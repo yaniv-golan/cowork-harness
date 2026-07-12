@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`status --latest-for <scenario-name-or-slug>`** — resolves and prints the NEWEST run dir for a
+  scenario by actual run time, replacing the fragile `ls -td runs/<scenario>/* | head -1` idiom: bare
+  directory mtime is NOT run recency (it bumps on any later write inside the dir — an `inspect`, a `trace
+  --translate-paths`, a slow finalize — independent of when the run itself happened), so it can readily
+  return a stale prior-session dir instead of the one you actually just kept. Recency is instead resolved
+  from the run's own `.origin` marker `createdAt` (pinned `--session-id` runs) or `result.json`'s mtime
+  (the common ephemeral-run case), falling back to `status.json`'s `startedAt` for a run dir with neither
+  yet; a run dir with no usable recency signal at all is skipped rather than silently falling back to its
+  own mtime. `--output-format json` emits `{scenario, outDir, createdAt, verdict?}` — `verdict` surfaces
+  opportunistically from a persisted `RunResult.verdict` when the kept run has one. A scenario with no
+  runs on disk fails clean (a message naming the scenario + runs root, exit 2) rather than crashing.
+  `outDir` (printed here and by every `run`/`skill`/`chat` invocation) is documented as the canonical
+  run-dir handle in docs/scenario.md's "Output" section.
+
 - **`RunResult.verdict`** — a kept run's `result.json` now persists the overall pass/fail: `{pass,
   exitCode, failures}`, the same pass/fail/exit-code `computeVerdict` (the single verdict source)
   computes for the run/skill exit, the footer, and the JSON envelope's `ok`. Previously the ONLY way to

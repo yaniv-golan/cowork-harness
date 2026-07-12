@@ -39,6 +39,7 @@ import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
 import { projectDispatchProbe, formatDispatchProbe } from "./run/probe-dispatch.js";
 import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
+import { findLatestRunForScenario } from "./run/latest-run.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -444,7 +445,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   status:
-    'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
+    "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n" +
+    "       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n" +
+    '       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)\n' +
+    "usage: status --latest-for <scenario-name-or-slug> [--output-format text|json]   (resolve the newest run dir for a scenario by actual run time, NOT `ls -td`'s directory mtime — see docs/scenario.md#output)\n" +
+    "       prints the resolved outDir (the canonical run-dir handle); --output-format json emits {scenario, outDir, createdAt, verdict?} (verdict present only once the kept run's result.json carries one)\n" +
+    "       cannot be combined with a positional <run-id | run-dir> or --follow\n" +
+    "       exit codes: 0 found · 2 no runs found for the scenario under the runs root (or a usage error)",
   stats:
     "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex] [--output-format text|json]\n" +
     "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
@@ -2968,14 +2975,34 @@ async function cmdDecide(args: string[]) {
 async function cmdStatus(args: string[]) {
   let p;
   try {
-    p = parseArgs(args, { booleans: ["--follow"], values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
+    p = parseArgs(args, {
+      booleans: ["--follow"],
+      values: ["--output-format", "--latest-for"],
+      enums: { "--output-format": ["text", "json"] },
+    });
   } catch (e) {
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
+  }
+  const json = p.options["--output-format"] === "json";
+  if (p.options["--latest-for"] !== undefined) {
+    // A dedicated mode, not a modifier on the run-id/run-dir lookup above: it resolves a SCENARIO to its
+    // newest run dir rather than reading a status.json a caller already has the path to, so it takes no
+    // positional and doesn't compose with --follow (there is no single dir to follow before resolution).
+    if (p.positionals.length !== 0)
+      return fail(
+        "status",
+        "usage",
+        "status --latest-for <scenario> takes no positional <run-id | run-dir>",
+        SUBCOMMAND_USAGE.status,
+        json,
+      );
+    if (p.flags["--follow"])
+      return fail("status", "usage", "status --latest-for cannot be combined with --follow", SUBCOMMAND_USAGE.status, json);
+    return cmdStatusLatestFor(p.options["--latest-for"], json);
   }
   if (p.positionals.length !== 1) {
     return fail("status", "usage", SUBCOMMAND_USAGE.status, undefined, isJsonOutput(args));
   }
-  const json = p.options["--output-format"] === "json";
   let dir: string;
   try {
     dir = resolveStatusDir(p.positionals[0]);
@@ -3074,6 +3101,43 @@ async function cmdStatus(args: string[]) {
   // earlier) · 3 stale/probably-dead — distinct from 1 so a script can tell "it failed" from "can't
   // confirm it's alive" without parsing text.
   return process.exit(stale ? 3 : status.state === "error" ? 1 : 0);
+}
+
+/** `status --latest-for <scenario>` — resolve the newest run dir for a scenario by actual run time
+ *  (`findLatestRunForScenario`, src/run/latest-run.ts), and print its `outDir` — the canonical run-dir
+ *  handle (see docs/scenario.md#output). Exists because `ls -td runs/<scenario>/* | head -1` orders by
+ *  bare directory mtime, which is NOT run recency and readily returns a stale prior-session dir. */
+async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<never> {
+  const root = runsRoot();
+  const found = findLatestRunForScenario(root, scenarioArg);
+  if (!found) {
+    // "usage" + exit 2 — matches how trace/scaffold/inspect treat an unresolvable identifier, not the
+    // "runtime" category status's own <run-id | run-dir> lookup uses for a dir that resolved but has no
+    // status.json yet (a different failure shape: here the scenario itself never resolved to anything).
+    return fail("status", "usage", `no runs found for "${scenarioArg}" under ${root}`, undefined, json, 2);
+  }
+  if (json) {
+    out(
+      JSON.stringify({
+        tool: "cowork-harness",
+        version: pkgVersion(),
+        command: "status",
+        ok: true,
+        scenario: found.scenario,
+        outDir: found.outDir,
+        createdAt: found.createdAt,
+        ...(found.verdict !== undefined ? { verdict: found.verdict } : {}),
+      }),
+    );
+  } else {
+    // Human output is stderr (project convention — stdout stays machine-only under --output-format
+    // json); the raw outDir is the LAST line specifically, mirroring statusLine's `[status] <outDir>`
+    // convention (execute.ts) so a driving script capturing stderr can grab it without parsing the
+    // summary line above it.
+    log(`${found.scenario} · ${found.createdAt}` + (found.verdict ? ` · ${found.verdict.pass ? "PASS" : "FAIL"}` : ""));
+    log(found.outDir);
+  }
+  return process.exit(0);
 }
 
 /** `gates <dir> [--follow]` — the gate stream for the in-band `--decider-dir` path. Emits one clean

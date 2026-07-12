@@ -608,6 +608,16 @@ sub-agent dispatches (deduped), decisions — run **`cowork-harness trace <run-i
 The deliverable a skill produces lands at the `outputsDir` (`…/mnt/outputs`), surfaced by `--keep` and
 in the `--output-format json` envelope.
 
+**`outDir` is the canonical run-dir handle.** The run envelope's `outDir` field (and the `[status]
+<outDir>` line every `run`/`skill`/`chat` prints to stderr at start) is the authoritative path to a kept
+run — don't reconstruct it by listing `~/.cowork-harness/runs/<name>/` yourself. In particular, **do not
+use `ls -td runs/<scenario>/* | head -1`** to find "the latest run": directory mtime is not run recency
+(a dir's mtime bumps on any later write inside it — an `inspect`, a `trace --translate-paths`, a slow
+finalize — independent of when the run itself happened), so it can readily return a stale prior-session
+dir instead of the run you actually just kept. For "what's the newest run for scenario X", use
+**`cowork-harness status --latest-for <scenario-name-or-slug>`** instead — it resolves recency from the
+run's own `.origin`/`result.json` timestamps, not directory mtime, and prints the resolved `outDir`.
+
 **Terminal output.** `run` is verdict-first and prints the **failing transcript inline** on a `FAIL`;
 `--verbose` shows the transcript for every scenario, `--quiet` shows only the verdict. `--output-format
 json` emits the machine envelope `{tool, version, command, ok, results[], error}` on stdout (one
