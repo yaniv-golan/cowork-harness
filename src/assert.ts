@@ -1617,7 +1617,7 @@ function check(
       }
     }
   }
-  // VM-path-boundary + path-denial assertions (F4). `VM_PATH` is exact-or-prefix — NEVER a bare
+  // VM-path-boundary + path-denial assertions. `VM_PATH` is exact-or-prefix — NEVER a bare
   // `startsWith("/sessions")`, which would wrongly match "/sessionsfoo". `hostloopOnly` mirrors the
   // no_scratchpad_leak tier-gate precedent above: on a non-hostloop tier /sessions/... is a VALID VM
   // path (no path hook exists there), so excluding the key could green a wrong-tier scenario — it must

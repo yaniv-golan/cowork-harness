@@ -611,6 +611,18 @@ describe("VM-path + path-denial assertions", () => {
     expect(evaluate([{ no_path_denied: true }], c)[0].pass).toBe(false);
   });
 
+  it("vm_path_denied FAILS when pathDenials has denials but none target /sessions", () => {
+    const c = hlCtx({ pathDenials: [{ source: "pretooluse", tool: "Write", path: "/workspace/x", decision: "deny" }] });
+    const [r] = evaluate([{ vm_path_denied: true }], c);
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/no \/sessions-targeted denial recorded/);
+  });
+
+  it("no_path_denied passes when pathDenials is empty", () => {
+    const c = hlCtx({ pathDenials: [] });
+    expect(evaluate([{ no_path_denied: true }], c)[0].pass).toBe(true);
+  });
+
   it("path_denied/vm_path_denied/no_path_denied on a NON-hostloop tier FAIL cannot-verify", () => {
     const c = ctx({ effectiveFidelity: "container", pathDenials: [] });
     for (const a of [{ vm_path_denied: true }, { path_denied: {} }, { no_path_denied: true }] as const) {
