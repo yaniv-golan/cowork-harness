@@ -37,24 +37,45 @@ paths out of markdown text. Two WARN rules, both exit-1 findings:
 
 - **`sessions-path-to-file-tool`** — a `/sessions/...` token in a file-tool/output POSITIVE context: an
   `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target,
-  prose describing a write/save/read/edit "to"/"at" the path, or a bare path sitting inside a fenced
-  block that also contains a `Task(` call or `subagent_type` (a dispatch construct).
+  IMPERATIVE prose instructing a write/save/read/edit "to"/"at" the path, or a BARE `/sessions/...` path
+  line/value sitting inside a fenced block that also contains a `Task(` call or `subagent_type` (a
+  dispatch construct) — a path embedded inside a larger sentence or a bash-mediated command string within
+  that same block does not count as "bare".
 - **`sessions-find-into-file-read`** — a shell `find … /sessions …` whose output is substituted straight
-  into a `Read(`/`Grep(` directive (same line, or the very next line).
+  into a `Read(`/`Grep(` directive: same line, or the very next line AND sharing a visible `$VAR`/`${VAR}`
+  data-flow marker with it (pure line adjacency to an unrelated `Read(`/`Grep(` does not fire).
 
 **EXEMPT by design** (false-positive guards, deliberately conservative — "when unsure, do not flag"):
-a `/sessions` token inside a ` ```bash `/`sh`/`shell`/`zsh` fenced block is legitimate in-VM bash and is
-never scanned; a line carrying an anti-instruction word (`never`, `don't`, `do not`, `avoid`, `not`) near
-the path is treated as teaching the rule, not breaking it; plain prose that documents a fact (e.g. "the
-VM cwd is `/sessions/<id>`") without any of the positive contexts above is left alone.
+a `/sessions` token inside a ` ```bash `/`sh`/`shell`/`zsh`/`console`/`*-session` fenced block (or any
+`bash`/`sh`/`shell`/`zsh`-prefixed language, or the same fence blockquoted with `> `) is legitimate in-VM
+bash and is never scanned; the fence opener's language is read as the first word only, so a trailing
+info-string (` ```bash title="x" `) doesn't defeat the exemption and doesn't leave a phantom fence open
+for later content to cascade into; a 4-space/tab INDENTED unfenced block is treated the same way; a line
+carrying an anti-instruction word (`never`, `don't`, `do not`, `avoid`, `not`) on that line OR the
+immediately adjacent line is treated as teaching the rule, not breaking it; a line mentioning the `bash`
+tool suppresses the prose context (the tool's own correct remediation, not a violation); passive-voice
+documentation prose ("Deliverables are saved at ...", "Uploads are read-only at ...") does not count as an
+imperative instruction; plain prose that documents a fact (e.g. "the VM cwd is `/sessions/<id>`") without
+any of the positive contexts above is left alone. A token that matches more than one positive context on
+the same line (e.g. an `OUTPUT_PATH=` line that also sits inside a dispatch-construct fence) is reported
+once, not once per matching context.
 
 **Honest limits.** Only the extraction is heuristic — the deny decision is the same one production
 enforces. Documented false negatives: a variable-carried path (`$OUT/...` where the literal value isn't
-`/sessions`), an indented/unfenced shell template, and a prose-only dispatch instruction (no fenced
-block). Two decision-class misses are out of v1 scope entirely: an absolute HOST path outside connected
-folders (denied by containment, not the `/sessions` rule) and a write into a read-only category
+`/sessions`), a `/sessions` path written only in an INDENTED (4-space/tab) unfenced code block — treated
+as an exempt code context, the same as a fenced bash block, precisely to avoid an earlier false-positive
+bug in this same shape (an unfenced VM-bash template was firing) — and a prose-only dispatch instruction
+(no fenced block). Two decision-class misses are out of v1 scope entirely: an absolute HOST path outside
+connected folders (denied by containment, not the `/sessions` rule) and a write into a read-only category
 (uploads/spool/plugin content) — neither is a `/sessions` finding, so this analyzer doesn't claim to
 catch them.
+
+**`analyze-skill` gates the HOST-LOOP path model only.** A skill authored exclusively for a VM tier
+(`container`/`microvm`), where `/sessions` is a valid, ungated path, is not what this analyzer is meant to
+clear — a clean result there isn't meaningful, and a firing result on such a skill is a false alarm for
+that tier (the finding message names the tier explicitly so this is visible at read time, but `analyze-skill`
+itself has no way to know which tier(s) a given SKILL.md targets). Run it against skills meant to work
+on host-loop, or skills written to work across tiers via the tier-qualified addressing above.
 
 **A clean `analyze-skill` is a PRE-FLIGHT signal, not proof of on-tier resolution.** The authoritative
 check remains the runtime `no_vm_path_file_op` / `vm_path_denied` assertions (see

@@ -103,6 +103,19 @@ describe("analyzeSkillText — firing cases", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0].line).toBe(3);
   });
+
+  it("dedupes a token that matches BOTH the OUTPUT_PATH context and the dispatch-construct context to one finding", () => {
+    const text = [
+      "```",
+      'Task(description="deliver", subagent_type="general-purpose")',
+      "OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/report.md",
+      "```",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(3);
+    expect(hits[0].message).toContain("denied on host-loop");
+  });
 });
 
 // --------------------------------------------------------------------------------------------- //
@@ -157,6 +170,101 @@ describe("analyzeSkillText — near-miss clean cases (anti-FP guards)", () => {
     // directive-target context correctly finds nothing here — only rule 2 (tested above) fires.
     expect(findRule(text, RULE1)).toEqual([]);
   });
+
+  // --- prose that correctly routes a /sessions path through the bash tool must not fire -------- //
+
+  it("does NOT flag prose that explicitly routes the /sessions path through the bash tool", () => {
+    const text = "Use the bash tool to write the summary to `/sessions/{{session_id}}/mnt/outputs/summary.md`.";
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("does NOT flag a prose write instruction whose anti-instruction sits on the ADJACENT line", () => {
+    const text = [
+      "Never write directly to a /sessions path from a file tool.",
+      "Instead, save the report to `/sessions/{{session_id}}/mnt/outputs/summary.md`.",
+    ].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- passive tier-documentation prose must not fire ---------------------------------------- //
+
+  it("does NOT flag passive 'are read-only at ...' documentation prose", () => {
+    const text = "Uploads are read-only at `/sessions/{{session_id}}/mnt/uploads` on every tier.";
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("does NOT flag passive 'are saved at ...' documentation prose", () => {
+    const text = "Deliverables are saved at `/sessions/{{session_id}}/mnt/outputs` by the in-VM agent.";
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- a fence info-string must not defeat the bash exemption or cascade into later prose ----- //
+
+  it("does NOT flag a ```bash fence carrying a trailing info-string, and does NOT cascade-swallow later prose", () => {
+    const text = [
+      '```bash title="deliver.sh"',
+      "OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/report.md",
+      "```",
+      "",
+      "Then call `Write(/sessions/{{session_id}}/mnt/outputs/other.md)` to save the report.",
+    ].join("\n");
+    // The bash-fence line with the info-string is exempt (not flagged)...
+    const outputPathHit = findRule(text, RULE1).find((f) => f.line === 2);
+    expect(outputPathHit).toBeUndefined();
+    // ...and the fence closed properly (no phantom unlabeled fence), so the REAL violation two
+    // lines later still fires — proving there's no cascade.
+    const laterHit = findRule(text, RULE1).find((f) => f.line === 5);
+    expect(laterHit).toBeDefined();
+    expect(laterHit?.message).toContain("Write(...)");
+  });
+
+  // --- shell-transcript fences and indented/blockquoted code must not fire -------------------- //
+
+  it("does NOT flag a ```console shell-transcript fence", () => {
+    const text = ["```console", "$ OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/report.md ./run.sh", "```"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("does NOT flag a 4-space INDENTED (unfenced) shell template", () => {
+    const text = ["Run this locally:", "", "    OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/report.md", "    ./run.sh"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("does NOT flag a blockquoted ```bash fence", () => {
+    const text = ["> ```bash", "> OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/report.md", "> ```"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- a dispatch prompt that correctly bash-mediates a /sessions path must not fire ---------- //
+
+  it("does NOT flag a /sessions path embedded inside a bash-mediated command string in a Task( prompt", () => {
+    const text = ["```", 'Task(prompt="Using the bash tool run: cp report.md /sessions/{{session_id}}/mnt/outputs/")', "```"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- rule 2 must require visible data flow, not just line adjacency ------------------------- //
+
+  it("does NOT flag a find /sessions line adjacent to an UNRELATED Read( with no shared variable", () => {
+    const text = ["Run `find /sessions/{{session_id}} -name notes.md` with the bash tool.", "Read(artifacts/index.md)"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- Attack vectors that correctly did NOT fire — regression guards ------------------------- //
+
+  it("does NOT flag a ~~~bash tilde fence (regression guard)", () => {
+    const text = ["~~~bash", 'echo "/sessions/{{id}}/mnt/outputs/x.md"', "~~~"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("does NOT flag a Bash(...) directive — not one of the tracked file tools (regression guard)", () => {
+    const text = 'Bash(cmd="cat /sessions/{{id}}/mnt/outputs/x.md")';
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("does NOT flag a real Write(...) directive when a stray unrelated 'not' sits on the same line (regression guard, accepted trade-off)", () => {
+    const text = "This report is not final yet; Write(/sessions/{{id}}/mnt/outputs/out.md) saves it anyway.";
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
 });
 
 // --------------------------------------------------------------------------------------------- //
@@ -166,16 +274,23 @@ describe("analyzeSkillText — near-miss clean cases (anti-FP guards)", () => {
 
 describe("fail-on-break — stubbing isVmSessionsPath to always-false clears every firing fixture", () => {
   it("clears the OUTPUT_PATH, directive-target, and find-into-Read firing fixtures", async () => {
+    const outputPathText = "OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/notes.md";
+    const writeDirectiveText = "Write(/sessions/{{session_id}}/mnt/outputs/out.md)";
+    const findIntoReadText = 'Read($(find /sessions/{{session_id}} -name "notes.md"))';
+
+    // Test-honesty check FIRST, unstubbed: prove each fixture actually fires under normal
+    // conditions, so the stubbed assertions below can't go vacuous (i.e. "clears" something that
+    // was already empty).
+    expect(analyzeSkillText(outputPathText, "SKILL.md").length).toBeGreaterThan(0);
+    expect(analyzeSkillText(writeDirectiveText, "SKILL.md").length).toBeGreaterThan(0);
+    expect(analyzeSkillText(findIntoReadText, "SKILL.md").length).toBeGreaterThan(0);
+
     vi.resetModules();
     vi.doMock("../src/vm-paths.js", async () => {
       const actual = await vi.importActual<typeof import("../src/vm-paths.js")>("../src/vm-paths.js");
       return { ...actual, isVmSessionsPath: () => false };
     });
     const { analyzeSkillText: stubbed } = await import("../src/run/analyze-skill.js");
-
-    const outputPathText = "OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/notes.md";
-    const writeDirectiveText = "Write(/sessions/{{session_id}}/mnt/outputs/out.md)";
-    const findIntoReadText = 'Read($(find /sessions/{{session_id}} -name "notes.md"))';
 
     expect(stubbed(outputPathText, "SKILL.md")).toEqual([]);
     expect(stubbed(writeDirectiveText, "SKILL.md")).toEqual([]);

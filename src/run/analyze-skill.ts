@@ -35,10 +35,22 @@ export interface SkillFinding {
   message: string;
 }
 
-const BASH_FENCE_LANGS = new Set(["bash", "sh", "shell", "zsh"]);
-/** Opening/closing fence: ``` or ~~~ (>=3), optional info string (language) — mirrors the bundled
- *  `scenario.py` lint-skill fence tracker so both tools treat markdown the same way. */
-const FENCE_RE = /^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$/;
+/** Fenced-block languages treated as "legitimate in-VM bash" and therefore exempt from every rule.
+ *  Includes plain shell names plus the common shell-transcript aliases (`console`, `*-session`) — a
+ *  `$ cmd` transcript block is exactly as bash-ish as a raw `bash` fence. Anything with a `sh`/`bash`/
+ *  `shell`/`zsh` PREFIX is also treated as bash-ish (e.g. `bash-session`, `shellscript`), per the
+ *  conservative "when unsure, do not flag" posture — see `isBashishLang`. */
+const BASH_FENCE_LANGS = new Set(["bash", "sh", "shell", "zsh", "console", "shell-session", "sh-session"]);
+function isBashishLang(lang: string): boolean {
+  if (BASH_FENCE_LANGS.has(lang)) return true;
+  return /^(bash|sh|shell|zsh)/.test(lang);
+}
+/** Opening/closing fence: ``` or ~~~ (>=3), optionally blockquote-prefixed (`> `, possibly nested), a
+ *  language token, and — for the OPENER only — any trailing info-string/attributes (`title="x"`,
+ *  `{.line-numbers}`) are tolerated and ignored: the language is always the FIRST word after the fence
+ *  marker, never the whole rest of the line. A bare closer (no language token, nothing else on the line
+ *  beyond optional trailing junk with no leading identifier chars) is still recognized as a close. */
+const FENCE_RE = /^(?:>\s*)*\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)(?:\s+.*)?$/;
 /** A generic "path-ish" token: starts with `/`, runs until whitespace or a delimiter that could not be
  *  part of a bare path in prose/markdown (quote, backtick, closing paren/bracket). This is intentionally
  *  BROADER than a real path — it is filtered down to genuine `/sessions` candidates by `isVmSessionsPath`
@@ -48,10 +60,31 @@ const OUTPUT_ASSIGN_RE = /\b(OUTPUT_PATH|OUTPUT_DIR)\s*[:=]\s*"?(\/[^\s"'`)\]]+)
 const DIRECTIVE_RE = /\b(Write|Read|Edit|Glob|Grep)\(([^)]*)\)/g;
 const PROSE_VERB_RE = /\b(write|writes|writing|wrote|save|saves|saving|saved|read|reads|reading|edit|edits|editing|edited)\b/gi;
 const PROSE_PREP_RE = /\b(to|at)\b/gi;
+/** Passive-voice auxiliary immediately preceding a verb match — "are saved", "is read", "were written".
+ *  Passive documentation prose ("Deliverables are saved at ...") is not an imperative instruction to the
+ *  agent, so it must not count as the prose POSITIVE context. */
+const PASSIVE_AUX_RE = /\b(?:is|are|was|were|be|been|being)\s*$/i;
+/** A mention of the `bash` tool anywhere on the line — "Use the bash tool to write ... to /sessions/..."
+ *  is the tool's own correct remediation, not a file-tool violation. Scoped to the prose context
+ *  only (an explicit `Write(/sessions/...)` directive is unambiguous regardless of a stray "bash" nearby). */
+const BASH_TOOL_MENTION_RE = /\bbash\b/i;
+/** A line whose only content (after an optional short `key:`/`key=` label and optional surrounding
+ *  quote/backtick) is a single path token: "OUTPUT_PATH=/sessions/..." or a bare
+ *  "/sessions/{{id}}/mnt/outputs/x.json" line. Deliberately does NOT match a path embedded inside a
+ *  larger sentence or command string (`Task(prompt="... /sessions/... ...")`) — that shape must NOT be
+ *  treated as a bare dispatch-construct path. */
+const BARE_PATH_LINE_RE = /^\s*(?:[A-Za-z_][\w-]*\s*[:=]\s*)?["'`]?(\/[^\s"'`]+)["'`]?\s*$/;
+/** A `$VAR` / `${VAR}` reference — used to require VISIBLE DATA FLOW between a `find` line and the
+ *  Read(/Grep( line it appears to feed: pure line adjacency is not enough, the two lines must
+ *  share a variable. */
+const VAR_TOKEN_RE = /\$\{?(\w+)\}?/g;
 /** Anti-instruction guard: "NEVER write to `/sessions/...`" (and siblings) must NOT fire. Deliberately
  *  broad (whole-line, not proximity-scoped) — a stray "not" elsewhere on the line also suppresses, which
  *  trades a few accepted false negatives for never flagging a line that is teaching the rule, not
- *  breaking it. That trade is the point of this analyzer's conservative posture. */
+ *  breaking it. That trade is the point of this analyzer's conservative posture. The guard also looks at
+ *  the IMMEDIATELY ADJACENT line (previous and next), not just the current one — "Never use a file tool
+ *  for VM paths. / Instead, write the report to `/sessions/...`" must not fire either, since the
+ *  anti-instruction sits one clause/line away (see `hasNegationNearby`). */
 const NEGATION_RE = /\b(never|don'?t|do\s+not|avoid|not)\b/i;
 const DISPATCH_MARKER_RE = /\bTask\(|\bsubagent_type\b/;
 const FIND_KEYWORD_RE = /\bfind\b/i;
@@ -82,8 +115,17 @@ function extractSessionsTokens(line: string): { token: string; index: number }[]
 
 /** POSITIVE context 2b: prose "write/save/read/edit … to|at `/sessions/...`" — a verb somewhere before a
  *  to/at preposition that sits immediately (within a few chars, allowing for a quote/backtick) before the
- *  path token. Scoped to the SAME line only (no cross-line prose inference). */
+ *  path token. Scoped to the SAME line only (no cross-line prose inference).
+ *
+ *  Three guards narrow this to genuine IMPERATIVE file-tool instructions:
+ *   - a `bash` mention anywhere on the line suppresses entirely — "Use the bash tool to write ... to
+ *     `/sessions/...`" is the tool's own correct remediation, not a file-tool violation;
+ *   - "read" immediately followed by "-only" is the adjective ("Uploads are read-only at ..."), not the
+ *     verb "read";
+ *   - a verb immediately preceded by a passive-voice auxiliary (is/are/was/were/be/been/being) is
+ *     documentation ("Deliverables are saved at ...") — the passive doesn't direct the agent to act. */
 function proseContextBeforeToken(line: string, tokenIndex: number): boolean {
+  if (BASH_TOOL_MENTION_RE.test(line)) return false;
   const before = line.slice(0, tokenIndex);
   PROSE_PREP_RE.lastIndex = 0;
   let prepEnd = -1;
@@ -93,8 +135,17 @@ function proseContextBeforeToken(line: string, tokenIndex: number): boolean {
     if (gap <= 6) prepEnd = m.index; // "to `/sessions" / "at `/sessions" — small gap for quote+space
   }
   if (prepEnd === -1) return false;
+  const clause = before.slice(0, prepEnd);
   PROSE_VERB_RE.lastIndex = 0;
-  return PROSE_VERB_RE.test(before.slice(0, prepEnd));
+  let vm: RegExpExecArray | null;
+  while ((vm = PROSE_VERB_RE.exec(clause))) {
+    const word = vm[0];
+    const start = vm.index;
+    if (/^read$/i.test(word) && /^-only\b/i.test(clause.slice(start + word.length))) continue;
+    if (PASSIVE_AUX_RE.test(clause.slice(0, start))) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Rule 1 (`sessions-path-to-file-tool`) POSITIVE-context classification for one line, given it is
@@ -145,13 +196,56 @@ function ruleTwoSameLine(line: string): string[] {
   return tokens;
 }
 
+/** Rule 1 POSITIVE context 3, narrowed extraction: only a line whose ENTIRE trimmed content
+ *  (after an optional short `key:`/`key=` label and an optional wrapping quote/backtick) IS the path
+ *  token. A path embedded inside a larger sentence or command string — `Task(prompt="Using the bash
+ *  tool run: cp report.md /sessions/.../outputs/")` — does not match: the brief's "bare /sessions path
+ *  line/value", not "any /sessions token anywhere in a dispatch block". */
+function extractBarePathLineToken(line: string): string | null {
+  const m = BARE_PATH_LINE_RE.exec(line);
+  if (!m) return null;
+  const trimmed = trimTrailingPunct(m[1]);
+  return isVmSessionsPath(trimmed) ? trimmed : null;
+}
+
+/** Every `$VAR` / `${VAR}` reference on `line` — used to require VISIBLE DATA FLOW between a `find` line
+ *  and the Read(/Grep( line it appears to feed: the two lines must share a variable, not just sit
+ *  next to each other. */
+function findLineVars(line: string): Set<string> {
+  const vars = new Set<string>();
+  const re = new RegExp(VAR_TOKEN_RE.source, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line))) vars.add(m[1]);
+  return vars;
+}
+
 interface LineInfo {
   lineNo: number;
   text: string;
-  bashExempt: boolean; // inside a ```bash/sh/shell/zsh fenced block — never scanned
+  codeExempt: boolean; // inside a bash-ish fenced block or an indented code block — never scanned
 }
 
-/** First pass: classify every line by fence state, and group non-bash fenced blocks (with their body
+/** Anti-instruction guard, extended to an ADJACENT line: "Never use a file tool for VM paths. /
+ *  Instead, write the report to `/sessions/...`" must not fire — the anti-instruction sits one line away
+ *  from the path, not on the same line. Checks the previous line, the current line, and the next line in
+ *  `arr` (whatever line grouping the caller is iterating — the full document for the main passes, or a
+ *  single fenced block's own lines for the dispatch-construct pass). */
+function hasNegationNearby(arr: LineInfo[], idx: number): boolean {
+  const prev = arr[idx - 1]?.text;
+  const next = arr[idx + 1]?.text;
+  return (
+    NEGATION_RE.test(arr[idx].text) || (prev !== undefined && NEGATION_RE.test(prev)) || (next !== undefined && NEGATION_RE.test(next))
+  );
+}
+
+/** A line indented 4+ spaces or a tab, with content, OUTSIDE any fence — Markdown's own "indented code
+ *  block" convention. Treated as a code context (exempt, like a bash fence) rather than scanned prose:
+ *  an unfenced VM-bash template written this way is legitimate in-VM bash, not a violation. Over-exempting
+ *  an indented sub-bullet that ISN'T code just trades a false negative for the false positive this
+ *  guards against — the accepted posture throughout this file. */
+const INDENTED_CODE_RE = /^(?: {4,}|\t)\S/;
+
+/** First pass: classify every line by fence state, and group non-bash-ish fenced blocks (with their body
  *  lines) so the dispatch-construct rule (3rd POSITIVE context) can look at a whole block at once. */
 function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; lines: LineInfo[] }[] } {
   const rawLines = text.split(/\r?\n/);
@@ -177,30 +271,30 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
         fenceLen = marker.length;
         fenceLang = lang;
         currentBlock = [];
-        lines.push({ lineNo, text: raw, bashExempt: false }); // the fence marker line itself carries no path
+        lines.push({ lineNo, text: raw, codeExempt: false }); // the fence marker line itself carries no path
         continue;
       }
       if (marker[0] === fenceChar && marker.length >= fenceLen && !lang) {
-        if (!BASH_FENCE_LANGS.has(fenceLang)) blocks.push({ lang: fenceLang, lines: currentBlock });
+        if (!isBashishLang(fenceLang)) blocks.push({ lang: fenceLang, lines: currentBlock });
         inFence = false;
         fenceChar = "";
         fenceLen = 0;
         fenceLang = "";
         currentBlock = [];
-        lines.push({ lineNo, text: raw, bashExempt: false });
+        lines.push({ lineNo, text: raw, codeExempt: false });
         continue;
       }
       // a fence-looking line inside an open block — falls through as ordinary content below.
     }
 
-    const bashExempt = inFence && BASH_FENCE_LANGS.has(fenceLang);
-    const info: LineInfo = { lineNo, text: raw, bashExempt };
+    const codeExempt = (inFence && isBashishLang(fenceLang)) || (!inFence && INDENTED_CODE_RE.test(raw));
+    const info: LineInfo = { lineNo, text: raw, codeExempt };
     lines.push(info);
-    if (inFence && !bashExempt) currentBlock.push(info);
+    if (inFence && !codeExempt) currentBlock.push(info);
   }
-  // An unterminated non-bash fence at EOF still has its buffered lines flushed (mirrors scenario.py's
+  // An unterminated non-bash-ish fence at EOF still has its buffered lines flushed (mirrors scenario.py's
   // own EOF flush for the analogous bash case).
-  if (inFence && !BASH_FENCE_LANGS.has(fenceLang)) blocks.push({ lang: fenceLang, lines: currentBlock });
+  if (inFence && !isBashishLang(fenceLang)) blocks.push({ lang: fenceLang, lines: currentBlock });
 
   return { lines, blocks };
 }
@@ -209,9 +303,13 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
  *  only to stamp `SkillFinding.path` (the caller resolves it once per target). */
 export function analyzeSkillText(text: string, filePath: string): SkillFinding[] {
   const findings: SkillFinding[] = [];
+  // Dedup key is (rule, line, token) — NOT (rule, line, message) — so the SAME token on the SAME line
+  // yields at most one finding even when more than one positive context matches it (e.g. an
+  // `OUTPUT_PATH=` line that also sits inside a dispatch-construct fence). First-context-wins for
+  // the message; later contexts on the same token+line are silently absorbed, not appended.
   const seen = new Set<string>();
-  const add = (rule: SkillAnalysisRuleId, lineNo: number, message: string) => {
-    const key = `${rule} ${lineNo} ${message}`;
+  const add = (rule: SkillAnalysisRuleId, lineNo: number, token: string, message: string) => {
+    const key = `${rule} ${lineNo} ${token}`;
     if (seen.has(key)) return;
     seen.add(key);
     findings.push({ rule, path: filePath, line: lineNo, message });
@@ -220,40 +318,47 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
   const { lines, blocks } = splitLines(text);
 
   // Rule 1, positive contexts 1+2 (OUTPUT_PATH/OUTPUT_DIR, file-tool directive target, prose idiom) —
-  // every non-bash-exempt line.
-  for (const { lineNo, text: lineText, bashExempt } of lines) {
-    if (bashExempt) continue;
-    if (NEGATION_RE.test(lineText)) continue; // anti-instruction guard — suppress the whole line
+  // every non-exempt line.
+  for (let i = 0; i < lines.length; i++) {
+    const { lineNo, text: lineText, codeExempt } = lines[i];
+    if (codeExempt) continue;
+    if (hasNegationNearby(lines, i)) continue; // anti-instruction guard — suppress line + adjacent line
     for (const [token, contextLabel] of classifyLineRule1(lineText)) {
-      add("sessions-path-to-file-tool", lineNo, `\`${token}\` in ${contextLabel} — ${TIER_NOTE}`);
+      add("sessions-path-to-file-tool", lineNo, token, `\`${token}\` in ${contextLabel} — ${TIER_NOTE}`);
     }
   }
 
-  // Rule 1, positive context 3: a bare /sessions token inside a fenced (non-bash) block whose body
-  // contains a Task( call or a subagent_type key — the dispatch-construct shape.
+  // Rule 1, positive context 3: a BARE /sessions path line/value inside a fenced (non-bash-ish) block
+  // whose body contains a Task( call or a subagent_type key — the dispatch-construct shape. Narrowed to
+  // a whole-line match (see `extractBarePathLineToken`) so a /sessions token embedded inside a larger
+  // sentence or bash-mediated command string within the Task prompt does NOT fire.
   for (const block of blocks) {
     const bodyText = block.lines.map((l) => l.text).join("\n");
     if (!DISPATCH_MARKER_RE.test(bodyText)) continue;
-    for (const { lineNo, text: lineText } of block.lines) {
-      if (NEGATION_RE.test(lineText)) continue;
-      for (const { token } of extractSessionsTokens(lineText)) {
-        add(
-          "sessions-path-to-file-tool",
-          lineNo,
-          `\`${token}\` as a bare path inside a dispatch construct (a fenced block containing \`Task(\`/\`subagent_type\`) — ${TIER_NOTE}`,
-        );
-      }
+    for (let i = 0; i < block.lines.length; i++) {
+      const { lineNo, text: lineText } = block.lines[i];
+      if (hasNegationNearby(block.lines, i)) continue;
+      const token = extractBarePathLineToken(lineText);
+      if (!token) continue;
+      add(
+        "sessions-path-to-file-tool",
+        lineNo,
+        token,
+        `\`${token}\` as a bare path inside a dispatch construct (a fenced block containing \`Task(\`/\`subagent_type\`) — ${TIER_NOTE}`,
+      );
     }
   }
 
   // Rule 2, same-line shape: find(...) substituted straight into Read(/Grep(.
-  for (const { lineNo, text: lineText, bashExempt } of lines) {
-    if (bashExempt) continue;
-    if (NEGATION_RE.test(lineText)) continue;
+  for (let i = 0; i < lines.length; i++) {
+    const { lineNo, text: lineText, codeExempt } = lines[i];
+    if (codeExempt) continue;
+    if (hasNegationNearby(lines, i)) continue;
     for (const token of ruleTwoSameLine(lineText)) {
       add(
         "sessions-find-into-file-read",
         lineNo,
+        token,
         `a shell \`find\` under \`/sessions\` (\`${token}\`) is substituted directly into a Read(/Grep( directive — ${TIER_NOTE}`,
       );
     }
@@ -261,26 +366,36 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
 
   // Rule 2, two-line adjacent shape: a `find … /sessions …` line (not itself a Read(/Grep( call) whose
   // output visibly feeds the VERY NEXT non-blank line's Read(/Grep( directive. Kept narrow on purpose —
-  // this is the one place this analyzer looks past a single line, and only one line ahead.
+  // this is the one place this analyzer looks past a single line, and only one line ahead. Adjacency
+  // alone is not enough: the find line must carry a visible data-flow marker (a `$VAR`/`${VAR}`
+  // reference) and the Read(/Grep( line must reference that SAME variable — pure proximity to an
+  // unrelated Read( targeting a different path must NOT fire.
   for (let i = 0; i < lines.length; i++) {
     const cur = lines[i];
-    if (cur.bashExempt) continue;
+    if (cur.codeExempt) continue;
     if (!FIND_KEYWORD_RE.test(cur.text)) continue;
     if (READ_GREP_START_RE.test(cur.text)) continue; // handled by the same-line shape above
     const findTokens = extractSessionsTokens(cur.text);
     if (findTokens.length === 0) continue;
-    if (NEGATION_RE.test(cur.text)) continue;
+    const curVars = findLineVars(cur.text);
+    if (curVars.size === 0) continue; // no data-flow marker on the find line — nothing to trace forward
+    if (hasNegationNearby(lines, i)) continue;
     let j = i + 1;
     while (j < lines.length && lines[j].text.trim() === "") j++;
     if (j >= lines.length) continue;
     const next = lines[j];
-    if (next.bashExempt) continue;
-    if (!/^\s*(Read|Grep)\(/.test(next.text)) continue;
-    if (NEGATION_RE.test(next.text)) continue;
+    if (next.codeExempt) continue;
+    const dm = /^\s*(Read|Grep)\(([^)]*)\)/.exec(next.text);
+    if (!dm) continue;
+    const nextVars = findLineVars(dm[2]);
+    const sharesVar = [...curVars].some((v) => nextVars.has(v));
+    if (!sharesVar) continue; // the Read(/Grep( body never references the find's captured variable
+    if (hasNegationNearby(lines, j)) continue;
     for (const { token } of findTokens) {
       add(
         "sessions-find-into-file-read",
         next.lineNo,
+        token,
         `a preceding shell \`find\` under \`/sessions\` (\`${token}\`, line ${cur.lineNo}) appears to feed this Read(/Grep( directive — ${TIER_NOTE}`,
       );
     }
