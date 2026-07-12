@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { findLatestRunForScenario } from "../src/run/latest-run.js";
 
-// Unit coverage for the pure resolution logic (N5): the CLI-level wiring (`status --latest-for`) is
+// Unit coverage for the pure resolution logic: the CLI-level wiring (`status --latest-for`) is
 // covered in test/cli-status-latest-for.test.ts. This file exercises `findLatestRunForScenario` directly
 // against a synthetic runs tree — no CLI spawn needed.
 

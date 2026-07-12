@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync, utimesSync, statSync
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 
-// CLI-level coverage for `status --latest-for <scenario>` (N5): arg wiring, exit codes, text/json shape,
+// CLI-level coverage for `status --latest-for <scenario>`: arg wiring, exit codes, text/json shape,
 // the no-runs case. The pure recency-resolution logic (createdAt-vs-mtime discrimination, the fallback
 // chain) is unit-tested directly in test/latest-run.test.ts; this covers command wiring only.
 const CLI = resolve("dist/cli.js");
