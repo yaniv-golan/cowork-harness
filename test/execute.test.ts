@@ -13,11 +13,48 @@ import {
   collectArtifacts,
   readSessionManifest,
   parseEnvPort,
+  resolveSubagentConfigRoot,
 } from "../src/run/execute.js";
 import { classifyWorkspaceFiles } from "../src/run/artifacts.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv, hostNativeSpawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
+import { VM_WORK_HOST } from "../src/runtime/lima.js";
+
+// Regression guard: the sub-agent reasoning capture (`captureSubagentReasoning`) globs under a
+// per-tier config-dir ROOT. hostloop and container resolve against the SAME host tree the caller
+// already has (`configDir` / `workRoot`); microvm does NOT — it stages into a separate host tree
+// (`VM_WORK_HOST/<sessionId>/mnt`, see src/runtime/microvm.ts's `sessionHost`/`mntHost`), never
+// `workRoot`. Reverting the microvm case to the container path (`join(workRoot, ".claude")`) would
+// glob a directory that doesn't exist for microvm runs, silently leaving `reasoning` undefined even
+// when a real child transcript was written — this test fails loud on that regression.
+describe("resolveSubagentConfigRoot — per-tier config-dir root", () => {
+  const configDir = "/host/plan/config-dir";
+  const workRoot = "/host/out/work/session/mnt";
+  const sessionId = "sess-abc123";
+
+  it("hostloop resolves to configDir as-is", () => {
+    expect(resolveSubagentConfigRoot("hostloop", { configDir, workRoot, sessionId })).toBe(configDir);
+  });
+
+  it("container resolves to workRoot/.claude", () => {
+    expect(resolveSubagentConfigRoot("container", { configDir, workRoot, sessionId })).toBe(join(workRoot, ".claude"));
+  });
+
+  it("microvm resolves to VM_WORK_HOST/<sessionId>/mnt/.claude — NOT workRoot/.claude", () => {
+    const root = resolveSubagentConfigRoot("microvm", { configDir, workRoot, sessionId });
+    expect(root).toBe(join(VM_WORK_HOST, sessionId, "mnt", ".claude"));
+    expect(root).not.toBe(join(workRoot, ".claude"));
+  });
+
+  it("microvm with no sessionId returns undefined (no session subtree to derive)", () => {
+    expect(resolveSubagentConfigRoot("microvm", { configDir, workRoot })).toBeUndefined();
+  });
+
+  it("other tiers (e.g. protocol) return undefined — no real agent binary spawns", () => {
+    expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId })).toBeUndefined();
+  });
+});
 
 describe("slugForPath keeps the run dir inside runs/", () => {
   it("neutralizes traversal and separators, preserves normal names", () => {

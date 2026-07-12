@@ -39,7 +39,7 @@ import {
   capabilityPreflightDecision,
   CAPABILITY_FAMILIES,
 } from "../runtime/image-capabilities.js";
-import { instanceName } from "../runtime/lima.js";
+import { instanceName, VM_WORK_HOST } from "../runtime/lima.js";
 import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -204,15 +204,36 @@ function readOriginMarker(path: string): OriginMarker | null {
 
 /** Resolve the config-dir ROOT the sub-agent reasoning capture (`captureSubagentReasoning`) should glob
  *  under, per tier — mirrors how `CLAUDE_CONFIG_DIR` itself is set per tier (src/runtime/argv.ts +
- *  src/runtime/{hostloop,container,microvm}.ts): hostloop spawns the native process directly with
- *  `CLAUDE_CONFIG_DIR=plan.configDir` (already a host path); container/microvm spawn IN the sandbox
- *  with a GUEST `CLAUDE_CONFIG_DIR=mnt/.claude`, which `stageWorkspace` (src/runtime/stage.ts) cp's
- *  `plan.configDir` INTO at `<workRoot>/.claude` — host-visible there via the docker bind mount / Lima
- *  shared folder. Other tiers (protocol — no real agent binary spawns)
- *  return `undefined`: there is no child transcript to read, so the caller skips the capture entirely. */
-function subagentConfigDirRoot(effectiveFidelity: string, configDir: string, workRoot: string): string | undefined {
-  if (effectiveFidelity === "hostloop") return configDir;
-  if (effectiveFidelity === "container" || effectiveFidelity === "microvm") return join(workRoot, ".claude");
+ *  src/runtime/{hostloop,container,microvm}.ts), but the three real-agent tiers do NOT share one host
+ *  tree:
+ *    - hostloop spawns the native process directly with `CLAUDE_CONFIG_DIR=plan.configDir` (already a
+ *      host path) — root is `configDir` as-is.
+ *    - container spawns IN the sandbox with a GUEST `CLAUDE_CONFIG_DIR=mnt/.claude`, which
+ *      `stageWorkspace` (src/runtime/stage.ts) cp's `plan.configDir` INTO at `<workRoot>/.claude` —
+ *      host-visible there via the docker bind mount, and `workRoot` (`outDir/work/session/mnt`) IS that
+ *      host tree — root is `join(workRoot, ".claude")`.
+ *    - microvm ALSO spawns with a guest `CLAUDE_CONFIG_DIR=mnt/.claude`, but it stages into a
+ *      SEPARATE host tree: `VM_WORK_HOST/<sessionId>/mnt` (src/runtime/lima.ts's `VM_WORK_HOST`,
+ *      `join(homedir(), ".cowork-harness", "vm-work")` — see src/runtime/microvm.ts's `sessionHost` /
+ *      `mntHost`), NOT `outDir/work/session/mnt` — root is `join(VM_WORK_HOST, sessionId, "mnt",
+ *      ".claude")`. Using the container root here would glob an empty (non-existent) dir and silently
+ *      leave `reasoning` undefined on every microvm run.
+ *  Other tiers (protocol — no real agent binary spawns) return `undefined`: there is no child
+ *  transcript to read, so the caller skips the capture entirely. */
+export function resolveSubagentConfigRoot(
+  effectiveFidelity: string,
+  ctx: { configDir: string; workRoot: string; sessionId?: string },
+): string | undefined {
+  if (effectiveFidelity === "hostloop") return ctx.configDir;
+  if (effectiveFidelity === "container") return join(ctx.workRoot, ".claude");
+  if (effectiveFidelity === "microvm") {
+    // sessionId should always be available from the real call sites (executeScenario's local
+    // `sessionId`, threaded into buildPartialResult) — undefined only in a hypothetical caller that
+    // omits it, in which case there is no way to derive the per-session VM_WORK_HOST subtree, so
+    // capture is skipped rather than globbing the wrong (or a nonexistent) directory.
+    if (!ctx.sessionId) return undefined;
+    return join(VM_WORK_HOST, ctx.sessionId, "mnt", ".claude");
+  }
   return undefined;
 }
 
@@ -837,6 +858,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         outDir,
         workRoot,
         configDir: plan.configDir,
+        sessionId,
         pluginSkillRoots: pluginSkillRootsFromPlan(plan),
         userVisibleRoots,
         readonlyFolderRoots,
@@ -1261,11 +1283,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     });
 
     // Sub-agent reasoning (thinking + text turns), read from each dispatch's on-disk child session
-    // transcript (LIVE/record only — see subagentConfigDirRoot's doc comment for the per-tier root and
-    // captureSubagentReasoning's for the join). Mutates `result.subagents[].reasoning` in place; a
+    // transcript (LIVE/record only — see resolveSubagentConfigRoot's doc comment for the per-tier root
+    // and captureSubagentReasoning's for the join). Mutates `result.subagents[].reasoning` in place; a
     // `undefined` root (e.g. protocol tier) or a capture-internal failure is a silent no-op — reasoning
     // just stays absent, never a run failure.
-    const subagentConfigRoot = subagentConfigDirRoot(effectiveFidelity, plan.configDir, workRoot);
+    const subagentConfigRoot = resolveSubagentConfigRoot(effectiveFidelity, { configDir: plan.configDir, workRoot, sessionId });
     if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, result.subagents);
 
     // THE verdict-persist point: `computeVerdict` is downstream of assembling `result` (it reads
@@ -1463,6 +1485,12 @@ export function buildPartialResult(args: {
   outDir: string;
   workRoot: string;
   configDir: string;
+  /** This run's session ID — needed (microvm tier only) to derive the per-session VM_WORK_HOST subtree
+   *  for the sub-agent reasoning capture (see `resolveSubagentConfigRoot`'s doc comment). Optional so
+   *  pre-existing callers (e.g. tests exercising non-microvm tiers) still compile without it; the real
+   *  `executeScenario` call site always passes it. Omitting it on a microvm partial just leaves
+   *  `reasoning` absent for that salvage run, same as any other capture-unavailable case. */
+  sessionId?: string;
   pluginSkillRoots: PluginSkillRoot[];
   userVisibleRoots: string[];
   readonlyFolderRoots: string[];
@@ -1606,10 +1634,15 @@ export function buildPartialResult(args: {
     skippedAssertions: undefined,
     verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there
   });
-  // Same sub-agent reasoning capture the success path runs (see subagentConfigDirRoot's doc comment) —
-  // a salvaged partial run is still LIVE, and a dispatch may have completed (and thought) before the
-  // gate that ended the run. Silent no-op on a tier with no child transcript, or a capture failure.
-  const subagentConfigRoot = subagentConfigDirRoot(args.effectiveFidelity, args.configDir, args.workRoot);
+  // Same sub-agent reasoning capture the success path runs (see resolveSubagentConfigRoot's doc
+  // comment) — a salvaged partial run is still LIVE, and a dispatch may have completed (and thought)
+  // before the gate that ended the run. Silent no-op on a tier with no child transcript, or a capture
+  // failure.
+  const subagentConfigRoot = resolveSubagentConfigRoot(args.effectiveFidelity, {
+    configDir: args.configDir,
+    workRoot: args.workRoot,
+    sessionId: args.sessionId,
+  });
   if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, built.subagents);
 
   // A partial run still has a verdict — it failed on the unanswered gate (`result:"error"`), not on an
