@@ -82,6 +82,13 @@ const full: RunResult = {
   gateDeliveries: [{ question: "Proceed?", delivered: true, error: undefined, reason: "ok" }],
   egress: [{ host: "api.anthropic.com", decision: "allow" }],
   assertions: [{ assertion: { result: "success" }, pass: true, message: undefined }],
+  verdict: {
+    pass: false,
+    exitCode: 1,
+    signals: [{ code: "assertion", severity: "fail", message: "expected result to be success" }],
+    guards: [{ name: "capability-use", status: "na" }],
+    failures: [{ assertion: "result", message: "expected result to be success" }],
+  },
   subagents: [
     {
       toolUseId: "tu_1",
@@ -91,10 +98,16 @@ const full: RunResult = {
       dispatchTypeOmitted: true,
       declaredTools: ["Read"],
       toolsUsed: [{ name: "Read", count: 1 }],
+      referencesRead: ["references/sub-agent-notes.md"],
       description: "explore",
       dispatchModel: "claude-sonnet-4-5",
       resolvedModel: "claude-haiku-x",
       attributedSkillId: "my-plugin:my-skill",
+      reasoning: [
+        { kind: "thinking", text: "considering how to explore this" },
+        { kind: "text", text: "I'll start by reading the reference doc." },
+      ],
+      reasoningElided: 1,
     },
   ],
   nonReproducibleAnswers: [{ question: "Format?", chosen: "PDF", by: "llm", rationale: "best fit", model: "claude-sonnet-4-5" }],

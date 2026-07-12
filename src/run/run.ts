@@ -16,6 +16,7 @@ import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
+import { isVmSessionsPath } from "../vm-paths.js";
 
 /** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
  *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). Exported so the replay
@@ -48,7 +49,7 @@ const TASK_EVENT_SUBTYPES = new Set([
  *  replay reconstruction (cassette.ts) so both pick the same path from an identical input shape. */
 export function deniedPathFrom(inp: Record<string, unknown>): string | undefined {
   const vals = ["file_path", "path"].map((k) => inp[k]).filter((v): v is string => typeof v === "string");
-  return vals.find((v) => v === "/sessions" || v.startsWith("/sessions/")) ?? vals[0];
+  return vals.find(isVmSessionsPath) ?? vals[0];
 }
 
 /** Bound a captured decision input so a large tool payload can't bloat the run record. Objects pass
@@ -161,6 +162,11 @@ interface SubagentDispatch {
   dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type at all (proven by the full input parse) — the wildcard-fallback trap fired
   declaredTools: string[];
   toolsUsed: Array<{ name: string; count: number }>;
+  // Skill reference/script files THIS sub-agent Read (skill-relative: `references/foo.md`,
+  // `scripts/bar.py`), deduped in first-seen order — the sub-agent counterpart of the top-level
+  // (main-agent-only) RunRecord.filesRead. Attributed via the same parentToolUseId join that builds
+  // toolsUsed above, using the identical skillReferenceReadPath() predicate the main path uses.
+  referencesRead: string[];
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
   prompt?: string; // dispatch input.prompt, assertText-capped
   dispatchModel?: string; // the DISPATCHING message's model (ex-`model` — renamed when resolvedModel landed beside it)
@@ -632,6 +638,13 @@ export class Run {
                 const entry = sa.toolsUsed.find((d) => d.name === ev.name);
                 if (entry) entry.count++;
                 else sa.toolsUsed.push({ name: ev.name, count: 1 });
+                // Sub-agent counterpart of the main-agent-only filesRead capture at :594-597 above —
+                // same skillReferenceReadPath() predicate, attributed to THIS dispatch instead of the
+                // top-level record. Deduped, first-seen order (mirrors the main filesRead dedupe).
+                if (ev.name === "Read") {
+                  const ref = skillReferenceReadPath(String((ev.input as Record<string, unknown> | undefined)?.file_path ?? ""));
+                  if (ref && !sa.referencesRead.includes(ref)) sa.referencesRead.push(ref);
+                }
               }
             }
             // A `present_files` call is stashed regardless of main-agent/sub-agent scope above — the
@@ -712,6 +725,7 @@ export class Run {
               dispatchTypeOmitted: ev.typeOmitted || undefined,
               declaredTools: ev.declaredTools,
               toolsUsed: [],
+              referencesRead: [],
               description: ev.description,
               prompt: ev.prompt,
               dispatchModel: ev.dispatchModel,
@@ -881,7 +895,7 @@ export class Run {
               const pp = ev.paths?.path;
               // the DENIED path is whichever key the VM guard flagged — a /sessions-prefixed value if
               // present, else the first non-empty key (matching the gate's own scan order).
-              const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+              const vmHit = [fp, pp].find(isVmSessionsPath);
               this.rec.pathDenials.push({
                 source: "pretooluse",
                 tool: ev.tool ?? "?",

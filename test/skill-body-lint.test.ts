@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -174,6 +174,106 @@ describe.skipIf(!havePython)("scenario.py lint-skill — Cowork host-loop footgu
     expect(guarded?.line).toBe(4); // first block's token → INFO
     expect(warn?.line).toBe(9); // second block's token → WARN (buffer reset between fences)
     expect(warn?.severity).toBe("WARN");
+  });
+
+  it("Task E: self-heal `find -path` naming the CURRENT skill stays INFO plugin-root-guarded", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-guard-self-"));
+    const md = [
+      "---",
+      "name: demo-skill3",
+      "---",
+      "",
+      "# Demo skill 3",
+      "",
+      "```bash",
+      'S="${CLAUDE_PLUGIN_ROOT}/scripts/x.py"',
+      '[ -d "$S" ] || S="$(find /sessions -name x.py -path \'*/skills/demo-skill3/scripts\')"',
+      'python3 "$S" run',
+      "```",
+      "",
+    ].join("\n");
+    writeFileSync(join(d, "SKILL.md"), md);
+
+    const { findings } = lintSkill(d);
+    expect(findings.some((f) => f.rule === "guard-pattern-mismatch")).toBe(false);
+    const guarded = findings.find((f) => f.rule === "plugin-root-guarded");
+    expect(guarded, "expected a plugin-root-guarded INFO").toBeDefined();
+    expect(guarded?.severity).toBe("INFO");
+  });
+
+  it("Task E: self-heal `find -path` naming the enclosing PLUGIN's script dir stays INFO (widened scope)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-guard-plugin-"));
+    mkdirSync(join(d, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    const md = [
+      "# Demo skill in a plugin",
+      "",
+      "```bash",
+      'S="${CLAUDE_PLUGIN_ROOT}/scripts/x.py"',
+      '[ -d "$S" ] || S="$(find /sessions -name x.py -path \'*/demo-plugin/scripts\')"',
+      'python3 "$S" run',
+      "```",
+      "",
+    ].join("\n");
+    writeFileSync(join(d, "SKILL.md"), md);
+
+    const { findings } = lintSkill(d);
+    expect(findings.some((f) => f.rule === "guard-pattern-mismatch")).toBe(false);
+    const guarded = findings.find((f) => f.rule === "plugin-root-guarded");
+    expect(guarded, "expected a plugin-root-guarded INFO").toBeDefined();
+    expect(guarded?.severity).toBe("INFO");
+  });
+
+  it("Task E: self-heal `find -path` naming a WRONG/different skill is WARN guard-pattern-mismatch", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-guard-wrong-"));
+    const md = [
+      "---",
+      "name: demo-skill3",
+      "---",
+      "",
+      "# Demo skill 3",
+      "",
+      "```bash",
+      'S="${CLAUDE_PLUGIN_ROOT}/scripts/x.py"',
+      '[ -d "$S" ] || S="$(find /sessions -name x.py -path \'*/skills/other-skill/scripts\')"',
+      'python3 "$S" run',
+      "```",
+      "",
+    ].join("\n");
+    writeFileSync(join(d, "SKILL.md"), md);
+
+    const { findings } = lintSkill(d);
+    expect(findings.some((f) => f.rule === "plugin-root-guarded")).toBe(false);
+    const mismatch = findings.find((f) => f.rule === "guard-pattern-mismatch");
+    expect(mismatch, "expected a guard-pattern-mismatch WARN").toBeDefined();
+    expect(mismatch?.severity).toBe("WARN");
+    expect(mismatch?.message).toMatch(/other-skill/);
+    expect(mismatch?.message).toMatch(/demo-skill3/);
+  });
+
+  it("Task E: self-heal `find` with only `-name` (no `-path` skill token) stays INFO — conservative", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-guard-noname-"));
+    const md = [
+      "---",
+      "name: demo-skill3",
+      "---",
+      "",
+      "# Demo skill 3",
+      "",
+      "```bash",
+      'S="${CLAUDE_PLUGIN_ROOT}/scripts/x.py"',
+      '[ -d "$S" ] || S="$(find /sessions -name x.py)"',
+      'python3 "$S" run',
+      "```",
+      "",
+    ].join("\n");
+    writeFileSync(join(d, "SKILL.md"), md);
+
+    const { findings } = lintSkill(d);
+    expect(findings.some((f) => f.rule === "guard-pattern-mismatch")).toBe(false);
+    const guarded = findings.find((f) => f.rule === "plugin-root-guarded");
+    expect(guarded, "expected a plugin-root-guarded INFO").toBeDefined();
+    expect(guarded?.severity).toBe("INFO");
   });
 
   it("exit code: WARN findings are clean (0) by default but non-zero under --strict", () => {

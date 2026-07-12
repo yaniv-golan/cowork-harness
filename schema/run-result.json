@@ -309,7 +309,7 @@
       "additionalProperties": {
         "type": "number"
       },
-      "description": "Truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)."
+      "description": "Truthful per-tool CALL-COUNT map: a plain number per tool name (NOT usage.server_tool_use, which is host-routed-blind in cowork). Shape is always {tool: number} — for per-tool error counts use the separately-shaped toolErrors ({tool: {calls, errors}}); for per-tool timing use toolDurations ({tool: {calls, totalMs, maxMs}}). Do not expect an object value here."
     },
     "infraErrors": {
       "type": "array",
@@ -520,7 +520,10 @@
             "type": "number"
           },
           "toolCounts": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
           },
           "toolCallCount": {
             "type": "number"
@@ -550,6 +553,89 @@
     },
     "assertions": {
       "type": "array"
+    },
+    "verdict": {
+      "type": "object",
+      "description": "The overall run/asserted-lane verdict: computeVerdict's full return value, persisted VERBATIM (the same shape the --output-format json stdout envelope attaches to every result, since envelope.ts calls computeVerdict too) so the persisted and streamed channels can never diverge. pass/exitCode are the SAME values every verdict site (the run/skill exit, the footer, the JSON envelope ok) routes through computeVerdict for. signals[]/guards[] are the raw verdict inputs; failures[] collapses signals into a flat, jq-friendly list — names the failing assertion key when a failure traces to one, else carries just a hard-verdict guard reason (infra error, unanswered gate, scan-based host-path leak, etc.); empty on a pass. Run/asserted lane ONLY — absent (undefined) on a chat result, and on a result.json written before this field existed.",
+      "properties": {
+        "pass": {
+          "type": "boolean"
+        },
+        "exitCode": {
+          "type": "integer",
+          "enum": [0, 1]
+        },
+        "signals": {
+          "type": "array",
+          "description": "the raw verdict signals computeVerdict evaluated (assertion failures + guard-fired reasons + warn-only signals like non_determinism); [] on a clean pass.",
+          "items": {
+            "type": "object",
+            "required": ["code", "severity", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "assertion",
+                  "result_error",
+                  "transport_error",
+                  "usage_limit",
+                  "permissive_auto_allow",
+                  "outputs_delete",
+                  "host_path_leak",
+                  "non_deterministic",
+                  "l0_plugin_divergence",
+                  "missing_capability",
+                  "infra_error",
+                  "stalled",
+                  "prompt_asset_missing",
+                  "scan_unavailable"
+                ]
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["fail", "warn"]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "guards": {
+          "type": "array",
+          "description": "the \"guards active this run\" roster — one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
+          "items": {
+            "type": "object",
+            "required": ["name", "status"],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["ok", "fired", "na", "unverified"]
+              }
+            }
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "assertion": {
+                "type": "string",
+                "description": "the failing assertion's key (e.g. \"tool_called\"), when the failure traces to one"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": ["pass", "exitCode", "signals", "guards", "failures"]
     },
     "subagents": {
       "type": "array",
@@ -605,6 +691,13 @@
               }
             }
           },
+          "referencesRead": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "skill reference/script files THIS sub-agent Read (same shape/dedupe as the top-level referencesRead), attributed via the dispatch's toolUseId"
+          },
           "description": {
             "type": "string"
           },
@@ -628,6 +721,33 @@
           },
           "attributedSkillId": {
             "type": "string"
+          },
+          "reasoning": {
+            "type": "array",
+            "description": "the sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result excluded — already covered by toolsUsed/referencesRead). Read from the on-disk child session transcript (LIVE/record lane only — undefined on replay, never embedded in a cassette). [] = a child transcript was found but captured no thinking/text turns; undefined = no child transcript joined to this dispatch.",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "text"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "thinking",
+                    "text"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "reasoningElided": {
+            "type": "number",
+            "description": "count of reasoning turns dropped by the cap (oldest-first) — mirrors thinkingElided"
           }
         }
       }

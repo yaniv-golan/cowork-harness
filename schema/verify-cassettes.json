@@ -15,7 +15,7 @@
     "command": { "const": "verify-cassettes" },
     "ok": {
       "type": "boolean",
-      "description": "false if any real privacy finding (cls != 'unscanned'), staleness message, version mismatch, or unreadable cassette. Mirrors the exit code (0 clean / 1 not-ok)."
+      "description": "false if any real privacy finding (cls != 'unscanned'), staleness message, unverifiable-class staleness, version mismatch, or unreadable cassette. Mirrors whether the exit code is non-zero, but NOT which one: exit 0 (ok:true, clean); exit 1 (ok:false, verification RAN and found a real problem — findings[], staleness[], or scenarioDrift[]); exit 3 (ok:false, verification could NOT complete — unverifiable[], version[], or error). A real finding always wins exit 1 over a co-occurring exit-3 signal in the same run."
     },
     "coverage": {
       "type": "object",
@@ -32,7 +32,7 @@
       "description": "One entry per cassette file, including unreadable ones (tallied via `error`, never a crash that aborts the batch).",
       "items": {
         "type": "object",
-        "required": ["file", "findings", "staleness", "notes", "version", "scenarioDrift"],
+        "required": ["file", "findings", "staleness", "unverifiable", "notes", "version", "scenarioDrift"],
         "properties": {
           "file": { "type": "string" },
           "findings": {
@@ -54,7 +54,12 @@
           "staleness": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Drift / unresolvable-fingerprint messages \u2014 each one fails the gate. Empty under --skip-staleness."
+            "description": "Genuine drift messages \u2014 a StalenessFinding whose class is NOT 'unverifiable-*' (e.g. baseline/skill/shared-root/format/resolved-tier/prompt-assets), plus the session-shape fingerprint drift string. Verification RAN and found a real problem: exit 1. Empty under --skip-staleness. See `unverifiable` for the could-not-verify counterpart."
+          },
+          "unverifiable": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "StalenessFinding messages whose class IS 'unverifiable-*' (e.g. unverifiable-baseline/unverifiable-skill/unverifiable-tier/unverifiable-prompt-assets) \u2014 verification could NOT complete, distinct from a genuine `staleness` drift finding: exit 3 (unless the same run also carries a `staleness`/`findings`/`scenarioDrift` entry, in which case that real finding wins exit 1). Empty under --skip-staleness."
           },
           "notes": {
             "type": "array",
@@ -64,16 +69,16 @@
           "version": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Format/version failures: the cassette was written by a NEWER harness than this one understands. Always fails the gate (can't verify \u21d2 not green), independent of --skip-staleness."
+            "description": "Format/version failures: the cassette was written by a NEWER harness than this one understands. Always fails the gate (can't verify \u21d2 not green; exit 3, the could-not-verify bucket), independent of --skip-staleness."
           },
           "scenarioDrift": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Scenario-content (prompt) drift: the committed on-disk scenario's prompt diverged from the cassette's frozen prompt. A definite divergence \u2014 each message fails the gate (own bucket so --skip-staleness can't mask it). Empty under --skip-scenario-drift, or when the source isn't resolvable (that becomes a non-failing `notes` entry instead)."
+            "description": "Scenario-content (prompt) drift: the committed on-disk scenario's prompt diverged from the cassette's frozen prompt. A definite divergence \u2014 each message fails the gate (own bucket so --skip-staleness can't mask it; exit 1, a real finding). Empty under --skip-scenario-drift, or when the source isn't resolvable (that becomes a non-failing `notes` entry instead)."
           },
           "error": {
             "type": "string",
-            "description": "Present when the cassette file itself is malformed/unreadable; the file is tallied as a gate failure and the batch continues."
+            "description": "Present when the cassette file itself is malformed/unreadable (or its per-file check crashed); the file is tallied as a could-not-verify failure (exit 3) and the batch continues."
           }
         }
       }

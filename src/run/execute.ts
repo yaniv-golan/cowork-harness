@@ -39,7 +39,7 @@ import {
   capabilityPreflightDecision,
   CAPABILITY_FAMILIES,
 } from "../runtime/image-capabilities.js";
-import { instanceName } from "../runtime/lima.js";
+import { instanceName, VM_WORK_HOST } from "../runtime/lima.js";
 import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -54,6 +54,7 @@ import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { readTimeline } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
+import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
@@ -65,6 +66,7 @@ import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
+import { computeVerdict } from "./verdict.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -198,6 +200,41 @@ function readOriginMarker(path: string): OriginMarker | null {
     /* missing or malformed */
   }
   return null;
+}
+
+/** Resolve the config-dir ROOT the sub-agent reasoning capture (`captureSubagentReasoning`) should glob
+ *  under, per tier — mirrors how `CLAUDE_CONFIG_DIR` itself is set per tier (src/runtime/argv.ts +
+ *  src/runtime/{hostloop,container,microvm}.ts), but the three real-agent tiers do NOT share one host
+ *  tree:
+ *    - hostloop spawns the native process directly with `CLAUDE_CONFIG_DIR=plan.configDir` (already a
+ *      host path) — root is `configDir` as-is.
+ *    - container spawns IN the sandbox with a GUEST `CLAUDE_CONFIG_DIR=mnt/.claude`, which
+ *      `stageWorkspace` (src/runtime/stage.ts) cp's `plan.configDir` INTO at `<workRoot>/.claude` —
+ *      host-visible there via the docker bind mount, and `workRoot` (`outDir/work/session/mnt`) IS that
+ *      host tree — root is `join(workRoot, ".claude")`.
+ *    - microvm ALSO spawns with a guest `CLAUDE_CONFIG_DIR=mnt/.claude`, but it stages into a
+ *      SEPARATE host tree: `VM_WORK_HOST/<sessionId>/mnt` (src/runtime/lima.ts's `VM_WORK_HOST`,
+ *      `join(homedir(), ".cowork-harness", "vm-work")` — see src/runtime/microvm.ts's `sessionHost` /
+ *      `mntHost`), NOT `outDir/work/session/mnt` — root is `join(VM_WORK_HOST, sessionId, "mnt",
+ *      ".claude")`. Using the container root here would glob an empty (non-existent) dir and silently
+ *      leave `reasoning` undefined on every microvm run.
+ *  Other tiers (protocol — no real agent binary spawns) return `undefined`: there is no child
+ *  transcript to read, so the caller skips the capture entirely. */
+export function resolveSubagentConfigRoot(
+  effectiveFidelity: string,
+  ctx: { configDir: string; workRoot: string; sessionId?: string },
+): string | undefined {
+  if (effectiveFidelity === "hostloop") return ctx.configDir;
+  if (effectiveFidelity === "container") return join(ctx.workRoot, ".claude");
+  if (effectiveFidelity === "microvm") {
+    // sessionId should always be available from the real call sites (executeScenario's local
+    // `sessionId`, threaded into buildPartialResult) — undefined only in a hypothetical caller that
+    // omits it, in which case there is no way to derive the per-session VM_WORK_HOST subtree, so
+    // capture is skipped rather than globbing the wrong (or a nonexistent) directory.
+    if (!ctx.sessionId) return undefined;
+    return join(VM_WORK_HOST, ctx.sessionId, "mnt", ".claude");
+  }
+  return undefined;
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
@@ -821,6 +858,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         outDir,
         workRoot,
         configDir: plan.configDir,
+        sessionId,
         pluginSkillRoots: pluginSkillRootsFromPlan(plan),
         userVisibleRoots,
         readonlyFolderRoots,
@@ -1241,7 +1279,24 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       unansweredGate: undefined,
       staleness: undefined,
       skippedAssertions: undefined,
+      verdict: undefined, // computed just below (after assertions are evaluated / the object is fully assembled) and stored — see the comment there
     });
+
+    // Sub-agent reasoning (thinking + text turns), read from each dispatch's on-disk child session
+    // transcript (LIVE/record only — see resolveSubagentConfigRoot's doc comment for the per-tier root
+    // and captureSubagentReasoning's for the join). Mutates `result.subagents[].reasoning` in place; a
+    // `undefined` root (e.g. protocol tier) or a capture-internal failure is a silent no-op — reasoning
+    // just stays absent, never a run failure.
+    const subagentConfigRoot = resolveSubagentConfigRoot(effectiveFidelity, { configDir: plan.configDir, workRoot, sessionId });
+    if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, result.subagents);
+
+    // THE verdict-persist point: `computeVerdict` is downstream of assembling `result` (it reads
+    // `result.assertions`, `result.scan`, `result.permissiveAutoAllow`, …), so it can only run here, after
+    // the assembler call above — never inside it. Stored verbatim on `result` before it's written to
+    // result.json (below) — the SAME `Verdict` shape (`{pass, exitCode, signals, guards, failures}`) the
+    // `--output-format json` stdout envelope attaches (envelope.ts calls `computeVerdict` too), so the two
+    // channels can never diverge in shape or value.
+    result.verdict = computeVerdict(result, "live");
 
     // Non-null: see the matching comment at the partial-result finalize call above.
     runCrashSafety.finalize(record, result.result, result.durationMs!);
@@ -1412,9 +1467,11 @@ function writeRunJsonl(
 /** Assemble a RunResult for a run that did NOT complete — it exited on an unanswered gate. The work the
  *  agent did before the whiff (artifacts on disk, the partial transcript, decisions/tool counts so far) is
  *  salvaged so the paid run is still inspectable instead of vanishing. Deliberately reduced: no assertion
- *  outcome (a partial run has none) and no capability/verdict fields (those would need a probe we skip).
- *  `partial:true` is the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its
- *  populated `artifacts[]` as a passing run. */
+ *  outcome (a partial run has none — `assertions: []`) and no capability-probe fields (those would need a
+ *  probe we skip). It DOES still carry a `verdict` — `result:"error"` on the unanswered gate is itself a
+ *  hard fail, computed and stored at the end of this function (see the comment there). `partial:true` is
+ *  the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its populated
+ *  `artifacts[]` as a passing run. */
 export function buildPartialResult(args: {
   /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
   turn?: number;
@@ -1428,6 +1485,12 @@ export function buildPartialResult(args: {
   outDir: string;
   workRoot: string;
   configDir: string;
+  /** This run's session ID — needed (microvm tier only) to derive the per-session VM_WORK_HOST subtree
+   *  for the sub-agent reasoning capture (see `resolveSubagentConfigRoot`'s doc comment). Optional so
+   *  pre-existing callers (e.g. tests exercising non-microvm tiers) still compile without it; the real
+   *  `executeScenario` call site always passes it. Omitting it on a microvm partial just leaves
+   *  `reasoning` absent for that salvage run, same as any other capture-unavailable case. */
+  sessionId?: string;
   pluginSkillRoots: PluginSkillRoot[];
   userVisibleRoots: string[];
   readonlyFolderRoots: string[];
@@ -1471,7 +1534,7 @@ export function buildPartialResult(args: {
   };
   // Working folder panel's file model — same walk `artifacts` below derives from.
   const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
-  return assembleRunResult({
+  const built = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
@@ -1552,8 +1615,8 @@ export function buildPartialResult(args: {
     resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
     stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
     resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs()),
-    // Fields this lane deliberately never sets (per this function's own doc comment: "no capability/
-    // verdict fields") — now explicit instead of implicit:
+    // Fields this lane deliberately never sets (per this function's own doc comment: "no capability
+    // probe fields") — now explicit instead of implicit:
     resultErrorKind: undefined,
     stalledOnQuestion: undefined,
     capabilityProbe: undefined,
@@ -1569,7 +1632,24 @@ export function buildPartialResult(args: {
     missingCapabilityUse: undefined,
     staleness: undefined,
     skippedAssertions: undefined,
+    verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there
   });
+  // Same sub-agent reasoning capture the success path runs (see resolveSubagentConfigRoot's doc
+  // comment) — a salvaged partial run is still LIVE, and a dispatch may have completed (and thought)
+  // before the gate that ended the run. Silent no-op on a tier with no child transcript, or a capture
+  // failure.
+  const subagentConfigRoot = resolveSubagentConfigRoot(args.effectiveFidelity, {
+    configDir: args.configDir,
+    workRoot: args.workRoot,
+    sessionId: args.sessionId,
+  });
+  if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, built.subagents);
+
+  // A partial run still has a verdict — it failed on the unanswered gate (`result:"error"`), not on an
+  // assertion (there are none to evaluate here). Compute it from the just-assembled object (computeVerdict
+  // reads result.assertions/unansweredGate/etc. off it) and store the result, same as the success path above.
+  built.verdict = computeVerdict(built, "live");
+  return built;
 }
 
 /** the structured run trace. */
@@ -1671,9 +1751,18 @@ const TOUCHES_OUTPUTS = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
 const UNDER_OUTPUTS = /(^|\/)(mnt\/)?outputs(\/|$)/;
 const CD_INTO_OUTPUTS = /\b(cd|pushd)\s+["']?(mnt\/)?outputs(?![\w.])/;
 
-/** Configured safe-staging prefixes (opt-in, no default — `/tmp` is NOT assumed scratch since a skill may
- *  stage deliverables there). Set COWORK_HARNESS_SAFE_STAGING_PREFIX to a comma-separated list to enable
- *  rm-suppression for deletes provably scoped under those prefixes. */
+/** Default safe-staging prefixes, always active. Real Cowork denies an outputs-delete STRUCTURALLY by the
+ *  resolved target's mount (the `outputs` mount is `rw` without the delete bit) — a delete whose target
+ *  provably lands under `/tmp` (or the literal, unexpanded `$TMPDIR`/`${TMPDIR}` idiom) is genuinely never
+ *  an outputs delete in production, so treating it as scratch here is MORE faithful, not less safe. (Prior
+ *  rationale for leaving this opt-in — "`/tmp` is NOT assumed scratch" — predated that binary finding.) */
+function defaultSafePrefixes(): string[] {
+  return ["/tmp/", "$TMPDIR/", "${TMPDIR}/"];
+}
+
+/** Additional operator-configured safe-staging prefixes, unioned with `defaultSafePrefixes()`. Set
+ *  COWORK_HARNESS_SAFE_STAGING_PREFIX to a comma-separated list to extend rm-suppression to other
+ *  provably-scratch prefixes (e.g. a skill's own `/scratch` convention). */
 function safePrefixes(): string[] {
   return (process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX ?? "")
     .split(",")
@@ -1682,10 +1771,22 @@ function safePrefixes(): string[] {
     .map((p) => (p.endsWith("/") ? p : p + "/"));
 }
 
+/** Collapse bash backslash-newline line continuations (`\` immediately followed by a newline, plus any
+ *  following indentation) into a single space, so a line-wrapped statement is one logical line before any
+ *  splitting/scanning happens. Without this, `splitStatements` (which splits on bare `\n`) shreds a
+ *  line-continued `mv \` / `outputs/a.txt \` / `/tmp/b.txt` into fragments too small for `mvDeletesOutputs`
+ *  to see both operands — an UNDER-detection (false negative), not a false positive. Applied inside
+ *  `expandSimpleVars` (the single entry point both the mv scan and the rm scan run through) so every caller
+ *  gets joined statements for free. */
+function joinLineContinuations(cmd: string): string {
+  return cmd.replace(/\\\r?\n[ \t]*/g, " ");
+}
+
 /** Substitute simple `NAME=VALUE` assignments into later `$NAME`/`${NAME}` uses. Conservative: skips
  *  command-substituted values (`$(...)`/backticks) so an unresolved indirect target is never treated as
  *  resolved (and therefore never "provably safe"). */
-function expandSimpleVars(cmd: string): string {
+function expandSimpleVars(rawCmd: string): string {
+  const cmd = joinLineContinuations(rawCmd);
   const vars = new Map<string, string>();
   const assign = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/g;
   const record = (part: string): void => {
@@ -1718,6 +1819,67 @@ function expandSimpleVars(cmd: string): string {
     }
     out += expand(parts[i]);
     record(parts[i]);
+  }
+  return out;
+}
+
+const MKTEMP_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b([^)]*)\)/g;
+const ANY_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=/g;
+const MKTEMP_SAFE_PLACEHOLDER = "/tmp/.mktemp-safe";
+
+/** True when a `mktemp` invocation's argument string DIRECTS the created file/dir at a specific directory
+ *  rather than letting it fall under the system temp dir: `-p DIR` / `-pDIR`, `--tmpdir` / `--tmpdir=DIR`,
+ *  or a positional TEMPLATE argument containing a `/` (e.g. `mktemp mnt/outputs/tmp.XXXXXX`). Any of these
+ *  means the resulting path is NOT provably under `/tmp` — `mktemp -p mnt/outputs`, `mktemp
+ *  --tmpdir=mnt/outputs xx.XXXX`, and `mktemp mnt/outputs/tmp.XXXXXX` can all place the file inside
+ *  outputs. Lightweight whitespace tokenizer (consistent with `nonFlagArgs` elsewhere in this file) — never
+ *  under-detects a dir-directing arg, which is what matters for the "prefer false positive" invariant. */
+function mktempIsDirDirected(args: string): boolean {
+  const tokens = args.trim().split(/\s+/).filter(Boolean);
+  for (const t of tokens) {
+    if (t === "-p" || t.startsWith("-p") /* combined -pDIR */) return true;
+    if (t === "--tmpdir" || t.startsWith("--tmpdir=")) return true;
+    if (!t.startsWith("-") && t.includes("/")) return true; // positional TEMPLATE naming a directory
+  }
+  return false;
+}
+
+/** A NARROW, separate pass (run AFTER `expandSimpleVars`, which deliberately SKIPS `$(...)`-valued
+ *  assignments as unresolved): recognizes the `VAR=$(mktemp …)` idiom — a `$(...)` value, but one that is
+ *  known by construction to always resolve under the system temp directory — and substitutes later
+ *  `$VAR`/`${VAR}` uses with a literal `/tmp`-scoped placeholder so the target-safety check in
+ *  `isOutputsDelete` treats them as provably outside outputs. Only applies when the mktemp call has NO
+ *  directory-directing argument (see `mktempIsDirDirected`); `mktemp -p mnt/outputs`, `mktemp
+ *  --tmpdir=mnt/outputs …`, and `mktemp mnt/outputs/tmp.XXXXXX` can all place the created path inside
+ *  outputs, so those are deliberately left UNRESOLVED rather than marked safe — an unresolved `$VAR` is
+ *  never "provably safe" downstream, so the later `rm "$VAR"` still flags (matches "prefer a false
+ *  positive over a false negative"). Source-order aware, mirroring `expandSimpleVars`'s non-retroactive
+ *  semantics: a later reassignment of VAR to anything else (mktemp or not) removes the safe marking for
+ *  subsequent uses within that same reassignment, then re-establishes it only if the NEW assignment is
+ *  itself a directory-free `mktemp` call. */
+function resolveMktempVars(cmd: string): string {
+  const safeVars = new Set<string>();
+  const parts = cmd.split(/(\n|;|&&|\|\|)/);
+  let out = "";
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      out += parts[i];
+      continue;
+    }
+    let part = parts[i];
+    for (const v of safeVars) {
+      part = part.replace(new RegExp(`\\$\\{${v}\\}|\\$${v}\\b`, "g"), () => MKTEMP_SAFE_PLACEHOLDER);
+    }
+    MKTEMP_ASSIGN.lastIndex = 0;
+    const mktempHere = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = MKTEMP_ASSIGN.exec(part))) if (!mktempIsDirDirected(m[3])) mktempHere.add(m[2]);
+    ANY_ASSIGN.lastIndex = 0;
+    while ((m = ANY_ASSIGN.exec(part))) {
+      if (mktempHere.has(m[2])) safeVars.add(m[2]);
+      else safeVars.delete(m[2]);
+    }
+    out += part;
   }
   return out;
 }
@@ -1758,28 +1920,48 @@ function mvDeletesOutputs(stmt: string): boolean {
 /**
  * A bash command deletes in outputs when (a) an `mv` moves a file OUT of outputs, or (b) an rm-family
  * delete (`rm/unlink/rmdir/shred/truncate`, `find … -delete`, python os.remove/unlink/rmdir/shutil.rmtree,
- * pathlib `.unlink()`) co-occurs with an `outputs/` reference. mv-direction is always evaluated (fixes the
- * move-INTO false positive without losing the move-OUT true positive). For the rm family the DEFAULT is
- * conservative (flag any co-occurrence — current behavior); when the operator opts in via
- * COWORK_HARNESS_SAFE_STAGING_PREFIX, a delete is suppressed only when provably scoped to a configured
- * prefix and outputs is referenced only by non-delete statements. Unresolved/command-substituted targets
- * are never "provably safe". Pure + exported so the rule is directly unit-testable. RESIDUAL GAP: a delete
- * via a script file / renamed binary / non-bash tool still evades this post-hoc scan — real enforcement is
- * the deferred FUSE/MCP sub-project.
+ * pathlib `.unlink()`) targets something under outputs. mv-direction is always evaluated (fixes the
+ * move-INTO false positive without losing the move-OUT true positive). For the rm family this mirrors real
+ * Cowork's own enforcement, which is STRUCTURAL (a delete syscall's resolved target's mount), not
+ * command-text co-occurrence: BY DEFAULT, each rm-family delete statement's own target(s) are inspected —
+ * a delete is suppressed only when EVERY target is provably outside outputs (an absolute/relative path not
+ * under outputs, or a path under a safe prefix: `/tmp/`, the literal `$TMPDIR`/`${TMPDIR}` idiom, a
+ * `VAR=$(mktemp …)`-sourced `$VAR`, or an operator-configured COWORK_HARNESS_SAFE_STAGING_PREFIX entry).
+ * Unresolved/command-substituted targets (other than the recognized `mktemp` idiom) are never "provably
+ * safe" — the guiding invariant is "prefer a false positive over a false negative when a target is
+ * genuinely unprovable", so those, and a delete statement that itself names outputs, still flag. Pure +
+ * exported so the rule is directly unit-testable. RESIDUAL GAP: a delete via a script file / renamed binary
+ * / non-bash tool still evades this post-hoc scan — real enforcement is the deferred FUSE/MCP sub-project.
+ * Also out of scope: the harness has no counterpart to production's `allow_cowork_file_delete` escalation
+ * tool (a sub-agent that hits a real outputs-delete EPERM should call that, not silently fail) — this scan
+ * only feeds the `no_delete_in_outputs` assertion, it never blocks execution.
  */
 export function isOutputsDelete(cmd: string): boolean {
-  const expanded = expandSimpleVars(cmd);
+  const expanded = resolveMktempVars(expandSimpleVars(cmd));
   for (const stmt of splitStatements(expanded)) if (mvDeletesOutputs(stmt)) return true; // mv: always-on, direction-aware
   if (!DELETE_TOKEN.test(expanded) || !TOUCHES_OUTPUTS.test(expanded)) return false; // rm-family fast path
-  const prefixes = safePrefixes();
-  if (prefixes.length === 0) return true; // no opt-in → flag the co-occurrence (unchanged default behavior)
+  const prefixes = [...defaultSafePrefixes(), ...safePrefixes()];
   if (CD_INTO_OUTPUTS.test(expanded)) return true; // a cwd-relative delete could hit outputs
   for (const stmt of splitStatements(expanded)) {
     if (!DELETE_TOKEN.test(stmt)) continue;
     if (TOUCHES_OUTPUTS.test(stmt)) return true; // a delete statement itself names outputs
     const targets = nonFlagArgs(stmt);
-    const allSafe = targets.length > 0 && targets.every((t) => prefixes.some((pre) => t.startsWith(pre)));
-    if (!allSafe) return true; // unprovable (incl. unexpanded/command-subst vars) → flag
+    // A prefix match only PROVES safety if the remainder after the prefix is itself inert: no `..`
+    // path segment (could walk back out of the safe root, e.g. `/tmp/a/../b` → `/tmp/b`... or worse,
+    // `/tmp/../outputs/x`) and no unexpanded `$` (an unresolved var/command-subst suffix, e.g.
+    // `/tmp/${TARGET}` or `/tmp/$(get)`, whose real resolved path is unknown). Either makes the
+    // remainder itself unprovable, so the whole target falls through to the "unprovable → flag" path
+    // below rather than being cleared by the prefix match.
+    const isProvablySafe = (t: string): boolean =>
+      prefixes.some((pre) => {
+        if (!t.startsWith(pre)) return false;
+        const remainder = t.slice(pre.length);
+        if (/(^|\/)\.\.(\/|$)/.test(remainder)) return false;
+        if (remainder.includes("$")) return false;
+        return true;
+      });
+    const allSafe = targets.length > 0 && targets.every(isProvablySafe);
+    if (!allSafe) return true; // unprovable (incl. unexpanded/command-subst vars, `..` traversal) → flag
   }
   return false; // every rm delete is provably under a safe prefix; outputs ref was non-delete only
 }

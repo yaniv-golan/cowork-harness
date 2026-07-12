@@ -141,12 +141,79 @@ function nthParentDir(p: string, n: number): string {
   return out;
 }
 
+/** `.../claude-code/<ver>/claude.app/Contents/MacOS/claude` — the leaf below the `<ver>` directory. */
+const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
+/** Number of path segments to strip off a full native binary path to reach its `<ver>` directory —
+ *  the 4-segment `NATIVE_LEAF` plus the `<ver>` dir itself. */
+const NATIVE_VERSION_ROOT_DEPTH = NATIVE_LEAF.split("/").length + 1;
+
+/** Extract the `<ver>` directory name from a `.../claude-code/<ver>/claude.app/Contents/MacOS/claude`
+ *  path. `NATIVE_LEAF` is 4 segments (`claude.app/Contents/MacOS/claude`), so the `<ver>` dir is 4
+ *  `dirname` hops up from the leaf file. Returns undefined if the path is too shallow to contain one. */
+function nativeVersionFromPath(path: string): string | undefined {
+  const verDir = nthParentDir(path, NATIVE_LEAF.split("/").length);
+  const ver = verDir.split("/").pop();
+  return ver || undefined;
+}
+
+/**
+ * Classification of the NATIVE agent binary's staging state against its baseline pin — the single
+ * source of truth shared by `resolveHostAgentBinary` and `doctor`'s `hostAgent` check so the two never
+ * disagree about whether a drift is patch-only (auto-tolerated) or major/minor (env-gated/hard-fail).
+ *
+ * - `exact` — the pinned path exists as-is.
+ * - `patch` — the pinned path is gone, but a same-major.minor, different-patch sibling exists (safe:
+ *   the native binary has no sha256 pin, so a patch bump is auto-tolerated).
+ * - `major-minor` — the pinned path is gone and either no sibling version could be extracted, or the
+ *   best sibling differs in major or minor (today's env-gated-fallback-or-throw behavior applies).
+ * - `missing` — the pinned path is gone and no sibling binary exists at all.
+ */
+export interface NativeStagingDrift {
+  kind: "exact" | "patch" | "major-minor" | "missing";
+  /** The baseline's configured (possibly nonexistent) staged path, tilde-expanded. */
+  stagedPath: string;
+  /** The pinned version dir name, if extractable from `stagedPath`. */
+  pinned?: string;
+  /** The fallback sibling's version dir name, if one was found. */
+  found?: string;
+  /** The fallback sibling's resolved binary path, if one was found (kinds `patch`/`major-minor`). */
+  fallbackPath?: string;
+}
+
+/** Classify the native agent binary's staging drift against `baseline.agentBinary.nativeStagedPath`.
+ *  See `NativeStagingDrift` for the classification. Pure/read-only — does not touch env vars. */
+export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeStagingDrift {
+  const staged = (baseline.agentBinary?.nativeStagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
+  if (staged && existsSync(staged)) {
+    const ver = nativeVersionFromPath(staged);
+    return { kind: "exact", stagedPath: staged, pinned: ver, found: ver };
+  }
+  if (!staged) return { kind: "missing", stagedPath: staged };
+  const fallback = newestStagedSibling(nthParentDir(staged, NATIVE_VERSION_ROOT_DEPTH), NATIVE_LEAF);
+  if (!fallback) return { kind: "missing", stagedPath: staged, pinned: nativeVersionFromPath(staged) };
+  const pinned = nativeVersionFromPath(staged);
+  const found = nativeVersionFromPath(fallback);
+  const patchOnly =
+    !!pinned &&
+    !!found &&
+    pinned.split(".")[0] === found.split(".")[0] &&
+    pinned.split(".")[1] === found.split(".")[1] &&
+    cmpVersionStrings(pinned, found) !== 0;
+  return { kind: patchOnly ? "patch" : "major-minor", stagedPath: staged, pinned, found, fallbackPath: fallback };
+}
+
 /**
  * Resolve the host path to the staged NATIVE macOS agent binary (COWORK_HOST_AGENT_BINARY override >
  * baseline.agentBinary.nativeStagedPath). Desktop stages a native macOS Mach-O binary alongside the
  * Linux/arm64 ELF — `claude-code/<ver>/claude.app/Contents/MacOS/claude`. This is what hostloop spawns
  * directly (no Docker) for the agent loop; the ELF (`resolveAgentBinary`) stays the source of truth for
  * container/microvm and for hostloop's bash/web_fetch VM sidecar image.
+ *
+ * A mid-session Claude Desktop auto-update prunes the pinned version and stages a newer one — since the
+ * native binary carries NO sha256 pin (unlike the ELF), a same-major.minor PATCH bump is auto-tolerated
+ * by default (loud stderr note, no env var needed): `verifiedElf`'s hard-fail-on-mismatch doesn't apply
+ * here, so silently using a patch-newer binary can't downgrade an integrity check that doesn't exist. A
+ * major/minor drift keeps today's behavior — env-gated fallback or a hard throw.
  */
 export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
   const override = process.env.COWORK_HOST_AGENT_BINARY;
@@ -154,26 +221,29 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
     if (!existsSync(override)) throw new Error(`COWORK_HOST_AGENT_BINARY not found: ${override}`);
     return resolve(override);
   }
-  const staged = (baseline.agentBinary?.nativeStagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
-  if (staged && existsSync(staged)) return resolve(staged);
-  const exactPath = staged || "(unknown)";
-  // .../claude-code/<ver>/claude.app/Contents/MacOS/claude -> versionRoot = .../claude-code (5 segments:
-  // the 4-segment leaf below PLUS the <ver> dir itself).
-  const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
-  const fallback = staged ? newestStagedSibling(nthParentDir(staged, NATIVE_LEAF.split("/").length + 1), NATIVE_LEAF) : undefined;
-  if (fallback && process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
+  const drift = classifyNativeStagingDrift(baseline);
+  if (drift.kind === "exact") return resolve(drift.stagedPath);
+  const exactPath = drift.stagedPath || "(unknown)";
+  if (drift.kind === "patch") {
     process.stderr.write(
-      `cowork-harness: staged NATIVE agent binary "${staged}" not found; falling back to newest sibling "${fallback}".\n`,
+      `cowork-harness: staged native agent ${drift.pinned} pruned by a Desktop update; using patch-newer ` +
+        `${drift.found} — behavior contract unchanged for a patch bump.\n`,
     );
-    return fallback;
+    return resolve(drift.fallbackPath!);
   }
-  if (fallback) {
+  if (drift.kind === "major-minor") {
+    if (process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
+      process.stderr.write(
+        `cowork-harness: staged NATIVE agent binary "${exactPath}" not found; falling back to newest sibling "${drift.fallbackPath}".\n`,
+      );
+      return resolve(drift.fallbackPath!);
+    }
     throw new Error(
       `cowork-harness: baseline NATIVE agent binary not found: ${exactPath}. Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to use the newest available.`,
     );
   }
   throw new Error(
-    `Staged NATIVE agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +
+    `Staged NATIVE agent binary not found at "${exactPath}". It is extracted from your Claude Desktop install ` +
       `(claude-code/<ver>/claude.app/Contents/MacOS/claude). Open Cowork once to stage it, or set COWORK_HOST_AGENT_BINARY to its path.`,
   );
 }

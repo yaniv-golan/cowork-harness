@@ -257,6 +257,35 @@
             },
             "additionalProperties": false
           },
+          "subagent_dispatch_healthy": {
+            "description": "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. Content-class (fileToolAttempts + toolResults), replay-checkable without controlOut.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "description": "regex over dispatchAgentType OR resolvedAgentType OR description, selecting the dispatch(es) to check — same matching as subagent_dispatched; omit to require EVERY dispatch to be healthy",
+                "type": "string"
+              },
+              "delivered": {
+                "description": "default true: the selected dispatch's OWN sub-agent-origin write (matched by parentToolUseId, not any sub-agent's write) has a paired non-error tool_result",
+                "type": "boolean"
+              },
+              "path": {
+                "description": "EXACT raw path the delivered write must have sent (strongest); narrows `delivered`",
+                "type": "string",
+                "minLength": 1
+              },
+              "path_suffix": {
+                "description": "the delivered write's path suffix (weaker than `path`)",
+                "type": "string",
+                "minLength": 1
+              },
+              "no_vm_paths": {
+                "description": "default true: the selected dispatch attempted NO `/sessions` VM path (its own parentToolUseId only)",
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
           "subagent_dispatched": {
             "description": "a sub-agent matching this regex (by dispatch or resolved agent type, or description) was dispatched",
             "type": "string"

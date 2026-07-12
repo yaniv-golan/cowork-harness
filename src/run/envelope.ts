@@ -60,10 +60,14 @@ export interface JsonEnvelopeOpts {
  *  same SEAM-B verdict as the process exit code / footer (it cannot diverge). `replay` uses the replay
  *  lane (a cassette can't reproduce the scan/permissive signals); every other command is the live lane.
  *
- *  Each emitted result carries its own `verdict` ({pass, exitCode, signals[], guards[]}) — a NON-MUTATING
- *  projection (computeVerdict is pure; RunResult the type stays clean). This lets a consumer read per-result
- *  pass/fail AND why (the `signals[]` — e.g. an all-green-assertions run that is `pass:false` purely on a
- *  `stalled` signal) without recomputing from the sibling booleans. NOTE: this publishes the
+ *  Each emitted result carries its own `verdict` ({pass, exitCode, signals[], guards[], failures[]}) — a
+ *  NON-MUTATING re-derivation (computeVerdict is pure; the RunResult on disk stays untouched by this
+ *  spread) via the SAME `computeVerdict` call that already persisted `result.verdict` into `result.json`
+ *  at the execute.ts persist point — so this recomputation is provably identical in shape AND value to
+ *  what's on disk; the two channels (a kept run's `result.json` and this stdout envelope) can never
+ *  diverge. This lets a consumer read per-result pass/fail AND why (the `signals[]` — e.g. an
+ *  all-green-assertions run that is `pass:false` purely on a `stalled` signal — or the flat `failures[]`
+ *  for a jq-friendly summary) without recomputing from the sibling booleans. NOTE: this publishes the
  *  VerdictSignal.code taxonomy as a de-facto wire contract.
  *
  *  `ok` — for a NON-repeat, NON-matrix call, `ok` is derived from the SAME per-result verdicts as

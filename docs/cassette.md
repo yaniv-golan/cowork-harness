@@ -239,6 +239,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `subagent_tool_absent` | no sub-agent used the tool |
 | `no_vm_path_file_op` | **`fidelity: hostloop` only** — no gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, re-derived from the frozen `tool_use` stream; any other tier FAILS "cannot verify" (`/sessions/...` is valid there) |
 | `subagent_file_write` | a sub-agent-origin write attempt (`path` exact or `path_suffix`) has a paired non-error tool_result (`RunResult.fileToolAttempts` + `RunResult.toolResults`) — content-class, tier-agnostic |
+| `subagent_dispatch_healthy` | **`fidelity: hostloop` only** — composite: ties ONE selected dispatch's own delivered write (`delivered`, default true) and path-cleanliness (`no_vm_paths`, default true) to it via `parentToolUseId` — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks; content-class (`RunResult.fileToolAttempts` + `RunResult.toolResults`) |
 | `subagent_dispatched` | a sub-agent matching the regex was dispatched |
 | `subagent_declared_but_unused` | sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `subagent_output_contains` | a dispatched sub-agent's own output contains the substring — `match` (optional regex over `agentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it |
@@ -658,6 +659,26 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
 ```bash
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 ```
+
+### Reading the result
+
+`verify-cassettes` exits one of three codes — don't treat every non-zero exit as "the gate caught a
+leak/drift":
+
+| exit | meaning | JSON buckets populated |
+|---|---|---|
+| `0` | clean | none |
+| `1` | **verification RAN and found a real problem** | `findings[]` (a PII/privacy match), `staleness[]` (a genuine, non-`unverifiable-*` drift finding), and/or `scenarioDrift[]` |
+| `2` | usage error (e.g. `--skip-privacy`+`--skip-staleness` together, zero cassettes under a dir) | n/a |
+| `3` | **verification could NOT complete** | `unverifiable[]` (an `unverifiable-*`-class staleness finding), `version[]` (the cassette is from a newer harness than this one understands), and/or `error` (a malformed/unreadable cassette, or a per-file crash) |
+
+If a run has both a real finding and a could-not-verify signal, `1` wins — a confirmed problem is the
+stronger signal. This split matters for CI: a naive `[ $? -ne 0 ]` (or a `must-fail` canary built the
+other way around) can't tell "the scan found a leak" apart from "a cassette couldn't be read" — branch
+on the exit code, or read the `unverifiable`/`version`/`error` buckets directly, when that distinction
+matters. Text-output rows carry the same split: `[stale]` = a genuine drift finding, `[unverifiable]` =
+could-not-verify, `[version]`/`[error]` unchanged. A per-file `[error]` row is a bug to report (a
+malformed cassette or a crash), not a signal to re-record.
 
 The cardinal rule still holds: record against **synthetic** inputs (e.g. "Cadence / Acme", made-up
 numbers) — redaction and the scan are belt-and-suspenders, not a license to record real customer data.

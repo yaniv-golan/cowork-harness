@@ -34,9 +34,12 @@ import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
-import { cmdLint } from "./run/scenario-tool.js";
+import { cmdLint, cmdLintSkill } from "./run/scenario-tool.js";
+import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
+import { projectDispatchProbe, formatDispatchProbe } from "./run/probe-dispatch.js";
 import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
+import { findLatestRunForScenario } from "./run/latest-run.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -151,7 +154,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
       [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
       [--output-format json]
-  verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 on finding or drift
+  verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 = verified & failed, exit 3 = could not verify
       [--skip-privacy|--skip-staleness|--skip-scenario-drift] [--margins]  skip a check / print per-assert budget margins
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
@@ -164,10 +167,19 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
       [--strict]               fail on any lint finding (WARN/INFO), not just ERROR
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
+  lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
+      [--strict]               fail on any finding (the two footguns are WARN-only by default), not just ERROR
+  analyze-skill <SKILL.md | skill-dir/>  ADVISORY token-free scan: warns on a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
+      [--strict]               fail (exit 1) on any finding instead of just warning (mirrors lint-skill's --strict)
+      analyze-skill: ignore    a line with this marker (bare or in an HTML comment) in a SKILL.md silences EVERY finding for that file, even under --strict
+      [--output-format json]   exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage; a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
 ── Debugging / inspection ─────────────────────────────────────────────────────
+  probe-dispatch <skill-dir> "<prompt>"  cheap single-dispatch mechanics probe: runs the skill (default
+                               fidelity: hostloop) and prints ONE Task dispatch's {resolvedAgentType,
+                               pathDenials, delivered} — a thin wrapper over 'skill' (see 'probe-dispatch --help')
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
       [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths]   focus on one view (default: all); see 'trace --help'
       [--output-format json]   structured rows
@@ -400,8 +412,8 @@ function hasHelp(args: string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
-// Per-subcommand `--help`. `run`/`skill` already print their own help via hasHelp(); `lint` delegates
-// to the Python argparse path (which has its own --help). Every OTHER subcommand goes straight to parseArgs,
+// Per-subcommand `--help`. `run`/`skill` already print their own help via hasHelp(); `lint`/`lint-skill`
+// delegate to the Python argparse path (which has its own --help). Every OTHER subcommand goes straight to parseArgs,
 // where `--help` was an "unknown flag" error — so you could only discover flags by triggering a bad
 // invocation. Intercept `--help`/`-h` at dispatch and print the command's usage (exit 0). One concise line
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
@@ -433,7 +445,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   status:
-    'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
+    "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n" +
+    "       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n" +
+    '       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)\n' +
+    "usage: status --latest-for <scenario-name-or-slug> [--output-format text|json]   (resolve the newest run dir for a scenario by actual run time, NOT `ls -td`'s directory mtime — see docs/scenario.md#output)\n" +
+    "       prints the resolved outDir (the canonical run-dir handle); --output-format json emits {scenario, outDir, createdAt, verdict?} (verdict present only once the kept run's result.json carries one)\n" +
+    "       cannot be combined with a positional <run-id | run-dir> or --follow\n" +
+    "       exit codes: 0 found · 2 no runs found for the scenario under the runs root (or a usage error)",
   stats:
     "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex] [--output-format text|json]\n" +
     "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
@@ -466,6 +484,12 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   prune: "usage: prune [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
+  "analyze-skill":
+    "usage: analyze-skill <SKILL.md | skill-dir/> [--strict] [--output-format text|json]   (ADVISORY token-free scan: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output — denied on host-loop)\n" +
+    "       reuses the harness's own ported /sessions path-gate predicate (isVmSessionsPath) as the deny decision; only the EXTRACTION from SKILL.md text is heuristic.\n" +
+    "       findings are WARNINGS: exit 0 by default even when findings are printed. --strict fails (exit 1) on any finding instead (mirrors lint-skill's --strict). exit 2 = usage error.\n" +
+    "       a line containing `analyze-skill: ignore` (bare, or inside an HTML comment) anywhere in a SKILL.md silences EVERY path-fidelity finding for that file — even under --strict, even a genuine true positive (an explicit author override).\n" +
+    "       a clean/suppressed result is a PRE-FLIGHT signal only — the runtime no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
 };
 
 // Known subcommands — used by the global value-flag parsers (`--dotenv`, `--run-dir`) to reject a command
@@ -493,6 +517,9 @@ const COMMANDS = [
   "boundary-check",
   "vm",
   "lint",
+  "lint-skill",
+  "analyze-skill",
+  "probe-dispatch",
   "doctor",
   "rehash",
   "init-redact",
@@ -616,7 +643,7 @@ async function main() {
   const [cmd, ...rest] = argv;
   if (cmd === "--version" || cmd === "-v") return void out(pkgVersion());
   if (cmd === undefined || cmd === "--help" || cmd === "-h" || cmd === "help") return printHelp();
-  // Per-subcommand --help for the parseArgs-direct commands (run/skill/lint self-handle, so they're
+  // Per-subcommand --help for the parseArgs-direct commands (run/skill/lint/lint-skill self-handle, so they're
   // absent from the map and fall through to their own handling).
   if (hasHelp(rest) && cmd in SUBCOMMAND_USAGE) return void log(SUBCOMMAND_USAGE[cmd]);
   // validate COWORK_HARNESS_OUTPUT_FORMAT here — AFTER the --version/--help/per-subcommand-help
@@ -678,6 +705,12 @@ async function main() {
       return cmdReplay(rest);
     case "lint":
       return cmdLint(rest);
+    case "lint-skill":
+      return cmdLintSkill(rest);
+    case "analyze-skill":
+      return cmdAnalyzeSkill(rest);
+    case "probe-dispatch":
+      return cmdProbeDispatch(rest);
     case "verify-cassettes":
       return cmdVerifyCassettes(rest);
     case "rehash":
@@ -1015,7 +1048,7 @@ function loadAnswerPolicy(command: string, path: string, json: boolean): AnswerR
  * across the file loop), the `--output-format json` envelope, and the exit code.
  */
 async function runOneScenario(p: {
-  command: "run" | "skill";
+  command: "run" | "skill" | "probe-dispatch";
   scenario: Scenario;
   label: string;
   flags: CommonFlags;
@@ -1053,9 +1086,15 @@ async function runOneScenario(p: {
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
   let result: RunResult;
   try {
+    // executeScenario's own `command` option (→ RunResult.command) doesn't know about "probe-dispatch"
+    // (its type, and RunResult.command's, are unchanged by this command — it's built via the exact same
+    // inline-session/scenario machinery as `skill`, so "skill" is what RunResult.command should read too).
+    // The wider `command` value above still drives THIS function's own footer-prefix/fail()-label/
+    // scaffoldTip choices.
+    const execCommand: "run" | "skill" | "record" = command === "run" ? "run" : "skill";
     result = await executeScenario(scenario, {
       ...extra,
-      command,
+      command: execCommand,
       onUnanswered: policy,
       externalChannel,
       hooks: renderer ? [renderer] : [],
@@ -1905,6 +1944,165 @@ async function cmdSkill(rawArgs: string[]) {
   // mutually exclusive with --output-format json). The footer itself is emitted inside runOneScenario.
   if (o.json) out(jsonEnvelope("skill", [result]));
   process.exit(computeVerdict(result, "live").pass ? 0 : 1);
+}
+
+const PROBE_DISPATCH_HELP = `cowork-harness probe-dispatch <skill-dir> "<prompt>"
+
+  A cheap, focused mechanics probe: runs the skill/plugin folder against the staged Cowork agent (a THIN
+  wrapper over 'skill' — same inline session + scenario construction, same runOneScenario execution) with
+  a prompt you scope to trigger ONE Task dispatch, then prints just that dispatch's mechanics:
+  {resolvedAgentType, pathDenials, delivered}. NO new data model — every field is a projection of the same
+  RunResult 'skill' already produces (subagents[]/fileToolAttempts/pathDenials/toolResults).
+
+  "One dispatch" is PROMPT-SCOPED, not enforced by the harness: Cowork itself imposes no in-conversation
+  Task-dispatch cap. The probe just ASSERTS it (subagent_dispatched + dispatch_count_max: 1) so a prompt
+  that fanned out to several dispatches shows up as a failed verdict instead of a silently-averaged one.
+
+Fidelity  --fidelity <container|microvm|hostloop>   (default: hostloop — path-fidelity, this probe's whole
+                               reason to exist, only matters on hostloop; override only if you can't stage
+                               a native agent binary — see 'skill --help' for the tier descriptions)
+
+Source:
+  <skill-dir>                  dir containing .claude-plugin/plugin.json
+  --plugin <dir>                extra plugin source (repeatable)
+
+Files:
+  --upload <path>                mount a file at mnt/uploads/<name> (repeatable)
+  --folder <dir>                 connect a folder at mnt/<folder-name> (repeatable)
+
+Probe tuning:
+  --model <id>                   override the session model (e.g. pin a cheaper model for the probe)
+  --expect-write <suffix>         narrow "delivered" to a sub-agent write whose path ends with this suffix
+                                 (default: ANY sub-agent-origin write under the dispatch's own toolUseId)
+
+Output:
+  --output-format text|json      text = one line per dispatch + verdict (default); json = a compact
+                                 {dispatches: [{resolvedAgentType, dispatchTypeOmitted, pathDenials,
+                                 delivered, referencesRead}], verdict} envelope
+  --quiet, -q                    suppress the live tool stream; verdict + dispatch lines only
+
+Dependency: forced hostloop needs the NATIVE agent binary staged (a patch-drift-tolerant match within the
+  same major.minor resolves — see 'sync'). If none is staged, this fails with the existing
+  resolveHostAgentBinary remedy — the probe cannot run hostloop without it; this command does NOT add new
+  staging logic.
+
+Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail · 3 boundary/integrity.`;
+
+async function cmdProbeDispatch(rawArgs: string[]) {
+  if (hasHelp(rawArgs)) return void log(PROBE_DISPATCH_HELP);
+  const { rest: args, flags } = takeCommonFlags(rawArgs, "probe-dispatch");
+  const isJson = flags.output === "json";
+  const positional: string[] = [];
+  const extraPlugins: string[] = [];
+  const uploads: string[] = [];
+  const folders: string[] = [];
+  const PD_FID = ["container", "microvm", "hostloop"] as const;
+  let fidelity: (typeof PD_FID)[number] = "hostloop"; // forced-default: path-fidelity (this probe's whole point) only matters on hostloop
+  let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
+  let expectWriteSuffix: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    const eqVal = eq > 0 ? a.slice(eq + 1) : undefined;
+    const nextVal = (): string => {
+      if (eqVal !== undefined) {
+        if (eqVal.trim() === "") fail("probe-dispatch", "usage", `${name} requires a non-empty value`, undefined, isJson);
+        return eqVal;
+      }
+      return flagValueStrict("probe-dispatch", args, i++, name, isJson);
+    };
+    if (name === "--fidelity") {
+      const v = nextVal();
+      if (!(PD_FID as readonly string[]).includes(v))
+        fail("probe-dispatch", "usage", `--fidelity must be one of ${PD_FID.join("|")} (got "${v}")`, undefined, isJson);
+      fidelity = v as (typeof PD_FID)[number];
+    } else if (name === "--model") model = nextVal();
+    else if (name === "--plugin") extraPlugins.push(nextVal());
+    else if (name === "--upload") uploads.push(nextVal());
+    else if (name === "--folder") folders.push(nextVal());
+    else if (name === "--expect-write") expectWriteSuffix = nextVal();
+    else if (a.startsWith("-")) fail("probe-dispatch", "usage", `unknown flag: ${a}`, undefined, isJson);
+    else positional.push(a);
+  }
+  if (positional.length !== 2)
+    fail(
+      "probe-dispatch",
+      "usage",
+      'usage: cowork-harness probe-dispatch <skill-dir> "<prompt>" [--fidelity container|microvm|hostloop] [--model <id>] [--expect-write <suffix>] [--plugin <dir>]… [--upload <file>]… [--folder <dir>]… [--output-format text|json]  (probe-dispatch --help for the full flag reference)',
+      undefined,
+      isJson,
+    );
+  const [folder, prompt] = positional;
+
+  // Session + scenario construction mirrors cmdSkill's own inline-session path (loadSession →
+  // resolveSessionPaths, Scenario.parse) — the "thin wrapper, don't reinvent" seam the design calls for.
+  // Kept inline rather than factored into a shared helper: the two commands' flag surfaces diverge enough
+  // (skill's marketplaces/resume/decider-llm/dry-run vs. this command's --expect-write/forced-hostloop
+  // default) that a shared helper would need almost as many parameters as it saves lines.
+  const localPlugins = [folder, ...extraPlugins];
+  const session = resolveSessionPaths(
+    loadSession({
+      model,
+      permission_parity: "cowork",
+      plugins: { local_plugins: localPlugins, local_marketplaces: [], enabled: [] },
+      uploads,
+      folders: folders.map((from) => ({ from, mode: "rw" as const })),
+    }),
+    process.cwd(),
+  );
+  const sourceName = basename(folder.replace(/\/+$/, "")) || "probe";
+  const scenario = Scenario.parse({
+    name: `probe-dispatch-${sourceName
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40)}`,
+    baseline: "latest",
+    session: "(inline)",
+    fidelity,
+    prompt,
+    answers: [],
+    // Note in --help/docs: PROMPT-SCOPED, not enforced — this just flags a prompt that fanned out.
+    assert: [{ subagent_dispatched: ".*" }, { dispatch_count_max: 1 }],
+  });
+
+  // --decider-dir/--decider-cmd (captured generically by takeCommonFlags) are honored here for free via
+  // the same resolveExternal seam `skill` uses — an external channel forces the `fail` terminal
+  // (matching cmdSkill's own precedence), so an external decider never races an adaptive prompt.
+  const externalChannel = resolveExternal("probe-dispatch", flags);
+  const policy: OnUnanswered = externalChannel ? "fail" : resolvePolicy("skill", flags); // same adaptive default as `skill`: prompt on TTY, fail in CI
+  const o = resolveOutput("skill", flags);
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
+  let result: RunResult;
+  try {
+    result = await runOneScenario({
+      command: "probe-dispatch",
+      scenario,
+      label: scenario.name,
+      flags,
+      policy,
+      externalChannel,
+      o,
+      extra: { session },
+    });
+  } finally {
+    externalChannel?.close?.();
+  }
+
+  const projection = projectDispatchProbe(result, { expectWriteSuffix });
+  // jsonPayloadEnvelope's payload is a plain Record (no index signature on DispatchProbeProjection) —
+  // spread into a fresh object literal rather than an opaque `as` cast, so a future field addition to
+  // DispatchProbeProjection is still type-checked structurally at this call site.
+  if (o.json)
+    out(
+      jsonPayloadEnvelope("probe-dispatch", projection.verdict.pass, {
+        dispatches: projection.dispatches,
+        subagentsUnavailable: projection.subagentsUnavailable,
+        verdict: projection.verdict,
+      }),
+    );
+  else out(formatDispatchProbe(projection));
+  process.exit(projection.verdict.pass ? 0 : 1);
 }
 
 /** All fidelity tiers the harness understands (the canonical Scenario `fidelity:` enum), surfaced so a
@@ -2777,14 +2975,34 @@ async function cmdDecide(args: string[]) {
 async function cmdStatus(args: string[]) {
   let p;
   try {
-    p = parseArgs(args, { booleans: ["--follow"], values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
+    p = parseArgs(args, {
+      booleans: ["--follow"],
+      values: ["--output-format", "--latest-for"],
+      enums: { "--output-format": ["text", "json"] },
+    });
   } catch (e) {
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
+  }
+  const json = p.options["--output-format"] === "json";
+  if (p.options["--latest-for"] !== undefined) {
+    // A dedicated mode, not a modifier on the run-id/run-dir lookup above: it resolves a SCENARIO to its
+    // newest run dir rather than reading a status.json a caller already has the path to, so it takes no
+    // positional and doesn't compose with --follow (there is no single dir to follow before resolution).
+    if (p.positionals.length !== 0)
+      return fail(
+        "status",
+        "usage",
+        "status --latest-for <scenario> takes no positional <run-id | run-dir>",
+        SUBCOMMAND_USAGE.status,
+        json,
+      );
+    if (p.flags["--follow"])
+      return fail("status", "usage", "status --latest-for cannot be combined with --follow", SUBCOMMAND_USAGE.status, json);
+    return cmdStatusLatestFor(p.options["--latest-for"], json);
   }
   if (p.positionals.length !== 1) {
     return fail("status", "usage", SUBCOMMAND_USAGE.status, undefined, isJsonOutput(args));
   }
-  const json = p.options["--output-format"] === "json";
   let dir: string;
   try {
     dir = resolveStatusDir(p.positionals[0]);
@@ -2883,6 +3101,43 @@ async function cmdStatus(args: string[]) {
   // earlier) · 3 stale/probably-dead — distinct from 1 so a script can tell "it failed" from "can't
   // confirm it's alive" without parsing text.
   return process.exit(stale ? 3 : status.state === "error" ? 1 : 0);
+}
+
+/** `status --latest-for <scenario>` — resolve the newest run dir for a scenario by actual run time
+ *  (`findLatestRunForScenario`, src/run/latest-run.ts), and print its `outDir` — the canonical run-dir
+ *  handle (see docs/scenario.md#output). Exists because `ls -td runs/<scenario>/* | head -1` orders by
+ *  bare directory mtime, which is NOT run recency and readily returns a stale prior-session dir. */
+async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<never> {
+  const root = runsRoot();
+  const found = findLatestRunForScenario(root, scenarioArg);
+  if (!found) {
+    // "usage" + exit 2 — matches how trace/scaffold/inspect treat an unresolvable identifier, not the
+    // "runtime" category status's own <run-id | run-dir> lookup uses for a dir that resolved but has no
+    // status.json yet (a different failure shape: here the scenario itself never resolved to anything).
+    return fail("status", "usage", `no runs found for "${scenarioArg}" under ${root}`, undefined, json, 2);
+  }
+  if (json) {
+    out(
+      JSON.stringify({
+        tool: "cowork-harness",
+        version: pkgVersion(),
+        command: "status",
+        ok: true,
+        scenario: found.scenario,
+        outDir: found.outDir,
+        createdAt: found.createdAt,
+        ...(found.verdict !== undefined ? { verdict: found.verdict } : {}),
+      }),
+    );
+  } else {
+    // Human output is stderr (project convention — stdout stays machine-only under --output-format
+    // json); the raw outDir is the LAST line specifically, mirroring statusLine's `[status] <outDir>`
+    // convention (execute.ts) so a driving script capturing stderr can grab it without parsing the
+    // summary line above it.
+    log(`${found.scenario} · ${found.createdAt}` + (found.verdict ? ` · ${found.verdict.pass ? "PASS" : "FAIL"}` : ""));
+    log(found.outDir);
+  }
+  return process.exit(0);
 }
 
 /** `gates <dir> [--follow]` — the gate stream for the in-band `--decider-dir` path. Emits one clean

@@ -209,3 +209,85 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(v.pass).toBe(true); // warn, not fail
   });
 });
+
+describe("computeVerdict's failures[] (the unified RunResult.verdict projection — no separate persistedVerdict)", () => {
+  it("a failing assertion → pass:false, failures[] names the assertion key + message, exitCode is the fail code", () => {
+    const r = rr({ assertions: [{ assertion: { tool_called: "Bash" }, pass: false, message: "expected Bash to be called" }] });
+    const v = computeVerdict(r, "live");
+    expect(v.pass).toBe(false);
+    expect(v.exitCode).toBe(1);
+    expect(v.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
+  });
+
+  it("a passing run → pass:true, failures:[], exitCode 0", () => {
+    const v = computeVerdict(rr({ assertions: [assn({ tool_called: "Bash" }, true)] }), "live");
+    expect(v.pass).toBe(true);
+    expect(v.exitCode).toBe(0);
+    expect(v.failures).toEqual([]);
+  });
+
+  it("a hard-verdict guard failure independent of any assert (infra error) is named without an `assertion` key", () => {
+    const v = computeVerdict(rr({ infraErrors: [{ source: "egress-sidecar", message: "sidecar exited 1" }] }), "live");
+    expect(v.pass).toBe(false);
+    expect(v.failures).toEqual([{ message: expect.stringContaining("sidecar exited 1") }]);
+    expect(v.failures[0]).not.toHaveProperty("assertion");
+  });
+
+  it("names BOTH a failing assertion (keyed) and a guard reason (unkeyed) when both fire on the same run", () => {
+    const r = rr({
+      assertions: [assn({ tool_called: "Bash" }, false)],
+      infraErrors: [{ source: "egress-sidecar", message: "sidecar crashed" }],
+    });
+    const v = computeVerdict(r, "live");
+    expect(v.pass).toBe(false);
+    expect(v.failures).toHaveLength(2);
+    expect(v.failures.some((f) => f.assertion === "tool_called")).toBe(true);
+    expect(v.failures.some((f) => f.message.includes("sidecar crashed") && f.assertion === undefined)).toBe(true);
+  });
+
+  it("a salvaged (unanswered-gate) run: pass:false, failures[] names the gate reason, not the generic 'run result was error'", () => {
+    const gateMsg = 'unscripted AskUserQuestion (on_unanswered=fail):\n  • "Confirm?"';
+    const r = rr({ result: "error", unansweredGate: { message: gateMsg, hint: "add --answer" } });
+    const v = computeVerdict(r, "live");
+    expect(v.pass).toBe(false);
+    expect(v.exitCode).toBe(1);
+    expect(v.failures).toEqual([{ message: gateMsg }]);
+    // the generic result_error placeholder is suppressed in favor of the real gate reason
+    expect(v.failures.some((f) => f.message === "run result was error")).toBe(false);
+  });
+
+  it("jq-shape sanity: plain JSON — round-trips through JSON.stringify/parse with no functions, and an unnamed failure drops its `assertion` key rather than serializing `assertion: undefined`", () => {
+    const r = rr({ assertions: [assn({ tool_called: "Bash" }, false)], infraErrors: [{ source: "x", message: "boom" }] });
+    const v = computeVerdict(r, "live");
+    const roundTripped = JSON.parse(JSON.stringify(v));
+    expect(roundTripped).toEqual(v);
+    for (const f of roundTripped.failures) {
+      if (f.assertion === undefined) expect(Object.prototype.hasOwnProperty.call(f, "assertion")).toBe(false);
+    }
+  });
+});
+
+describe("the persisted channel (result.json) and the streamed channel (--output-format json envelope) can never diverge", () => {
+  // Regression test for the shape-inconsistency this unifies: before, execute.ts persisted
+  // `result.verdict` via a separate `persistedVerdict()` wrapper shaped `{pass, exitCode, failures}`,
+  // while envelope.ts's stdout envelope overwrote the SAME field name with `computeVerdict(r, lane)`
+  // shaped `{pass, exitCode, signals, guards}` — so `run --output-format json | jq
+  // '.results[0].verdict.failures'` returned undefined even on a failing run. Both persist points
+  // (execute.ts's success path and its buildPartialResult salvage path) and envelope.ts's stdout
+  // attachment now call the exact same `computeVerdict`, so they are provably the same shape — this
+  // test simulates both call sites against one RunResult and asserts they agree, INCLUDING `failures`.
+  it("execute.ts's persist-point verdict and envelope.ts's stream-point verdict are identical for a failing run", () => {
+    const r = rr({ assertions: [{ assertion: { tool_called: "Bash" }, pass: false, message: "expected Bash to be called" }] });
+
+    // Mirrors execute.ts:1253 (`result.verdict = computeVerdict(result, "live");`) — the result.json persist point.
+    const persisted = computeVerdict(r, "live");
+
+    // Mirrors envelope.ts:84 (`{ ...r, verdict: computeVerdict(r, lane) }`) — the stdout envelope's per-result attachment.
+    const streamed = { ...r, verdict: computeVerdict(r, "live") }.verdict;
+
+    expect(persisted).toEqual(streamed);
+    // the exact bug this fix closes: failures[] must survive on BOTH channels, not just one.
+    expect(persisted.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
+    expect(streamed.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
+  });
+});

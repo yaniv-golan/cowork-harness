@@ -714,6 +714,164 @@ describe("VM-path + path-denial assertions", () => {
     expect(r.pass).toBe(false);
     expect((r as { message: string }).message).toMatch(/cannot verify/);
   });
+
+  describe("subagent_dispatch_healthy — per-dispatch correlation via parentToolUseId", () => {
+    it("PASSes a healthy dispatch: type matches, its OWN delivered write is paired non-error, no VM attempt", () => {
+      const dispatches = [{ toolUseId: "d1", dispatchAgentType: "general-purpose", declaredTools: [], toolsUsed: [] }];
+      const attempts = [
+        {
+          tool: "Write",
+          paths: { file_path: "artifacts/probe.json" },
+          gatePath: "artifacts/probe.json",
+          origin: "subagent" as const,
+          parentToolUseId: "d1",
+          toolUseId: "t1",
+        },
+      ];
+      const c = hlCtx({ subagents: dispatches, fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+      expect(evaluate([{ subagent_dispatch_healthy: { type: "general-purpose" } }], c)[0].pass).toBe(true);
+    });
+
+    it("the correlation point: a delivered write under a DIFFERENT dispatch's parentToolUseId FAILS — subagent_file_write wrongly PASSes the same evidence", () => {
+      const dispatches = [
+        { toolUseId: "d1", dispatchAgentType: "writer-agent", declaredTools: [], toolsUsed: [] },
+        { toolUseId: "d2", dispatchAgentType: "helper-agent", declaredTools: [], toolsUsed: [] },
+      ];
+      // d2 delivered the write, NOT d1 — but we select only d1 via `type`.
+      const attempts = [
+        {
+          tool: "Write",
+          paths: { file_path: "artifacts/probe.json" },
+          gatePath: "artifacts/probe.json",
+          origin: "subagent" as const,
+          parentToolUseId: "d2",
+          toolUseId: "t1",
+        },
+      ];
+      const c = hlCtx({ subagents: dispatches, fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+      // sanity: subagent_file_write matches ANY sub-agent write — this is the gap the composite closes.
+      expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], c)[0].pass).toBe(true);
+      const r = evaluate([{ subagent_dispatch_healthy: { type: "writer-agent" } }], c)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toContain("delivered");
+      expect((r as { message: string }).message).toContain("writer-agent");
+    });
+
+    it("FAILs when the selected dispatch attempted a /sessions VM path (no_vm_paths)", () => {
+      const dispatches = [{ toolUseId: "d1", dispatchAgentType: "writer-agent", declaredTools: [], toolsUsed: [] }];
+      const attempts = [
+        {
+          tool: "Write",
+          paths: { file_path: "artifacts/probe.json" },
+          gatePath: "artifacts/probe.json",
+          origin: "subagent" as const,
+          parentToolUseId: "d1",
+          toolUseId: "t1",
+        },
+        {
+          tool: "Read",
+          paths: { file_path: "/sessions/x/y" },
+          gatePath: "/sessions/x/y",
+          origin: "subagent" as const,
+          parentToolUseId: "d1",
+        },
+      ];
+      const c = hlCtx({ subagents: dispatches, fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+      const r = evaluate([{ subagent_dispatch_healthy: {} }], c)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toContain("no_vm_paths");
+    });
+
+    it("fails closed when fileToolAttempts/toolResults are undefined, even on the right tier", () => {
+      const c = hlCtx({
+        subagents: [{ toolUseId: "d1", dispatchAgentType: "x", declaredTools: [], toolsUsed: [] }],
+        fileToolAttempts: undefined,
+        toolResults: undefined,
+      });
+      const r = evaluate([{ subagent_dispatch_healthy: {} }], c)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toMatch(/cannot verify/);
+    });
+
+    it("on a NON-hostloop tier FAILS cannot-verify (never excluded into a green run)", () => {
+      const c = ctx({ effectiveFidelity: "container", subagents: [], fileToolAttempts: [], toolResults: [] });
+      const r = evaluate([{ subagent_dispatch_healthy: {} }], c)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toMatch(/cannot verify/);
+    });
+
+    it("a `type` that matches no dispatch FAILS (a dispatch that never happened isn't healthy)", () => {
+      const c = hlCtx({
+        subagents: [{ toolUseId: "d1", dispatchAgentType: "writer-agent", declaredTools: [], toolsUsed: [] }],
+        fileToolAttempts: [],
+        toolResults: [],
+      });
+      const r = evaluate([{ subagent_dispatch_healthy: { type: "nonexistent-type" } }], c)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toMatch(/no sub-agent matching/);
+    });
+
+    it("delivered:false + no_vm_paths:true checks ONLY the VM-path conjunct (an undelivered dispatch is not itself unhealthy)", () => {
+      const dispatches = [{ toolUseId: "d1", dispatchAgentType: "writer-agent", declaredTools: [], toolsUsed: [] }];
+      const clean = hlCtx({ subagents: dispatches, fileToolAttempts: [], toolResults: [] });
+      expect(evaluate([{ subagent_dispatch_healthy: { delivered: false, no_vm_paths: true } }], clean)[0].pass).toBe(true);
+
+      const dirty = hlCtx({
+        subagents: dispatches,
+        fileToolAttempts: [
+          {
+            tool: "Read",
+            paths: { file_path: "/sessions/x" },
+            gatePath: "/sessions/x",
+            origin: "subagent" as const,
+            parentToolUseId: "d1",
+          },
+        ],
+        toolResults: [],
+      });
+      const r = evaluate([{ subagent_dispatch_healthy: { delivered: false, no_vm_paths: true } }], dirty)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toContain("no_vm_paths");
+    });
+
+    it("with `type` omitted, EVERY dispatch must be healthy — one unhealthy dispatch fails the whole key", () => {
+      const dispatches = [
+        { toolUseId: "d1", dispatchAgentType: "writer-agent", declaredTools: [], toolsUsed: [] },
+        { toolUseId: "d2", dispatchAgentType: "helper-agent", declaredTools: [], toolsUsed: [] },
+      ];
+      const attempts = [
+        {
+          tool: "Write",
+          paths: { file_path: "artifacts/probe.json" },
+          gatePath: "artifacts/probe.json",
+          origin: "subagent" as const,
+          parentToolUseId: "d1",
+          toolUseId: "t1",
+        },
+        // d2 never delivered anything.
+      ];
+      const c = hlCtx({ subagents: dispatches, fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+      const r = evaluate([{ subagent_dispatch_healthy: {} }], c)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toContain("helper-agent");
+    });
+
+    it("evidence-unavailable when subagentsMissing (mirrors subagent_dispatched)", () => {
+      const c = hlCtx({ subagentsMissing: true, fileToolAttempts: [], toolResults: [] });
+      const r = evaluate([{ subagent_dispatch_healthy: {} }], c)[0];
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toMatch(/evidence unavailable/);
+    });
+
+    it("schema: parses a full-shape object, rejects a wrong-typed field", () => {
+      expect(
+        AssertionSchema.safeParse({
+          subagent_dispatch_healthy: { type: "writer", delivered: true, path: "a/b.json", no_vm_paths: true },
+        }).success,
+      ).toBe(true);
+      expect(AssertionSchema.safeParse({ subagent_dispatch_healthy: { delivered: "yes" } }).success).toBe(false);
+    });
+  });
 });
 
 describe("tool_no_error (M3)", () => {

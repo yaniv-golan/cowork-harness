@@ -27,6 +27,140 @@ the outputs mount: not denied, just silently non-deliverable (nothing collects i
 artifact). A skill meant to work across tiers must anchor its output path on the outputs mount, never
 on one hardcoded relative form.
 
+## Static path-fidelity check (`analyze-skill`)
+
+`cowork-harness analyze-skill <SKILL.md | skill-dir/>` catches the "hands a `/sessions/...` path to a
+file tool" defect described above **statically**, token-free — no Docker, no model call, no live
+host-loop run — by scanning a SKILL.md's text. It reuses the harness's own ported `/sessions` path-gate
+predicate (`isVmSessionsPath`) as the DENY decision; the only heuristic part is extracting candidate
+paths out of markdown text.
+
+**ADVISORY by default.** Because the extraction is heuristic and can over-flag innocent
+documentation/teaching examples, findings print as warnings but the command **exits 0 by default even
+when it prints findings**. Pass `--strict` to turn it into a hard gate — exit 1 on any finding, mirroring
+`lint-skill --strict` exactly. A SKILL.md can also silence the ENTIRE warning class for itself: a line
+containing `analyze-skill: ignore` (bare, or inside an HTML comment `<!-- analyze-skill: ignore -->`)
+anywhere in the file suppresses every `analyze-skill` finding for that file — including a genuine true
+positive, since this is an explicit author override, not a narrower false-positive guard. Use it on a
+SKILL.md that legitimately uses `/sessions` paths (a VM-tier-only skill) or that documents them in
+prose/teaching examples. Under `--strict`, a suppressed file never fails.
+
+Two rules, both advisory findings:
+
+- **`sessions-path-to-file-tool`** — a `/sessions/...` token in a file-tool/output POSITIVE context: an
+  `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target,
+  IMPERATIVE prose instructing a write/save/read/edit "to"/"at" the path, or a BARE `/sessions/...` path
+  line/value sitting inside a fenced block that also contains a `Task(` call or `subagent_type` (a
+  dispatch construct) — a path embedded inside a larger sentence or a bash-mediated command string within
+  that same block does not count as "bare".
+- **`sessions-find-into-file-read`** — a shell `find … /sessions …` whose output is substituted straight
+  into a `Read(`/`Grep(` directive: same line, or the very next line AND the directive's body references
+  the find line's OUTPUT-CAPTURE variable specifically — a `VAR=$(find …)` assignment or a
+  `find … > $VAR`/`> VAR` redirection — not merely any `$VAR` token that happens to appear on the find
+  line (an `-name "$NAME"` argument is find's INPUT, not its output, and sharing that token with an
+  unrelated `Read(` does not fire).
+
+**Context confidence governs which guards apply.** HIGH-confidence STRUCTURED contexts — an
+`OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target, and a
+bare `/sessions/...` path LINE inside a dispatch construct — are machine-unambiguous and fire regardless of
+a neighboring anti-instruction word or a stray "bash" mention elsewhere on the line: an author writing
+`Write(/sessions/...)` next to "Do not modify any other file." is still handing a `/sessions` path to a
+file tool. The LOW-confidence PROSE idiom ("write/save/read/edit ... to/at `/sessions/...`") keeps the
+whole-line/adjacent-line negation guard and the bash-tool suppression, since that context is the one where
+a genuine remediation ("Use the bash tool to write ... to `/sessions/...`") or an anti-instruction ("Never
+write to `/sessions/...`") is ambiguous without them. A STRUCTURED context instead gets a much NARROWER
+carve-out: a negation token in the SAME CLAUSE as the directive/assignment itself (not merely the same or
+an adjacent line) suppresses it — the genuine teaching idiom "❌ Write(/sessions/...) — never do this; use
+the bash tool instead." — while an unrelated same-or-adjacent-line negation still fires.
+
+**EXEMPT by design** (false-positive guards, deliberately conservative — "when unsure, do not flag"):
+a `/sessions` token inside a ` ```bash `/`sh`/`shell`/`zsh`/`console`/`*-session` fenced block (matched by
+exact language name, not a prefix — a ` ```shiny ` fence is not bash-ish just because it starts with "sh"),
+or the same fence blockquoted with `> `, is legitimate in-VM bash and is never scanned; the fence opener's
+language is read as the first word only, so a trailing info-string (` ```bash title="x" `) doesn't defeat
+the exemption and doesn't leave a phantom fence open for later content to cascade into; a 4-space/tab
+INDENTED unfenced block is treated the same way UNLESS the run of indented lines carries a dispatch marker
+(`Task(`/`subagent_type`) outside a `#` comment (in which case it is analyzed like a fenced dispatch block
+instead — see "Honest limits" below); a line carrying an anti-instruction word (`never`, `don't`, `do not`,
+`avoid`, `not`) on that line OR the immediately adjacent line suppresses ONLY the prose context, not a
+structured one (see above); the prose context's bash suppression has two tiers — the INSTRUMENT phrase
+"bash tool" (or "the bash tool") suppresses if it appears ANYWHERE on the line, even in a fronted clause
+severed by a comma ("Using the bash tool, write ... to `/sessions/...`") or a trailing clause after the
+path ("Write ... to `/sessions/...` using the bash tool."); a BARE "bash" mention (no "tool") is narrower
+and stays scoped to the CLAUSE that links the verb to the path — an unrelated, punctuation-severed earlier
+clause naming "bash" (e.g. "the bash step", not "the bash tool") does not suppress a genuinely different
+instrument; passive-voice documentation prose ("Deliverables are saved at ...", "Uploads are read-only at
+...") does not count as an imperative instruction; plain prose that documents a fact (e.g. "the VM cwd is
+`/sessions/<id>`") without any of the positive contexts above is left alone. A token that matches more than
+one positive context on the same line (e.g. an `OUTPUT_PATH=` line that also sits inside a
+dispatch-construct fence) is reported once, not once per matching context.
+
+**Honest limits.** Only the extraction is heuristic — the deny decision is the same one production
+enforces. Documented false negatives: a variable-carried path (`$OUT/...` where the literal value isn't
+`/sessions`), a `/sessions` path written only in an INDENTED (4-space/tab) unfenced code block that does
+NOT carry a dispatch marker — treated as an exempt code context, the same as a fenced bash block, since an
+unfenced VM-bash template written this way is legitimate in-VM bash, not a violation. An indented block
+that DOES carry a dispatch marker (`Task(`/`subagent_type`) is NOT exempt — it is analyzed the same way a
+fenced dispatch block is, since an indented dispatch template is this analyzer's headline defect class,
+not VM bash (a blank line inside such a run does not defeat this — the run is still grouped as one, and a
+`Task(`/`subagent_type` mention inside a `#` comment does not count as the marker). Also a documented
+false negative: a prose-only dispatch instruction (no fenced or indented block), and — deliberately
+unaddressed, to avoid new false positives from expanding dispatch detection into bash fences — a
+` ```bash `-FENCED dispatch template (`Task(` plus `OUTPUT_PATH=/sessions/...` inside a bash fence) stays
+silent, as do a lowercase `output_path` / JSON quoted-key `"output_path"` inside a fence, and a
+no-comma prose variant of the dispatch-argument shape. Two decision-class misses are out of v1 scope
+entirely: an absolute HOST path outside connected folders (denied by containment, not the `/sessions`
+rule) and a write into a read-only category (uploads/spool/plugin content) — neither is a `/sessions`
+finding, so this analyzer doesn't claim to catch them.
+
+**`analyze-skill` gates the HOST-LOOP path model only.** A skill authored exclusively for a VM tier
+(`container`/`microvm`), where `/sessions` is a valid, ungated path, is not what this analyzer is meant to
+clear — a clean result there isn't meaningful, and a firing result on such a skill is a false alarm for
+that tier (the finding message names the tier explicitly so this is visible at read time, but `analyze-skill`
+itself has no way to know which tier(s) a given SKILL.md targets). Run it against skills meant to work
+on host-loop, or skills written to work across tiers via the tier-qualified addressing above.
+
+**A clean or suppressed `analyze-skill` is a PRE-FLIGHT signal, not proof of on-tier resolution.** The
+authoritative check remains the runtime `no_vm_path_file_op` / `vm_path_denied` assertions (see
+[scenario.md](./scenario.md)) against a real recorded/live run — `analyze-skill` exists to catch the
+obvious cases before paying for that run, not to replace it.
+
+## Static `subagent_type` resolution (`resolve-agent-types` / `lint-skill`)
+
+A pinned `subagent_type` value that doesn't resolve to a real agent (e.g.
+`founder-skills:cap-table` when the agent is actually named `captable`) fails a definition lookup at
+`Task` dispatch time and breaks the skill — but until now that was only discoverable via a live
+dispatch. `scenario.py` resolves it **statically**, token-free, from a plugin's own manifest and
+agent frontmatter:
+
+- **`scenario.py resolve-agent-types <plugin-dir>`** — reads the plugin's `name` from
+  `<plugin-dir>/.claude-plugin/plugin.json` (fallback `<plugin-dir>/plugin.json`), globs
+  `<plugin-dir>/agents/*.md`, and for each file reads the `name:` YAML frontmatter field (falling
+  back to the filename stem — `foo.md` → `foo` — when a file has no `name:`). Prints the resulting
+  `{plugin}:{agent}` set, one per line or as a JSON array with `--json`. A dir with no plugin.json
+  prints an empty set (exit 0) — a bare SKILL.md dir with no plugin manifest has nothing to resolve
+  against, and this never crashes.
+- **Folded into `scenario.py lint-skill`** — the SKILL.md body scan also extracts every pinned
+  `subagent_type` value (`subagent_type: <value>` YAML, `subagent_type="<value>"` /
+  `subagent_type: "<value>"` dispatch-prose forms — not limited to fenced blocks), resolves the
+  enclosing plugin by walking up from the SKILL.md to the nearest ancestor with a
+  `.claude-plugin/plugin.json`/`plugin.json`, and classifies each value:
+  - resolves within that plugin's `agents/`, or is literally `general-purpose` → clean, no finding;
+  - a `<other-plugin>:<agent>` (colon-qualified, prefix isn't this plugin's name) →
+    **`subagent-type-unresolvable`** — "belongs to another plugin, can't confirm it resolves from
+    here";
+  - any other unresolved value → **`subagent-type-unknown`** — "not defined in this plugin and not
+    the `general-purpose` built-in, can't confirm statically (may be an agent-binary built-in)".
+
+**Both findings are INFO, never WARN — by design, not an oversight.** There is no harness registry of
+built-in agent types (`Explore`, teammate-style built-ins, etc.) to disprove an unresolved bare value
+against — the built-in set is agent-binary-version-dependent and the harness deliberately does not
+ship a committed list of it (it would go stale and either false-warn a real built-in or false-clear a
+typo). So an unresolved `subagent_type` is always *surfaced*, never *failed* — `lint-skill` only
+exits non-zero on it under `--strict`, matching the WARN-class footguns above. If you want a stronger
+guarantee for a specific agent, name it as `general-purpose` explicitly or ship it under the same
+plugin's `agents/` so it resolves in-plugin.
+
 ## Capability / path matrix
 
 | Path class | host-loop (file tools) | host-loop (workspace bash) | VM loop (file tools = bash view) |
@@ -152,3 +286,116 @@ of the shell-absence patterns implies it.
 
 See also [boundary.md](./boundary.md) for the tier-by-tier boundary model these sub-agent rules sit on
 top of, and [scenario.md](./scenario.md) for the `subagent_*` assertion reference.
+
+## Observing mechanics cheaply
+
+Sometimes you don't want to judge a skill's *analytical* output — you want to see whether it walks the
+right *steps*: does it dispatch the sub-agent it's supposed to, with a typed `subagent_type`; does it
+write to the outputs mount instead of a denied `/sessions/...` path; does the step sequence even reach
+the point that matters. That's plumbing, not quality, and you can inspect it without paying for an
+expensive model.
+
+**First line — static, token-free, no run at all.** Run
+[`analyze-skill`](#static-path-fidelity-check-analyze-skill) first. It catches the whole `/sessions`-path-to-file-tool
+defect class from the SKILL.md text alone, before spending anything on a live run.
+
+**Second line — a cheap live run, for what static analysis can't see.** Point both loops at a cheap
+model and read the telemetry a run already produces:
+
+- Main loop: `--model <cheap-id>` on `cowork-harness skill <dir> "<prompt>" --model <cheap-id>` or
+  `cowork-harness run <scenario.yaml> --model <cheap-id>`. A session YAML's `model:` field does the
+  same for a checked-in scenario, and `run --matrix`'s `models:` axis sweeps it across cells.
+- Sub-agents (if the skill dispatches any): `agent_env.subagent_model: <cheap-id>` in the session YAML
+  — sets `CLAUDE_CODE_SUBAGENT_MODEL` uniformly across tiers, independent of the main-loop model (see
+  [Sub-agent identity, model, and environment](#sub-agent-identity-model-and-environment) above).
+
+Then inspect the run dir's plumbing telemetry — `fileToolAttempts` (with origin), `pathDenials`, and
+`subagents[].resolvedAgentType` / `dispatchTypeOmitted` in `result.json` — none of which depend on
+model quality to be meaningful; a denied path or an untyped dispatch shows up the same way regardless
+of which model produced it. The matching assert keys turn that telemetry into a pass/fail: `no_vm_path_file_op`,
+`path_denied` / `vm_path_denied`, `subagent_dispatched`, `subagent_dispatch_healthy`.
+
+**The honest limit.** There is no `--driver=scripted` or forced step-sequencer in the harness — a cheap
+model still has to read the skill and decide to walk its steps *unassisted*. If the model is too weak
+to follow the skill at all, it may never reach the step whose plumbing you wanted to observe, and the
+telemetry above will simply be absent or empty rather than showing a failure. This recipe observes
+plumbing **when the model gets there**, not on a deterministic schedule — pick the cheapest model that
+still reliably follows the skill's steps, not the absolute cheapest one available.
+
+## Stream observability — where the sub-agent + path telemetry comes from
+
+`RunResult`'s sub-agent and path fields aren't inferred after the fact — each is derived from a specific
+event on the child→driver SDK stream (`events.jsonl`). This section names those wire channels so a
+consumer knows what's actually being observed, and what isn't.
+
+**Dispatch identity — the `task_started` event family.** A `subagent_dispatch` event is synthesized the
+moment the parent stream emits a `tool_use` block named `Agent`/`Task` (or carrying `subagent_type` in
+its input) — this seeds `subagents[].dispatchAgentType` (the DISPATCH-INPUT type) and
+`dispatchTypeOmitted`. The BINARY-**resolved** child type arrives separately, as a system-subtype event:
+`task_started`, one member of a sibling family the harness tracks as a group (`task_started`,
+`task_progress`, `task_updated`, `task_notification`, `background_tasks_changed`, `thinking_tokens` —
+`src/run/run.ts:37-44`). Only `task_started` is consumed today: joined strictly by `tool_use_id`
+(`src/run/run.ts:830-849`), it sets `subagents[].resolvedAgentType` — "strictly better evidence than
+`dispatchAgentType` for a type-less dispatch" (`schema/run-result.json:662-664`) — and when a dispatch
+had `dispatchTypeOmitted` and resolved to `general-purpose`, the harness warns loudly about the
+wildcard-fallback trap (see [The type-less dispatch trap](#the-type-less-dispatch-trap) above).
+
+**Resolved model and output — the `toolUseResult` envelope / `subagent_result_meta`.** The child's `user`
+message carrying its `tool_result` also carries a TOP-LEVEL sibling field on the raw frame,
+`tool_use_result` (`src/agent/session.ts:1034-1038`) — the wire's `toolUseResult` envelope. When it
+carries `resolvedModel`/`agentType`/`status`, the harness parses it into a `subagent_result_meta` event
+(`src/agent/session.ts:1049-1056`), joined by the paired `tool_result` block's `tool_use_id`. That event
+feeds `subagents[].resolvedModel` directly, and only *corroborates* `resolvedAgentType` — it never
+overwrites stronger evidence `task_started` already set (`src/run/run.ts:742-748`). `subagents[].output`
+comes from the same `user` message, but a different content block: the `tool_result` block itself (a
+separate `tool_result` event, `src/agent/session.ts:1064-1078`), joined by the dispatch's own `toolUseId`
+against `RunResult`'s `toolResults` (`src/run/run.ts:1071-1081`, `denormalizeSubagentOutputs`) — the
+dispatch's own return value, capped at the assert-text cap (`outputTruncated` records when the cap
+actually cut something, so `subagent_output_contains` reports "unverifiable" rather than a false
+negative). `subagents[].toolsUsed` is **not** part of this envelope — see parent-stream attribution below.
+
+**Path denials and attempts — `permission_denied`, the PreToolUse hook, and `can_use_tool`.**
+`pathDenials[]` has exactly three filtered producers (`schema/run-result.json:97`):
+
+1. `pretooluse` — the PreToolUse path gate's own hook callback (`HOSTLOOP_PATH_GATE_ID`) firing `block`
+   (`src/run/run.ts:888-910`); host-loop only.
+2. `can_use_tool` — a DENIED `can_use_tool` ask on a gated file tool that carries a path
+   (`src/run/run.ts:1225-1240`) — covers every decider (scripted, parity default, the host-loop gate, or
+   a human).
+3. `permission_denied` — a stream `permission_denied` system event, ingested ONLY when correlated by
+   `tool_use_id` to an already-recorded `fileToolAttempts` entry that itself carries a path
+   (`src/run/run.ts:855-877`) — a real `permission_denied` can fire for a non-path tool too (e.g.
+   `present_files`), so it is never ingested unfiltered.
+
+`fileToolAttempts[]` feeds the correlation above and stands on its own as attempt-level (not
+decision-level) telemetry: every gated file-tool `tool_use` — `Read`/`Write`/`Edit`/`Glob`/`Grep`/
+`MultiEdit` (`FILE_ATTEMPT_TOOLS`, `src/run/run.ts:25`) — is recorded regardless of outcome, with
+`origin: "main" | "subagent" | "unknown"` set from the same recognized-dispatch membership check the
+attribution branch below uses (`src/run/run.ts:571-588`).
+
+**Parent-stream attribution, and the thinking gap.** A child's `tool_use`/`text` blocks carry a block- or
+message-level `parent_tool_use_id` (`src/agent/session.ts:946-966`), threaded onto the synthetic
+`tool_use`/`assistant_text` events as `parentToolUseId`. The recorder uses it to attribute a tool call to
+the dispatch whose `toolUseId` it matches (`src/run/run.ts:635-648`) — this is the sole channel behind
+both `subagents[].toolsUsed` and the newer `subagents[].referencesRead` (skill reference/script files
+*that sub-agent* Read, same `skillReferenceReadPath()` predicate the main-agent `referencesRead` uses,
+deduped in first-seen order).
+
+HONEST LIMIT: `thinking` blocks are parsed **without** a `parentToolUseId` at all. Compare
+`src/agent/session.ts:967` (`text` → `assistant_text`, threads `parentToolUseId`) and `:969` (`tool_use`,
+threads it) against `:968` (`thinking` — does not); the synthetic event type itself has no
+`parentToolUseId` field on `thinking` (`src/agent/session.ts:94`). So even where a sub-agent's own
+reasoning could in principle land on the parent stream, the harness has no key to attribute it to a
+dispatch — `RunResult.thinking` is populated unconditionally at the top level
+(`src/run/run.ts:716-719`) and is never scoped to a `subagents[]` entry. **A consumer must not expect
+sub-agent reasoning/thinking to appear anywhere in the run artifact** — it is not captured, by an SDK
+limitation upstream of the harness, not a harness omission.
+
+**Where to look.** `schema/run-result.json` is the authoritative field reference — every field named
+above has a `description` there (`subagents[]` at line 640; top-level `fileToolAttempts`/`pathDenials` at
+lines 61/80). The matching assert keys (see [scenario.md](./scenario.md)) turn this telemetry into
+pass/fail: `subagent_dispatched` (matches `dispatchAgentType`/`resolvedAgentType`/description),
+`subagent_dispatch_healthy` (per-dispatch delivered output + no VM-path attempts, host-loop only),
+`no_vm_path_file_op` (content-class, re-derived from the frozen `tool_use` stream — replay-checkable
+without `controlOut`), and `path_denied` / `vm_path_denied` (decision-level — need `controlOut` on
+replay).

@@ -1,6 +1,7 @@
 import { ABSTAIN, type Abstain, type Decider, type Decision, type RunContext } from "../decide/decider.js";
 import type { DecisionRequest } from "../agent/session.js";
 import { PATH_GATE_TOOL_NAMES } from "./pretooluse-path-hook.js";
+import { isVmSessionsPath } from "../vm-paths.js";
 
 /** The SDK's own working-directory deny reason (asar `Zt`, `.vite/build/index.chunk-CS-g0Skn.js`,
  *  Desktop 1.20186.1 — also on the wire as decision_reason). Production's canUseTool wrapper rewrites
@@ -39,7 +40,7 @@ export function makeHostLoopCanUseToolGate(): Decider {
       // xe: the /sessions guard (both keys, 5-set only — MultiEdit not in the set, matching production).
       for (const key of PATH_KEYS) {
         const v = req.input[key];
-        if (typeof v === "string" && (v === "/sessions" || v.startsWith("/sessions/")))
+        if (typeof v === "string" && isVmSessionsPath(v))
           return deny(
             `\`${v}\` is a VM path. In this session the ${req.tool} tool runs on the host filesystem, where ` +
               `\`/sessions/...\` doesn't exist. Use the host path for this file (connected folders are available ` +

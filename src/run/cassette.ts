@@ -57,6 +57,7 @@ import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from ".
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
+import { isVmSessionsPath } from "../vm-paths.js";
 
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
@@ -2628,6 +2629,7 @@ function replayErrorResult(file: string): RunResult {
     tasks: undefined,
     context: undefined,
     resources: undefined,
+    verdict: undefined, // synthetic early-bail error result for an unreadable cassette — no assertions were evaluated to derive one from; the JSON envelope's own live-computed Verdict (envelope.ts) covers this on stdout
   });
 }
 
@@ -3262,9 +3264,14 @@ async function computeCassetteMargins(cassette: Cassette, cassetteDir: string): 
 }
 
 /** `verify-cassettes <file|dir>` — the CI gate (token/agent-free). Runs the privacy scan and the
- *  staleness check over one cassette or every `*.cassette.json` in a dir (non-recursive). Exit 1 on any
- *  real PII finding or staleness drift; `unscanned` notes are informational. Dedicated JSON envelope.
- *  `--margins` adds a per-count-assert recorded-vs-budget report (a per-cassette replay cost, single-sample). */
+ *  staleness check over one cassette or every `*.cassette.json` in a dir (non-recursive). Exit codes are
+ *  split by whether verification actually ran: exit 1 = verification RAN and found a real problem (a PII
+ *  finding, a genuine `StalenessFinding.class` — one NOT prefixed `unverifiable-` — or scenario-prompt
+ *  drift); exit 3 = verification could NOT complete (any `unverifiable-*` staleness class, a cassette
+ *  format newer than this harness understands, or a per-file read error/crash). A finding always wins
+ *  over an unverifiable when both occur in the same run. `unscanned` notes are informational. Dedicated
+ *  JSON envelope. `--margins` adds a per-count-assert recorded-vs-budget report (a per-cassette replay
+ *  cost, single-sample). */
 export async function cmdVerifyCassettes(args: string[]) {
   // Up-front JSON detection (see cmdRecord) so every error path emits the shared envelope in JSON mode.
   const asJson = isJsonOutput(args);
@@ -3360,19 +3367,37 @@ export async function cmdVerifyCassettes(args: string[]) {
       return verifyOneCassette(f);
     } catch (e) {
       // A per-file crash must be TALLIED as that file's error, never abort the batch (results:[] reads
-      // as "nothing to report" — a false-green by abort). Mirrors cmdReplay's per-file catch.
-      return { file: f, findings: [], staleness: [], notes: [], version: [], scenarioDrift: [], error: (e as Error)?.message ?? String(e) };
+      // as "nothing to report" — a false-green by abort). Mirrors cmdReplay's per-file catch. A crash
+      // is a bug to report, not staleness — it lands in `error` (exit 3, "could not verify"), never in
+      // `staleness`/`findings` (exit 1, "verified and failed").
+      return {
+        file: f,
+        findings: [],
+        staleness: [],
+        unverifiable: [],
+        notes: [],
+        version: [],
+        scenarioDrift: [],
+        error: (e as Error)?.message ?? String(e),
+      };
     }
   });
   function verifyOneCassette(f: string) {
     const rc = readCassette(f);
-    if ("error" in rc) return { file: f, findings: [], staleness: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
+    if ("error" in rc)
+      return { file: f, findings: [], staleness: [], unverifiable: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
     // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
     // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
     // never dropped, and must never red the gate.
     const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f)) : { findings: [], notes: [] };
-    const staleness = stale.findings.map((s) => s.message);
+    // Class-based split (StalenessFinding.class, src/types.ts): every `unverifiable-*` class means
+    // "verification could not run" (exit 3), while every other class is a genuine drift finding
+    // (exit 1) — preserve the class instead of collapsing straight to `.message` (that used to drop it,
+    // which is exactly how a version-refused cassette false-greened an inverted "must-fail" canary: it
+    // exited non-zero, just not for the reason the canary was checking).
+    const staleness = stale.findings.filter((s) => !s.class.startsWith("unverifiable-")).map((s) => s.message);
+    const unverifiable = stale.findings.filter((s) => s.class.startsWith("unverifiable-")).map((s) => s.message);
     const notes = [...stale.notes];
     // Session-shape fingerprint drift (Finding 23): gated by the SAME --skip-staleness toggle (it's a
     // staleness concept — session SHAPE, not skill content) but computed and hard-failed HERE ONLY, never
@@ -3425,7 +3450,7 @@ export async function cmdVerifyCassettes(args: string[]) {
             `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
           ]
         : [];
-    return { file: f, findings, staleness, notes, version, scenarioDrift, error: undefined as string | undefined };
+    return { file: f, findings, staleness, unverifiable, notes, version, scenarioDrift, error: undefined as string | undefined };
   }
   // --margins (diagnostic; never affects the gate): replay each cassette that carries count-bound asserts
   // and report recorded-vs-budget + margin. A per-cassette replay cost the base command doesn't have.
@@ -3445,10 +3470,23 @@ export async function cmdVerifyCassettes(args: string[]) {
   }
   const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
   const staleAny = results.some((r) => r.staleness.length > 0);
+  const unverifiableAny = results.some((r) => r.unverifiable.length > 0);
+  const unverifiableCount = results.reduce((n, r) => n + r.unverifiable.length, 0);
   const versionAny = results.some((r) => r.version.length > 0);
   const scenarioDriftAny = results.some((r) => r.scenarioDrift.length > 0);
   const errorAny = results.some((r) => r.error !== undefined);
-  const ok = realFindings.length === 0 && !staleAny && !versionAny && !scenarioDriftAny && !errorAny;
+  // Exit-code split (per-command; distinct from the run/skill family's exit 3 = boundary/integrity):
+  //  - a real problem (a PII finding, a genuine (non-unverifiable-*) staleness finding, or scenario-prompt
+  //    drift) VERIFIED and FAILED → exit 1. A real finding is the stronger signal: it wins even when the
+  //    SAME run also carries an unverifiable/version/error entry elsewhere.
+  //  - otherwise, anything that means verification COULD NOT complete (unverifiable-* staleness, a
+  //    cassette from a version this harness can't read, or a per-file read error/crash) → exit 3. This is
+  //    the split that keeps an inverted "any non-zero = tripwire fired" canary from false-greening on a
+  //    version-refused cassette instead of the finding it was meant to catch.
+  const hasFinding = realFindings.length > 0 || staleAny || scenarioDriftAny;
+  const hasUnverifiable = unverifiableAny || versionAny || errorAny;
+  const ok = !hasFinding && !hasUnverifiable;
+  const exitCode = ok ? 0 : hasFinding ? 1 : 3;
   const coverage = { privacy: doPrivacy, staleness: doStaleness, scenarioDrift: doScenarioDrift };
   if (json) {
     out(jsonPayloadEnvelope("verify-cassettes", ok, { coverage, results, ...(margins ? { margins } : {}) }));
@@ -3460,6 +3498,9 @@ export async function cmdVerifyCassettes(args: string[]) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
       for (const s of r.staleness) log(`✗ ${r.file}: [stale] ${s}`);
+      // Distinct token from `[stale]` — this class could NOT be verified (exit 3), it isn't a confirmed
+      // drift finding (exit 1). Same ✗ severity marker: it still means "not clean", just for a different reason.
+      for (const u of r.unverifiable) log(`✗ ${r.file}: [unverifiable] ${u}`);
       for (const d of r.scenarioDrift) log(`✗ ${r.file}: [scenario-drift] ${d}`);
       // Informational, never fails the gate (the `·` row mirrors the privacy channel's `unscanned` precedent).
       for (const n of r.notes) log(`· ${r.file}: [note] ${n}`);
@@ -3468,8 +3509,12 @@ export async function cmdVerifyCassettes(args: string[]) {
     log(
       ok
         ? `✓ verify-cassettes: ${files.length} cassette(s) clean`
-        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${scenarioDriftAny ? " + scenario prompt drift" : ""}${versionAny ? " + version mismatch" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
+        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${scenarioDriftAny ? " + scenario prompt drift" : ""}${unverifiableCount > 0 ? ` + ${unverifiableCount} unverifiable` : ""}${versionAny ? " + version mismatch" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s) (exit ${exitCode})`,
     );
+    if (!ok)
+      log(
+        "  exit 1 = verified & failed (a real finding); exit 3 = could not verify (unresolvable baseline/skill/tier, an unsupported cassette version, or a per-file read ERROR/CRASH — that's a bug to report, not a signal to re-record)",
+      );
     if (margins) {
       log(
         "\ncount-budget margins (recorded vs budget; a SINGLE-SAMPLE estimate — one cassette ≠ variance, use `run --repeat` for a distribution):",
@@ -3487,7 +3532,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       }
     }
   }
-  return process.exit(ok ? 0 : 1);
+  return process.exit(exitCode);
 }
 
 /** `cowork-harness rehash <dir/> [--dry-run] [--output-format text|json]`
@@ -3769,6 +3814,10 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   // itself above (see the comment beside `fileToolAttempts: rec.fileToolAttempts` in replayCassette).
   "no_vm_path_file_op",
   "subagent_file_write",
+  // content-class, NOT controlOut-gated: the composite reads only fileToolAttempts/toolResults (same
+  // frozen-stream evidence as subagent_file_write above), scoped per-dispatch via parentToolUseId — see
+  // assert.ts's subagent_dispatch_healthy evaluator.
+  "subagent_dispatch_healthy",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
   // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
   // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
@@ -3966,7 +4015,7 @@ export async function replayCassette(
         if (hev.decision !== "block") continue;
         const fp = hev.paths?.file_path;
         const pp = hev.paths?.path;
-        const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+        const vmHit = [fp, pp].find(isVmSessionsPath);
         replayPathDenials.push({
           source: "pretooluse",
           tool: hev.tool ?? "?",
@@ -4475,6 +4524,10 @@ export async function replayCassette(
       toolResults: rec.toolResults,
       durationMs: undefined,
       resources: undefined, // replay never spawns a sandbox to sample; no live resource telemetry
+      // replay never writes a result.json (there is no on-disk persist point for this lane to populate
+      // at) — cmdReplay's own JSON envelope (envelope.ts) independently attaches its own live-computed
+      // Verdict to every emitted result, incl. a replay's, for stdout consumers.
+      verdict: undefined,
     });
   } finally {
     if (replayWorkRoot) rmSync(replayWorkRoot, { recursive: true, force: true });

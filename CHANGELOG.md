@@ -6,6 +6,210 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`RunResult.subagents[].reasoning`** — a sub-agent's own THINKING and TEXT turns, in transcript order,
+  surfaced per dispatch. The SDK suppresses sub-agent thinking on the parent event stream entirely, so
+  the only channel for "did the sub-agent reason over the right rubric" was previously unavailable; this
+  reads the on-disk child session transcript the agent binary writes per `Task` dispatch
+  (`<configDirRoot>/projects/**/subagents/agent-<id>.jsonl`), joined to its `RunResult.subagents[]` entry
+  via the sibling `agent-<id>.meta.json`'s `toolUseId` (an exact match — no path reconstruction). Resolved
+  per fidelity tier (hostloop vs. the container/microvm sandboxed config dir) at finalize, LIVE/record
+  lane only — `undefined` on replay, same as `resources`/`mcpErrors`. Capped the same way the top-level
+  `thinking[]` field is (~50 entries, ~10KB/entry each), with `reasoningElided` counting the overflow. A
+  missing or malformed child transcript never fails the run — the affected dispatch's `reasoning` is just
+  left absent.
+
+- **`status --latest-for <scenario-name-or-slug>`** — resolves and prints the NEWEST run dir for a
+  scenario by actual run time, replacing the fragile `ls -td runs/<scenario>/* | head -1` idiom: bare
+  directory mtime is NOT run recency (it bumps on any later write inside the dir — an `inspect`, a `trace
+  --translate-paths`, a slow finalize — independent of when the run itself happened), so it can readily
+  return a stale prior-session dir instead of the one you actually just kept. Recency is instead resolved
+  from the run's own `.origin` marker `createdAt` (pinned `--session-id` runs) or `result.json`'s mtime
+  (the common ephemeral-run case), falling back to `status.json`'s `startedAt` for a run dir with neither
+  yet; a run dir with no usable recency signal at all is skipped rather than silently falling back to its
+  own mtime. `--output-format json` emits `{scenario, outDir, createdAt, verdict?}` — `verdict` surfaces
+  opportunistically from a persisted `RunResult.verdict` when the kept run has one. A scenario with no
+  runs on disk fails clean (a message naming the scenario + runs root, exit 2) rather than crashing.
+  `outDir` (printed here and by every `run`/`skill`/`chat` invocation) is documented as the canonical
+  run-dir handle in docs/scenario.md's "Output" section.
+
+- **`RunResult.verdict`** — a kept run's `result.json` now persists the overall pass/fail: `{pass,
+  exitCode, failures}`, the same pass/fail/exit-code `computeVerdict` (the single verdict source)
+  computes for the run/skill exit, the footer, and the JSON envelope's `ok`. Previously the ONLY way to
+  see why a kept run failed was to re-run `verify-run`; `jq '.verdict' result.json` now answers it
+  directly, with `failures[]` naming the failing assertion key (when a failure traces to one) or a
+  hard-verdict guard reason (an infra error, an unanswered gate, a scan-based host-path leak, …)
+  otherwise. Populated on both the success path and a salvaged (unanswered-gate) partial run — a whiffed
+  gate is itself a verdict fail, and its `failures[]` names the gate reason rather than a generic
+  placeholder. Scope: the run/asserted lane only — `chat` carries no assertions and no verdict, so the
+  field stays absent (undefined) there, same as it always has for every other verdict-adjacent field.
+
+- **`probe-dispatch <skill-dir> "<prompt>"`** — a cheap, focused mechanics probe for a single `Task`
+  dispatch. A THIN wrapper over `skill` (same inline session/scenario construction, same `runOneScenario`
+  execution; default fidelity `hostloop`, since path-fidelity — this probe's whole reason to exist — only
+  matters there): scope the prompt to trigger ONE dispatch, and it prints just that dispatch's
+  `{resolvedAgentType, pathDenials, delivered}` instead of the full run transcript. No new `RunResult`
+  field backs it — it's a pure projection of data `skill`/`run` already produce
+  (`subagents[]`/`fileToolAttempts`/`pathDenials`/`toolResults`); `pathDenials` is scoped to the specific
+  dispatch by joining a denial's own `toolUseId` through `fileToolAttempts[].parentToolUseId` (falling
+  back to the run-level list, clearly labeled, when `fileToolAttempts` isn't available), and `delivered`
+  mirrors the `subagent_dispatch_healthy` assertion's own paired-write computation. `--expect-write
+  <suffix>` narrows `delivered` to a specific target path; `--output-format json` emits a compact
+  `{dispatches: [...], verdict}` envelope. "One dispatch" is PROMPT-SCOPED, not enforced — Cowork imposes
+  no in-conversation dispatch cap — so the probe just asserts it (`subagent_dispatched` +
+  `dispatch_count_max: 1`) and reports a failed verdict if the prompt fanned out.
+
+- **`RunResult.subagents[].referencesRead`** — the skill `references/*` / `scripts/*` files a SUB-AGENT
+  dispatch actually **Read**, attributed per-dispatch (skill-relative, deduped in first-seen order, same
+  filter as the existing top-level `referencesRead`). Previously a sub-agent's Reads were dropped
+  entirely even though its `tool_use` blocks already ride the parent stream — this closes that gap
+  without touching the top-level (main-agent-only) `referencesRead`, which is unchanged. Present on live
+  and replay.
+
+- **`analyze-skill <SKILL.md | skill-dir/>` — a token-free static ADVISORY scan for the "skill hands a
+  `/sessions/...` path to a file tool" defect class.** Previously the only way to discover that a skill's
+  dispatch prompt or file-tool directive points at a `/sessions/...` VM path — which production's
+  host-loop path gate denies unconditionally, since the agent's file tools run on the host filesystem —
+  was a paid live host-loop run. `analyze-skill` scans a SKILL.md's text and reuses the harness's own
+  ported `/sessions` path-gate predicate (`isVmSessionsPath`, new export in `src/vm-paths.ts`) as the
+  deny decision; only the extraction of candidate paths from markdown is heuristic, and it is
+  conservative by design — a `/sessions` token inside a fenced bash/sh/shell/zsh block, an
+  anti-instruction line ("never write to `/sessions/...`"), or plain prose with no file-tool/output
+  context is never flagged. Findings from two rules (`sessions-path-to-file-tool`,
+  `sessions-find-into-file-read`) print as advisory warnings and exit 0 by default — the extraction is
+  heuristic enough that a hard gate would over-flag innocent documentation; pass `--strict` to fail
+  (exit 1) on any finding instead, and put a line containing `analyze-skill: ignore` (bare, or inside an
+  HTML comment) in a SKILL.md to silence every finding for that file, even under `--strict`. Exit 2 on a
+  usage error. See [docs/subagents.md](./docs/subagents.md#static-path-fidelity-check-analyze-skill) — a
+  clean/suppressed result is a PRE-FLIGHT signal only, not proof of on-tier resolution; the runtime
+  `no_vm_path_file_op` / `vm_path_denied` assertions remain authoritative.
+
+- **`scenario.py resolve-agent-types <plugin-dir>` + a `subagent_type` check folded into `lint-skill`
+  — static resolution of a pinned `subagent_type` against a plugin's own agents.** A `Task` dispatch
+  pinning a `subagent_type` that doesn't actually resolve (e.g. `founder-skills:cap-table` when the
+  agent is named `captable`) fails a definition lookup at dispatch time — previously only discoverable
+  by paying for a live run. `resolve-agent-types` reads a plugin's `name` from
+  `.claude-plugin/plugin.json` (fallback `plugin.json`) and each `agents/*.md`'s `name:` frontmatter
+  (filename-stem fallback) to build the plugin's valid `<plugin>:<agent>` set (`--json` for a machine
+  array); `lint-skill` now extracts every pinned `subagent_type` in a SKILL.md (YAML and
+  dispatch-prose forms, not limited to fenced blocks), resolves the enclosing plugin, and flags a
+  value that doesn't resolve as `subagent-type-unresolvable` (belongs to another plugin) or
+  `subagent-type-unknown` (unresolved bare value). Both are **INFO, never WARN** — there is no
+  harness registry of built-in agent types to disprove an unknown value against (only
+  `general-purpose` is harness-known), so an unresolved value is always surfaced, never failed. See
+  [docs/subagents.md](./docs/subagents.md#static-subagent_type-resolution-resolve-agent-types--lint-skill).
+
+- **`lint-skill` gained a `guard-pattern-mismatch` WARN: a `${CLAUDE_PLUGIN_ROOT}` self-heal `find`
+  that targets a different skill/plugin than the one being linted.** The mount-discovery self-heal
+  pattern recovers `${CLAUDE_PLUGIN_ROOT}` by `find`-ing the plugin's own mount at runtime, but a
+  copy-pasted `-path` glob naming another skill's or plugin's directory silently fails to discover
+  THIS skill's mount instead. `lint-skill` now extracts the `-path` glob's skill/plugin/scripts-segment
+  token and compares it against the SKILL.md's own frontmatter `name:` (or parent-directory name) and
+  enclosing plugin name, warning when they don't match. See
+  [docs/plugin-root.md](./docs/plugin-root.md#catch-both-before-a-paid-run).
+
+- **`lint-skill`'s `subagent_type` check gained a third outcome: `subagent-type-not-found-in-plugin`
+  (INFO).** A pinned `subagent_type` whose `<plugin>:<agent>` prefix names THIS skill's own enclosing
+  plugin, but whose `<agent>` isn't among that plugin's enumerated `agents/*.md`, can never be another
+  binary's built-in — the namespace prefix already commits it to this plugin, and the plugin's agent
+  set was fully enumerable — so it's reported as `subagent-type-not-found-in-plugin` rather than the
+  more equivocal `subagent-type-unknown`. Still INFO, not WARN, consistent with the rest of the
+  `subagent_type` ladder's honest-limit posture. See
+  [docs/subagents.md](./docs/subagents.md#static-subagent_type-resolution-resolve-agent-types--lint-skill).
+
+- **`subagent_dispatch_healthy: {type?, delivered?, path?, path_suffix?, no_vm_paths?}` — a composite
+  assertion for a single dispatch's per-dispatch correlation.** `subagent_file_write` matches ANY
+  sub-agent-origin write, so it can't distinguish a delivery from the SELECTED dispatch from one made by
+  a sibling dispatch. `subagent_dispatch_healthy` selects dispatch(es) by `type` (same matching as
+  `subagent_dispatched`; omit to require every dispatch healthy) and, for each, checks its OWN paired
+  non-error write (`delivered`, default `true`, optionally narrowed by `path`/`path_suffix`) and its OWN
+  freedom from any `/sessions` VM-path attempt (`no_vm_paths`, default `true`) — both tied to that
+  dispatch's `parentToolUseId`, never any other dispatch's. Hostloop-only (the VM-path conjunct can't
+  verify off that tier); content-class (`RunResult.fileToolAttempts` + `RunResult.toolResults`),
+  replay-checkable without `controlOut`.
+
+- **Docs: a "mechanics-only cheap-model" recipe for observing a skill's plumbing without paying for
+  analytical quality.** No new code — this documents combining existing knobs (`--model <cheap-id>` on
+  `skill`/`run`, a session's `model:` field, `run --matrix`'s `models:` axis for the main loop;
+  `agent_env.subagent_model` for sub-agents) with the path/dispatch telemetry a run already produces
+  (`fileToolAttempts`, `pathDenials`, `subagents[].resolvedAgentType`/`dispatchTypeOmitted`) and its
+  matching assert keys (`no_vm_path_file_op`, `path_denied`/`vm_path_denied`, `subagent_dispatched`,
+  `subagent_dispatch_healthy`) — none of which depend on model quality to be meaningful. Cross-links
+  the static, token-free `analyze-skill` scan as the first line and the cheap live run as the second.
+  Also states the honest limit: there is no scripted-step driver, so a cheap model still walks a
+  skill's steps unassisted and may never reach the step you wanted to observe. See
+  [docs/subagents.md](./docs/subagents.md#observing-mechanics-cheaply).
+
+### Changed
+
+- **`toolCounts` shape pinned + clarified.** `RunResult.toolCounts` is always a `{tool: number}`
+  call-count map — the schema now strictly pins the value type (including the per-window
+  `skillActivity[].toolCounts`, previously unconstrained), and the description distinguishes it from the
+  separately-shaped `toolErrors` (`{tool: {calls, errors}}`) and `toolDurations`
+  (`{tool: {calls, totalMs, maxMs}}`) so a `jq` recipe can't conflate the three rollups.
+- **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and
+  found a real problem" in its exit code.** Previously every non-clean outcome exited `1`, so a
+  consumer's non-zero-exit tripwire couldn't tell a genuine finding apart from a cassette verification
+  simply couldn't run against (e.g. one written by a newer harness) — a version-refused cassette could
+  false-green an inverted "must-fail" canary for the wrong reason. Exit `1` is now reserved for
+  verification that RAN and found a real problem (a PII finding, a genuine — non-`unverifiable-*` —
+  staleness drift, or scenario-prompt drift); exit `3` covers everything that means verification could
+  NOT complete (any `unverifiable-*`-class staleness finding, a cassette from a version this harness
+  doesn't understand, or a per-file read error/crash). A real finding still wins exit `1` when both occur
+  in the same run. The JSON envelope (`schema/verify-cassettes.json`) gained a matching `unverifiable[]`
+  bucket per result, split out of what used to be a class-blind `staleness[]`; text output now marks
+  those rows `[unverifiable]` instead of `[stale]`.
+
+### Fixed
+
+- **The `no_delete_in_outputs` outputs-delete scan (`isOutputsDelete`) now parses the actual delete
+  TARGET by default, instead of flagging on whole-command token co-occurrence.** A binary-verified read
+  of real Cowork's own enforcement showed it denies outputs deletes STRUCTURALLY, by the resolved
+  target's mount (the `outputs` mount is `rw` without the delete bit) — not by scanning command text —
+  so a target-based scan is MORE faithful, not less safe. Previously `T=$(mktemp); …; rm -f "$T"` was
+  flagged just because "outputs" appeared elsewhere in the same command, even though the `rm` target was
+  `/tmp`. Now each rm-family delete statement's own target(s) are checked; a delete is suppressed only
+  when every target is *provably* outside outputs — an absolute/relative path clear of `outputs/`, or a
+  path under a safe prefix. `/tmp/` and the literal `$TMPDIR`/`${TMPDIR}` idiom are safe by DEFAULT
+  (including a `VAR=$(mktemp …)`-sourced `$VAR`, resolved by a narrow, source-order-aware pass);
+  `COWORK_HARNESS_SAFE_STAGING_PREFIX` remains available to union in operator-specific prefixes. An
+  unresolved/command-substituted target (anything other than the recognized `mktemp` idiom) still always
+  flags — the guiding invariant, "prefer a false positive over a false negative when a target is
+  genuinely unprovable," is unchanged. Also fixed in the same pass: `splitStatements` now joins bash
+  backslash-newline line continuations before splitting, so a line-wrapped `mv \` / `outputs/a.txt \` /
+  `/tmp/b.txt` is scanned as one logical statement instead of being shredded into fragments too small for
+  the `mv`-direction check to see both operands (previously an under-detection).
+
+- **The staged NATIVE agent binary (hostloop/cowork tiers) now tolerates a patch-level staging drift by
+  default, instead of forcing `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`.** A mid-session Claude Desktop
+  auto-update prunes the pinned native version dir and stages a newer one; since the native binary
+  carries no sha256 pin, a same-major.minor patch bump is now auto-accepted (with a loud stderr note
+  naming the pinned and substituted versions) rather than hard-failing. A major/minor drift keeps the
+  existing behavior — env-gated fallback or a hard throw. `doctor`'s native-binary check surfaces the
+  same substitution as an `ok` status with a version-substitution note, sharing one classifier with the
+  resolver so the two can't disagree. The sha256-pinned VM ELF resolver is unchanged — it keeps its
+  strict exact-or-env-gated-or-throw behavior on a patch-only sibling, verified by a regression test.
+
+- **`lint-skill --strict` no longer fails on an INFO-only result.** The `subagent_type` ladder
+  (`subagent-type-unresolvable` / `-not-found-in-plugin` / `-unknown`) is always INFO by design — there
+  is no harness registry of built-in agent types to disprove an unknown value against — but `--strict`
+  was exiting non-zero on ANY finding, INFO included, contradicting its own `--help` text ("exit
+  non-zero on WARN too, not just ERROR") and failing a correctly-authored skill that merely pins a
+  built-in `subagent_type` (e.g. `Explore`). `--strict` now fails only on WARN or ERROR severity.
+
+### Docs
+
+- **`docs/subagents.md`: new "Stream observability" subsection.** Names the wire channels
+  `RunResult`'s sub-agent and path telemetry are actually derived from — the `task_started` event
+  family behind `subagents[].resolvedAgentType`/`dispatchTypeOmitted`, the `toolUseResult` envelope
+  (`subagent_result_meta`) behind `resolvedModel`/`output`, the three filtered `pathDenials[]`
+  producers (`pretooluse`/`can_use_tool`/`permission_denied`), and the `parent_tool_use_id`
+  attribution mechanism behind `toolsUsed`/`referencesRead`. Documents the honest limit that
+  sub-agent `thinking` blocks are parsed without a `parentToolUseId` at all, so sub-agent
+  reasoning cannot be attributed to a dispatch and never appears in the run artifact — a real gap,
+  not a harness omission.
+
 ## [0.30.0] — 2026-07-12
 
 > **Upgrade notes.**

@@ -33,6 +33,22 @@ export interface Verdict {
   exitCode: 0 | 1;
   signals: VerdictSignal[];
   guards: GuardReport[];
+  /** The SAME `failures[]` projection formerly built by the now-removed `persistedVerdict` wrapper,
+   *  computed inline here so there is exactly ONE verdict shape everywhere (result.json AND the
+   *  `--output-format json` stdout envelope both carry this `Verdict`, never a second flatter shape):
+   *  - a failure that traces to a specific failing assert carries its key — `Object.keys(a.assertion)`,
+   *    the same convention `verify-run`'s text output (cli.ts) and the cassette replay-drift summary use
+   *    — alongside its message. Reads `result.assertions` directly (not `signals`) because a
+   *    `VerdictSignal` of code `"assertion"` doesn't itself carry which assertion failed.
+   *  - a hard-verdict GUARD reason that failed the run independent of an explicit assert (infra error,
+   *    scan-based host-path leak/outputs-delete, a stalled/transport/usage-limit/capability signal, …)
+   *    carries just its message, no `assertion` key.
+   *  - an unanswered-gate salvage (`result.unansweredGate` set) is special-cased: the generic
+   *    `result_error`/`transport_error` signal for it would read as "run result was error" with no
+   *    reason. Substitute the gate's own message (the decider's failure text, question embedded) so a
+   *    salvaged run's `failures` actually names the gate reason instead of the generic placeholder.
+   *  Empty on a pass. */
+  failures: Array<{ assertion?: string; message: string }>;
 }
 
 /** build the "guards active this run" roster from the guards' INPUT PRECONDITIONS (lane + probe
@@ -252,5 +268,28 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     });
 
   const pass = !signals.some((s) => s.severity === "fail");
-  return { pass, exitCode: pass ? 0 : 1, signals, guards: guardRoster(result, lane, signals) };
+
+  // `failures[]` — the flat, jq-friendly projection (see the field's doc comment on `Verdict` above).
+  // Plain JSON in shape (no functions, and `assertion: undefined` — set only when no key was found — is
+  // dropped by `JSON.stringify` like every other optional field on this type).
+  const failures: Array<{ assertion?: string; message: string }> = [];
+
+  for (const a of result.assertions) {
+    if (a.pass) continue;
+    const key = Object.keys(a.assertion).filter((k) => (a.assertion as Record<string, unknown>)[k] !== undefined)[0];
+    failures.push(key ? { assertion: key, message: a.message ?? "assertion failed" } : { message: a.message ?? "assertion failed" });
+  }
+
+  for (const s of signals) {
+    if (s.severity !== "fail" || s.code === "assertion") continue;
+    // the gate's own message (pushed below) already names the reason — skip the content-free generic
+    // result_error/transport_error signal emitted above for the same result:"error" so a salvaged run's
+    // failures[] doesn't carry two entries for one root cause.
+    if (result.unansweredGate && (s.code === "result_error" || s.code === "transport_error")) continue;
+    failures.push({ message: s.message });
+  }
+
+  if (result.unansweredGate) failures.push({ message: result.unansweredGate.message });
+
+  return { pass, exitCode: pass ? 0 : 1, signals, guards: guardRoster(result, lane, signals), failures };
 }

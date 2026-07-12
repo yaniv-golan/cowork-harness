@@ -10,6 +10,7 @@ import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
 import { collectArtifactPathsWithHealth } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
+import { isVmSessionsPath } from "./vm-paths.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
  *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (the
@@ -256,6 +257,12 @@ export interface AssertContext {
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
   subagents: {
+    // Optional (not required) so existing hand-built test fixtures that omit it keep compiling — every
+    // real construction site (live/replay/verify-run) passes RunResult.subagents through untouched, which
+    // always carries it (types.ts, non-optional there). A dispatch missing it here can never correlate to
+    // a fileToolAttempts entry (real "subagent"-origin attempts always carry a defined parentToolUseId
+    // matching a real dispatch's toolUseId), so subagent_dispatch_healthy fails closed rather than mismatching.
+    toolUseId?: string;
     dispatchAgentType: string;
     resolvedAgentType?: string; // the BINARY-resolved child type from task_started — strictly better evidence than dispatchAgentType for a type-less dispatch
     declaredTools: string[];
@@ -1637,7 +1644,7 @@ function check(
   // no_scratchpad_leak tier-gate precedent above: on a non-hostloop tier /sessions/... is a VALID VM
   // path (no path hook exists there), so excluding the key could green a wrong-tier scenario — it must
   // FAIL "cannot verify" instead.
-  const VM_PATH = (p: string | undefined): boolean => p !== undefined && (p === "/sessions" || p.startsWith("/sessions/"));
+  const VM_PATH = isVmSessionsPath;
   const hostloopOnly = (key: string): KeyResult | null =>
     ctx.effectiveFidelity !== "hostloop"
       ? fail(
@@ -1724,6 +1731,91 @@ function check(
               `subagent_file_write: no SUB-AGENT-origin ${q.tool ?? "Write/Edit/MultiEdit"} attempt with path ${want} and a non-error paired result`,
             ),
       );
+    }
+  }
+
+  if (a.subagent_dispatch_healthy !== undefined) {
+    // hostloop-only: the no_vm_paths conjunct can't verify off hostloop (see the VM_PATH/hostloopOnly
+    // comment above no_vm_path_file_op) — a delivered-only query would still be tier-agnostic in principle,
+    // but the composite gates uniformly so a scenario can't accidentally get a partial, tier-dependent
+    // verdict from one key.
+    const gate = hostloopOnly("subagent_dispatch_healthy");
+    if (gate) results.push(gate);
+    else {
+      const q = a.subagent_dispatch_healthy;
+      const c = q.type !== undefined ? compileUserRegex(q.type) : undefined;
+      if (c && "error" in c) results.push(fail(`subagent_dispatch_healthy: bad regex "${q.type}": ${c.error}`));
+      else if (ctx.fileToolAttempts === undefined || ctx.toolResults === undefined)
+        results.push(fail("subagent_dispatch_healthy: attempt/result telemetry unavailable (older run) — cannot verify"));
+      else if (ctx.subagentsMissing)
+        results.push(
+          fail("evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_dispatch_healthy"),
+        );
+      else {
+        // Match dispatchAgentType OR resolvedAgentType OR description — mirrors subagent_dispatched.
+        const selected = c
+          ? ctx.subagents.filter(
+              (s) =>
+                c.re.test(s.dispatchAgentType) ||
+                (s.resolvedAgentType !== undefined && c.re.test(s.resolvedAgentType)) ||
+                c.re.test(s.description ?? ""),
+            )
+          : ctx.subagents;
+        if (q.type !== undefined && selected.length === 0) {
+          results.push(fail(`subagent_dispatch_healthy: no sub-agent matching "${q.type}" was dispatched (by type or description)`));
+        } else {
+          const wantDelivered = q.delivered !== false; // default true
+          const wantNoVm = q.no_vm_paths !== false; // default true
+          const writeTools = (n: string): boolean => n === "Write" || n === "Edit" || n === "MultiEdit";
+          // exact when `path` is given, else suffix, else any path — mirrors subagent_file_write's
+          // pathMatch precedence (a foo/artifacts/probe.json must not satisfy an artifacts/probe.json suffix).
+          const pathMatch = (gp: string | undefined): boolean => {
+            if (q.path === undefined && q.path_suffix === undefined) return true;
+            return gp !== undefined && (q.path !== undefined ? gp === q.path : gp.endsWith(q.path_suffix!));
+          };
+          const want = q.path !== undefined ? `== "${q.path}"` : q.path_suffix !== undefined ? `ending "${q.path_suffix}"` : "(any path)";
+          let unhealthy: { s: (typeof selected)[number]; reason: string } | undefined;
+          for (const s of selected) {
+            if (wantDelivered) {
+              // Scoped to THIS dispatch's own parentToolUseId — the correlation subagent_file_write lacks
+              // (it matches ANY sub-agent-origin write, so a write delivered under a SIBLING dispatch would
+              // wrongly satisfy that key but must NOT satisfy this one).
+              const chain = ctx.fileToolAttempts.find(
+                (at) =>
+                  at.origin === "subagent" &&
+                  at.parentToolUseId === s.toolUseId &&
+                  writeTools(at.tool) &&
+                  pathMatch(at.gatePath) &&
+                  at.toolUseId !== undefined &&
+                  ctx.toolResults!.some((r) => r.toolUseId === at.toolUseId && !r.isError),
+              );
+              if (!chain) {
+                unhealthy = {
+                  s,
+                  reason: `delivered: no SUB-AGENT-origin write ${want} under its OWN dispatch with a non-error paired result`,
+                };
+                break;
+              }
+            }
+            if (wantNoVm) {
+              const vmHit = ctx.fileToolAttempts.find(
+                (at) => at.parentToolUseId === s.toolUseId && (VM_PATH(at.paths.file_path) || VM_PATH(at.paths.path)),
+              );
+              if (vmHit) {
+                unhealthy = { s, reason: `no_vm_paths: attempted VM path "${vmHit.paths.file_path ?? vmHit.paths.path}"` };
+                break;
+              }
+            }
+          }
+          results.push(
+            unhealthy
+              ? fail(
+                  `subagent_dispatch_healthy: dispatch "${unhealthy.s.dispatchAgentType}"${unhealthy.s.toolUseId ? ` (${unhealthy.s.toolUseId})` : ""} unhealthy — ${unhealthy.reason}`,
+                )
+              : ok(),
+          );
+        }
+      }
     }
   }
 

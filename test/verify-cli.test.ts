@@ -116,7 +116,8 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
 
   // The non-failing `notes` channel. A pre-effectiveFidelity cassette with an EXPLICIT tier is
   // statically knowable → exit 0 with an informational note in the envelope (never a silent skip,
-  // never a spurious red). A `fidelity: cowork` one is baseline-dependent → loud unverifiable-tier, exit 1.
+  // never a spurious red). A `fidelity: cowork` one is baseline-dependent → loud unverifiable-tier,
+  // exit 3 (could not verify, not a confirmed finding).
   it("pre-effectiveFidelity + explicit tier → exit 0, note surfaced in the JSON envelope", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     writeFileSync(join(d, "old.cassette.json"), JSON.stringify(cassette([JSON.stringify({ type: "result", subtype: "success" })])));
@@ -127,24 +128,76 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(r.json.results[0].notes[0]).toMatch(/statically knowable/);
   });
 
-  it("pre-effectiveFidelity + fidelity: cowork → unverifiable-tier staleness, exit 1", () => {
+  it("pre-effectiveFidelity + fidelity: cowork → unverifiable-tier staleness, exit 3 (could not verify), landed in the `unverifiable` bucket", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]);
     (c.scenario as { fidelity: string }).fidelity = "cowork";
     writeFileSync(join(d, "cw.cassette.json"), JSON.stringify(c));
     const r = run(["verify-cassettes", join(d, "cw.cassette.json"), "--output-format", "json"], d);
-    expect(r.code).toBe(1);
+    expect(r.code).toBe(3);
     expect(r.json.ok).toBe(false);
-    expect(r.json.results[0].staleness.join(" ")).toMatch(/predates effectiveFidelity/);
+    expect(r.json.results[0].staleness).toHaveLength(0);
+    expect(r.json.results[0].unverifiable.join(" ")).toMatch(/predates effectiveFidelity/);
   });
 
-  it("a malformed cassette is TALLIED (exit 1), not a crash — clean siblings still verified", () => {
+  it("a malformed cassette is TALLIED (exit 3, could not verify), not a crash — clean siblings still verified", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     writeFileSync(join(d, "ok.cassette.json"), JSON.stringify(cassette([JSON.stringify({ type: "result", subtype: "success" })])));
     writeFileSync(join(d, "junk.cassette.json"), "{ this is not valid json");
     const r = run(["verify-cassettes", d, "--output-format", "json"], d);
-    expect(r.code).toBe(1);
+    expect(r.code).toBe(3);
     expect(r.json.ok).toBe(false);
     expect(JSON.stringify(r.json)).toMatch(/invalid cassette JSON|unreadable/);
+  });
+
+  it("a genuine baseline DRIFT cassette (fingerprint.baseline stale) → exit 1 (verified & failed), landed in the `staleness` bucket, NOT `unverifiable`", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;
+    // A stale, non-live baseline appVersion — genuine `class: "baseline"` drift, not `unverifiable-baseline`
+    // (the live baseline itself always loads fine in this repo's test env).
+    c.fingerprint = { baseline: "0.0.0-does-not-exist" };
+    writeFileSync(join(d, "drift.cassette.json"), JSON.stringify(c));
+    const r = run(["verify-cassettes", join(d, "drift.cassette.json"), "--output-format", "json"], d);
+    expect(r.code).toBe(1);
+    expect(r.json.ok).toBe(false);
+    expect(r.json.results[0].staleness.join(" ")).toMatch(/baseline moved/);
+    expect(r.json.results[0].unverifiable).toHaveLength(0);
+  });
+
+  it("a cassette from a NEWER harness version → exit 3 (could not verify), landed in the `version` bucket", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;
+    c.cassetteVersion = 9999;
+    writeFileSync(join(d, "future.cassette.json"), JSON.stringify(c));
+    const r = run(["verify-cassettes", join(d, "future.cassette.json"), "--output-format", "json"], d);
+    expect(r.code).toBe(3);
+    expect(r.json.ok).toBe(false);
+    expect(r.json.results[0].version.length).toBeGreaterThan(0);
+    expect(r.json.results[0].error).toBeUndefined();
+  });
+
+  it("a planted PII finding → exit 1 (verified & failed), landed in the `findings` bucket — reverting the class split would flip this back too", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
+    writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(c));
+    const r = run(["verify-cassettes", join(d, "leak.cassette.json"), "--output-format", "json"], d);
+    expect(r.code).toBe(1);
+    expect(r.json.ok).toBe(false);
+    expect(r.json.results[0].findings.length).toBeGreaterThan(0);
+  });
+
+  it("a real finding AND an unverifiable cassette in the SAME run → exit 1 wins (a real finding is the stronger signal)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const leak = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
+    writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(leak));
+    const future = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;
+    future.cassetteVersion = 9999;
+    writeFileSync(join(d, "future.cassette.json"), JSON.stringify(future));
+    const r = run(["verify-cassettes", d, "--output-format", "json"], d);
+    expect(r.code).toBe(1);
+    expect(r.json.ok).toBe(false);
+    const byFile = Object.fromEntries(r.json.results.map((res: any) => [res.file.split("/").pop(), res]));
+    expect(byFile["leak.cassette.json"].findings.length).toBeGreaterThan(0);
+    expect(byFile["future.cassette.json"].version.length).toBeGreaterThan(0);
   });
 });

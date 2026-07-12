@@ -13,11 +13,48 @@ import {
   collectArtifacts,
   readSessionManifest,
   parseEnvPort,
+  resolveSubagentConfigRoot,
 } from "../src/run/execute.js";
 import { classifyWorkspaceFiles } from "../src/run/artifacts.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv, hostNativeSpawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
+import { VM_WORK_HOST } from "../src/runtime/lima.js";
+
+// Regression guard: the sub-agent reasoning capture (`captureSubagentReasoning`) globs under a
+// per-tier config-dir ROOT. hostloop and container resolve against the SAME host tree the caller
+// already has (`configDir` / `workRoot`); microvm does NOT — it stages into a separate host tree
+// (`VM_WORK_HOST/<sessionId>/mnt`, see src/runtime/microvm.ts's `sessionHost`/`mntHost`), never
+// `workRoot`. Reverting the microvm case to the container path (`join(workRoot, ".claude")`) would
+// glob a directory that doesn't exist for microvm runs, silently leaving `reasoning` undefined even
+// when a real child transcript was written — this test fails loud on that regression.
+describe("resolveSubagentConfigRoot — per-tier config-dir root", () => {
+  const configDir = "/host/plan/config-dir";
+  const workRoot = "/host/out/work/session/mnt";
+  const sessionId = "sess-abc123";
+
+  it("hostloop resolves to configDir as-is", () => {
+    expect(resolveSubagentConfigRoot("hostloop", { configDir, workRoot, sessionId })).toBe(configDir);
+  });
+
+  it("container resolves to workRoot/.claude", () => {
+    expect(resolveSubagentConfigRoot("container", { configDir, workRoot, sessionId })).toBe(join(workRoot, ".claude"));
+  });
+
+  it("microvm resolves to VM_WORK_HOST/<sessionId>/mnt/.claude — NOT workRoot/.claude", () => {
+    const root = resolveSubagentConfigRoot("microvm", { configDir, workRoot, sessionId });
+    expect(root).toBe(join(VM_WORK_HOST, sessionId, "mnt", ".claude"));
+    expect(root).not.toBe(join(workRoot, ".claude"));
+  });
+
+  it("microvm with no sessionId returns undefined (no session subtree to derive)", () => {
+    expect(resolveSubagentConfigRoot("microvm", { configDir, workRoot })).toBeUndefined();
+  });
+
+  it("other tiers (e.g. protocol) return undefined — no real agent binary spawns", () => {
+    expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId })).toBeUndefined();
+  });
+});
 
 describe("slugForPath keeps the run dir inside runs/", () => {
   it("neutralizes traversal and separators, preserves normal names", () => {
@@ -304,8 +341,8 @@ describe("execute — scanEvents host-path leak detection", () => {
   });
 });
 
-// outputs-delete detector: mv-direction (default) + opt-in /tmp suppression
-describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", () => {
+// outputs-delete detector: mv-direction + target-based rm parsing (default) + safe-prefix suppression
+describe("isOutputsDelete — mv direction + target-based safe-prefix suppression", () => {
   const setEnv = (v?: string) => {
     if (v === undefined) delete process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX;
     else process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX = v;
@@ -324,27 +361,63 @@ describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", ()
   it("mv: ambiguous -t mentioning outputs → conservative flag", () => {
     expect(isOutputsDelete("mv -t /tmp outputs/a outputs/b")).toBe(true);
   });
+  it("mv: same-dir rename stays inside outputs → not a delete", () => {
+    expect(isOutputsDelete("mv outputs/a.txt outputs/b.txt")).toBe(false);
+  });
+  it("mv N-ary: moving multiple files INTO outputs/ is not a delete", () => {
+    expect(isOutputsDelete("mv a.pdf b.pdf outputs/")).toBe(false);
+  });
+  it("mv N-ary: moving multiple files OUT of outputs is a delete", () => {
+    expect(isOutputsDelete("mv outputs/a.pdf outputs/b.pdf /tmp/")).toBe(true);
+  });
+  it("mv: line-continued statement is joined before scanning (was a false negative)", () => {
+    expect(isOutputsDelete("mv \\\n  outputs/a.txt \\\n  /tmp/b.txt")).toBe(true);
+  });
+  it("mv: one-line equivalent of the line-continued command is unchanged", () => {
+    expect(isOutputsDelete("mv outputs/a.txt /tmp/b.txt")).toBe(true);
+  });
 
-  it("default (no env): flags every rm co-occurrence", () => {
-    expect(isOutputsDelete("rm -rf /tmp/s.* ; cat outputs/y")).toBe(true);
-    expect(isOutputsDelete("rm mnt/outputs/a.md")).toBe(true);
+  it("default (no env): a rm TARGET provably under outputs is flagged", () => {
+    expect(isOutputsDelete("rm outputs/report.md")).toBe(true);
+    expect(isOutputsDelete("rm mnt/outputs/x")).toBe(true);
+    expect(isOutputsDelete("find outputs -delete")).toBe(true);
     expect(isOutputsDelete("cd outputs && rm -rf *")).toBe(true);
   });
-  it("mv INTO outputs co-located with an unrelated rm/tmp still flags by the rm default", () => {
-    expect(isOutputsDelete("mv tmp/x outputs/x && rm /tmp/y")).toBe(true);
+  it("default (no env): a rm TARGET provably outside outputs (/tmp) is NOT flagged, even when the command mentions outputs elsewhere", () => {
+    expect(isOutputsDelete("rm -rf /tmp/scratch")).toBe(false);
+    expect(isOutputsDelete("rm -rf /tmp/s.* ; cat outputs/y")).toBe(false);
+    expect(isOutputsDelete("mv tmp/x outputs/x && rm /tmp/y")).toBe(false);
+  });
+  it('default (no env): the consumer idiom T=$(mktemp); …; rm -f "$T" is NOT flagged', () => {
+    expect(isOutputsDelete('T=$(mktemp); cp "$T" outputs/f; rm -f "$T"')).toBe(false);
+    expect(isOutputsDelete('T=$(mktemp -d); cp "$T"/f outputs/f; rm -rf "$T"')).toBe(false);
+  });
+  it("default (no env): an UNRESOLVABLE rm target with an outputs mention still flags (conservative — no new false negative)", () => {
+    expect(isOutputsDelete('rm "$UNSET" ; cp a mnt/outputs/b')).toBe(true);
+    expect(isOutputsDelete('rm -rf "$UNDEFINED/data" ; cp a mnt/outputs/b')).toBe(true);
+    expect(isOutputsDelete('rm "$(some_cmd)" ; cp a mnt/outputs/b')).toBe(true); // command-subst target, not mktemp
+  });
+  it("default (no env): a delete statement that itself names outputs still flags even with a safe-looking prefix nearby", () => {
+    expect(isOutputsDelete("rm -rf scratch/* && cp x mnt/outputs/y")).toBe(true);
   });
 
-  it("opt-in (/tmp): suppresses provably-safe staging cleanups", () => {
-    setEnv("/tmp");
-    expect(isOutputsDelete("rm -rf /tmp/cap.staging.* ; cat /mnt/outputs/x.csv")).toBe(false);
-    expect(isOutputsDelete('STAGING=/tmp/x.123 && cp "$STAGING/o.csv" mnt/outputs/o.csv && rm -rf "$STAGING"')).toBe(false);
+  it("default safe prefix: $TMPDIR (literal, unexpanded) is safe", () => {
+    expect(isOutputsDelete("rm $TMPDIR/x ; cat outputs/y")).toBe(false);
+    expect(isOutputsDelete("rm ${TMPDIR}/x ; cat outputs/y")).toBe(false);
   });
-  it("opt-in (/tmp): STILL flags true positives", () => {
-    setEnv("/tmp");
+
+  it("configured COWORK_HARNESS_SAFE_STAGING_PREFIX unions with (not replaces) the /tmp default", () => {
+    setEnv("/scratch");
+    expect(isOutputsDelete("rm -rf /scratch/cap.staging.* ; cat /mnt/outputs/x.csv")).toBe(false);
+    expect(isOutputsDelete("rm -rf /tmp/s.* ; cat outputs/y")).toBe(false); // default still applies
+    expect(isOutputsDelete('STAGING=/scratch/x.123 && cp "$STAGING/o.csv" mnt/outputs/o.csv && rm -rf "$STAGING"')).toBe(false);
+  });
+  it("configured prefix: STILL flags true positives", () => {
+    setEnv("/scratch");
     expect(isOutputsDelete("rm mnt/outputs/a.md")).toBe(true);
     expect(isOutputsDelete("find outputs -delete")).toBe(true);
     expect(isOutputsDelete("cd outputs && rm -rf *")).toBe(true);
-    expect(isOutputsDelete("rm -rf scratch/* && cp x mnt/outputs/y")).toBe(true);
+    expect(isOutputsDelete("rm -rf other/* && cp x mnt/outputs/y")).toBe(true);
     expect(isOutputsDelete('rm -rf "$UNDEFINED/data" ; cp a mnt/outputs/b')).toBe(true); // unresolved var
   });
 
@@ -361,15 +434,58 @@ describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", ()
     expect(isOutputsDelete("cmd &> outputs/log.txt")).toBe(false); // single & is not a boundary
   });
 
-  it("mv N-ary: moving multiple files INTO outputs/ is not a delete", () => {
-    expect(isOutputsDelete("mv a.pdf b.pdf outputs/")).toBe(false);
-  });
-  it("mv N-ary: moving multiple files OUT of outputs is a delete", () => {
-    expect(isOutputsDelete("mv outputs/a.pdf outputs/b.pdf /tmp/")).toBe(true);
-  });
-
   it("source-order expansion: a later reassignment does not mask an earlier outputs delete", () => {
     expect(isOutputsDelete('D=outputs; rm "$D/file.txt"; D=/sandbox; echo "$D"')).toBe(true);
+  });
+  it("mktemp resolution is source-order aware: a later non-mktemp reassignment un-marks the var as safe", () => {
+    expect(isOutputsDelete('T=$(mktemp); T=outputs/sneaky; rm "$T"')).toBe(true);
+  });
+
+  it("mktemp DIRECTED at outputs via -p is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp -p mnt/outputs); rm -f "$T"')).toBe(true);
+  });
+  it("mktemp -d DIRECTED at outputs via -p is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('D=$(mktemp -d -p mnt/outputs); rm -rf "$D"')).toBe(true);
+  });
+  it("mktemp DIRECTED at outputs via --tmpdir= is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp --tmpdir=mnt/outputs xx.XXXX); rm "$T"')).toBe(true);
+  });
+  it("mktemp DIRECTED at outputs via a positional TEMPLATE path is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp mnt/outputs/tmp.XXXXXX); rm "$T"')).toBe(true);
+  });
+  it("mktemp DIRECTED at outputs via a relative positional TEMPLATE path is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp outputs/tmp.XXXXXX); rm "$T"')).toBe(true);
+  });
+  it("mktemp with NO directory-directing argument stays /tmp-safe", () => {
+    expect(isOutputsDelete('T=$(mktemp); cp "$T" outputs/f; rm "$T"')).toBe(false);
+  });
+  it("mktemp DIRECTED at /tmp explicitly via -p stays safe", () => {
+    expect(isOutputsDelete('T=$(mktemp -p /tmp); rm "$T"')).toBe(false);
+  });
+
+  // a safe-prefix match only proves safety when the REMAINDER after the prefix is itself inert —
+  // no `..` traversal, no unexpanded `$`. Otherwise the resolved target is unprovable and must fall
+  // through to the "unprovable → flag" path, even though the raw text starts with a safe prefix.
+  it("safe-prefix target with a `..` traversal segment behind it is NOT provably safe → flags", () => {
+    expect(isOutputsDelete("echo mnt/outputs; rm -rf /tmp/a/../b")).toBe(true);
+  });
+  it("safe-prefix target with an unexpanded var suffix is NOT provably safe → flags", () => {
+    expect(isOutputsDelete("echo mnt/outputs; rm -rf /tmp/${TARGET}")).toBe(true);
+  });
+  it("safe-prefix target with an unresolved command-subst suffix is NOT provably safe → flags", () => {
+    expect(isOutputsDelete('echo mnt/outputs; rm -rf "/tmp/$(get)"')).toBe(true);
+  });
+
+  // regression: the `..`/`$` remainder check must not re-flag the already-fixed FP cases — a clean
+  // remainder (no `..`, no `$`) behind a safe prefix stays suppressed.
+  it("preserved: the mktemp idiom's placeholder remainder is clean → still not flagged", () => {
+    expect(isOutputsDelete('T=$(mktemp); cp "$T" outputs/f; rm -f "$T"')).toBe(false);
+  });
+  it("preserved: a plain /tmp target with no `..`/`$` is still not flagged, even with outputs mentioned elsewhere", () => {
+    expect(isOutputsDelete("echo mnt/outputs; rm -rf /tmp/scratch/file")).toBe(false);
+  });
+  it("preserved: the literal $TMPDIR/ prefix itself (not a remainder `$`) is still not flagged", () => {
+    expect(isOutputsDelete("rm $TMPDIR/x")).toBe(false);
   });
 });
 

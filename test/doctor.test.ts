@@ -245,4 +245,47 @@ describe("doctor --tier hostloop — native agent binary", () => {
     const cs = runDoctorChecks("container", OK_PROBE);
     expect(cs.find((c) => c.id === "hostAgent")).toBeUndefined();
   });
+
+  // A patch-tolerated native staging-drift substitution stays `ok` (safe — no sha256 pin on the
+  // native binary) but must surface a note naming the pinned-vs-found versions, so the substitution is
+  // visible rather than silent. Exact matches stay ok with no note; a major/minor miss stays a fail.
+  it("patch-tolerated substitution → status ok, with a note naming the pinned/found versions", () => {
+    const cs = runDoctorChecks(
+      "hostloop",
+      probe({
+        hostAgentBinary: () => ({
+          ok: true,
+          path: "/x/claude-code/2.1.208/claude.app/Contents/MacOS/claude",
+          note: "patch-tolerated: pinned 2.1.205, using 2.1.208",
+        }),
+      }),
+    );
+    const hostAgent = get(cs, "hostAgent");
+    expect(hostAgent.status).toBe("ok");
+    expect(hostAgent.detail).toMatch(/2\.1\.205/);
+    expect(hostAgent.detail).toMatch(/2\.1\.208/);
+    expect(blocking(cs)).not.toContain("hostAgent");
+  });
+
+  it("exact match → status ok, no version-substitution note", () => {
+    const cs = runDoctorChecks("hostloop", OK_PROBE); // OK_PROBE's hostAgentBinary carries no `note`
+    const hostAgent = get(cs, "hostAgent");
+    expect(hostAgent.status).toBe("ok");
+    expect(hostAgent.detail).not.toMatch(/patch-tolerated/);
+  });
+
+  it("major/minor miss (no env fallback) → status fail, same as before", () => {
+    const cs = runDoctorChecks(
+      "hostloop",
+      probe({
+        hostAgentBinary: () => ({
+          ok: false,
+          error: "cowork-harness: baseline NATIVE agent binary not found: /x/claude-code/2.1.205/claude.app/Contents/MacOS/claude.",
+        }),
+      }),
+    );
+    const hostAgent = get(cs, "hostAgent");
+    expect(hostAgent.status).toBe("fail");
+    expect(blocking(cs)).toContain("hostAgent");
+  });
 });

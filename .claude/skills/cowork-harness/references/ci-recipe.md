@@ -139,13 +139,19 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   universal net (container-tier recordings can trip it too).
 - **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain / local-path /
   machine-inventory matches it finds in the committed cassettes and **exits non-zero**, so "no leak" is
-  a gate, not discipline.
+  a gate, not discipline. Non-zero is not one thing, though: exit `1` means verification RAN and found a
+  real finding (a PII match, a genuine staleness drift, or scenario-prompt drift); exit `3` means
+  verification could NOT complete (an `unverifiable-*`-class staleness finding, a cassette written by a
+  newer harness than this one understands, or a malformed/unreadable cassette). A plain `|| true` or `[
+  $? -ne 0 ]` tripwire treats both the same — if you need to tell "the gate caught something" apart from
+  "the gate couldn't run", branch on the exit code (or parse `--output-format json`'s per-file
+  `findings`/`staleness` vs `unverifiable`/`version`/`error` buckets).
   Suppress synthetic / public reference names (NVCA, Cooley GO, …) with `--allow <regex>`. (Multi-word
   proper names are NOT a default class — too noisy to gate on; add a pattern via config if your corpus
   needs it.)
 
 ```bash
-cowork-harness verify-cassettes cassettes/                       # privacy scan + staleness, exit 1 on a finding
+cowork-harness verify-cassettes cassettes/                       # privacy scan + staleness — exit 1 = verified & failed, exit 3 = could not verify
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 cowork-harness verify-cassettes cassettes/ --skip-privacy        # staleness only (skip the privacy scan); both run by default
 ```
@@ -245,9 +251,12 @@ fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-
 JSON.
 
 `verify-cassettes` emits its **own** envelope (`{command, ok, coverage, results[]}` with per-file
-`findings`/`staleness`/`notes`/`version`/`error`), published as `schema/verify-cassettes.json` in the
-npm package. Both envelope schemas are covered 1.0 contract surfaces (SPEC §12) — parse the JSON, not
-the human-readable text (which is explicitly NOT stable).
+`findings`/`staleness`/`unverifiable`/`notes`/`version`/`error`), published as
+`schema/verify-cassettes.json` in the npm package. `ok:false` doesn't say *why* — read the buckets, or
+the exit code (`1` = `findings`/`staleness`/`scenarioDrift` populated, a real problem verified & found;
+`3` = `unverifiable`/`version`/`error` populated, verification could not complete; a real finding wins
+`1` if both are present). Both envelope schemas are covered 1.0 contract surfaces (SPEC §12) — parse the
+JSON, not the human-readable text (which is explicitly NOT stable).
 
 A run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` by default — outside any working tree. In CI,
 set `COWORK_HARNESS_RUNS_DIR` (or pass `--run-dir`) to a workspace-relative path (e.g. `runs`) so an
@@ -280,8 +289,11 @@ does **not** imply the recording is still valid. Each replay result carries `sta
 
 (A pre-`effectiveFidelity` cassette with an **explicit** tier is statically knowable — it passes the tier
 check with a non-failing informational note in the `verify-cassettes` envelope's per-file `notes[]`, a
-`·`-prefixed row in text output. On `verify-cassettes` every staleness *finding* above is a hard fail —
-the gate is class-blind; notes never fail it.)
+`·`-prefixed row in text output. On `verify-cassettes` every staleness *finding* above still fails the
+gate (`ok:false`) — but it's no longer class-blind on the EXIT CODE: a `baseline`/`skill`/`shared-root`/
+`format`/`resolved-tier` class lands in the envelope's `staleness[]` (verified & failed — exit `1`),
+while an `unverifiable-*` class lands in `unverifiable[]` (could not verify — exit `3`). Notes never
+fail it either way.)
 
 To gate in CI, pick the severity you want:
 

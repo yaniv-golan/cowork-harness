@@ -1,6 +1,7 @@
 import { resolve, isAbsolute, relative, dirname, basename, join } from "node:path";
 import { realpath, lstat } from "node:fs/promises";
 import { homedir } from "node:os";
+import { isVmSessionsPath } from "../vm-paths.js";
 
 /**
  * The hostloop PreToolUse path-containment gate. A byte-faithful port of production's inline hook body,
@@ -112,7 +113,7 @@ export async function checkHostLoopPathGate(
   // block/allow outcome either way, but the denial TEXT differs, and this matches production's own gating.
   for (const key of PATH_GATE_TOOLS.has(toolName) ? PATH_ARG_KEYS : []) {
     const v = input[key];
-    if (typeof v === "string" && (v === "/sessions" || v.startsWith("/sessions/")))
+    if (typeof v === "string" && isVmSessionsPath(v))
       return {
         decision: "block",
         reason:

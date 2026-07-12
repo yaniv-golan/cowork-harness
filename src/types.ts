@@ -291,6 +291,31 @@ export const Assertion = z.strictObject({
     .describe(
       "a SUB-AGENT-origin write attempt whose raw path EQUALS `path` (or ends with `path_suffix`) has a PAIRED non-error tool_result — the causal half of a delivery probe (pair with artifact_json for content). Prefer `path` (exact) so a foo/artifacts/probe.json can't satisfy an artifacts/probe.json suffix. Tier-agnostic.",
     ),
+  subagent_dispatch_healthy: z
+    .object({
+      type: z
+        .string()
+        .optional()
+        .describe(
+          "regex over dispatchAgentType OR resolvedAgentType OR description, selecting the dispatch(es) to check — same matching as subagent_dispatched; omit to require EVERY dispatch to be healthy",
+        ),
+      delivered: z
+        .boolean()
+        .optional()
+        .describe(
+          "default true: the selected dispatch's OWN sub-agent-origin write (matched by parentToolUseId, not any sub-agent's write) has a paired non-error tool_result",
+        ),
+      path: z.string().min(1).optional().describe("EXACT raw path the delivered write must have sent (strongest); narrows `delivered`"),
+      path_suffix: z.string().min(1).optional().describe("the delivered write's path suffix (weaker than `path`)"),
+      no_vm_paths: z
+        .boolean()
+        .optional()
+        .describe("default true: the selected dispatch attempted NO `/sessions` VM path (its own parentToolUseId only)"),
+    })
+    .optional()
+    .describe(
+      "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. Content-class (fileToolAttempts + toolResults), replay-checkable without controlOut.",
+    ),
   subagent_dispatched: z
     .string()
     .optional()
@@ -912,7 +937,10 @@ export interface RunResult {
     // {question: chosen-answer} map) so no existing detail-reading consumer needs to change.
     questions?: Array<{ question: string; header?: string; options: { label: string; description?: string }[]; multiSelect?: boolean }>;
   }>;
-  toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
+  // truthful per-tool CALL-COUNT map — always {tool: number} (NOT usage.server_tool_use, host-routed-blind in
+  // cowork). For per-tool ERRORS use `toolErrors` ({tool:{calls,errors}}); for timing `toolDurations`
+  // ({tool:{calls,totalMs,maxMs}}). The value here is never an object — don't conflate the three rollups.
+  toolCounts?: Record<string, number>;
   /** Structured WebSearch calls — query + per-result {title,url}, parsed from the paired tool_result's
    *  "Web search results for query: ...\n\nLinks: [...]" convention (an AGENT-BINARY convention,
    *  verified against a real captured hostloop-fidelity cassette — re-verify the format on agent-version
@@ -1017,6 +1045,51 @@ export interface RunResult {
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
     judgeInvalid?: boolean;
   }>;
+  /** The overall run/asserted-lane verdict — `computeVerdict`'s (src/run/verdict.ts) `Verdict` return
+   *  value, persisted VERBATIM (never a second, narrower shape) so a kept run's `result.json` answers "did
+   *  it pass, and why" (`jq '.verdict'`) without a consumer re-deriving from `assertions[]` and the
+   *  guard-signal fields scattered across this type, or re-running `verify-run`. This is the SAME shape
+   *  the `--output-format json` stdout envelope attaches to every result (envelope.ts calls
+   *  `computeVerdict` too) — one canonical `Verdict` shape everywhere, computed by the one function, so the
+   *  persisted and streamed channels can never diverge. `pass`/`exitCode` are the SAME values every verdict
+   *  site (the run/skill exit, the footer, the JSON envelope `ok`) routes through `computeVerdict` for —
+   *  never recomputed independently here. `signals`/`guards` are the raw verdict inputs (see
+   *  `VerdictSignal`/`GuardReport` in verdict.ts — inlined here rather than imported, to avoid a
+   *  types.ts → run/verdict.ts → types.ts import cycle). `failures` collapses `signals` into a flat,
+   *  jq-friendly list: it names the failing assertion key (`Object.keys(a.assertion)`, the same convention
+   *  `verify-run`'s text output uses) when a failure traces to one; a hard-verdict GUARD reason that
+   *  failed the run independent of an explicit assert (an infra error, an unanswered gate, a scan-based
+   *  host-path leak, a transport drop, …) carries just its message. Empty on a pass. SCOPE: the
+   *  run/asserted lane ONLY (`run`/`skill`/`record`/`replay`, incl. a salvaged partial run — a whiffed
+   *  gate is itself a verdict). `chat` carries NO assertions and NO verdict — this field is ABSENT
+   *  (undefined), never a vacuous `{pass:true,...}`; a consumer must not read a chat result as pass/fail.
+   *  Also absent on a result.json written before this field existed (pre-existing kept runs) — treat
+   *  absence as "unknown", never as a pass. */
+  verdict?: {
+    pass: boolean;
+    exitCode: 0 | 1;
+    signals: Array<{
+      code:
+        | "assertion"
+        | "result_error"
+        | "transport_error"
+        | "usage_limit"
+        | "permissive_auto_allow"
+        | "outputs_delete"
+        | "host_path_leak"
+        | "non_deterministic"
+        | "l0_plugin_divergence"
+        | "missing_capability"
+        | "infra_error"
+        | "stalled"
+        | "prompt_asset_missing"
+        | "scan_unavailable";
+      severity: "fail" | "warn";
+      message: string;
+    }>;
+    guards: Array<{ name: string; status: "ok" | "fired" | "na" | "unverified" }>;
+    failures: Array<{ assertion?: string; message: string }>;
+  };
   /** The agent's final answer — the SDK result message (`{type:"result"}`.result), i.e. the model's
    *  designated final response. This is what llm-transport treats as "the answer"; it is distinct from
    *  the full joined transcript (every assistant turn concatenated). Surfaced so a consumer reads the
@@ -1030,10 +1103,11 @@ export interface RunResult {
   /** Skill reference/script files the agent actually **Read** during the run (skill-relative:
    *  `references/foo.md`, `scripts/bar.py`), deduped in first-seen order. A progressive-disclosure
    *  signal — "did the agent reach this content?" — for skill-quality measurement. Scope: **main-agent
-   *  Reads only** (a sub-agent's reads aren't attributed), matching `references/`/`scripts/` under a
-   *  mounted plugin root — NOT `assets/`, and never `SKILL.md` (delivered whole, never Read as a file).
-   *  Derived from the run's Read events, so it's present on **both live and replay**; absent when no such
-   *  file was Read. */
+   *  Reads only**; a sub-agent's reads are attributed separately, per-dispatch, on
+   *  `subagents[].referencesRead` below — this top-level field's data is unaffected by that addition,
+   *  matching `references/`/`scripts/` under a mounted plugin root — NOT `assets/`, and never `SKILL.md`
+   *  (delivered whole, never Read as a file). Derived from the run's Read events, so it's present on
+   *  **both live and replay**; absent when no such file was Read. */
   referencesRead?: string[];
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
    *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
@@ -1049,6 +1123,11 @@ export interface RunResult {
     dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type (proven by full input parse) — the wildcard-fallback trap fired
     declaredTools: string[];
     toolsUsed: Array<{ name: string; count: number }>;
+    /** Skill reference/script files THIS sub-agent Read (same skill-relative shape and dedupe rule as
+     *  the top-level `referencesRead` above), attributed via the dispatch's `toolUseId` — the sub-agent
+     *  counterpart of the main-agent-only top-level field. Absent/empty when the dispatch Read no
+     *  reference/script file. */
+    referencesRead?: string[];
     description?: string;
     prompt?: string; // dispatch input.prompt, assertText-capped
     dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it)
@@ -1056,6 +1135,20 @@ export interface RunResult {
     output?: string; // the dispatch's own paired tool_result, assertText-capped
     outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)
     attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
+    /** The sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result are
+     *  excluded — already covered by `toolsUsed`/`referencesRead` above). Read from the on-disk child
+     *  session transcript the agent binary writes per dispatch (`<configDirRoot>/projects/**\/subagents/
+     *  agent-<id>.jsonl`, joined to this entry via the sibling `agent-<id>.meta.json`'s `toolUseId`) —
+     *  the ONLY channel for a sub-agent's reasoning, since the SDK suppresses sub-agent thinking on the
+     *  parent event stream. LIVE/record lane only: the child transcript exists only while the real agent
+     *  binary ran, so this is `undefined` on replay (evidence-unavailable, like `resources`/`mcpErrors`)
+     *  — never embedded in a cassette. Capped the same way the top-level `thinking[]` field is (~50
+     *  entries, ~10KB/entry); `[]` is a valid "a child transcript was found but it captured no
+     *  thinking/text turns" (a trivial dispatch may not reason at all) — distinct from `undefined`
+     *  ("no child transcript joined to this dispatch"). */
+    reasoning?: Array<{ kind: "thinking" | "text"; text: string }>;
+    /** Count of `reasoning` turns dropped by the cap above (oldest-first) — mirrors `thinkingElided`. */
+    reasoningElided?: number;
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,
