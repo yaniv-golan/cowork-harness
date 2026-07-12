@@ -29,11 +29,21 @@ on one hardcoded relative form.
 
 ## Static path-fidelity check (`analyze-skill`)
 
-`cowork-harness analyze-skill <SKILL.md | skill-dir/>` catches the "hands a `/sessions/...` path to a
-file tool" defect described above **statically**, token-free — no Docker, no model call, no live
+`cowork-harness analyze-skill <SKILL.md | skill-dir/ | glob>…` catches the "hands a `/sessions/...` path
+to a file tool" defect described above **statically**, token-free — no Docker, no model call, no live
 host-loop run — by scanning a SKILL.md's text. It reuses the harness's own ported `/sessions` path-gate
 predicate (`isVmSessionsPath`) as the DENY decision; the only heuristic part is extracting candidate
 paths out of markdown text.
+
+**Multiple positionals are accepted, matching `lint-skill`'s `nargs="+"`** — `analyze-skill a/SKILL.md
+b/SKILL.md`, `analyze-skill skill-a/ skill-b/`, or a mix of files, dirs, and globs in one call. A
+positional containing `*` is expanded by a small hand-rolled glob matcher (no dependency, no
+`engines.node` bump): `dir/*.md` matches shallowly (one level under `dir`); `dir/**/*.md` matches
+recursively, reusing the same no-symlink-loop walker the directory-target union scan uses. Every
+positional's file set is UNIONed and deduped by resolved absolute path ACROSS THE WHOLE INVOCATION — a
+file reached both directly and through a dir/glob positional is analyzed once, not twice. Zero scannable
+files across ALL positionals is a usage error (exit 2); an unresolvable single positional (a missing
+path, or a glob shape other than the two above) fails the whole invocation the same way.
 
 **A directory target scans the UNION of every contract-bearing markdown file present, not just
 `SKILL.md`.** A plugin's dispatch/output contracts often live in `agents/*.md` or `references/*.md` —

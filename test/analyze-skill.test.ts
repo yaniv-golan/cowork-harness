@@ -1177,3 +1177,136 @@ describe.skipIf(!can)("analyze-skill CLI — directory union scan (agents/refere
     expect(textRun.err).toContain(siblingDir); // left unscanned
   });
 });
+
+// --------------------------------------------------------------------------------------------- //
+// Multiple positionals + a simple `*` glob (matches lint-skill's nargs="+") — a consumer with
+// several explicit paths, or a directory's flat *.md set, no longer has to loop analyze-skill once
+// per path. Fail-on-break: every test below would fail on the pre-fix single-positional CLI (either
+// an immediate ">1 positional" usage error, or a glob positional treated as a literal, nonexistent
+// file path).
+// --------------------------------------------------------------------------------------------- //
+
+describe.skipIf(!can)("analyze-skill CLI — multiple positionals + a simple `*` glob", () => {
+  it("two file positionals aggregate into ONE files:[] envelope; a finding in either fails --strict", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-multi-files-"));
+    mkdirSync(join(d, "a"));
+    mkdirSync(join(d, "b"));
+    const a = join(d, "a", "SKILL.md");
+    const b = join(d, "b", "SKILL.md");
+    writeFileSync(a, "OUTPUT_PATH=artifacts/out.md\n"); // clean
+    writeFileSync(b, SESSIONS_WRITE); // dirty
+
+    const r = run(["analyze-skill", a, b, "--output-format", "json"], d);
+    expect(r.code).toBe(0); // advisory by default
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.files).toHaveLength(2);
+    expect(payload.scanned.sort()).toEqual([a, b].sort());
+    const bEntry = payload.files.find((f: { file: string }) => f.file === b);
+    expect(bEntry.findings.length).toBeGreaterThan(0);
+    const aEntry = payload.files.find((f: { file: string }) => f.file === a);
+    expect(aEntry.findings).toEqual([]);
+
+    expect(run(["analyze-skill", a, b, "--strict"], d).code).toBe(1);
+    // Flip: a clean SECOND file must not mask a dirty FIRST file's --strict failure either.
+    expect(run(["analyze-skill", b, a, "--strict"], d).code).toBe(1);
+  });
+
+  it("a quoted shallow glob (dir/*.md) expands to the matching files; a /sessions one fires", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-glob-shallow-"));
+    const agentsDir = join(d, "plug", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(agentsDir, "clean.md"), "clean agent doc\n");
+    writeFileSync(join(agentsDir, "dirty.md"), SESSIONS_WRITE);
+    writeFileSync(join(agentsDir, "notes.txt"), "not markdown, must not be swept in\n");
+
+    // The glob is passed as an ABSOLUTE path (built from the mkdtemp'd `d`) rather than relative to
+    // cwd — on macOS, `/tmp`'s parent is itself a symlink (`/var` → `/private/var`), and a spawned
+    // child process's OS-level cwd resolves through it, so a relative glob resolved against the
+    // child's `process.cwd()` would land on a differently-spelled (but equivalent) absolute path than
+    // the un-resolved `d` string this test compares against — an absolute glob sidesteps that.
+    const r = run(["analyze-skill", join(agentsDir, "*.md"), "--output-format", "json"], d);
+    expect(r.code).toBe(0);
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.files).toHaveLength(2);
+    const names = payload.scanned.map((f: string) => f.split("/").pop()).sort();
+    expect(names).toEqual(["clean.md", "dirty.md"]);
+
+    expect(run(["analyze-skill", join(agentsDir, "*.md"), "--strict"], d).code).toBe(1);
+  });
+
+  it("a recursive glob (dir/**/*.md) reaches a nested file via the same no-symlink-loop walker", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-glob-recursive-"));
+    const agentsDir = join(d, "plug", "agents");
+    const nested = join(agentsDir, "sub");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(agentsDir, "top.md"), "top agent doc\n");
+    writeFileSync(join(nested, "deep.md"), SESSIONS_WRITE);
+
+    const shallow = run(["analyze-skill", join(agentsDir, "*.md"), "--output-format", "json"], d);
+    const shallowPayload = JSON.parse(shallow.out.trim());
+    expect(shallowPayload.files).toHaveLength(1); // the nested file is NOT reached by the shallow shape
+
+    const recursive = run(["analyze-skill", join(agentsDir, "**", "*.md"), "--output-format", "json"], d);
+    expect(recursive.code).toBe(0);
+    const recursivePayload = JSON.parse(recursive.out.trim());
+    expect(recursivePayload.files).toHaveLength(2);
+    expect(recursivePayload.scanned.some((f: string) => f.endsWith(join("sub", "deep.md")))).toBe(true);
+    expect(run(["analyze-skill", join(agentsDir, "**", "*.md"), "--strict"], d).code).toBe(1);
+  });
+
+  it("a dir positional + a file positional union and dedup — a file reached via BOTH appears ONCE", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-multi-dedup-"));
+    const skillDir = join(d, "my-skill");
+    mkdirSync(skillDir);
+    const skillMd = join(skillDir, "SKILL.md");
+    writeFileSync(skillMd, SESSIONS_WRITE);
+
+    // Same file named explicitly AND reachable through the directory-target resolution — must be
+    // analyzed exactly once, not twice (no duplicate finding, no duplicate files[] entry).
+    const r = run(["analyze-skill", skillDir, skillMd, "--output-format", "json"], d);
+    expect(r.code).toBe(0);
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].file).toBe(skillMd);
+    expect(payload.files[0].findings.length).toBeGreaterThan(0);
+  });
+
+  it("zero matches across ALL positionals is a usage error (exit 2) — an empty glob plus an empty dir", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-multi-zero-"));
+    const emptyDir = join(d, "empty");
+    mkdirSync(emptyDir);
+    mkdirSync(join(d, "agents"));
+    writeFileSync(join(d, "agents", "notes.txt"), "no markdown here\n");
+
+    const r = run(["analyze-skill", emptyDir, join("agents", "*.md")], d);
+    expect(r.code).toBe(2);
+  });
+
+  it("an unresolvable single positional (missing path) fails the WHOLE invocation, even with other valid positionals", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-multi-badpath-"));
+    const clean = join(d, "SKILL.md");
+    writeFileSync(clean, "OUTPUT_PATH=artifacts/out.md\n");
+
+    const r = run(["analyze-skill", clean, join(d, "does-not-exist.md")], d);
+    expect(r.code).toBe(2);
+  });
+
+  it("an unsupported glob shape (wildcard directory segment) is a usage error naming the two supported shapes", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-multi-badglob-"));
+    const r = run(["analyze-skill", join("plug", "*", "agents.md")], d);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/dir\/\*\.md.*dir\/\*\*\/\*\.md|unsupported glob shape/);
+  });
+
+  it("a single positional still behaves exactly as before (regression: multi-positional code path doesn't change the 1-target case)", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-multi-single-regress-"));
+    const dirty = join(d, "SKILL.md");
+    writeFileSync(dirty, SESSIONS_WRITE);
+    const r = run(["analyze-skill", dirty, "--output-format", "json"], d);
+    expect(r.code).toBe(0);
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].file).toBe(dirty);
+    expect(run(["analyze-skill", dirty, "--strict"], d).code).toBe(1);
+  });
+});

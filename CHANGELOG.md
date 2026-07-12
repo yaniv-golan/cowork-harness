@@ -32,6 +32,19 @@ All notable changes to this project are documented here. The format is based on
   `agents/*.md`. Zero scannable files under a directory target is now a usage error (exit 2) that
   enumerates the shapes it looked for — never a silent clean pass.
 
+- **`analyze-skill` accepts MULTIPLE positionals + a simple `*` glob, matching `lint-skill`'s
+  `nargs="+"`.** A consumer with several explicit paths (or a directory's flat `*.md` set) no longer has
+  to loop `analyze-skill` once per path: `analyze-skill a/SKILL.md b/SKILL.md`, `analyze-skill skill-a/
+  skill-b/`, and `analyze-skill "plug/agents/*.md"` are all one call now. Each positional resolves
+  independently — a file or directory via the existing rules above, or a `*`-bearing target via a small
+  HAND-ROLLED glob matcher (no new dependency, no `engines.node` bump): `dir/*.md` matches shallowly,
+  `dir/**/*.md` matches recursively (reusing the same no-symlink-loop walker the directory-target union
+  scan already uses). Every positional's files are UNIONed and deduped by resolved absolute path across
+  the WHOLE invocation, extending the existing single-target dedup to span all of them — a file reached
+  both directly and through a dir/glob positional is analyzed once. Zero scannable files across ALL
+  positionals remains the usage error (exit 2); a bad single positional (missing path, unrecognized glob
+  shape) fails the whole invocation.
+
 ### Changed (breaking, pre-1.0)
 
 - **`analyze-skill <dir> --strict` may newly fail where it passed clean before**, if `references/`/

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
@@ -960,8 +960,100 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
   return { files: [...files].sort(), unscanned };
 }
 
+/** Translate ONE glob path segment (the filename component, e.g. `*.md`, `agent-*.md`) into a
+ *  case-insensitive `RegExp` — the only glob syntax supported is `*` as a wildcard; every other
+ *  character is escaped literally. Matched against a bare file NAME (`basename`), never a full path —
+ *  `*` never crosses a `/` in this matcher (there is no such thing as `dir/*.md` matching a nested
+ *  file; that's what the `**` shape below is for). Case-insensitive to match this file's existing
+ *  `.md`/`.MD` convention (`walkMarkdownDeep`, `resolveSkillTarget`). */
+function globSegmentToRegExp(segment: string): RegExp {
+  const parts = segment.split("*").map((literal) => literal.replace(/[.+^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`^${parts.join(".*")}$`, "i");
+}
+
+/** Expand ONE glob positional to its matching files. HAND-ROLLED — no `fs.globSync` dependency, no
+ *  `engines.node` bump (owner decision) — and deliberately narrow: only two shapes are recognized,
+ *  mirroring the two the walker already supports:
+ *
+ *  - `dir/*.md` (shallow) — a single `readdirSync` of `dir`, filtered to files whose NAME matches the
+ *    final segment's pattern (`globSegmentToRegExp`). Not recursive: a nested `dir/sub/x.md` is never
+ *    matched by this shape, by design (that's what `**` is for).
+ *  - `dir/**\/*.md` (recursive) — reuses `walkMarkdownDeep` (the same no-symlink-loop, denylist-aware,
+ *    case-insensitive `.md` walker `resolveSkillTarget` itself uses) to collect every markdown file
+ *    under `dir`, then filters those by the final segment's pattern too (a no-op filter for the
+ *    canonical `**\/*.md`, but lets `**\/agent-*.md` narrow further without extra plumbing).
+ *
+ *  `dir` may be empty (a bare `*.md` or `**\/*.md` glob, relative to cwd). Any OTHER placement of `*`
+ *  (a wildcard directory segment BEFORE the filename, e.g. `dir` + wildcard-dir + `agents.md`; or no
+ *  `*` at all in the final segment) is a usage error naming the two supported shapes — never silently
+ *  misinterpreted. A shape that resolves to zero matches is NOT itself an error (a `plug/agents/*.md`
+ *  glob against an `agents/` dir with only non-matching files is a valid, if empty, expansion) — the
+ *  caller's cross-positional "zero total files" check is what turns an empty run into exit 2.
+ */
+function expandGlob(pattern: string): { files: string[] } | { error: string } {
+  const segments = pattern.split("/");
+  const nameSegment = segments[segments.length - 1];
+  let dirSegments = segments.slice(0, -1);
+  const recursive = dirSegments.length > 0 && dirSegments[dirSegments.length - 1] === "**";
+  if (recursive) dirSegments = dirSegments.slice(0, -1);
+
+  if (dirSegments.some((s) => s.includes("*")) || !nameSegment.includes("*")) {
+    return {
+      error: `unsupported glob shape: ${pattern} — only "dir/*.md" (shallow) and "dir/**/*.md" (recursive) are supported`,
+    };
+  }
+
+  const dir = dirSegments.length > 0 ? dirSegments.join("/") : ".";
+  const nameRe = globSegmentToRegExp(nameSegment);
+
+  if (recursive) {
+    return { files: walkMarkdownDeep(resolve(dir)).filter((f) => nameRe.test(basename(f))) };
+  }
+
+  if (!existsSync(dir)) return { files: [] };
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return { files: [] };
+  }
+  const files: string[] = [];
+  for (const e of entries) {
+    if (!nameRe.test(e.name)) continue;
+    const full = join(dir, e.name);
+    if (e.isFile()) {
+      files.push(resolve(full));
+      continue;
+    }
+    if (e.isSymbolicLink()) {
+      let st;
+      try {
+        st = statSync(full); // follows the link — resolves to the TARGET's type
+      } catch {
+        continue; // dangling symlink
+      }
+      if (st.isFile()) files.push(resolve(full));
+    }
+  }
+  return { files };
+}
+
+/** Resolve ONE CLI positional (a file, a directory, or a `*`-bearing glob) to the files it names. A
+ *  glob (`target.includes("*")`) is expanded via `expandGlob`; anything else is unchanged single-target
+ *  behavior, delegated to `resolveSkillTarget` (file → itself; directory → its shape-union). Shared by
+ *  `cmdAnalyzeSkill` across ALL positionals — the caller unions + dedups the results by resolved
+ *  absolute path. */
+function resolvePositional(target: string): SkillTargetResolution | { error: string } {
+  if (target.includes("*")) {
+    const g = expandGlob(target);
+    if ("error" in g) return g;
+    return { files: g.files, unscanned: [] };
+  }
+  return resolveSkillTarget(target);
+}
+
 /**
- * `cowork-harness analyze-skill <SKILL.md | skill-dir/>` — an ADVISORY, token-free scan (unlike the
+ * `cowork-harness analyze-skill <SKILL.md | skill-dir/ | glob>…` — an ADVISORY, token-free scan (unlike the
  * `lint-skill` two-footgun WARN check, which is also advisory by default): findings are printed but
  * exit 0 by DEFAULT, since the extraction is heuristic and can over-flag innocent documentation. Pass
  * `--strict` to turn it into a hard gate (exit 1 on any finding, mirroring `lint-skill --strict`
@@ -990,26 +1082,41 @@ export function cmdAnalyzeSkill(args: string[]): void {
     return fail(
       "analyze-skill",
       "usage",
-      "usage: analyze-skill <SKILL.md | skill-dir/> [--strict] [--output-format text|json]",
+      "usage: analyze-skill <SKILL.md | skill-dir/ | glob>… [--strict] [--output-format text|json]",
       undefined,
       asJson,
     );
   }
-  if (p.positionals.length > 1) {
+
+  // Multiple positionals + a simple `*` glob (matching `lint-skill`'s `nargs="+"`) — resolve EACH
+  // positional independently (a file/dir target via `resolveSkillTarget`, a `*`-bearing target via
+  // `expandGlob`), then UNION + DEDUP by resolved absolute path across ALL of them, extending the
+  // single-target dedup Set to span the whole invocation. A resolution error on ANY ONE positional
+  // (missing path, unrecognized glob shape, a dir matching no known shape) fails the whole invocation
+  // immediately — same usage-error posture a single bad positional had before multi-positional support.
+  const files = new Set<string>();
+  const unscannedSet = new Set<string>();
+  for (const target of p.positionals) {
+    const resolved = resolvePositional(target);
+    if ("error" in resolved) {
+      return fail("analyze-skill", "usage", `analyze-skill: ${resolved.error}`, undefined, asJson);
+    }
+    for (const f of resolved.files) files.add(resolve(f));
+    for (const u of resolved.unscanned) unscannedSet.add(u);
+  }
+
+  if (files.size === 0) {
     return fail(
       "analyze-skill",
       "usage",
-      `analyze-skill takes one <SKILL.md | skill-dir/> (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      `analyze-skill: no scannable files found across ${p.positionals.length} target(s): ${p.positionals.join(", ")}`,
       undefined,
       asJson,
     );
   }
-  const target = p.positionals[0];
-  const resolved = resolveSkillTarget(target);
-  if ("error" in resolved) {
-    return fail("analyze-skill", "usage", `analyze-skill: ${resolved.error}`, undefined, asJson);
-  }
-  const { files: fileList, unscanned } = resolved;
+
+  const fileList = [...files].sort();
+  const unscanned = [...unscannedSet].sort();
 
   const perFile: { file: string; findings: SkillFinding[]; suppressed: boolean }[] = [];
   for (const file of fileList) {
