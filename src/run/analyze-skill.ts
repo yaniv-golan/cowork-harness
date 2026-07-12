@@ -37,13 +37,12 @@ export interface SkillFinding {
 
 /** Fenced-block languages treated as "legitimate in-VM bash" and therefore exempt from every rule.
  *  Includes plain shell names plus the common shell-transcript aliases (`console`, `*-session`) — a
- *  `$ cmd` transcript block is exactly as bash-ish as a raw `bash` fence. Anything with a `sh`/`bash`/
- *  `shell`/`zsh` PREFIX is also treated as bash-ish (e.g. `bash-session`, `shellscript`), per the
- *  conservative "when unsure, do not flag" posture — see `isBashishLang`. */
-const BASH_FENCE_LANGS = new Set(["bash", "sh", "shell", "zsh", "console", "shell-session", "sh-session"]);
+ *  `$ cmd` transcript block is exactly as bash-ish as a raw `bash` fence. Matched EXACTLY, not by
+ *  prefix — an earlier `sh`-prefix match over-exempted unrelated langs that merely start with those
+ *  letters (e.g. ` ```shiny `), silencing a real `Write(/sessions/...)` inside them. */
+const BASH_FENCE_LANGS = new Set(["bash", "sh", "shell", "zsh", "console", "sh-session", "shell-session", "shellsession"]);
 function isBashishLang(lang: string): boolean {
-  if (BASH_FENCE_LANGS.has(lang)) return true;
-  return /^(bash|sh|shell|zsh)/.test(lang);
+  return BASH_FENCE_LANGS.has(lang);
 }
 /** Opening/closing fence: ``` or ~~~ (>=3), optionally blockquote-prefixed (`> `, possibly nested), a
  *  language token, and — for the OPENER only — any trailing info-string/attributes (`title="x"`,
@@ -64,20 +63,33 @@ const PROSE_PREP_RE = /\b(to|at)\b/gi;
  *  Passive documentation prose ("Deliverables are saved at ...") is not an imperative instruction to the
  *  agent, so it must not count as the prose POSITIVE context. */
 const PASSIVE_AUX_RE = /\b(?:is|are|was|were|be|been|being)\s*$/i;
-/** A mention of the `bash` tool anywhere on the line — "Use the bash tool to write ... to /sessions/..."
- *  is the tool's own correct remediation, not a file-tool violation. Scoped to the prose context
- *  only (an explicit `Write(/sessions/...)` directive is unambiguous regardless of a stray "bash" nearby). */
+/** A mention of the `bash` tool. Scoped to the prose context only — an explicit `Write(/sessions/...)`
+ *  directive is unambiguous regardless of a stray "bash" nearby, so this is never consulted for
+ *  structured (OUTPUT_PATH/directive/bare-dispatch-path) contexts. Within prose, suppression is further
+ *  scoped to the CLAUSE that links the verb to the path (see `bashInLastClause`) — not anywhere on the
+ *  line — so an earlier, unrelated clause naming "bash" (e.g. "After the bash step completes, use the
+ *  Write tool to write ... to /sessions/...") does not suppress a genuinely different instrument. */
 const BASH_TOOL_MENTION_RE = /\bbash\b/i;
-/** A line whose only content (after an optional short `key:`/`key=` label and optional surrounding
- *  quote/backtick) is a single path token: "OUTPUT_PATH=/sessions/..." or a bare
- *  "/sessions/{{id}}/mnt/outputs/x.json" line. Deliberately does NOT match a path embedded inside a
- *  larger sentence or command string (`Task(prompt="... /sessions/... ...")`) — that shape must NOT be
- *  treated as a bare dispatch-construct path. */
-const BARE_PATH_LINE_RE = /^\s*(?:[A-Za-z_][\w-]*\s*[:=]\s*)?["'`]?(\/[^\s"'`]+)["'`]?\s*$/;
-/** A `$VAR` / `${VAR}` reference — used to require VISIBLE DATA FLOW between a `find` line and the
- *  Read(/Grep( line it appears to feed: pure line adjacency is not enough, the two lines must
- *  share a variable. */
+/** Clause-boundary punctuation (`,` `.` `;`) used to isolate the FINAL clause of a prose fragment —
+ *  the one that actually contains the verb-to-path instruction — from any earlier clause. */
+const CLAUSE_BOUNDARY_RE = /[,.;]/;
+/** A line whose only content (after an optional short `key:`/`key=` label, optional surrounding
+ *  quote/backtick, and optional trailing sentence/argument punctuation) is a single path token:
+ *  "OUTPUT_PATH=/sessions/..." or a bare "/sessions/{{id}}/mnt/outputs/x.json" line — including the
+ *  trailing-comma shape a multi-line `Task(...)`/`output_path="...",` argument list produces. Deliberately
+ *  does NOT match a path embedded inside a larger sentence or command string
+ *  (`Task(prompt="... /sessions/... ...")`) — that shape must NOT be treated as a bare dispatch-construct
+ *  path. */
+const BARE_PATH_LINE_RE = /^\s*(?:[A-Za-z_][\w-]*\s*[:=]\s*)?["'`]?(\/[^\s"'`]+)["'`]?[.,;]?\s*$/;
+/** A `$VAR` / `${VAR}` reference — used on the Read(/Grep( SIDE of rule 2's two-line shape to check
+ *  whether the directive's body references the find's captured output variable. */
 const VAR_TOKEN_RE = /\$\{?(\w+)\}?/g;
+/** `VAR=$(find ...)` command-substitution assignment — captures the ASSIGNED var name, not every `$VAR`
+ *  referenced anywhere on the find line (an `-name "$NAME"` argument is find's INPUT, not its output). */
+const FIND_ASSIGN_RE = /\b([A-Za-z_]\w*)\s*=\s*\$\(\s*find\b/i;
+/** `find ... > $VAR` / `find ... > VAR` redirection — captures the OUTPUT var/file name, same rationale
+ *  as `FIND_ASSIGN_RE`. */
+const FIND_REDIRECT_RE = /\bfind\b[^|;]*?>\s*\$?\{?([A-Za-z_]\w*)\}?/i;
 /** Anti-instruction guard: "NEVER write to `/sessions/...`" (and siblings) must NOT fire. Deliberately
  *  broad (whole-line, not proximity-scoped) — a stray "not" elsewhere on the line also suppresses, which
  *  trades a few accepted false negatives for never flagging a line that is teaching the rule, not
@@ -113,20 +125,34 @@ function extractSessionsTokens(line: string): { token: string; index: number }[]
   return hits;
 }
 
+/** Is `bash` mentioned in the FINAL clause of `before` (the clause containing the actual verb-to-path
+ *  instruction), rather than merely somewhere earlier on the line? Splits on clause-boundary punctuation
+ *  (`,` `.` `;`) and only inspects the last segment — "Use the bash tool to write the summary to
+ *  `/sessions/...`" has no internal clause boundary, so the whole (single) clause is inspected and
+ *  suppresses; "After the bash step completes, use the Write tool to write ... to `/sessions/...`" has a
+ *  comma severing the "bash step" clause from the "use the Write tool" clause that actually governs the
+ *  verb, so `bash` in the earlier clause does NOT suppress. */
+function bashInLastClause(before: string): boolean {
+  const segments = before.split(CLAUSE_BOUNDARY_RE);
+  return BASH_TOOL_MENTION_RE.test(segments[segments.length - 1]);
+}
+
 /** POSITIVE context 2b: prose "write/save/read/edit … to|at `/sessions/...`" — a verb somewhere before a
  *  to/at preposition that sits immediately (within a few chars, allowing for a quote/backtick) before the
  *  path token. Scoped to the SAME line only (no cross-line prose inference).
  *
  *  Three guards narrow this to genuine IMPERATIVE file-tool instructions:
- *   - a `bash` mention anywhere on the line suppresses entirely — "Use the bash tool to write ... to
- *     `/sessions/...`" is the tool's own correct remediation, not a file-tool violation;
+ *   - a `bash` mention in the clause that links the verb to the path suppresses entirely (see
+ *     `bashInLastClause`) — "Use the bash tool to write ... to `/sessions/...`" is the tool's own correct
+ *     remediation, not a file-tool violation; an unrelated "bash" in an earlier, punctuation-severed
+ *     clause does not suppress;
  *   - "read" immediately followed by "-only" is the adjective ("Uploads are read-only at ..."), not the
  *     verb "read";
  *   - a verb immediately preceded by a passive-voice auxiliary (is/are/was/were/be/been/being) is
  *     documentation ("Deliverables are saved at ...") — the passive doesn't direct the agent to act. */
 function proseContextBeforeToken(line: string, tokenIndex: number): boolean {
-  if (BASH_TOOL_MENTION_RE.test(line)) return false;
   const before = line.slice(0, tokenIndex);
+  if (bashInLastClause(before)) return false;
   PROSE_PREP_RE.lastIndex = 0;
   let prepEnd = -1;
   let m: RegExpExecArray | null;
@@ -153,8 +179,14 @@ function proseContextBeforeToken(line: string, tokenIndex: number): boolean {
  *  before this runs). Returns token -> human context label, first-context-wins per token (so a token
  *  matched by more than one positive context still produces exactly one finding). A directive body that
  *  also contains `find` is deliberately EXCLUDED here — that shape is rule 2's narrower territory, not a
- *  generic directive-target hit. */
-function classifyLineRule1(line: string): Map<string, string> {
+ *  generic directive-target hit.
+ *
+ *  `suppressProse` gates ONLY the prose context (an adjacent-clause anti-instruction word — see
+ *  `hasNegationNearby`). The OUTPUT_PATH/OUTPUT_DIR assignment and file-tool directive-target contexts
+ *  are machine-unambiguous — a stray "not"/"avoid" on the same or an adjacent line must never suppress
+ *  them (an author writing `Write(/sessions/...)` next to "Do not modify any other file." is still handing
+ *  a `/sessions` path to a file tool). Only the low-confidence PROSE idiom keeps the negation guard. */
+function classifyLineRule1(line: string, suppressProse: boolean): Map<string, string> {
   const result = new Map<string, string>();
 
   for (const m of line.matchAll(OUTPUT_ASSIGN_RE)) {
@@ -172,9 +204,11 @@ function classifyLineRule1(line: string): Map<string, string> {
     }
   }
 
-  for (const { token, index } of extractSessionsTokens(line)) {
-    if (result.has(token)) continue;
-    if (proseContextBeforeToken(line, index)) result.set(token, "prose describing a write/save/read/edit to this path");
+  if (!suppressProse) {
+    for (const { token, index } of extractSessionsTokens(line)) {
+      if (result.has(token)) continue;
+      if (proseContextBeforeToken(line, index)) result.set(token, "prose describing a write/save/read/edit to this path");
+    }
   }
 
   return result;
@@ -208,14 +242,28 @@ function extractBarePathLineToken(line: string): string | null {
   return isVmSessionsPath(trimmed) ? trimmed : null;
 }
 
-/** Every `$VAR` / `${VAR}` reference on `line` — used to require VISIBLE DATA FLOW between a `find` line
- *  and the Read(/Grep( line it appears to feed: the two lines must share a variable, not just sit
- *  next to each other. */
+/** Every `$VAR` / `${VAR}` reference on `line` — used on the Read(/Grep( SIDE of rule 2's two-line shape
+ *  (any var referenced in the directive's body is a candidate to match against the find line's OUTPUT
+ *  var — see `findOutputVars`). */
 function findLineVars(line: string): Set<string> {
   const vars = new Set<string>();
   const re = new RegExp(VAR_TOKEN_RE.source, "g");
   let m: RegExpExecArray | null;
   while ((m = re.exec(line))) vars.add(m[1]);
+  return vars;
+}
+
+/** The find LINE's OUTPUT-CAPTURE variable(s) only — `VAR=$(find … /sessions …)` command substitution,
+ *  or `find … /sessions … > $VAR` / `> VAR` redirection. Deliberately NARROWER than "every `$VAR` on the
+ *  line": a `find /sessions/... -name "$NAME"` argument uses `$NAME` as find's INPUT pattern, not its
+ *  output, and must not be harvested as if `find` had assigned it — that was the NFP-1 false positive
+ *  (a `Read(docs/$NAME/index.md)` on the next line shared the token but read an unrelated host path). */
+function findOutputVars(line: string): Set<string> {
+  const vars = new Set<string>();
+  const assign = FIND_ASSIGN_RE.exec(line);
+  if (assign) vars.add(assign[1]);
+  const redirect = FIND_REDIRECT_RE.exec(line);
+  if (redirect) vars.add(redirect[1]);
   return vars;
 }
 
@@ -239,14 +287,21 @@ function hasNegationNearby(arr: LineInfo[], idx: number): boolean {
 }
 
 /** A line indented 4+ spaces or a tab, with content, OUTSIDE any fence — Markdown's own "indented code
- *  block" convention. Treated as a code context (exempt, like a bash fence) rather than scanned prose:
- *  an unfenced VM-bash template written this way is legitimate in-VM bash, not a violation. Over-exempting
- *  an indented sub-bullet that ISN'T code just trades a false negative for the false positive this
- *  guards against — the accepted posture throughout this file. */
+ *  block" convention. TENTATIVELY treated as a code context (exempt, like a bash fence) rather than
+ *  scanned prose: an unfenced VM-bash template written this way is legitimate in-VM bash, not a
+ *  violation. Over-exempting an indented sub-bullet that ISN'T code just trades a false negative for the
+ *  false positive this guards against — the accepted posture throughout this file.
+ *
+ *  The exemption is NOT unconditional, though (OC-4): a contiguous run of indented lines that contains a
+ *  dispatch marker (`Task(`/`subagent_type`) is the analyzer's HEADLINE defect class, not VM bash — an
+ *  indented `Task(...)` + `OUTPUT_PATH=/sessions/...` template must still be analyzed. `splitLines` below
+ *  groups contiguous indented runs and un-exempts (and registers as a dispatch block) any run whose body
+ *  contains a dispatch marker; a plain indented VM-bash template (no dispatch marker) stays exempt. */
 const INDENTED_CODE_RE = /^(?: {4,}|\t)\S/;
 
-/** First pass: classify every line by fence state, and group non-bash-ish fenced blocks (with their body
- *  lines) so the dispatch-construct rule (3rd POSITIVE context) can look at a whole block at once. */
+/** First pass: classify every line by fence state, and group non-bash-ish fenced blocks AND
+ *  dispatch-marker-carrying indented runs (with their body lines) so the dispatch-construct rule (3rd
+ *  POSITIVE context) can look at a whole block at once regardless of whether it's fenced or indented. */
 function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; lines: LineInfo[] }[] } {
   const rawLines = text.split(/\r?\n/);
   const lines: LineInfo[] = [];
@@ -258,6 +313,17 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
   let fenceLang = "";
   let currentBlock: LineInfo[] = [];
 
+  let indentedRun: LineInfo[] = [];
+  const flushIndentedRun = () => {
+    if (indentedRun.length === 0) return;
+    const bodyText = indentedRun.map((l) => l.text).join("\n");
+    if (DISPATCH_MARKER_RE.test(bodyText)) {
+      for (const info of indentedRun) info.codeExempt = false; // OC-4: not VM bash — a dispatch template
+      blocks.push({ lang: "indented-dispatch", lines: indentedRun });
+    }
+    indentedRun = [];
+  };
+
   for (let i = 0; i < rawLines.length; i++) {
     const lineNo = i + 1;
     const raw = rawLines[i];
@@ -266,6 +332,7 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
       const marker = fm[1];
       const lang = fm[2].toLowerCase();
       if (!inFence) {
+        flushIndentedRun();
         inFence = true;
         fenceChar = marker[0];
         fenceLen = marker.length;
@@ -287,14 +354,22 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
       // a fence-looking line inside an open block — falls through as ordinary content below.
     }
 
-    const codeExempt = (inFence && isBashishLang(fenceLang)) || (!inFence && INDENTED_CODE_RE.test(raw));
+    const isIndented = !inFence && INDENTED_CODE_RE.test(raw);
+    const codeExempt = (inFence && isBashishLang(fenceLang)) || isIndented;
     const info: LineInfo = { lineNo, text: raw, codeExempt };
     lines.push(info);
     if (inFence && !codeExempt) currentBlock.push(info);
+
+    if (isIndented) {
+      indentedRun.push(info);
+    } else {
+      flushIndentedRun();
+    }
   }
   // An unterminated non-bash-ish fence at EOF still has its buffered lines flushed (mirrors scenario.py's
   // own EOF flush for the analogous bash case).
   if (inFence && !isBashishLang(fenceLang)) blocks.push({ lang: fenceLang, lines: currentBlock });
+  flushIndentedRun();
 
   return { lines, blocks };
 }
@@ -318,33 +393,36 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
   const { lines, blocks } = splitLines(text);
 
   // Rule 1, positive contexts 1+2 (OUTPUT_PATH/OUTPUT_DIR, file-tool directive target, prose idiom) —
-  // every non-exempt line.
+  // every non-exempt line. The negation guard applies ONLY to the low-confidence prose context
+  // (`suppressProse`, passed to `classifyLineRule1`) — the OUTPUT_PATH/directive-target contexts are
+  // machine-unambiguous and fire regardless of a same-or-adjacent-line "not"/"avoid"/"never".
   for (let i = 0; i < lines.length; i++) {
     const { lineNo, text: lineText, codeExempt } = lines[i];
     if (codeExempt) continue;
-    if (hasNegationNearby(lines, i)) continue; // anti-instruction guard — suppress line + adjacent line
-    for (const [token, contextLabel] of classifyLineRule1(lineText)) {
+    const suppressProse = hasNegationNearby(lines, i);
+    for (const [token, contextLabel] of classifyLineRule1(lineText, suppressProse)) {
       add("sessions-path-to-file-tool", lineNo, token, `\`${token}\` in ${contextLabel} — ${TIER_NOTE}`);
     }
   }
 
-  // Rule 1, positive context 3: a BARE /sessions path line/value inside a fenced (non-bash-ish) block
-  // whose body contains a Task( call or a subagent_type key — the dispatch-construct shape. Narrowed to
-  // a whole-line match (see `extractBarePathLineToken`) so a /sessions token embedded inside a larger
-  // sentence or bash-mediated command string within the Task prompt does NOT fire.
+  // Rule 1, positive context 3: a BARE /sessions path line/value inside a fenced (non-bash-ish) block OR
+  // a dispatch-marker-carrying indented run whose body contains a Task( call or a subagent_type key — the
+  // dispatch-construct shape. Narrowed to a whole-line match (see `extractBarePathLineToken`) so a
+  // /sessions token embedded inside a larger sentence or bash-mediated command string within the Task
+  // prompt does NOT fire. No negation guard here (structured context, same as contexts 1+2 above) — a
+  // bare dispatch-construct path is machine-unambiguous regardless of a neighboring anti-instruction line.
   for (const block of blocks) {
     const bodyText = block.lines.map((l) => l.text).join("\n");
     if (!DISPATCH_MARKER_RE.test(bodyText)) continue;
     for (let i = 0; i < block.lines.length; i++) {
       const { lineNo, text: lineText } = block.lines[i];
-      if (hasNegationNearby(block.lines, i)) continue;
       const token = extractBarePathLineToken(lineText);
       if (!token) continue;
       add(
         "sessions-path-to-file-tool",
         lineNo,
         token,
-        `\`${token}\` as a bare path inside a dispatch construct (a fenced block containing \`Task(\`/\`subagent_type\`) — ${TIER_NOTE}`,
+        `\`${token}\` as a bare path inside a dispatch construct (a fenced/indented block containing \`Task(\`/\`subagent_type\`) — ${TIER_NOTE}`,
       );
     }
   }
@@ -367,9 +445,12 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
   // Rule 2, two-line adjacent shape: a `find … /sessions …` line (not itself a Read(/Grep( call) whose
   // output visibly feeds the VERY NEXT non-blank line's Read(/Grep( directive. Kept narrow on purpose —
   // this is the one place this analyzer looks past a single line, and only one line ahead. Adjacency
-  // alone is not enough: the find line must carry a visible data-flow marker (a `$VAR`/`${VAR}`
-  // reference) and the Read(/Grep( line must reference that SAME variable — pure proximity to an
-  // unrelated Read( targeting a different path must NOT fire.
+  // alone is not enough: the find line must carry a visible OUTPUT-CAPTURE data-flow marker — a
+  // `VAR=$(find …)` assignment or a `find … > $VAR`/`> VAR` redirection (see `findOutputVars`) — and the
+  // Read(/Grep( line must reference that SAME variable. Harvesting every `$VAR` referenced anywhere on
+  // the find line (e.g. an `-name "$NAME"` INPUT pattern) is deliberately NOT enough (NFP-1): pure
+  // token-sharing with find's own arguments, or pure proximity to an unrelated Read( targeting a
+  // different path, must NOT fire.
   for (let i = 0; i < lines.length; i++) {
     const cur = lines[i];
     if (cur.codeExempt) continue;
@@ -377,8 +458,8 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
     if (READ_GREP_START_RE.test(cur.text)) continue; // handled by the same-line shape above
     const findTokens = extractSessionsTokens(cur.text);
     if (findTokens.length === 0) continue;
-    const curVars = findLineVars(cur.text);
-    if (curVars.size === 0) continue; // no data-flow marker on the find line — nothing to trace forward
+    const curVars = findOutputVars(cur.text);
+    if (curVars.size === 0) continue; // no OUTPUT-capture var on the find line — nothing to trace forward
     if (hasNegationNearby(lines, i)) continue;
     let j = i + 1;
     while (j < lines.length && lines[j].text.trim() === "") j++;

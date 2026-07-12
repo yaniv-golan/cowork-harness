@@ -42,31 +42,51 @@ paths out of markdown text. Two WARN rules, both exit-1 findings:
   dispatch construct) — a path embedded inside a larger sentence or a bash-mediated command string within
   that same block does not count as "bare".
 - **`sessions-find-into-file-read`** — a shell `find … /sessions …` whose output is substituted straight
-  into a `Read(`/`Grep(` directive: same line, or the very next line AND sharing a visible `$VAR`/`${VAR}`
-  data-flow marker with it (pure line adjacency to an unrelated `Read(`/`Grep(` does not fire).
+  into a `Read(`/`Grep(` directive: same line, or the very next line AND the directive's body references
+  the find line's OUTPUT-CAPTURE variable specifically — a `VAR=$(find …)` assignment or a
+  `find … > $VAR`/`> VAR` redirection — not merely any `$VAR` token that happens to appear on the find
+  line (an `-name "$NAME"` argument is find's INPUT, not its output, and sharing that token with an
+  unrelated `Read(` does not fire).
+
+**Context confidence governs which guards apply.** HIGH-confidence STRUCTURED contexts — an
+`OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target, and a
+bare `/sessions/...` path LINE inside a dispatch construct — are machine-unambiguous and fire regardless of
+a neighboring anti-instruction word or a stray "bash" mention elsewhere on the line: an author writing
+`Write(/sessions/...)` next to "Do not modify any other file." is still handing a `/sessions` path to a
+file tool. Only the LOW-confidence PROSE idiom ("write/save/read/edit ... to/at `/sessions/...`") keeps
+the negation guard and the bash-tool suppression, since that context is the one where a genuine
+remediation ("Use the bash tool to write ... to `/sessions/...`") or an anti-instruction ("Never write to
+`/sessions/...`") is ambiguous without them.
 
 **EXEMPT by design** (false-positive guards, deliberately conservative — "when unsure, do not flag"):
-a `/sessions` token inside a ` ```bash `/`sh`/`shell`/`zsh`/`console`/`*-session` fenced block (or any
-`bash`/`sh`/`shell`/`zsh`-prefixed language, or the same fence blockquoted with `> `) is legitimate in-VM
-bash and is never scanned; the fence opener's language is read as the first word only, so a trailing
-info-string (` ```bash title="x" `) doesn't defeat the exemption and doesn't leave a phantom fence open
-for later content to cascade into; a 4-space/tab INDENTED unfenced block is treated the same way; a line
-carrying an anti-instruction word (`never`, `don't`, `do not`, `avoid`, `not`) on that line OR the
-immediately adjacent line is treated as teaching the rule, not breaking it; a line mentioning the `bash`
-tool suppresses the prose context (the tool's own correct remediation, not a violation); passive-voice
-documentation prose ("Deliverables are saved at ...", "Uploads are read-only at ...") does not count as an
-imperative instruction; plain prose that documents a fact (e.g. "the VM cwd is `/sessions/<id>`") without
-any of the positive contexts above is left alone. A token that matches more than one positive context on
-the same line (e.g. an `OUTPUT_PATH=` line that also sits inside a dispatch-construct fence) is reported
-once, not once per matching context.
+a `/sessions` token inside a ` ```bash `/`sh`/`shell`/`zsh`/`console`/`*-session` fenced block (matched by
+exact language name, not a prefix — a ` ```shiny ` fence is not bash-ish just because it starts with "sh"),
+or the same fence blockquoted with `> `, is legitimate in-VM bash and is never scanned; the fence opener's
+language is read as the first word only, so a trailing info-string (` ```bash title="x" `) doesn't defeat
+the exemption and doesn't leave a phantom fence open for later content to cascade into; a 4-space/tab
+INDENTED unfenced block is treated the same way UNLESS the run of indented lines carries a dispatch marker
+(`Task(`/`subagent_type`), in which case it is analyzed like a fenced dispatch block instead (see "Honest
+limits" below); a line carrying an anti-instruction word (`never`, `don't`, `do not`, `avoid`, `not`) on
+that line OR the immediately adjacent line suppresses ONLY the prose context, not a structured one (see
+above); a line mentioning the `bash` tool in the CLAUSE that links the verb to the path (not merely
+anywhere on the line) suppresses the prose context — an unrelated, punctuation-severed earlier clause
+naming "bash" does not suppress a genuinely different instrument; passive-voice documentation prose
+("Deliverables are saved at ...", "Uploads are read-only at ...") does not count as an imperative
+instruction; plain prose that documents a fact (e.g. "the VM cwd is `/sessions/<id>`") without any of the
+positive contexts above is left alone. A token that matches more than one positive context on the same
+line (e.g. an `OUTPUT_PATH=` line that also sits inside a dispatch-construct fence) is reported once, not
+once per matching context.
 
 **Honest limits.** Only the extraction is heuristic — the deny decision is the same one production
 enforces. Documented false negatives: a variable-carried path (`$OUT/...` where the literal value isn't
-`/sessions`), a `/sessions` path written only in an INDENTED (4-space/tab) unfenced code block — treated
-as an exempt code context, the same as a fenced bash block, precisely to avoid an earlier false-positive
-bug in this same shape (an unfenced VM-bash template was firing) — and a prose-only dispatch instruction
-(no fenced block). Two decision-class misses are out of v1 scope entirely: an absolute HOST path outside
-connected folders (denied by containment, not the `/sessions` rule) and a write into a read-only category
+`/sessions`), a `/sessions` path written only in an INDENTED (4-space/tab) unfenced code block that does
+NOT carry a dispatch marker — treated as an exempt code context, the same as a fenced bash block, since an
+unfenced VM-bash template written this way is legitimate in-VM bash, not a violation. An indented block
+that DOES carry a dispatch marker (`Task(`/`subagent_type`) is NOT exempt — it is analyzed the same way a
+fenced dispatch block is, since an indented dispatch template is this analyzer's headline defect class,
+not VM bash. Also a documented false negative: a prose-only dispatch instruction (no fenced or indented
+block). Two decision-class misses are out of v1 scope entirely: an absolute HOST path outside connected
+folders (denied by containment, not the `/sessions` rule) and a write into a read-only category
 (uploads/spool/plugin content) — neither is a `/sessions` finding, so this analyzer doesn't claim to
 catch them.
 

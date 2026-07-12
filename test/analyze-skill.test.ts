@@ -261,9 +261,147 @@ describe("analyzeSkillText — near-miss clean cases (anti-FP guards)", () => {
     expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
   });
 
-  it("does NOT flag a real Write(...) directive when a stray unrelated 'not' sits on the same line (regression guard, accepted trade-off)", () => {
+  // NOTE: the FIRST fix pass treated a same-line stray "not" as suppressing a Write(...) directive too
+  // (an accepted trade-off at the time). The SECOND fix pass narrows the negation guard to the
+  // low-confidence PROSE context only — a `Write(/sessions/...)` directive target is a machine-unambiguous
+  // structured context and must fire regardless of an unrelated "not" on the line (see the
+  // "restored true positives" describe block below for the full context-confidence rationale). This
+  // fixture is intentionally flipped from CLEAN to FIRING to match that supersession.
+  it("DOES flag a real Write(...) directive even with a stray unrelated 'not' on the same line (structured context — negation guard no longer applies)", () => {
     const text = "This report is not final yet; Write(/sessions/{{id}}/mnt/outputs/out.md) saves it anyway.";
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+  });
+
+  // --- rule 2 must key off find's OUTPUT-capture variable, not any shared token (NFP-1) ------- //
+
+  it('does NOT flag rule 2 when the shared token is find\'s OWN input pattern (-name "$NAME"), not its captured output (NFP-1)', () => {
+    const text = ['Run `find /sessions/{{id}}/mnt/uploads -name "$NAME"` with the bash tool.', "Read(docs/$NAME/index.md)"].join("\n");
+    expect(findRule(text, RULE2)).toEqual([]);
+  });
+});
+
+// --------------------------------------------------------------------------------------------- //
+// Restored true positives — the second fix pass. The first FP-fix pass over-corrected: guards meant
+// for the low-confidence PROSE context leaked onto HIGH-confidence STRUCTURED contexts
+// (OUTPUT_PATH=/OUTPUT_DIR= assignments, Write(/Read(/Edit(/Glob(/Grep( directive targets, and a bare
+// /sessions path line inside a dispatch construct), silencing unambiguous true positives. These fixtures
+// prove the structured contexts fire again while the FP-clean fixtures above stay clean.
+// --------------------------------------------------------------------------------------------- //
+
+describe("analyzeSkillText — restored true positives (context-confidence fixes)", () => {
+  // --- OC-1/2/6/9: the negation guard no longer applies to structured contexts ----------------- //
+
+  it("flags Write(/sessions/...) even with an unrelated negation on the very next line (OC-1)", () => {
+    const text = ["Write(/sessions/{{id}}/mnt/outputs/out.md) saves the report.", "Do not modify any other file."].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((f) => f.line === 1)).toBe(true);
+  });
+
+  it("flags an OUTPUT_PATH= assignment even with an unrelated negation on the line above (OC-2)", () => {
+    const text = ["The report must not be empty.", "OUTPUT_PATH=/sessions/{{id}}/mnt/outputs/report.md"].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((f) => f.line === 2)).toBe(true);
+  });
+
+  it("flags Read(/sessions/...) even with an unrelated negation on the very next line (OC-6)", () => {
+    const text = ["Read(/sessions/{{id}}/mnt/outputs/notes.md) loads context.", "Avoid long summaries."].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((f) => f.line === 1)).toBe(true);
+  });
+
+  it("flags a bare dispatch-construct /sessions path even with an unrelated negation on the line above (OC-9)", () => {
+    const text = [
+      "```",
+      'Task(description="deliver", subagent_type="general-purpose")',
+      "Do not include drafts.",
+      "/sessions/{{id}}/mnt/outputs/result.json",
+      "```",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((f) => f.line === 4)).toBe(true);
+  });
+
+  // --- OC-5: a trailing comma (multi-line Task(...) argument list) must not defeat the bare-path match --- //
+
+  it("flags a bare dispatch-construct /sessions path even with a trailing comma (multi-line Task(...) args) (OC-5)", () => {
+    const text = [
+      "```",
+      "Task(",
+      '  subagent_type="general-purpose",',
+      '  output_path="/sessions/{{id}}/mnt/outputs/x.json",',
+      ")",
+      "```",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(4);
+  });
+
+  it("still flags the comma-less bare dispatch-construct path form (regression check for OC-5)", () => {
+    const text = [
+      "```",
+      'Task(description="fetch", prompt="...", subagent_type="general-purpose")',
+      "Expected output:",
+      "/sessions/{{id}}/mnt/outputs/result.json",
+      "```",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+  });
+
+  // --- OC-3: bash-mention suppression is scoped to the clause linking the verb to the path, not the whole line --- //
+
+  it("flags a prose Write-tool instruction even though an earlier, unrelated clause mentions bash (OC-3)", () => {
+    const text = "After the bash step completes, use the Write tool to write the final summary to `/sessions/{{id}}/mnt/outputs/final.md`.";
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].message).toContain("prose");
+  });
+
+  it("still does NOT flag prose where bash is the instrument IN THE SAME clause as the verb (regression check for OC-3)", () => {
+    const text = "Use the bash tool to write the summary to `/sessions/{{session_id}}/mnt/outputs/summary.md`.";
     expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- OC-4: an indented DISPATCH template is analyzed, not exempted as VM bash ----------------- //
+
+  it("analyzes an INDENTED dispatch template (Task(/subagent_type) instead of exempting it as VM bash (OC-4)", () => {
+    const text = [
+      "Dispatch template:",
+      "",
+      '    Task(subagent_type="general-purpose")',
+      "    OUTPUT_PATH=/sessions/{{id}}/mnt/outputs/result.json",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((f) => f.line === 4)).toBe(true);
+  });
+
+  it("still does NOT flag a plain INDENTED shell template with no dispatch marker (regression check for OC-4)", () => {
+    const text = ["Run this locally:", "", "    OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/report.md", "    ./run.sh"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- NFP-1 (positive counterpart): a real VAR=$(find ...) assignment still feeds a Read($VAR) -- //
+
+  it("still flags rule 2 when a VAR=$(find ...) assignment visibly feeds the next Read($VAR) call", () => {
+    const text = ['REFS=$(find /sessions/{{id}}/mnt/outputs -name "notes.md")', "Read($REFS)"].join("\n");
+    const hits = findRule(text, RULE2);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(2);
+  });
+
+  // --- Minor: isBashishLang matches KNOWN bash-ish langs exactly, not by "sh"/"bash" prefix ------ //
+
+  it("flags a Write(/sessions/...) inside a ```shiny fence — 'sh' prefix is no longer treated as bash-ish", () => {
+    const text = ["```shiny", "Write(/sessions/{{id}}/mnt/outputs/out.md)", "```"].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
   });
 });
 
