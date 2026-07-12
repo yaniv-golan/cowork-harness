@@ -16,8 +16,8 @@ export interface LatestRunInfo {
   /** ISO-8601 — the recency signal that won: `.origin`'s `createdAt`, else `result.json`'s mtime, else
    *  `status.json`'s `startedAt`. */
   createdAt: string;
-  /** Read opportunistically from a persisted `result.json` (Task N4's `RunResult.verdict`) — omitted
-   *  when absent (older result.json, or a result.json this reader couldn't parse). Never re-derived. */
+  /** Read opportunistically from a persisted `result.json`'s `RunResult.verdict` (a subset — pass/exit/
+   *  failures) — omitted when absent (older result.json, or one this reader couldn't parse). Never re-derived. */
   verdict?: { pass: boolean; exitCode: 0 | 1; failures: Array<{ assertion?: string; message: string }> };
 }
 
