@@ -25,15 +25,19 @@ All notable changes to this project are documented here. The format is based on
   never a silent notice on a green exit.
 
 - **`analyze-skill <dir>` now scans the UNION of every contract-bearing markdown file in the directory,
-  not just `SKILL.md`.** A plugin's `/sessions` dispatch/output contracts often live in `agents/*.md` or
-  `references/*.md` — scanning only `SKILL.md` there was a false green (a consumer's `agents/x.md` could
-  hand a `/sessions` path straight to a file tool and `analyze-skill` would never see it). A directory
-  target is now expanded to every shape it matches, deduped by resolved absolute path: a top-level
-  `SKILL.md` (+ its `references/**`); a plugin root (`.claude-plugin/plugin.json` or `plugin.json`, +
-  `agents/*.md`, `references/**`, `commands/*.md`, and each `skills/*/SKILL.md` + that skill's own
-  `references/**`); and a skill dir living inside a plugin also pulls in the enclosing plugin's
-  `agents/*.md`. Zero scannable files under a directory target is now a usage error (exit 2) that
-  enumerates the shapes it looked for — never a silent clean pass.
+  not just `SKILL.md`.** A plugin's `/sessions` dispatch/output contracts often live in `agents/**` or
+  `references/**` — scanning only `SKILL.md` there was a false green (a consumer's `agents/sub/x.md`
+  could hand a `/sessions` path straight to a file tool and `analyze-skill` would never see it). A
+  directory target is now expanded to every shape it matches, deduped by resolved absolute path: a
+  top-level `SKILL.md` (+ its `references/**`); a plugin root (`.claude-plugin/plugin.json` or
+  `plugin.json`, + `agents/**`, `references/**`, `commands/**`, and each `skills/*/SKILL.md` + that
+  skill's own `references/**`); and a skill dir living inside a plugin also pulls in the enclosing
+  plugin's `agents/**`, `references/**`, and `commands/**`. Every walk is RECURSIVE (Claude Code discovers
+  namespaced commands/agents in subdirectories — `commands/tasks/build.md`, `agents/sub/x.md` — so a
+  single-level listing silently narrowed the scan) and FOLLOWS directory symlinks, loop-guarded against a
+  self-referencing symlink via a realpath visited-set, so a symlinked `references/`/`skills/<name>` is
+  scanned rather than silently dropped. Zero scannable files under a directory target is now a usage error
+  (exit 2) that enumerates the shapes it looked for — never a silent clean pass.
 
 - **`analyze-skill` accepts MULTIPLE positionals + a simple `*` glob, matching `lint-skill`'s
   `nargs="+"`.** A consumer with several explicit paths (or a directory's flat `*.md` set) no longer has
@@ -41,9 +45,10 @@ All notable changes to this project are documented here. The format is based on
   skill-b/`, and `analyze-skill "plug/agents/*.md"` are all one call now. Each positional resolves
   independently — a file or directory via the existing rules above, or a `*`-bearing target via a small
   HAND-ROLLED glob matcher (no new dependency, no `engines.node` bump): `dir/*.md` matches shallowly,
-  `dir/**/*.md` matches recursively (reusing the same no-symlink-loop walker the directory-target union
-  scan already uses). Every positional's files are UNIONed and deduped by resolved absolute path across
-  the WHOLE invocation, extending the existing single-target dedup to span all of them — a file reached
+  `dir/**/*.md` matches recursively (reusing the same symlink-following, loop-guarded walker the
+  directory-target union scan already uses). Every positional's files are UNIONed and deduped by
+  resolved absolute path across the WHOLE invocation, extending the existing single-target dedup to
+  span all of them — a file reached
   both directly and through a dir/glob positional is analyzed once. Zero scannable files across ALL
   positionals remains the usage error (exit 2); a bad single positional (missing path, unrecognized glob
   shape) fails the whole invocation.
@@ -62,8 +67,9 @@ All notable changes to this project are documented here. The format is based on
   fail if it carries this exact typo shape; fix the agent name (or add the missing `agents/<agent>.md`)
   to restore a clean `--strict` run.
 - **`analyze-skill <dir> --strict` may newly fail where it passed clean before**, if `references/`/
-  `agents/` carries a `/sessions`-addressed teaching example that the old SKILL.md-only scan never looked
-  at. Annotate the example with `analyze-skill: ignore-next-line` (or an `ignore-start`/`ignore-end`
+  `agents/`/`commands/` carries a `/sessions`-addressed teaching example that the old SKILL.md-only scan
+  never looked at — including one nested under a subdirectory or reached only via a symlink, both now
+  scanned. Annotate the example with `analyze-skill: ignore-next-line` (or an `ignore-start`/`ignore-end`
   fence) to restore a clean `--strict` run — there is no `--skill-md-only` compatibility flag; the
   narrower scan was the bug this closes.
 - **`analyze-skill --output-format json`'s single-file shape changed.** The flat

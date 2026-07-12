@@ -39,10 +39,10 @@ paths out of markdown text.
 b/SKILL.md`, `analyze-skill skill-a/ skill-b/`, or a mix of files, dirs, and globs in one call. A
 positional containing `*` is expanded by a small hand-rolled glob matcher (no dependency, no
 `engines.node` bump): `dir/*.md` matches shallowly (one level under `dir`); `dir/**/*.md` matches
-recursively, reusing the same no-symlink-loop walker the directory-target union scan uses. Every
-positional's file set is UNIONed and deduped by resolved absolute path ACROSS THE WHOLE INVOCATION — a
-file reached both directly and through a dir/glob positional is analyzed once, not twice. Zero scannable
-files across ALL positionals is a usage error (exit 2); an unresolvable single positional (a missing
+recursively, reusing the same symlink-following, loop-guarded walker the directory-target union scan uses
+(see below). Every positional's file set is UNIONed and deduped by resolved absolute path ACROSS THE
+WHOLE INVOCATION — a file reached both directly and through a dir/glob positional is analyzed once, not
+twice. Zero scannable files across ALL positionals is a usage error (exit 2); an unresolvable single positional (a missing
 path, or a glob shape other than the two above) fails the whole invocation the same way.
 
 **A directory target scans the UNION of every contract-bearing markdown file present, not just
@@ -55,32 +55,40 @@ top-level-`SKILL.md` dir AND a plugin root):
 - a top-level `SKILL.md` present → that file, plus every markdown file recursively under top-level
   `references/`;
 - a `.claude-plugin/plugin.json` or bare `plugin.json` present (a plugin root) → every markdown file
-  directly under root `agents/`, every markdown file recursively under root `references/`, every
-  markdown file directly under root `commands/`, and each `skills/<name>/SKILL.md` (plus every markdown
-  file recursively under that skill's own `references/`);
+  RECURSIVELY under root `agents/`, `references/`, and `commands/` — Claude Code discovers namespaced
+  commands/agents in subdirectories (`commands/tasks/build.md`, `agents/sub/x.md`), so these are `**`
+  walks, not a single-level listing — and each `skills/<name>/SKILL.md` (plus every markdown file
+  recursively under that skill's own `references/`); `skills/<name>` may itself be a directory symlink
+  and is still picked up;
 - a skill dir INSIDE a plugin (its own `SKILL.md` present, and walking UP the directory tree finds an
-  enclosing plugin manifest) → ALSO every markdown file directly under the enclosing plugin's root
-  `agents/`.
+  enclosing plugin manifest) → ALSO every markdown file RECURSIVELY under the enclosing plugin's root
+  `agents/`, `references/`, AND `commands/` — the same contract dirs scanned in every other shape above,
+  so a skill-dir target is never narrower than a plugin-root target for the same plugin.
 
-A FILE target is unchanged — just that one file. The `references/**` recursion is a hand-rolled
-directory walker (no glob dependency) that does **not** follow symlinks. **ZERO scannable files under a
-directory target is a USAGE ERROR (exit 2)**, never a silent clean pass — the error message enumerates
-every shape it looked for.
+A FILE target is unchanged — just that one file. Every `**` walk above is a hand-rolled directory walker
+(no glob dependency) that **FOLLOWS directory symlinks** — a symlinked `references/`/`agents/`/`commands/`
+(or a symlinked file inside one) is a real, scannable contract surface, not a boundary to silently drop —
+guarded against a symlink LOOP (e.g. `references/loop -> ..`) by a realpath visited-set threaded through
+the whole walk, so a self-referencing symlink becomes one harmless extra pass, never infinite recursion. It
+matches `.md`/`.MD` case-insensitively and skips `node_modules`, `.git`, and any dot-prefixed directory.
+**ZERO scannable files under a directory target is a USAGE ERROR (exit 2)**, never a silent clean pass —
+the error message enumerates every shape it looked for.
 
 The `--output-format json` payload nests per-file results under a `files:` key —
 `{tool, version, command, ok, files: [{file, findings, suppressed}], scanned, unscanned, strict, error}`
-— never a bare array, never `results[]`. `scanned` lists every file analyzed; `unscanned` names any
-contract dir that exists on disk but was deliberately left out of THIS target's scope (e.g. a plugin's
-`commands/` or a sibling `skills/*` dir when the target is one skill dir inside that plugin, not the
-plugin root) — printed as a scope banner in text mode too, so a narrower-than-expected scan is never
-silent. `ok`/`--strict` are computed across ALL scanned files: `ok` is true only when every file has zero
-findings, and `--strict` fails (exit 1) if ANY file has an unsuppressed finding. The `analyze-skill:
+— never a bare array, never `results[]`. `scanned` lists every file analyzed; `unscanned` names entries
+deliberately left out of THIS target's scope — a `skills/<name>` dir with no `SKILL.md` (not a scannable
+skill dir), or a sibling skill dir in the enclosing plugin when the target is one skill dir inside that
+plugin, not the plugin root — printed as a scope banner in text mode too, so a narrower-than-expected scan
+is never silent. `ok`/`--strict` are computed across ALL scanned files: `ok` is true only when every file
+has zero findings, and `--strict` fails (exit 1) if ANY file has an unsuppressed finding. The `analyze-skill:
 ignore` marker (and the two scoped markers below) apply PER FILE — silencing one scanned file has no
 effect on any other file in the union.
 
 > **Migrating from a single-`SKILL.md`-only scan (pre-0.32):** a directory target that previously scanned
-> only `SKILL.md` may newly surface findings in `references/`/`agents/` teaching examples that were never
-> looked at before — annotate those with `analyze-skill: ignore-next-line` or an
+> only `SKILL.md` may newly surface findings in `references/`/`agents/`/`commands/` teaching examples that
+> were never looked at before — including one nested under a subdirectory or reached only via a symlink,
+> both now scanned — annotate those with `analyze-skill: ignore-next-line` or an
 > `ignore-start`/`ignore-end` fence (see below) rather than reaching for the file-wide marker. The
 > `--output-format json` shape also changed: a single-file target's flat `{file, findings, suppressed,
 > strict}` became `{files: [{file, findings, suppressed}], scanned, unscanned, strict}` for uniformity
