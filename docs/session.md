@@ -37,6 +37,12 @@ debug:
                                  # NOT represent a real Cowork config — real Cowork never emits any budget
                                  # besides 31999 (or no budget, when thinking is off).
 
+# ── tier-uniform agent-env knob ───────────────────────────────────────────────
+agent_env:
+  subagent_model: claude-haiku-x            # -> CLAUDE_CODE_SUBAGENT_MODEL
+  tool_search: "off"                        # -> ENABLE_TOOL_SEARCH ("auto" | "off"); omit for the binary default (ON)
+  disable_experimental_betas: false         # -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1" when true (also disables ToolSearch)
+
 # ── work folders / projects (Cowork "add folder" / Spaces) → mnt/<folder-name> ──
 #    (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
 folders:
@@ -130,6 +136,37 @@ that skill instead of the shared root.
 
 > **Removed:** the old numeric/per-model `max_thinking_tokens` field is gone — a session YAML that still
 > sets it fails to load with a targeted hint pointing at `extended_thinking` / `debug.max_thinking_tokens`.
+
+### Agent-env knob (tier-uniform)
+
+`hostloop` and `protocol` spawn the agent over the **operator's full shell env** (`...process.env` /
+`{...plan.baseEnv}`), while `container`/`microvm` build a **constructed allowlist**. Left alone, that means
+an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
+`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
+same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the
+authored, uniform replacement: it applies across **all four tiers**, and the three keys above are
+additionally **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers that inherit
+one) before any baseline/knob overlay — so a stray shell value can never leak through on some tiers and
+not others.
+
+| Field | Type | Env key | Notes |
+|---|---|---|---|
+| `agent_env.subagent_model` | string | `CLAUDE_CODE_SUBAGENT_MODEL` | Binary precedence: env > dispatch param > frontmatter > inherit — this knob outranks a subagent's own `model:` frontmatter. |
+| `agent_env.tool_search` | enum | `ENABLE_TOOL_SEARCH` | `"auto"` \| `"off"`. **Naming trap:** unset (key absent) is binary mode `tst` — ToolSearch is **ON** first-party by default. There is no `"standard"` value to set here; the binary's own `"standard"` mode name means **DISABLED**, not "the standard/default mode" — `tool_search: "off"` is the correct way to disable it, emitting `ENABLE_TOOL_SEARCH="off"` (the binary's actual disable spelling). |
+| `agent_env.disable_experimental_betas` | boolean | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `true` emits `"1"`; also disables ToolSearch as a side effect on the binary side. Omit/`false` emits no key. |
+
+**Precedence is tier-qualified** (not a single uniform three-layer rule):
+
+- `hostloop` / `container` / `microvm` (each layers a baseline `spawn.env`): **knob > baseline spawn.env
+  > operator env (scrubbed)**.
+- `protocol` (no baseline-env overlay — it spawns from `{...plan.baseEnv}` only): the two-layer **knob >
+  operator env (scrubbed)**.
+
+An unset `agent_env` field emits no key at all (never an empty string) — the agent falls back to its own
+default for that key. Setting any `agent_env` field moves the session-**shape** fingerprint (the
+`verify-cassettes` drift channel — see cassette.md), so a knob change stales a cassette recorded before it,
+instead of silently replaying the pre-knob env behavior forever. A session with no `agent_env` (the
+default `{}`) hashes identically to one authored before this field existed.
 
 ### Folders, projects, uploads
 | Field | Maps to | Mounted at |

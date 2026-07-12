@@ -4,10 +4,25 @@ import { mkdirSync, cpSync, existsSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
+
+/**
+ * Pure builder for L0's spawn env. Protocol spawns the host `claude` over the OPERATOR's full shell env
+ * (`{...plan.baseEnv}`) — there is no baseline `spawn.env` overlay here (unlike hostloop/container/microvm),
+ * so precedence is the two-layer `knob > operator env (scrubbed)`: scrub `SCRUBBED_AGENT_ENV_KEYS` from
+ * the operator layer FIRST, then overlay the authored `agentEnv` knob so it always wins. Extracted from
+ * `spawnProtocol` so this env-construction step is unit-testable at the actual runtime call site.
+ */
+export function buildProtocolEnv(plan: LaunchPlan): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...plan.baseEnv };
+  for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
+  Object.assign(env, plan.agentEnv ?? {});
+  return env;
+}
 
 /**
  * L0 — protocol-only runtime. Spawns the host `claude` with the stream-json
@@ -80,7 +95,8 @@ export function spawnProtocol(
   //   - with ANTHROPIC_API_KEY (CI): use the hermetic managed config dir + the key.
   //   - else (local OAuth): keep the real config dir for auth, and layer our
   //     discovery settings via --settings so plugins/skills/mcp still apply.
-  const env: NodeJS.ProcessEnv = { ...plan.baseEnv };
+  // Scrub the inheritance-asymmetric operator keys, then overlay the agent_env knob — see buildProtocolEnv.
+  const env: NodeJS.ProcessEnv = buildProtocolEnv(plan);
   const settingsFile = join(plan.configDir, "settings.json");
   const useManagedConfig = !!env.ANTHROPIC_API_KEY || process.env.COWORK_MANAGED_CONFIG === "1";
   const discoveryArgs: string[] = [];

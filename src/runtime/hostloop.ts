@@ -5,6 +5,7 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan, Mount } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS } from "../session.js";
 import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 
@@ -46,13 +47,25 @@ export const WORKSPACE_TOOL_ALIASES: Record<string, string> = { Bash: "mcp__work
  * would otherwise leak straight through `...process.env` and — were the ELF to still read the env —
  * silently outrank the flag. Strip it explicitly. Extracted from `spawnHostLoop` so this env-construction
  * step is unit-testable without spawning anything.
+ *
+ * Layers apply in precedence order — knob > baseline spawn.env > operator env (scrubbed):
+ *   1. the operator's shell (`...process.env`), but with `SCRUBBED_AGENT_ENV_KEYS` deleted from THIS
+ *      layer alone, before anything else touches it — container/microvm never inherit these keys, so
+ *      leaking them only here (and on protocol) is exactly the asymmetry `agent_env` closes. Scrubbing
+ *      AFTER the baseline overlay would also erase a value the baseline legitimately sets; scrubbing
+ *      the operator layer first keeps that value intact.
+ *   2. `hostNativeSpawnEnv`'s baseline-derived output (may legitimately set any of the three keys).
+ *   3. the authored `agentEnv` knob, applied last so it always wins.
  */
-export function buildHostLoopNativeEnv(baseline: PlatformBaseline, opts: Parameters<typeof hostNativeSpawnEnv>[1]): NodeJS.ProcessEnv {
-  const nativeEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...hostNativeSpawnEnv(baseline, opts),
-  };
+export function buildHostLoopNativeEnv(
+  baseline: PlatformBaseline,
+  opts: Parameters<typeof hostNativeSpawnEnv>[1] & { agentEnv?: Record<string, string> },
+): NodeJS.ProcessEnv {
+  const nativeEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of SCRUBBED_AGENT_ENV_KEYS) delete nativeEnv[k];
+  Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
   delete nativeEnv.MAX_THINKING_TOKENS;
+  Object.assign(nativeEnv, opts.agentEnv ?? {});
   return nativeEnv;
 }
 
@@ -150,6 +163,8 @@ export function spawnHostLoop(
     // Real host paths of connected folders (never staged copies) — the only spawn tier where these
     // are meaningful, since container/microvm folders are staged as copies with no real host path.
     folderHostPaths: plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath),
+    // The tier-uniform agent_env knob — wins over both the (scrubbed) operator layer and baseline spawn.env.
+    agentEnv: plan.agentEnv,
   });
 
   // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's

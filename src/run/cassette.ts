@@ -27,7 +27,7 @@ import {
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { loadSession, resolveSessionPaths } from "../session.js";
+import { loadSession, resolveSessionPaths, agentEnvOverrides } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
@@ -599,6 +599,11 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
     mcp: { config: cfg.mcp.config, enabled: [...cfg.mcp.enabled].sort() },
     egress: { extra_allow: [...cfg.egress.extra_allow].sort(), unrestricted: cfg.egress.unrestricted },
     web_fetch: { approved_domains: [...cfg.web_fetch.approved_domains].sort() },
+    // Only when NON-DEFAULT, so every existing session's fingerprint stays byte-stable across this
+    // field's introduction — a knob-less session's hash doesn't move. A knob change (which silently
+    // affects only hostloop/protocol replay behavior — see agent_env's doc comment) moves the hash so
+    // `verify-cassettes` surfaces the drift instead of a cassette quietly replaying stale env behavior.
+    ...(Object.keys(agentEnvOverrides(cfg.agent_env)).length ? { agent_env: agentEnvOverrides(cfg.agent_env) } : {}),
   };
   return createHash("sha256")
     .update(Buffer.from(JSON.stringify(shape), "utf8"))

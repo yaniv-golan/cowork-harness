@@ -63,7 +63,9 @@ export function spawnContainer(
   const env = spawnEnv(baseline, {
     configGuest,
     proxyHost,
-    extra: runtimeAuthEnv(),
+    // The tier-uniform agent_env knob rides in via `extra`, which spawnEnv applies LAST — no scrub
+    // needed here: the container's env is a constructed allowlist, never the operator's shell.
+    extra: { ...runtimeAuthEnv(), ...plan.agentEnv },
   });
   const claudeArgs = agentArgs(baseline, plan, {
     mntRoot,
