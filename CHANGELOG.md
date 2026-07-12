@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-07-13
+
 ### Added
 
 - **`assertions --list` now documents that `subagent_dispatch_healthy`'s `type` matches the dispatch
