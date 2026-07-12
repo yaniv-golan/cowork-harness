@@ -258,7 +258,7 @@
             "additionalProperties": false
           },
           "subagent_dispatched": {
-            "description": "a sub-agent matching this regex (by agentType or description) was dispatched",
+            "description": "a sub-agent matching this regex (by dispatch or resolved agent type, or description) was dispatched",
             "type": "string"
           },
           "subagent_declared_but_unused": {
@@ -270,7 +270,7 @@
             "type": "object",
             "properties": {
               "match": {
-                "description": "regex over agentType or description, narrowing to specific dispatch(es); omit to check all",
+                "description": "regex over dispatchAgentType or description, narrowing to specific dispatch(es); omit to check all",
                 "type": "string"
               },
               "contains": {

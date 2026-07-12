@@ -256,7 +256,8 @@ export interface AssertContext {
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
   subagents: {
-    agentType: string;
+    dispatchAgentType: string;
+    resolvedAgentType?: string; // the BINARY-resolved child type from task_started — strictly better evidence than dispatchAgentType for a type-less dispatch
     declaredTools: string[];
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
@@ -828,8 +829,10 @@ function check(
     );
   }
   if (a.subagent_dispatched !== undefined) {
-    // Match the agentType OR the description — skills often dispatch with only a `description`
-    // (no subagent_type → agentType "unknown"), so name-matching alone would miss those.
+    // Match dispatchAgentType OR resolvedAgentType OR the description — skills often dispatch with only
+    // a `description` (no subagent_type → dispatchAgentType "unknown"), so name-matching alone would
+    // miss those. resolvedAgentType (from task_started) is strictly better evidence than dispatchAgentType
+    // for a type-less dispatch that RESOLVED to e.g. "general-purpose".
     const c = compileUserRegex(a.subagent_dispatched);
     if ("error" in c) results.push(fail(`subagent_dispatched: bad regex "${a.subagent_dispatched}": ${c.error}`));
     else if (ctx.subagentsMissing)
@@ -837,7 +840,12 @@ function check(
       results.push(fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_dispatched`));
     else
       results.push(
-        ctx.subagents.some((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""))
+        ctx.subagents.some(
+          (s) =>
+            c.re.test(s.dispatchAgentType) ||
+            (s.resolvedAgentType !== undefined && c.re.test(s.resolvedAgentType)) ||
+            c.re.test(s.description ?? ""),
+        )
           ? ok()
           : fail(`no sub-agent matching "${a.subagent_dispatched}" was dispatched (by type or description)`),
       );
@@ -852,7 +860,7 @@ function check(
       const c = compileUserRegex(match);
       if ("error" in c) results.push(fail(`subagent_output_contains: bad regex "${match}": ${c.error}`));
       else {
-        const candidates = ctx.subagents.filter((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""));
+        const candidates = ctx.subagents.filter((s) => c.re.test(s.dispatchAgentType) || c.re.test(s.description ?? ""));
         results.push(
           candidates.some((s) => s.output?.includes(contains))
             ? ok()
@@ -895,7 +903,7 @@ function check(
       results.push(
         culprit
           ? fail(
-              `sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.map((d) => d.name).join(", ") || "none"})`,
+              `sub-agent "${culprit.dispatchAgentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.map((d) => d.name).join(", ") || "none"})`,
             )
           : ok(),
       );

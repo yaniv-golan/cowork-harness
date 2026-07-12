@@ -23,6 +23,20 @@ import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
  *  frozen request + controlOut pairing, without duplicating the tool set. */
 export const FILE_ATTEMPT_TOOLS = new Set<string>([...PATH_GATE_TOOL_NAMES, "MultiEdit"]);
 
+/** The `task_started` sibling family — written against the WHOLE emitter family (not one subtype) so a
+ *  new sibling lands in the same consumer instead of a subtype-specific dead end. Only `task_started`
+ *  carries the binary-RESOLVED child type today; the others are consumed here only in the sense that
+ *  they no longer fall through un-flagged (the pre-existing `contextEvents` push still records all of
+ *  them; this set exists so a future sibling-specific consumer has a single place to extend). */
+const TASK_EVENT_SUBTYPES = new Set([
+  "task_started",
+  "task_progress",
+  "task_updated",
+  "task_notification",
+  "background_tasks_changed",
+  "thinking_tokens",
+]);
+
 /** Extract the DENIED path from a captured `{file_path?, path?}`-shaped input: whichever key is a
  *  `/sessions`-prefixed value (what the VM path-gate actually flags), else the first present key (the
  *  gate's own scan order — file_path before path). Shared by the can_use_tool producer (below) and its
@@ -137,7 +151,9 @@ function parseWebSearchLinks(text: string): Array<{ title: string; url: string }
 interface SubagentDispatch {
   toolUseId: string;
   parentToolUseId?: string;
-  agentType: string;
+  dispatchAgentType: string; // the DISPATCH-INPUT type ("unknown" when the dispatch omitted subagent_type) — unchanged meaning, renamed from the ambiguous `agentType` now that a resolved type lands beside it
+  resolvedAgentType?: string; // the BINARY-resolved child type from task_started (incl. the general-purpose fallback) — strictly better evidence than dispatchAgentType for a type-less dispatch
+  dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type at all (proven by the full input parse) — the wildcard-fallback trap fired
   declaredTools: string[];
   toolsUsed: Array<{ name: string; count: number }>;
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
@@ -682,7 +698,8 @@ export class Run {
             this.rec.subagents.push({
               toolUseId: ev.toolUseId,
               parentToolUseId: ev.parentToolUseId,
-              agentType: ev.agentType,
+              dispatchAgentType: ev.dispatchAgentType,
+              dispatchTypeOmitted: ev.typeOmitted || undefined,
               declaredTools: ev.declaredTools,
               toolsUsed: [],
               description: ev.description,
@@ -692,7 +709,7 @@ export class Run {
             // An explicit Agent(subagent_type:"fork") inherits the main agent's context (unlike every
             // other dispatch type, which starts isolated) — so its children are main-agent flow. Still
             // push to rec.subagents unconditionally above, so dispatch_count_max stays unaffected.
-            if (ev.agentType === "fork" && ev.toolUseId) this.forkScopedIds.add(ev.toolUseId);
+            if (ev.dispatchAgentType === "fork" && ev.toolUseId) this.forkScopedIds.add(ev.toolUseId);
             break;
           case "metrics":
             // merge, don't overwrite — a "result" event may have already set/will later set `usd`
@@ -770,6 +787,30 @@ export class Run {
             break;
           case "system_event":
             this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
+            // Task-event FAMILY (task_started + siblings) — written against the whole family so a new
+            // sibling lands here, not in a subtype-specific dead end. task_started carries the
+            // binary-RESOLVED child type (incl. the general-purpose fallback); join strictly by id.
+            if (TASK_EVENT_SUBTYPES.has(ev.subtype)) {
+              const d = ev.data as Record<string, unknown>;
+              // Join ONLY on tool_use_id — that is what subagents[].toolUseId holds (the dispatch's
+              // toolu_ id). `task_id` is a DIFFERENT identifier and can never match a dispatch's
+              // toolUseId, so falling back to it would silently mis-join (or no-op). If a future need
+              // arises to correlate the task_id-only sibling events, persist a separate task_id→toolUseId
+              // map; today's task_started carries tool_use_id, so this direct join suffices.
+              const joinId = typeof d.tool_use_id === "string" ? d.tool_use_id : undefined;
+              if (ev.subtype === "task_started" && joinId !== undefined && typeof d.subagent_type === "string") {
+                const sa = this.rec.subagents.find((s) => s.toolUseId === joinId);
+                if (sa) {
+                  sa.resolvedAgentType = d.subagent_type;
+                  if (sa.dispatchTypeOmitted && d.subagent_type === "general-purpose")
+                    warn(
+                      `::warning:: [subagent] dispatch ${joinId} OMITTED subagent_type and fell back to general-purpose ` +
+                        `(tools:["*"] — every surviving session MCP tool, incl. workspace bash, is in scope). ` +
+                        `Pin subagent_type explicitly; assert with subagent_dispatched + subagent_tool_absent.\n`,
+                    );
+                }
+              }
+            }
             // pathDenials producer (3): permission_denied is PRE-ASK ONLY, carries no structured path,
             // and is NOT necessarily path-related (a real production permission_denied denied
             // `present_files`) — so it is ingested ONLY when correlated (by tool_use_id) to a recorded

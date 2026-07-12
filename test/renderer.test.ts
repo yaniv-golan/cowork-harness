@@ -22,7 +22,7 @@ const events: AgentEvent[] = [
   { type: "assistant_text", text: "I will search" },
   { type: "tool_use", name: "Bash", input: { command: "grep x" } },
   { type: "tool_use", name: "Read", input: {}, parentToolUseId: "tu1" }, // sub-agent tool: not a top-level tool
-  { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: ["Read"] },
+  { type: "subagent_dispatch", toolUseId: "tu1", dispatchAgentType: "researcher", declaredTools: ["Read"], typeOmitted: false },
   { type: "assistant_text", text: "found it" },
   { type: "result", isError: false },
 ];
@@ -119,8 +119,15 @@ describe("renderer — sub-agent dispatch nesting", () => {
   it("indents a nested sub-agent dispatch deeper than its parent", () => {
     const s = sink();
     const r = makeRenderer(plan({ verbose: true }), s.write);
-    r.onEvent!({ type: "subagent_dispatch", toolUseId: "a1", agentType: "outer", declaredTools: [] });
-    r.onEvent!({ type: "subagent_dispatch", toolUseId: "a2", parentToolUseId: "a1", agentType: "inner", declaredTools: [] });
+    r.onEvent!({ type: "subagent_dispatch", toolUseId: "a1", dispatchAgentType: "outer", declaredTools: [], typeOmitted: false });
+    r.onEvent!({
+      type: "subagent_dispatch",
+      toolUseId: "a2",
+      parentToolUseId: "a1",
+      dispatchAgentType: "inner",
+      declaredTools: [],
+      typeOmitted: false,
+    });
     const dispatchLines = s
       .text()
       .split("\n")
@@ -132,7 +139,13 @@ describe("renderer — sub-agent dispatch nesting", () => {
   it("a top-level dispatch renders exactly as before (regression guard)", () => {
     const s = sink();
     const r = makeRenderer(plan({ verbose: true }), s.write);
-    r.onEvent!({ type: "subagent_dispatch", toolUseId: "a1", agentType: "researcher", declaredTools: ["Read"] });
+    r.onEvent!({
+      type: "subagent_dispatch",
+      toolUseId: "a1",
+      dispatchAgentType: "researcher",
+      declaredTools: ["Read"],
+      typeOmitted: false,
+    });
     expect(s.text()).toContain("  └ sub-agent: researcher [Read]");
   });
 });

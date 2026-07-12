@@ -291,11 +291,17 @@ export const Assertion = z.strictObject({
     .describe(
       "a SUB-AGENT-origin write attempt whose raw path EQUALS `path` (or ends with `path_suffix`) has a PAIRED non-error tool_result — the causal half of a delivery probe (pair with artifact_json for content). Prefer `path` (exact) so a foo/artifacts/probe.json can't satisfy an artifacts/probe.json suffix. Tier-agnostic.",
     ),
-  subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
+  subagent_dispatched: z
+    .string()
+    .optional()
+    .describe("a sub-agent matching this regex (by dispatch or resolved agent type, or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
   subagent_output_contains: z
     .object({
-      match: z.string().optional().describe("regex over agentType or description, narrowing to specific dispatch(es); omit to check all"),
+      match: z
+        .string()
+        .optional()
+        .describe("regex over dispatchAgentType or description, narrowing to specific dispatch(es); omit to check all"),
       contains: z.string().describe("substring that must appear in the matched dispatch(es)' output"),
     })
     .optional()
@@ -1038,7 +1044,9 @@ export interface RunResult {
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;
-    agentType: string;
+    dispatchAgentType: string; // the DISPATCH-INPUT type ("unknown" when the input omitted it)
+    resolvedAgentType?: string; // the BINARY-resolved child type from task_started (incl. the general-purpose fallback); dispatchAgentType above keeps its dispatch-input semantics
+    dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type (proven by full input parse) — the wildcard-fallback trap fired
     declaredTools: string[];
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;

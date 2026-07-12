@@ -104,7 +104,7 @@ describe("F2: parseMessage — assistant content block guards (crash fix)", () =
       message: { model: "claude-x", content: [{ type: "tool_use", id: "toolu_2", name: "Agent", input: 42 }] },
     });
     const dispatch = events.find((e) => e.type === "subagent_dispatch");
-    expect(dispatch).toMatchObject({ type: "subagent_dispatch", toolUseId: "toolu_2", agentType: "unknown", declaredTools: [] });
+    expect(dispatch).toMatchObject({ type: "subagent_dispatch", toolUseId: "toolu_2", dispatchAgentType: "unknown", declaredTools: [] });
   });
 
   it("a null entry in the assistant content array is rejected as a typed protocol error (not an uncaught 'Cannot read properties of null')", () => {
@@ -113,6 +113,23 @@ describe("F2: parseMessage — assistant content block guards (crash fix)", () =
 
   it("a scalar entry in the assistant content array is likewise rejected", () => {
     expect(() => parseMessage({ type: "assistant", message: { content: ["not-an-object"] } })).toThrow(/malformed assistant content block/);
+  });
+});
+
+describe("subagent_dispatch — typeOmitted is a parse-time fact (full input parse, never a prefix grep)", () => {
+  const dispatchMsg = (input: Record<string, unknown>) => ({
+    type: "assistant",
+    message: { id: "msg_1", model: "claude-x", content: [{ type: "tool_use", id: "t1", name: "Agent", input }] },
+  });
+  it("omitted subagent_type → typeOmitted true, dispatchAgentType 'unknown'", () => {
+    const ev = parseMessage(dispatchMsg({ description: "d", prompt: "p" })).find((e) => e.type === "subagent_dispatch");
+    expect(ev).toMatchObject({ dispatchAgentType: "unknown", typeOmitted: true });
+  });
+  it("EXPLICIT general-purpose → typeOmitted false (deliberate choice, not a trap)", () => {
+    const ev = parseMessage(dispatchMsg({ description: "d", prompt: "p", subagent_type: "general-purpose" })).find(
+      (e) => e.type === "subagent_dispatch",
+    );
+    expect(ev).toMatchObject({ dispatchAgentType: "general-purpose", typeOmitted: false });
   });
 });
 

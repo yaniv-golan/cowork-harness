@@ -191,7 +191,7 @@ describe("parseMessage — sub-agent dispatch", () => {
     expect(d[0]).toMatchObject({
       type: "subagent_dispatch",
       toolUseId: "toolu_1",
-      agentType: "example-skills:deck-review",
+      dispatchAgentType: "example-skills:deck-review",
       declaredTools: [],
     });
   });
@@ -201,7 +201,7 @@ describe("parseMessage — sub-agent dispatch", () => {
       assistant([{ type: "tool_use", id: "t2", name: "Task", input: { subagent_type: "researcher", tools: ["Read", "Grep"] } }]),
     );
     expect(d).toHaveLength(1);
-    expect(d[0]).toMatchObject({ agentType: "researcher", declaredTools: ["Read", "Grep"] });
+    expect(d[0]).toMatchObject({ dispatchAgentType: "researcher", declaredTools: ["Read", "Grep"] });
   });
 
   it("recognizes any tool whose input carries subagent_type (rename-robust)", () => {
@@ -359,7 +359,7 @@ describe("Run — turn loop + record", () => {
       { type: "init", tools: ["Task", "Bash"], mcpServers: [], skills: [], cwd: "/sessions/x" },
       { type: "assistant_text", text: "working" },
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher", tools: ["Bash", "Read"] } },
-      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: ["Bash", "Read"] },
+      { type: "subagent_dispatch", toolUseId: "tu1", dispatchAgentType: "researcher", declaredTools: ["Bash", "Read"], typeOmitted: false },
       { type: "tool_use", name: "Read", input: {}, parentToolUseId: "tu1" }, // sub-agent used Read, not Bash
       { type: "result", isError: false, usage: { output_tokens: 5 } },
     ];
@@ -369,7 +369,7 @@ describe("Run — turn loop + record", () => {
     expect(rec.transcript).toBe("working");
     expect(rec.toolsCalled.has("Task")).toBe(true);
     expect(rec.subagents).toHaveLength(1);
-    expect(rec.subagents[0].agentType).toBe("researcher");
+    expect(rec.subagents[0].dispatchAgentType).toBe("researcher");
     expect(rec.subagents[0].declaredTools).toEqual(["Bash", "Read"]);
     expect(rec.subagents[0].toolsUsed).toEqual([{ name: "Read", count: 1 }]); // declared Bash but never used it → the culprit
     expect(rec.result).toBe("success");
@@ -395,7 +395,7 @@ describe("Run — turn loop + record", () => {
 
   it("increments toolsUsed's count for a repeated tool inside the same subagent dispatch (not a duplicate entry)", async () => {
     const ev: AgentEvent[] = [
-      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: ["Read"] },
+      { type: "subagent_dispatch", toolUseId: "disp1", dispatchAgentType: "general-purpose", declaredTools: ["Read"], typeOmitted: false },
       { type: "tool_use", name: "Read", input: {}, toolUseId: "t1", parentToolUseId: "disp1" },
       { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
       { type: "tool_use", name: "Read", input: {}, toolUseId: "t2", parentToolUseId: "disp1" },
@@ -411,7 +411,8 @@ describe("Run — turn loop + record", () => {
       {
         type: "subagent_dispatch",
         toolUseId: "disp1",
-        agentType: "general-purpose",
+        dispatchAgentType: "general-purpose",
+        typeOmitted: false,
         declaredTools: [],
         prompt: "explore",
         model: "claude-sonnet-4-5",
@@ -425,7 +426,7 @@ describe("Run — turn loop + record", () => {
 
   it("leaves rec.subagents[].output undefined when no tool_result matches the dispatch's toolUseId (M4)", async () => {
     const ev: AgentEvent[] = [
-      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "disp1", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
       { type: "result", isError: false },
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
@@ -478,7 +479,7 @@ describe("Run — turn loop + record", () => {
   it("does NOT capture a sub-agent-parented Skill tool_use (not a top-level invocation)", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },
-      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "tu1", dispatchAgentType: "researcher", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Skill", input: { skill: "nested:nested" }, parentToolUseId: "tu1" },
       { type: "result", isError: false },
     ];
@@ -528,7 +529,7 @@ describe("Run — turn loop + record", () => {
   it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },
-      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "tu1", dispatchAgentType: "researcher", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Read", input: {}, parentToolUseId: "tu1" }, // under a real dispatch → counted
       { type: "tool_use", name: "Bash", input: {}, parentToolUseId: "orphan-no-dispatch" }, // orphan parent → NOT counted
       { type: "result", isError: false },

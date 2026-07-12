@@ -72,7 +72,8 @@ export type AgentEvent =
       type: "subagent_dispatch";
       toolUseId: string;
       parentToolUseId?: string;
-      agentType: string;
+      dispatchAgentType: string; // the DISPATCH-INPUT type ("unknown" when the input omitted subagent_type); the BINARY-resolved type (incl. the general-purpose fallback) arrives later on the record via task_started — see RunRecord.subagents[].resolvedAgentType
+      typeOmitted: boolean; // the dispatch input carried no subagent_type key at all (proven by the full input parse, never a prefix grep) — a deliberate explicit "general-purpose" is NOT this
       declaredTools: string[];
       description?: string;
       prompt?: string; // input.prompt, assertText-capped
@@ -983,9 +984,14 @@ export function parseMessage(msg: any): AgentEvent[] {
               type: "subagent_dispatch",
               toolUseId,
               parentToolUseId,
-              // Skills often dispatch with only {description, prompt} (no subagent_type) → agentType is
-              // "unknown" but the description still identifies the dispatch (e.g. "TOP_DOWN market sizing").
-              agentType: String(inp.subagent_type ?? inp.subagentType ?? "unknown"),
+              // Skills often dispatch with only {description, prompt} (no subagent_type) → dispatchAgentType
+              // is "unknown" but the description still identifies the dispatch (e.g. "TOP_DOWN market sizing").
+              dispatchAgentType: String(inp.subagent_type ?? inp.subagentType ?? "unknown"),
+              // Parse-time fact from the FULL input parse (never a prefix grep): the dispatch input carried
+              // neither key at all. Distinguishes an omitted type (the wildcard-fallback trap — the binary
+              // resolves it to general-purpose with tools:["*"]) from an EXPLICIT subagent_type:"general-purpose"
+              // (a deliberate choice, not a trap).
+              typeOmitted: !("subagent_type" in inp) && !("subagentType" in inp),
               declaredTools: declared,
               description: inp.description != null ? String(inp.description) : undefined,
               prompt: inp.prompt != null ? toolResultAssertText(String(inp.prompt)) : undefined,

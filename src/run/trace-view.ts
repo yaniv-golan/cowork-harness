@@ -60,7 +60,7 @@ export interface TraceRow {
   kind: "tool" | "dispatch" | "decision" | "text" | "result" | "thinking";
   name?: string;
   detail?: string;
-  agentType?: string;
+  dispatchAgentType?: string;
   declaredTools?: string[];
   description?: string; // dispatch description — identifies an `unknown`-typed dispatch
   child?: boolean; // ran inside a sub-agent (had a parentToolUseId)
@@ -110,7 +110,15 @@ function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
         { kind: "tool", name: ev.name, detail: summarize(ev.input, translate), child: !!ev.parentToolUseId, toolUseId: ev.toolUseId },
       ];
     case "subagent_dispatch":
-      return [{ kind: "dispatch", name: "Agent", agentType: ev.agentType, declaredTools: ev.declaredTools, description: ev.description }];
+      return [
+        {
+          kind: "dispatch",
+          name: "Agent",
+          dispatchAgentType: ev.dispatchAgentType,
+          declaredTools: ev.declaredTools,
+          description: ev.description,
+        },
+      ];
     case "assistant_text":
       return ev.parentToolUseId || !ev.text.trim() ? [] : [{ kind: "text", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
     case "thinking":
@@ -420,7 +428,7 @@ export function formatGateTrace(rows: GateTraceRow[]): string {
 
 export interface DispatchNode {
   toolUseId: string;
-  agentType: string;
+  dispatchAgentType: string;
   description?: string;
   declaredTools: string[];
   depth: number; // 0 = top-level dispatch; >0 = dispatched by another sub-agent
@@ -456,7 +464,7 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
   };
   const nodes = dispatches.map((d) => ({
     toolUseId: d.toolUseId,
-    agentType: d.agentType,
+    dispatchAgentType: d.dispatchAgentType,
     description: d.description,
     declaredTools: d.declaredTools,
     depth: depthOf(d),
@@ -479,7 +487,7 @@ export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; to
       .filter(Boolean)
       .map((s) => `\n${indent}  ${s}`)
       .join("");
-    return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}${extra}`;
+    return `${indent}└ ${n.dispatchAgentType}${n.description ? ` (${n.description})` : ""}${tools}${extra}`;
   });
   lines.push(`\n${total} sub-agent dispatch(es) total — assert with \`dispatch_count_max: ${total}\``);
   return lines.join("\n");
@@ -708,7 +716,7 @@ export function formatTrace(rows: TraceRow[], opts?: { modelUsage?: RunResult["m
   for (const r of rows) {
     if (r.kind === "dispatch")
       lines.push(
-        `└ dispatch ${r.agentType}${r.description ? ` (${r.description})` : ""}${r.declaredTools?.length ? " [" + r.declaredTools.join(",") + "]" : ""}`,
+        `└ dispatch ${r.dispatchAgentType}${r.description ? ` (${r.description})` : ""}${r.declaredTools?.length ? " [" + r.declaredTools.join(",") + "]" : ""}`,
       );
     else if (r.kind === "tool")
       lines.push(

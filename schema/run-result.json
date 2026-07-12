@@ -557,7 +557,7 @@
         "type": "object",
         "required": [
           "toolUseId",
-          "agentType",
+          "dispatchAgentType",
           "declaredTools",
           "toolsUsed"
         ],
@@ -569,8 +569,17 @@
             "type": "string",
             "description": "the dispatching parent's toolUseId \u2014 reconstructs the nested dispatch tree (#16)"
           },
-          "agentType": {
-            "type": "string"
+          "dispatchAgentType": {
+            "type": "string",
+            "description": "the DISPATCH-INPUT type (\"unknown\" when the input omitted subagent_type) \u2014 unchanged meaning, renamed from the ambiguous agentType now that a resolved type lands beside it"
+          },
+          "resolvedAgentType": {
+            "type": "string",
+            "description": "the BINARY-resolved child type from task_started (incl. the general-purpose fallback) \u2014 strictly better evidence than dispatchAgentType for a type-less dispatch"
+          },
+          "dispatchTypeOmitted": {
+            "type": "boolean",
+            "description": "the dispatch input carried no subagent_type at all (proven by the full input parse) \u2014 the wildcard-fallback trap fired"
           },
           "declaredTools": {
             "type": "array",

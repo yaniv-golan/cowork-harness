@@ -86,7 +86,9 @@ const full: RunResult = {
     {
       toolUseId: "tu_1",
       parentToolUseId: undefined,
-      agentType: "general-purpose",
+      dispatchAgentType: "unknown",
+      resolvedAgentType: "general-purpose",
+      dispatchTypeOmitted: true,
       declaredTools: ["Read"],
       toolsUsed: [{ name: "Read", count: 1 }],
       description: "explore",

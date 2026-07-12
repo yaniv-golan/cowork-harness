@@ -206,12 +206,12 @@ describe("tool_called / tool_not_called / subagent_tool_* — glob matching", ()
   });
 });
 
-describe("subagent_dispatched matches agentType OR description", () => {
+describe("subagent_dispatched matches dispatchAgentType OR resolvedAgentType OR description", () => {
   const subs = [
-    { agentType: "unknown", declaredTools: [], toolsUsed: [], description: "TOP_DOWN market sizing for Cadence" },
-    { agentType: "example-skills:market-sizing", declaredTools: [], toolsUsed: [], description: "coaching" },
+    { dispatchAgentType: "unknown", declaredTools: [], toolsUsed: [], description: "TOP_DOWN market sizing for Cadence" },
+    { dispatchAgentType: "example-skills:market-sizing", declaredTools: [], toolsUsed: [], description: "coaching" },
   ];
-  it("matches a named dispatch by agentType", () => {
+  it("matches a named dispatch by dispatchAgentType", () => {
     expect(pass(evaluate([{ subagent_dispatched: "market-sizing" }], ctx({ subagents: subs })))).toBe(true);
   });
   it("matches an UNKNOWN-typed dispatch by its description (the skill set no subagent_type)", () => {
@@ -220,26 +220,30 @@ describe("subagent_dispatched matches agentType OR description", () => {
   it("fails when neither type nor description matches", () => {
     expect(pass(evaluate([{ subagent_dispatched: "SLIDE_REVIEWS" }], ctx({ subagents: subs })))).toBe(false);
   });
+  it("matches a type-less dispatch by its RESOLVED type (task_started evidence is strictly better than dispatchAgentType)", () => {
+    const resolved = [{ dispatchAgentType: "unknown", resolvedAgentType: "general-purpose", declaredTools: [], toolsUsed: [] }];
+    expect(pass(evaluate([{ subagent_dispatched: "general-purpose" }], ctx({ subagents: resolved })))).toBe(true);
+  });
 });
 
 describe("subagent_output_contains", () => {
   it("passes when a dispatch's output contains the substring (no match filter — checks all dispatches)", () => {
-    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "found 3 files" }] });
+    const c = ctx({ subagents: [{ dispatchAgentType: "x", declaredTools: [], toolsUsed: [], output: "found 3 files" }] });
     const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
     expect(result.pass).toBe(true);
   });
 
   it("fails when no dispatch's output contains the substring", () => {
-    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "nothing here" }] });
+    const c = ctx({ subagents: [{ dispatchAgentType: "x", declaredTools: [], toolsUsed: [], output: "nothing here" }] });
     const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
     expect(result.pass).toBe(false);
   });
 
-  it("narrows to a specific dispatch via match (regex over agentType/description), then checks only that dispatch's output", () => {
+  it("narrows to a specific dispatch via match (regex over dispatchAgentType/description), then checks only that dispatch's output", () => {
     const c = ctx({
       subagents: [
-        { agentType: "general-purpose", declaredTools: [], toolsUsed: [], output: "3 files" },
-        { agentType: "market-sizing", declaredTools: [], toolsUsed: [], output: "no match here" },
+        { dispatchAgentType: "general-purpose", declaredTools: [], toolsUsed: [], output: "3 files" },
+        { dispatchAgentType: "market-sizing", declaredTools: [], toolsUsed: [], output: "no match here" },
       ],
     });
     const result = evaluate([{ subagent_output_contains: { match: "market-sizing", contains: "no match" } }], c)[0];

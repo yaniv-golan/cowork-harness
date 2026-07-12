@@ -69,7 +69,7 @@ export type TimelineEvent =
       type: "subagent_dispatch";
       toolUseId: string;
       parentToolUseId?: string;
-      agentType: string;
+      dispatchAgentType: string;
       model?: string;
       skillScope?: string;
     }
@@ -114,7 +114,12 @@ export function toTimelineFields(ev: AgentEvent): TimelineFields<TimelineEvent> 
     case "tool_result":
       return { type: "tool_result", toolUseId: ev.toolUseId, isError: ev.isError };
     case "subagent_dispatch":
-      return { type: "subagent_dispatch", toolUseId: ev.toolUseId, parentToolUseId: ev.parentToolUseId, agentType: ev.agentType };
+      return {
+        type: "subagent_dispatch",
+        toolUseId: ev.toolUseId,
+        parentToolUseId: ev.parentToolUseId,
+        dispatchAgentType: ev.dispatchAgentType,
+      };
     case "thinking":
       return { type: "thinking" };
     case "decision":

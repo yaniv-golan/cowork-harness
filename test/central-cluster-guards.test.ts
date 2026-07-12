@@ -171,7 +171,9 @@ describe("#9 subagent_output_contains distinguishes a truncated output from an a
   it("a miss against a TRUNCATED sub-agent output is evidence-unavailable, not a proven absence", () => {
     const [r] = evaluate(
       [{ subagent_output_contains: { match: "researcher", contains: "SECRET" } }],
-      ctx({ subagents: [{ agentType: "researcher", declaredTools: [], toolsUsed: [], output: "head only", outputTruncated: true }] }),
+      ctx({
+        subagents: [{ dispatchAgentType: "researcher", declaredTools: [], toolsUsed: [], output: "head only", outputTruncated: true }],
+      }),
     );
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/evidence unavailable/);
@@ -181,7 +183,7 @@ describe("#9 subagent_output_contains distinguishes a truncated output from an a
   it("a miss against a COMPLETE sub-agent output is a plain absence (no truncation caveat)", () => {
     const [r] = evaluate(
       [{ subagent_output_contains: { match: "researcher", contains: "SECRET" } }],
-      ctx({ subagents: [{ agentType: "researcher", declaredTools: [], toolsUsed: [], output: "head only" }] }),
+      ctx({ subagents: [{ dispatchAgentType: "researcher", declaredTools: [], toolsUsed: [], output: "head only" }] }),
     );
     expect(r.pass).toBe(false);
     expect(r.message).not.toMatch(/evidence unavailable/);
@@ -269,9 +271,10 @@ function toolUse(
   };
 }
 
-/** Synthetic `subagent_dispatch` AgentEvent builder — registers a RECOGNIZED dispatch under `toolUseId`. */
-function dispatch(toolUseId: string, agentType: string): AgentEvent {
-  return { type: "subagent_dispatch", toolUseId, agentType, declaredTools: [] };
+/** Synthetic `subagent_dispatch` AgentEvent builder — registers a RECOGNIZED dispatch under `toolUseId`.
+ *  `opts.typeOmitted` defaults false (an explicit dispatch-input type, the common case in these fixtures). */
+function dispatch(toolUseId: string, dispatchAgentType: string, opts: { typeOmitted?: boolean } = {}): AgentEvent {
+  return { type: "subagent_dispatch", toolUseId, dispatchAgentType, declaredTools: [], typeOmitted: opts.typeOmitted ?? false };
 }
 
 /** Drive a `Run` over a scripted event list (via `MockSession`), auto-appending a terminal `result` event
@@ -345,6 +348,26 @@ function hookEvent(opts: {
 function systemEvent(subtype: string, data: Record<string, unknown>): AgentEvent {
   return { type: "system_event", subtype, data };
 }
+
+describe("task_started family consumption (resolved child type + omission note)", () => {
+  it("joins task_started to the dispatch by tool_use_id and records the RESOLVED type", async () => {
+    const rec = await driveRunOverEvents([
+      dispatch("t1", "unknown", { typeOmitted: true }),
+      systemEvent("task_started", { tool_use_id: "t1", subagent_type: "general-purpose", task_type: "local_agent" }),
+    ]);
+    const sa = rec.subagents.find((s) => s.toolUseId === "t1")!;
+    expect(sa.resolvedAgentType).toBe("general-purpose");
+    expect(sa.dispatchAgentType).toBe("unknown"); // dispatch-input semantics stay on their own field — never overwritten by the resolved type
+    expect(sa.dispatchTypeOmitted).toBe(true);
+  });
+  it("a task_started with only task_id (no tool_use_id) does NOT join — task_id can't match toolUseId", async () => {
+    const rec = await driveRunOverEvents([
+      dispatch("t1", "unknown", { typeOmitted: true }),
+      systemEvent("task_started", { task_id: "task_99", subagent_type: "general-purpose" }), // task_id ≠ dispatch toolUseId
+    ]);
+    expect(rec.subagents[0].resolvedAgentType).toBeUndefined();
+  });
+});
 
 let reqCounter = 0;
 /** Synthetic `permission` DecisionRequest builder for driving a Run over a scripted decision list. */

@@ -107,7 +107,7 @@ describe("trace view", () => {
     const dispatch = rows.filter((r) => r.kind === "dispatch");
     const tools = rows.filter((r) => r.kind === "tool");
     expect(dispatch).toHaveLength(1);
-    expect(dispatch[0].agentType).toBe("general-purpose");
+    expect(dispatch[0].dispatchAgentType).toBe("general-purpose");
     // the Agent block does NOT also appear as a tool row; TaskCreate + Read do
     expect(tools.map((t) => t.name).sort()).toEqual(["Read", "TaskCreate"]);
     expect(formatTrace(rows)).toContain("1 sub-agent dispatch(es)");
@@ -310,7 +310,7 @@ describe("trace --view dispatches (dispatch tree + total)", () => {
     ]);
     const tree = buildDispatchTree(f);
     expect(tree.total).toBe(3);
-    expect(tree.nodes.map((n) => [n.agentType, n.depth])).toEqual([
+    expect(tree.nodes.map((n) => [n.dispatchAgentType, n.depth])).toEqual([
       ["explorer", 0],
       ["child", 1],
       ["writer", 0],
@@ -345,7 +345,7 @@ describe("trace --view dispatches (dispatch tree + total)", () => {
       nodes: [
         {
           toolUseId: "d1",
-          agentType: "general-purpose",
+          dispatchAgentType: "general-purpose",
           declaredTools: [],
           depth: 0,
           prompt: "go explore\nmore detail",
