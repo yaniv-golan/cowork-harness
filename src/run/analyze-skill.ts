@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync, writeSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
@@ -698,9 +698,13 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
  *  analyze — see `resolveSkillTarget` below for the shape rules. `files` is deduped by resolved
  *  absolute path (a target dir can match more than one shape at once — see the top-level-SKILL.md +
  *  plugin-root overlap this repo's own `.claude/skills/cowork-harness/` demonstrates); `unscanned` names
- *  contract dirs that exist on disk but were deliberately left OUT of this target's scope (a sibling
- *  skill, or a plugin-root `commands/` when the target is one skill dir inside that plugin, not the
- *  plugin root itself) — the scope banner prints these so a narrower-than-expected scan is never silent. */
+ *  contract dirs (or entries) that exist on disk but were deliberately left OUT of this target's scope —
+ *  a sibling skill in the enclosing plugin (when the target is one skill dir inside that plugin, not the
+ *  plugin root itself), or a `skills/<name>` entry with no `SKILL.md` — the scope banner prints these so
+ *  a narrower-than-expected scan is never silent. As of this fix, `references/` and `commands/` are no
+ *  longer among the things a skill-dir target leaves unscanned in its enclosing plugin (see rule 3
+ *  below) — every contract dir this tool scans anywhere else is now either SCANNED here or explicitly
+ *  named in `unscanned`, never silently dropped. */
 export interface SkillTargetResolution {
   files: string[];
   unscanned: string[];
@@ -728,28 +732,103 @@ function findEnclosingPluginDir(startDir: string): string | null {
   }
 }
 
-/** Non-recursive `*.md` listing directly inside `dir` (used for `agents/*.md` and `commands/*.md`, both
- *  single-level per the resolution rules — NOT `agents/**`). `[]` when `dir` doesn't exist. A symlink
- *  entry is skipped outright (`entry.isFile()` is false for a symlink dirent — Node reports the LINK's
- *  own type, not its target's — so this never needs a manual symlink check to stay non-following). */
-function listMarkdownShallow(dir: string): string[] {
+/** Directory names the recursive markdown walker (`walkMarkdownDeep`) never descends into: `node_modules`
+ *  and `.git` (vendored/VCS trees that can be enormous and are never a skill's own contract surface), plus
+ *  ANY dot-prefixed directory (`.git` itself, `.github`, a stray `.cache`, etc. — dot-dirs are tooling/VCS
+ *  convention, not skill contract dirs). Checked by NAME only and applied identically to a real directory
+ *  and a symlinked directory (see `walkMarkdownDeep`) — a symlinked `node_modules` is exactly as
+ *  uninteresting as a real one. */
+const DENYLISTED_WALK_DIR_NAMES = new Set(["node_modules", ".git"]);
+function isDenylistedWalkDirName(name: string): boolean {
+  return DENYLISTED_WALK_DIR_NAMES.has(name) || name.startsWith(".");
+}
+
+/** Recursive `*.md` walk under `dir` (used for EVERY `agents/**`, `commands/**`, and `references/**` shape
+ *  — Claude Code discovers namespaced commands/agents in subdirectories, e.g. `commands/tasks/build.md` /
+ *  `agents/sub/x.md`, so a single-level listing silently narrowed the scan; this walker is now the ONLY
+ *  markdown-collection primitive `resolveSkillTarget` uses) via a hand-rolled `readdirSync` walker — glob
+ *  dependencies are unavailable on Node 20 in this repo's runtime target. Matches `.md`/`.MD`/any case
+ *  (case-insensitive — Markdown tooling doesn't care about extension case, and neither should this
+ *  scanner). `[]` when `dir` doesn't exist.
+ *
+ *  FOLLOWS directory symlinks — via `statSync` on the entry's full path, which resolves THROUGH the link,
+ *  unlike a `Dirent`'s own `isDirectory()`, which always reports `false` for a symlink dirent (Node
+ *  reports the link's OWN type there, not its target's). A symlinked `references/` (or a symlinked file
+ *  inside one) is a real, scannable contract surface, not a boundary to silently drop — the earlier
+ *  never-follow posture was itself a silent-narrowing bug, not a safety feature.
+ *
+ *  Guarded against symlink LOOPS by `visited`: a `Set` of `realpathSync`'d directory paths threaded BY
+ *  REFERENCE through every recursive call (never reset per call, including across the top-level caller's
+ *  own recursive descent). Before a directory (real or symlinked) is read, its realpath is checked against
+ *  `visited`; if already present, the descent is skipped and `[]` is returned for that branch. This is what
+ *  turns a `references/loop -> ..` self-referencing symlink into a single harmless extra pass over
+ *  already-covered ground instead of infinite recursion.
+ *
+ *  Skips `node_modules`, `.git`, and any dot-prefixed directory (`isDenylistedWalkDirName`) — vendored or
+ *  VCS trees are never a skill's own contract surface and can be large enough to make an unfiltered walk
+ *  expensive. A dangling symlink (its `statSync` throws) is silently skipped: there is nothing on the
+ *  other end to scan, which is not the same failure class as a real contract dir being out of scope. */
+function walkMarkdownDeep(dir: string, visited: Set<string> = new Set()): string[] {
   if (!existsSync(dir)) return [];
+  let real: string;
+  try {
+    real = realpathSync(dir);
+  } catch {
+    return [];
+  }
+  if (visited.has(real)) return [];
+  visited.add(real);
+
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {
     return [];
   }
-  return entries.filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => join(dir, e.name));
+
+  const out: string[] = [];
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (isDenylistedWalkDirName(e.name)) continue;
+      out.push(...walkMarkdownDeep(full, visited));
+      continue;
+    }
+    if (e.isSymbolicLink()) {
+      let st;
+      try {
+        st = statSync(full); // follows the link — resolves to the TARGET's type
+      } catch {
+        continue; // dangling symlink — nothing on the other end to scan
+      }
+      if (st.isDirectory()) {
+        if (isDenylistedWalkDirName(e.name)) continue;
+        out.push(...walkMarkdownDeep(full, visited));
+      } else if (st.isFile() && /\.md$/i.test(e.name)) {
+        out.push(full);
+      }
+      continue;
+    }
+    if (e.isFile() && /\.md$/i.test(e.name)) out.push(full);
+  }
+  return out;
 }
 
-/** Recursive `*.md` walk under `dir` (used for every `references/**` shape) via a hand-rolled
- *  `readdirSync` walker — glob dependencies are unavailable on Node 20 in this repo's runtime target.
- *  Deliberately does NOT follow symlinks: only recurses into an entry where `isDirectory()` is true,
- *  which (like the shallow listing above) a symlinked directory never satisfies — Node's `Dirent` type
- *  reflects the directory-entry's OWN type, not the link target's, so a symlink loop can never be
- *  traversed into. `[]` when `dir` doesn't exist. */
-function walkMarkdownDeep(dir: string): string[] {
+/** Non-recursive subdirectory NAMES directly inside `dir` (used to enumerate `skills/*` entries). This is
+ *  a single-level listing, never itself recursive, so it needs no loop-guard of its own: a symlinked
+ *  `skills/<name>` pointing back into an ancestor is only a hazard for something that RECURSES through
+ *  it, and the caller's own `walkMarkdownDeep` calls into that skill's `references/` carry their own
+ *  loop-guard (a fresh `visited` set per top-level walk). `[]` when `dir` doesn't exist.
+ *
+ *  INCLUDES a symlinked directory — via `statSync`, which follows the link — rather than excluding it. A
+ *  symlinked `skills/linked` pointing at a real skill dir elsewhere is a real, scannable skill, not a
+ *  boundary to silently drop: excluding it (the earlier behavior, via `Dirent.isDirectory()`, which is
+ *  `false` for every symlink) made `skills/linked` invisible to this listing and, with no other skill
+ *  present, made the whole target resolve to zero files — an incorrect exit-2 usage error for a dir that
+ *  plainly had a scannable skill, and in a mixed plugin (a symlinked skill alongside real ones) a silent
+ *  false green: the symlinked skill's contents were never analyzed and nothing said so. A dangling
+ *  symlink is silently skipped — nothing on the other end. */
+function listSubdirs(dir: string): string[] {
   if (!existsSync(dir)) return [];
   let entries;
   try {
@@ -759,25 +838,21 @@ function walkMarkdownDeep(dir: string): string[] {
   }
   const out: string[] = [];
   for (const e of entries) {
-    const full = join(dir, e.name);
-    if (e.isDirectory()) out.push(...walkMarkdownDeep(full));
-    else if (e.isFile() && e.name.endsWith(".md")) out.push(full);
+    if (e.isDirectory()) {
+      out.push(e.name);
+      continue;
+    }
+    if (e.isSymbolicLink()) {
+      let st;
+      try {
+        st = statSync(join(dir, e.name));
+      } catch {
+        continue; // dangling symlink
+      }
+      if (st.isDirectory()) out.push(e.name);
+    }
   }
   return out;
-}
-
-/** Non-recursive subdirectory names directly inside `dir` (used to enumerate `skills/*` entries). `[]`
- *  when `dir` doesn't exist. Symlinked directories are excluded for the same reason as
- *  `listMarkdownShallow`/`walkMarkdownDeep` above. */
-function listSubdirs(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries.filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
 /** Resolve the CLI target to the FULL UNION of contract-bearing markdown files to analyze:
@@ -786,18 +861,33 @@ function listSubdirs(dir: string): string[] {
  *  - a DIRECTORY target is expanded to every shape it matches, deduped by resolved absolute path (a dir
  *    can match more than one shape — see this repo's own `.claude/skills/cowork-harness/`, which is
  *    simultaneously a top-level-SKILL.md dir AND a plugin root):
- *      1. top-level "SKILL.md" present → add it + every markdown file recursively under top-level
+ *      1. top-level "SKILL.md" present → add it + every markdown file RECURSIVELY under top-level
  *         "references/";
  *      2. ".claude-plugin/plugin.json" or bare "plugin.json" present (a plugin root) → add every
- *         markdown file directly under root "agents/", every markdown file recursively under root
- *         "references/", every markdown file directly under root "commands/", and each "skills/<name>/
- *         SKILL.md" (+ every markdown file recursively under that skill's own "references/");
+ *         markdown file RECURSIVELY under root "agents/", "references/", and "commands/" — Claude Code
+ *         discovers namespaced commands/agents in subdirectories (`commands/tasks/build.md`,
+ *         `agents/sub/x.md`), so these are `**` walks, not a single-level listing (see
+ *         `walkMarkdownDeep`) — and each "skills/<name>/SKILL.md" (+ every markdown file recursively
+ *         under that skill's own "references/"); "skills/<name>" may itself be a directory SYMLINK and is
+ *         still picked up (see `listSubdirs`);
  *      3. the dir is a skill dir INSIDE a plugin (its own "SKILL.md" present, and walking UP finds an
- *         enclosing plugin manifest) → ALSO add every markdown file directly under the enclosing
- *         plugin's root "agents/".
+ *         enclosing plugin manifest) → ALSO add every markdown file RECURSIVELY under the enclosing
+ *         plugin's root "agents/", "references/", AND "commands/" — `references/` and `commands/` are
+ *         contract dirs this tool scans in every other shape above, so a skill-dir target must not be
+ *         narrower than a plugin-root target for the SAME underlying plugin.
  *
- *  ZERO scannable files (a dir matching none of the above, or an empty/nonexistent path) is a USAGE
- *  ERROR, never a silent clean pass — the caller reports it via `fail()`. */
+ *  Every recursive walk above (`walkMarkdownDeep`) FOLLOWS directory symlinks (loop-guarded against
+ *  `references/loop -> ..`-style self-reference) and matches `.md`/`.MD` case-insensitively — nothing
+ *  under a scanned root is silently dropped for being a symlink or an unusual extension case. The
+ *  plugin's sibling `skills/*` entries (other than the target itself, for shape 3) remain genuinely OUT
+ *  of scope for a skill-dir target — named in `unscanned`, never silently dropped.
+ *
+ *  ZERO scannable files is a USAGE ERROR, never a silent clean pass — the caller reports it via `fail()`.
+ *  The message DISTINGUISHES two cases: no shape recognized at all (no top-level SKILL.md, no plugin
+ *  manifest anywhere), vs. a recognized plugin shape that simply has no markdown contract files (e.g. a
+ *  hooks/MCP-only plugin with `agents/`/`references/`/`commands/`/`skills/` all absent or empty) —
+ *  conflating the two produced a confusing "looked for plugin.json" message even for a dir that plainly
+ *  HAD one. */
 export function resolveSkillTarget(target: string): SkillTargetResolution | { error: string } {
   if (!existsSync(target)) return { error: `path not found: ${target}` };
   if (!statSync(target).isDirectory()) return { files: [target], unscanned: [] };
@@ -815,9 +905,9 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
 
   const isPluginRoot = isPluginManifestDir(dir);
   if (isPluginRoot) {
-    for (const f of listMarkdownShallow(join(dir, "agents"))) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "agents"))) files.add(f);
     for (const f of walkMarkdownDeep(join(dir, "references"))) files.add(f);
-    for (const f of listMarkdownShallow(join(dir, "commands"))) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "commands"))) files.add(f);
     const skillsDir = join(dir, "skills");
     for (const name of listSubdirs(skillsDir)) {
       const subSkillMd = join(skillsDir, name, "SKILL.md");
@@ -831,10 +921,9 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
   } else if (hasTopSkillMd) {
     const enclosing = findEnclosingPluginDir(dir);
     if (enclosing) {
-      for (const f of listMarkdownShallow(join(enclosing, "agents"))) files.add(f);
-      if (existsSync(join(enclosing, "commands"))) {
-        unscanned.push(`${join(enclosing, "commands")} (enclosing plugin's commands/ — out of scope for a skill-dir target)`);
-      }
+      for (const f of walkMarkdownDeep(join(enclosing, "agents"))) files.add(f);
+      for (const f of walkMarkdownDeep(join(enclosing, "references"))) files.add(f);
+      for (const f of walkMarkdownDeep(join(enclosing, "commands"))) files.add(f);
       const siblingSkillsDir = join(enclosing, "skills");
       for (const name of listSubdirs(siblingSkillsDir)) {
         const siblingDir = join(siblingSkillsDir, name);
@@ -845,13 +934,26 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
   }
 
   if (files.size === 0) {
+    if (!hasTopSkillMd && !isPluginRoot) {
+      return {
+        error:
+          `no contract-bearing markdown found under ${target} — looked for: a top-level SKILL.md ` +
+          "(+ references/**/*.md); a plugin root (.claude-plugin/plugin.json or plugin.json, pulling in " +
+          "agents/**/*.md, references/**/*.md, commands/**/*.md, and skills/*/SKILL.md + " +
+          "skills/*/references/**/*.md); or a skill dir whose SKILL.md sits somewhere inside an enclosing " +
+          "plugin (pulling in that plugin's agents/**/*.md, references/**/*.md, and commands/**/*.md)",
+      };
+    }
+    // A shape WAS recognized (a plugin manifest exists at `dir` — `hasTopSkillMd` can't be true here,
+    // since that branch always adds `topSkillMd` itself and `files` would be non-empty) — it simply has
+    // no markdown contract files: no agents/, references/, commands/, or skills/*/SKILL.md content, e.g.
+    // a hooks/MCP-only plugin. Distinct message so "no recognized shape" and "recognized shape, nothing
+    // to scan" are never conflated.
     return {
       error:
-        `no contract-bearing markdown found under ${target} — looked for: a top-level SKILL.md ` +
-        "(+ references/**/*.md); a plugin root (.claude-plugin/plugin.json or plugin.json, pulling in " +
-        "agents/*.md, references/**/*.md, commands/*.md, and skills/*/SKILL.md + skills/*/references/**/*.md); " +
-        "or a skill dir whose SKILL.md sits somewhere inside an enclosing plugin (pulling in that plugin's " +
-        "agents/*.md)",
+        `${target} matches a plugin shape (.claude-plugin/plugin.json or plugin.json present) but has no ` +
+        "markdown contract files to scan — no agents/**/*.md, references/**/*.md, commands/**/*.md, or " +
+        "skills/*/SKILL.md found; likely a hooks/MCP-only plugin with nothing for analyze-skill to check",
     };
   }
 

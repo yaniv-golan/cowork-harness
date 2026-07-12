@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -682,7 +682,10 @@ const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 
 function run(args: string[], cwd: string) {
-  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd });
+  // A generous but finite timeout (fail loud with a diagnosable `code: null`, not an indefinite hang) —
+  // exists specifically so a broken symlink-loop guard in the walker fails FAST as a test failure rather
+  // than stalling the whole suite.
+  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd, timeout: 10_000 });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
 
@@ -874,12 +877,17 @@ describe("resolveSkillTarget — directory union resolution", () => {
     expect(resolved.files).toContain(join(root, "agents", "coordinator.md"));
   });
 
-  it("a skill dir inside a plugin leaves the plugin's commands/ and sibling skills/ UNSCANNED, named in the banner", () => {
+  it("a skill dir inside a plugin now ALSO scans the enclosing plugin's commands/ and references/ (no longer left unscanned), but leaves sibling skills/ UNSCANNED, named in the banner", () => {
+    // Scope-boundary fix: `references/` and `commands/` are contract dirs this tool scans everywhere
+    // else (plugin-root target), so a skill-dir target must not be narrower for the SAME plugin — see
+    // `resolveSkillTarget` rule 3. Only the sibling `skills/*` entries remain genuinely out of scope.
     const root = mkdtempSync(join(tmpdir(), "as-resolve-unscanned-"));
     mkdirSync(join(root, ".claude-plugin"), { recursive: true });
     writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
     mkdirSync(join(root, "commands"));
     writeFileSync(join(root, "commands", "z.md"), "command doc\n");
+    mkdirSync(join(root, "references"));
+    writeFileSync(join(root, "references", "bad.md"), SESSIONS_WRITE);
     const skillDir = join(root, "skills", "my-skill");
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(skillDir, "SKILL.md"), "skill body\n");
@@ -889,9 +897,10 @@ describe("resolveSkillTarget — directory union resolution", () => {
 
     const resolved = resolveSkillTarget(skillDir);
     if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
-    expect(resolved.files).not.toContain(join(root, "commands", "z.md"));
+    expect(resolved.files).toContain(join(root, "commands", "z.md"));
+    expect(resolved.files).toContain(join(root, "references", "bad.md"));
     expect(resolved.files).not.toContain(join(siblingDir, "SKILL.md"));
-    expect(resolved.unscanned.some((u) => u.includes(join(root, "commands")))).toBe(true);
+    expect(resolved.unscanned.some((u) => u.includes(join(root, "commands")))).toBe(false);
     expect(resolved.unscanned.some((u) => u.includes(siblingDir))).toBe(true);
   });
 
@@ -989,6 +998,113 @@ describe.skipIf(!can)("analyze-skill CLI — directory union scan (agents/refere
     expect(run(["analyze-skill", skillDir, "--strict"], root).code).toBe(1);
   });
 
+  it("a /sessions write in a NAMESPACED commands/tasks/build.md fires under --strict (recursive commands/** scan)", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-commands-namespaced-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "commands", "tasks"), { recursive: true });
+    writeFileSync(join(root, "commands", "tasks", "build.md"), SESSIONS_WRITE);
+
+    const defaultRun = run(["analyze-skill", root], root);
+    expect(defaultRun.code).toBe(0);
+    expect(defaultRun.err).toMatch(new RegExp(RULE1));
+
+    expect(run(["analyze-skill", root, "--strict"], root).code).toBe(1);
+  });
+
+  it("a /sessions write in a NAMESPACED agents/sub/x.md fires under --strict (recursive agents/** scan)", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-agents-namespaced-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "agents", "sub"), { recursive: true });
+    writeFileSync(join(root, "agents", "sub", "x.md"), SESSIONS_WRITE);
+
+    expect(run(["analyze-skill", root, "--strict"], root).code).toBe(1);
+  });
+
+  it("a skill dir inside a plugin catches a /sessions write in the enclosing plugin's references/bad.md", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-skilldir-refs-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "references"), { recursive: true });
+    writeFileSync(join(root, "references", "bad.md"), SESSIONS_WRITE);
+    const skillDir = join(root, "skills", "my-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "clean skill body, no /sessions mentions here\n");
+
+    expect(run(["analyze-skill", skillDir, "--strict"], root).code).toBe(1);
+  });
+
+  it("a symlinked skills/linked dir is SCANNED (not a false-green exit 2), including in a mixed plugin", () => {
+    const target = mkdtempSync(join(tmpdir(), "as-cli-symlink-target-"));
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "SKILL.md"), SESSIONS_WRITE);
+
+    const root = mkdtempSync(join(tmpdir(), "as-cli-symlink-plugin-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "skills"), { recursive: true });
+    symlinkSync(target, join(root, "skills", "linked"), "dir");
+
+    const r = run(["analyze-skill", root, "--output-format", "json"], root);
+    expect(r.code).not.toBe(2); // must not exit 2 — a symlinked skill dir is a real, scannable skill
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.files.some((f: { file: string }) => f.file === join(root, "skills", "linked", "SKILL.md"))).toBe(true);
+
+    // Mixed plugin: a REAL sibling skill alongside the symlinked one — both must fire under --strict, the
+    // symlinked skill must not be a silent false green.
+    const realSkillDir = join(root, "skills", "real-skill");
+    mkdirSync(realSkillDir, { recursive: true });
+    writeFileSync(join(realSkillDir, "SKILL.md"), "clean, no /sessions mentions\n");
+    expect(run(["analyze-skill", root, "--strict"], root).code).toBe(1);
+  });
+
+  it("a references/loop -> .. self-referencing symlink terminates without hanging and does not duplicate findings", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-symlink-loop-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    writeFileSync(join(root, "SKILL.md"), "clean\n");
+    mkdirSync(join(root, "references"), { recursive: true });
+    symlinkSync("..", join(root, "references", "loop"), "dir");
+
+    const r = run(["analyze-skill", root, "--output-format", "json"], root);
+    // If the walker looped, spawnSync would time out and `code` would be null — a non-null code proves
+    // the process actually exited rather than hanging.
+    expect(r.code).not.toBeNull();
+    expect(r.code).not.toBe(2);
+  });
+
+  it("a references/node_modules/pkg/x.md is NOT scanned (denylisted vendored tree)", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-node-modules-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "references", "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(root, "references", "node_modules", "pkg", "x.md"), SESSIONS_WRITE);
+    writeFileSync(join(root, "references", "clean.md"), "no violations here\n");
+
+    const resolved = resolveSkillTarget(root);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    expect(resolved.files).not.toContain(join(root, "references", "node_modules", "pkg", "x.md"));
+    expect(resolved.files).toContain(join(root, "references", "clean.md"));
+
+    const r = run(["analyze-skill", root, "--strict"], root);
+    expect(r.code).toBe(0); // the only violation lives under the denylisted node_modules/ tree
+  });
+
+  it("a .MD file (uppercase extension) IS scanned — case-insensitive matching", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-uppercase-md-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "references"), { recursive: true });
+    writeFileSync(join(root, "references", "BAD.MD"), SESSIONS_WRITE);
+
+    const resolved = resolveSkillTarget(root);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    expect(resolved.files).toContain(join(root, "references", "BAD.MD"));
+
+    expect(run(["analyze-skill", root, "--strict"], root).code).toBe(1);
+  });
+
   it("this repo's own .claude/skills/cowork-harness/ resolves non-empty (regression vs. a zero-file false green)", () => {
     const repoRoot = REPO_ROOT;
     const skillDir = join(".claude", "skills", "cowork-harness");
@@ -1036,6 +1152,11 @@ describe.skipIf(!can)("analyze-skill CLI — directory union scan (agents/refere
     const skillDir = join(root, "skills", "my-skill");
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(skillDir, "SKILL.md"), "clean\n");
+    // A sibling skill keeps `unscanned` non-empty even though `commands/` is now IN scope for a
+    // skill-dir target (the scope-boundary fix) — sibling skills/* remain the one thing left unscanned.
+    const siblingDir = join(root, "skills", "other-skill");
+    mkdirSync(siblingDir, { recursive: true });
+    writeFileSync(join(siblingDir, "SKILL.md"), "sibling\n");
 
     const r = run(["analyze-skill", skillDir, "--output-format", "json"], root);
     const payload = JSON.parse(r.out.trim());
@@ -1044,10 +1165,15 @@ describe.skipIf(!can)("analyze-skill CLI — directory union scan (agents/refere
     expect(Array.isArray(payload.scanned)).toBe(true);
     expect(Array.isArray(payload.unscanned)).toBe(true);
     expect(payload.unscanned.length).toBeGreaterThan(0);
+    expect(payload.unscanned.some((u: string) => u.includes(siblingDir))).toBe(true);
+    // commands/ is now SCANNED (not unscanned) for a skill-dir target — the scope-boundary fix.
+    expect(payload.scanned).toContain(join(root, "commands", "z.md"));
+    expect(payload.unscanned.some((u: string) => u.includes(join(root, "commands")))).toBe(false);
 
     const textRun = run(["analyze-skill", skillDir], root);
     expect(textRun.err).toMatch(/scope: scanned/);
     expect(textRun.err).toMatch(/scope: left unscanned/);
-    expect(textRun.err).toContain(join(root, "commands"));
+    expect(textRun.err).toContain(join(root, "commands", "z.md")); // scanned, printed under "scope: scanned"
+    expect(textRun.err).toContain(siblingDir); // left unscanned
   });
 });
