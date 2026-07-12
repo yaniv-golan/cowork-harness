@@ -766,6 +766,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/boundary.md](./docs/boundary.md) | The limitations model — sealed FS, default-deny egress, MCP-only crossing; how each tier enforces it; how to verify. |
 | [docs/session.md](./docs/session.md) | Every `sessions/*.yaml` field and its Cowork mapping. |
 | [docs/scenario.md](./docs/scenario.md) | `scenarios/*.yaml` — prompt, scripted answers, assertions. |
+| [docs/subagents.md](./docs/subagents.md) | The sub-agent capability/path model — tier-qualified outputs contract, tool-composition rules, the type-less dispatch trap. |
 | [docs/chat.md](./docs/chat.md) | The interactive `chat` REPL — multi-turn debugging, flags, attaching files/folders. |
 | [docs/debugging.md](./docs/debugging.md) | Debugging a run — `inspect`/`trace`/`chat`/`verify-run` for a misbehaving skill; the false-green hunt for a green you don't trust. |
 | [docs/cassette.md](./docs/cassette.md) | `record`/`replay` cassettes — what replay checks, which assertions are skipped. |

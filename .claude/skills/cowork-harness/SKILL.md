@@ -422,8 +422,8 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`.
 - **`result.json` carries the raw fields** the assertions read: `toolDurations`, `models`, `toolErrors`,
-  `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/model/output/
-  `attributedSkillId`, `outputTruncated`), `context` (tools/mcpServers/availableSkills), `tasks`,
+  `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/`dispatchModel`/
+  `resolvedModel`/output/`attributedSkillId`, `outputTruncated`), `context` (tools/mcpServers/availableSkills), `tasks`,
   `workspaceFiles`, `presentedFiles`, `hookEvents`, `mcpErrors`, `contextEvents`, `resources`
   (`probeFailures` distinguishes a failed sample from a tier that was never sampleable). Provenance/
   evidence-health fields: `command` (`run`/`skill`/`record`/`chat`/`replay` — finer than `mode`),
@@ -441,7 +441,7 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   than debugging; `"transport"`/`"agent"` means something actually broke, worth localizing before
   re-running.
 - **Attributing cost to sub-agent work.** `subagents[]` gives the dispatch tree — each sub-agent's
-  `model`, `toolsUsed`, `prompt`/`output`, and `attributedSkillId` — but **not** its own token/cost;
+  `dispatchModel`/`resolvedModel`, `toolsUsed`, `prompt`/`output`, and `attributedSkillId` — but **not** its own token/cost;
   aggregate cost is per-**model** in `modelUsage` (and `trace --view usage`), not per-sub-agent. So a
   cost spike from fan-out reads as `trace --view dispatches` (how many, which agent) against that model's
   per-model usage — the harness doesn't line-item each sub-agent's tokens.
@@ -516,8 +516,20 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    to prove an attempt; it proves the tool actually ran.
 
 5. **`subagent_declared_but_unused` fires on declared-but-didn't-use-THAT-tool**, even if the
-   sub-agent used other tools. And `subagent_dispatched` matches by dispatch **description** too —
-   skills often dispatch with no `subagent_type` (`agentType:"unknown"`), so match the description.
+   sub-agent used other tools. `subagent_dispatched` / `subagent_output_contains` match on dispatch
+   type (`dispatchAgentType`), the binary-*resolved* type (`resolvedAgentType`), *or* the dispatch
+   **description** — so a type-less dispatch that resolved to e.g. `general-purpose` is still
+   selectable, by either the resolved type or the description. A `Task` dispatch that carries NO
+   `subagent_type` at all falls back to the built-in `general-purpose` agent with a **wildcard tool
+   surface** (`tools:["*"]`, including workspace bash) — faithful production behavior, and it fires
+   routinely. The harness warns loudly on this fallback and records `subagents[].dispatchTypeOmitted`;
+   an *explicit* `subagent_type: "general-purpose"` is a deliberate author choice and does not warn.
+   Implication: `subagent_tool_absent` on a type-less dispatch is weaker evidence (wildcard surface) —
+   pin `subagent_type` explicitly when you need a tight tool-absence guarantee.
+
+   **Cross-tier "no shell" caveat.** On `hostloop`, native `Bash` calls route through the
+   `mcp__workspace__bash` alias, so a "sub-agent used no shell" check must glob **both** `Bash` and
+   `mcp__workspace__*` to hold across every tier.
 
 6. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It's a post-hoc count
    assertion: passing means "happened to dispatch ≤N this run," nothing more. Cowork imposes **no**

@@ -15,6 +15,7 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | [boundary.md](./boundary.md) | **The limitations model** — how the harness reproduces Cowork's sealed filesystem, default-deny egress, and MCP-only crossing, per fidelity tier; how to verify it. Read this if you care about *constraint* fidelity. |
 | [session.md](./session.md) | **Author** — reference for `sessions/*.yaml`: every pre-prompt setting (model, folders/projects, uploads, discovery, egress) and its Cowork mapping. |
 | [scenario.md](./scenario.md) | **Author** — reference for `scenarios/*.yaml`: prompt, scripted answers, assertions. |
+| [subagents.md](./subagents.md) | **Author/debug** — the sub-agent capability/path model: the tier-qualified outputs-addressing contract (host-loop vs. VM-loop), the tool-composition rules, the type-less dispatch trap, and model-resolution precedence. |
 | [cassette.md](./cassette.md) | **Run, record & lock** — cassette `record`/`replay`: file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` + the O7 guard), backward compat, and the committed CI fixture. |
 | [stats.md](./stats.md) | **Run** — the `stats` command + `index.jsonl`: querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run, filtered/windowed per scenario. |
 | [run-status.md](./run-status.md) | **Run** — checking whether a background run is alive without `ps aux`: the `status.json` file + `cowork-harness status [--follow]`. |

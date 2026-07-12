@@ -105,6 +105,12 @@ agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; 
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 
+# sub-agent / tool-search env knob (tier-uniform; maps to agent env vars)
+agent_env:
+  subagent_model: claude-opus-4-8   # -> CLAUDE_CODE_SUBAGENT_MODEL
+  tool_search: auto                 # auto | off -> ENABLE_TOOL_SEARCH; omit = binary default (ToolSearch ON)
+  disable_experimental_betas: false # true -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 (also disables ToolSearch)
+
 # fenced debug escape hatch (NOT reachable via Cowork's UI)
 debug:
   max_thinking_tokens: 50000     # overrides --max-thinking-tokens directly; bypasses extended_thinking's
@@ -256,9 +262,9 @@ same set live from the schema.
 | `subagent_tool_absent: <glob>` | no sub-agent used a tool matching this glob (same rejection) |
 | `no_vm_path_file_op: true` | **`fidelity: hostloop` only** — NO gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, replay-checkable without `controlOut`; any other tier FAILS "cannot verify" (`/sessions/...` is valid there). **Only `true` is valid** |
 | `subagent_file_write: {path?, path_suffix?, tool?}` | a sub-agent-origin write attempt whose raw path equals `path` (exact) or ends with `path_suffix` has a paired non-error tool_result — the causal half of a delivery probe; requires one of `path`/`path_suffix`; `tool` defaults to Write/Edit/MultiEdit; content-class; tier-agnostic |
-| `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch description** matches |
+| `subagent_dispatched: <regex>` | a sub-agent whose `dispatchAgentType`, binary-*resolved* `resolvedAgentType`, **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
-| `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the substring `contains` — `match` (optional regex over `agentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it (existence check, not "all"); a miss against an output that was **truncated at the assert cap** reports evidence-unavailable instead of a proven absence — the substring could lie past the cut |
+| `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the substring `contains` — `match` (optional regex over `dispatchAgentType`/`resolvedAgentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it (existence check, not "all"); a miss against an output that was **truncated at the assert cap** reports evidence-unavailable instead of a proven absence — the substring could lie past the cut |
 | `dispatch_count_max: <N>` | at most N sub-agents dispatched — an author-chosen budget (Cowork imposes no in-conversation Task-dispatch cap; records only, enforces nothing — see gotcha 12) |
 | `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
 | `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
@@ -362,7 +368,8 @@ on recording-shaping drift (`prompt`/`answers`/`baseline`/`skills`) or skill-con
 sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on-disk-`assert:` path for a kept
 *run dir*; `--assert-from` is the equivalent for a *cassette*.
 
-**Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
+**Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `subagent_file_write`,
+`no_vm_path_file_op`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `skill_available`, `connector_available`, `tool_available`,
 `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
 `max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `present_files_called`, `result`
@@ -371,7 +378,9 @@ modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
-`gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`. With `controlOut` present they evaluate; on an old
+`gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
+`path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see the assertion
+table). With `controlOut` present they evaluate; on an old
 cassette without it, a **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
 `questions_count_max` counts sub-questions, not gates/tool-calls — see the catalog row above and
 `trace --view questions`. `hook_blocked`/`no_hook_blocked` need `controlOut` for a different reason than
@@ -504,8 +513,13 @@ reference omits). Neither list is a strict superset of the other — reach for t
    `artifact_json` (dotted `path` + operator); use the pytest lane (`assert_artifact_json` with a real
    predicate) only for checks too complex for a dotted path. Find field paths via `--keep`.
 
-10. **`subagent_dispatched` matches by `description` too** — skills often dispatch with no
-    `subagent_type` (`agentType:"unknown"`), so match the dispatch description.
+10. **`subagent_dispatched` matches by `resolvedAgentType` or `description` too** — a `Task` dispatch
+    with no `subagent_type` at all falls back to the built-in `general-purpose` agent (a WILDCARD tool
+    surface, `tools:["*"]`, incl. workspace bash) rather than leaving the type unresolved; the harness
+    warns loudly on this fallback and records `subagents[].dispatchTypeOmitted`, so match on the
+    resolved type or the dispatch description. `subagent_tool_absent` on a type-less dispatch is
+    correspondingly weaker evidence (wildcard surface) — pin `subagent_type` explicitly when you need a
+    tight guarantee.
 
 11. **`subagent_declared_but_unused` fires on declared-but-didn't-use-THAT-tool**, even if the
     sub-agent used other tools.

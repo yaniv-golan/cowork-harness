@@ -6,6 +6,77 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Parity baseline for Claude Desktop 1.20186.1.** `baseline: latest` now resolves to `desktop-1.20186.1`
+  — a patch-only Desktop release (egress allowlist, spawn config, and the Cowork system-prompt
+  fingerprint are unchanged from 1.20186.0). The pinned VM agent ELF was re-synced from 2.1.202 to
+  2.1.205 after a live Desktop self-update within the same Desktop build, restoring agreement between
+  the pinned agent version and what's staged on disk so the host-loop live lane resolves its binary.
+- **Cassette prompt-asset fingerprint.** Prompt identity was previously keyed on `appVersion` alone, so
+  editing a committed prompt-asset file (`spawn.promptTemplate` / `subagentAppend` /
+  `subagentAppendHostLoop`) under the *same* app version silently replayed old-prompt behavior. A cassette
+  now records a hash over the referenced asset files (`fingerprint.promptAssetsHash`); a mismatch is a new
+  warn-by-default staleness finding (`prompt-assets`, fails under `--strict`), an unhashable pointer is a
+  distinct can't-verify finding (`unverifiable-prompt-assets`), and a cassette recorded before this field
+  existed surfaces a non-failing informational note instead of either.
+- **Host-loop sub-agent tool aliasing and gated `web_fetch`.** The host-loop initialize request now
+  carries production's `Bash → mcp__workspace__bash` / `WebFetch → mcp__workspace__web_fetch` aliases
+  (single-hop; an alias never grants a tool a sub-agent's frontmatter didn't already bind).
+- **Five new assertion keys for sub-agent path fidelity.** `no_vm_path_file_op: true` (hostloop-only —
+  no gated file tool attempted a `/sessions`-exact-or-prefixed path); `vm_path_denied: true`
+  (hostloop-only — at least one recorded denial targeted a `/sessions` path; needs `controlOut` on
+  replay); `path_denied: {tool?, path_matches?, source?, agent_scope?}` (hostloop-only — a denial
+  matching all given matchers, `source` ∈ `pretooluse`/`can_use_tool`/`permission_denied`); `no_path_denied:
+  true` (hostloop-only — no path denial recorded at all); and `subagent_file_write: {path?, path_suffix?,
+  tool?}` (**tier-agnostic** — a sub-agent-origin write/edit attempt at the given path, exact or suffix,
+  with a paired non-error tool result — the causal half of a delivery probe, pairs with `artifact_json` for
+  content). The four hostloop-only keys fail "cannot verify" (never vacuous-pass) on any other tier, since
+  `/sessions/...` is a valid path there.
+- **`RunResult.fileToolAttempts`** — attempt-level telemetry (raw `file_path`/`path` as sent, the
+  first-match gate path, and `origin: main|subagent|unknown`) for every gated file-tool call
+  (Read/Write/Edit/Glob/Grep/MultiEdit), re-derivable on replay from the frozen tool_use stream.
+- **`RunResult.pathDenials`** — decision-level path-denial telemetry merged from all three producers that
+  can deny a gated file-tool call on path grounds: the PreToolUse path gate's own callback, a denied
+  `can_use_tool` ask on a gated file tool with a path, and a pre-ask `permission_denied` correlated to a
+  recorded attempt. The `can_use_tool` source is reconstructible on replay only when the cassette carries
+  `controlOut`; without it the field is undefined (evidence-unavailable), never a vacuous `[]`.
+- **`RunResult.subagents[].resolvedAgentType` / `.resolvedModel`.** The agent stream states the
+  binary-*resolved* child type (via `task_started`) and the resolved child model (via the dispatch's own
+  `tool_use_result` envelope) — previously discarded. Both are joined strictly by `toolUseId` and
+  corroborate each other without overwriting stronger evidence. `subagent_dispatched` and
+  `subagent_output_contains` now match on dispatch type, resolved type, *or* description, so a type-less
+  dispatch that resolved to e.g. `general-purpose` is selectable by either assertion.
+- **A loud warning on type-omitted sub-agent dispatches.** A `Task` dispatch that carries no
+  `subagent_type` at all falls back to the built-in `general-purpose` agent (`tools:["*"]` — the wildcard
+  surface, including workspace bash) — faithful production behavior, and one that fires routinely, not
+  just at the edges. The harness now warns loudly when this fallback is observed (an *explicit*
+  `subagent_type: "general-purpose"` is a deliberate author choice and does not warn) and records the
+  omission on the run (`subagents[].dispatchTypeOmitted`), so it's visible in the run's own record, not
+  only in a live terminal warning.
+- **`agent_env` session config knob** (`subagent_model`, `tool_search: "auto"|"off"`,
+  `disable_experimental_betas`) applies `CLAUDE_CODE_SUBAGENT_MODEL` / `ENABLE_TOOL_SEARCH` /
+  `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` **uniformly across all four fidelity tiers**. Previously an
+  operator-exported value of any of these three leaked into hostloop/protocol (which spawn over the full
+  operator shell env) but never into container/microvm (a constructed allowlist) — the same session
+  behaved differently depending only on which tier it ran at. The three keys are now also scrubbed from
+  the operator layer on the two inheriting tiers before any baseline/knob overlay, so a stray shell value
+  can never leak through on some tiers and not others; setting any `agent_env` field moves the session
+  fingerprint so `verify-cassettes` surfaces the drift on an older cassette.
+- **`sync` now guards sub-agent prompt and path-gate fidelity.** Two new structural sentinels pin the
+  two-branch (`subagent_env_hl`/`subagent_env_vm`) sub-agent append — the branch-selection ternary,
+  the per-branch content fingerprint, and the substitution map's keys *and* values (a host/VM cwd swap
+  fails) — and the host-loop path gate's module-bounded shape (gated/excluded tool sets, every deny text,
+  the read-only-guard-before-containment order). A separate pinned gate hard-stops the sync (not just
+  warns) if production flips on a server-delivered override of the sub-agent append text, since that flip
+  is invisible to the content sentinel and the harness has no captured override text to fall back to.
+- **`docs/subagents.md`** — the sub-agent capability/path reference: the tier-qualified outputs-addressing
+  contract (host-loop's cwd-relative `artifacts/...` vs. the VM loop's `mnt/outputs/artifacts/...` —
+  there is no single cross-tier literal form), a full capability/path matrix, the sub-agent tool-composition
+  rules (frontmatter allowlists, the `"*"` wildcard, `disallowedTools`, tool aliases, never-subagent
+  tools), the type-less dispatch trap, model-resolution precedence, and lifecycle notes (no resume, a
+  depth cap of 5 with no fan-out cap, fork-dispatch environment-append exclusion).
+
 ### Changed
 
 - **Cassette v9 read floor.** `readCassette` now refuses cassettes recorded below v9
@@ -28,9 +99,35 @@ All notable changes to this project are documented here. The format is based on
   the documented manual-republish escape hatch).
 - `ResourceSummary.probeFailures` (shipped at runtime in 0.29.0) is now declared on the RunResult
   type and JSON Schema; assertion-side consumption remains deferred.
+- **Breaking (pre-1.0): `subagents[].agentType` renamed to `dispatchAgentType`, and `subagents[].model`
+  renamed to `dispatchModel`.** Both keep their original (dispatch-input) meaning — the rename exists only
+  because a *resolved* type/model now lands beside each (`resolvedAgentType`/`resolvedModel`, above) and
+  the old names would have been ambiguous between "what the dispatch asked for" and "what the binary
+  actually ran." No deprecation window; a consumer reading the old field names gets `undefined`.
+- **The host-loop `PreToolUse` path gate is re-ported to Desktop 1.20186.1 semantics.** Plugin/skill
+  content loses its blanket path exemption and becomes a read-only category instead (a mutating tool
+  targeting it is now denied, with its own message, rather than silently passing through); the read-only
+  guard gains the two other production categories — an uploads hardlink write-block and spooled tool
+  results (`projects`) — each with per-session-type deny text; the spool dir joins the readable roots. The
+  harness's own `mode: r` connected-folder extension and the `/sessions` MultiEdit message-selection
+  nuance are preserved across the re-port.
 
 ### Fixed
 
+- **Host-loop sub-agent dispatches now receive the correct environment description.** The harness always
+  sent sub-agents the VM-branch environment text, telling them their files exist only in a sandbox while
+  their file tools actually reach the real host filesystem — one of two prompt bugs that could seed
+  `/sessions/...` paths into a host-loop sub-agent's dispatch. A new host-loop-specific append
+  (`subagent_env_hl`) is now selected whenever `effectiveFidelity === "hostloop"` (container/microvm keep
+  the existing VM-branch text; `protocol` sends neither, a documented divergence), delivered on **both**
+  the `run`/`skill` and `chat` lanes (previously `chat` sent no sub-agent append at all).
+- **The host-loop "Shell access" prompt's outputs bullet no longer teaches VM paths to native file tools.**
+  Its file-tool side substituted the VM session root where production substitutes the host outputs
+  directory — the other of the two prompt bugs behind stray `/sessions/...` sub-agent paths.
+- **`web_fetch` on host-loop is now gated through a single `can_use_tool` decision, matching production**,
+  instead of being pre-approved directly by the workspace handler. Bash stays pre-approved for the whole
+  session; a fetch now emits a real permission ask, answered once by the shared provenance/domain
+  decision (which marks provenance on allow) — closing the prior two-decision, self-approving shape.
 - **Raw run logs are scrubbed on every exit path.** Previously only the success and
   unanswered-gate paths scrubbed `events.jsonl`/`control-out.jsonl`, and `agent.stderr.log` was
   never scrubbed — a mid-run fault kept raw (potentially secret-bearing) logs on disk. An
@@ -63,6 +160,9 @@ All notable changes to this project are documented here. The format is based on
 - Dropped the stale first-run egress-race gotcha (proxy startup has been synchronous for a
   while); documented `verify-run`'s fail-closed refusal family in `docs/scenario.md` and the
   companion skill.
+- `docs/subagents.md` (new — see Added) is cross-linked from `docs/boundary.md` and `docs/scenario.md`;
+  `docs/plugin-root.md`'s tier table is corrected — `CLAUDE_PLUGIN_ROOT` is absent from a Bash-tool
+  subprocess's env on **every** tier, not host-loop only, as the table previously implied.
 
 ## [0.29.0] — 2026-07-11
 
