@@ -149,6 +149,18 @@ describe.skipIf(!havePython)("scenario.py lint-skill — subagent_type static re
     expect(status).toBe(0); // INFO never fails lint-skill without --strict
   });
 
+  it("INFO subagent-type-not-found-in-plugin: an in-plugin-prefixed but absent agent is a provable typo", () => {
+    const dir = makeFixturePlugin();
+    const skillPath = writeSkill(dir, 'subagent_type="testplug:qux"');
+    const { status, findings } = lintSkill(skillPath);
+    const hit = findings.find((f) => f.rule === "subagent-type-not-found-in-plugin");
+    expect(hit, "expected a subagent-type-not-found-in-plugin finding").toBeDefined();
+    expect(hit?.severity).toBe("INFO");
+    expect(findings.some((f) => f.rule === "subagent-type-unknown")).toBe(false);
+    expect(findings.some((f) => f.rule === "subagent-type-unresolvable")).toBe(false);
+    expect(status).toBe(0); // INFO never fails lint-skill without --strict
+  });
+
   it("INFO subagent-type-unknown (NEVER WARN): an unknown bare pinned type is surfaced, not failed", () => {
     const dir = makeFixturePlugin();
     const skillPath = writeSkill(dir, 'subagent_type="typo-agent"');

@@ -39,6 +39,7 @@ system PyYAML is preferred when present.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
@@ -960,15 +961,60 @@ def _finding_subagent_unknown(path, line, value):
     )
 
 
+def _finding_subagent_not_found_in_plugin(path, line, value, plugin_name, agent, sorted_agents):
+    """A pinned `<this-plugin>:<agent>` value whose prefix names the RESOLVED plugin (this SKILL.md's
+    own enclosing plugin) but whose agent isn't in its enumerated agents/*.md set. Unlike
+    `subagent-type-unknown`, this can never be another binary's built-in — the namespace prefix
+    already commits it to this plugin, and the plugin's agent set was fully enumerable — so it's a
+    provable typo, not an unconfirmable unknown."""
+    return Finding(
+        "INFO",
+        "subagent-type-not-found-in-plugin",
+        f"pinned type `{value}` names this plugin (`{plugin_name}`) but `{agent}` is not among its "
+        f"agents [{', '.join(sorted_agents)}] — likely a typo.",
+        "Fix the agent name to match one of the listed agents, or add `agents/<agent>.md` with a "
+        "`name:` frontmatter matching the pinned value (or rely on the filename-stem fallback) if it "
+        "was meant to exist. Check `scenario.py resolve-agent-types <plugin-dir>` to confirm.",
+        path,
+        line,
+    )
+
+
 def _classify_subagent_type(value, plugin_name, plugin_agent_types):
     """Part 3 severity ladder. Returns a Finding-builder (path, line, value) -> Finding, or None if
-    clean. Severity is ALWAYS INFO — see the HONEST LIMIT note above this section; never WARN/ERROR."""
+    clean. Severity is ALWAYS INFO — see the HONEST LIMIT note above this section; never WARN/ERROR.
+
+    Precedence:
+      1. Resolves in-plugin, or is `general-purpose` -> clean (None).
+      2. Has a `<prefix>:<agent>` shape whose prefix EQUALS the resolved plugin's own name AND the
+         plugin's agent set was non-empty (i.e. enumerable) -> `subagent-type-not-found-in-plugin`.
+         A value namespaced under this plugin's own name can never be another binary's built-in, so
+         once the plugin is fully enumerated a miss here is a provable typo, not an unconfirmable
+         unknown.
+      3. Has a `<prefix>:<agent>` shape whose prefix does NOT equal the resolved plugin's name (or
+         there's no resolved plugin at all) -> `subagent-type-unresolvable` (belongs to another
+         plugin, or an empty plugin_name means we truly can't tell whose namespace it is).
+      4. Otherwise (no colon, or same-plugin prefix but the plugin set was empty/unenumerable) ->
+         `subagent-type-unknown` — genuinely can't confirm statically.
+    """
     if value == "general-purpose" or value in plugin_agent_types:
         return None
     if ":" in value:
-        prefix = value.split(":", 1)[0]
-        if plugin_name is None or prefix != plugin_name:
-            return _finding_subagent_unresolvable
+        prefix, agent = value.split(":", 1)
+        if plugin_name is not None and prefix == plugin_name:
+            if plugin_agent_types:
+                sorted_agents = sorted(
+                    t.split(":", 1)[1] for t in plugin_agent_types if t.split(":", 1)[0] == plugin_name
+                )
+                return functools.partial(
+                    _finding_subagent_not_found_in_plugin,
+                    plugin_name=plugin_name,
+                    agent=agent,
+                    sorted_agents=sorted_agents,
+                )
+            # Plugin set is empty — couldn't enumerate (e.g. no agents/ dir) — genuinely can't confirm.
+            return _finding_subagent_unknown
+        return _finding_subagent_unresolvable
     return _finding_subagent_unknown
 
 
@@ -1230,9 +1276,12 @@ def main(argv=None):
             "in an indented/unfenced shell snippet won't be caught.\n\n"
             "Also statically resolves any pinned `subagent_type` value in the SKILL.md against the "
             "enclosing plugin's `agents/*.md` (see `resolve-agent-types`): a value that resolves in-plugin "
-            "or is `general-purpose` is clean; a `<other-plugin>:<agent>` or any other unresolved value is "
-            "reported as `subagent-type-unresolvable`/`subagent-type-unknown` — always INFO, never WARN, "
-            "since there is no harness registry of built-in agent types to disprove an unknown value against."
+            "or is `general-purpose` is clean; a `<this-plugin>:<agent>` whose agent is missing from an "
+            "enumerable plugin is a provable typo, reported as `subagent-type-not-found-in-plugin`; a "
+            "`<other-plugin>:<agent>` is reported as `subagent-type-unresolvable`; any other unresolved "
+            "value (including a same-plugin prefix the linter couldn't enumerate) is "
+            "`subagent-type-unknown` — all three are always INFO, never WARN, since there is no harness "
+            "registry of built-in agent types to disprove an unknown value against."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
