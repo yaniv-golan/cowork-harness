@@ -286,3 +286,38 @@ of the shell-absence patterns implies it.
 
 See also [boundary.md](./boundary.md) for the tier-by-tier boundary model these sub-agent rules sit on
 top of, and [scenario.md](./scenario.md) for the `subagent_*` assertion reference.
+
+## Observing mechanics cheaply
+
+Sometimes you don't want to judge a skill's *analytical* output — you want to see whether it walks the
+right *steps*: does it dispatch the sub-agent it's supposed to, with a typed `subagent_type`; does it
+write to the outputs mount instead of a denied `/sessions/...` path; does the step sequence even reach
+the point that matters. That's plumbing, not quality, and you can inspect it without paying for an
+expensive model.
+
+**First line — static, token-free, no run at all.** Run
+[`analyze-skill`](#static-path-fidelity-check-analyze-skill) first. It catches the whole `/sessions`-path-to-file-tool
+defect class from the SKILL.md text alone, before spending anything on a live run.
+
+**Second line — a cheap live run, for what static analysis can't see.** Point both loops at a cheap
+model and read the telemetry a run already produces:
+
+- Main loop: `--model <cheap-id>` on `cowork-harness skill <dir> "<prompt>" --model <cheap-id>` or
+  `cowork-harness run <scenario.yaml> --model <cheap-id>`. A session YAML's `model:` field does the
+  same for a checked-in scenario, and `run --matrix`'s `models:` axis sweeps it across cells.
+- Sub-agents (if the skill dispatches any): `agent_env.subagent_model: <cheap-id>` in the session YAML
+  — sets `CLAUDE_CODE_SUBAGENT_MODEL` uniformly across tiers, independent of the main-loop model (see
+  [Sub-agent identity, model, and environment](#sub-agent-identity-model-and-environment) above).
+
+Then inspect the run dir's plumbing telemetry — `fileToolAttempts` (with origin), `pathDenials`, and
+`subagents[].resolvedAgentType` / `dispatchTypeOmitted` in `result.json` — none of which depend on
+model quality to be meaningful; a denied path or an untyped dispatch shows up the same way regardless
+of which model produced it. The matching assert keys turn that telemetry into a pass/fail: `no_vm_path_file_op`,
+`path_denied` / `vm_path_denied`, `subagent_dispatched`, `subagent_dispatch_healthy`.
+
+**The honest limit.** There is no `--driver=scripted` or forced step-sequencer in the harness — a cheap
+model still has to read the skill and decide to walk its steps *unassisted*. If the model is too weak
+to follow the skill at all, it may never reach the step whose plumbing you wanted to observe, and the
+telemetry above will simply be absent or empty rather than showing a failure. This recipe observes
+plumbing **when the model gets there**, not on a deterministic schedule — pick the cheapest model that
+still reliably follows the skill's steps, not the absolute cheapest one available.

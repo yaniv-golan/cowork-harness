@@ -70,6 +70,18 @@ All notable changes to this project are documented here. The format is based on
   verify off that tier); content-class (`RunResult.fileToolAttempts` + `RunResult.toolResults`),
   replay-checkable without `controlOut`.
 
+- **Docs: a "mechanics-only cheap-model" recipe for observing a skill's plumbing without paying for
+  analytical quality.** No new code — this documents combining existing knobs (`--model <cheap-id>` on
+  `skill`/`run`, a session's `model:` field, `run --matrix`'s `models:` axis for the main loop;
+  `agent_env.subagent_model` for sub-agents) with the path/dispatch telemetry a run already produces
+  (`fileToolAttempts`, `pathDenials`, `subagents[].resolvedAgentType`/`dispatchTypeOmitted`) and its
+  matching assert keys (`no_vm_path_file_op`, `path_denied`/`vm_path_denied`, `subagent_dispatched`,
+  `subagent_dispatch_healthy`) — none of which depend on model quality to be meaningful. Cross-links
+  the static, token-free `analyze-skill` scan as the first line and the cheap live run as the second.
+  Also states the honest limit: there is no scripted-step driver, so a cheap model still walks a
+  skill's steps unassisted and may never reach the step you wanted to observe. See
+  [docs/subagents.md](./docs/subagents.md#observing-mechanics-cheaply).
+
 ### Changed
 
 - **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and
