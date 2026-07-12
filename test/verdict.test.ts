@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeVerdict } from "../src/run/verdict.js";
+import { computeVerdict, persistedVerdict } from "../src/run/verdict.js";
 import type { RunResult, Assertion } from "../src/types.js";
 
 function rr(over: Partial<RunResult>): RunResult {
@@ -207,5 +207,68 @@ describe("computeVerdict (the single verdict source)", () => {
     const v = computeVerdict(rr({ scan: undefined }), "live");
     expect(v.signals).toContainEqual(expect.objectContaining({ code: "scan_unavailable", severity: "warn" }));
     expect(v.pass).toBe(true); // warn, not fail
+  });
+});
+
+describe("persistedVerdict (the RunResult.verdict projection)", () => {
+  it("a failing assertion → pass:false, failures[] names the assertion key + message, exitCode is the fail code", () => {
+    const r = rr({ assertions: [{ assertion: { tool_called: "Bash" }, pass: false, message: "expected Bash to be called" }] });
+    const v = persistedVerdict(r, "live");
+    expect(v.pass).toBe(false);
+    expect(v.exitCode).toBe(1);
+    expect(v.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
+  });
+
+  it("a passing run → pass:true, failures:[], exitCode 0", () => {
+    const v = persistedVerdict(rr({ assertions: [assn({ tool_called: "Bash" }, true)] }), "live");
+    expect(v).toEqual({ pass: true, exitCode: 0, failures: [] });
+  });
+
+  it("a hard-verdict guard failure independent of any assert (infra error) is named without an `assertion` key", () => {
+    const v = persistedVerdict(rr({ infraErrors: [{ source: "egress-sidecar", message: "sidecar exited 1" }] }), "live");
+    expect(v.pass).toBe(false);
+    expect(v.failures).toEqual([{ message: expect.stringContaining("sidecar exited 1") }]);
+    expect(v.failures[0]).not.toHaveProperty("assertion");
+  });
+
+  it("names BOTH a failing assertion (keyed) and a guard reason (unkeyed) when both fire on the same run", () => {
+    const r = rr({
+      assertions: [assn({ tool_called: "Bash" }, false)],
+      infraErrors: [{ source: "egress-sidecar", message: "sidecar crashed" }],
+    });
+    const v = persistedVerdict(r, "live");
+    expect(v.pass).toBe(false);
+    expect(v.failures).toHaveLength(2);
+    expect(v.failures.some((f) => f.assertion === "tool_called")).toBe(true);
+    expect(v.failures.some((f) => f.message.includes("sidecar crashed") && f.assertion === undefined)).toBe(true);
+  });
+
+  it("a salvaged (unanswered-gate) run: pass:false, failures[] names the gate reason, not the generic 'run result was error'", () => {
+    const gateMsg = 'unscripted AskUserQuestion (on_unanswered=fail):\n  • "Confirm?"';
+    const r = rr({ result: "error", unansweredGate: { message: gateMsg, hint: "add --answer" } });
+    const v = persistedVerdict(r, "live");
+    expect(v.pass).toBe(false);
+    expect(v.exitCode).toBe(1);
+    expect(v.failures).toEqual([{ message: gateMsg }]);
+    // the generic result_error placeholder is suppressed in favor of the real gate reason
+    expect(v.failures.some((f) => f.message === "run result was error")).toBe(false);
+  });
+
+  it("jq-shape sanity: plain JSON — round-trips through JSON.stringify/parse with no functions, and an unnamed failure drops its `assertion` key rather than serializing `assertion: undefined`", () => {
+    const r = rr({ assertions: [assn({ tool_called: "Bash" }, false)], infraErrors: [{ source: "x", message: "boom" }] });
+    const v = persistedVerdict(r, "live");
+    const roundTripped = JSON.parse(JSON.stringify(v));
+    expect(roundTripped).toEqual(v);
+    for (const f of roundTripped.failures) {
+      if (f.assertion === undefined) expect(Object.prototype.hasOwnProperty.call(f, "assertion")).toBe(false);
+    }
+  });
+
+  it("reuses computeVerdict's own pass/exitCode rather than recomputing independently", () => {
+    const r = rr({ nonDeterministic: true }); // a WARN-only signal — pass stays true
+    const cv = computeVerdict(r, "live");
+    const pv = persistedVerdict(r, "live");
+    expect(pv.pass).toBe(cv.pass);
+    expect(pv.exitCode).toBe(cv.exitCode);
   });
 });

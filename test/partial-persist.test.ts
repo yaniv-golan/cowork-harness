@@ -238,4 +238,35 @@ describe("buildPartialResult — salvage a whiffed run", () => {
     expect(result.nonDeterministic).toBe(false);
     expect(result.nonDeterministicTerminal).toBe(false);
   });
+
+  // A whiffed gate is itself a hard verdict fail — a salvaged partial run must not read as "no verdict"
+  // (undefined) just because it skipped assertion evaluation.
+  it("persists a verdict on the salvaged run: pass:false, exitCode 1, failures[] names the gate reason", () => {
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
+    const gateMsg = 'unscripted AskUserQuestion (on_unanswered=fail):\n  • "Confirm?"';
+    const result = buildPartialResult({
+      scenarioName: "cap-table",
+      prompt: "extract the cap table",
+      fidelity: "container",
+      baseline: "desktop-1.13576.1",
+      record: partialRecord(),
+      outDir,
+      workRoot,
+      configDir,
+      pluginSkillRoots: [],
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1234,
+      unanswered: { message: gateMsg, hint: "add --answer" },
+    });
+
+    expect(result.verdict).toBeDefined();
+    expect(result.verdict?.pass).toBe(false);
+    expect(result.verdict?.exitCode).toBe(1);
+    expect(result.verdict?.failures).toEqual([{ message: gateMsg }]);
+    // plain JSON — the persisted result.json round-trips this field with no functions/undefined-keys weirdness
+    expect(JSON.parse(JSON.stringify(result.verdict))).toEqual(result.verdict);
+  });
 });

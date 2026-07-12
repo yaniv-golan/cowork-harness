@@ -87,6 +87,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     tasks: undefined,
     context: undefined,
     resources: undefined,
+    verdict: undefined,
   };
 }
 

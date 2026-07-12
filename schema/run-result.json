@@ -551,6 +551,36 @@
     "assertions": {
       "type": "array"
     },
+    "verdict": {
+      "type": "object",
+      "description": "The overall run/asserted-lane verdict: the SAME pass/fail + exit code every verdict site (the run/skill exit, the footer, the JSON envelope ok) computes via computeVerdict, projected into a flat self-contained summary so a kept run's result.json answers pass/fail and why without recomputing. failures[] names the failing assertion key when a failure traces to one, else carries just a hard-verdict guard reason (infra error, unanswered gate, scan-based host-path leak, etc.); empty on a pass. Run/asserted lane ONLY — absent (undefined) on a chat result, and on a result.json written before this field existed.",
+      "properties": {
+        "pass": {
+          "type": "boolean"
+        },
+        "exitCode": {
+          "type": "integer",
+          "enum": [0, 1]
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "assertion": {
+                "type": "string",
+                "description": "the failing assertion's key (e.g. \"tool_called\"), when the failure traces to one"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": ["pass", "exitCode", "failures"]
+    },
     "subagents": {
       "type": "array",
       "items": {

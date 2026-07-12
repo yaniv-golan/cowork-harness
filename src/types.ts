@@ -1042,6 +1042,21 @@ export interface RunResult {
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
     judgeInvalid?: boolean;
   }>;
+  /** The overall run/asserted-lane verdict — `computeVerdict`'s (src/run/verdict.ts) pass/fail +
+   *  exit code, projected into a flat, self-contained summary so a kept run's `result.json` answers
+   *  "did it pass, and why" (`jq '.verdict'`) without a consumer re-deriving from `assertions[]` and the
+   *  guard-signal fields scattered across this type, or re-running `verify-run`. `pass`/`exitCode` are
+   *  the SAME values every verdict site (the run/skill exit, the footer, the JSON envelope `ok`) routes
+   *  through `computeVerdict` for — never recomputed independently here. `failures` names the failing
+   *  assertion key (`Object.keys(a.assertion)`, the same convention `verify-run`'s text output uses) when
+   *  a failure traces to one; a hard-verdict GUARD reason that failed the run independent of an explicit
+   *  assert (an infra error, an unanswered gate, a scan-based host-path leak, a transport drop, …) carries
+   *  just its message. Empty on a pass. SCOPE: the run/asserted lane ONLY (`run`/`skill`/`record`/
+   *  `replay`, incl. a salvaged partial run — a whiffed gate is itself a verdict). `chat` carries NO
+   *  assertions and NO verdict — this field is ABSENT (undefined), never a vacuous `{pass:true,...}`; a
+   *  consumer must not read a chat result as pass/fail. Also absent on a result.json written before this
+   *  field existed (pre-existing kept runs) — treat absence as "unknown", never as a pass. */
+  verdict?: { pass: boolean; exitCode: 0 | 1; failures: Array<{ assertion?: string; message: string }> };
   /** The agent's final answer — the SDK result message (`{type:"result"}`.result), i.e. the model's
    *  designated final response. This is what llm-transport treats as "the answer"; it is distinct from
    *  the full joined transcript (every assistant turn concatenated). Surfaced so a consumer reads the

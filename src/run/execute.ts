@@ -65,6 +65,7 @@ import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
+import { persistedVerdict } from "./verdict.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -1241,7 +1242,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       unansweredGate: undefined,
       staleness: undefined,
       skippedAssertions: undefined,
+      verdict: undefined, // computed just below (after assertions are evaluated / the object is fully assembled) and stored — see the comment there
     });
+
+    // THE verdict-persist point: `computeVerdict` (via `persistedVerdict`) is downstream of assembling
+    // `result` (it reads `result.assertions`, `result.scan`, `result.permissiveAutoAllow`, …), so it can
+    // only run here, after the assembler call above — never inside it. Reuses the single verdict source;
+    // does not recompute pass/fail independently. Stored on `result` before it's written to result.json
+    // (below) so a kept run's `.verdict` matches the exit code / footer this same run produced.
+    result.verdict = persistedVerdict(result, "live");
 
     // Non-null: see the matching comment at the partial-result finalize call above.
     runCrashSafety.finalize(record, result.result, result.durationMs!);
@@ -1412,9 +1421,11 @@ function writeRunJsonl(
 /** Assemble a RunResult for a run that did NOT complete — it exited on an unanswered gate. The work the
  *  agent did before the whiff (artifacts on disk, the partial transcript, decisions/tool counts so far) is
  *  salvaged so the paid run is still inspectable instead of vanishing. Deliberately reduced: no assertion
- *  outcome (a partial run has none) and no capability/verdict fields (those would need a probe we skip).
- *  `partial:true` is the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its
- *  populated `artifacts[]` as a passing run. */
+ *  outcome (a partial run has none — `assertions: []`) and no capability-probe fields (those would need a
+ *  probe we skip). It DOES still carry a `verdict` — `result:"error"` on the unanswered gate is itself a
+ *  hard fail, computed and stored at the end of this function (see the comment there). `partial:true` is
+ *  the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its populated
+ *  `artifacts[]` as a passing run. */
 export function buildPartialResult(args: {
   /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
   turn?: number;
@@ -1471,7 +1482,7 @@ export function buildPartialResult(args: {
   };
   // Working folder panel's file model — same walk `artifacts` below derives from.
   const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
-  return assembleRunResult({
+  const built = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
@@ -1552,8 +1563,8 @@ export function buildPartialResult(args: {
     resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
     stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
     resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs()),
-    // Fields this lane deliberately never sets (per this function's own doc comment: "no capability/
-    // verdict fields") — now explicit instead of implicit:
+    // Fields this lane deliberately never sets (per this function's own doc comment: "no capability
+    // probe fields") — now explicit instead of implicit:
     resultErrorKind: undefined,
     stalledOnQuestion: undefined,
     capabilityProbe: undefined,
@@ -1569,7 +1580,13 @@ export function buildPartialResult(args: {
     missingCapabilityUse: undefined,
     staleness: undefined,
     skippedAssertions: undefined,
+    verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there
   });
+  // A partial run still has a verdict — it failed on the unanswered gate (`result:"error"`), not on an
+  // assertion (there are none to evaluate here). Compute it from the just-assembled object (persistedVerdict
+  // reads result.assertions/unansweredGate/etc. off it) and store the result, same as the success path below.
+  built.verdict = persistedVerdict(built, "live");
+  return built;
 }
 
 /** the structured run trace. */

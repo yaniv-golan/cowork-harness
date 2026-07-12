@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`RunResult.verdict`** — a kept run's `result.json` now persists the overall pass/fail: `{pass,
+  exitCode, failures}`, the same pass/fail/exit-code `computeVerdict` (the single verdict source)
+  computes for the run/skill exit, the footer, and the JSON envelope's `ok`. Previously the ONLY way to
+  see why a kept run failed was to re-run `verify-run`; `jq '.verdict' result.json` now answers it
+  directly, with `failures[]` naming the failing assertion key (when a failure traces to one) or a
+  hard-verdict guard reason (an infra error, an unanswered gate, a scan-based host-path leak, …)
+  otherwise. Populated on both the success path and a salvaged (unanswered-gate) partial run — a whiffed
+  gate is itself a verdict fail, and its `failures[]` names the gate reason rather than a generic
+  placeholder. Scope: the run/asserted lane only — `chat` carries no assertions and no verdict, so the
+  field stays absent (undefined) there, same as it always has for every other verdict-adjacent field.
+
 - **`probe-dispatch <skill-dir> "<prompt>"`** — a cheap, focused mechanics probe for a single `Task`
   dispatch. A THIN wrapper over `skill` (same inline session/scenario construction, same `runOneScenario`
   execution; default fidelity `hostloop`, since path-fidelity — this probe's whole reason to exist — only
