@@ -585,6 +585,7 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
   } catch {
     return undefined;
   }
+  const agentEnv = agentEnvOverrides(cfg.agent_env);
   const shape = {
     folders: [...cfg.folders].map((f) => ({ from: f.from, mode: f.mode })).sort((a, b) => a.from.localeCompare(b.from)),
     plugins: {
@@ -603,7 +604,7 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
     // field's introduction — a knob-less session's hash doesn't move. A knob change (which silently
     // affects only hostloop/protocol replay behavior — see agent_env's doc comment) moves the hash so
     // `verify-cassettes` surfaces the drift instead of a cassette quietly replaying stale env behavior.
-    ...(Object.keys(agentEnvOverrides(cfg.agent_env)).length ? { agent_env: agentEnvOverrides(cfg.agent_env) } : {}),
+    ...(Object.keys(agentEnv).length ? { agent_env: agentEnv } : {}),
   };
   return createHash("sha256")
     .update(Buffer.from(JSON.stringify(shape), "utf8"))

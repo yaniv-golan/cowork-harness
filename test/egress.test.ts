@@ -4,6 +4,8 @@ import { compile, startEgressProxy, freePort } from "../src/egress/proxy.js";
 import { parseEgressLine, reframeEgressError, registerCleanup, drainCleanups } from "../src/egress/sidecar.js";
 import { validateBareDomain } from "../src/boundary-paths.js";
 import { Run } from "../src/run/run.js";
+import { ABSTAIN } from "../src/decide/decider.js";
+import type { AgentSession, DecisionResponse } from "../src/agent/session.js";
 
 describe("egress allowlist validation + proxy readiness", () => {
   it("rejects a scheme / path / port entry (would silently never match a bare host)", () => {
@@ -36,8 +38,7 @@ describe("egress allowlist validation + proxy readiness", () => {
 
   describe("seedApprovedDomains validates seeds (same policy as compile())", () => {
     // The Run constructor only builds the RunRecord; seedApprovedDomains is synchronous and never
-    // touches the session/decider, and requestWebFetchApproval short-circuits true for a seeded host
-    // BEFORE consulting the decider — so a null session/decider is safe for these assertions.
+    // touches the session/decider — so a null session/decider is safe for these assertions.
     const mkRun = () => new Run(null as any, null as any);
 
     it("rejects empty / URL / scheme / path / port seeds (throws like compile())", () => {
@@ -51,11 +52,30 @@ describe("egress allowlist validation + proxy readiness", () => {
       expect(() => mkRun().seedApprovedDomains(["*.example.com"])).toThrow(/concrete host/);
     });
 
-    it("admits a valid host (case-folded) so a later fetch short-circuits without a gate", async () => {
-      const run = mkRun();
+    it("admits a valid host (case-folded) so a later can_use_tool web_fetch auto-allows with no gate raised", async () => {
+      const responded: { id: string; r: DecisionResponse }[] = [];
+      const session: AgentSession = {
+        async *start() {
+          yield {
+            type: "decision",
+            request: { id: "req-1", kind: "permission", tool: "mcp__workspace__web_fetch", input: { url: "https://example.com/a" } },
+          };
+        },
+        sendUserTurn() {},
+        respond(id, r) {
+          responded.push({ id, r });
+          return { delivered: true };
+        },
+        close() {},
+      };
+      // ABSTAIN would fail-closed if the decider were ever consulted — proves the seeded domain
+      // short-circuits before any decision is made.
+      const run = new Run(session, { decide: async () => ABSTAIN } as any);
+      run.enableWebFetchGate();
       run.seedApprovedDomains(["Example.COM"]);
-      // approved → requestWebFetchApproval returns true before any decider is consulted
-      await expect(run.requestWebFetchApproval("example.com", "https://example.com/a")).resolves.toBe(true);
+      const rec = await run.drive("hi");
+      expect(rec.decisions.filter((d) => d.name === "mcp__workspace__web_fetch")).toHaveLength(0); // pre-approved — no gate raised
+      expect(responded[0]?.r).toMatchObject({ kind: "permission", behavior: "allow" });
     });
   });
 

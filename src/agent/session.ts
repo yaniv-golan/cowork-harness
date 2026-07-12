@@ -46,7 +46,7 @@ export type DecisionRequest =
   | { id: string; kind: "elicit"; server?: string; prompt?: string; schema?: unknown }; // elicitation / side_question
 export type DecisionResponse =
   // `grant` is a WEB_FETCH-LOCAL, OFF-WIRE field (once = this fetch only; domain = approve the whole host
-  // for the run). web_fetch approval is host-synthesized (Run.requestWebFetchApproval) and never serialized,
+  // for the run). web_fetch approval is host-synthesized (Run's decideWebFetchDomain) and never serialized,
   // so `grant` must NEVER reach serializeDecision — a guard there throws if it does (catches a future
   // refactor that routes web_fetch through the wire, where serialize would silently drop it).
   | { kind: "permission"; behavior: "allow" | "deny"; updatedInput?: unknown; message?: string; grant?: "once" | "domain" }

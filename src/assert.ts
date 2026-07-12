@@ -860,7 +860,14 @@ function check(
       const c = compileUserRegex(match);
       if ("error" in c) results.push(fail(`subagent_output_contains: bad regex "${match}": ${c.error}`));
       else {
-        const candidates = ctx.subagents.filter((s) => c.re.test(s.dispatchAgentType) || c.re.test(s.description ?? ""));
+        // Match dispatchAgentType OR resolvedAgentType OR description — mirrors subagent_dispatched so a
+        // type-less dispatch that RESOLVED to e.g. "general-purpose" is selectable here too.
+        const candidates = ctx.subagents.filter(
+          (s) =>
+            c.re.test(s.dispatchAgentType) ||
+            (s.resolvedAgentType !== undefined && c.re.test(s.resolvedAgentType)) ||
+            c.re.test(s.description ?? ""),
+        );
         results.push(
           candidates.some((s) => s.output?.includes(contains))
             ? ok()

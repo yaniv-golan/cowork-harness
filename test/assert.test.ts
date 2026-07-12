@@ -263,6 +263,22 @@ describe("subagent_output_contains", () => {
     expect(result.pass).toBe(false);
     expect(result.message).toContain("bad regex");
   });
+
+  it("narrows to a specific dispatch via match against its RESOLVED type (parity with subagent_dispatched)", () => {
+    const c = ctx({
+      subagents: [
+        {
+          dispatchAgentType: "unknown",
+          resolvedAgentType: "general-purpose",
+          declaredTools: [],
+          toolsUsed: [],
+          output: "found 3 files",
+        },
+      ],
+    });
+    const result = evaluate([{ subagent_output_contains: { match: "general-purpose", contains: "3 files" } }], c)[0];
+    expect(result.pass).toBe(true);
+  });
 });
 
 describe("skill_triggered / no_skill_triggered (Wave 1 / E8)", () => {
