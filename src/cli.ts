@@ -35,6 +35,7 @@ import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, 
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint, cmdLintSkill } from "./run/scenario-tool.js";
+import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
 import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
 import { parseArgs } from "./cli-args.js";
@@ -166,6 +167,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
       [--strict]               fail on any finding (the two footguns are WARN-only by default), not just ERROR
+  analyze-skill <SKILL.md | skill-dir/>  token-free CI gate: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
+      [--output-format json]   exit 1 = finding(s) · exit 0 = clean · exit 2 = usage; a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
@@ -468,6 +471,11 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   prune: "usage: prune [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
+  "analyze-skill":
+    "usage: analyze-skill <SKILL.md | skill-dir/> [--output-format text|json]   (token-free CI gate: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output — denied on host-loop)\n" +
+    "       reuses the harness's own ported /sessions path-gate predicate (isVmSessionsPath) as the deny decision; only the EXTRACTION from SKILL.md text is heuristic.\n" +
+    "       exit 1 = at least one finding (this is a focused gate, unlike the advisory lint-skill) · exit 0 = clean · exit 2 = usage error.\n" +
+    "       a clean result is a PRE-FLIGHT signal only — the runtime no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
 };
 
 // Known subcommands — used by the global value-flag parsers (`--dotenv`, `--run-dir`) to reject a command
@@ -496,6 +504,7 @@ const COMMANDS = [
   "vm",
   "lint",
   "lint-skill",
+  "analyze-skill",
   "doctor",
   "rehash",
   "init-redact",
@@ -683,6 +692,8 @@ async function main() {
       return cmdLint(rest);
     case "lint-skill":
       return cmdLintSkill(rest);
+    case "analyze-skill":
+      return cmdAnalyzeSkill(rest);
     case "verify-cassettes":
       return cmdVerifyCassettes(rest);
     case "rehash":

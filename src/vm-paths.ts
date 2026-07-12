@@ -106,6 +106,20 @@ export function isScratchpadVMPath(path: string, sessionId: string): boolean {
   return path.startsWith(sessionPrefix) && !path.startsWith(`${sessionPrefix}mnt/`);
 }
 
+/**
+ * True for ANY `/sessions` VM path — exact `/sessions` or `/sessions/...` — regardless of session
+ * id. This is the single source for the host-loop path gate's "is this a VM path on a filesystem
+ * where /sessions doesn't exist" check, previously copy-pasted at 6 call sites (the PreToolUse hook,
+ * the canUseTool gate port, the assert VM-path assertions, and three `.find()` denied-path pickers in
+ * run.ts/cassette.ts). Exact-or-prefix — NEVER a bare `startsWith("/sessions")`, which would wrongly
+ * match `/sessionsfoo`. Accepts `string | undefined` (rather than requiring the caller to pre-filter)
+ * specifically so it drops in as an `Array<string | undefined>.find()` predicate unchanged at those
+ * three sites.
+ */
+export function isVmSessionsPath(v: string | undefined): boolean {
+  return v !== undefined && (v === "/sessions" || v.startsWith("/sessions/"));
+}
+
 // --- percent-encoding helpers -----------------------------------------------------------------
 
 /** `encodeURIComponent`, plus escaping `(`/`)` (which it otherwise leaves untouched). */

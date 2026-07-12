@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`analyze-skill <SKILL.md | skill-dir/>` — a token-free static CI gate for the "skill hands a
+  `/sessions/...` path to a file tool" defect class.** Previously the only way to discover that a skill's
+  dispatch prompt or file-tool directive points at a `/sessions/...` VM path — which production's
+  host-loop path gate denies unconditionally, since the agent's file tools run on the host filesystem —
+  was a paid live host-loop run. `analyze-skill` scans a SKILL.md's text and reuses the harness's own
+  ported `/sessions` path-gate predicate (`isVmSessionsPath`, new export in `src/vm-paths.ts`) as the
+  deny decision; only the extraction of candidate paths from markdown is heuristic, and it is
+  conservative by design — a `/sessions` token inside a fenced bash/sh/shell/zsh block, an
+  anti-instruction line ("never write to `/sessions/...`"), or plain prose with no file-tool/output
+  context is never flagged. Two WARN rules (`sessions-path-to-file-tool`,
+  `sessions-find-into-file-read`); exit 1 on any finding, exit 0 clean, exit 2 on usage error. See
+  [docs/subagents.md](./docs/subagents.md#static-path-fidelity-check-analyze-skill) — a clean result is
+  a PRE-FLIGHT signal only, not proof of on-tier resolution; the runtime `no_vm_path_file_op` /
+  `vm_path_denied` assertions remain authoritative.
+
 ### Changed
 
 - **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and

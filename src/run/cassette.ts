@@ -57,6 +57,7 @@ import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from ".
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
+import { isVmSessionsPath } from "../vm-paths.js";
 
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
@@ -4009,7 +4010,7 @@ export async function replayCassette(
         if (hev.decision !== "block") continue;
         const fp = hev.paths?.file_path;
         const pp = hev.paths?.path;
-        const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+        const vmHit = [fp, pp].find(isVmSessionsPath);
         replayPathDenials.push({
           source: "pretooluse",
           tool: hev.tool ?? "?",

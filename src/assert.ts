@@ -10,6 +10,7 @@ import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
 import { collectArtifactPathsWithHealth } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
+import { isVmSessionsPath } from "./vm-paths.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
  *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (the
@@ -1637,7 +1638,7 @@ function check(
   // no_scratchpad_leak tier-gate precedent above: on a non-hostloop tier /sessions/... is a VALID VM
   // path (no path hook exists there), so excluding the key could green a wrong-tier scenario — it must
   // FAIL "cannot verify" instead.
-  const VM_PATH = (p: string | undefined): boolean => p !== undefined && (p === "/sessions" || p.startsWith("/sessions/"));
+  const VM_PATH = isVmSessionsPath;
   const hostloopOnly = (key: string): KeyResult | null =>
     ctx.effectiveFidelity !== "hostloop"
       ? fail(

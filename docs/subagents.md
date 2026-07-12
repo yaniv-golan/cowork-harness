@@ -27,6 +27,40 @@ the outputs mount: not denied, just silently non-deliverable (nothing collects i
 artifact). A skill meant to work across tiers must anchor its output path on the outputs mount, never
 on one hardcoded relative form.
 
+## Static path-fidelity check (`analyze-skill`)
+
+`cowork-harness analyze-skill <SKILL.md | skill-dir/>` catches the "hands a `/sessions/...` path to a
+file tool" defect described above **statically**, token-free — no Docker, no model call, no live
+host-loop run — by scanning a SKILL.md's text. It reuses the harness's own ported `/sessions` path-gate
+predicate (`isVmSessionsPath`) as the DENY decision; the only heuristic part is extracting candidate
+paths out of markdown text. Two WARN rules, both exit-1 findings:
+
+- **`sessions-path-to-file-tool`** — a `/sessions/...` token in a file-tool/output POSITIVE context: an
+  `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target,
+  prose describing a write/save/read/edit "to"/"at" the path, or a bare path sitting inside a fenced
+  block that also contains a `Task(` call or `subagent_type` (a dispatch construct).
+- **`sessions-find-into-file-read`** — a shell `find … /sessions …` whose output is substituted straight
+  into a `Read(`/`Grep(` directive (same line, or the very next line).
+
+**EXEMPT by design** (false-positive guards, deliberately conservative — "when unsure, do not flag"):
+a `/sessions` token inside a ` ```bash `/`sh`/`shell`/`zsh` fenced block is legitimate in-VM bash and is
+never scanned; a line carrying an anti-instruction word (`never`, `don't`, `do not`, `avoid`, `not`) near
+the path is treated as teaching the rule, not breaking it; plain prose that documents a fact (e.g. "the
+VM cwd is `/sessions/<id>`") without any of the positive contexts above is left alone.
+
+**Honest limits.** Only the extraction is heuristic — the deny decision is the same one production
+enforces. Documented false negatives: a variable-carried path (`$OUT/...` where the literal value isn't
+`/sessions`), an indented/unfenced shell template, and a prose-only dispatch instruction (no fenced
+block). Two decision-class misses are out of v1 scope entirely: an absolute HOST path outside connected
+folders (denied by containment, not the `/sessions` rule) and a write into a read-only category
+(uploads/spool/plugin content) — neither is a `/sessions` finding, so this analyzer doesn't claim to
+catch them.
+
+**A clean `analyze-skill` is a PRE-FLIGHT signal, not proof of on-tier resolution.** The authoritative
+check remains the runtime `no_vm_path_file_op` / `vm_path_denied` assertions (see
+[scenario.md](./scenario.md)) against a real recorded/live run — `analyze-skill` exists to catch the
+obvious cases before paying for that run, not to replace it.
+
 ## Capability / path matrix
 
 | Path class | host-loop (file tools) | host-loop (workspace bash) | VM loop (file tools = bash view) |

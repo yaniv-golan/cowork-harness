@@ -16,6 +16,7 @@ import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
+import { isVmSessionsPath } from "../vm-paths.js";
 
 /** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
  *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). Exported so the replay
@@ -48,7 +49,7 @@ const TASK_EVENT_SUBTYPES = new Set([
  *  replay reconstruction (cassette.ts) so both pick the same path from an identical input shape. */
 export function deniedPathFrom(inp: Record<string, unknown>): string | undefined {
   const vals = ["file_path", "path"].map((k) => inp[k]).filter((v): v is string => typeof v === "string");
-  return vals.find((v) => v === "/sessions" || v.startsWith("/sessions/")) ?? vals[0];
+  return vals.find(isVmSessionsPath) ?? vals[0];
 }
 
 /** Bound a captured decision input so a large tool payload can't bloat the run record. Objects pass
@@ -881,7 +882,7 @@ export class Run {
               const pp = ev.paths?.path;
               // the DENIED path is whichever key the VM guard flagged — a /sessions-prefixed value if
               // present, else the first non-empty key (matching the gate's own scan order).
-              const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+              const vmHit = [fp, pp].find(isVmSessionsPath);
               this.rec.pathDenials.push({
                 source: "pretooluse",
                 tool: ev.tool ?? "?",

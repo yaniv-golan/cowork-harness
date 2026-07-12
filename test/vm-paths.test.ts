@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   mapVMPathToHostPath,
   isScratchpadVMPath,
+  isVmSessionsPath,
   deepTranslateVMPaths,
   encodeComputerUrlsForHostLoop,
   type VmPathContext,
@@ -289,5 +290,31 @@ describe("deepTranslateVMPaths — hostLoopMode encode-only branch", () => {
     const ctx = baseCtx();
     const text = "at /sessions/sess1/mnt/outputs/report.pdf on disk";
     expect(deepTranslateVMPaths(text, ctx, true)).toBe("at /host/outputs/report.pdf on disk");
+  });
+});
+
+describe("isVmSessionsPath — the single-source /sessions predicate", () => {
+  it("matches the bare /sessions path", () => {
+    expect(isVmSessionsPath("/sessions")).toBe(true);
+  });
+
+  it("matches any /sessions/... prefix", () => {
+    expect(isVmSessionsPath("/sessions/abc123/mnt/outputs/report.pdf")).toBe(true);
+  });
+
+  it("does NOT match a lookalike that merely starts with the /sessions characters", () => {
+    expect(isVmSessionsPath("/sessionsfoo")).toBe(false);
+  });
+
+  it("does NOT match an unrelated absolute path", () => {
+    expect(isVmSessionsPath("/Users/me/project/report.pdf")).toBe(false);
+  });
+
+  it("does NOT match a relative path", () => {
+    expect(isVmSessionsPath("sessions/foo")).toBe(false);
+  });
+
+  it("returns false for undefined (so it drops in as an Array<string|undefined>.find predicate)", () => {
+    expect(isVmSessionsPath(undefined)).toBe(false);
   });
 });
