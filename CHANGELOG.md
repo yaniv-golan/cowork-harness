@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-07-12
+
+> **Upgrade notes.**
+> - **Breaking (pre-1.0): `subagents[].agentType` renamed to `dispatchAgentType`, and
+>   `subagents[].model` renamed to `dispatchModel`.** A consumer reading either old field name off
+>   `result.json` now gets `undefined`. Both keep their original (dispatch-input) meaning — the
+>   resolved counterparts (`resolvedAgentType`/`resolvedModel`, below) are new, separate fields.
+
 ### Added
 
 - **Parity baseline for Claude Desktop 1.20186.1.** `baseline: latest` now resolves to `desktop-1.20186.1`
