@@ -374,7 +374,6 @@ exports[`golden — host-loop (deltas) > agentArgs snapshot 1`] = `
   "JavaScript",
   "ToolSearch",
   "mcp__workspace__bash",
-  "mcp__workspace__web_fetch",
 ]
 `;
 
@@ -511,6 +510,5 @@ exports[`golden — host-loop (deltas) > dockerRunArgv snapshot (named for docke
   "JavaScript",
   "ToolSearch",
   "mcp__workspace__bash",
-  "mcp__workspace__web_fetch",
 ]
 `;

@@ -264,3 +264,18 @@ absent from chat roots entirely.
 writes are gated by `allow_host_writes` consent instead of scratch containment; spooled-projects
 read-roots exist only as the task-lane spool dir; connected-folder scope differs. The task-lane
 read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
+
+---
+
+## VM tiers have no workspace tool aliases
+
+**Real Cowork behaviour:** host-loop aliases `Bash→mcp__workspace__bash` and
+`WebFetch→mcp__workspace__web_fetch`; the VM loop ALSO aliases WebFetch to a host-side SDK-MCP
+`web_fetch` (gate `coworkWebFetchViaApi`, live true) — "Bash is the only tool that truly diverges
+between loops."
+
+**Harness behaviour:** host-loop sets both aliases (`WORKSPACE_TOOL_ALIASES`, hostloop.ts) on the
+`initialize` control_request. The container/microvm tiers register only the `cowork` SDK server — no
+workspace `web_fetch` server exists there to alias to — so they set NO aliases. Consequence: a VM-tier
+model emitting a bare `WebFetch` errors in the harness where production resolves it. Host-loop is the
+production-default loop; use hostloop for alias-sensitive scenarios.

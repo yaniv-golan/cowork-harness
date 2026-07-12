@@ -27,7 +27,7 @@ import {
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
-import { spawnHostLoop } from "../runtime/hostloop.js";
+import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
@@ -581,6 +581,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           egressProxy: sidecar?.proxyUrl,
           dockerNetwork: sidecar?.network,
           provenanceRef,
+          webFetchViaApi: viaApiOn,
         });
         child = hl.child;
         sdkMcp = hl.sdkMcp;
@@ -657,10 +658,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
       if (effectiveFidelity === "hostloop" && viaApiOn) {
+        run.enableWebFetchGate();
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),
           markAllowed: (u) => run.provenanceAdd(u),
-          requestApproval: (d, u) => run.requestWebFetchApproval(d, u),
+          requestApproval: undefined, // gated at can_use_tool — the handler must not self-approve (was the 2nd record)
           promptGateOn,
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };
@@ -672,6 +674,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             subagentAppend: prompts.subagentAppend,
             sdkMcp,
             hooks: hostloopHooks,
+            ...(effectiveFidelity === "hostloop" ? { toolAliases: WORKSPACE_TOOL_ALIASES } : {}),
           });
         } catch (e) {
           // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can

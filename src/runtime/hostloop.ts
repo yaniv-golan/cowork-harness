@@ -29,6 +29,13 @@ import { stripComments } from "../prompt.js";
  *  decisions and exclude every other custom-hook callback the same `hook_callback` mechanism fires. */
 export const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
 
+/** Production's host-loop tool aliases (asar `et()`; single-hop, deny rules do NOT expand across the
+ *  alias). An alias never GRANTS a tool — it resolves only when the target is already in the caller's
+ *  bound set, so a bare Bash/WebFetch from a sub-agent without the workspace tool bound still fails.
+ *  Host-loop-only: the container/microvm tiers register no workspace server to alias to (see
+ *  docs/fidelity-gaps.md). */
+export const WORKSPACE_TOOL_ALIASES: Record<string, string> = { Bash: "mcp__workspace__bash", WebFetch: "mcp__workspace__web_fetch" };
+
 /**
  * Pure builder for the hostloop native process's env: `hostNativeSpawnEnv`'s contract-layer output
  * layered over this REAL macOS process's own `...process.env` base (unlike container/microvm, which
@@ -76,6 +83,10 @@ export function spawnHostLoop(
     egressProxy?: string;
     dockerNetwork?: string;
     provenanceRef?: { current?: WebFetchProvenance }; // filled by execute.ts/chat.ts (Run-backed)
+    // coworkWebFetchViaApi (readGateFlag, execute.ts/chat.ts) — when on, web_fetch is gated through
+    // can_use_tool (production shape: bash pre-approved, web_fetch is not) instead of pre-approved
+    // alongside bash (the allowlist-fallback shape, gate off).
+    webFetchViaApi?: boolean;
   } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
@@ -128,7 +139,10 @@ export function spawnHostLoop(
     mcpGuest: mcpHostPath,
     systemPromptAppend,
     disallowed: ["Bash", "WebFetch", "NotebookEdit"],
-    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"],
+    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"], // both REGISTERED regardless of the gate
+    extraAllowedTools: opts.webFetchViaApi
+      ? ["mcp__workspace__bash"] // web_fetch is gated via can_use_tool (production shape) — pre-approve bash only
+      : ["mcp__workspace__bash", "mcp__workspace__web_fetch"], // gate off (allowlist fallback) — keep web_fetch pre-approved
   });
   const nativeEnv = buildHostLoopNativeEnv(baseline, {
     configDir: plan.configDir,

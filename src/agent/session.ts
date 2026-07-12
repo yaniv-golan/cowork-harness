@@ -168,8 +168,13 @@ export type DecisionDelivery = { delivered: boolean; reason?: "session-closing" 
 export interface AgentSession {
   /** write `initialize` before the first user turn (idempotent; `start()` also calls it).
    *  Optional — replay sessions (cassette) have no live control channel and omit it. */
-  init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): void;
-  start(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): AsyncIterable<AgentEvent>;
+  init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> }): void;
+  start(opts?: {
+    subagentAppend?: string;
+    sdkMcp?: SdkMcp;
+    hooks?: HookBundle;
+    toolAliases?: Record<string, string>;
+  }): AsyncIterable<AgentEvent>;
   sendUserTurn(text: string): void;
   respond(decisionId: string, r: DecisionResponse): DecisionDelivery;
   close(): void;
@@ -498,7 +503,7 @@ export class LiveAgentSession implements AgentSession {
    * also calls it so a standalone `start()` (no prior `init`) still initializes. Guarded so the two
    * call sites never double-write init-1.
    */
-  init(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } = {}): void {
+  init(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } = {}): void {
     if (this.initWritten) return;
     this.initWritten = true;
     this.sdkMcp = opts.sdkMcp;
@@ -511,10 +516,16 @@ export class LiveAgentSession implements AgentSession {
     initRequest.hooks = opts.hooks
       ? { PreToolUse: [...COWORK_PRETOOLUSE_HOOKS.PreToolUse, ...opts.hooks.definitions.PreToolUse] }
       : COWORK_PRETOOLUSE_HOOKS;
+    // Production's host-loop-only tool alias map (Bash→mcp__workspace__bash, WebFetch→mcp__workspace__web_fetch)
+    // — omitted entirely (not an empty object) when the caller passes none, so container/microvm's
+    // initialize request is byte-identical to before this option existed.
+    if (opts.toolAliases && Object.keys(opts.toolAliases).length) initRequest.toolAliases = opts.toolAliases;
     this.write({ type: "control_request", request_id: "init-1", request: initRequest });
   }
 
-  async *start(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } = {}): AsyncIterable<AgentEvent> {
+  async *start(
+    opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } = {},
+  ): AsyncIterable<AgentEvent> {
     this.init(opts); // idempotent — a no-op if drive() already wrote init-1 before the first user turn
 
     // race-approach latch — `errorPromise` rejects when proc emits an error, which is

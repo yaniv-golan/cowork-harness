@@ -6,7 +6,7 @@ import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
-import { spawnHostLoop } from "../runtime/hostloop.js";
+import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan, linkifyForTerminal, shouldLinkify } from "./display-translate.js";
@@ -37,8 +37,13 @@ const log = (s: string) => process.stderr.write(s);
 export function chatDriveOpts(
   prompts: { subagentAppend?: string },
   hl?: { sdkMcp: SdkMcp; hooks: HookBundle },
-): { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } {
-  return { subagentAppend: prompts.subagentAppend, ...(hl ? { sdkMcp: hl.sdkMcp, hooks: hl.hooks } : {}) };
+): { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } {
+  return {
+    subagentAppend: prompts.subagentAppend,
+    // toolAliases rides along with the hostloop sdkMcp/hooks bundle (host-loop-only — see
+    // src/runtime/hostloop.ts's WORKSPACE_TOOL_ALIASES doc comment).
+    ...(hl ? { sdkMcp: hl.sdkMcp, hooks: hl.hooks, toolAliases: WORKSPACE_TOOL_ALIASES } : {}),
+  };
 }
 
 /** Fidelity tiers `chat` supports. A subset of the full Scenario tier set: `microvm`/`cowork` are NOT
@@ -327,6 +332,7 @@ export async function cmdChat(args: string[]) {
         egressProxy: sidecar!.proxyUrl,
         dockerNetwork: sidecar!.network,
         provenanceRef,
+        webFetchViaApi: viaApiOn,
       });
       child = hl.child;
       containerName = hl.containerName;
@@ -383,10 +389,11 @@ export async function cmdChat(args: string[]) {
       const run = new Run(agent, decider, [renderer, tripwireHook], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       if (viaApiOn) {
+        run.enableWebFetchGate();
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),
           markAllowed: (u) => run.provenanceAdd(u),
-          requestApproval: (d, u) => run.requestWebFetchApproval(d, u),
+          requestApproval: undefined, // gated at can_use_tool — the handler must not self-approve (was the 2nd record)
           promptGateOn,
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };

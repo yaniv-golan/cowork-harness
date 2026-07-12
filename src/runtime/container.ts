@@ -71,8 +71,11 @@ export function spawnContainer(
     mcpGuest,
     // present_files must be a known, pre-approved cowork tool — otherwise the agent's first call gets
     // auto-allowed as OFF-REGISTRY, tripping the cowork-parity permissive-auto-allow guard and failing
-    // the run (confirmed live against a real container spawn before this was added).
+    // the run (confirmed live against a real container spawn before this was added). extraAllowedTools
+    // is stated explicitly (no hidden extraTools→allowedTools coupling), keeping this tier's
+    // CURRENT pre-approval set unchanged.
     extraTools: ["mcp__cowork__present_files"],
+    extraAllowedTools: ["mcp__cowork__present_files"],
   });
   const dockerArgs = dockerRunArgv({
     network,

@@ -23,6 +23,11 @@ import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
  *  frozen request + controlOut pairing, without duplicating the tool set. */
 export const FILE_ATTEMPT_TOOLS = new Set<string>([...PATH_GATE_TOOL_NAMES, "MultiEdit"]);
 
+/** The workspace SDK-MCP tool name web_fetch resolves to on host-loop (mcp__workspace__web_fetch) —
+ *  when the can_use_tool web_fetch gate is enabled (enableWebFetchGate), a `can_use_tool` for exactly
+ *  this tool is answered by the shared provenance/domain decision instead of the ordinary decider chain. */
+const WORKSPACE_WEB_FETCH_TOOL = "mcp__workspace__web_fetch";
+
 /** The `task_started` sibling family — written against the WHOLE emitter family (not one subtype) so a
  *  new sibling lands in the same consumer instead of a subtype-specific dead end. Only `task_started`
  *  carries the binary-RESOLVED child type today; the others are consumed here only in the sense that
@@ -384,6 +389,10 @@ export class Run {
   // web_fetch per-DOMAIN approvals ("Allow all for website"). Per-Run, ephemeral (starts empty) —
   // verified the grant is session-scoped, not persistent. An approved host fetches with no re-prompt.
   private approvedDomains = new Set<string>();
+  // Set by enableWebFetchGate() — host-loop, coworkWebFetchViaApi on. When true, a can_use_tool for
+  // WORKSPACE_WEB_FETCH_TOOL is answered by resolveWebFetchGate (the shared provenance/domain decision)
+  // instead of falling through to the ordinary decider chain.
+  private webFetchGate = false;
 
   constructor(
     private session: AgentSession,
@@ -1086,7 +1095,20 @@ export class Run {
     // string (`answers[q]` = "Label A, Label B"). The ScriptedDecider validates each member against the
     // offered options and joins; fallback terminals answer with a single (valid) member.
 
-    const decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
+    // web_fetch can_use_tool gate (host-loop, coworkWebFetchViaApi on): answer via the shared
+    // provenance/domain decision instead of the ordinary decider chain — the can_use_tool response IS
+    // the shared webfetch:<domain> decision, recorded ONCE (skipRecord suppresses the record for an
+    // automatic allow — a provenance hit or an already-approved domain — matching the legacy
+    // "records nothing on a repeat fetch" contract).
+    let decided: Decision | typeof ABSTAIN;
+    let skipRecord = false;
+    if (this.webFetchGate && req.kind === "permission" && req.tool === WORKSPACE_WEB_FETCH_TOOL) {
+      const g = await this.resolveWebFetchGate(req);
+      decided = g.decided;
+      skipRecord = g.skipRecord;
+    } else {
+      decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
+    }
     if (decided === ABSTAIN) {
       // A QUESTION must NEVER be silently answered with option 1 (the worst failure mode: a wrong-branch
       // run that still prints ✓ success). If no terminal answered it, fail LOUD. (Permission/dialog/elicit
@@ -1127,7 +1149,9 @@ export class Run {
         by: decided.by,
         rationale: "decider returned a mismatched response kind",
       });
-    } else {
+    } else if (!skipRecord) {
+      // `req` here is the ORIGINAL can_use_tool request (not a synthetic webfetch:<domain> one), so on
+      // the web_fetch gate path this is the ONE recorded decision, with name:"mcp__workspace__web_fetch".
       this.recordDecision(req, decided.response, decided.by, decided.rationale, decided.model);
     }
   }
@@ -1241,19 +1265,30 @@ export class Run {
     this.provenance.add(url);
   }
 
-  /**
-   * Harness-initiated web_fetch approval for a provenance miss — a synthetic `webfetch:<domain>`
-   * permission routed through the SAME Decider and RECORDED in rec.decisions (so it shows in
-   * result.decisions and flips nonDeterministic when answered by agent/external/human). Mirrors
-   * Cowork's host-initiated handleToolPermission(`webfetch:${domain}`, {domain,url}). This does NOT
-   * go through handleDecision (no agent control_request exists for the synthetic id), so it resolves
-   * ABSTAIN→deny explicitly and never calls session.respond.
-   */
-  async requestWebFetchApproval(domain: string, url: string): Promise<boolean> {
-    // Per-run "Allow all for website" grant: an already-approved host fetches with NO gate and records
-    // nothing (a 2nd fetch to an approved host does not re-prompt). Checked BEFORE the decider.
-    // Normalize both sides so "Example.com" and "example.com" match the same stored entry.
-    if (this.approvedDomains.has(normalizeHost(domain))) return true;
+  /** Enable the can_use_tool web_fetch gate (host-loop, coworkWebFetchViaApi on): with web_fetch
+   *  dropped from --allowedTools, the CLI emits a real can_use_tool for each fetch; handleDecision
+   *  answers it via the shared provenance/domain decision (resolveWebFetchGate) — ONE recorded
+   *  decision, marking provenance on allow — so the workspace handler's own self-approval block
+   *  (requestApproval) is never reached on this path (the handler is wired with requestApproval
+   *  undefined; see execute.ts/chat.ts). Off by default — the allowlist-fallback shape (gate off)
+   *  still routes through the ordinary decider chain, unchanged. */
+  enableWebFetchGate(): void {
+    this.webFetchGate = true;
+  }
+
+  /** The shared webfetch:<domain> decision core — consults the Decider (so scenario `--answer
+   *  webfetch:…` rules still match) and returns the decided request/response/attribution WITHOUT
+   *  recording anything. `null` = the domain is already approved (an "Allow all for website" hit —
+   *  auto-allow, no decider consult, nothing to record). Recording is the CALLER's choice: the
+   *  can_use_tool gate path (resolveWebFetchGate) records the ORIGINAL can_use_tool request as the one
+   *  decision; the legacy synthetic path (requestWebFetchApproval) records this synthetic
+   *  webfetch:<domain> request itself. Shared so the two paths can never diverge on how a domain gate
+   *  is decided — only on what gets written to rec.decisions. */
+  private async decideWebFetchDomain(
+    domain: string,
+    url: string,
+  ): Promise<{ req: DecisionRequest; by: Decision["by"]; resp: DecisionResponse; mismatch: boolean } | null> {
+    if (this.approvedDomains.has(normalizeHost(domain))) return null;
     const req: DecisionRequest = {
       id: `webfetch-${randomUUID()}`,
       kind: "permission",
@@ -1264,27 +1299,98 @@ export class Run {
     const d = await this.decider.decide(req, this.ctx());
     // "fail" conflated the FailDecider class with the internal abstain-fallback path. Use a distinct
     // provenance value so readers can tell "no decider answered" apart from an explicit FailDecider deny.
-    const by = d === ABSTAIN ? "abstain-fallback" : d.by;
-    // Pass the RESPONSE BODY + by (recordDecision reads resp.behavior) — not the whole Decision.
-    const resp: DecisionResponse =
-      d === ABSTAIN ? { kind: "permission", behavior: "deny", message: "no decider answer (fail-closed)" } : d.response;
+    const by: Decision["by"] = d === ABSTAIN ? "abstain-fallback" : d.by;
+    if (d === ABSTAIN)
+      return { req, by, resp: { kind: "permission", behavior: "deny", message: "no decider answer (fail-closed)" }, mismatch: false };
     // mirror handleDecision's mismatched-kind guard. A decider that answers a "permission" request
-    // with a non-permission response is a protocol error — previously this recorded `decision:"?"` (via
-    // recordDecision's behavior===undefined branch) with NO warning. Record `mismatch→deny`, warn loudly,
-    // and DENY the fetch (fail-closed), instead of silently treating it as "?".
-    if (d !== ABSTAIN && isDecisionKindMismatch(req, resp, "webfetch")) {
-      this.rec.decisions.push({
-        kind: kindOf(req),
-        name: nameOf(req),
-        decision: "mismatch→deny",
+    // with a non-permission response is a protocol error — deny (fail-closed) rather than silently
+    // treating it as "?". `mismatch:true` lets a caller that needs the DISTINCT "mismatch→deny" record
+    // label (requestWebFetchApproval's external contract) tell this apart from an ordinary decider deny.
+    if (isDecisionKindMismatch(req, d.response, "webfetch"))
+      return {
+        req,
         by,
+        resp: { kind: "permission", behavior: "deny", message: "decider returned a mismatched response kind" },
+        mismatch: true,
+      };
+    return { req, by, resp: d.response, mismatch: false };
+  }
+
+  /** Decide a web_fetch can_use_tool via the shared provenance/domain logic (decideWebFetchDomain). On
+   *  allow, marks provenance so the subsequent actual fetch (routed through the workspace handler) is a
+   *  provenance HIT and never re-triggers the handler's own self-approval block. `skipRecord:true` means
+   *  the allow was AUTOMATIC (a provenance hit or an already-approved domain) — the can_use_tool is
+   *  still answered allow, but nothing is recorded, matching the legacy "a repeat fetch records
+   *  nothing" contract. */
+  private async resolveWebFetchGate(
+    req: Extract<DecisionRequest, { kind: "permission" }>,
+  ): Promise<{ decided: Decision; skipRecord: boolean }> {
+    const allowResp: DecisionResponse = { kind: "permission", behavior: "allow", updatedInput: req.input };
+    const denyResp = (message: string): DecisionResponse => ({ kind: "permission", behavior: "deny", message });
+    const url = typeof req.input.url === "string" ? req.input.url : undefined;
+    if (url === undefined) return { decided: { response: denyResp("web_fetch: missing 'url'"), by: "agent" }, skipRecord: false };
+    let domain: string;
+    try {
+      domain = new URL(url).hostname;
+    } catch {
+      return { decided: { response: denyResp("web_fetch failed: invalid URL"), by: "agent" }, skipRecord: false };
+    }
+    // provenance hit (the URL already appeared in a user turn or a prior fetch result) — auto-allow, no
+    // decider consult, nothing recorded.
+    if (this.provenance.has(url)) return { decided: { response: allowResp, by: "agent" }, skipRecord: true };
+    const r = await this.decideWebFetchDomain(domain, url);
+    if (r === null) {
+      // an already-approved domain ("Allow all for website" from an earlier fetch this run) — auto-allow.
+      this.provenance.add(url);
+      return { decided: { response: allowResp, by: "agent" }, skipRecord: true };
+    }
+    const allow = r.resp.kind === "permission" && r.resp.behavior === "allow";
+    const grant = r.resp.kind === "permission" ? r.resp.grant : undefined;
+    if (allow) {
+      this.provenance.add(url);
+      if (grant === "domain") this.approvedDomains.add(normalizeHost(domain));
+    }
+    // the can_use_tool RESPONSE the agent actually receives carries no off-wire `grant` (the domain
+    // approval above is Run-side state, not wire content) — plain allow/deny, mirroring `allowResp`.
+    return { decided: { response: allow ? allowResp : denyResp("Web fetch was not allowed."), by: r.by }, skipRecord: false };
+  }
+
+  /**
+   * Harness-initiated web_fetch approval for a provenance miss — a synthetic `webfetch:<domain>`
+   * permission routed through the SAME Decider and RECORDED in rec.decisions (so it shows in
+   * result.decisions and flips nonDeterministic when answered by agent/external/human). Mirrors
+   * Cowork's host-initiated handleToolPermission(`webfetch:${domain}`, {domain,url}). This does NOT
+   * go through handleDecision (no agent control_request exists for the synthetic id), so it resolves
+   * ABSTAIN→deny explicitly and never calls session.respond.
+   *
+   * Reached ONLY on the allowlist-fallback path today (the workspace handler's own self-approval
+   * block) — the can_use_tool gate path (enableWebFetchGate) wires the handler's `requestApproval` as
+   * undefined, so this delegates its DECISION to the same shared core (decideWebFetchDomain) the gate
+   * path uses, but keeps its own external contract (records a `webfetch:<domain>` decision, returns a
+   * bool) unchanged.
+   */
+  async requestWebFetchApproval(domain: string, url: string): Promise<boolean> {
+    // Per-run "Allow all for website" grant: an already-approved host fetches with NO gate and records
+    // nothing (a 2nd fetch to an approved host does not re-prompt). Checked BEFORE the decider (also
+    // re-checked inside decideWebFetchDomain — cheap, and covers a domain approved between the two).
+    if (this.approvedDomains.has(normalizeHost(domain))) return true;
+    const r = await this.decideWebFetchDomain(domain, url);
+    if (r === null) return true; // approved between the check above and here — treat as allow
+    if (r.mismatch) {
+      // Preserve the DISTINCT "mismatch→deny" record label (not a plain "deny") — the agent did NOT
+      // receive the intended answer, and recordDecision alone can't tell that apart from a real deny.
+      this.rec.decisions.push({
+        kind: kindOf(r.req),
+        name: nameOf(r.req),
+        decision: "mismatch→deny",
+        by: r.by,
         rationale: "decider returned a mismatched response kind",
       });
       return false;
     }
-    const allow = resp.kind === "permission" && resp.behavior === "allow";
-    const grant = resp.kind === "permission" ? resp.grant : undefined;
-    this.recordDecision(req, resp, by);
+    const allow = r.resp.kind === "permission" && r.resp.behavior === "allow";
+    const grant = r.resp.kind === "permission" ? r.resp.grant : undefined;
+    this.recordDecision(r.req, r.resp, r.by);
     // "Allow all for website" → approve the host for the rest of the run (off-wire; Run-side state).
     if (allow && grant === "domain") this.approvedDomains.add(normalizeHost(domain));
     return allow;
