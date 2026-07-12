@@ -6,9 +6,13 @@ import { tmpdir } from "node:os";
 
 // `scenario.py` resolves a plugin's valid `<plugin>:<agent>` subagent types statically from
 // `plugin.json` + `agents/*.md` frontmatter, and folds a check into `lint-skill` that flags a SKILL.md's
-// pinned `subagent_type` values that don't resolve. Unknown bare values are ALWAYS INFO, never WARN —
-// there is no harness registry of built-in agent types to disprove them against (only `general-purpose`
-// is harness-known).
+// pinned `subagent_type` values that don't resolve. Only ONE outcome is a hard gate:
+// `subagent-type-not-found-in-plugin` (a `<this-plugin>:<agent>` value whose plugin was fully
+// enumerated and doesn't contain that agent) is a PROVABLE typo, so it's WARN and `lint-skill --strict`
+// fails on it. The other two outcomes — a cross-plugin `<other-plugin>:<agent>` reference
+// (`subagent-type-unresolvable`) and an unknown bare value (`subagent-type-unknown`) — stay INFO,
+// never WARN: there is no harness registry of built-in agent types to disprove them against (only
+// `general-purpose` is harness-known), so those two can never be proven wrong statically.
 const SCRIPT = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
 const py = process.env.PYTHON ?? "python3";
 const havePython = spawnSync(py, ["--version"], { stdio: "ignore" }).status === 0;
@@ -149,16 +153,32 @@ describe.skipIf(!havePython)("scenario.py lint-skill — subagent_type static re
     expect(status).toBe(0); // INFO never fails lint-skill without --strict
   });
 
-  it("INFO subagent-type-not-found-in-plugin: an in-plugin-prefixed but absent agent is a provable typo", () => {
+  it("INFO subagent-type-unresolvable stays scoped-INFO: `--strict` still exits 0 (unconfirmable, not promoted)", () => {
+    const dir = makeFixturePlugin();
+    const skillPath = writeSkill(dir, 'subagent_type="otherplug:baz"');
+    const r = spawnSync(py, [SCRIPT, "lint-skill", "--strict", "--json", skillPath], { encoding: "utf8" });
+    const findings: Finding[] = JSON.parse(r.stdout || "[]");
+    const hit = findings.find((f) => f.rule === "subagent-type-unresolvable");
+    expect(hit?.severity).toBe("INFO");
+    expect(r.status).toBe(0); // cross-plugin is genuinely unconfirmable — not part of the WARN promotion
+  });
+
+  it("WARN subagent-type-not-found-in-plugin: an in-plugin-prefixed but absent agent is a PROVABLE typo (promoted from INFO, gates under --strict)", () => {
     const dir = makeFixturePlugin();
     const skillPath = writeSkill(dir, 'subagent_type="testplug:qux"');
     const { status, findings } = lintSkill(skillPath);
     const hit = findings.find((f) => f.rule === "subagent-type-not-found-in-plugin");
     expect(hit, "expected a subagent-type-not-found-in-plugin finding").toBeDefined();
-    expect(hit?.severity).toBe("INFO");
+    expect(hit?.severity).toBe("WARN");
     expect(findings.some((f) => f.rule === "subagent-type-unknown")).toBe(false);
     expect(findings.some((f) => f.rule === "subagent-type-unresolvable")).toBe(false);
-    expect(status).toBe(0); // INFO never fails lint-skill without --strict
+    expect(status).toBe(0); // WARN is still advisory-only without --strict
+
+    const r = spawnSync(py, [SCRIPT, "lint-skill", "--strict", "--json", skillPath], { encoding: "utf8" });
+    const strictFindings: Finding[] = JSON.parse(r.stdout || "[]");
+    const strictHit = strictFindings.find((f) => f.rule === "subagent-type-not-found-in-plugin");
+    expect(strictHit?.severity).toBe("WARN");
+    expect(r.status).toBe(1); // the provable typo is now a hard gate under --strict
   });
 
   it("INFO subagent-type-unknown (NEVER WARN): an unknown bare pinned type is surfaced, not failed", () => {
@@ -171,6 +191,16 @@ describe.skipIf(!havePython)("scenario.py lint-skill — subagent_type static re
     expect(hit?.severity).not.toBe("WARN");
     expect(hit?.message).toMatch(/not defined in this plugin/i);
     expect(status).toBe(0); // fail-on-break: INFO does not exit non-zero without --strict
+  });
+
+  it("INFO subagent-type-unknown stays scoped-INFO: `--strict` still exits 0 (unconfirmable, not promoted)", () => {
+    const dir = makeFixturePlugin();
+    const skillPath = writeSkill(dir, 'subagent_type="typo-agent"');
+    const r = spawnSync(py, [SCRIPT, "lint-skill", "--strict", "--json", skillPath], { encoding: "utf8" });
+    const findings: Finding[] = JSON.parse(r.stdout || "[]");
+    const hit = findings.find((f) => f.rule === "subagent-type-unknown");
+    expect(hit?.severity).toBe("INFO");
+    expect(r.status).toBe(0); // unknown bare value is genuinely unconfirmable — not part of the WARN promotion
   });
 
   it("REGRESSION: `lint-skill --strict` does NOT fail on an INFO-only result (a pinned built-in like `Explore`)", () => {

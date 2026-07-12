@@ -258,7 +258,7 @@
             "additionalProperties": false
           },
           "subagent_dispatch_healthy": {
-            "description": "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. Content-class (fileToolAttempts + toolResults), replay-checkable without controlOut.",
+            "description": "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. `type` matches the dispatch's resolvedAgentType OR dispatchAgentType OR description (a regex can narrow to one dispatch in a same-agent-type fleet). Content-class (fileToolAttempts + toolResults), replay-checkable without controlOut.",
             "type": "object",
             "properties": {
               "type": {

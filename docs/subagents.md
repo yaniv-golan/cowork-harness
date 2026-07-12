@@ -29,23 +29,114 @@ on one hardcoded relative form.
 
 ## Static path-fidelity check (`analyze-skill`)
 
-`cowork-harness analyze-skill <SKILL.md | skill-dir/>` catches the "hands a `/sessions/...` path to a
-file tool" defect described above **statically**, token-free — no Docker, no model call, no live
+`cowork-harness analyze-skill <SKILL.md | skill-dir/ | glob>…` catches the "hands a `/sessions/...` path
+to a file tool" defect described above **statically**, token-free — no Docker, no model call, no live
 host-loop run — by scanning a SKILL.md's text. It reuses the harness's own ported `/sessions` path-gate
 predicate (`isVmSessionsPath`) as the DENY decision; the only heuristic part is extracting candidate
 paths out of markdown text.
 
+**Multiple positionals are accepted, matching `lint-skill`'s `nargs="+"`** — `analyze-skill a/SKILL.md
+b/SKILL.md`, `analyze-skill skill-a/ skill-b/`, or a mix of files, dirs, and globs in one call. A
+positional containing `*` is expanded by a small hand-rolled glob matcher (no dependency, no
+`engines.node` bump): `dir/*.md` matches shallowly (one level under `dir`); `dir/**/*.md` matches
+recursively, reusing the same symlink-following, loop-guarded walker the directory-target union scan uses
+(see below). Every positional's file set is UNIONed and deduped by resolved absolute path ACROSS THE
+WHOLE INVOCATION — a file reached both directly and through a dir/glob positional is analyzed once, not
+twice. Zero scannable files across ALL positionals is a usage error (exit 2); an unresolvable single positional (a missing
+path, or a glob shape other than the two above) fails the whole invocation the same way.
+
+**A directory target scans the UNION of every contract-bearing markdown file present, not just
+`SKILL.md`.** A plugin's dispatch/output contracts often live in `agents/*.md` or `references/*.md` —
+scanning only `SKILL.md` there is a false green. Pointing `analyze-skill` at a directory expands it to
+every shape the directory matches, deduped by resolved absolute path (a directory can match more than
+one shape at once — this repo's own `.claude/skills/cowork-harness/` is simultaneously a
+top-level-`SKILL.md` dir AND a plugin root):
+
+- a top-level `SKILL.md` present → that file, plus every markdown file recursively under top-level
+  `references/`;
+- a `.claude-plugin/plugin.json` or bare `plugin.json` present (a plugin root) → every markdown file
+  RECURSIVELY under root `agents/`, `references/`, and `commands/` — Claude Code discovers namespaced
+  commands/agents in subdirectories (`commands/tasks/build.md`, `agents/sub/x.md`), so these are `**`
+  walks, not a single-level listing — and each `skills/<name>/SKILL.md` (plus every markdown file
+  recursively under that skill's own `references/`); `skills/<name>` may itself be a directory symlink
+  and is still picked up;
+- a skill dir INSIDE a plugin (its own `SKILL.md` present, and walking UP the directory tree finds an
+  enclosing plugin manifest) → ALSO every markdown file RECURSIVELY under the enclosing plugin's root
+  `agents/`, `references/`, AND `commands/` — the same contract dirs scanned in every other shape above,
+  so a skill-dir target is never narrower than a plugin-root target for the same plugin.
+
+A FILE target is unchanged — just that one file. Every `**` walk above is a hand-rolled directory walker
+(no glob dependency) that **FOLLOWS directory symlinks** — a symlinked `references/`/`agents/`/`commands/`
+(or a symlinked file inside one) is a real, scannable contract surface, not a boundary to silently drop —
+guarded against a symlink LOOP (e.g. `references/loop -> ..`) by a realpath visited-set threaded through
+the whole walk, so a self-referencing symlink becomes one harmless extra pass, never infinite recursion. It
+matches `.md`/`.MD` case-insensitively and skips `node_modules`, `.git`, and any dot-prefixed directory.
+**ZERO scannable files under a directory target is a USAGE ERROR (exit 2)**, never a silent clean pass —
+the error message enumerates every shape it looked for.
+
+The `--output-format json` payload nests per-file results under a `files:` key —
+`{tool, version, command, ok, files: [{file, findings, suppressed}], scanned, unscanned, strict, error}`
+— never a bare array, never `results[]`. `scanned` lists every file analyzed; `unscanned` names entries
+deliberately left out of THIS target's scope — a `skills/<name>` dir with no `SKILL.md` (not a scannable
+skill dir), or a sibling skill dir in the enclosing plugin when the target is one skill dir inside that
+plugin, not the plugin root — printed as a scope banner in text mode too, so a narrower-than-expected scan
+is never silent. `ok`/`--strict` are computed across ALL scanned files: `ok` is true only when every file
+has zero findings, and `--strict` fails (exit 1) if ANY file has an unsuppressed finding. The `analyze-skill:
+ignore` marker (and the two scoped markers below) apply PER FILE — silencing one scanned file has no
+effect on any other file in the union.
+
+> **Migrating from a single-`SKILL.md`-only scan (pre-0.32):** a directory target that previously scanned
+> only `SKILL.md` may newly surface findings in `references/`/`agents/`/`commands/` teaching examples that
+> were never looked at before — including one nested under a subdirectory or reached only via a symlink,
+> both now scanned — annotate those with `analyze-skill: ignore-next-line` or an
+> `ignore-start`/`ignore-end` fence (see below) rather than reaching for the file-wide marker. The
+> `--output-format json` shape also changed: a single-file target's flat `{file, findings, suppressed,
+> strict}` became `{files: [{file, findings, suppressed}], scanned, unscanned, strict}` for uniformity
+> with the multi-file case — an external `jq '.findings'`/`.file` recipe needs `jq '.files[0].findings'`/
+> `.files[0].file` instead.
+
 **ADVISORY by default.** Because the extraction is heuristic and can over-flag innocent
 documentation/teaching examples, findings print as warnings but the command **exits 0 by default even
 when it prints findings**. Pass `--strict` to turn it into a hard gate — exit 1 on any finding, mirroring
-`lint-skill --strict` exactly. A SKILL.md can also silence the ENTIRE warning class for itself: a line
-containing `analyze-skill: ignore` (bare, or inside an HTML comment `<!-- analyze-skill: ignore -->`)
-anywhere in the file suppresses every `analyze-skill` finding for that file — including a genuine true
-positive, since this is an explicit author override, not a narrower false-positive guard. Use it on a
-SKILL.md that legitimately uses `/sessions` paths (a VM-tier-only skill) or that documents them in
-prose/teaching examples. Under `--strict`, a suppressed file never fails.
+`lint-skill --strict` exactly.
 
-Two rules, both advisory findings:
+**Three ignore markers, three scopes.** A SKILL.md can silence findings at the granularity that fits the
+false positive — from a single teaching line up to the whole file:
+
+- **`analyze-skill: ignore-next-line`** — suppresses findings on the SINGLE line immediately following
+  the marker line. The narrowest tier: use it right above one teaching example (`❌ Write(/sessions/...)`
+  in a "don't do this" callout, a one-line illustrative snippet) without touching anything else in the
+  file.
+- **`analyze-skill: ignore-start`** … **`analyze-skill: ignore-end`** — suppresses findings on every line
+  from `ignore-start` through the matching `ignore-end`, inclusive. Use it to wrap a multi-line teaching
+  block — e.g. a `references/`/`agents/` code sample that legitimately demonstrates `/sessions` addressing
+  for a VM-tier reader. A `ignore-start` with **no matching `ignore-end` before EOF** is itself a finding
+  — `unclosed-ignore-fence` — that prints and gates under `--strict` exactly like any other finding (it
+  still suppresses everything from the stray `ignore-start` to EOF, fail-open, but the missing-`ignore-end`
+  mistake itself is never silent).
+- **`analyze-skill: ignore`** (file-wide, unchanged) — silences the ENTIRE warning class for the file,
+  including a genuine true positive, since this is an explicit whole-file author override, not a narrower
+  false-positive guard. Use it on a SKILL.md that legitimately uses `/sessions` paths throughout (a
+  VM-tier-only skill). Under `--strict`, a file-wide-suppressed file never fails, and it never emits
+  `unclosed-ignore-fence` either — the whole-file override wins outright.
+
+All three accept the same wrappers as the file-wide marker: bare (`analyze-skill: ignore-next-line`), an
+HTML comment (`<!-- analyze-skill: ignore-start -->`), a markdown reference-link comment
+(`[//]: # (analyze-skill: ignore-end)`), a `#`-prefixed line, or a list bullet (`- analyze-skill:
+ignore-next-line`). Every marker is **line-anchored** — the marker text must be the line's ENTIRE
+meaningful content (allowing only the wrapper and whitespace) to take effect; a SKILL.md that merely
+*documents* one of these markers in prose (e.g. `` add `analyze-skill: ignore-next-line` to skip a line
+``) does not accidentally trigger it.
+
+**Teaching examples in `references/`/`agents/` — the pattern this unlocks.** A skill's `references/` or
+`agents/` files often carry a deliberately WRONG code sample under a "don't do this" heading — exactly the
+`/sessions`-to-file-tool shape this analyzer flags, but as a teaching illustration, not a live defect. Wrap
+just that sample in `ignore-start`/`ignore-end` (or prefix the one bad line with `ignore-next-line`)
+instead of reaching for the file-wide marker — the rest of the file, including any REAL `/sessions`
+mistake introduced later, stays fully scanned.
+
+Three rules, all advisory findings — including `unclosed-ignore-fence`, which fires on this file's own
+ignore-marker syntax rather than on `/sessions` addressing:
 
 - **`sessions-path-to-file-tool`** — a `/sessions/...` token in a file-tool/output POSITIVE context: an
   `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target,
@@ -59,6 +150,10 @@ Two rules, both advisory findings:
   `find … > $VAR`/`> VAR` redirection — not merely any `$VAR` token that happens to appear on the find
   line (an `-name "$NAME"` argument is find's INPUT, not its output, and sharing that token with an
   unrelated `Read(` does not fire).
+- **`unclosed-ignore-fence`** — an `analyze-skill: ignore-start` line with no matching `ignore-end` before
+  EOF. Not a `/sessions`-addressing finding at all — a syntax mistake in the file's OWN ignore markup,
+  reported so a forgotten `ignore-end` (which would otherwise fail-open and silently blind the rest of the
+  file) is never a silent stderr-only notice on a green exit.
 
 **Context confidence governs which guards apply.** HIGH-confidence STRUCTURED contexts — an
 `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target, and a
@@ -146,20 +241,34 @@ agent frontmatter:
   enclosing plugin by walking up from the SKILL.md to the nearest ancestor with a
   `.claude-plugin/plugin.json`/`plugin.json`, and classifies each value:
   - resolves within that plugin's `agents/`, or is literally `general-purpose` → clean, no finding;
+  - a `<this-plugin>:<agent>` (colon-qualified, prefix EQUALS this plugin's own name) whose `agent`
+    is missing from that plugin's fully-enumerated `agents/*.md` → **`subagent-type-not-found-in-plugin`**
+    — "names this plugin but that agent doesn't exist — likely a typo";
   - a `<other-plugin>:<agent>` (colon-qualified, prefix isn't this plugin's name) →
     **`subagent-type-unresolvable`** — "belongs to another plugin, can't confirm it resolves from
     here";
   - any other unresolved value → **`subagent-type-unknown`** — "not defined in this plugin and not
     the `general-purpose` built-in, can't confirm statically (may be an agent-binary built-in)".
 
-**Both findings are INFO, never WARN — by design, not an oversight.** There is no harness registry of
-built-in agent types (`Explore`, teammate-style built-ins, etc.) to disprove an unresolved bare value
+**`subagent-type-not-found-in-plugin` is WARN — it's a provable typo, not an unconfirmable unknown.**
+The namespace prefix already commits the value to THIS plugin, and the plugin's agent set was fully
+enumerated from `agents/*.md`, so a miss there can never be another binary's built-in agent hiding
+from static analysis — it's simply wrong. Being provable, it's promoted out of INFO so
+`lint-skill --strict` gates on it (exit 1).
+
+**The other two, `subagent-type-unresolvable` and `subagent-type-unknown`, stay INFO, never WARN — by
+design, not an oversight.** There is no harness registry of built-in agent types (`Explore`,
+teammate-style built-ins, etc.) to disprove an unresolved bare value or a cross-plugin reference
 against — the built-in set is agent-binary-version-dependent and the harness deliberately does not
 ship a committed list of it (it would go stale and either false-warn a real built-in or false-clear a
-typo). So an unresolved `subagent_type` is always *surfaced*, never *failed* — `lint-skill` only
-exits non-zero on it under `--strict`, matching the WARN-class footguns above. If you want a stronger
-guarantee for a specific agent, name it as `general-purpose` explicitly or ship it under the same
-plugin's `agents/` so it resolves in-plugin.
+typo). So those two are always *surfaced*, never *failed*, even under `--strict`. If you want a
+stronger guarantee for a specific agent, name it as `general-purpose` explicitly or ship it under the
+same plugin's `agents/` so it resolves in-plugin.
+
+**Run `lint-skill --strict` in CI, not plain `lint-skill`.** Plain `lint-skill` is advisory-only —
+it prints every finding (WARN and INFO alike) but exits 0. `--strict` is what turns the two
+host-loop-footgun WARNs and the provable `subagent-type-not-found-in-plugin` WARN into an actual
+gate; the naive first-reach invocation without `--strict` is a silent rubber-stamp.
 
 ## Capability / path matrix
 

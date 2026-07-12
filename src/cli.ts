@@ -169,10 +169,11 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
       [--strict]               fail on any finding (the two footguns are WARN-only by default), not just ERROR
-  analyze-skill <SKILL.md | skill-dir/>  ADVISORY token-free scan: warns on a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
+  analyze-skill <SKILL.md | skill-dir/ | glob>…  ADVISORY token-free scan: warns on a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
+      A directory target scans the UNION of every contract-bearing markdown file present, not just SKILL.md: top-level SKILL.md + references/**, a plugin root's agents/*.md + references/**/commands/*.md/skills/*/SKILL.md(+references/**), and (for a skill dir inside a plugin) the enclosing plugin's agents/*.md. Multiple positionals are accepted (matches lint-skill's nargs="+"), incl. a simple hand-rolled '*' glob — "dir/*.md" (shallow) or "dir/**/*.md" (recursive) — with the results of ALL positionals UNIONed + deduped by resolved path. Zero scannable files across every positional is a usage error (exit 2), never a silent clean pass.
       [--strict]               fail (exit 1) on any finding instead of just warning (mirrors lint-skill's --strict)
       analyze-skill: ignore    a line with this marker (bare or in an HTML comment) in a SKILL.md silences EVERY finding for that file, even under --strict
-      [--output-format json]   exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage; a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution
+      [--output-format json]   {tool,version,command,ok,files:[{file,findings,suppressed}],scanned,unscanned,strict,error} — exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage; a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
@@ -485,10 +486,18 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":
-    "usage: analyze-skill <SKILL.md | skill-dir/> [--strict] [--output-format text|json]   (ADVISORY token-free scan: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output — denied on host-loop)\n" +
+    "usage: analyze-skill <SKILL.md | skill-dir/ | glob>… [--strict] [--output-format text|json]   (ADVISORY token-free scan: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output — denied on host-loop)\n" +
     "       reuses the harness's own ported /sessions path-gate predicate (isVmSessionsPath) as the deny decision; only the EXTRACTION from SKILL.md text is heuristic.\n" +
-    "       findings are WARNINGS: exit 0 by default even when findings are printed. --strict fails (exit 1) on any finding instead (mirrors lint-skill's --strict). exit 2 = usage error.\n" +
-    "       a line containing `analyze-skill: ignore` (bare, or inside an HTML comment) anywhere in a SKILL.md silences EVERY path-fidelity finding for that file — even under --strict, even a genuine true positive (an explicit author override).\n" +
+    "       a DIRECTORY target scans the UNION of every contract-bearing markdown file present, not just SKILL.md — a plugin's dispatch/output contracts often live in agents/*.md or references/*.md:\n" +
+    "         · top-level SKILL.md present → + top-level references/**/*.md\n" +
+    "         · .claude-plugin/plugin.json or plugin.json present (a plugin root) → + agents/*.md, references/**/*.md, commands/*.md, skills/*/SKILL.md (+ that skill's own references/**/*.md)\n" +
+    "         · a skill dir INSIDE a plugin (SKILL.md present, walking up finds an enclosing plugin manifest) → + that plugin's root agents/*.md\n" +
+    '       MULTIPLE positionals are accepted (matches lint-skill\'s nargs="+"), each resolved independently (file/dir via the rules above, or a `*`-bearing target via a small hand-rolled glob matcher — `dir/*.md` shallow, `dir/**/*.md` recursive; no dependency, no engines bump).\n' +
+    "       every positional's file set is UNIONed and deduped by resolved absolute path across the WHOLE invocation (a file reached both directly and via a dir/glob is analyzed once). ZERO scannable files across ALL positionals is a USAGE ERROR (exit 2), never a silent clean pass; an unresolvable single positional (bad path, unrecognized glob shape) fails the whole invocation the same way.\n" +
+    "       findings are WARNINGS: exit 0 by default even when findings are printed. --strict fails (exit 1) if ANY scanned file (across ALL positionals) has an unsuppressed finding (mirrors lint-skill's --strict). exit 2 = usage error.\n" +
+    "       plain `analyze-skill` (no --strict) is ADVISORY ONLY — CI should invoke `analyze-skill ... --strict` to actually gate on findings, same as `lint-skill --strict`.\n" +
+    "       a line containing `analyze-skill: ignore` (bare, or inside an HTML comment) anywhere in one of the scanned files silences EVERY path-fidelity finding for THAT file — even under --strict, even a genuine true positive (an explicit author override); it does not affect other scanned files.\n" +
+    "       --output-format json emits {tool,version,command,ok,files:[{file,findings,suppressed}],scanned,unscanned,strict,error} — NOT a bare array and NOT results[]; `scanned`/`unscanned` name the files analyzed and any contract dirs left out of scope (printed as a banner in text mode too).\n" +
     "       a clean/suppressed result is a PRE-FLIGHT signal only — the runtime no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
 };
 

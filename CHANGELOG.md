@@ -6,6 +6,105 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-07-13
+
+### Added
+
+- **`assertions --list` now documents that `subagent_dispatch_healthy`'s `type` matches the dispatch
+  description** (not just resolvedAgentType/dispatchAgentType), so a regex can narrow to one dispatch in a
+  same-agent-type fleet — previously only in `docs/scenario.md`.
+- **`analyze-skill` line- and block-scoped ignore markers** — `analyze-skill: ignore-next-line` and
+  `analyze-skill: ignore-start` / `analyze-skill: ignore-end`, alongside the existing file-wide
+  `analyze-skill: ignore`. The file-wide marker silences EVERY finding in the file, which was too coarse
+  for a SKILL.md that carries just one `/sessions`-addressed teaching example (e.g. a "don't do this"
+  callout in `references/`/`agents/`): the whole file went blind to any OTHER, genuine finding. The two
+  new markers suppress only the exact line (`ignore-next-line`) or fenced range (`ignore-start`/
+  `ignore-end`, inclusive) they scope, reusing the same line-anchored marker matching as the file-wide
+  marker (bare, `#`-prefixed, list-bullet, HTML comment, or markdown reference-link comment — never
+  triggered by a marker merely documented mid-prose). An `ignore-start` with no matching `ignore-end`
+  before EOF emits its own gating `unclosed-ignore-fence` finding — it still suppresses to EOF (fail-open),
+  but the missing-`ignore-end` mistake itself prints and fails under `--strict` like any other finding,
+  never a silent notice on a green exit.
+
+- **`analyze-skill <dir>` now scans the UNION of every contract-bearing markdown file in the directory,
+  not just `SKILL.md`.** A plugin's `/sessions` dispatch/output contracts often live in `agents/**` or
+  `references/**` — scanning only `SKILL.md` there was a false green (a consumer's `agents/sub/x.md`
+  could hand a `/sessions` path straight to a file tool and `analyze-skill` would never see it). A
+  directory target is now expanded to every shape it matches, deduped by resolved absolute path: a
+  top-level `SKILL.md` (+ its `references/**`); a plugin root (`.claude-plugin/plugin.json` or
+  `plugin.json`, + `agents/**`, `references/**`, `commands/**`, and each `skills/*/SKILL.md` + that
+  skill's own `references/**`); and a skill dir living inside a plugin also pulls in the enclosing
+  plugin's `agents/**`, `references/**`, and `commands/**`. Every walk is RECURSIVE (Claude Code discovers
+  namespaced commands/agents in subdirectories — `commands/tasks/build.md`, `agents/sub/x.md` — so a
+  single-level listing silently narrowed the scan) and FOLLOWS directory symlinks, loop-guarded against a
+  self-referencing symlink via a realpath visited-set, so a symlinked `references/`/`skills/<name>` is
+  scanned rather than silently dropped. Zero scannable files under a directory target is now a usage error
+  (exit 2) that enumerates the shapes it looked for — never a silent clean pass.
+
+- **`analyze-skill` accepts MULTIPLE positionals + a simple `*` glob, matching `lint-skill`'s
+  `nargs="+"`.** A consumer with several explicit paths (or a directory's flat `*.md` set) no longer has
+  to loop `analyze-skill` once per path: `analyze-skill a/SKILL.md b/SKILL.md`, `analyze-skill skill-a/
+  skill-b/`, and `analyze-skill "plug/agents/*.md"` are all one call now. Each positional resolves
+  independently — a file or directory via the existing rules above, or a `*`-bearing target via a small
+  HAND-ROLLED glob matcher (no new dependency, no `engines.node` bump): `dir/*.md` matches shallowly,
+  `dir/**/*.md` matches recursively (reusing the same symlink-following, loop-guarded walker the
+  directory-target union scan already uses). Every positional's files are UNIONed and deduped by
+  resolved absolute path across the WHOLE invocation, extending the existing single-target dedup to
+  span all of them — a file reached
+  both directly and through a dir/glob positional is analyzed once. Zero scannable files across ALL
+  positionals remains the usage error (exit 2); a bad single positional (missing path, unrecognized glob
+  shape) fails the whole invocation.
+
+### Changed (breaking, pre-1.0)
+
+- **`lint-skill`'s `subagent-type-not-found-in-plugin` finding is now WARN, not INFO** — so
+  `lint-skill --strict` newly gates on it. This is the one `subagent_type` outcome that's a *provable*
+  typo: a `<this-plugin>:<agent>` value whose prefix names the SKILL.md's own enclosing plugin, where
+  that plugin's `agents/*.md` was fully enumerated and doesn't contain the agent — the namespace prefix
+  already commits the value to this plugin, so a miss can never be another binary's built-in hiding
+  from static analysis. The other two `subagent_type` outcomes stay INFO, unchanged, because they
+  genuinely can't be disproven: `subagent-type-unresolvable` (a `<other-plugin>:<agent>` — belongs to
+  a plugin this linter didn't scan) and `subagent-type-unknown` (a bare value with no in-plugin match —
+  may be an agent-binary built-in). A `lint-skill --strict` run that previously passed clean may now
+  fail if it carries this exact typo shape; fix the agent name (or add the missing `agents/<agent>.md`)
+  to restore a clean `--strict` run.
+- **`analyze-skill <dir> --strict` may newly fail where it passed clean before**, if `references/`/
+  `agents/`/`commands/` carries a `/sessions`-addressed teaching example that the old SKILL.md-only scan
+  never looked at — including one nested under a subdirectory or reached only via a symlink, both now
+  scanned. Annotate the example with `analyze-skill: ignore-next-line` (or an `ignore-start`/`ignore-end`
+  fence) to restore a clean `--strict` run — there is no `--skill-md-only` compatibility flag; the
+  narrower scan was the bug this closes.
+- **`analyze-skill --output-format json`'s single-file shape changed.** The flat
+  `{file, findings, suppressed, strict}` payload is now always `{files: [{file, findings, suppressed}],
+  scanned, unscanned, strict}`, for uniformity with a directory target's multi-file result. An external
+  `jq '.findings'` / `jq '.file'` recipe needs `jq '.files[0].findings'` / `jq '.files[0].file'` instead.
+- **`analyze-skill`'s JSON envelope `ok` now mirrors the exit code, not "zero findings."** Previously
+  `ok = findings.length === 0`, so an ADVISORY run (the default — findings print but exit 0) reported
+  `ok:false` even though the process exited 0 and `action.yml`'s own documented contract (`ok` "mirrors
+  the command's exit code") said otherwise; the packaged Action's job-summary reporter then rendered
+  "Overall: ❌ fail" for a run that hadn't actually failed. `ok` is now `true` on an advisory exit-0 run
+  even with findings present, and `false` only under `--strict` with findings or the exit-2 usage error
+  — the same rule `lint`/`lint-skill --output-format json` follow (see the Fixed entry below). A `jq
+  '.ok'` consumer that was treating `ok:false` as "any findings at all" should switch to checking
+  `.files[].findings` directly; the exit code (and `ok`) now only reflect `--strict` gating.
+
+### Fixed
+
+- **The packaged Action's `lint`/`lint-skill` lanes were broken.** `action.yml` always appends
+  `--output-format json` to every command it drives, but the bundled `scenario.py`'s `lint`/`lint-skill`
+  only understand `--json` — `--output-format` was an unrecognized argument to python's argparse (exit 2,
+  empty stdout), so `command: lint` / `command: lint-skill` in the Action always failed with an
+  unhelpful `ok:false` and no findings. `cowork-harness lint`/`lint-skill` now detect json mode
+  themselves, strip `--output-format json|text|=…` before forwarding to python, pass python's own
+  `--json` in json mode, and re-wrap the child's bare findings array in the harness's standard
+  `jsonPayloadEnvelope("lint"/"lint-skill", ok, { findings })` (`ok` mirrors the child's exit code). Text
+  mode (the default) is unaffected in output — `stdio: "inherit"` as before — but now also strips the
+  flag first, since python didn't know the text form either. A python-level usage error in json mode
+  (e.g. a missing required path — argparse exit 2, empty stdout) now surfaces as a `jsonError("usage",
+  …)` envelope instead of a raw `JSON.parse` crash. `action.yml` also now documents `lint-skill` and
+  `analyze-skill` in its `command` input, and no longer forwards the replay-only `--fail-on-skill-drift`
+  flag to any command other than `replay`.
+
 ## [0.31.0] — 2026-07-12
 
 ### Added

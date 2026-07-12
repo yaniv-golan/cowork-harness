@@ -1047,9 +1047,10 @@ def _finding_subagent_not_found_in_plugin(path, line, value, plugin_name, agent,
     own enclosing plugin) but whose agent isn't in its enumerated agents/*.md set. Unlike
     `subagent-type-unknown`, this can never be another binary's built-in — the namespace prefix
     already commits it to this plugin, and the plugin's agent set was fully enumerable — so it's a
-    provable typo, not an unconfirmable unknown."""
+    provable typo, not an unconfirmable unknown. Provable means it can be a hard gate: WARN (not
+    INFO), so `lint-skill --strict` fails on it."""
     return Finding(
-        "INFO",
+        "WARN",
         "subagent-type-not-found-in-plugin",
         f"pinned type `{value}` names this plugin (`{plugin_name}`) but `{agent}` is not among its "
         f"agents [{', '.join(sorted_agents)}] — likely a typo.",
@@ -1063,20 +1064,23 @@ def _finding_subagent_not_found_in_plugin(path, line, value, plugin_name, agent,
 
 def _classify_subagent_type(value, plugin_name, plugin_agent_types):
     """subagent_type severity ladder. Returns a Finding-builder (path, line, value) -> Finding, or None if
-    clean. Severity is ALWAYS INFO — see the HONEST LIMIT note above this section; never WARN/ERROR.
+    clean. Only ONE outcome is a hard gate: `subagent-type-not-found-in-plugin` is WARN (a provable
+    typo, so `lint-skill --strict` fails on it); the two unconfirmable outcomes
+    (`subagent-type-unresolvable`, `subagent-type-unknown`) stay INFO — see the HONEST LIMIT note
+    above this section for why those two can never be proven.
 
     Precedence:
       1. Resolves in-plugin, or is `general-purpose` -> clean (None).
       2. Has a `<prefix>:<agent>` shape whose prefix EQUALS the resolved plugin's own name AND the
-         plugin's agent set was non-empty (i.e. enumerable) -> `subagent-type-not-found-in-plugin`.
-         A value namespaced under this plugin's own name can never be another binary's built-in, so
-         once the plugin is fully enumerated a miss here is a provable typo, not an unconfirmable
-         unknown.
+         plugin's agent set was non-empty (i.e. enumerable) -> `subagent-type-not-found-in-plugin`
+         (WARN — provable typo, gates under `--strict`). A value namespaced under this plugin's own
+         name can never be another binary's built-in, so once the plugin is fully enumerated a miss
+         here is a provable typo, not an unconfirmable unknown.
       3. Has a `<prefix>:<agent>` shape whose prefix does NOT equal the resolved plugin's name (or
-         there's no resolved plugin at all) -> `subagent-type-unresolvable` (belongs to another
+         there's no resolved plugin at all) -> `subagent-type-unresolvable` (INFO — belongs to another
          plugin, or an empty plugin_name means we truly can't tell whose namespace it is).
       4. Otherwise (no colon, or same-plugin prefix but the plugin set was empty/unenumerable) ->
-         `subagent-type-unknown` — genuinely can't confirm statically.
+         `subagent-type-unknown` (INFO) — genuinely can't confirm statically.
     """
     if value == "general-purpose" or value in plugin_agent_types:
         return None
@@ -1170,10 +1174,10 @@ def cmd_lint_skill(args):
         _print_findings(all_findings, n_files, kind="skill file", clean_suffix=" — no Cowork host-loop footguns.")
     has_error = any(x.severity == "ERROR" for x in all_findings)
     # --strict fails on WARN too, per its own --help text ("exit non-zero on WARN too, not just ERROR")
-    # — but NEVER on INFO. The subagent_type ladder (subagent-type-unresolvable /
-    # -not-found-in-plugin / -unknown) and plugin-root-guarded are always INFO by design (there is no
-    # harness registry to disprove an unknown value against — see the subparser help above), so they
-    # must always be surfaced, never failed, even under --strict.
+    # — but NEVER on INFO. Of the subagent_type ladder, only `subagent-type-not-found-in-plugin` is
+    # WARN (a provable in-plugin typo — see the subparser help above); `subagent-type-unresolvable` and
+    # `subagent-type-unknown` stay INFO by design (there is no harness registry to disprove an unknown
+    # value against), so those two must always be surfaced, never failed, even under --strict.
     has_warn = any(x.severity == "WARN" for x in all_findings)
     if has_error or (args.strict and has_warn):
         return 1
@@ -1364,17 +1368,26 @@ def main(argv=None):
             "Also statically resolves any pinned `subagent_type` value in the SKILL.md against the "
             "enclosing plugin's `agents/*.md` (see `resolve-agent-types`): a value that resolves in-plugin "
             "or is `general-purpose` is clean; a `<this-plugin>:<agent>` whose agent is missing from an "
-            "enumerable plugin is a provable typo, reported as `subagent-type-not-found-in-plugin`; a "
-            "`<other-plugin>:<agent>` is reported as `subagent-type-unresolvable`; any other unresolved "
-            "value (including a same-plugin prefix the linter couldn't enumerate) is "
-            "`subagent-type-unknown` — all three are always INFO, never WARN, since there is no harness "
-            "registry of built-in agent types to disprove an unknown value against."
+            "enumerable plugin is a provable typo, reported as `subagent-type-not-found-in-plugin` "
+            "(WARN — gates under `--strict`, since the namespace prefix already commits it to this "
+            "plugin and its agent set was fully enumerated); a `<other-plugin>:<agent>` is reported as "
+            "`subagent-type-unresolvable` (INFO); any other unresolved value (including a same-plugin "
+            "prefix the linter couldn't enumerate) is `subagent-type-unknown` (INFO) — those two stay "
+            "INFO, never WARN, since there is no harness registry of built-in agent types to disprove "
+            "an unknown value against.\n\n"
+            "Plain `lint-skill` (no `--strict`) is ADVISORY — it prints findings but exits 0 on "
+            "WARN/INFO. CI should invoke `lint-skill --strict` to actually gate on the WARN-class "
+            "findings above (the two host-loop footguns and the provable subagent_type typo)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     lsp.add_argument("paths", nargs="+", help="SKILL.md file(s) or skill director(ies) to inspect")
     lsp.add_argument("--json", action="store_true", help="emit findings as JSON")
-    lsp.add_argument("--strict", action="store_true", help="exit non-zero on WARN too, not just ERROR")
+    lsp.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero on WARN too, not just ERROR (CI-recommended invocation; plain lint-skill is advisory-only)",
+    )
     lsp.set_defaults(func=cmd_lint_skill)
 
     rap = sub.add_parser(

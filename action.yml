@@ -1,30 +1,41 @@
 name: "cowork-harness"
 description: >-
-  Run cowork-harness (replay/lint/verify-cassettes/run) against a scenario or cassette and report the
-  verdict as a PR job summary. The token-free lane (replay/lint/verify-cassettes) runs on any
-  ubuntu-latest runner — no Docker, no API key, no agent binary. `run` (the live lane) additionally
-  needs Docker + a provisioned agent binary; this action does not provision either — see the
-  cowork-harness README's CI section for what a self-hosted live-lane runner needs.
+  Run cowork-harness (replay/lint/lint-skill/analyze-skill/verify-cassettes/run) against a scenario,
+  cassette, or skill path and report the verdict as a PR job summary. The token-free lane
+  (replay/lint/lint-skill/analyze-skill/verify-cassettes) runs on any ubuntu-latest runner — no Docker,
+  no API key, no agent binary. `run` (the live lane) additionally needs Docker + a provisioned agent
+  binary; this action does not provision either — see the cowork-harness README's CI section for what a
+  self-hosted live-lane runner needs.
 author: "Yaniv Golan"
 
 inputs:
   command:
-    description: 'cowork-harness subcommand to run: replay | lint | verify-cassettes | run'
+    description: >-
+      cowork-harness subcommand to run: replay | lint | lint-skill | analyze-skill | verify-cassettes |
+      run. `lint` and `lint-skill` are thin passthroughs to the bundled `scenario.py` (needs python3 on
+      the runner — preinstalled on ubuntu-latest); `analyze-skill` is a pure-TS static scan (no python3
+      needed). This is a description, not a validated allowlist — `path`/`extra-args` are built verbatim
+      into the invocation for any subcommand the installed `cowork-harness` accepts.
     required: false
     default: "replay"
   path:
-    description: "Cassette/scenario file or directory to check (positional argument to the command)"
+    description: "Cassette/scenario/SKILL.md/skill-dir to check (positional argument to the command)"
     required: true
   version:
     description: "npm version or dist-tag of cowork-harness to install"
     required: false
     default: "latest"
   strict:
-    description: 'Pass --strict (replay only — fail on any cassette-staleness finding, not just skill/shared-root drift)'
+    description: >-
+      Pass --strict — fail on any finding instead of just the default gate: for `replay`, any
+      cassette-staleness finding (not just skill/shared-root drift); for `lint`/`lint-skill`, any
+      WARN/INFO finding (not just ERROR); for `analyze-skill`, any advisory finding at all (it's exit-0
+      by default). `verify-cassettes`/`run` don't accept `--strict` (unknown-flag usage error), so it is
+      IGNORED (not forwarded) for those two commands.
     required: false
     default: "false"
   fail-on-skill-drift:
-    description: "Pass --fail-on-skill-drift (replay only — fail on skill/shared-root staleness classes)"
+    description: "Pass --fail-on-skill-drift — REPLAY ONLY (fail on skill/shared-root staleness classes); not forwarded to any other command."
     required: false
     default: "false"
   extra-args:
@@ -90,8 +101,17 @@ runs:
       run: |
         set +e
         args=("${{ inputs.command }}" "${{ inputs.path }}" "--output-format" "json")
-        [ "${{ inputs.strict }}" = "true" ] && args+=("--strict")
-        [ "${{ inputs.fail-on-skill-drift }}" = "true" ] && args+=("--fail-on-skill-drift")
+        # --strict is accepted only by replay/lint/lint-skill/analyze-skill; verify-cassettes/run exit 2
+        # ("unknown flag") on it, so it must NOT be forwarded to those two commands.
+        case "${{ inputs.command }}" in
+          replay | lint | lint-skill | analyze-skill)
+            [ "${{ inputs.strict }}" = "true" ] && args+=("--strict")
+            ;;
+        esac
+        # --fail-on-skill-drift is REPLAY-only (a cassette/skill-drift staleness flag); lint/lint-skill/
+        # analyze-skill don't know it — forwarding it there would be the same class of "unknown flag"
+        # breakage --output-format used to cause, just for a narrower input combination.
+        [ "${{ inputs.command }}" = "replay" ] && [ "${{ inputs.fail-on-skill-drift }}" = "true" ] && args+=("--fail-on-skill-drift")
         if [ -n "${{ inputs.extra-args }}" ]; then
           # deliberately word-split: extra-args is documented as space-separated raw flags
           read -ra extra <<< "${{ inputs.extra-args }}"

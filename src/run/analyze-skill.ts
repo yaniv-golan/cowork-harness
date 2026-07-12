@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
@@ -33,7 +33,7 @@ const log = (s: string) => writeSync(2, s + "\n");
  * legitimately uses `/sessions` paths, or one that merely documents them in prose/teaching examples.
  */
 
-export type SkillAnalysisRuleId = "sessions-path-to-file-tool" | "sessions-find-into-file-read";
+export type SkillAnalysisRuleId = "sessions-path-to-file-tool" | "sessions-find-into-file-read" | "unclosed-ignore-fence";
 
 export interface SkillFinding {
   rule: SkillAnalysisRuleId;
@@ -456,8 +456,32 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
  *  a SKILL.md — a VM-tier-only skill that legitimately uses `/sessions` paths puts a genuine
  *  marker LINE in and the whole warning class goes quiet for that file, INCLUDING a real true positive
  *  (an explicit author override, not a narrower FP guard). */
-const IGNORE_MARKER_LINE_RE =
-  /^\s*(?:<!--\s*analyze-skill:\s*ignore\s*-->|\[[^\]]*\]:\s*#\s*\(\s*analyze-skill:\s*ignore\s*\)|#+\s*analyze-skill:\s*ignore|[-*]\s*analyze-skill:\s*ignore|analyze-skill:\s*ignore)\s*$/i;
+/** Builds a line-anchored marker regex for `analyze-skill: <word>`, with the SAME five accepted
+ *  wrappers as the original hand-written `analyze-skill: ignore` pattern (HTML comment, markdown
+ *  reference-link comment, `#`-prefixed, list bullet, bare) — factored out so the three SCOPED marker
+ *  spellings (`ignore-next-line`, `ignore-start`, `ignore-end`) get byte-identical line-anchoring to the
+ *  file-wide marker, not a re-derived approximation. `word` is always one of a fixed set of literal
+ *  marker names (no regex-special characters), so no escaping is needed. Anchoring to `\s*$` right after
+ *  `word` is what prevents cross-marker collisions without any extra logic: `ignore-start` never matches
+ *  the `ignore` pattern (or vice versa) because the shorter word's alternative requires whitespace-to-EOL
+ *  immediately after it, and `-start`/`-next-line` is not whitespace. */
+function buildMarkerLineRe(word: string): RegExp {
+  return new RegExp(
+    `^\\s*(?:<!--\\s*analyze-skill:\\s*${word}\\s*-->|\\[[^\\]]*\\]:\\s*#\\s*\\(\\s*analyze-skill:\\s*${word}\\s*\\)|#+\\s*analyze-skill:\\s*${word}|[-*]\\s*analyze-skill:\\s*${word}|analyze-skill:\\s*${word})\\s*$`,
+    "i",
+  );
+}
+
+const IGNORE_MARKER_LINE_RE = buildMarkerLineRe("ignore");
+/** `analyze-skill: ignore-next-line` — suppresses findings on the SINGLE line immediately following
+ *  the marker line (not the marker line itself). See `computeScopedIgnores`. */
+const IGNORE_NEXT_LINE_MARKER_RE = buildMarkerLineRe("ignore-next-line");
+/** `analyze-skill: ignore-start` — opens a suppression fence; findings on this line through the
+ *  matching `ignore-end` line (inclusive) are suppressed. See `computeScopedIgnores`. */
+const IGNORE_START_MARKER_RE = buildMarkerLineRe("ignore-start");
+/** `analyze-skill: ignore-end` — closes the nearest open `ignore-start` fence. See
+ *  `computeScopedIgnores`. */
+const IGNORE_END_MARKER_RE = buildMarkerLineRe("ignore-end");
 
 /** Does `text` carry the `analyze-skill: ignore` marker as its OWN line (see `IGNORE_MARKER_LINE_RE`)?
  *  Exported so the CLI can print an explanatory note distinguishing "suppressed by marker" from
@@ -466,10 +490,76 @@ export function hasIgnoreMarker(text: string): boolean {
   return text.split(/\r?\n/).some((line) => IGNORE_MARKER_LINE_RE.test(line));
 }
 
+/** Result of one pass over `text` for the two SCOPED ignore markers (`ignore-next-line` and the
+ *  `ignore-start`/`ignore-end` fence) — deliberately separate from the file-wide `analyze-skill: ignore`
+ *  marker (`hasIgnoreMarker`), which is an all-or-nothing author override handled earlier by
+ *  `analyzeSkillText`'s own early return. */
+interface ScopedIgnores {
+  /** Every 1-based line number whose findings are suppressed: `ignore-next-line`'s target line, plus
+   *  every line within a closed (or, suppressed-to-EOF, unclosed) `ignore-start`/`ignore-end` fence. */
+  suppressedLines: Set<number>;
+  /** Line number of each `ignore-start` marker that reached EOF with no matching `ignore-end` — the
+   *  must-fix case: each one becomes its own gating `unclosed-ignore-fence` finding (see
+   *  `analyzeSkillText`), never a silent notice. */
+  unclosedStartLines: number[];
+}
+
+/** One pass over `text`'s raw lines (NOT the fence/indent-aware `LineInfo[]` `splitLines` produces —
+ *  ignore markers apply to the raw document text regardless of code-fence state, same as the file-wide
+ *  marker) computing which lines the two scoped markers suppress. Fences do not nest: once an
+ *  `ignore-start` is open, a second `ignore-start` line is ordinary (non-marker) content until the first
+ *  `ignore-end` closes it — this keeps the state machine (and the "which fence does this ignore-end
+ *  close" question) unambiguous. An `ignore-start` still open at EOF suppresses every line from itself
+ *  through EOF (fail-open, deliberately: an author who forgets `ignore-end` should not have every
+ *  subsequent finding in the file resurface) AND is recorded in `unclosedStartLines` so
+ *  `analyzeSkillText` can emit the gating `unclosed-ignore-fence` finding at the
+ *  fence's own start line — a line the fence's own suppression range does not need to cover for this to
+ *  work, since that finding is added directly, never filtered against `suppressedLines`. */
+function computeScopedIgnores(text: string): ScopedIgnores {
+  const rawLines = text.split(/\r?\n/);
+  const suppressedLines = new Set<number>();
+  const unclosedStartLines: number[] = [];
+  let openStart: number | null = null;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const lineNo = i + 1;
+    const line = rawLines[i];
+    if (openStart === null) {
+      if (IGNORE_NEXT_LINE_MARKER_RE.test(line)) {
+        if (lineNo + 1 <= rawLines.length) suppressedLines.add(lineNo + 1);
+        continue;
+      }
+      if (IGNORE_START_MARKER_RE.test(line)) {
+        openStart = lineNo;
+        continue;
+      }
+    } else if (IGNORE_END_MARKER_RE.test(line)) {
+      for (let l = openStart; l <= lineNo; l++) suppressedLines.add(l);
+      openStart = null;
+    }
+  }
+
+  if (openStart !== null) {
+    unclosedStartLines.push(openStart);
+    for (let l = openStart; l <= rawLines.length; l++) suppressedLines.add(l);
+  }
+
+  return { suppressedLines, unclosedStartLines };
+}
+
 /** Scan one SKILL.md's full text and return every finding, ordered by line number. `filePath` is used
  *  only to stamp `SkillFinding.path` (the caller resolves it once per target). Returns `[]` immediately,
- *  before any rule runs, when the file carries the `analyze-skill: ignore` marker (see `hasIgnoreMarker`)
- *  — the marker is an author override and must suppress even a genuine true positive. */
+ *  before any rule runs, when the file carries the FILE-WIDE `analyze-skill: ignore` marker (see
+ *  `hasIgnoreMarker`) — that marker is an explicit whole-file author override and must suppress even a
+ *  genuine true positive, INCLUDING this file's own `unclosed-ignore-fence` finding below (an unclosed
+ *  scoped fence is moot once the whole file is silenced).
+ *
+ *  The two SCOPED markers (`ignore-next-line`, `ignore-start`/`ignore-end`) are narrower: rather than an
+ *  early return, every rule below still runs over the FULL file, and the scoped-ignore line ranges
+ *  (`computeScopedIgnores`) are used only to FILTER the resulting findings by line at the end — so a
+ *  teaching example wrapped in `ignore-start`/`ignore-end` (or preceded by `ignore-next-line`) doesn't
+ *  blind the rest of the file to a genuine finding elsewhere, the exact regression the file-wide marker
+ *  caused and this task fixes. */
 export function analyzeSkillText(text: string, filePath: string): SkillFinding[] {
   if (hasIgnoreMarker(text)) return [];
   const findings: SkillFinding[] = [];
@@ -577,23 +667,393 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
     }
   }
 
-  return findings.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
+  // Scoped-ignore filter: drop every finding whose line falls inside an `ignore-next-line` target or an
+  // `ignore-start`/`ignore-end` fence (open or closed — an unclosed fence still suppresses to EOF, see
+  // `computeScopedIgnores`). Applied here, AFTER every rule above has already run over the full file, so
+  // a scoped ignore narrows what's REPORTED without narrowing what's SCANNED.
+  const { suppressedLines, unclosedStartLines } = computeScopedIgnores(text);
+  const scoped = suppressedLines.size === 0 ? findings : findings.filter((f) => !suppressedLines.has(f.line));
+
+  // Unclosed-fence must-fix: an `ignore-start` with no matching `ignore-end` is itself a real, gating
+  // finding — added directly (not via `add`/`seen`, and never filtered against `suppressedLines`, so the
+  // fence's own suppress-to-EOF range can never silently swallow it) so it prints under the normal
+  // finding path and gates under `--strict` exactly like any other finding. This is the must-fix this
+  // task exists to guarantee: a forgotten `ignore-end` fails VISIBLE, never a silent stderr-only notice.
+  for (const lineNo of unclosedStartLines) {
+    scoped.push({
+      rule: "unclosed-ignore-fence",
+      path: filePath,
+      line: lineNo,
+      message:
+        "`analyze-skill: ignore-start` has no matching `analyze-skill: ignore-end` before EOF — findings from " +
+        "this line through EOF are suppressed (fail-open), but this fence itself is a finding: add the missing " +
+        "`ignore-end`, or remove the stray `ignore-start`.",
+    });
+  }
+
+  return scoped.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
 }
 
-/** Resolve the CLI target to the SKILL.md text to analyze: a file is used as-is, a directory is expected
- *  to contain a `SKILL.md`. */
-function resolveSkillTarget(target: string): { file: string } | { error: string } {
-  if (!existsSync(target)) return { error: `path not found: ${target}` };
-  if (statSync(target).isDirectory()) {
-    const md = join(target, "SKILL.md");
-    if (!existsSync(md)) return { error: `no SKILL.md found under ${target}` };
-    return { file: md };
+/** Result of resolving a directory (or file) target to the set of contract-bearing markdown files to
+ *  analyze — see `resolveSkillTarget` below for the shape rules. `files` is deduped by resolved
+ *  absolute path (a target dir can match more than one shape at once — see the top-level-SKILL.md +
+ *  plugin-root overlap this repo's own `.claude/skills/cowork-harness/` demonstrates); `unscanned` names
+ *  contract dirs (or entries) that exist on disk but were deliberately left OUT of this target's scope —
+ *  a sibling skill in the enclosing plugin (when the target is one skill dir inside that plugin, not the
+ *  plugin root itself), or a `skills/<name>` entry with no `SKILL.md` — the scope banner prints these so
+ *  a narrower-than-expected scan is never silent. As of this fix, `references/` and `commands/` are no
+ *  longer among the things a skill-dir target leaves unscanned in its enclosing plugin (see rule 3
+ *  below) — every contract dir this tool scans anywhere else is now either SCANNED here or explicitly
+ *  named in `unscanned`, never silently dropped. */
+export interface SkillTargetResolution {
+  files: string[];
+  unscanned: string[];
+}
+
+/** `.claude-plugin/plugin.json` OR bare `plugin.json` at `dir` — the plugin-root manifest test, shared by
+ *  the plugin-root shape and the enclosing-plugin walk-up. Mirrors `scenario.py`'s own
+ *  `_find_enclosing_plugin_dir` acceptance of either manifest location. */
+function isPluginManifestDir(dir: string): boolean {
+  return existsSync(join(dir, ".claude-plugin", "plugin.json")) || existsSync(join(dir, "plugin.json"));
+}
+
+/** Walk UP from `startDir` to the nearest ancestor (inclusive of `startDir` itself) carrying a plugin
+ *  manifest — the enclosing plugin for a skill dir that is not itself a plugin root. Net-new; there is no
+ *  prior TS implementation. Semantic reference: `scenario.py:_find_enclosing_plugin_dir` (accepts either
+ *  manifest location, walks `[start, *start.parents]`). Returns `null` once the filesystem root is
+ *  reached with no manifest found (`dirname(dir) === dir`). */
+function findEnclosingPluginDir(startDir: string): string | null {
+  let dir = resolve(startDir);
+  for (;;) {
+    if (isPluginManifestDir(dir)) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
-  return { file: target };
+}
+
+/** Directory names the recursive markdown walker (`walkMarkdownDeep`) never descends into: `node_modules`
+ *  and `.git` (vendored/VCS trees that can be enormous and are never a skill's own contract surface), plus
+ *  ANY dot-prefixed directory (`.git` itself, `.github`, a stray `.cache`, etc. — dot-dirs are tooling/VCS
+ *  convention, not skill contract dirs). Checked by NAME only and applied identically to a real directory
+ *  and a symlinked directory (see `walkMarkdownDeep`) — a symlinked `node_modules` is exactly as
+ *  uninteresting as a real one. */
+const DENYLISTED_WALK_DIR_NAMES = new Set(["node_modules", ".git"]);
+function isDenylistedWalkDirName(name: string): boolean {
+  return DENYLISTED_WALK_DIR_NAMES.has(name) || name.startsWith(".");
+}
+
+/** Recursive `*.md` walk under `dir` (used for EVERY `agents/**`, `commands/**`, and `references/**` shape
+ *  — Claude Code discovers namespaced commands/agents in subdirectories, e.g. `commands/tasks/build.md` /
+ *  `agents/sub/x.md`, so a single-level listing silently narrowed the scan; this walker is now the ONLY
+ *  markdown-collection primitive `resolveSkillTarget` uses) via a hand-rolled `readdirSync` walker — glob
+ *  dependencies are unavailable on Node 20 in this repo's runtime target. Matches `.md`/`.MD`/any case
+ *  (case-insensitive — Markdown tooling doesn't care about extension case, and neither should this
+ *  scanner). `[]` when `dir` doesn't exist.
+ *
+ *  FOLLOWS directory symlinks — via `statSync` on the entry's full path, which resolves THROUGH the link,
+ *  unlike a `Dirent`'s own `isDirectory()`, which always reports `false` for a symlink dirent (Node
+ *  reports the link's OWN type there, not its target's). A symlinked `references/` (or a symlinked file
+ *  inside one) is a real, scannable contract surface, not a boundary to silently drop — the earlier
+ *  never-follow posture was itself a silent-narrowing bug, not a safety feature.
+ *
+ *  Guarded against symlink LOOPS by `visited`: a `Set` of `realpathSync`'d directory paths threaded BY
+ *  REFERENCE through every recursive call (never reset per call, including across the top-level caller's
+ *  own recursive descent). Before a directory (real or symlinked) is read, its realpath is checked against
+ *  `visited`; if already present, the descent is skipped and `[]` is returned for that branch. This is what
+ *  turns a `references/loop -> ..` self-referencing symlink into a single harmless extra pass over
+ *  already-covered ground instead of infinite recursion.
+ *
+ *  Skips `node_modules`, `.git`, and any dot-prefixed directory (`isDenylistedWalkDirName`) — vendored or
+ *  VCS trees are never a skill's own contract surface and can be large enough to make an unfiltered walk
+ *  expensive. A dangling symlink (its `statSync` throws) is silently skipped: there is nothing on the
+ *  other end to scan, which is not the same failure class as a real contract dir being out of scope. */
+function walkMarkdownDeep(dir: string, visited: Set<string> = new Set()): string[] {
+  if (!existsSync(dir)) return [];
+  let real: string;
+  try {
+    real = realpathSync(dir);
+  } catch {
+    return [];
+  }
+  if (visited.has(real)) return [];
+  visited.add(real);
+
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const out: string[] = [];
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (isDenylistedWalkDirName(e.name)) continue;
+      out.push(...walkMarkdownDeep(full, visited));
+      continue;
+    }
+    if (e.isSymbolicLink()) {
+      let st;
+      try {
+        st = statSync(full); // follows the link — resolves to the TARGET's type
+      } catch {
+        continue; // dangling symlink — nothing on the other end to scan
+      }
+      if (st.isDirectory()) {
+        if (isDenylistedWalkDirName(e.name)) continue;
+        out.push(...walkMarkdownDeep(full, visited));
+      } else if (st.isFile() && /\.md$/i.test(e.name)) {
+        out.push(full);
+      }
+      continue;
+    }
+    if (e.isFile() && /\.md$/i.test(e.name)) out.push(full);
+  }
+  return out;
+}
+
+/** Non-recursive subdirectory NAMES directly inside `dir` (used to enumerate `skills/*` entries). This is
+ *  a single-level listing, never itself recursive, so it needs no loop-guard of its own: a symlinked
+ *  `skills/<name>` pointing back into an ancestor is only a hazard for something that RECURSES through
+ *  it, and the caller's own `walkMarkdownDeep` calls into that skill's `references/` carry their own
+ *  loop-guard (a fresh `visited` set per top-level walk). `[]` when `dir` doesn't exist.
+ *
+ *  INCLUDES a symlinked directory — via `statSync`, which follows the link — rather than excluding it. A
+ *  symlinked `skills/linked` pointing at a real skill dir elsewhere is a real, scannable skill, not a
+ *  boundary to silently drop: excluding it (the earlier behavior, via `Dirent.isDirectory()`, which is
+ *  `false` for every symlink) made `skills/linked` invisible to this listing and, with no other skill
+ *  present, made the whole target resolve to zero files — an incorrect exit-2 usage error for a dir that
+ *  plainly had a scannable skill, and in a mixed plugin (a symlinked skill alongside real ones) a silent
+ *  false green: the symlinked skill's contents were never analyzed and nothing said so. A dangling
+ *  symlink is silently skipped — nothing on the other end. */
+function listSubdirs(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      out.push(e.name);
+      continue;
+    }
+    if (e.isSymbolicLink()) {
+      let st;
+      try {
+        st = statSync(join(dir, e.name));
+      } catch {
+        continue; // dangling symlink
+      }
+      if (st.isDirectory()) out.push(e.name);
+    }
+  }
+  return out;
+}
+
+/** Resolve the CLI target to the FULL UNION of contract-bearing markdown files to analyze:
+ *
+ *  - a FILE target → that file only (unchanged single-file behavior);
+ *  - a DIRECTORY target is expanded to every shape it matches, deduped by resolved absolute path (a dir
+ *    can match more than one shape — see this repo's own `.claude/skills/cowork-harness/`, which is
+ *    simultaneously a top-level-SKILL.md dir AND a plugin root):
+ *      1. top-level "SKILL.md" present → add it + every markdown file RECURSIVELY under top-level
+ *         "references/";
+ *      2. ".claude-plugin/plugin.json" or bare "plugin.json" present (a plugin root) → add every
+ *         markdown file RECURSIVELY under root "agents/", "references/", and "commands/" — Claude Code
+ *         discovers namespaced commands/agents in subdirectories (`commands/tasks/build.md`,
+ *         `agents/sub/x.md`), so these are `**` walks, not a single-level listing (see
+ *         `walkMarkdownDeep`) — and each "skills/<name>/SKILL.md" (+ every markdown file recursively
+ *         under that skill's own "references/"); "skills/<name>" may itself be a directory SYMLINK and is
+ *         still picked up (see `listSubdirs`);
+ *      3. the dir is a skill dir INSIDE a plugin (its own "SKILL.md" present, and walking UP finds an
+ *         enclosing plugin manifest) → ALSO add every markdown file RECURSIVELY under the enclosing
+ *         plugin's root "agents/", "references/", AND "commands/" — `references/` and `commands/` are
+ *         contract dirs this tool scans in every other shape above, so a skill-dir target must not be
+ *         narrower than a plugin-root target for the SAME underlying plugin.
+ *
+ *  Every recursive walk above (`walkMarkdownDeep`) FOLLOWS directory symlinks (loop-guarded against
+ *  `references/loop -> ..`-style self-reference) and matches `.md`/`.MD` case-insensitively — nothing
+ *  under a scanned root is silently dropped for being a symlink or an unusual extension case. The
+ *  plugin's sibling `skills/*` entries (other than the target itself, for shape 3) remain genuinely OUT
+ *  of scope for a skill-dir target — named in `unscanned`, never silently dropped.
+ *
+ *  ZERO scannable files is a USAGE ERROR, never a silent clean pass — the caller reports it via `fail()`.
+ *  The message DISTINGUISHES two cases: no shape recognized at all (no top-level SKILL.md, no plugin
+ *  manifest anywhere), vs. a recognized plugin shape that simply has no markdown contract files (e.g. a
+ *  hooks/MCP-only plugin with `agents/`/`references/`/`commands/`/`skills/` all absent or empty) —
+ *  conflating the two produced a confusing "looked for plugin.json" message even for a dir that plainly
+ *  HAD one. */
+export function resolveSkillTarget(target: string): SkillTargetResolution | { error: string } {
+  if (!existsSync(target)) return { error: `path not found: ${target}` };
+  if (!statSync(target).isDirectory()) return { files: [target], unscanned: [] };
+
+  const dir = resolve(target);
+  const files = new Set<string>();
+  const unscanned: string[] = [];
+
+  const topSkillMd = join(dir, "SKILL.md");
+  const hasTopSkillMd = existsSync(topSkillMd);
+  if (hasTopSkillMd) {
+    files.add(topSkillMd);
+    for (const f of walkMarkdownDeep(join(dir, "references"))) files.add(f);
+  }
+
+  const isPluginRoot = isPluginManifestDir(dir);
+  if (isPluginRoot) {
+    for (const f of walkMarkdownDeep(join(dir, "agents"))) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "references"))) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "commands"))) files.add(f);
+    const skillsDir = join(dir, "skills");
+    for (const name of listSubdirs(skillsDir)) {
+      const subSkillMd = join(skillsDir, name, "SKILL.md");
+      if (!existsSync(subSkillMd)) {
+        unscanned.push(`${join(skillsDir, name)} (no SKILL.md — not a scannable skill dir)`);
+        continue;
+      }
+      files.add(subSkillMd);
+      for (const f of walkMarkdownDeep(join(skillsDir, name, "references"))) files.add(f);
+    }
+  } else if (hasTopSkillMd) {
+    const enclosing = findEnclosingPluginDir(dir);
+    if (enclosing) {
+      for (const f of walkMarkdownDeep(join(enclosing, "agents"))) files.add(f);
+      for (const f of walkMarkdownDeep(join(enclosing, "references"))) files.add(f);
+      for (const f of walkMarkdownDeep(join(enclosing, "commands"))) files.add(f);
+      const siblingSkillsDir = join(enclosing, "skills");
+      for (const name of listSubdirs(siblingSkillsDir)) {
+        const siblingDir = join(siblingSkillsDir, name);
+        if (siblingDir === dir) continue; // this skill itself, already in scope
+        unscanned.push(`${siblingDir} (sibling skill in the enclosing plugin — out of scope for a skill-dir target)`);
+      }
+    }
+  }
+
+  if (files.size === 0) {
+    if (!hasTopSkillMd && !isPluginRoot) {
+      return {
+        error:
+          `no contract-bearing markdown found under ${target} — looked for: a top-level SKILL.md ` +
+          "(+ references/**/*.md); a plugin root (.claude-plugin/plugin.json or plugin.json, pulling in " +
+          "agents/**/*.md, references/**/*.md, commands/**/*.md, and skills/*/SKILL.md + " +
+          "skills/*/references/**/*.md); or a skill dir whose SKILL.md sits somewhere inside an enclosing " +
+          "plugin (pulling in that plugin's agents/**/*.md, references/**/*.md, and commands/**/*.md)",
+      };
+    }
+    // A shape WAS recognized (a plugin manifest exists at `dir` — `hasTopSkillMd` can't be true here,
+    // since that branch always adds `topSkillMd` itself and `files` would be non-empty) — it simply has
+    // no markdown contract files: no agents/, references/, commands/, or skills/*/SKILL.md content, e.g.
+    // a hooks/MCP-only plugin. Distinct message so "no recognized shape" and "recognized shape, nothing
+    // to scan" are never conflated.
+    return {
+      error:
+        `${target} matches a plugin shape (.claude-plugin/plugin.json or plugin.json present) but has no ` +
+        "markdown contract files to scan — no agents/**/*.md, references/**/*.md, commands/**/*.md, or " +
+        "skills/*/SKILL.md found; likely a hooks/MCP-only plugin with nothing for analyze-skill to check",
+    };
+  }
+
+  return { files: [...files].sort(), unscanned };
+}
+
+/** Translate ONE glob path segment (the filename component, e.g. `*.md`, `agent-*.md`) into a
+ *  case-insensitive `RegExp` — the only glob syntax supported is `*` as a wildcard; every other
+ *  character is escaped literally. Matched against a bare file NAME (`basename`), never a full path —
+ *  `*` never crosses a `/` in this matcher (there is no such thing as `dir/*.md` matching a nested
+ *  file; that's what the `**` shape below is for). Case-insensitive to match this file's existing
+ *  `.md`/`.MD` convention (`walkMarkdownDeep`, `resolveSkillTarget`). */
+function globSegmentToRegExp(segment: string): RegExp {
+  const parts = segment.split("*").map((literal) => literal.replace(/[.+^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`^${parts.join(".*")}$`, "i");
+}
+
+/** Expand ONE glob positional to its matching files. HAND-ROLLED — no `fs.globSync` dependency, no
+ *  `engines.node` bump (owner decision) — and deliberately narrow: only two shapes are recognized,
+ *  mirroring the two the walker already supports:
+ *
+ *  - `dir/*.md` (shallow) — a single `readdirSync` of `dir`, filtered to files whose NAME matches the
+ *    final segment's pattern (`globSegmentToRegExp`). Not recursive: a nested `dir/sub/x.md` is never
+ *    matched by this shape, by design (that's what `**` is for).
+ *  - `dir/**\/*.md` (recursive) — reuses `walkMarkdownDeep` (the same no-symlink-loop, denylist-aware,
+ *    case-insensitive `.md` walker `resolveSkillTarget` itself uses) to collect every markdown file
+ *    under `dir`, then filters those by the final segment's pattern too (a no-op filter for the
+ *    canonical `**\/*.md`, but lets `**\/agent-*.md` narrow further without extra plumbing).
+ *
+ *  `dir` may be empty (a bare `*.md` or `**\/*.md` glob, relative to cwd). Any OTHER placement of `*`
+ *  (a wildcard directory segment BEFORE the filename, e.g. `dir` + wildcard-dir + `agents.md`; or no
+ *  `*` at all in the final segment) is a usage error naming the two supported shapes — never silently
+ *  misinterpreted. A shape that resolves to zero matches is NOT itself an error (a `plug/agents/*.md`
+ *  glob against an `agents/` dir with only non-matching files is a valid, if empty, expansion) — the
+ *  caller's cross-positional "zero total files" check is what turns an empty run into exit 2.
+ */
+function expandGlob(pattern: string): { files: string[] } | { error: string } {
+  const segments = pattern.split("/");
+  const nameSegment = segments[segments.length - 1];
+  let dirSegments = segments.slice(0, -1);
+  const recursive = dirSegments.length > 0 && dirSegments[dirSegments.length - 1] === "**";
+  if (recursive) dirSegments = dirSegments.slice(0, -1);
+
+  if (dirSegments.some((s) => s.includes("*")) || !nameSegment.includes("*")) {
+    return {
+      error: `unsupported glob shape: ${pattern} — only "dir/*.md" (shallow) and "dir/**/*.md" (recursive) are supported`,
+    };
+  }
+
+  const dir = dirSegments.length > 0 ? dirSegments.join("/") : ".";
+  const nameRe = globSegmentToRegExp(nameSegment);
+
+  if (recursive) {
+    return { files: walkMarkdownDeep(resolve(dir)).filter((f) => nameRe.test(basename(f))) };
+  }
+
+  if (!existsSync(dir)) return { files: [] };
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return { files: [] };
+  }
+  const files: string[] = [];
+  for (const e of entries) {
+    if (!nameRe.test(e.name)) continue;
+    const full = join(dir, e.name);
+    if (e.isFile()) {
+      files.push(resolve(full));
+      continue;
+    }
+    if (e.isSymbolicLink()) {
+      let st;
+      try {
+        st = statSync(full); // follows the link — resolves to the TARGET's type
+      } catch {
+        continue; // dangling symlink
+      }
+      if (st.isFile()) files.push(resolve(full));
+    }
+  }
+  return { files };
+}
+
+/** Resolve ONE CLI positional (a file, a directory, or a `*`-bearing glob) to the files it names. A
+ *  glob (`target.includes("*")`) is expanded via `expandGlob`; anything else is unchanged single-target
+ *  behavior, delegated to `resolveSkillTarget` (file → itself; directory → its shape-union). Shared by
+ *  `cmdAnalyzeSkill` across ALL positionals — the caller unions + dedups the results by resolved
+ *  absolute path. */
+function resolvePositional(target: string): SkillTargetResolution | { error: string } {
+  if (target.includes("*")) {
+    const g = expandGlob(target);
+    if ("error" in g) return g;
+    return { files: g.files, unscanned: [] };
+  }
+  return resolveSkillTarget(target);
 }
 
 /**
- * `cowork-harness analyze-skill <SKILL.md | skill-dir/>` — an ADVISORY, token-free scan (unlike the
+ * `cowork-harness analyze-skill <SKILL.md | skill-dir/ | glob>…` — an ADVISORY, token-free scan (unlike the
  * `lint-skill` two-footgun WARN check, which is also advisory by default): findings are printed but
  * exit 0 by DEFAULT, since the extraction is heuristic and can over-flag innocent documentation. Pass
  * `--strict` to turn it into a hard gate (exit 1 on any finding, mirroring `lint-skill --strict`
@@ -622,56 +1082,99 @@ export function cmdAnalyzeSkill(args: string[]): void {
     return fail(
       "analyze-skill",
       "usage",
-      "usage: analyze-skill <SKILL.md | skill-dir/> [--strict] [--output-format text|json]",
+      "usage: analyze-skill <SKILL.md | skill-dir/ | glob>… [--strict] [--output-format text|json]",
       undefined,
       asJson,
     );
   }
-  if (p.positionals.length > 1) {
+
+  // Multiple positionals + a simple `*` glob (matching `lint-skill`'s `nargs="+"`) — resolve EACH
+  // positional independently (a file/dir target via `resolveSkillTarget`, a `*`-bearing target via
+  // `expandGlob`), then UNION + DEDUP by resolved absolute path across ALL of them, extending the
+  // single-target dedup Set to span the whole invocation. A resolution error on ANY ONE positional
+  // (missing path, unrecognized glob shape, a dir matching no known shape) fails the whole invocation
+  // immediately — same usage-error posture a single bad positional had before multi-positional support.
+  const files = new Set<string>();
+  const unscannedSet = new Set<string>();
+  for (const target of p.positionals) {
+    const resolved = resolvePositional(target);
+    if ("error" in resolved) {
+      return fail("analyze-skill", "usage", `analyze-skill: ${resolved.error}`, undefined, asJson);
+    }
+    for (const f of resolved.files) files.add(resolve(f));
+    for (const u of resolved.unscanned) unscannedSet.add(u);
+  }
+
+  if (files.size === 0) {
     return fail(
       "analyze-skill",
       "usage",
-      `analyze-skill takes one <SKILL.md | skill-dir/> (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      `analyze-skill: no scannable files found across ${p.positionals.length} target(s): ${p.positionals.join(", ")}`,
       undefined,
       asJson,
     );
   }
-  const target = p.positionals[0];
-  const resolved = resolveSkillTarget(target);
-  if ("error" in resolved) {
-    return fail("analyze-skill", "usage", `analyze-skill: ${resolved.error}`, undefined, asJson);
+
+  const fileList = [...files].sort();
+  const unscanned = [...unscannedSet].sort();
+
+  const perFile: { file: string; findings: SkillFinding[]; suppressed: boolean }[] = [];
+  for (const file of fileList) {
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (e) {
+      return fail("analyze-skill", "usage", `analyze-skill: cannot read ${file}: ${(e as Error).message}`, undefined, asJson);
+    }
+    const suppressed = hasIgnoreMarker(text);
+    const findings = analyzeSkillText(text, file); // [] when `suppressed` — see analyzeSkillText
+    perFile.push({ file, findings, suppressed });
   }
-  let text: string;
-  try {
-    text = readFileSync(resolved.file, "utf8");
-  } catch (e) {
-    return fail("analyze-skill", "usage", `analyze-skill: cannot read ${resolved.file}: ${(e as Error).message}`, undefined, asJson);
-  }
-  const suppressed = hasIgnoreMarker(text);
-  const findings = analyzeSkillText(text, resolved.file); // [] when `suppressed` — see analyzeSkillText
-  const ok = findings.length === 0;
-  const failing = strict && findings.length > 0; // suppressed files never reach here with findings, so --strict can't fail them
+
+  const totalFindings = perFile.reduce((n, f) => n + f.findings.length, 0);
+  const failing = strict && totalFindings > 0; // suppressed files never contribute findings, so --strict can't fail on them
+  // `ok` mirrors the exit code (matches `action.yml`'s documented "`ok` mirrors the command's exit
+  // code" contract, and the same rule `lint`/`lint-skill` follow — see scenario-tool.ts's
+  // `runLintLike`): true on an advisory run with findings (exit 0), false only under `--strict` with
+  // findings or the exit-2 usage error above. This command is ADVISORY BY DEFAULT (see the doc comment
+  // above `cmdAnalyzeSkill`) — `ok:false` with a clean exit 0 would contradict the exit code AND
+  // action.yml's own contract, and render.js would print "Overall: ❌ fail" for a run that exited 0.
+  const ok = !failing;
 
   if (json) {
-    out(jsonPayloadEnvelope("analyze-skill", ok, { file: resolved.file, findings, suppressed, strict }));
+    out(
+      jsonPayloadEnvelope("analyze-skill", ok, {
+        files: perFile,
+        scanned: fileList,
+        unscanned,
+        strict,
+      }),
+    );
   } else {
-    if (suppressed) {
-      log(`⊘ analyze-skill: ${resolved.file} — path-fidelity warnings suppressed for this file by the ` + "`analyze-skill: ignore` marker");
-    } else if (ok) {
-      log(`✓ analyze-skill: ${resolved.file} — no /sessions-to-file-tool findings`);
-    } else {
-      for (const f of findings) log(`⚠ ${f.path}:${f.line}: [${f.rule}] ${f.message}`);
+    for (const pf of perFile) {
+      log(`── ${pf.file} ──`);
+      if (pf.suppressed) {
+        log(`⊘ analyze-skill: ${pf.file} — path-fidelity warnings suppressed for this file by the ` + "`analyze-skill: ignore` marker");
+      } else if (pf.findings.length === 0) {
+        log(`✓ analyze-skill: ${pf.file} — no /sessions-to-file-tool findings`);
+      } else {
+        for (const f of pf.findings) log(`⚠ ${f.path}:${f.line}: [${f.rule}] ${f.message}`);
+      }
+    }
+    if (totalFindings > 0) {
       log(
-        `⚠ analyze-skill: ${findings.length} finding(s) in ${resolved.file} — advisory (exit 0)` +
+        `⚠ analyze-skill: ${totalFindings} finding(s) across ${fileList.length} file(s) — advisory (exit 0)` +
           (strict ? ", failing on --strict (exit 1)" : "; pass --strict to fail on findings"),
       );
+    } else {
+      log(`✓ analyze-skill: ${fileList.length} file(s) scanned — no findings`);
     }
-    if (!suppressed) {
-      log(
-        "  a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution — the runtime " +
-          "no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
-      );
-    }
+    log(
+      "  a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution — the runtime " +
+        "no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
+    );
+    log(`  scope: scanned ${fileList.length} file(s) — ${fileList.join(", ")}`);
+    log(unscanned.length > 0 ? `  scope: left unscanned — ${unscanned.join("; ")}` : "  scope: no contract dirs left unscanned");
   }
   return process.exit(failing ? 1 : 0);
 }
