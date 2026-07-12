@@ -76,6 +76,24 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The `no_delete_in_outputs` outputs-delete scan (`isOutputsDelete`) now parses the actual delete
+  TARGET by default, instead of flagging on whole-command token co-occurrence.** A binary-verified read
+  of real Cowork's own enforcement showed it denies outputs deletes STRUCTURALLY, by the resolved
+  target's mount (the `outputs` mount is `rw` without the delete bit) — not by scanning command text —
+  so a target-based scan is MORE faithful, not less safe. Previously `T=$(mktemp); …; rm -f "$T"` was
+  flagged just because "outputs" appeared elsewhere in the same command, even though the `rm` target was
+  `/tmp`. Now each rm-family delete statement's own target(s) are checked; a delete is suppressed only
+  when every target is *provably* outside outputs — an absolute/relative path clear of `outputs/`, or a
+  path under a safe prefix. `/tmp/` and the literal `$TMPDIR`/`${TMPDIR}` idiom are safe by DEFAULT
+  (including a `VAR=$(mktemp …)`-sourced `$VAR`, resolved by a narrow, source-order-aware pass);
+  `COWORK_HARNESS_SAFE_STAGING_PREFIX` remains available to union in operator-specific prefixes. An
+  unresolved/command-substituted target (anything other than the recognized `mktemp` idiom) still always
+  flags — the guiding invariant, "prefer a false positive over a false negative when a target is
+  genuinely unprovable," is unchanged. Also fixed in the same pass: `splitStatements` now joins bash
+  backslash-newline line continuations before splitting, so a line-wrapped `mv \` / `outputs/a.txt \` /
+  `/tmp/b.txt` is scanned as one logical statement instead of being shredded into fragments too small for
+  the `mv`-direction check to see both operands (previously an under-detection).
+
 - **The staged NATIVE agent binary (hostloop/cowork tiers) now tolerates a patch-level staging drift by
   default, instead of forcing `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`.** A mid-session Claude Desktop
   auto-update prunes the pinned native version dir and stages a newer one; since the native binary

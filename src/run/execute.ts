@@ -1671,9 +1671,18 @@ const TOUCHES_OUTPUTS = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
 const UNDER_OUTPUTS = /(^|\/)(mnt\/)?outputs(\/|$)/;
 const CD_INTO_OUTPUTS = /\b(cd|pushd)\s+["']?(mnt\/)?outputs(?![\w.])/;
 
-/** Configured safe-staging prefixes (opt-in, no default — `/tmp` is NOT assumed scratch since a skill may
- *  stage deliverables there). Set COWORK_HARNESS_SAFE_STAGING_PREFIX to a comma-separated list to enable
- *  rm-suppression for deletes provably scoped under those prefixes. */
+/** Default safe-staging prefixes, always active. Real Cowork denies an outputs-delete STRUCTURALLY by the
+ *  resolved target's mount (the `outputs` mount is `rw` without the delete bit) — a delete whose target
+ *  provably lands under `/tmp` (or the literal, unexpanded `$TMPDIR`/`${TMPDIR}` idiom) is genuinely never
+ *  an outputs delete in production, so treating it as scratch here is MORE faithful, not less safe. (Prior
+ *  rationale for leaving this opt-in — "`/tmp` is NOT assumed scratch" — predated that binary finding.) */
+function defaultSafePrefixes(): string[] {
+  return ["/tmp/", "$TMPDIR/", "${TMPDIR}/"];
+}
+
+/** Additional operator-configured safe-staging prefixes, unioned with `defaultSafePrefixes()`. Set
+ *  COWORK_HARNESS_SAFE_STAGING_PREFIX to a comma-separated list to extend rm-suppression to other
+ *  provably-scratch prefixes (e.g. a skill's own `/scratch` convention). */
 function safePrefixes(): string[] {
   return (process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX ?? "")
     .split(",")
@@ -1682,10 +1691,22 @@ function safePrefixes(): string[] {
     .map((p) => (p.endsWith("/") ? p : p + "/"));
 }
 
+/** Collapse bash backslash-newline line continuations (`\` immediately followed by a newline, plus any
+ *  following indentation) into a single space, so a line-wrapped statement is one logical line before any
+ *  splitting/scanning happens. Without this, `splitStatements` (which splits on bare `\n`) shreds a
+ *  line-continued `mv \` / `outputs/a.txt \` / `/tmp/b.txt` into fragments too small for `mvDeletesOutputs`
+ *  to see both operands — an UNDER-detection (false negative), not a false positive. Applied inside
+ *  `expandSimpleVars` (the single entry point both the mv scan and the rm scan run through) so every caller
+ *  gets joined statements for free. */
+function joinLineContinuations(cmd: string): string {
+  return cmd.replace(/\\\r?\n[ \t]*/g, " ");
+}
+
 /** Substitute simple `NAME=VALUE` assignments into later `$NAME`/`${NAME}` uses. Conservative: skips
  *  command-substituted values (`$(...)`/backticks) so an unresolved indirect target is never treated as
  *  resolved (and therefore never "provably safe"). */
-function expandSimpleVars(cmd: string): string {
+function expandSimpleVars(rawCmd: string): string {
+  const cmd = joinLineContinuations(rawCmd);
   const vars = new Map<string, string>();
   const assign = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/g;
   const record = (part: string): void => {
@@ -1718,6 +1739,45 @@ function expandSimpleVars(cmd: string): string {
     }
     out += expand(parts[i]);
     record(parts[i]);
+  }
+  return out;
+}
+
+const MKTEMP_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b[^)]*\)/g;
+const ANY_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=/g;
+const MKTEMP_SAFE_PLACEHOLDER = "/tmp/.mktemp-safe";
+
+/** A NARROW, separate pass (run AFTER `expandSimpleVars`, which deliberately SKIPS `$(...)`-valued
+ *  assignments as unresolved): recognizes the `VAR=$(mktemp …)` idiom — a `$(...)` value, but one that is
+ *  known by construction to always resolve under the system temp directory — and substitutes later
+ *  `$VAR`/`${VAR}` uses with a literal `/tmp`-scoped placeholder so the target-safety check in
+ *  `isOutputsDelete` treats them as provably outside outputs. Source-order aware, mirroring
+ *  `expandSimpleVars`'s non-retroactive semantics: a later reassignment of VAR to anything else (mktemp or
+ *  not) removes the safe marking for subsequent uses within that same reassignment, then re-establishes it
+ *  only if the NEW assignment is itself a `mktemp` call. */
+function resolveMktempVars(cmd: string): string {
+  const safeVars = new Set<string>();
+  const parts = cmd.split(/(\n|;|&&|\|\|)/);
+  let out = "";
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      out += parts[i];
+      continue;
+    }
+    let part = parts[i];
+    for (const v of safeVars) {
+      part = part.replace(new RegExp(`\\$\\{${v}\\}|\\$${v}\\b`, "g"), () => MKTEMP_SAFE_PLACEHOLDER);
+    }
+    MKTEMP_ASSIGN.lastIndex = 0;
+    const mktempHere = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = MKTEMP_ASSIGN.exec(part))) mktempHere.add(m[2]);
+    ANY_ASSIGN.lastIndex = 0;
+    while ((m = ANY_ASSIGN.exec(part))) {
+      if (mktempHere.has(m[2])) safeVars.add(m[2]);
+      else safeVars.delete(m[2]);
+    }
+    out += part;
   }
   return out;
 }
@@ -1758,21 +1818,27 @@ function mvDeletesOutputs(stmt: string): boolean {
 /**
  * A bash command deletes in outputs when (a) an `mv` moves a file OUT of outputs, or (b) an rm-family
  * delete (`rm/unlink/rmdir/shred/truncate`, `find … -delete`, python os.remove/unlink/rmdir/shutil.rmtree,
- * pathlib `.unlink()`) co-occurs with an `outputs/` reference. mv-direction is always evaluated (fixes the
- * move-INTO false positive without losing the move-OUT true positive). For the rm family the DEFAULT is
- * conservative (flag any co-occurrence — current behavior); when the operator opts in via
- * COWORK_HARNESS_SAFE_STAGING_PREFIX, a delete is suppressed only when provably scoped to a configured
- * prefix and outputs is referenced only by non-delete statements. Unresolved/command-substituted targets
- * are never "provably safe". Pure + exported so the rule is directly unit-testable. RESIDUAL GAP: a delete
- * via a script file / renamed binary / non-bash tool still evades this post-hoc scan — real enforcement is
- * the deferred FUSE/MCP sub-project.
+ * pathlib `.unlink()`) targets something under outputs. mv-direction is always evaluated (fixes the
+ * move-INTO false positive without losing the move-OUT true positive). For the rm family this mirrors real
+ * Cowork's own enforcement, which is STRUCTURAL (a delete syscall's resolved target's mount), not
+ * command-text co-occurrence: BY DEFAULT, each rm-family delete statement's own target(s) are inspected —
+ * a delete is suppressed only when EVERY target is provably outside outputs (an absolute/relative path not
+ * under outputs, or a path under a safe prefix: `/tmp/`, the literal `$TMPDIR`/`${TMPDIR}` idiom, a
+ * `VAR=$(mktemp …)`-sourced `$VAR`, or an operator-configured COWORK_HARNESS_SAFE_STAGING_PREFIX entry).
+ * Unresolved/command-substituted targets (other than the recognized `mktemp` idiom) are never "provably
+ * safe" — the guiding invariant is "prefer a false positive over a false negative when a target is
+ * genuinely unprovable", so those, and a delete statement that itself names outputs, still flag. Pure +
+ * exported so the rule is directly unit-testable. RESIDUAL GAP: a delete via a script file / renamed binary
+ * / non-bash tool still evades this post-hoc scan — real enforcement is the deferred FUSE/MCP sub-project.
+ * Also out of scope: the harness has no counterpart to production's `allow_cowork_file_delete` escalation
+ * tool (a sub-agent that hits a real outputs-delete EPERM should call that, not silently fail) — this scan
+ * only feeds the `no_delete_in_outputs` assertion, it never blocks execution.
  */
 export function isOutputsDelete(cmd: string): boolean {
-  const expanded = expandSimpleVars(cmd);
+  const expanded = resolveMktempVars(expandSimpleVars(cmd));
   for (const stmt of splitStatements(expanded)) if (mvDeletesOutputs(stmt)) return true; // mv: always-on, direction-aware
   if (!DELETE_TOKEN.test(expanded) || !TOUCHES_OUTPUTS.test(expanded)) return false; // rm-family fast path
-  const prefixes = safePrefixes();
-  if (prefixes.length === 0) return true; // no opt-in → flag the co-occurrence (unchanged default behavior)
+  const prefixes = [...defaultSafePrefixes(), ...safePrefixes()];
   if (CD_INTO_OUTPUTS.test(expanded)) return true; // a cwd-relative delete could hit outputs
   for (const stmt of splitStatements(expanded)) {
     if (!DELETE_TOKEN.test(stmt)) continue;
