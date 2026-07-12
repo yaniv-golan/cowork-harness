@@ -65,7 +65,7 @@ import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
-import { persistedVerdict } from "./verdict.js";
+import { computeVerdict } from "./verdict.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -1245,12 +1245,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       verdict: undefined, // computed just below (after assertions are evaluated / the object is fully assembled) and stored — see the comment there
     });
 
-    // THE verdict-persist point: `computeVerdict` (via `persistedVerdict`) is downstream of assembling
-    // `result` (it reads `result.assertions`, `result.scan`, `result.permissiveAutoAllow`, …), so it can
-    // only run here, after the assembler call above — never inside it. Reuses the single verdict source;
-    // does not recompute pass/fail independently. Stored on `result` before it's written to result.json
-    // (below) so a kept run's `.verdict` matches the exit code / footer this same run produced.
-    result.verdict = persistedVerdict(result, "live");
+    // THE verdict-persist point: `computeVerdict` is downstream of assembling `result` (it reads
+    // `result.assertions`, `result.scan`, `result.permissiveAutoAllow`, …), so it can only run here, after
+    // the assembler call above — never inside it. Stored verbatim on `result` before it's written to
+    // result.json (below) — the SAME `Verdict` shape (`{pass, exitCode, signals, guards, failures}`) the
+    // `--output-format json` stdout envelope attaches (envelope.ts calls `computeVerdict` too), so the two
+    // channels can never diverge in shape or value.
+    result.verdict = computeVerdict(result, "live");
 
     // Non-null: see the matching comment at the partial-result finalize call above.
     runCrashSafety.finalize(record, result.result, result.durationMs!);
@@ -1583,9 +1584,9 @@ export function buildPartialResult(args: {
     verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there
   });
   // A partial run still has a verdict — it failed on the unanswered gate (`result:"error"`), not on an
-  // assertion (there are none to evaluate here). Compute it from the just-assembled object (persistedVerdict
-  // reads result.assertions/unansweredGate/etc. off it) and store the result, same as the success path below.
-  built.verdict = persistedVerdict(built, "live");
+  // assertion (there are none to evaluate here). Compute it from the just-assembled object (computeVerdict
+  // reads result.assertions/unansweredGate/etc. off it) and store the result, same as the success path above.
+  built.verdict = computeVerdict(built, "live");
   return built;
 }
 

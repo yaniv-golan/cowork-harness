@@ -553,7 +553,7 @@
     },
     "verdict": {
       "type": "object",
-      "description": "The overall run/asserted-lane verdict: the SAME pass/fail + exit code every verdict site (the run/skill exit, the footer, the JSON envelope ok) computes via computeVerdict, projected into a flat self-contained summary so a kept run's result.json answers pass/fail and why without recomputing. failures[] names the failing assertion key when a failure traces to one, else carries just a hard-verdict guard reason (infra error, unanswered gate, scan-based host-path leak, etc.); empty on a pass. Run/asserted lane ONLY — absent (undefined) on a chat result, and on a result.json written before this field existed.",
+      "description": "The overall run/asserted-lane verdict: computeVerdict's full return value, persisted VERBATIM (the same shape the --output-format json stdout envelope attaches to every result, since envelope.ts calls computeVerdict too) so the persisted and streamed channels can never diverge. pass/exitCode are the SAME values every verdict site (the run/skill exit, the footer, the JSON envelope ok) routes through computeVerdict for. signals[]/guards[] are the raw verdict inputs; failures[] collapses signals into a flat, jq-friendly list — names the failing assertion key when a failure traces to one, else carries just a hard-verdict guard reason (infra error, unanswered gate, scan-based host-path leak, etc.); empty on a pass. Run/asserted lane ONLY — absent (undefined) on a chat result, and on a result.json written before this field existed.",
       "properties": {
         "pass": {
           "type": "boolean"
@@ -561,6 +561,59 @@
         "exitCode": {
           "type": "integer",
           "enum": [0, 1]
+        },
+        "signals": {
+          "type": "array",
+          "description": "the raw verdict signals computeVerdict evaluated (assertion failures + guard-fired reasons + warn-only signals like non_determinism); [] on a clean pass.",
+          "items": {
+            "type": "object",
+            "required": ["code", "severity", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "assertion",
+                  "result_error",
+                  "transport_error",
+                  "usage_limit",
+                  "permissive_auto_allow",
+                  "outputs_delete",
+                  "host_path_leak",
+                  "non_deterministic",
+                  "l0_plugin_divergence",
+                  "missing_capability",
+                  "infra_error",
+                  "stalled",
+                  "prompt_asset_missing",
+                  "scan_unavailable"
+                ]
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["fail", "warn"]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "guards": {
+          "type": "array",
+          "description": "the \"guards active this run\" roster — one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
+          "items": {
+            "type": "object",
+            "required": ["name", "status"],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["ok", "fired", "na", "unverified"]
+              }
+            }
+          }
         },
         "failures": {
           "type": "array",
@@ -579,7 +632,7 @@
           }
         }
       },
-      "required": ["pass", "exitCode", "failures"]
+      "required": ["pass", "exitCode", "signals", "guards", "failures"]
     },
     "subagents": {
       "type": "array",

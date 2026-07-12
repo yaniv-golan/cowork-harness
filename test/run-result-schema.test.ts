@@ -82,7 +82,13 @@ const full: RunResult = {
   gateDeliveries: [{ question: "Proceed?", delivered: true, error: undefined, reason: "ok" }],
   egress: [{ host: "api.anthropic.com", decision: "allow" }],
   assertions: [{ assertion: { result: "success" }, pass: true, message: undefined }],
-  verdict: { pass: false, exitCode: 1, failures: [{ assertion: "result", message: "expected result to be success" }] },
+  verdict: {
+    pass: false,
+    exitCode: 1,
+    signals: [{ code: "assertion", severity: "fail", message: "expected result to be success" }],
+    guards: [{ name: "capability-use", status: "na" }],
+    failures: [{ assertion: "result", message: "expected result to be success" }],
+  },
   subagents: [
     {
       toolUseId: "tu_1",
