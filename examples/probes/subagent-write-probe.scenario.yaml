@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Live acceptance probe: a sub-agent's RELATIVE Write lands in outputs on hostloop (the production
+# default loop), with the full causal chain asserted — dispatch -> child-origin Write -> paired
+# non-error result -> artifact content — plus zero VM-path attempts. Run on the live lane only.
+name: subagent-write-probe
+baseline: latest
+session: (inline)
+fidelity: hostloop
+prompt: |
+  Dispatch exactly one sub-agent with the Agent tool, passing subagent_type: "general-purpose" and this
+  prompt: 'Using the Write tool with the exact relative path artifacts/probe.json (do not prefix it
+  with any directory), write this exact JSON content and nothing else: {"probe":"subagent-write","ok":true}
+  Then finish.' Do not write the file yourself; after the sub-agent returns, reply DONE.
+assert:
+  - subagent_dispatched: "general-purpose"
+  - dispatch_count_max: 1            # exactly one dispatch — so the matched write is THE child's
+  - subagent_tool_used: "Write"
+  - subagent_file_write:
+      path: "artifacts/probe.json"   # EXACT raw path — a foo/artifacts/probe.json cannot satisfy this
+  - no_vm_path_file_op: true
+  - artifact_json:                    # exact path (not a suffix) — proves the file landed in outputs
+      artifact: "outputs/artifacts/probe.json"
+      path: "probe"
+      equals: "subagent-write"
+  - artifact_json:
+      artifact: "outputs/artifacts/probe.json"
+      path: "ok"
+      equals: true
