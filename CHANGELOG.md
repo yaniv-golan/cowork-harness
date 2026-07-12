@@ -21,6 +21,29 @@ All notable changes to this project are documented here. The format is based on
   but the missing-`ignore-end` mistake itself prints and fails under `--strict` like any other finding,
   never a silent notice on a green exit.
 
+- **`analyze-skill <dir>` now scans the UNION of every contract-bearing markdown file in the directory,
+  not just `SKILL.md`.** A plugin's `/sessions` dispatch/output contracts often live in `agents/*.md` or
+  `references/*.md` — scanning only `SKILL.md` there was a false green (a consumer's `agents/x.md` could
+  hand a `/sessions` path straight to a file tool and `analyze-skill` would never see it). A directory
+  target is now expanded to every shape it matches, deduped by resolved absolute path: a top-level
+  `SKILL.md` (+ its `references/**`); a plugin root (`.claude-plugin/plugin.json` or `plugin.json`, +
+  `agents/*.md`, `references/**`, `commands/*.md`, and each `skills/*/SKILL.md` + that skill's own
+  `references/**`); and a skill dir living inside a plugin also pulls in the enclosing plugin's
+  `agents/*.md`. Zero scannable files under a directory target is now a usage error (exit 2) that
+  enumerates the shapes it looked for — never a silent clean pass.
+
+### Changed (breaking, pre-1.0)
+
+- **`analyze-skill <dir> --strict` may newly fail where it passed clean before**, if `references/`/
+  `agents/` carries a `/sessions`-addressed teaching example that the old SKILL.md-only scan never looked
+  at. Annotate the example with `analyze-skill: ignore-next-line` (or an `ignore-start`/`ignore-end`
+  fence) to restore a clean `--strict` run — there is no `--skill-md-only` compatibility flag; the
+  narrower scan was the bug this closes.
+- **`analyze-skill --output-format json`'s single-file shape changed.** The flat
+  `{file, findings, suppressed, strict}` payload is now always `{files: [{file, findings, suppressed}],
+  scanned, unscanned, strict}`, for uniformity with a directory target's multi-file result. An external
+  `jq '.findings'` / `jq '.file'` recipe needs `jq '.files[0].findings'` / `jq '.files[0].file'` instead.
+
 ## [0.31.0] — 2026-07-12
 
 ### Added

@@ -1,9 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { analyzeSkillText, hasIgnoreMarker } from "../src/run/analyze-skill.js";
+import { fileURLToPath } from "node:url";
+import { analyzeSkillText, hasIgnoreMarker, resolveSkillTarget } from "../src/run/analyze-skill.js";
+
+// This repo is pure ESM ("type": "module") — `__dirname` is undefined; derive the repo root from
+// `import.meta.url` instead (this file lives at `<repoRoot>/test/analyze-skill.test.ts`).
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const RULE1 = "sessions-path-to-file-tool";
 const RULE2 = "sessions-find-into-file-read";
@@ -722,8 +727,9 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     const jsonRun = run(["analyze-skill", suppressed, "--strict", "--output-format", "json"], d);
     expect(jsonRun.code).toBe(0);
     const payload = JSON.parse(jsonRun.out.trim());
-    expect(payload.findings).toEqual([]);
-    expect(payload.suppressed).toBe(true);
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].findings).toEqual([]);
+    expect(payload.files[0].suppressed).toBe(true);
   });
 
   it("a marker mentioned only mid-prose does NOT suppress — the real finding still fires and --strict still gates", () => {
@@ -748,8 +754,9 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     const jsonRun = run(["analyze-skill", notSuppressed, "--output-format", "json"], d);
     expect(jsonRun.code).toBe(0);
     const payload = JSON.parse(jsonRun.out.trim());
-    expect(payload.suppressed).toBe(false);
-    expect(payload.findings.length).toBeGreaterThan(0);
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].suppressed).toBe(false);
+    expect(payload.files[0].findings.length).toBeGreaterThan(0);
   });
 
   it("an unclosed `ignore-start` prints visibly and gates under --strict (never a silent stderr-only notice)", () => {
@@ -766,7 +773,8 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
 
     const jsonRun = run(["analyze-skill", dirty, "--output-format", "json"], d);
     const payload = JSON.parse(jsonRun.out.trim());
-    expect(payload.findings.some((f: { rule: string }) => f.rule === RULE_UNCLOSED)).toBe(true);
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].findings.some((f: { rule: string }) => f.rule === RULE_UNCLOSED)).toBe(true);
   });
 
   it("resolves a skill directory to its SKILL.md", () => {
@@ -796,9 +804,14 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     expect(payload.tool).toBe("cowork-harness");
     expect(payload.command).toBe("analyze-skill");
     expect(payload.ok).toBe(false);
-    expect(Array.isArray(payload.findings)).toBe(true);
-    expect(payload.findings.length).toBeGreaterThan(0);
-    expect(payload.findings[0].rule).toBe(RULE1);
+    expect(Array.isArray(payload.files)).toBe(true);
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].file).toBe(dirty);
+    expect(Array.isArray(payload.files[0].findings)).toBe(true);
+    expect(payload.files[0].findings.length).toBeGreaterThan(0);
+    expect(payload.files[0].findings[0].rule).toBe(RULE1);
+    expect(Array.isArray(payload.scanned)).toBe(true);
+    expect(Array.isArray(payload.unscanned)).toBe(true);
   });
 
   it("--output-format json + --strict exits 1 on a finding", () => {
@@ -809,12 +822,232 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     expect(r.code).toBe(1);
     const payload = JSON.parse(r.out.trim());
     expect(payload.ok).toBe(false);
-    expect(payload.findings.length).toBeGreaterThan(0);
+    expect(payload.files[0].findings.length).toBeGreaterThan(0);
   });
 
   it("rejects an unknown flag (exit 2, not silently accepted)", () => {
     const d = mkdtempSync(join(tmpdir(), "as-cli-badflag-"));
     const r = run(["analyze-skill", "SKILL.md", "--zzz-bogus"], d);
     expect(r.code).toBe(2);
+  });
+});
+
+// --------------------------------------------------------------------------------------------- //
+// Directory-target resolution: the union scan (a plugin's dispatch/output contracts often live in
+// agents/*.md / references/*.md, not just SKILL.md — a directory target must scan every
+// contract-bearing markdown file present, deduped, or it's a false green).
+// --------------------------------------------------------------------------------------------- //
+
+const SESSIONS_WRITE = "Write(/sessions/{{id}}/mnt/outputs/out.md)\n";
+
+describe("resolveSkillTarget — directory union resolution", () => {
+  it("a plugin-root dir pulls in agents/*.md, references/**/*.md, and commands/*.md", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-resolve-plugin-root-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "agents"));
+    writeFileSync(join(root, "agents", "x.md"), "agent doc\n");
+    mkdirSync(join(root, "references"));
+    writeFileSync(join(root, "references", "y.md"), "reference doc\n");
+    mkdirSync(join(root, "commands"));
+    writeFileSync(join(root, "commands", "z.md"), "command doc\n");
+
+    const resolved = resolveSkillTarget(root);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    const names = resolved.files.map((f) => f.slice(root.length + 1)).sort();
+    expect(names).toEqual([join("agents", "x.md"), join("commands", "z.md"), join("references", "y.md")].sort());
+  });
+
+  it("a skill dir inside a plugin also pulls the enclosing plugin's agents/*.md", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-resolve-skilldir-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "agents"));
+    writeFileSync(join(root, "agents", "coordinator.md"), "agent doc\n");
+    const skillDir = join(root, "skills", "my-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "skill body\n");
+
+    const resolved = resolveSkillTarget(skillDir);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    expect(resolved.files).toContain(join(skillDir, "SKILL.md"));
+    expect(resolved.files).toContain(join(root, "agents", "coordinator.md"));
+  });
+
+  it("a skill dir inside a plugin leaves the plugin's commands/ and sibling skills/ UNSCANNED, named in the banner", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-resolve-unscanned-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "commands"));
+    writeFileSync(join(root, "commands", "z.md"), "command doc\n");
+    const skillDir = join(root, "skills", "my-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "skill body\n");
+    const siblingDir = join(root, "skills", "other-skill");
+    mkdirSync(siblingDir, { recursive: true });
+    writeFileSync(join(siblingDir, "SKILL.md"), "sibling skill body\n");
+
+    const resolved = resolveSkillTarget(skillDir);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    expect(resolved.files).not.toContain(join(root, "commands", "z.md"));
+    expect(resolved.files).not.toContain(join(siblingDir, "SKILL.md"));
+    expect(resolved.unscanned.some((u) => u.includes(join(root, "commands")))).toBe(true);
+    expect(resolved.unscanned.some((u) => u.includes(siblingDir))).toBe(true);
+  });
+
+  it("this repo's own .claude/skills/cowork-harness/ (plugin.json + top-level SKILL.md + references/, no agents/, no skills/) resolves NON-EMPTY", () => {
+    // Regression fixture: rule 1 (top-level SKILL.md) and rule 2 (plugin root) BOTH apply to this exact
+    // shape and must union without going empty — the false green this task exists to close.
+    const repoRoot = REPO_ROOT;
+    const skillDir = join(repoRoot, ".claude", "skills", "cowork-harness");
+    const resolved = resolveSkillTarget(skillDir);
+    if ("error" in resolved) throw new Error(`expected a non-empty resolution, got error: ${resolved.error}`);
+    expect(resolved.files.length).toBeGreaterThan(0);
+    expect(resolved.files).toContain(join(skillDir, "SKILL.md"));
+    expect(resolved.files.some((f) => f.includes(join("references", "ci-recipe.md")))).toBe(true);
+  });
+
+  it("dedup: a dir matching BOTH the top-level-SKILL.md shape and the plugin-root shape analyzes each file ONCE", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-resolve-dedup-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    writeFileSync(join(root, "SKILL.md"), "skill body\n");
+    mkdirSync(join(root, "references"));
+    writeFileSync(join(root, "references", "y.md"), SESSIONS_WRITE);
+
+    const resolved = resolveSkillTarget(root);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    const refPath = join(root, "references", "y.md");
+    expect(resolved.files.filter((f) => f === refPath)).toHaveLength(1);
+  });
+
+  it("an empty/uncontract dir resolves to a usage error enumerating the shapes it looked for", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-resolve-empty-"));
+    const emptyDir = join(d, "empty");
+    mkdirSync(emptyDir);
+    const resolved = resolveSkillTarget(emptyDir);
+    if (!("error" in resolved)) throw new Error("expected an error, got a resolution");
+    expect(resolved.error).toMatch(/SKILL\.md/);
+    expect(resolved.error).toMatch(/plugin\.json/);
+    expect(resolved.error).toMatch(/agents/);
+  });
+
+  it("a FILE target still resolves to just that file (unchanged single-file behavior)", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-resolve-file-"));
+    const file = join(d, "SKILL.md");
+    writeFileSync(file, "skill body\n");
+    const resolved = resolveSkillTarget(file);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    expect(resolved.files).toEqual([file]);
+    expect(resolved.unscanned).toEqual([]);
+  });
+});
+
+describe.skipIf(!can)("analyze-skill CLI — directory union scan (agents/references/commands, plugin-root-aware)", () => {
+  it("a /sessions write in a PLUGIN-ROOT agents/x.md fires under --strict — the consumer's exact case", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-plugin-agents-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "agents"));
+    writeFileSync(join(root, "agents", "x.md"), SESSIONS_WRITE);
+
+    const defaultRun = run(["analyze-skill", root], root);
+    expect(defaultRun.code).toBe(0);
+    expect(defaultRun.err).toMatch(new RegExp(RULE1));
+
+    const strictRun = run(["analyze-skill", root, "--strict"], root);
+    expect(strictRun.code).toBe(1);
+  });
+
+  it("a /sessions write in references/y.md or commands/z.md fires UNLESS scope-ignored (D coexists)", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-plugin-refs-cmds-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "references"));
+    writeFileSync(join(root, "references", "y.md"), SESSIONS_WRITE);
+    mkdirSync(join(root, "commands"));
+    writeFileSync(join(root, "commands", "z.md"), SESSIONS_WRITE);
+
+    expect(run(["analyze-skill", root, "--strict"], root).code).toBe(1);
+
+    // Scope-ignored: both teaching examples wrapped, the dir now passes clean under --strict.
+    writeFileSync(join(root, "references", "y.md"), "<!-- analyze-skill: ignore -->\n" + SESSIONS_WRITE);
+    writeFileSync(join(root, "commands", "z.md"), "<!-- analyze-skill: ignore -->\n" + SESSIONS_WRITE);
+    expect(run(["analyze-skill", root, "--strict"], root).code).toBe(0);
+  });
+
+  it("a skill dir inside a plugin pulls the enclosing plugin's agents/ — fires under --strict", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-skilldir-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "agents"));
+    writeFileSync(join(root, "agents", "coordinator.md"), SESSIONS_WRITE);
+    const skillDir = join(root, "skills", "my-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "clean skill body, no /sessions mentions here\n");
+
+    expect(run(["analyze-skill", skillDir, "--strict"], root).code).toBe(1);
+  });
+
+  it("this repo's own .claude/skills/cowork-harness/ resolves non-empty (regression vs. a zero-file false green)", () => {
+    const repoRoot = REPO_ROOT;
+    const skillDir = join(".claude", "skills", "cowork-harness");
+    const r = run(["analyze-skill", skillDir, "--output-format", "json"], repoRoot);
+    expect(r.code).not.toBe(2);
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.files.length).toBeGreaterThan(0);
+  });
+
+  it("an empty/uncontract dir exits 2 with a message enumerating the shapes looked for", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-empty-dir-"));
+    const emptyDir = join(d, "empty");
+    mkdirSync(emptyDir);
+    const r = run(["analyze-skill", emptyDir], d);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/SKILL\.md/);
+    expect(r.err).toMatch(/plugin\.json/);
+  });
+
+  it("dedup: a dir matching two shapes reports each finding ONCE (no duplicate findings or banner entries)", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-dedup-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    writeFileSync(join(root, "SKILL.md"), "skill body\n");
+    mkdirSync(join(root, "references"));
+    writeFileSync(join(root, "references", "y.md"), SESSIONS_WRITE);
+
+    const r = run(["analyze-skill", root, "--output-format", "json"], root);
+    const payload = JSON.parse(r.out.trim());
+    const refPath = join(root, "references", "y.md");
+    expect(payload.files.filter((f: { file: string }) => f.file === refPath)).toHaveLength(1);
+    expect(payload.scanned.filter((f: string) => f === refPath)).toHaveLength(1);
+
+    const scopeLines = r.err.split("\n").filter((l) => l.includes(refPath));
+    // Once as the per-file header, once inside the "scope: scanned" banner line — never duplicated beyond that.
+    expect(scopeLines.length).toBeLessThanOrEqual(2);
+  });
+
+  it("emits the `files:`-keyed JSON envelope (not a bare array, not results[]) with a scope banner naming scanned + unscanned", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-cli-envelope-"));
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "demo-plugin" }));
+    mkdirSync(join(root, "commands"));
+    writeFileSync(join(root, "commands", "z.md"), "command doc\n");
+    const skillDir = join(root, "skills", "my-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "clean\n");
+
+    const r = run(["analyze-skill", skillDir, "--output-format", "json"], root);
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.results).toBeUndefined();
+    expect(Array.isArray(payload.files)).toBe(true);
+    expect(Array.isArray(payload.scanned)).toBe(true);
+    expect(Array.isArray(payload.unscanned)).toBe(true);
+    expect(payload.unscanned.length).toBeGreaterThan(0);
+
+    const textRun = run(["analyze-skill", skillDir], root);
+    expect(textRun.err).toMatch(/scope: scanned/);
+    expect(textRun.err).toMatch(/scope: left unscanned/);
+    expect(textRun.err).toContain(join(root, "commands"));
   });
 });

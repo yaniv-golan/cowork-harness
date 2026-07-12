@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync, writeSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
@@ -694,16 +694,168 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
   return scoped.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
 }
 
-/** Resolve the CLI target to the SKILL.md text to analyze: a file is used as-is, a directory is expected
- *  to contain a `SKILL.md`. */
-function resolveSkillTarget(target: string): { file: string } | { error: string } {
-  if (!existsSync(target)) return { error: `path not found: ${target}` };
-  if (statSync(target).isDirectory()) {
-    const md = join(target, "SKILL.md");
-    if (!existsSync(md)) return { error: `no SKILL.md found under ${target}` };
-    return { file: md };
+/** Result of resolving a directory (or file) target to the set of contract-bearing markdown files to
+ *  analyze — see `resolveSkillTarget` below for the shape rules. `files` is deduped by resolved
+ *  absolute path (a target dir can match more than one shape at once — see the top-level-SKILL.md +
+ *  plugin-root overlap this repo's own `.claude/skills/cowork-harness/` demonstrates); `unscanned` names
+ *  contract dirs that exist on disk but were deliberately left OUT of this target's scope (a sibling
+ *  skill, or a plugin-root `commands/` when the target is one skill dir inside that plugin, not the
+ *  plugin root itself) — the scope banner prints these so a narrower-than-expected scan is never silent. */
+export interface SkillTargetResolution {
+  files: string[];
+  unscanned: string[];
+}
+
+/** `.claude-plugin/plugin.json` OR bare `plugin.json` at `dir` — the plugin-root manifest test, shared by
+ *  the plugin-root shape and the enclosing-plugin walk-up. Mirrors `scenario.py`'s own
+ *  `_find_enclosing_plugin_dir` acceptance of either manifest location. */
+function isPluginManifestDir(dir: string): boolean {
+  return existsSync(join(dir, ".claude-plugin", "plugin.json")) || existsSync(join(dir, "plugin.json"));
+}
+
+/** Walk UP from `startDir` to the nearest ancestor (inclusive of `startDir` itself) carrying a plugin
+ *  manifest — the enclosing plugin for a skill dir that is not itself a plugin root. Net-new; there is no
+ *  prior TS implementation. Semantic reference: `scenario.py:_find_enclosing_plugin_dir` (accepts either
+ *  manifest location, walks `[start, *start.parents]`). Returns `null` once the filesystem root is
+ *  reached with no manifest found (`dirname(dir) === dir`). */
+function findEnclosingPluginDir(startDir: string): string | null {
+  let dir = resolve(startDir);
+  for (;;) {
+    if (isPluginManifestDir(dir)) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
-  return { file: target };
+}
+
+/** Non-recursive `*.md` listing directly inside `dir` (used for `agents/*.md` and `commands/*.md`, both
+ *  single-level per the resolution rules — NOT `agents/**`). `[]` when `dir` doesn't exist. A symlink
+ *  entry is skipped outright (`entry.isFile()` is false for a symlink dirent — Node reports the LINK's
+ *  own type, not its target's — so this never needs a manual symlink check to stay non-following). */
+function listMarkdownShallow(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => join(dir, e.name));
+}
+
+/** Recursive `*.md` walk under `dir` (used for every `references/**` shape) via a hand-rolled
+ *  `readdirSync` walker — glob dependencies are unavailable on Node 20 in this repo's runtime target.
+ *  Deliberately does NOT follow symlinks: only recurses into an entry where `isDirectory()` is true,
+ *  which (like the shallow listing above) a symlinked directory never satisfies — Node's `Dirent` type
+ *  reflects the directory-entry's OWN type, not the link target's, so a symlink loop can never be
+ *  traversed into. `[]` when `dir` doesn't exist. */
+function walkMarkdownDeep(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walkMarkdownDeep(full));
+    else if (e.isFile() && e.name.endsWith(".md")) out.push(full);
+  }
+  return out;
+}
+
+/** Non-recursive subdirectory names directly inside `dir` (used to enumerate `skills/*` entries). `[]`
+ *  when `dir` doesn't exist. Symlinked directories are excluded for the same reason as
+ *  `listMarkdownShallow`/`walkMarkdownDeep` above. */
+function listSubdirs(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+}
+
+/** Resolve the CLI target to the FULL UNION of contract-bearing markdown files to analyze:
+ *
+ *  - a FILE target → that file only (unchanged single-file behavior);
+ *  - a DIRECTORY target is expanded to every shape it matches, deduped by resolved absolute path (a dir
+ *    can match more than one shape — see this repo's own `.claude/skills/cowork-harness/`, which is
+ *    simultaneously a top-level-SKILL.md dir AND a plugin root):
+ *      1. top-level "SKILL.md" present → add it + every markdown file recursively under top-level
+ *         "references/";
+ *      2. ".claude-plugin/plugin.json" or bare "plugin.json" present (a plugin root) → add every
+ *         markdown file directly under root "agents/", every markdown file recursively under root
+ *         "references/", every markdown file directly under root "commands/", and each "skills/<name>/
+ *         SKILL.md" (+ every markdown file recursively under that skill's own "references/");
+ *      3. the dir is a skill dir INSIDE a plugin (its own "SKILL.md" present, and walking UP finds an
+ *         enclosing plugin manifest) → ALSO add every markdown file directly under the enclosing
+ *         plugin's root "agents/".
+ *
+ *  ZERO scannable files (a dir matching none of the above, or an empty/nonexistent path) is a USAGE
+ *  ERROR, never a silent clean pass — the caller reports it via `fail()`. */
+export function resolveSkillTarget(target: string): SkillTargetResolution | { error: string } {
+  if (!existsSync(target)) return { error: `path not found: ${target}` };
+  if (!statSync(target).isDirectory()) return { files: [target], unscanned: [] };
+
+  const dir = resolve(target);
+  const files = new Set<string>();
+  const unscanned: string[] = [];
+
+  const topSkillMd = join(dir, "SKILL.md");
+  const hasTopSkillMd = existsSync(topSkillMd);
+  if (hasTopSkillMd) {
+    files.add(topSkillMd);
+    for (const f of walkMarkdownDeep(join(dir, "references"))) files.add(f);
+  }
+
+  const isPluginRoot = isPluginManifestDir(dir);
+  if (isPluginRoot) {
+    for (const f of listMarkdownShallow(join(dir, "agents"))) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "references"))) files.add(f);
+    for (const f of listMarkdownShallow(join(dir, "commands"))) files.add(f);
+    const skillsDir = join(dir, "skills");
+    for (const name of listSubdirs(skillsDir)) {
+      const subSkillMd = join(skillsDir, name, "SKILL.md");
+      if (!existsSync(subSkillMd)) {
+        unscanned.push(`${join(skillsDir, name)} (no SKILL.md — not a scannable skill dir)`);
+        continue;
+      }
+      files.add(subSkillMd);
+      for (const f of walkMarkdownDeep(join(skillsDir, name, "references"))) files.add(f);
+    }
+  } else if (hasTopSkillMd) {
+    const enclosing = findEnclosingPluginDir(dir);
+    if (enclosing) {
+      for (const f of listMarkdownShallow(join(enclosing, "agents"))) files.add(f);
+      if (existsSync(join(enclosing, "commands"))) {
+        unscanned.push(`${join(enclosing, "commands")} (enclosing plugin's commands/ — out of scope for a skill-dir target)`);
+      }
+      const siblingSkillsDir = join(enclosing, "skills");
+      for (const name of listSubdirs(siblingSkillsDir)) {
+        const siblingDir = join(siblingSkillsDir, name);
+        if (siblingDir === dir) continue; // this skill itself, already in scope
+        unscanned.push(`${siblingDir} (sibling skill in the enclosing plugin — out of scope for a skill-dir target)`);
+      }
+    }
+  }
+
+  if (files.size === 0) {
+    return {
+      error:
+        `no contract-bearing markdown found under ${target} — looked for: a top-level SKILL.md ` +
+        "(+ references/**/*.md); a plugin root (.claude-plugin/plugin.json or plugin.json, pulling in " +
+        "agents/*.md, references/**/*.md, commands/*.md, and skills/*/SKILL.md + skills/*/references/**/*.md); " +
+        "or a skill dir whose SKILL.md sits somewhere inside an enclosing plugin (pulling in that plugin's " +
+        "agents/*.md)",
+    };
+  }
+
+  return { files: [...files].sort(), unscanned };
 }
 
 /**
@@ -755,37 +907,59 @@ export function cmdAnalyzeSkill(args: string[]): void {
   if ("error" in resolved) {
     return fail("analyze-skill", "usage", `analyze-skill: ${resolved.error}`, undefined, asJson);
   }
-  let text: string;
-  try {
-    text = readFileSync(resolved.file, "utf8");
-  } catch (e) {
-    return fail("analyze-skill", "usage", `analyze-skill: cannot read ${resolved.file}: ${(e as Error).message}`, undefined, asJson);
+  const { files: fileList, unscanned } = resolved;
+
+  const perFile: { file: string; findings: SkillFinding[]; suppressed: boolean }[] = [];
+  for (const file of fileList) {
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (e) {
+      return fail("analyze-skill", "usage", `analyze-skill: cannot read ${file}: ${(e as Error).message}`, undefined, asJson);
+    }
+    const suppressed = hasIgnoreMarker(text);
+    const findings = analyzeSkillText(text, file); // [] when `suppressed` — see analyzeSkillText
+    perFile.push({ file, findings, suppressed });
   }
-  const suppressed = hasIgnoreMarker(text);
-  const findings = analyzeSkillText(text, resolved.file); // [] when `suppressed` — see analyzeSkillText
-  const ok = findings.length === 0;
-  const failing = strict && findings.length > 0; // suppressed files never reach here with findings, so --strict can't fail them
+
+  const totalFindings = perFile.reduce((n, f) => n + f.findings.length, 0);
+  const ok = totalFindings === 0;
+  const failing = strict && totalFindings > 0; // suppressed files never contribute findings, so --strict can't fail on them
 
   if (json) {
-    out(jsonPayloadEnvelope("analyze-skill", ok, { file: resolved.file, findings, suppressed, strict }));
+    out(
+      jsonPayloadEnvelope("analyze-skill", ok, {
+        files: perFile,
+        scanned: fileList,
+        unscanned,
+        strict,
+      }),
+    );
   } else {
-    if (suppressed) {
-      log(`⊘ analyze-skill: ${resolved.file} — path-fidelity warnings suppressed for this file by the ` + "`analyze-skill: ignore` marker");
-    } else if (ok) {
-      log(`✓ analyze-skill: ${resolved.file} — no /sessions-to-file-tool findings`);
-    } else {
-      for (const f of findings) log(`⚠ ${f.path}:${f.line}: [${f.rule}] ${f.message}`);
+    for (const pf of perFile) {
+      log(`── ${pf.file} ──`);
+      if (pf.suppressed) {
+        log(`⊘ analyze-skill: ${pf.file} — path-fidelity warnings suppressed for this file by the ` + "`analyze-skill: ignore` marker");
+      } else if (pf.findings.length === 0) {
+        log(`✓ analyze-skill: ${pf.file} — no /sessions-to-file-tool findings`);
+      } else {
+        for (const f of pf.findings) log(`⚠ ${f.path}:${f.line}: [${f.rule}] ${f.message}`);
+      }
+    }
+    if (totalFindings > 0) {
       log(
-        `⚠ analyze-skill: ${findings.length} finding(s) in ${resolved.file} — advisory (exit 0)` +
+        `⚠ analyze-skill: ${totalFindings} finding(s) across ${fileList.length} file(s) — advisory (exit 0)` +
           (strict ? ", failing on --strict (exit 1)" : "; pass --strict to fail on findings"),
       );
+    } else {
+      log(`✓ analyze-skill: ${fileList.length} file(s) scanned — no findings`);
     }
-    if (!suppressed) {
-      log(
-        "  a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution — the runtime " +
-          "no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
-      );
-    }
+    log(
+      "  a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution — the runtime " +
+        "no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
+    );
+    log(`  scope: scanned ${fileList.length} file(s) — ${fileList.join(", ")}`);
+    log(unscanned.length > 0 ? `  scope: left unscanned — ${unscanned.join("; ")}` : "  scope: no contract dirs left unscanned");
   }
   return process.exit(failing ? 1 : 0);
 }

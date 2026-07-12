@@ -35,6 +35,48 @@ host-loop run — by scanning a SKILL.md's text. It reuses the harness's own por
 predicate (`isVmSessionsPath`) as the DENY decision; the only heuristic part is extracting candidate
 paths out of markdown text.
 
+**A directory target scans the UNION of every contract-bearing markdown file present, not just
+`SKILL.md`.** A plugin's dispatch/output contracts often live in `agents/*.md` or `references/*.md` —
+scanning only `SKILL.md` there is a false green. Pointing `analyze-skill` at a directory expands it to
+every shape the directory matches, deduped by resolved absolute path (a directory can match more than
+one shape at once — this repo's own `.claude/skills/cowork-harness/` is simultaneously a
+top-level-`SKILL.md` dir AND a plugin root):
+
+- a top-level `SKILL.md` present → that file, plus every markdown file recursively under top-level
+  `references/`;
+- a `.claude-plugin/plugin.json` or bare `plugin.json` present (a plugin root) → every markdown file
+  directly under root `agents/`, every markdown file recursively under root `references/`, every
+  markdown file directly under root `commands/`, and each `skills/<name>/SKILL.md` (plus every markdown
+  file recursively under that skill's own `references/`);
+- a skill dir INSIDE a plugin (its own `SKILL.md` present, and walking UP the directory tree finds an
+  enclosing plugin manifest) → ALSO every markdown file directly under the enclosing plugin's root
+  `agents/`.
+
+A FILE target is unchanged — just that one file. The `references/**` recursion is a hand-rolled
+directory walker (no glob dependency) that does **not** follow symlinks. **ZERO scannable files under a
+directory target is a USAGE ERROR (exit 2)**, never a silent clean pass — the error message enumerates
+every shape it looked for.
+
+The `--output-format json` payload nests per-file results under a `files:` key —
+`{tool, version, command, ok, files: [{file, findings, suppressed}], scanned, unscanned, strict, error}`
+— never a bare array, never `results[]`. `scanned` lists every file analyzed; `unscanned` names any
+contract dir that exists on disk but was deliberately left out of THIS target's scope (e.g. a plugin's
+`commands/` or a sibling `skills/*` dir when the target is one skill dir inside that plugin, not the
+plugin root) — printed as a scope banner in text mode too, so a narrower-than-expected scan is never
+silent. `ok`/`--strict` are computed across ALL scanned files: `ok` is true only when every file has zero
+findings, and `--strict` fails (exit 1) if ANY file has an unsuppressed finding. The `analyze-skill:
+ignore` marker (and the two scoped markers below) apply PER FILE — silencing one scanned file has no
+effect on any other file in the union.
+
+> **Migrating from a single-`SKILL.md`-only scan (pre-0.32):** a directory target that previously scanned
+> only `SKILL.md` may newly surface findings in `references/`/`agents/` teaching examples that were never
+> looked at before — annotate those with `analyze-skill: ignore-next-line` or an
+> `ignore-start`/`ignore-end` fence (see below) rather than reaching for the file-wide marker. The
+> `--output-format json` shape also changed: a single-file target's flat `{file, findings, suppressed,
+> strict}` became `{files: [{file, findings, suppressed}], scanned, unscanned, strict}` for uniformity
+> with the multi-file case — an external `jq '.findings'`/`.file` recipe needs `jq '.files[0].findings'`/
+> `.files[0].file` instead.
+
 **ADVISORY by default.** Because the extraction is heuristic and can over-flag innocent
 documentation/teaching examples, findings print as warnings but the command **exits 0 by default even
 when it prints findings**. Pass `--strict` to turn it into a hard gate — exit 1 on any finding, mirroring
