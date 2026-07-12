@@ -1743,18 +1743,40 @@ function expandSimpleVars(rawCmd: string): string {
   return out;
 }
 
-const MKTEMP_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b[^)]*\)/g;
+const MKTEMP_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b([^)]*)\)/g;
 const ANY_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=/g;
 const MKTEMP_SAFE_PLACEHOLDER = "/tmp/.mktemp-safe";
+
+/** True when a `mktemp` invocation's argument string DIRECTS the created file/dir at a specific directory
+ *  rather than letting it fall under the system temp dir: `-p DIR` / `-pDIR`, `--tmpdir` / `--tmpdir=DIR`,
+ *  or a positional TEMPLATE argument containing a `/` (e.g. `mktemp mnt/outputs/tmp.XXXXXX`). Any of these
+ *  means the resulting path is NOT provably under `/tmp` — `mktemp -p mnt/outputs`, `mktemp
+ *  --tmpdir=mnt/outputs xx.XXXX`, and `mktemp mnt/outputs/tmp.XXXXXX` can all place the file inside
+ *  outputs. Lightweight whitespace tokenizer (consistent with `nonFlagArgs` elsewhere in this file) — never
+ *  under-detects a dir-directing arg, which is what matters for the "prefer false positive" invariant. */
+function mktempIsDirDirected(args: string): boolean {
+  const tokens = args.trim().split(/\s+/).filter(Boolean);
+  for (const t of tokens) {
+    if (t === "-p" || t.startsWith("-p") /* combined -pDIR */) return true;
+    if (t === "--tmpdir" || t.startsWith("--tmpdir=")) return true;
+    if (!t.startsWith("-") && t.includes("/")) return true; // positional TEMPLATE naming a directory
+  }
+  return false;
+}
 
 /** A NARROW, separate pass (run AFTER `expandSimpleVars`, which deliberately SKIPS `$(...)`-valued
  *  assignments as unresolved): recognizes the `VAR=$(mktemp …)` idiom — a `$(...)` value, but one that is
  *  known by construction to always resolve under the system temp directory — and substitutes later
  *  `$VAR`/`${VAR}` uses with a literal `/tmp`-scoped placeholder so the target-safety check in
- *  `isOutputsDelete` treats them as provably outside outputs. Source-order aware, mirroring
- *  `expandSimpleVars`'s non-retroactive semantics: a later reassignment of VAR to anything else (mktemp or
- *  not) removes the safe marking for subsequent uses within that same reassignment, then re-establishes it
- *  only if the NEW assignment is itself a `mktemp` call. */
+ *  `isOutputsDelete` treats them as provably outside outputs. Only applies when the mktemp call has NO
+ *  directory-directing argument (see `mktempIsDirDirected`); `mktemp -p mnt/outputs`, `mktemp
+ *  --tmpdir=mnt/outputs …`, and `mktemp mnt/outputs/tmp.XXXXXX` can all place the created path inside
+ *  outputs, so those are deliberately left UNRESOLVED rather than marked safe — an unresolved `$VAR` is
+ *  never "provably safe" downstream, so the later `rm "$VAR"` still flags (matches "prefer a false
+ *  positive over a false negative"). Source-order aware, mirroring `expandSimpleVars`'s non-retroactive
+ *  semantics: a later reassignment of VAR to anything else (mktemp or not) removes the safe marking for
+ *  subsequent uses within that same reassignment, then re-establishes it only if the NEW assignment is
+ *  itself a directory-free `mktemp` call. */
 function resolveMktempVars(cmd: string): string {
   const safeVars = new Set<string>();
   const parts = cmd.split(/(\n|;|&&|\|\|)/);
@@ -1771,7 +1793,7 @@ function resolveMktempVars(cmd: string): string {
     MKTEMP_ASSIGN.lastIndex = 0;
     const mktempHere = new Set<string>();
     let m: RegExpExecArray | null;
-    while ((m = MKTEMP_ASSIGN.exec(part))) mktempHere.add(m[2]);
+    while ((m = MKTEMP_ASSIGN.exec(part))) if (!mktempIsDirDirected(m[3])) mktempHere.add(m[2]);
     ANY_ASSIGN.lastIndex = 0;
     while ((m = ANY_ASSIGN.exec(part))) {
       if (mktempHere.has(m[2])) safeVars.add(m[2]);

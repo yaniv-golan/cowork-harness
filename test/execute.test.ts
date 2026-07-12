@@ -403,6 +403,28 @@ describe("isOutputsDelete — mv direction + target-based safe-prefix suppressio
   it("mktemp resolution is source-order aware: a later non-mktemp reassignment un-marks the var as safe", () => {
     expect(isOutputsDelete('T=$(mktemp); T=outputs/sneaky; rm "$T"')).toBe(true);
   });
+
+  it("mktemp DIRECTED at outputs via -p is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp -p mnt/outputs); rm -f "$T"')).toBe(true);
+  });
+  it("mktemp -d DIRECTED at outputs via -p is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('D=$(mktemp -d -p mnt/outputs); rm -rf "$D"')).toBe(true);
+  });
+  it("mktemp DIRECTED at outputs via --tmpdir= is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp --tmpdir=mnt/outputs xx.XXXX); rm "$T"')).toBe(true);
+  });
+  it("mktemp DIRECTED at outputs via a positional TEMPLATE path is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp mnt/outputs/tmp.XXXXXX); rm "$T"')).toBe(true);
+  });
+  it("mktemp DIRECTED at outputs via a relative positional TEMPLATE path is NOT treated as /tmp-safe (was a false negative)", () => {
+    expect(isOutputsDelete('T=$(mktemp outputs/tmp.XXXXXX); rm "$T"')).toBe(true);
+  });
+  it("mktemp with NO directory-directing argument stays /tmp-safe", () => {
+    expect(isOutputsDelete('T=$(mktemp); cp "$T" outputs/f; rm "$T"')).toBe(false);
+  });
+  it("mktemp DIRECTED at /tmp explicitly via -p stays safe", () => {
+    expect(isOutputsDelete('T=$(mktemp -p /tmp); rm "$T"')).toBe(false);
+  });
 });
 
 // dialog timeout parsing (pure function, token-free)
