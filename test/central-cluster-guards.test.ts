@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -366,6 +366,36 @@ describe("task_started family consumption (resolved child type + omission note)"
       systemEvent("task_started", { task_id: "task_99", subagent_type: "general-purpose" }), // task_id ≠ dispatch toolUseId
     ]);
     expect(rec.subagents[0].resolvedAgentType).toBeUndefined();
+  });
+});
+
+describe("wildcard-fallback-trap warning — emitted ONLY on an omitted dispatch, never on a deliberate choice", () => {
+  it("OMITTED subagent_type resolving (via task_started) to general-purpose emits the ::warning:: fallback-trap line", async () => {
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((l: unknown) => (warnings.push(String(l)), true));
+    try {
+      await driveRunOverEvents([
+        dispatch("t1", "unknown", { typeOmitted: true }),
+        systemEvent("task_started", { tool_use_id: "t1", subagent_type: "general-purpose", task_type: "local_agent" }),
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warnings.some((w) => w.includes("::warning::") && w.includes("OMITTED subagent_type"))).toBe(true);
+  });
+
+  it('an EXPLICIT subagent_type:"general-purpose" dispatch (deliberate, not omitted) resolving to general-purpose does NOT warn', async () => {
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((l: unknown) => (warnings.push(String(l)), true));
+    try {
+      await driveRunOverEvents([
+        dispatch("t1", "general-purpose", { typeOmitted: false }),
+        systemEvent("task_started", { tool_use_id: "t1", subagent_type: "general-purpose", task_type: "local_agent" }),
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warnings.some((w) => w.includes("OMITTED subagent_type"))).toBe(false);
   });
 });
 
