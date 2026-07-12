@@ -492,6 +492,30 @@ describe("analyzeSkillText — `analyze-skill: ignore` marker", () => {
     const text = ["analyze-skill: ignore", "", "OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/notes.md"].join("\n");
     expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
   });
+
+  it("does NOT suppress when the marker only appears mid-prose (embedded in a sentence, not the line's sole content)", () => {
+    const text = [
+      "This skill documents that adding `analyze-skill: ignore` suppresses warnings.",
+      "",
+      "Then call `Write(/sessions/{{id}}/mnt/outputs/out.md)` to save the report.",
+    ].join("\n");
+    // The prose line must not register as the marker at all...
+    expect(hasIgnoreMarker(text)).toBe(false);
+    // ...so the genuine Write(/sessions/...) directive still fires as a real finding.
+    const findings = analyzeSkillText(text, "SKILL.md");
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.some((f) => f.rule === RULE1)).toBe(true);
+  });
+
+  it("still recognizes the marker when prefixed with `#` or a list bullet", () => {
+    expect(hasIgnoreMarker("# analyze-skill: ignore")).toBe(true);
+    expect(hasIgnoreMarker("- analyze-skill: ignore")).toBe(true);
+    expect(hasIgnoreMarker("* analyze-skill: ignore")).toBe(true);
+  });
+
+  it("still recognizes the marker inside a markdown reference-link comment", () => {
+    expect(hasIgnoreMarker("[//]: # (analyze-skill: ignore)")).toBe(true);
+  });
 });
 
 // --------------------------------------------------------------------------------------------- //
@@ -583,6 +607,32 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     const payload = JSON.parse(jsonRun.out.trim());
     expect(payload.findings).toEqual([]);
     expect(payload.suppressed).toBe(true);
+  });
+
+  it("a marker mentioned only mid-prose does NOT suppress — the real finding still fires and --strict still gates", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-marker-prose-"));
+    const notSuppressed = join(d, "SKILL.md");
+    writeFileSync(
+      notSuppressed,
+      [
+        "This skill documents that adding `analyze-skill: ignore` suppresses warnings.",
+        "",
+        "Then call `Write(/sessions/{{id}}/mnt/outputs/out.md)` to save the report.",
+      ].join("\n"),
+    );
+
+    const defaultRun = run(["analyze-skill", notSuppressed], d);
+    expect(defaultRun.code).toBe(0);
+    expect(defaultRun.err).toMatch(new RegExp(RULE1));
+
+    const strictRun = run(["analyze-skill", notSuppressed, "--strict"], d);
+    expect(strictRun.code).toBe(1);
+
+    const jsonRun = run(["analyze-skill", notSuppressed, "--output-format", "json"], d);
+    expect(jsonRun.code).toBe(0);
+    const payload = JSON.parse(jsonRun.out.trim());
+    expect(payload.suppressed).toBe(false);
+    expect(payload.findings.length).toBeGreaterThan(0);
   });
 
   it("resolves a skill directory to its SKILL.md", () => {

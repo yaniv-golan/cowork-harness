@@ -444,20 +444,26 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
   return { lines, blocks };
 }
 
-/** The file-level silence marker: a line containing `analyze-skill: ignore` (accepted bare, or inside
- *  an HTML comment `<!-- analyze-skill: ignore -->` — the regex only cares about the substring, not
- *  what wraps it). Matched case-insensitively, anywhere on the line. This is the ONE switch documented
- *  to turn off every `analyze-skill` path-fidelity finding for a SKILL.md — a VM-tier-only skill that
- *  legitimately uses `/sessions` paths, or one that merely documents/teaches them in prose, puts this
- *  marker in and the whole warning class goes quiet for that file, INCLUDING a genuine true positive
+/** The file-level silence marker: a LINE whose only meaningful content — allowing just leading/trailing
+ *  whitespace and one optional wrapper — is `analyze-skill: ignore`. Accepted wrappers: an HTML comment
+ *  (`<!-- analyze-skill: ignore -->`), a markdown reference-link comment (`[//]: # (analyze-skill:
+ *  ignore)`), a `#`-prefixed line (`# analyze-skill: ignore`), a list bullet (`- analyze-skill: ignore`
+ *  / `* analyze-skill: ignore`), or bare. Anchored per line (`^\s*...\s*$`), NOT a whole-file substring
+ *  search — a SKILL.md that merely *documents* the marker in prose (e.g. `` add `analyze-skill:
+ *  ignore` to suppress warnings ``) must NOT accidentally self-silence: text before or after the marker
+ *  on the same line (prose, or the marker embedded mid-sentence inside backticks) disqualifies that
+ *  line. This is the ONE switch documented to turn off every `analyze-skill` path-fidelity finding for
+ *  a SKILL.md — a VM-tier-only skill that legitimately uses `/sessions` paths puts a genuine
+ *  marker LINE in and the whole warning class goes quiet for that file, INCLUDING a real true positive
  *  (an explicit author override, not a narrower FP guard). */
-const IGNORE_MARKER_RE = /analyze-skill:\s*ignore\b/i;
+const IGNORE_MARKER_LINE_RE =
+  /^\s*(?:<!--\s*analyze-skill:\s*ignore\s*-->|\[[^\]]*\]:\s*#\s*\(\s*analyze-skill:\s*ignore\s*\)|#+\s*analyze-skill:\s*ignore|[-*]\s*analyze-skill:\s*ignore|analyze-skill:\s*ignore)\s*$/i;
 
-/** Does `text` contain the `analyze-skill: ignore` marker on any line? Exported so the CLI can print an
- *  explanatory note distinguishing "suppressed by marker" from "genuinely clean" without re-deriving the
- *  regex. */
+/** Does `text` carry the `analyze-skill: ignore` marker as its OWN line (see `IGNORE_MARKER_LINE_RE`)?
+ *  Exported so the CLI can print an explanatory note distinguishing "suppressed by marker" from
+ *  "genuinely clean" without re-deriving the regex. */
 export function hasIgnoreMarker(text: string): boolean {
-  return text.split(/\r?\n/).some((line) => IGNORE_MARKER_RE.test(line));
+  return text.split(/\r?\n/).some((line) => IGNORE_MARKER_LINE_RE.test(line));
 }
 
 /** Scan one SKILL.md's full text and return every finding, ordered by line number. `filePath` is used
