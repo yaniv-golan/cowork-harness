@@ -1132,8 +1132,14 @@ export function cmdAnalyzeSkill(args: string[]): void {
   }
 
   const totalFindings = perFile.reduce((n, f) => n + f.findings.length, 0);
-  const ok = totalFindings === 0;
   const failing = strict && totalFindings > 0; // suppressed files never contribute findings, so --strict can't fail on them
+  // `ok` mirrors the exit code (matches `action.yml`'s documented "`ok` mirrors the command's exit
+  // code" contract, and the same rule `lint`/`lint-skill` follow — see scenario-tool.ts's
+  // `runLintLike`): true on an advisory run with findings (exit 0), false only under `--strict` with
+  // findings or the exit-2 usage error above. This command is ADVISORY BY DEFAULT (see the doc comment
+  // above `cmdAnalyzeSkill`) — `ok:false` with a clean exit 0 would contradict the exit code AND
+  // action.yml's own contract, and render.js would print "Overall: ❌ fail" for a run that exited 0.
+  const ok = !failing;
 
   if (json) {
     out(

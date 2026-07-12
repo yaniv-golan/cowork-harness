@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -74,5 +74,169 @@ describe.skipIf(!can || !havePython)("cowork-harness lint-skill (CLI passthrough
     const { code, stderr } = runCli(["lint-skill", d], { PYTHON: "/does/not/exist" });
     expect(code).toBe(127);
     expect(stderr).toMatch(/not found/i);
+  });
+});
+
+// The Action always appends `--output-format json` to every command it drives (action.yml), but
+// python's `lint`/`lint-skill` only understand `--json` — this was the "lint lane broken in the Action"
+// bug: argparse rejected `--output-format` (exit 2, empty stdout) → the wrapper's `ok` output came out
+// false with no useful message. These tests drive the CLI wrapper (not python directly) to prove the
+// flag gets translated/stripped and the harness's own envelope comes back well-formed.
+
+function writeCleanScenario(dir: string, name = "demo") {
+  const p = join(dir, `${name}.yaml`);
+  writeFileSync(
+    p,
+    [
+      "name: " + name,
+      "baseline: latest",
+      "fidelity: container",
+      "on_unanswered: fail",
+      "",
+      "prompt: |",
+      "  hello",
+      "",
+      "assert:",
+      "  - result: success",
+      "",
+    ].join("\n"),
+  );
+  return p;
+}
+
+// Triggers a real (INFO-severity) lint finding — `user_visible_artifact` without an `artifacts`
+// manifest — while still exiting 0 (INFO doesn't gate). Used to prove findings survive the json
+// envelope wrap even on a clean (ok:true) exit.
+function writeScenarioWithFinding(dir: string, name = "demo-finding") {
+  const p = join(dir, `${name}.yaml`);
+  writeFileSync(
+    p,
+    [
+      "name: " + name,
+      "baseline: latest",
+      "fidelity: container",
+      "on_unanswered: fail",
+      "",
+      "prompt: |",
+      "  hello",
+      "",
+      "assert:",
+      "  - result: success",
+      '  - user_visible_artifact: "out.txt"',
+      "",
+    ].join("\n"),
+  );
+  return p;
+}
+
+describe.skipIf(!can || !havePython)("cowork-harness lint --output-format json (Action passthrough)", () => {
+  it("a clean scenario → a well-formed jsonPayloadEnvelope with ok:true (not a python argparse error)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-json-clean-"));
+    const scenario = writeCleanScenario(d);
+    const { code, stdout } = runCli(["lint", scenario, "--output-format", "json"]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.tool).toBe("cowork-harness");
+    expect(payload.command).toBe("lint");
+    expect(payload.ok).toBe(true);
+    expect(Array.isArray(payload.findings)).toBe(true);
+    expect(payload.findings).toHaveLength(0);
+  });
+
+  it("a scenario with a lint finding → the findings are present in the envelope (still ok:true, INFO doesn't gate)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-json-finding-"));
+    const scenario = writeScenarioWithFinding(d);
+    const { code, stdout } = runCli(["lint", scenario, "--output-format", "json"]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(true);
+    expect(payload.findings.length).toBeGreaterThan(0);
+    expect(payload.findings[0].rule).toBe("manifest-needs-snapshot");
+  });
+
+  it("the `--output-format=json` equals-form also works (stripped + translated the same way)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-json-eq-"));
+    const scenario = writeCleanScenario(d);
+    const { code, stdout } = runCli(["lint", scenario, "--output-format=json"]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(true);
+  });
+
+  it("an ERROR-severity finding (an empty scenario dir) → ok:false, mirroring the non-zero exit code", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-json-error-"));
+    const emptyDir = join(d, "no-scenarios-here");
+    mkdirSync(emptyDir);
+    const { code, stdout } = runCli(["lint", emptyDir, "--output-format", "json"]);
+    expect(code).not.toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(false);
+    expect(payload.findings.length).toBeGreaterThan(0);
+  });
+
+  it("a python usage error (missing positional) in json mode → a jsonError envelope, not a crash", () => {
+    // `lint --output-format json` with no scenario path forwards to `python3 scenario.py lint --json`
+    // with no `files` positional — argparse's own hard requirement (nargs='+'), so it exits 2 with a
+    // "usage: ..." message on stderr and EMPTY stdout. The wrapper must not let JSON.parse("") throw.
+    const { code, stdout } = runCli(["lint", "--output-format", "json"]);
+    expect(code).toBe(2);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.tool).toBe("cowork-harness");
+    expect(payload.command).toBe("lint");
+    expect(payload.ok).toBe(false);
+    expect(payload.error).not.toBeNull();
+    expect(payload.error.category).toBe("usage");
+  });
+
+  it("text mode `lint --output-format text` still works (the flag is stripped, not forwarded)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-text-"));
+    const scenario = writeCleanScenario(d);
+    const { code, stdout } = runCli(["lint", scenario, "--output-format", "text"]);
+    expect(code).toBe(0);
+    expect(stdout).not.toMatch(/unrecognized arguments/);
+  });
+});
+
+describe.skipIf(!can || !havePython)("cowork-harness lint-skill --output-format json (Action passthrough)", () => {
+  it("a footgun fixture → a well-formed jsonPayloadEnvelope with the finding present (still ok:true — WARN doesn't gate without --strict)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-skill-json-warn-"));
+    writeFootgunSkill(d);
+    const { code, stdout } = runCli(["lint-skill", d, "--output-format", "json"]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.tool).toBe("cowork-harness");
+    expect(payload.command).toBe("lint-skill");
+    expect(payload.ok).toBe(true);
+    expect(Array.isArray(payload.findings)).toBe(true);
+    expect(payload.findings.some((f: { rule: string }) => f.rule === "plugin-root-in-vm-bash")).toBe(true);
+  });
+
+  it("the same fixture WITH --strict → ok:false, mirroring the exit-1 gate", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-skill-json-strict-"));
+    writeFootgunSkill(d);
+    const { code, stdout } = runCli(["lint-skill", d, "--strict", "--output-format", "json"]);
+    expect(code).toBe(1);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(false);
+    expect(payload.findings.length).toBeGreaterThan(0);
+  });
+
+  it("a clean fixture → ok:true, empty findings", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-skill-json-clean-"));
+    writeCleanSkill(d);
+    const { code, stdout } = runCli(["lint-skill", d, "--output-format", "json"]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(true);
+    expect(payload.findings).toHaveLength(0);
+  });
+
+  it("a python usage error (missing positional) in json mode → a jsonError envelope, not a crash", () => {
+    const { code, stdout } = runCli(["lint-skill", "--output-format", "json"]);
+    expect(code).toBe(2);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.command).toBe("lint-skill");
+    expect(payload.ok).toBe(false);
+    expect(payload.error.category).toBe("usage");
   });
 });

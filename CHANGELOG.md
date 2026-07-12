@@ -56,6 +56,32 @@ All notable changes to this project are documented here. The format is based on
   `{file, findings, suppressed, strict}` payload is now always `{files: [{file, findings, suppressed}],
   scanned, unscanned, strict}`, for uniformity with a directory target's multi-file result. An external
   `jq '.findings'` / `jq '.file'` recipe needs `jq '.files[0].findings'` / `jq '.files[0].file'` instead.
+- **`analyze-skill`'s JSON envelope `ok` now mirrors the exit code, not "zero findings."** Previously
+  `ok = findings.length === 0`, so an ADVISORY run (the default — findings print but exit 0) reported
+  `ok:false` even though the process exited 0 and `action.yml`'s own documented contract (`ok` "mirrors
+  the command's exit code") said otherwise; the packaged Action's job-summary reporter then rendered
+  "Overall: ❌ fail" for a run that hadn't actually failed. `ok` is now `true` on an advisory exit-0 run
+  even with findings present, and `false` only under `--strict` with findings or the exit-2 usage error
+  — the same rule `lint`/`lint-skill --output-format json` follow (see the Fixed entry below). A `jq
+  '.ok'` consumer that was treating `ok:false` as "any findings at all" should switch to checking
+  `.files[].findings` directly; the exit code (and `ok`) now only reflect `--strict` gating.
+
+### Fixed
+
+- **The packaged Action's `lint`/`lint-skill` lanes were broken.** `action.yml` always appends
+  `--output-format json` to every command it drives, but the bundled `scenario.py`'s `lint`/`lint-skill`
+  only understand `--json` — `--output-format` was an unrecognized argument to python's argparse (exit 2,
+  empty stdout), so `command: lint` / `command: lint-skill` in the Action always failed with an
+  unhelpful `ok:false` and no findings. `cowork-harness lint`/`lint-skill` now detect json mode
+  themselves, strip `--output-format json|text|=…` before forwarding to python, pass python's own
+  `--json` in json mode, and re-wrap the child's bare findings array in the harness's standard
+  `jsonPayloadEnvelope("lint"/"lint-skill", ok, { findings })` (`ok` mirrors the child's exit code). Text
+  mode (the default) is unaffected in output — `stdio: "inherit"` as before — but now also strips the
+  flag first, since python didn't know the text form either. A python-level usage error in json mode
+  (e.g. a missing required path — argparse exit 2, empty stdout) now surfaces as a `jsonError("usage",
+  …)` envelope instead of a raw `JSON.parse` crash. `action.yml` also now documents `lint-skill` and
+  `analyze-skill` in its `command` input, and no longer forwards the replay-only `--fail-on-skill-drift`
+  flag to any command other than `replay`.
 
 ## [0.31.0] — 2026-07-12
 

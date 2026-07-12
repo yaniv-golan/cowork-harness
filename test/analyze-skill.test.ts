@@ -797,7 +797,7 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     expect(run(["analyze-skill"], d).code).toBe(2);
   });
 
-  it("--output-format json emits a machine envelope with ok/findings (default exit 0 despite findings)", () => {
+  it("--output-format json emits a machine envelope with ok/findings; ok mirrors the exit code (default exit 0 despite findings → ok:true)", () => {
     const d = mkdtempSync(join(tmpdir(), "as-cli-json-"));
     const dirty = join(d, "SKILL.md");
     writeFileSync(dirty, "Write(/sessions/{{id}}/mnt/outputs/out.md)\n");
@@ -806,7 +806,9 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     const payload = JSON.parse(r.out.trim());
     expect(payload.tool).toBe("cowork-harness");
     expect(payload.command).toBe("analyze-skill");
-    expect(payload.ok).toBe(false);
+    // ok mirrors the exit code (action.yml's documented contract) — an advisory run WITH findings
+    // still exits 0, so ok is true here, even though findings are non-empty.
+    expect(payload.ok).toBe(true);
     expect(Array.isArray(payload.files)).toBe(true);
     expect(payload.files).toHaveLength(1);
     expect(payload.files[0].file).toBe(dirty);

@@ -177,6 +177,41 @@ jobs:
             echo "::error::action-self-test: reporter output doesn't show a failing verdict row for example-pdf-skill — the reporter may not be rendering assertion failures correctly."
             exit 1
           fi
+      - name: Run the action with command:lint (proves the analyzer passthrough — --output-format json
+          is stripped/translated to python's --json, not forwarded verbatim and rejected)
+        id: lintcase
+        uses: ./
+        with:
+          command: lint
+          path: examples/scenarios/example-pdf-skill.yaml
+          version: ${{ steps.pack.outputs.tarball }}
+      - name: Verify the lint case exited clean with a well-formed envelope
+        run: |
+          if [ "${{ steps.lintcase.outputs.ok }}" != "true" ]; then
+            echo "::error::action-self-test: command:lint expected ok=true, got '${{ steps.lintcase.outputs.ok }}' — see the 'Run the action with command:lint' step's log."
+            exit 1
+          fi
+          if ! node -e 'if (typeof JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).ok !== "boolean") process.exit(1)' "${{ steps.lintcase.outputs.envelope-path }}"; then
+            echo "::error::action-self-test: command:lint envelope is missing a boolean .ok field."
+            exit 1
+          fi
+      - name: Run the action with command:analyze-skill (the other token-free analyzer — pure TS, no python3 involved)
+        id: analyzecase
+        uses: ./
+        with:
+          command: analyze-skill
+          path: .claude/skills/cowork-harness
+          version: ${{ steps.pack.outputs.tarball }}
+      - name: Verify the analyze-skill case exited clean with a well-formed envelope
+        run: |
+          if [ "${{ steps.analyzecase.outputs.ok }}" != "true" ]; then
+            echo "::error::action-self-test: command:analyze-skill expected ok=true, got '${{ steps.analyzecase.outputs.ok }}' — see the 'Run the action with command:analyze-skill' step's log."
+            exit 1
+          fi
+          if ! node -e 'if (typeof JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).ok !== "boolean") process.exit(1)' "${{ steps.analyzecase.outputs.envelope-path }}"; then
+            echo "::error::action-self-test: command:analyze-skill envelope is missing a boolean .ok field."
+            exit 1
+          fi
 
   # ── Stage 1b: pytest helper lane — token-free subset only, excludes @pytest.mark.cowork (no Docker/token; -m 'not cowork') ──
   python:
