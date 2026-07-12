@@ -1946,8 +1946,22 @@ export function isOutputsDelete(cmd: string): boolean {
     if (!DELETE_TOKEN.test(stmt)) continue;
     if (TOUCHES_OUTPUTS.test(stmt)) return true; // a delete statement itself names outputs
     const targets = nonFlagArgs(stmt);
-    const allSafe = targets.length > 0 && targets.every((t) => prefixes.some((pre) => t.startsWith(pre)));
-    if (!allSafe) return true; // unprovable (incl. unexpanded/command-subst vars) → flag
+    // A prefix match only PROVES safety if the remainder after the prefix is itself inert: no `..`
+    // path segment (could walk back out of the safe root, e.g. `/tmp/a/../b` → `/tmp/b`... or worse,
+    // `/tmp/../outputs/x`) and no unexpanded `$` (an unresolved var/command-subst suffix, e.g.
+    // `/tmp/${TARGET}` or `/tmp/$(get)`, whose real resolved path is unknown). Either makes the
+    // remainder itself unprovable, so the whole target falls through to the "unprovable → flag" path
+    // below rather than being cleared by the prefix match.
+    const isProvablySafe = (t: string): boolean =>
+      prefixes.some((pre) => {
+        if (!t.startsWith(pre)) return false;
+        const remainder = t.slice(pre.length);
+        if (/(^|\/)\.\.(\/|$)/.test(remainder)) return false;
+        if (remainder.includes("$")) return false;
+        return true;
+      });
+    const allSafe = targets.length > 0 && targets.every(isProvablySafe);
+    if (!allSafe) return true; // unprovable (incl. unexpanded/command-subst vars, `..` traversal) → flag
   }
   return false; // every rm delete is provably under a safe prefix; outputs ref was non-delete only
 }

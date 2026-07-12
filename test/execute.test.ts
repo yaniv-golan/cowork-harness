@@ -462,6 +462,31 @@ describe("isOutputsDelete — mv direction + target-based safe-prefix suppressio
   it("mktemp DIRECTED at /tmp explicitly via -p stays safe", () => {
     expect(isOutputsDelete('T=$(mktemp -p /tmp); rm "$T"')).toBe(false);
   });
+
+  // a safe-prefix match only proves safety when the REMAINDER after the prefix is itself inert —
+  // no `..` traversal, no unexpanded `$`. Otherwise the resolved target is unprovable and must fall
+  // through to the "unprovable → flag" path, even though the raw text starts with a safe prefix.
+  it("safe-prefix target with a `..` traversal segment behind it is NOT provably safe → flags", () => {
+    expect(isOutputsDelete("echo mnt/outputs; rm -rf /tmp/a/../b")).toBe(true);
+  });
+  it("safe-prefix target with an unexpanded var suffix is NOT provably safe → flags", () => {
+    expect(isOutputsDelete("echo mnt/outputs; rm -rf /tmp/${TARGET}")).toBe(true);
+  });
+  it("safe-prefix target with an unresolved command-subst suffix is NOT provably safe → flags", () => {
+    expect(isOutputsDelete('echo mnt/outputs; rm -rf "/tmp/$(get)"')).toBe(true);
+  });
+
+  // regression: the `..`/`$` remainder check must not re-flag the already-fixed FP cases — a clean
+  // remainder (no `..`, no `$`) behind a safe prefix stays suppressed.
+  it("preserved: the mktemp idiom's placeholder remainder is clean → still not flagged", () => {
+    expect(isOutputsDelete('T=$(mktemp); cp "$T" outputs/f; rm -f "$T"')).toBe(false);
+  });
+  it("preserved: a plain /tmp target with no `..`/`$` is still not flagged, even with outputs mentioned elsewhere", () => {
+    expect(isOutputsDelete("echo mnt/outputs; rm -rf /tmp/scratch/file")).toBe(false);
+  });
+  it("preserved: the literal $TMPDIR/ prefix itself (not a remainder `$`) is still not flagged", () => {
+    expect(isOutputsDelete("rm $TMPDIR/x")).toBe(false);
+  });
 });
 
 // dialog timeout parsing (pure function, token-free)
