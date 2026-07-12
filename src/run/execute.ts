@@ -54,6 +54,7 @@ import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { readTimeline } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
+import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
@@ -199,6 +200,20 @@ function readOriginMarker(path: string): OriginMarker | null {
     /* missing or malformed */
   }
   return null;
+}
+
+/** Resolve the config-dir ROOT the sub-agent reasoning capture (`captureSubagentReasoning`) should glob
+ *  under, per tier — mirrors how `CLAUDE_CONFIG_DIR` itself is set per tier (src/runtime/argv.ts +
+ *  src/runtime/{hostloop,container,microvm}.ts): hostloop spawns the native process directly with
+ *  `CLAUDE_CONFIG_DIR=plan.configDir` (already a host path); container/microvm spawn IN the sandbox
+ *  with a GUEST `CLAUDE_CONFIG_DIR=mnt/.claude`, which `stageWorkspace` (src/runtime/stage.ts) cp's
+ *  `plan.configDir` INTO at `<workRoot>/.claude` — host-visible there via the docker bind mount / Lima
+ *  shared folder. Other tiers (protocol — no real agent binary spawns)
+ *  return `undefined`: there is no child transcript to read, so the caller skips the capture entirely. */
+function subagentConfigDirRoot(effectiveFidelity: string, configDir: string, workRoot: string): string | undefined {
+  if (effectiveFidelity === "hostloop") return configDir;
+  if (effectiveFidelity === "container" || effectiveFidelity === "microvm") return join(workRoot, ".claude");
+  return undefined;
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
@@ -1245,6 +1260,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       verdict: undefined, // computed just below (after assertions are evaluated / the object is fully assembled) and stored — see the comment there
     });
 
+    // Sub-agent reasoning (thinking + text turns), read from each dispatch's on-disk child session
+    // transcript (LIVE/record only — see subagentConfigDirRoot's doc comment for the per-tier root and
+    // captureSubagentReasoning's for the join). Mutates `result.subagents[].reasoning` in place; a
+    // `undefined` root (e.g. protocol tier) or a capture-internal failure is a silent no-op — reasoning
+    // just stays absent, never a run failure.
+    const subagentConfigRoot = subagentConfigDirRoot(effectiveFidelity, plan.configDir, workRoot);
+    if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, result.subagents);
+
     // THE verdict-persist point: `computeVerdict` is downstream of assembling `result` (it reads
     // `result.assertions`, `result.scan`, `result.permissiveAutoAllow`, …), so it can only run here, after
     // the assembler call above — never inside it. Stored verbatim on `result` before it's written to
@@ -1583,6 +1606,12 @@ export function buildPartialResult(args: {
     skippedAssertions: undefined,
     verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there
   });
+  // Same sub-agent reasoning capture the success path runs (see subagentConfigDirRoot's doc comment) —
+  // a salvaged partial run is still LIVE, and a dispatch may have completed (and thought) before the
+  // gate that ended the run. Silent no-op on a tier with no child transcript, or a capture failure.
+  const subagentConfigRoot = subagentConfigDirRoot(args.effectiveFidelity, args.configDir, args.workRoot);
+  if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, built.subagents);
+
   // A partial run still has a verdict — it failed on the unanswered gate (`result:"error"`), not on an
   // assertion (there are none to evaluate here). Compute it from the just-assembled object (computeVerdict
   // reads result.assertions/unansweredGate/etc. off it) and store the result, same as the success path above.

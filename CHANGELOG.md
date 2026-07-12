@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`RunResult.subagents[].reasoning`** — a sub-agent's own THINKING and TEXT turns, in transcript order,
+  surfaced per dispatch. The SDK suppresses sub-agent thinking on the parent event stream entirely, so
+  the only channel for "did the sub-agent reason over the right rubric" was previously unavailable; this
+  reads the on-disk child session transcript the agent binary writes per `Task` dispatch
+  (`<configDirRoot>/projects/**/subagents/agent-<id>.jsonl`), joined to its `RunResult.subagents[]` entry
+  via the sibling `agent-<id>.meta.json`'s `toolUseId` (an exact match — no path reconstruction). Resolved
+  per fidelity tier (hostloop vs. the container/microvm sandboxed config dir) at finalize, LIVE/record
+  lane only — `undefined` on replay, same as `resources`/`mcpErrors`. Capped the same way the top-level
+  `thinking[]` field is (~50 entries, ~10KB/entry each), with `reasoningElided` counting the overflow. A
+  missing or malformed child transcript never fails the run — the affected dispatch's `reasoning` is just
+  left absent.
+
 - **`status --latest-for <scenario-name-or-slug>`** — resolves and prints the NEWEST run dir for a
   scenario by actual run time, replacing the fragile `ls -td runs/<scenario>/* | head -1` idiom: bare
   directory mtime is NOT run recency (it bumps on any later write inside the dir — an `inspect`, a `trace

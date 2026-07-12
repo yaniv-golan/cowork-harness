@@ -103,6 +103,11 @@ const full: RunResult = {
       dispatchModel: "claude-sonnet-4-5",
       resolvedModel: "claude-haiku-x",
       attributedSkillId: "my-plugin:my-skill",
+      reasoning: [
+        { kind: "thinking", text: "considering how to explore this" },
+        { kind: "text", text: "I'll start by reading the reference doc." },
+      ],
+      reasoningElided: 1,
     },
   ],
   nonReproducibleAnswers: [{ question: "Format?", chosen: "PDF", by: "llm", rationale: "best fit", model: "claude-sonnet-4-5" }],

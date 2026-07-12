@@ -1135,6 +1135,20 @@ export interface RunResult {
     output?: string; // the dispatch's own paired tool_result, assertText-capped
     outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)
     attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
+    /** The sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result are
+     *  excluded — already covered by `toolsUsed`/`referencesRead` above). Read from the on-disk child
+     *  session transcript the agent binary writes per dispatch (`<configDirRoot>/projects/**\/subagents/
+     *  agent-<id>.jsonl`, joined to this entry via the sibling `agent-<id>.meta.json`'s `toolUseId`) —
+     *  the ONLY channel for a sub-agent's reasoning, since the SDK suppresses sub-agent thinking on the
+     *  parent event stream. LIVE/record lane only: the child transcript exists only while the real agent
+     *  binary ran, so this is `undefined` on replay (evidence-unavailable, like `resources`/`mcpErrors`)
+     *  — never embedded in a cassette. Capped the same way the top-level `thinking[]` field is (~50
+     *  entries, ~10KB/entry); `[]` is a valid "a child transcript was found but it captured no
+     *  thinking/text turns" (a trivial dispatch may not reason at all) — distinct from `undefined`
+     *  ("no child transcript joined to this dispatch"). */
+    reasoning?: Array<{ kind: "thinking" | "text"; text: string }>;
+    /** Count of `reasoning` turns dropped by the cap above (oldest-first) — mirrors `thinkingElided`. */
+    reasoningElided?: number;
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,

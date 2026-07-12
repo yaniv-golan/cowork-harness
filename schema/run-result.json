@@ -721,6 +721,33 @@
           },
           "attributedSkillId": {
             "type": "string"
+          },
+          "reasoning": {
+            "type": "array",
+            "description": "the sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result excluded — already covered by toolsUsed/referencesRead). Read from the on-disk child session transcript (LIVE/record lane only — undefined on replay, never embedded in a cassette). [] = a child transcript was found but captured no thinking/text turns; undefined = no child transcript joined to this dispatch.",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "text"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "thinking",
+                    "text"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "reasoningElided": {
+            "type": "number",
+            "description": "count of reasoning turns dropped by the cap (oldest-first) — mirrors thinkingElided"
           }
         }
       }
