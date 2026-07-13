@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.33.0
-  tracks-harness: cowork-harness 0.33.0 (baseline desktop-1.20186.1)
+  version: 1.0.0
+  tracks-harness: cowork-harness 1.0.0 (baseline desktop-1.20186.1)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.33.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.0.0` (baseline
 > `desktop-1.20186.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,9 +39,9 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.33.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=0.33.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=0.33.0"`. **Pin `@>=0.33.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.0.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.0.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.0.0"`. **Pin `@>=0.33.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 0.33.0 floor gates, by release:
+  What the ≥ 1.0.0 floor gates, by release:
 
   - **core set (pre-0.21.0 vintage, or mixed):** `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator (passes when the resolved value deep-equals one of the listed members — value ∈ your list, not the reverse), `verify-cassettes` incl. the `--allow-domain`/`--allow-email`/`--allow-patterns-file` allows (`--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.
   - **0.21.0:** `verify-cassettes --allow-path` (`path` — local absolute filesystem paths — is the scanner's 4th class), and `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field.
@@ -51,6 +51,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   - **0.31.0:** the `lint-skill` (static host-loop footgun + `subagent_type` resolution linter) / `analyze-skill` (advisory `/sessions`-path static scan, `--strict`, `analyze-skill: ignore` marker) / `probe-dispatch` (single-dispatch mechanics probe) commands, `status --latest-for` (resolve a scenario's newest run dir by run time, not directory mtime), the `subagent_dispatch_healthy` composite assertion, and the persisted `result.json` fields `verdict`, `subagents[].referencesRead`/`subagents[].reasoning`, plus the `toolCounts`/`toolErrors`/`toolDurations` shape distinction.
   - **0.32.0:** `analyze-skill`'s directory scan now covering a skill/plugin's full contract surface (recursive `agents/`/`references/`/`commands/`, plugin-root-aware, symlink-following) with line/block-scoped `analyze-skill: ignore-next-line`/`ignore-start`/`ignore-end` markers and multi-path/glob input, and `lint-skill`'s provable in-plugin `subagent_type` typo now a WARN that gates under `--strict`.
   - **0.33.0:** the `redacted` marker on display-omitted reasoning — `subagents[].reasoning` and the top-level `thinking[]` now carry `{text:"", redacted:true}` when the model returns a signed-but-empty thought (so "reasoned, text omitted" is distinct from "no thought"), plus the fenced `debug.thinking_display` escape hatch.
+  - **1.0.0:** first stable release — the SPEC §12 compatibility contract takes effect (covered CLI/schema/env/Action surfaces are now stable; breaking changes need a major bump). No new author-facing command; the floor simply tracks the 1.0 release.
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred), or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
