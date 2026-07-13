@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-07-14
+
+Patch: shorten the Action's Marketplace tagline. No runtime/API change.
+
+### Fixed
+
+- `action.yml`'s `description` is now under GitHub Marketplace's 125-character limit (the full
+  token-free-vs-live-lane detail is retained as comments above it), so the packaged Action can be
+  published to the Marketplace. `1.0.1`'s description was too long and blocked the listing.
+
 ## [1.0.1] — 2026-07-14
 
 Patch: Action Marketplace branding + a release-tooling fix. No runtime/API change.
