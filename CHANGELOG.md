@@ -37,8 +37,41 @@ All notable changes to this project are documented here. The format is based on
   answer-policies pointer is now a real link. `effectiveFidelity` (the recorded resolved tier behind
   the `resolved-tier`/`unverifiable-tier` staleness classes) is now mentioned in the README fidelity
   section and `python/README.md`, not only in `docs/cassette.md`.
+- **The docs told a false "default `8899`" story for `COWORK_VM_PROXY_PORT`** — when the var is
+  unset, the host binds the egress proxy on an OS-assigned free port and threads that value into the
+  guest firewall + `HTTP(S)_PROXY`; `8899` is only the guest-config fallback when a VM is spawned
+  without an explicit port, which never happens on a normal run. README and `docs/scenario.md` now
+  say so. Also closed: `COWORK_HARNESS_STATUS_CORRUPT_TIMEOUT_MS` (30s corrupt-`status.json`
+  backstop on `status --follow`) was the one `COWORK_*` env var documented nowhere — now in
+  `docs/run-status.md` + the README knob list; the `COWORK_HARNESS_DECIDER_DIR_POLL_MS` docs name
+  the per-subsystem defaults (300 ms rendezvous / 500 ms `gates --follow`); the `semantic_matches`
+  judge docs name the pinned default (`claude-opus-4-8`) in README, `docs/scenario.md`, and the
+  skill's schema reference; the heartbeat bullet states its 30s default instead of pointing at a
+  source file.
+- **`replay --explain` was invisible from the command catalog** — the flagship false-green
+  diagnosis flag was documented only in debugging prose; it's now in the `record`/`replay` command
+  table row and leads the record/replay "Flags worth knowing" bullet.
+- **`examples/README.md` ships in the npm tarball while the trees it describes don't** — it now
+  opens with a "Reading this on npm?" callout (clone for `scenarios/`/`sessions/`/`skills/`/`data/`),
+  documents `probes/` (previously invisible: used by `test/live-contract.test.ts` but absent from
+  the layout and from schema validation — `examples/probes` is now in `test/examples.test.ts`'s
+  scenario sweep), and links the matrices worked example; the README documentation-table row carries
+  the same source-checkout caveat.
+- **The companion skill's preflight sent replay-only users through `doctor`**, whose token check
+  hard-fails on every tier — a new "Replay-only? Skip `doctor`" bullet carries the same carve-out
+  `docs/README.md` already had. The 3,200-character single-bullet 0.32.0 feature parenthetical is
+  now a scannable by-release sub-list (content unchanged).
+- **`DESIGN.md` still said the staged in-VM agent is 2.1.202** — the `desktop-1.20186.1` baseline
+  re-synced it to 2.1.205; DESIGN.md and `docs/protocol.md` now carry dated patch-only notes for
+  1.20186.1 while the 2026-07-11 live pass stays scoped to `desktop-1.20186.0` (not restamped).
 
 ### Added
+
+- **`test/docs-index-sync.test.ts`** — three token-free guards: every `COWORK_*` env var read in
+  `src/` (dot-access **or** helper-read string literal) must be documented in README/`docs/*.md`;
+  the judge-model default id in the docs must match `semantic-judge.ts` (fails loud on a const
+  rename); `llms.txt` must link every top-level `docs/*.md` guide (both directions — `gotchas.md`,
+  `subagents.md`, and `plugin-root.md` were missing and are now linked).
 
 - **The Action's `version` default (`latest`) is now documented as intentional** — in `action.yml`'s
   input description, the README inputs sentence, and `references/ci-recipe.md` — with

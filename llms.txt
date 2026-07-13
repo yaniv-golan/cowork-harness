@@ -22,12 +22,15 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [DESIGN.md](DESIGN.md): parity matrix per tier, deliberate deltas vs. real Cowork, the maintenance contract
 - [docs/boundary.md](docs/boundary.md): the sandbox limitations model (what's enforced, what isn't)
 - [docs/discovery.md](docs/discovery.md): how marketplaces / plugins / skills / MCP are discovered
+- [docs/plugin-root.md](docs/plugin-root.md): `${CLAUDE_PLUGIN_ROOT}` resolves differently host-side vs in-VM bash — the single most common Cowork authoring footgun
 - [docs/cassette.md](docs/cassette.md): record/replay cassettes and the token-free PR gate
 - [docs/decider-dir.md](docs/decider-dir.md): in-band gate answering by a driving agent
 - [docs/maintenance.md](docs/maintenance.md): keeping parity across Claude Desktop releases (`sync`)
 - [docs/cowork-spawn-contract-1.12603.1.md](docs/cowork-spawn-contract-1.12603.1.md): the binary-grounded spawn/control contract (cwd, env, mounts, control-protocol fields) the harness implements
+- [docs/subagents.md](docs/subagents.md): what a sub-agent can reach, what tools it gets, and where host-loop vs VM-loop diverge — read before writing/asserting a Task-dispatching skill
 - [docs/chat.md](docs/chat.md): the interactive `chat` command — multi-turn sessions, `--folder`, fidelity tiers
 - [docs/debugging.md](docs/debugging.md): debugging a run — `inspect`/`trace`/`chat`/`verify-run` for a misbehaving skill, and the false-green hunt
+- [docs/gotchas.md](docs/gotchas.md): setup troubleshooting FAQ — lint/docker/worktree/doctor/scenarioDrift failures and their fixes
 - [docs/fidelity-gaps.md](docs/fidelity-gaps.md): what the harness deliberately does NOT reproduce vs real Cowork
 - [docs/invariants.md](docs/invariants.md): consolidated index of every "do not break" invariant, each with a pointer to its enforcement code and its test
 - [docs/run-status.md](docs/run-status.md): checking whether a background run is alive without `ps aux` — `status.json` + `cowork-harness status [--follow]`

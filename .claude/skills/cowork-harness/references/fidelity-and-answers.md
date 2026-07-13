@@ -176,7 +176,7 @@ and `scaffold` refuse to treat a partial run's half-finished output as a passing
 - `COWORK_HARNESS_RUNS_DIR` (or `--run-dir <path>`) — override the default run-output root `~/.cowork-harness/runs` (out of any working tree). flag > env > default.
 - `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` / `COWORK_HARNESS_LLM_TIMEOUT_MS` — decider backstops
   (default 600 s; **fail loud** on timeout).
-- `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous.
+- `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous (poll defaults: 300 ms for the run-side rendezvous, 500 ms for `gates --follow`).
 - `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — dialog auto-cancel (default 6 s).
 - `COWORK_HARNESS_LLM_MAX_BYTES` — stdout bound on `--decider-llm` (default 8 MiB).
 - `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit on the

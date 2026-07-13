@@ -155,3 +155,8 @@ least one vector.
   a live end-to-end pass across `protocol`/`container`/`hostloop`. The system-prompt source added a
   deployment-gated `{{modelIdentity}}` placeholder that is stripped on first-party, so the rendered
   prompt is byte-identical.
+- **2026-07-12** — baseline set extended through `desktop-1.20186.1` (patch-only: egress allowlist,
+  spawn config, and the system-prompt fingerprint unchanged from 1.20186.0; the staged VM ELF re-synced
+  2.1.202 → 2.1.205). The `v1` control-protocol facts are expected unchanged — the native 2.1.205
+  binary already passed the 2026-07-11 `hostloop` live lane — but the 2.1.205 in-VM ELF has had no
+  dedicated protocol pass; the 2026-07-11 verification stays scoped to 1.20186.0 (not restamped).

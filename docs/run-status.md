@@ -137,6 +137,10 @@ See also [scenario.md → Output](./scenario.md#output), which documents the sam
     treated as stale/probably-dead (default: 3× `COWORK_HARNESS_STATUS_INTERVAL_MS`, i.e. 15s out of the
     box). Raise it if you deliberately run with a longer `COWORK_HARNESS_STATUS_INTERVAL_MS` and don't
     want staleness to trip prematurely.
+  - `COWORK_HARNESS_STATUS_CORRUPT_TIMEOUT_MS` — how long a `status.json` may exist but never parse
+    before `status --follow` gives up and fails loud (default 30000ms / 30s). Guards against a
+    persistently corrupt/truncated file looping forever. Distinct from
+    `COWORK_HARNESS_STATUS_FIRST_SEEN_TIMEOUT_MS`, which covers the file never *appearing*.
 
 ## `mounts.json` — a run's VM-path resolution context
 

@@ -7,6 +7,11 @@ the committed cassettes replay token-free on **every** CI run, fork PRs included
 the workflow (main-repo pushes/PRs) — it's skipped on fork PRs, which never receive the secret.
 See `.github/workflows/ci.yml`.
 
+> **Reading this on npm?** The npm package ships only `replays/` and this README — the
+> `scenarios/`, `sessions/`, `skills/`, and `data/` trees described below need a source checkout
+> (`git clone https://github.com/yaniv-golan/cowork-harness`). See the what-ships table under
+> [README → Drive it from Claude Code](../README.md#drive-it-from-claude-code-companion-skill).
+
 > These are *examples* of the layout you'd author in your own skill repo. In **your** repo,
 > `scenarios/` + `sessions/` typically live at the root; here they're under `examples/`
 > because this is the harness's own repo. (The harness's internal fidelity self-tests live
@@ -29,9 +34,12 @@ examples/
   answer-policies/  reusable scripted-answer YAML fragments, loaded with `--answer-policy <yaml>` on
                     `skill`/`decide` (or authored inline via a scenario's `answers:` block) — see
                     docs/scenario.md § Reusable answer policies (--answer-policy)
+  probes/      live-contract probe scenarios (driven by test/live-contract.test.ts — not part of the copyable starter set)
 ```
 
 Answer policies: see [docs/scenario.md § Reusable answer policies](../docs/scenario.md#reusable-answer-policies---answer-policy).
+
+Matrices: the worked matrix config is `matrices/csv-metrics-matrix.yaml` — see the `run --matrix` bullet in README's "Flags worth knowing".
 
 `replays/` has its own [README](./replays/README.md) explaining what each committed cassette covers.
 
