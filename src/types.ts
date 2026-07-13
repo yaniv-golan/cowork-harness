@@ -680,7 +680,7 @@ export const ScenarioObject = z.strictObject({
     .enum(["fail", "prompt", "llm", "first"])
     .optional()
     .describe(
-      "policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) | `first` (pick the first offered option) | `llm` (delegate to a decider LLM) | `prompt` (rejected under `run`; only valid for `chat`)",
+      "policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) | `first` (pick the first offered option) | `llm` (delegate to a decider LLM) | `prompt` (interactive; valid only via `skill --on-unanswered prompt` or the adaptive-TTY default — rejected in scenario YAML under `run`)",
     ),
   expect_denied: z
     .array(z.string())

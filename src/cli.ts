@@ -319,7 +319,7 @@ Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of sil
   --timeout <ms>                   wall-clock budget; on expiry the agent is killed and the run ends
                                    result:error / errorSource:timeout (the CLI form of a scenario's timeout_ms).
 
-Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env >
+Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from process.env >
        --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
@@ -403,7 +403,7 @@ Output:
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
             (COWORK_HARNESS_NO_HEARTBEAT=1 / COWORK_HARNESS_HEARTBEAT_MS to disable/tune).
 
-Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from
+Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from
        process.env > --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 all pass · 1 any assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
