@@ -105,7 +105,8 @@ describe("rewriteFileContent — SKILL.md", () => {
       "> (baseline `desktop-1.20186.1`). If your checkout is newer, prefer the live `--help`.",
       "",
       "- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.33.0**. " +
-        'If missing, run `npx "cowork-harness@>=0.33.0" <cmd>` or `npm i -g "cowork-harness@>=0.33.0"`.',
+        'If missing, run `npx "cowork-harness@>=0.33.0" <cmd>` or `npm i -g "cowork-harness@>=0.33.0"`. ' +
+        "**Pin `@>=0.33.0`, never `@latest`** — the floor fails loud.",
       "",
       "  What the ≥ 0.33.0 floor gates, by release:",
       "",
@@ -145,6 +146,16 @@ describe("rewriteFileContent — SKILL.md", () => {
     const after = rewriteFileContent(SKILL_MD, fixture(), "0.34.0");
     expect(after).toContain('npx "cowork-harness@>=0.34.0" <cmd>');
     expect(after).toContain('npm i -g "cowork-harness@>=0.34.0"');
+  });
+
+  it("bumps the bare `Pin `@>=X.Y.Z`` floor (no cowork-harness prefix) — the gap that shipped stale in 1.0.0", () => {
+    // Regression: SKILL.md's `Pin `@>=X`` is a bare floor with no `cowork-harness` prefix, so
+    // bumpHarnessFloors misses it and check:versions (which reads only the first cowork-harness@>=
+    // match) can't see it. It rotted from 0.33.0 through 1.0.0 until bumpBareFloors was wired into
+    // the SKILL.md case too.
+    const after = rewriteFileContent(SKILL_MD, fixture(), "0.34.0");
+    expect(after).toContain("Pin `@>=0.34.0`");
+    expect(after).not.toContain("Pin `@>=0.33.0`");
   });
 
   it("CRITICAL: leaves a `- **<from-version>:** …` release-note bullet completely unchanged", () => {

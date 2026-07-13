@@ -180,6 +180,13 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
       ```
 - [ ] **Clean up**: `git push origin --delete release/X.Y.Z && git branch -d release/X.Y.Z`
+- [ ] **Move the major/minor tags** (so `uses: yaniv-golan/cowork-harness@v1` and `@v1.0` resolve to
+      this release — the packaged Action's Marketplace consumers pin those):
+      ```
+      git tag -f vX vX.Y.Z && git tag -f vX.Y vX.Y.Z   # e.g. v1 and v1.0 → v1.2.3
+      git push -f origin vX vX.Y
+      ```
+      (Force-moving these ALIAS tags is expected; never force-move the immutable `vX.Y.Z` release tag.)
 - [ ] Smoke the published artifact: `npx cowork-harness@X.Y.Z --version` and
       `npx cowork-harness@X.Y.Z doctor --tier protocol`.
 

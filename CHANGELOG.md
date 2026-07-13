@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-07-14
+
+Patch: Action Marketplace branding + a release-tooling fix. No runtime/API change.
+
+### Added
+
+- `action.yml` now declares Marketplace `branding` (`shield` / `orange`) so the packaged GitHub Action
+  can be listed on the GitHub Actions Marketplace. No change to the Action's inputs, outputs, or runtime.
+
+### Fixed
+
+- `npm run bump` now rewrites the bare `` `Pin `@>=X`` `` floor in `SKILL.md` — it previously bumped only
+  the `cowork-harness@>=`-prefixed floors, so that one line stayed stale (it had drifted since `0.33.0`
+  and shipped stale in `1.0.0`). A new `check:versions` invariant (5b) fails on any `@>=X` in `SKILL.md`
+  that doesn't match the floor, and a regression test covers the bump path.
+
+### Changed
+
+- `RELEASING.md` documents maintaining the moving `v1` / `v1.0` tags on each release, so
+  `uses: yaniv-golan/cowork-harness@v1` resolves to the latest 1.x.
+
 ## [1.0.0] — 2026-07-13
 
 **First stable release.** The compatibility contract in

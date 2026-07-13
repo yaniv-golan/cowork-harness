@@ -42,7 +42,7 @@ function bumpHarnessFloors(content: string, newVersion: string): string {
   return content.replace(/cowork-harness@>=\d+\.\d+\.\d+/g, `cowork-harness@>=${newVersion}`);
 }
 
-/** A bare, backtick-delimited `` `@>=X.Y.Z` `` floor with no `cowork-harness` prefix (README.md only). */
+/** A bare, backtick-delimited `` `@>=X.Y.Z` `` floor with no `cowork-harness` prefix (README's Action-inputs mention + SKILL.md's `Pin `@>=X`` phrase). */
 function bumpBareFloors(content: string, newVersion: string): string {
   return content.replace(/`@>=\d+\.\d+\.\d+`/g, `\`@>=${newVersion}\``);
 }
@@ -138,6 +138,7 @@ export function rewriteFileContent(relPath: string, content: string, newVersion:
       next = bumpNeedsFloor(next, newVersion);
       next = bumpFloorGatesHeading(next, newVersion);
       next = bumpHarnessFloors(next, newVersion);
+      next = bumpBareFloors(next, newVersion); // the `Pin `@>=X`` phrase — a bare floor, like README's
       return next;
     }
 
