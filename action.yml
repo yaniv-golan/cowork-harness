@@ -8,6 +8,10 @@ description: >-
   self-hosted live-lane runner needs.
 author: "Yaniv Golan"
 
+branding:
+  icon: shield
+  color: orange
+
 inputs:
   command:
     description: >-
