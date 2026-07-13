@@ -78,6 +78,9 @@ export function baseAgentArgs(
     // Cowork's own "no arbitrary N" invariant. Kept among the FIXED flags so the variadic
     // --tools/--allowedTools stay last (golden invariant).
     ...thinkingArgs(plan.extendedThinking, plan.debugMaxThinkingTokens),
+    // Fenced, non-Cowork `debug.thinking_display` → `--thinking-display <mode>` (real Cowork passes none,
+    // so this is emitted ONLY when the escape hatch is set; default omits it → byte-identical argv).
+    ...(plan.debugThinkingDisplay ? ["--thinking-display", plan.debugThinkingDisplay] : []),
     // Agent turn budget — emitted ONLY when the session opts in (`agent_max_turns`). Omitted by default so
     // the agent inherits its own turn ceiling (fidelity: real Cowork passes no --max-turns for interactive
     // sessions). The flag is verified supported by the staged agent binary.

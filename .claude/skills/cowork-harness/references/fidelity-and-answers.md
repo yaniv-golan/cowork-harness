@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 0.32.0` (baseline `desktop-1.20186.1`).
+Self-contained reference. Tracks `cowork-harness 0.33.0` (baseline `desktop-1.20186.1`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -13,10 +13,10 @@ Self-contained reference. Tracks `cowork-harness 0.32.0` (baseline `desktop-1.20
 | `cowork` | Auto-picks `hostloop` vs `container` the way Cowork itself does for the synced release | "Do what real Cowork does for this release." |
 
 - `hostloop` / `cowork` are the production-faithful path; `container` is the practical default.
-- Boundary assertions (`egress_*`, `expect_denied`) are enforced at `container`, `microvm`, and
-  `hostloop` (`container`'s and `hostloop`'s `bash` share the same Docker sandbox + egress proxy —
-  `hostloop`'s native file tools run with no container at all, gated instead by a path-containment hook).
-  Only `protocol` is rejected.
+- Boundary assertions (`egress_*`, `expect_denied`) are enforced at `container`, `microvm`, `hostloop`,
+  and `cowork` (`cowork` auto-resolves to a sandboxed tier; `container`'s and `hostloop`'s `bash` share
+  the same Docker sandbox + egress proxy — `hostloop`'s native file tools run with no container at all,
+  gated instead by a path-containment hook). Only `protocol` is rejected.
 - A `hostloop` scenario with a **writable** connected folder (`mode: rw`/`rwd`) needs `allow_host_writes:
   true` — with no container around the native file tools, that combination gives the agent genuine,
   software-checked-only host filesystem access. Read-only folders and folder-less runs need no opt-in.
@@ -176,7 +176,7 @@ and `scaffold` refuse to treat a partial run's half-finished output as a passing
 - `COWORK_HARNESS_RUNS_DIR` (or `--run-dir <path>`) — override the default run-output root `~/.cowork-harness/runs` (out of any working tree). flag > env > default.
 - `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` / `COWORK_HARNESS_LLM_TIMEOUT_MS` — decider backstops
   (default 600 s; **fail loud** on timeout).
-- `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous.
+- `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous (poll defaults: 300 ms for the run-side rendezvous, 500 ms for `gates --follow`).
 - `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — dialog auto-cancel (default 6 s).
 - `COWORK_HARNESS_LLM_MAX_BYTES` — stdout bound on `--decider-llm` (default 8 MiB).
 - `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit on the

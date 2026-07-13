@@ -77,6 +77,13 @@ describe("mount / path safety", () => {
     expect(loadSession({ debug: { max_thinking_tokens: 50000 } }).debug.max_thinking_tokens).toBe(50000); // positive ok
     expect(loadSession({}).debug.max_thinking_tokens).toBeUndefined(); // omitted by default
   });
+
+  it("debug.thinking_display is a fenced escape hatch — accepts the enum, rejects junk, omitted by default", () => {
+    expect(loadSession({ debug: { thinking_display: "summarized" } }).debug.thinking_display).toBe("summarized");
+    expect(loadSession({ debug: { thinking_display: "omitted" } }).debug.thinking_display).toBe("omitted");
+    expect(() => loadSession({ debug: { thinking_display: "raw" } })).toThrow();
+    expect(loadSession({}).debug.thinking_display).toBeUndefined(); // omitted by default
+  });
   it("a legacy top-level `max_thinking_tokens` gets a targeted removal hint, not an opaque schema error", () => {
     expect(() => loadSession({ max_thinking_tokens: 8000 })).toThrow(/max_thinking_tokens.*removed/s);
     expect(() => loadSession({ max_thinking_tokens: 8000 })).toThrow(/extended_thinking/);
@@ -274,6 +281,12 @@ describe("buildLaunchPlan", () => {
     const { plan: p } = plan({ debug: { max_thinking_tokens: 50000 } });
     expect(p.debugMaxThinkingTokens).toBe(50000);
     expect(p.extendedThinking).toBe(true); // default ON, independent of the debug override
+  });
+
+  it("resolves the fenced debug.thinking_display escape hatch onto the plan", () => {
+    const { plan: p } = plan({ debug: { thinking_display: "summarized" } });
+    expect(p.debugThinkingDisplay).toBe("summarized");
+    expect(plan({}).plan.debugThinkingDisplay).toBeUndefined(); // omitted by default
   });
 
   it("computes the egress allowlist from baseline + session, and honors unrestricted", () => {

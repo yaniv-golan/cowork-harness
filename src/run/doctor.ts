@@ -343,14 +343,14 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
         ? "found a 'Claude Code-credentials' Keychain entry, but the in-Docker agent can't read the Keychain"
         : worktreeEnv
           ? "no token in this git worktree (its ./.env is gitignored, so it's absent here)"
-          : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY",
+          : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN",
     remedy: token
       ? undefined
       : keychainOnly
         ? "copy your Keychain token into ./.env so the in-Docker agent can read it: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env — or, if the token is already in another file, point at it: cowork-harness --dotenv <path> <cmd> (the global --dotenv is honored by doctor too)"
         : worktreeEnv
           ? `the main checkout has a .env — point at it: cowork-harness --dotenv ${worktreeEnv} <cmd> (or set CLAUDE_CODE_OAUTH_TOKEN)`
-          : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
+          : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) (or set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
     required: true, // required for every tier doctor validates — each of those tiers calls a real model when actually run; only a committed-cassette replay needs none (and replay skips doctor)
   });
 

@@ -1985,7 +1985,9 @@ export async function cmdRecord(args: string[]) {
 
     const token = realProbe.hasToken();
     const agent = realProbe.agentBinary();
-    const tokenLine = token ? "  token:  found" : "  token:  ✗ MISSING — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY";
+    const tokenLine = token
+      ? "  token:  found"
+      : "  token:  ✗ MISSING — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN";
     const agentLine = agent.ok ? `  agent:  ${agent.path}` : `  agent:  ✗ ${agent.error.split("\n")[0]}`;
     const agentPayload = agent.ok ? { ok: true as const, path: agent.path } : { ok: false as const, error: agent.error };
 
@@ -2069,7 +2071,7 @@ export async function cmdRecord(args: string[]) {
     return fail(
       "record",
       "runtime",
-      "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY " +
+      "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN " +
         "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
       undefined,
       asJson,

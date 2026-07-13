@@ -268,6 +268,13 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
+        },
+        "thinking_display": {
+          "type": "string",
+          "enum": [
+            "summarized",
+            "omitted"
+          ]
         }
       },
       "additionalProperties": false

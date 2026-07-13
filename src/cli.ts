@@ -161,7 +161,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
                                for hostloop/protocol recordings; review + tailor the patterns before recording)
-  prune [--keep-last <n>]      prune accumulated run dirs, keeping N most recent per scenario (default: 5)
+  prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
+                               prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
@@ -198,6 +199,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--follow]               stream one line per status change until done/error; arm a Monitor here
       [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
       exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
+      [--latest-for <scenario>]  resolve a scenario's NEWEST run dir by actual run time, not dir mtime (no positional, no --follow; exit: 0 found · 2 not found)
   stats [<scenario>]           queryable summary over indexed runs: count, pass rate, cost/duration/token/turn p50/p95
       [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex]
       (run 'stats --help' for the full flag reference)
@@ -317,7 +319,7 @@ Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of sil
   --timeout <ms>                   wall-clock budget; on expiry the agent is killed and the run ends
                                    result:error / errorSource:timeout (the CLI form of a scenario's timeout_ms).
 
-Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env >
+Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from process.env >
        --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
@@ -401,7 +403,7 @@ Output:
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
             (COWORK_HARNESS_NO_HEARTBEAT=1 / COWORK_HARNESS_HEARTBEAT_MS to disable/tune).
 
-Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from
+Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from
        process.env > --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 all pass · 1 any assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
@@ -482,7 +484,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
-  prune: "usage: prune [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+  prune:
+    "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":
@@ -1955,7 +1958,7 @@ async function cmdSkill(rawArgs: string[]) {
   process.exit(computeVerdict(result, "live").pass ? 0 : 1);
 }
 
-const PROBE_DISPATCH_HELP = `cowork-harness probe-dispatch <skill-dir> "<prompt>"
+const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
 
   A cheap, focused mechanics probe: runs the skill/plugin folder against the staged Cowork agent (a THIN
   wrapper over 'skill' — same inline session + scenario construction, same runOneScenario execution) with

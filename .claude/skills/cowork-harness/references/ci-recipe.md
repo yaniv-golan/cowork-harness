@@ -1,16 +1,19 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.32.0` (baseline `desktop-1.20186.1`).
+Self-contained reference. Tracks `cowork-harness 0.33.0` (baseline `desktop-1.20186.1`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v1
+- uses: yaniv-golan/cowork-harness@main
   with:
     command: replay
     path: cassettes/
 ```
+
+The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
+release; pin an exact version (e.g. `version: "0.33.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -29,13 +32,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.197   # match your scenario's pinned baseline's agentVersion
+          V=2.1.205   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
           # before trusting it — see docs/maintenance.md's "Agent-binary provenance" section.
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
-      - uses: yaniv-golan/cowork-harness@v1
+      - uses: yaniv-golan/cowork-harness@main
         with:
           command: run
           path: scenarios/
@@ -54,7 +57,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=0.32.0"
+- run: npm i -g "cowork-harness@>=0.33.0"
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
 - run: cowork-harness replay cassettes/              # token-free content/structure
@@ -174,7 +177,7 @@ A typical skill repo runs four stages, fastest/cheapest first:
 
 ## GitHub Actions sketch
 
-The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v1` does
+The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@main` does
 in one step (see the top of this doc) — reach for this form when you need independent per-command
 gating/annotations rather than one action run per command. The nightly live job has no packaged-Action
 equivalent yet (the Action's `command: run` mode needs a self-hosted runner with Docker + the agent binary
@@ -194,7 +197,7 @@ jobs:
         with: { node-version: '20' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=0.32.0"
+      - run: npm i -g "cowork-harness@>=0.33.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -223,7 +226,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=0.32.0"
+        run: npm i -g "cowork-harness@>=0.33.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

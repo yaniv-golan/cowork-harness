@@ -177,3 +177,7 @@ cowork-harness chat skills/my-skill --fidelity protocol "What tools do you have?
 which prints one on unscripted gates). Once you have explored a flow and know which gates appear
 and what answers they need, express it as a `scenarios/*.yaml` with scripted `answers:` and run
 it with `cowork-harness run`. That makes the finding a repeatable, assertable regression.
+
+A `chat` run does write `result.json`, so `scaffold`/`stats`/`trace` will accept it — but scaffolding
+a `chat` run yields a skeleton with an **empty `assert:` block** (no scripted gates or artifacts to
+project). Treat it as a starting point, not a ready scenario.

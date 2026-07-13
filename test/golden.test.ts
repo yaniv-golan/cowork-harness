@@ -108,6 +108,22 @@ describe("golden — container (VM-loop)", () => {
     expect(debugOff).not.toContain("--thinking");
   });
 
+  it("thinking display: default plan emits NO --thinking-display (fidelity: real Cowork passes none)", () => {
+    expect(args).not.toContain("--thinking-display");
+  });
+
+  it("thinking display: debugThinkingDisplay emits --thinking-display <mode> among the fixed flags", () => {
+    const summarized = agentArgs(baseline, plan({ debugThinkingDisplay: "summarized" }), { mntRoot });
+    expect(summarized[summarized.indexOf("--thinking-display") + 1]).toBe("summarized");
+    // stays before the variadic --tools/--allowedTools (golden invariant: variadics last)
+    const td = summarized.indexOf("--thinking-display");
+    const tools = summarized.indexOf("--tools");
+    expect(td).toBeGreaterThanOrEqual(0);
+    expect(tools === -1 || td < tools).toBe(true);
+    const omitted = agentArgs(baseline, plan({ debugThinkingDisplay: "omitted" }), { mntRoot });
+    expect(omitted[omitted.indexOf("--thinking-display") + 1]).toBe("omitted");
+  });
+
   it("SPEC §9 env invariants", () => {
     const env = spawnEnv(baseline, { configGuest, proxyHost: "P" });
     expect(env.CLAUDE_CONFIG_DIR).toBe(configGuest);

@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.32.0
-  tracks-harness: cowork-harness 0.32.0 (baseline desktop-1.20186.1)
+  version: 0.33.0
+  tracks-harness: cowork-harness 0.33.0 (baseline desktop-1.20186.1)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.32.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.33.0` (baseline
 > `desktop-1.20186.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -38,10 +38,22 @@ cowork-harness skill ./my-skill "do X"      # run the skill once against the sta
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.32.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=0.32.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=0.32.0"`. **Pin `@>=0.32.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.32.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator (passes when the resolved value deep-equals one of the listed members — value ∈ your list, not the reverse), `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-path`/`--allow-patterns-file` (`path` — local absolute filesystem paths — is the scanner's 4th class, new in 0.21.0; `--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, `/help` in the REPL, `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field, `computer_links_resolve` (new in 0.22.0), `semantic_matches` (an LLM judge grades a fixed `rubric` of claims against the run's answer — **live-only**, so it is evidence-unavailable / skipped-loud on replay, never a vacuous pass; new in 0.27.0), **glob-matched** `tool_called`/`tool_not_called`/`subagent_tool_used`/`subagent_tool_absent` (a pattern like `mcp__workspace__*` matches any tool in the family; exact names match exactly; new in 0.28.0), the five path-gate assertion keys `no_vm_path_file_op`/`vm_path_denied`/`path_denied`/`no_path_denied`/`subagent_file_write`, the session-level `agent_env` knob, and resolved sub-agent identity on dispatch records (`resolvedAgentType`/`resolvedModel`; new in 0.30.0), the `lint-skill` (static host-loop footgun + `subagent_type` resolution linter) / `analyze-skill` (advisory `/sessions`-path static scan, `--strict`, `analyze-skill: ignore` marker) / `probe-dispatch` (single-dispatch mechanics probe) commands, `status --latest-for` (resolve a scenario's newest run dir by run time, not directory mtime), the `subagent_dispatch_healthy` composite assertion, and the persisted `result.json` fields `verdict`, `subagents[].referencesRead`/`subagents[].reasoning`, plus the `toolCounts`/`toolErrors`/`toolDurations` shape distinction (all new in 0.31.0), `analyze-skill`'s directory scan now covering a skill/plugin's full contract surface (recursive `agents/`/`references/`/`commands/`, plugin-root-aware, symlink-following) with line/block-scoped `analyze-skill: ignore-next-line`/`ignore-start`/`ignore-end` markers and multi-path/glob input, and `lint-skill`'s provable in-plugin `subagent_type` typo now a WARN that gates under `--strict` (new in 0.32.0).)
+- **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.33.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=0.33.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=0.33.0"`. **Pin `@>=0.33.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+
+  What the ≥ 0.33.0 floor gates, by release:
+
+  - **core set (pre-0.21.0 vintage, or mixed):** `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator (passes when the resolved value deep-equals one of the listed members — value ∈ your list, not the reverse), `verify-cassettes` incl. the `--allow-domain`/`--allow-email`/`--allow-patterns-file` allows (`--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.
+  - **0.21.0:** `verify-cassettes --allow-path` (`path` — local absolute filesystem paths — is the scanner's 4th class), and `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field.
+  - **0.22.0:** `computer_links_resolve`.
+  - **0.28.0:** `semantic_matches` (an LLM judge grades a fixed `rubric` of claims against the run's answer — **live-only**, so it is evidence-unavailable / skipped-loud on replay, never a vacuous pass), and **glob-matched** `tool_called`/`tool_not_called`/`subagent_tool_used`/`subagent_tool_absent` (a pattern like `mcp__workspace__*` matches any tool in the family; exact names match exactly).
+  - **0.30.0:** resolved sub-agent identity on dispatch records (`resolvedAgentType`/`resolvedModel`), the five path-gate assertion keys `no_vm_path_file_op`/`vm_path_denied`/`path_denied`/`no_path_denied`/`subagent_file_write`, and the session-level `agent_env` knob.
+  - **0.31.0:** the `lint-skill` (static host-loop footgun + `subagent_type` resolution linter) / `analyze-skill` (advisory `/sessions`-path static scan, `--strict`, `analyze-skill: ignore` marker) / `probe-dispatch` (single-dispatch mechanics probe) commands, `status --latest-for` (resolve a scenario's newest run dir by run time, not directory mtime), the `subagent_dispatch_healthy` composite assertion, and the persisted `result.json` fields `verdict`, `subagents[].referencesRead`/`subagents[].reasoning`, plus the `toolCounts`/`toolErrors`/`toolDurations` shape distinction.
+  - **0.32.0:** `analyze-skill`'s directory scan now covering a skill/plugin's full contract surface (recursive `agents/`/`references/`/`commands/`, plugin-root-aware, symlink-following) with line/block-scoped `analyze-skill: ignore-next-line`/`ignore-start`/`ignore-end` markers and multi-path/glob input, and `lint-skill`'s provable in-plugin `subagent_type` typo now a WARN that gates under `--strict`.
+  - **0.33.0:** the `redacted` marker on display-omitted reasoning — `subagents[].reasoning` and the top-level `thinking[]` now carry `{text:"", redacted:true}` when the model returns a signed-but-empty thought (so "reasoned, text omitted" is distinct from "no thought"), plus the fenced `debug.thinking_display` escape hatch.
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
-- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
+- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred), or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
 - **`--dotenv` is a GLOBAL flag — put it BEFORE the subcommand.** `cowork-harness --dotenv .env record …`, never `cowork-harness record … --dotenv .env`. Every *other* flag is subcommand-level, so muscle memory fights this one; the harness rejects the misplaced form with an exact-fix error, but placing it first avoids the round-trip.
 
 ## Orient — the three loops
@@ -240,12 +252,12 @@ Full model in `references/scenario-schema.md`.
 Don't hand-write the YAML from memory — that's how invented keys (`assertions:` vs `assert:`,
 `json_file`, `answer_policy`) creep in. Start from the bundled generator, which emits the
 known-good skeleton (right tier, scripted `answers:` + `on_unanswered: fail`, content assertions
-separated from live-only ones, one concern per item) and **self-lints its own output**:
+separated from live-only ones, one concern per item) and **self-lints its own output**. The
+generator is the bundled `scripts/scenario.py` — installed as a plugin, point `S` at
+`${CLAUDE_PLUGIN_ROOT}/scripts/scenario.py`; from a repo checkout, use the literal path below:
 
 ```bash
-S="${CLAUDE_PLUGIN_ROOT}/scripts/scenario.py"
-# Working from a repo checkout instead of an installed plugin?
-# S=".claude/skills/cowork-harness/scripts/scenario.py"
+S=".claude/skills/cowork-harness/scripts/scenario.py"
 python3 "$S" scaffold --name report-check --skill ./skills/report-gen \
   --prompt "Generate the weekly report to outputs/report.md." \
   --content 'weekly report' --artifact outputs/report.md \
@@ -372,7 +384,7 @@ than a stuck `"running"`.)
 ### Place assertions in the right CI lane
 
 CI placement: a **token-free `replay` PR gate** (content/structure only) + a **nightly live `run`**
-(filesystem/egress). Fastest setup: `uses: yaniv-golan/cowork-harness@v1` (a packaged GitHub Action with a
+(filesystem/egress). Fastest setup: `uses: yaniv-golan/cowork-harness@main` (a packaged GitHub Action with a
 PR job-summary reporter). See `references/ci-recipe.md` for the Action, the manual step-by-step form, and
 the four-stage pipeline.
 

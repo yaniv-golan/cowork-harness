@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.32.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.33.0`
 (baseline `desktop-1.20186.1`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -37,7 +37,7 @@ fidelity: container                 # protocol | container | microvm | hostloop 
 execution: local                    # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
                                     # local): local (default) | cloud-describe (RESERVED — no runner
                                     # exists yet; authoring it is a load-time error, not a silent no-op)
-on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm
+on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 
 prompt: |                           # the user turn
@@ -312,7 +312,7 @@ same set live from the schema.
 | `egress_allowed: <host>` | the host was allowed through |
 | `no_mcp_error: true` | no MCP round-trip failed (`RunResult.mcpErrors` is empty — no unhandled server, no handler throw) — live-only: MCP round-trips are harness-computed, not in the SDK stdout stream, so evidence-unavailable on replay (never a vacuous pass). **Only `true` is valid** |
 | `max_peak_rss_bytes: <N>` | peak sampled RSS of the agent sandbox ≤ N bytes (`RunResult.resources.peakRssBytes`) — live-only: replay never spawns a sandbox to sample, so evidence-unavailable on replay/protocol (never a vacuous pass); also evidence-unavailable when sampling captured no RSS value |
-| `semantic_matches: {rubric: [...], min_pass?, judge_model?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer — the **union of the agent's final result text (`RunResult.finalMessage`), the transcript, and the final on-disk content of any files the agent authored during the run** — so a claim about content the skill led the agent to *write to a file* grades as reliably as one about inlined prose (authored-file evidence is unavailable on the **microvm** tier — no pre-run manifest to diff against, so no files are captured; `container`/`hostloop` do capture them). Beyond the microvm case, when the authored-file evidence backing the judged document is **incomplete** — a file dropped at the capture-size cap, unreadable at read-back, or (on `--resume`) the scratchpad walk skipped — the assert fails evidence-unavailable rather than trusting a judge grade over a partial document; this is separate from the malformed-grade `judgeInvalid` path below. The assert passes iff ≥ `min_pass` claims pass (default: all — avoid for a gating scenario). Results align by claim index and are recorded per-claim in `RunResult.assertions[].semanticClaims` (`[{index, claim, pass}]`, so a consumer can diff the per-claim profile across runs); a rep whose grade can't be parsed (after one retry) is marked `RunResult.assertions[].judgeInvalid` and **never silently dropped** — it is excluded from the pass denominator, and the guard against a misleading score from that exclusion is the gate's minimum-valid-rep floor (`MIN_VALID` ≥ 4) plus this visibility, not a claim that denominator-shrinking inflation is impossible. Within a rep, a grade that's still unparseable after the retry **fails that assert outright** (evidence-unavailable, not a vacuous pass) — a persistently-flaky judge reds the run rather than silently passing. `judge_model` pins the grader (a dated id keeps a before/after comparison reproducible). Live-only: the judge is a live model call, so evidence-unavailable / skipped-loud on replay (never a vacuous pass) |
+| `semantic_matches: {rubric: [...], min_pass?, judge_model?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer — the **union of the agent's final result text (`RunResult.finalMessage`), the transcript, and the final on-disk content of any files the agent authored during the run** — so a claim about content the skill led the agent to *write to a file* grades as reliably as one about inlined prose (authored-file evidence is unavailable on the **microvm** tier — no pre-run manifest to diff against, so no files are captured; `container`/`hostloop` do capture them). Beyond the microvm case, when the authored-file evidence backing the judged document is **incomplete** — a file dropped at the capture-size cap, unreadable at read-back, or (on `--resume`) the scratchpad walk skipped — the assert fails evidence-unavailable rather than trusting a judge grade over a partial document; this is separate from the malformed-grade `judgeInvalid` path below. The assert passes iff ≥ `min_pass` claims pass (default: all — avoid for a gating scenario). Results align by claim index and are recorded per-claim in `RunResult.assertions[].semanticClaims` (`[{index, claim, pass}]`, so a consumer can diff the per-claim profile across runs); a rep whose grade can't be parsed (after one retry) is marked `RunResult.assertions[].judgeInvalid` and **never silently dropped** — it is excluded from the pass denominator, and the guard against a misleading score from that exclusion is the gate's minimum-valid-rep floor (`MIN_VALID` ≥ 4) plus this visibility, not a claim that denominator-shrinking inflation is impossible. Within a rep, a grade that's still unparseable after the retry **fails that assert outright** (evidence-unavailable, not a vacuous pass) — a persistently-flaky judge reds the run rather than silently passing. `judge_model` pins the grader (default when neither it nor `COWORK_HARNESS_JUDGE_MODEL` is set: `claude-opus-4-8`; a dated id keeps a before/after comparison reproducible). Live-only: the judge is a live model call, so evidence-unavailable / skipped-loud on replay (never a vacuous pass) |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
 | `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts — a dangling link fails, naming which target was checked (a live host path, the collected work tree, or the replay manifest). **Requires ≥1 link** (zero links fails — use `computer_links_resolve_if_present` for the presence-free variant). **Only `true` is valid** (`false` is rejected by the schema) |
 | `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant. **Only `true` is valid** |
@@ -329,7 +329,7 @@ paraphrases (that re-records red). Structured JSON → assert it in YAML with **
 `path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
 dotted path.
 
-**VerdictSignals in `result.signals`:** `computeVerdict` pushes signals into `result.signals`; most
+**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; most
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`) and only three are **warn**-severity (informational, never flip pass/fail). Current signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
@@ -353,7 +353,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.signals[].severity` or the run's exit code. Only the three **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the three **warn** codes are truly benign.
 
 ## Replay class
 
@@ -491,7 +491,7 @@ reference omits). Neither list is a strict superset of the other — reach for t
    the stochastic path flags the run `nonDeterministic`. The LLM decider is one mechanism, two
    spellings: `on_unanswered: llm` (YAML) and `--decider-llm` (CLI). The bare `--on-unanswered llm`
    is rejected (use `--decider-llm`). `agent` is **retired** — `on_unanswered: agent` is rejected by
-   the schema. (`src/types.ts:365` — the `on_unanswered` enum; `src/cli.ts:899` — the CLI-side
+   the schema. (`src/types.ts` — the `on_unanswered` enum; `src/cli.ts:899` — the CLI-side
    `--on-unanswered` value check.)
 
 4. **`--on-unanswered first` is non-deterministic too** — it picks option 1 and is flagged

@@ -2,7 +2,7 @@
 
 Start with the [project README](../README.md) for the overview and quick start, then dig in here.
 
-**Reading order (author → run → debug):** get oriented with [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) and [boundary.md](./boundary.md) (the limitations model) → **author:** [session.md](./session.md) + [scenario.md](./scenario.md) → **run, record & lock:** [cassette.md](./cassette.md) (record/replay deep-dive), [stats.md](./stats.md) (cross-run history), [run-status.md](./run-status.md) (liveness) → **debug:** [debugging.md](./debugging.md) (when a run misbehaves or you don't trust a green) + [chat.md](./chat.md) (interactive reproduction) → [gotchas.md](./gotchas.md) (setup troubleshooting FAQ).
+**Reading order (author → run → debug):** get oriented with [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) and [boundary.md](./boundary.md) (the limitations model) → **author:** [session.md](./session.md) + [scenario.md](./scenario.md) → **run, record & lock:** [cassette.md](./cassette.md) (record/replay deep-dive), [stats.md](./stats.md) (cross-run history), [run-status.md](./run-status.md) (liveness) → **debug:** [debugging.md](./debugging.md) (when a run misbehaves or you don't trust a green) + [chat.md](./chat.md) (interactive reproduction) → [gotchas.md](./gotchas.md) (troubleshooting FAQ — setup + authoring).
 
 > **Before a first *live* run** (any tier above `replay`/`protocol`): run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token. `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`. Replay-only usage (running only committed cassettes) can **skip** `doctor` entirely — its default `container` tier checks Docker + the staged agent, neither of which replay touches. Note that **every tier `doctor` checks** validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model — which is a further reason replay-only users simply skip `doctor` (a token ✗ there is expected, not a blocker for replay).
 
@@ -16,10 +16,10 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | [session.md](./session.md) | **Author** — reference for `sessions/*.yaml`: every pre-prompt setting (model, folders/projects, uploads, discovery, egress) and its Cowork mapping. |
 | [scenario.md](./scenario.md) | **Author** — reference for `scenarios/*.yaml`: prompt, scripted answers, assertions. |
 | [subagents.md](./subagents.md) | **Author/debug** — the sub-agent capability/path model: the tier-qualified outputs-addressing contract (host-loop vs. VM-loop), the tool-composition rules, the type-less dispatch trap, and model-resolution precedence. |
-| [cassette.md](./cassette.md) | **Run, record & lock** — cassette `record`/`replay`: file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` + the O7 guard), backward compat, and the committed CI fixture. |
+| [cassette.md](./cassette.md) | **Run, record & lock** — cassette `record`/`replay`: file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` — the recorded driver→child control responses — plus the O7 guard, which re-exercises the decision-serialization logic on replay), backward compat, and the committed CI fixture. |
 | [stats.md](./stats.md) | **Run** — the `stats` command + `index.jsonl`: querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run, filtered/windowed per scenario. |
 | [run-status.md](./run-status.md) | **Run** — checking whether a background run is alive without `ps aux`: the `status.json` file + `cowork-harness status [--follow]`. |
-| [debugging.md](./debugging.md) | **Debug** — the post-hoc loop (`inspect` → `trace` → `verify-run` → `diff`) for a misbehaving skill, and how to hunt a false-green (Gotchas, `lint`, `verify-cassettes`). A router into the tools, not a re-doc. |
+| [debugging.md](./debugging.md) | **Debug** — the post-hoc loop (`inspect` → `trace` → `verify-run` → `diff` → `chat`) for a misbehaving skill, and how to hunt a false-green (Gotchas, `lint`, `verify-cassettes`). A router into the tools, not a re-doc. |
 | [chat.md](./chat.md) | **Debug** — reference for the interactive `chat` command: multi-turn sessions, `--folder`, fidelity tiers, and how it differs from `skill`. |
 | [decider-dir.md](./decider-dir.md) | **Debug** — the `--decider-dir` recipe: answer LIVE questions in-band from a driving agent: the gates/answer file channel (`req-N.json`/`resp-N.json`) plus a Monitor walkthrough. |
 | [fidelity-gaps.md](./fidelity-gaps.md) | **Debug** — what the harness deliberately does NOT reproduce vs real Cowork: the known, faithful gaps (sometimes the "bug" is one of these). |
@@ -32,7 +32,7 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | [../DESIGN.md](../DESIGN.md) | Architecture deep-dive + the full parity matrix + why scripting the real Desktop runtime is closed. |
 | [../SPEC.md](../SPEC.md) | **The authoritative contract** — the precise behavior the harness implements (persistence/resume, control-response envelopes, dispatch caps, …). Read this when a doc and the code disagree. |
 | [../CHANGELOG.md](../CHANGELOG.md) | Release notes + the binary-grounding (asar / agent-ELF version) each entry was verified against. |
-| [gotchas.md](./gotchas.md) | Setup troubleshooting FAQ — exit 127, empty skill mount, arm64 Docker issues, git-worktree token traps, egress-proxy races. |
+| [gotchas.md](./gotchas.md) | Troubleshooting FAQ — setup + authoring footguns: exit 127, empty skill mount, arm64 Docker issues, git-worktree token traps, scenarioDrift after an edit, plus skill-authoring/host-loop footguns. |
 
 ## Reference
 
@@ -43,7 +43,7 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | `verify-run` (re-assert a kept run, no tokens) · `decide` (smoke-test a decider against a sample question, no run) | `cowork-harness verify-run --help`, `cowork-harness decide --help`, [scenario.md → Dry-running a decider](./scenario.md#dry-running-a-decider-decide) |
 | Debugging a run (a misbehaving skill, or a green you don't trust) | [debugging.md](./debugging.md) |
 | In-band gate answering from a driving agent (`gates` / `answer`) | [decider-dir.md](./decider-dir.md) |
-| Checking a background run's liveness (`status`) | [run-status.md](./run-status.md) |
+| Checking a background run's liveness (`status`) and locating a scenario's newest run (`status --latest-for`) | [run-status.md](./run-status.md) |
 | Fidelity — three isolation tiers (L0/L1/L2) + two loop overlays (`hostloop`, `cowork`) | [boundary.md](./boundary.md), [README](../README.md) |
 | Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md) (frozen historical research, verified on `desktop-1.12603.1`; control-protocol fields re-verified unchanged through `desktop-1.13576.1`; mount-layout fork at ≥`1.14271.0`; volatile fields — `agentVersion`, egress allowlist, GrowthBook gates — tracked in `baselines/`); see also [SPEC.md](../SPEC.md) |
 | AI agent instructions for this repo | [AGENTS.md](../AGENTS.md) |

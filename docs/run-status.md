@@ -90,6 +90,26 @@ cowork-harness status "$OUT_DIR" --follow
 | `2` | Usage error (bad flags/args), or an unresolvable `<run-id \| run-dir>` argument (wrong id, directory doesn't exist). Matches the behavior of `trace`, `inspect`, and `scaffold`. |
 | `3` | **Stale** — `"running"` but `updatedAt` hasn't advanced; the process likely died without a clean exit (`SIGKILL`/OOM/segfault) and no exit handler could catch it. Distinct from `1` on purpose, so a script can tell "the run failed" from "can't confirm it's alive" without parsing text. `status` never throws `BoundaryError`, but this code is reused elsewhere in the CLI for the same "abnormal abort" semantic. |
 
+## Locating the newest run: `status --latest-for`
+
+`cowork-harness status --latest-for <scenario-name-or-slug>` resolves and prints the **newest** run
+directory for a scenario by its actual run time — the run's own `.origin`/`result.json` timestamps —
+**not** `ls -td`'s directory mtime, which bumps on any later write inside a run dir (an `inspect`, a
+`trace --translate-paths`, a slow finalize) and can readily return a stale prior-session dir instead of
+the run you actually just kept. It takes no positional `<run-id | run-dir>` and cannot be combined with
+`--follow` — both are usage errors, since there's no single dir to follow before the scenario has even
+been resolved to a run. Exit codes: `0` found, `2` not found. Supports `--output-format text|json`.
+Typical use: a driving agent or script locating the run it just kept, right after a `run`/`skill`
+invocation, without hand-rolling directory-mtime logic.
+
+```bash
+cowork-harness status --latest-for csv-metrics
+# csv-metrics · 2026-07-13T09:14:02.000Z · PASS
+# /Users/you/.cowork-harness/runs/csv-metrics/2026-07-13T09-14-02-000Z-abc123
+```
+
+See also [scenario.md → Output](./scenario.md#output), which documents the same `ls -td` staleness trap.
+
 ## Notes and tuning
 
 - **Never rely on `ps aux` to check a `cowork-harness` run.** It only works when the checker shares the
@@ -117,6 +137,10 @@ cowork-harness status "$OUT_DIR" --follow
     treated as stale/probably-dead (default: 3× `COWORK_HARNESS_STATUS_INTERVAL_MS`, i.e. 15s out of the
     box). Raise it if you deliberately run with a longer `COWORK_HARNESS_STATUS_INTERVAL_MS` and don't
     want staleness to trip prematurely.
+  - `COWORK_HARNESS_STATUS_CORRUPT_TIMEOUT_MS` — how long a `status.json` may exist but never parse
+    before `status --follow` gives up and fails loud (default 30000ms / 30s). Guards against a
+    persistently corrupt/truncated file looping forever. Distinct from
+    `COWORK_HARNESS_STATUS_FIRST_SEEN_TIMEOUT_MS`, which covers the file never *appearing*.
 
 ## `mounts.json` — a run's VM-path resolution context
 

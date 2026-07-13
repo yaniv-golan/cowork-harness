@@ -6,6 +6,127 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-07-13
+
+### Fixed
+
+- **Empty thinking was surfaced as if the model hadn't reasoned — both `subagents[].reasoning` and the
+  top-level `thinking[]`.** The 0.31.0 sub-agent field captured TEXT turns fine but every `thinking` turn
+  came through as `{kind:"thinking", text:""}`, and the older top-level `thinking[]` field does the same
+  on current-gen models — a consumer couldn't tell "reasoned but text unavailable" from "no thought."
+  Root cause (binary-verified against the staged 2.1.205 agent, corpus-corroborated): it is a
+  **request-side display mode**, not a persist-time strip — the API's `thinking.display` resolves to
+  `"omitted"` (empty thinking text + a signature) for sub-agent turns always, and for the MAIN loop too
+  on models whose API default is `"omitted"` (Opus 4.8, Sonnet 5; Sonnet 4.6 defaulted to `"summarized"`).
+  Corpus: main-loop thinking text is 1810/1810 on Sonnet-4.6 but **0/2 on Opus-4.8 and 0/15 on Sonnet-5**,
+  every empty carrying a signature; sub-agents 0/230. The harness passes no `--thinking-display` —
+  faithfully to real Cowork, whose spawn passes none either. Both fields now mark such blocks
+  `{text:"", redacted:true}` (`kind:"thinking"` for the sub-agent turn shape) so they read as "reasoned,
+  text omitted by request"; TEXT turns are never redacted, and `redacted` is omitted (not `false`) on
+  blocks that carry text.
+- **New `debug.thinking_display` escape hatch** (fenced, non-Cowork — like `debug.max_thinking_tokens`).
+  Set it to `"summarized"` to emit `--thinking-display summarized`, which flips **both** loops to
+  summarized thinking text (the API returns no raw chain-of-thought — `summarized` is the ceiling). It
+  diverges from real Cowork (which passes no such flag) and adds token cost, so it is a debug-only opt-in;
+  the default stays `"omitted"`, byte-identical argv. `docs/subagents.md`, `docs/session.md`,
+  `schema/run-result.json`, and the `RunResult`/`SessionConfig` types state the real capture semantics;
+  the released 0.31.0 note is corrected in place.
+
+- **Docs pointed the GitHub Action at a ref that doesn't exist.** README, `SKILL.md`, and
+  `references/ci-recipe.md` all said `uses: yaniv-golan/cowork-harness@v1`, but no `v1` tag has ever
+  been published — a copy-pasted workflow failed with "unable to resolve action" before running
+  anything. All six references now bind `@main`; a moving major tag is a 1.0.0 question. A new
+  token-free guard (`test/action-docs-sync.test.ts`) locks the ref policy and also validates that
+  every documented `with:` key is a real `action.yml` input and every documented `command:` value is
+  one the Action describes.
+- **`llms.txt` command list was three commands stale** — `lint-skill`, `analyze-skill`, and
+  `probe-dispatch` were missing. Now lists all 29, locked by a new COMMANDS ↔ llms.txt sync test
+  (set-equality, so stale names fail too), and the README "Commands at a glance" guard gained the
+  reverse direction (a README-only row now fails).
+- **README observability prose still called a `subagents[]` field `model`** — renamed to
+  `dispatchModel` (beside `resolvedModel`) in 0.30.0; the prose now names the real fields. Also
+  fixed: the effort enum shorthand now lists `xhigh` (`extra` is the accepted alias) in both places,
+  the CI stage table matches `ci.yml`'s declaration order, the exit-code summary notes
+  `verify-cassettes`' distinct exit-`3` meaning and the reserved exit `4`, a duplicated `--keep`
+  example was collapsed, and `on_unanswered: llm` is explicitly marked as a scenario-YAML key (not a
+  CLI flag).
+- **`status --latest-for` was undocumented in its own guide** — now covered in `docs/run-status.md`
+  (with the real output shape), the `docs/README.md` index row, and the top-level `--help` status
+  entry (with its own `0` found / `2` not found exit semantics).
+- **`probe-dispatch --help` didn't start with a `usage:` line** like every other command; it does
+  now.
+- **`debugging.md` showed only the scenario run-dir layout** — it now also names `chat`'s
+  `runs/chat/<sessionId>/` path. `docs/session.md`'s "all four tiers" now spells out the four
+  execution tiers and that `fidelity: cowork` resolves to one of them. `examples/README.md`'s
+  answer-policies pointer is now a real link. `effectiveFidelity` (the recorded resolved tier behind
+  the `resolved-tier`/`unverifiable-tier` staleness classes) is now mentioned in the README fidelity
+  section and `python/README.md`, not only in `docs/cassette.md`.
+- **The docs told a false "default `8899`" story for `COWORK_VM_PROXY_PORT`** — when the var is
+  unset, the host binds the egress proxy on an OS-assigned free port and threads that value into the
+  guest firewall + `HTTP(S)_PROXY`; `8899` is only the guest-config fallback when a VM is spawned
+  without an explicit port, which never happens on a normal run. README and `docs/scenario.md` now
+  say so. Also closed: `COWORK_HARNESS_STATUS_CORRUPT_TIMEOUT_MS` (30s corrupt-`status.json`
+  backstop on `status --follow`) was the one `COWORK_*` env var documented nowhere — now in
+  `docs/run-status.md` + the README knob list; the `COWORK_HARNESS_DECIDER_DIR_POLL_MS` docs name
+  the per-subsystem defaults (300 ms rendezvous / 500 ms `gates --follow`); the `semantic_matches`
+  judge docs name the pinned default (`claude-opus-4-8`) in README, `docs/scenario.md`, and the
+  skill's schema reference; the heartbeat bullet states its 30s default instead of pointing at a
+  source file.
+- **`replay --explain` was invisible from the command catalog** — the flagship false-green
+  diagnosis flag was documented only in debugging prose; it's now in the `record`/`replay` command
+  table row and leads the record/replay "Flags worth knowing" bullet.
+- **`examples/README.md` ships in the npm tarball while the trees it describes don't** — it now
+  opens with a "Reading this on npm?" callout (clone for `scenarios/`/`sessions/`/`skills/`/`data/`),
+  documents `probes/` (previously invisible: used by `test/live-contract.test.ts` but absent from
+  the layout and from schema validation — `examples/probes` is now in `test/examples.test.ts`'s
+  scenario sweep), and links the matrices worked example; the README documentation-table row carries
+  the same source-checkout caveat.
+- **The companion skill's preflight sent replay-only users through `doctor`**, whose token check
+  hard-fails on every tier — a new "Replay-only? Skip `doctor`" bullet carries the same carve-out
+  `docs/README.md` already had. The 3,200-character single-bullet 0.32.0 feature parenthetical is
+  now a scannable by-release sub-list, with every release bucket tag-verified against git history —
+  which caught and fixed a long-standing wrong tag: `semantic_matches` was labeled "new in 0.27.0"
+  but shipped in 0.28.0; the five path-gate keys, `agent_env`, and the `hostloop` split/
+  `allow_host_writes:` now sit under their real releases (0.30.0 / 0.21.0) too.
+- **`DESIGN.md` still said the staged in-VM agent is 2.1.202** — the `desktop-1.20186.1` baseline
+  re-synced it to 2.1.205; DESIGN.md and `docs/protocol.md` now carry dated patch-only notes for
+  1.20186.1 while the 2026-07-11 live pass stays scoped to `desktop-1.20186.0` (not restamped).
+
+### Added
+
+- **`test/docs-index-sync.test.ts`** — three token-free guards: every `COWORK_*` env var read in
+  `src/` (dot-access **or** helper-read string literal) must be documented in README/`docs/*.md`;
+  the judge-model default id in the docs must match `semantic-judge.ts` (fails loud on a const
+  rename); `llms.txt` must link every top-level `docs/*.md` guide (both directions — `gotchas.md`,
+  `subagents.md`, and `plugin-root.md` were missing and are now linked).
+
+- **The Action's `version` default (`latest`) is now documented as intentional** — in `action.yml`'s
+  input description, the README inputs sentence, and `references/ci-recipe.md` — with
+  pin-an-exact-version guidance for reproducible CI, and why it deliberately differs from the
+  companion skill's `@>=0.32.0` floor for ad-hoc CLI installs.
+- **`--help` and unknown-flag structural-guard test coverage now spans all 29 commands** (previously
+  16 and 17 respectively); `lint`/`lint-skill` are asserted against their `scenario.py` passthrough
+  usage lines and skip cleanly when `python3` is absent.
+
+### Documentation
+
+- **`on_unanswered: prompt` was described as "only valid for `chat`" — wrong on two counts.** `chat`
+  never reads a scenario YAML (it runs an inline interactive scenario), and `prompt` is really a
+  `skill`-command policy (the adaptive-TTY default, or explicit `skill --on-unanswered prompt`);
+  `run` rejects it. The schema `.describe()` (and regenerated `scenario.schema.json`) now say so.
+- **`ANTHROPIC_AUTH_TOKEN` is an accepted auth source but was under-documented.** It resolves
+  identically to `ANTHROPIC_API_KEY` (used only when no OAuth token is set) and was already in
+  `.env.example`, but the README auth text, the `record`/`doctor` `--help` blurbs, the `doctor`
+  no-token detail/remedy, the two `record` credential messages, `docs/cassette.md`, and the companion
+  skill's Auth note named only the other two — all now list it as the third alternative.
+- **`llms.txt` exit-code line** now flags that `3`/`1` carry per-command meanings (e.g.
+  `verify-cassettes` `3` = could-not-verify, `sync` hard-fail = `1`) and links the authoritative
+  SPEC §11 text, instead of implying one global meaning for `3`.
+- **README** gains a platform × tier support matrix (making explicit that Linux live runs are
+  `container`-only), doc-index rows for the spawn contract and `docs/decisions/`, the
+  `probe-dispatch` fidelity set, and a clearer global-install-ships-`examples/replays/`-only warning;
+  `docs/chat.md` notes that scaffolding a `chat` run yields an empty `assert:` block.
+
 ## [0.32.0] — 2026-07-13
 
 ### Added
@@ -125,6 +246,11 @@ All notable changes to this project are documented here. The format is based on
   `thinking[]` field is (~50 entries, ~10KB/entry each), with `reasoningElided` counting the overflow. A
   missing or malformed child transcript never fails the run — the affected dispatch's `reasoning` is just
   left absent.
+  - **Correction (see Unreleased):** in practice only the TEXT turns carry content — the harness's
+    non-interactive spawn forces the API's `thinking.display` to `"omitted"` for sub-agent turns, so
+    `thinking` turns come through empty (signature-only). The Unreleased `redacted` marker distinguishes
+    "reasoned, text omitted by request" from "no thought"; the "THINKING … turns" wording above
+    overstated what this captures by default.
 
 - **`status --latest-for <scenario-name-or-slug>`** — resolves and prints the NEWEST run dir for a
   scenario by actual run time, replacing the fragile `ls -td runs/<scenario>/* | head -1` idiom: bare

@@ -1,4 +1,6 @@
-# Setup troubleshooting FAQ
+# Troubleshooting FAQ
+
+## Setup & environment
 
 - **`lint` exits 127.** `python3` isn't on `PATH`. Install it or point `PYTHON` at an interpreter.
 - **A local skill folder mounts empty.** Untracked files are invisible to the mount — `git add` the skill
@@ -19,6 +21,8 @@
   without re-recording — the frozen cassette no longer matches the on-disk scenario on one of these six
   recording-shaping fields. Either re-record, or pass `--skip-scenario-drift` if you're intentionally
   verifying the rest of the gate against an out-of-date recording (see [README → Commands at a glance](../README.md#commands-at-a-glance)).
+
+## Skill-authoring & host-loop footguns
 
 - **A skill works in the Claude Code CLI but misbehaves under Cowork's host-loop.** Two common footguns:
   a `${CLAUDE_PLUGIN_ROOT}` path hardcoded into in-VM bash (dead in the host-loop VM — resolve the mount

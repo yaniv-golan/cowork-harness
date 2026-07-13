@@ -144,7 +144,10 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   are **scenario-authored** (the YAML's `fidelity:` / `answers:` fields) — `run` takes no `--fidelity` /
   `--answer` flags, so the wrapper doesn't accept them either. `check=True` raises on a failed/enveloped-error
   run. The `Result` also exposes `.effective_fidelity` and `.artifacts` (the ENV-MANIFEST) so a test can prove
-  which tier actually ran (e.g. `cowork` → `hostloop`). A module-level `run_scenario(path, …, cli=None)` is
+  which tier actually ran (e.g. `cowork` → `hostloop`). A recorded cassette pins this same value as
+  `effectiveFidelity`, which backs the `resolved-tier`/`unverifiable-tier` staleness classes that
+  `verify-cassettes`/replay staleness checks report when a `fidelity: cowork` scenario's resolved tier
+  drifts — see [../docs/cassette.md](../docs/cassette.md). A module-level `run_scenario(path, …, cli=None)` is
   exported for the one-call case:
   ```python
   from cowork_harness import run_scenario

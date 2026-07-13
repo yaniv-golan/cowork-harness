@@ -22,7 +22,11 @@ inputs:
     description: "Cassette/scenario/SKILL.md/skill-dir to check (positional argument to the command)"
     required: true
   version:
-    description: "npm version or dist-tag of cowork-harness to install"
+    description: >-
+      npm version or dist-tag of cowork-harness to install. The `latest` default is intentional so
+      copy-paste recipes track the current release; for reproducible CI, pin an exact version here.
+      (This differs from the companion skill's `@>=0.32.0` floor guidance, which targets ad-hoc CLI
+      installs where an accidental older resolve should fail loud rather than silently downgrade.)
     required: false
     default: "latest"
   strict:

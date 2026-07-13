@@ -527,6 +527,48 @@ written to that dispatch's `subagents[].reasoning`.
   stays `undefined` for that dispatch (distinct from `[]`, which means a child file WAS found but
   produced no thinking/text turns).
 
+**Sub-agent thinking TEXT is empty by default — only TEXT turns carry content.** This is the most
+important semantic to understand before consuming `reasoning`. A sub-agent thinking block comes through
+with an **empty `thinking` string but a non-empty cryptographic `signature`** (the continuation token),
+so a `thinking` turn is surfaced as `{ "kind": "thinking", "text": "", "redacted": true }`. The harness
+adds the `redacted: true` marker precisely so a consumer does **not** misread empty text as "the
+sub-agent didn't reason":
+
+| Shape | Meaning |
+| --- | --- |
+| `{ "kind": "thinking", "text": "", "redacted": true }` | The sub-agent **reasoned here, but the text was omitted by request** (signature present, thinking text empty). Default state on this surface. |
+| `{ "kind": "thinking", "text": "<content>" }` | Thinking text that *was* returned (no `redacted` key). Not seen with the default config, but the shape is honored if the display mode is ever changed (see below). |
+| `{ "kind": "text", "text": "<content>" }` | A visible TEXT turn (the receipt/output the sub-agent SAID) — **always captured verbatim**, never redacted. |
+| `reasoning: []` | A child transcript was found but had no thinking/text turns at all. |
+| `reasoning: undefined` | No child transcript joined (replay, or a tier this wasn't captured on). |
+
+  **Why it's empty (mechanism).** This is **not** the binary stripping text when it writes the
+  transcript — it is a **request-side display mode**. The API's `thinking.display` is forced to
+  `"omitted"` for a sub-agent turn whenever the session is non-interactive (the harness always spawns
+  `-p`) and no explicit display was set, so the model returns empty thinking blocks (signature-only)
+  that the child transcript then faithfully records. Binary-verified against the staged 2.1.205 agent;
+  corpus-corroborated: 230/230 sub-agent thinking blocks were text-empty-but-signature-present, while
+  the *same agent binary's* main-loop transcripts — which resolve `display` to the API default
+  (`"summarized"` on Sonnet-4.6) — keep 1810/1827 blocks with full text. The signature is opaque (not a
+  reversible encoding of the text), and the same-run parent event stream drops sub-agent thinking too
+  (SDK-suppressed, per the previous subsection), so with the default config the text is unrecoverable.
+
+  **Is there a lever?** Yes, but it is **opt-in and fidelity-diverging**. The fenced
+  `debug.thinking_display: "summarized"` session field (see [session.md](./session.md)) emits the agent
+  binary's `--thinking-display summarized`, which surfaces **summarized** thinking for both loops.
+  Live-verified with a matched hostloop A/B on opus-4-8: the default run's thinking blocks were
+  empty-but-signed on both loops, while the `summarized` run's carried real text (sub-agent ~189 chars,
+  main-loop ~242). Note the ceiling: the API returns **no raw chain-of-thought** — `display` is only
+  `summarized` | `omitted`, so "summarized" is the maximum for *either* loop, not the verbatim CoT. Real
+  Cowork passes no such flag, so the default `"omitted"` is the fidelity-faithful behavior; summarized is
+  a **debug opt-in**, not the default. **The
+  same is true of the top-level `thinking[]` field (the main loop):** on models that default `display`
+  to `"omitted"` (Opus 4.8, Sonnet 5 — verified empty in the corpus, vs. Sonnet-4.6 which defaults to
+  `"summarized"`), `thinking[]` fills with `{text:"", redacted:true}`, carrying the identical `redacted`
+  marker so a consumer never misreads it as "no reasoning." The fenced `debug.thinking_display:
+  "summarized"` opt-in flips both loops to summarized text at once. `redacted` is omitted (not `false`)
+  on turns/blocks that carry text.
+
 **Where to look.** `schema/run-result.json` is the authoritative field reference — every field named
 above has a `description` there (`subagents[]` at line 640; top-level `fileToolAttempts`/`pathDenials` at
 lines 61/80). The matching assert keys (see [scenario.md](./scenario.md)) turn this telemetry into
