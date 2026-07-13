@@ -1,11 +1,11 @@
 name: "cowork-harness"
-description: >-
-  Run cowork-harness (replay/lint/lint-skill/analyze-skill/verify-cassettes/run) against a scenario,
-  cassette, or skill path and report the verdict as a PR job summary. The token-free lane
-  (replay/lint/lint-skill/analyze-skill/verify-cassettes) runs on any ubuntu-latest runner — no Docker,
-  no API key, no agent binary. `run` (the live lane) additionally needs Docker + a provisioned agent
-  binary; this action does not provision either — see the cowork-harness README's CI section for what a
-  self-hosted live-lane runner needs.
+# Runs cowork-harness (replay/lint/lint-skill/analyze-skill/verify-cassettes/run) against a scenario,
+# cassette, or skill path and reports the verdict as a PR job summary. The token-free lane
+# (replay/lint/lint-skill/analyze-skill/verify-cassettes) runs on any ubuntu-latest runner — no Docker,
+# no API key, no agent binary. `run` (the live lane) additionally needs Docker + a provisioned agent
+# binary; this action does not provision either — see the README's CI section for a self-hosted live runner.
+# NOTE: `description` below is the GitHub Marketplace tagline and MUST stay < 125 characters.
+description: "Test Claude Code skills under Claude Cowork's runtime in CI — token-free replay/lint, or a live scenario run."
 author: "Yaniv Golan"
 
 branding:
