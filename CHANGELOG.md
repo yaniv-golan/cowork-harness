@@ -60,7 +60,10 @@ All notable changes to this project are documented here. The format is based on
 - **The companion skill's preflight sent replay-only users through `doctor`**, whose token check
   hard-fails on every tier — a new "Replay-only? Skip `doctor`" bullet carries the same carve-out
   `docs/README.md` already had. The 3,200-character single-bullet 0.32.0 feature parenthetical is
-  now a scannable by-release sub-list (content unchanged).
+  now a scannable by-release sub-list, with every release bucket tag-verified against git history —
+  which caught and fixed a long-standing wrong tag: `semantic_matches` was labeled "new in 0.27.0"
+  but shipped in 0.28.0; the five path-gate keys, `agent_env`, and the `hostloop` split/
+  `allow_host_writes:` now sit under their real releases (0.30.0 / 0.21.0) too.
 - **`DESIGN.md` still said the staged in-VM agent is 2.1.202** — the `desktop-1.20186.1` baseline
   re-synced it to 2.1.205; DESIGN.md and `docs/protocol.md` now carry dated patch-only notes for
   1.20186.1 while the 2026-07-11 live pass stays scoped to `desktop-1.20186.0` (not restamped).

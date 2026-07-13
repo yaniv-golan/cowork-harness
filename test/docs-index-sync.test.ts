@@ -29,11 +29,12 @@ const docsText = readFileSync(resolve("README.md"), "utf8") + "\n" + docFiles.ma
 
 describe("COWORK_* env vars ↔ docs", () => {
   // Vars read via helpers (envPositiveNumber("COWORK_…"), parseEnvPort("COWORK_…"), env-name
-  // constants) never appear as a `process.env.X` token, so the scrape is the UNION of dot-access
-  // and quoted string literals — dot-access alone misses the helper-read STATUS_* / DECIDER_DIR_* /
-  // LLM_* / GITSET / VM_PROXY_PORT families entirely.
+  // constants) never appear as a `process.env.X` token, and vars read off a destructured/aliased
+  // env object appear only as `env.X` — so the scrape is the UNION of all three shapes.
+  // Dot-access alone misses the helper-read STATUS_* / DECIDER_DIR_* / LLM_* / GITSET /
+  // VM_PROXY_PORT families and the aliased NO_HYPERLINKS read.
   const names = new Set<string>();
-  for (const re of [/process\.env\.(COWORK[A-Z0-9_]+)/g, /["'](COWORK[A-Z0-9_]+)["']/g]) {
+  for (const re of [/process\.env\.(COWORK[A-Z0-9_]+)/g, /["'](COWORK[A-Z0-9_]+)["']/g, /\benv\.(COWORK[A-Z0-9_]+)/g]) {
     for (const m of srcText.matchAll(re)) names.add(m[1]);
   }
   // Intentionally-internal vars go here, each with a stated reason. Empty today: every env knob
@@ -41,14 +42,21 @@ describe("COWORK_* env vars ↔ docs", () => {
   const ALLOWLIST = new Set<string>([]);
 
   it("scraped a sane env-var set", () => {
-    expect(names.size).toBeGreaterThan(40);
-    // the canary for the helper-read class — reachable only via the quoted-literal half
+    // 53 names at time of writing; the floor must sit ABOVE the 41 that dot-access alone yields,
+    // so silently losing the literal/env-object halves fails here instead of false-greening.
+    expect(names.size).toBeGreaterThan(50);
+    // canary for the helper-read class — reachable only via the quoted-literal pattern
     expect([...names]).toContain("COWORK_HARNESS_STATUS_CORRUPT_TIMEOUT_MS");
+    // canary for the aliased-env-object class — reachable only via the `env.X` pattern
+    expect([...names]).toContain("COWORK_HARNESS_NO_HYPERLINKS");
     expect([...names]).toContain("COWORK_VM_PROXY_PORT");
   });
 
   it("every COWORK_* env var read in src/ is documented in README.md or docs/*.md", () => {
-    const undocumented = [...names].filter((n) => !ALLOWLIST.has(n) && !docsText.includes(n)).sort();
+    // word-boundary match: a doc mentioning COWORK_HARNESS_DEBUG_SKILLHASH must not satisfy a
+    // lookup for COWORK_HARNESS_DEBUG
+    const documented = (n: string) => new RegExp(`${n}(?![A-Z0-9_])`).test(docsText);
+    const undocumented = [...names].filter((n) => !ALLOWLIST.has(n) && !documented(n)).sort();
     expect(undocumented).toEqual([]);
   });
 });
