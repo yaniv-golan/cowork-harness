@@ -60,4 +60,4 @@ following are enforced:
 
 ## Supported versions
 
-Pre-1.0: only the latest `main` is supported. Pin a commit for reproducibility.
+Only the latest published release is supported. Pin an exact version for reproducibility.

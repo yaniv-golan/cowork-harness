@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
-[Semantic Versioning](https://semver.org/); pre-1.0 minor versions may include breaking changes.
+[Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
 ## [Unreleased]
 
@@ -26,6 +26,9 @@ Patch: Action Marketplace branding + a release-tooling fix. No runtime/API chang
 
 - `RELEASING.md` documents maintaining the moving `v1` / `v1.0` tags on each release, so
   `uses: yaniv-golan/cowork-harness@v1` resolves to the latest 1.x.
+- Pruned stale pre-1.0 versioning language now that the compatibility contract is in force
+  (README, `SPEC.md`, `RELEASING.md`, `docs/maintenance.md`, this file); `SECURITY.md` now states
+  that only the latest published release is supported.
 
 ## [1.0.0] — 2026-07-13
 

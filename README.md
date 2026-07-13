@@ -821,7 +821,7 @@ From `1.0.0` this project follows [semver](https://semver.org/). What that cover
 exit codes, the scenario/session/baseline/`RunResult`/cassette/protocol schemas, the documented
 `COWORK_HARNESS_*` (+ `COWORK_AGENT_BINARY`/`COWORK_AGENT_IMAGE`) env vars, and the packaged Action's
 inputs/outputs. Human-readable terminal text is explicitly **not** part of the contract — parse the
-`--output-format json` envelope, not stdout. Pre-1.0, minor versions may still break any surface.
+`--output-format json` envelope, not stdout. As of 1.0.0, a backwards-incompatible change to a covered surface is a major bump.
 
 ## Status
 

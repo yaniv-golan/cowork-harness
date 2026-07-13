@@ -678,8 +678,8 @@ entries (CB-5), adding major European, Asian, and Latin American ccTLDs
 
 From `1.0.0` the project follows [semver](https://semver.org/). The surfaces below are the **covered
 contract**: a backwards-incompatible change to any of them is a MAJOR bump. Everything else — most
-importantly human-readable text — is explicitly NOT covered and may change in any release. (Pre-1.0,
-nothing here is guaranteed; minor versions may break any surface — see [RELEASING.md](./RELEASING.md).)
+importantly human-readable text — is explicitly NOT covered and may change in any release.
+Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./RELEASING.md).
 
 **Covered (semver-guaranteed):**
 

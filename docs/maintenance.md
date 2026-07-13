@@ -182,8 +182,8 @@ The sync extractor currently targets macOS paths (`~/Library/Application Support
 > locations, the branch → PR → tag → publish flow, the checklist) lives in [RELEASING.md](../RELEASING.md).
 > The notes here only cover how a *parity sync* relates to versioning.
 
-Versioning follows [SemVer](https://semver.org/); pre-1.0 minor bumps may include breaking changes
-(baseline-schema or CLI-contract changes count as breaking). A parity-baseline *content* update (a new
+Versioning follows [SemVer](https://semver.org/); as of 1.0.0 a backwards-incompatible change to a
+covered surface (baseline-schema or CLI-contract changes count) is a major bump. A parity-baseline *content* update (a new
 Desktop release) is **not** a package version bump on its own — it ships in a normal patch/minor.
 
 Release flow — CD via `.github/workflows/release.yml`, published with **npm Trusted Publishing (OIDC)**
