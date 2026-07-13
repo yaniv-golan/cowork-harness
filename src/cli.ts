@@ -198,6 +198,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--follow]               stream one line per status change until done/error; arm a Monitor here
       [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
       exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
+      [--latest-for <scenario>]  resolve a scenario's NEWEST run dir by actual run time, not dir mtime (no positional, no --follow; exit: 0 found · 2 not found)
   stats [<scenario>]           queryable summary over indexed runs: count, pass rate, cost/duration/token/turn p50/p95
       [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex]
       (run 'stats --help' for the full flag reference)
@@ -1955,7 +1956,7 @@ async function cmdSkill(rawArgs: string[]) {
   process.exit(computeVerdict(result, "live").pass ? 0 : 1);
 }
 
-const PROBE_DISPATCH_HELP = `cowork-harness probe-dispatch <skill-dir> "<prompt>"
+const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
 
   A cheap, focused mechanics probe: runs the skill/plugin folder against the staged Cowork agent (a THIN
   wrapper over 'skill' — same inline session + scenario construction, same runOneScenario execution) with

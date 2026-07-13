@@ -256,14 +256,13 @@ cowork-harness skill ~/my-plugin --prompt-file ./prompt.txt               # prom
 cowork-harness skill ~/my-plugin "..." --answer "which format=Markdown"   # script AskUserQuestion
 cowork-harness skill ~/my-plugin "..." --fidelity protocol                # fast, no sandbox
 cowork-harness skill ~/my-plugin "..." --dry-run                          # resolve & print the launch plan, don't run
-cowork-harness skill ~/my-plugin "..." --keep                             # print the run dir to inspect
 cowork-harness skill ~/my-plugin "..." --output-format json                      # machine-readable result on stdout
 cowork-harness skill ~/my-plugin "..." --on-unanswered fail               # never fabricate an answer (CI/agents)
 cowork-harness skill ~/my-plugin "..." --decider-cmd 'node answer.js'     # answer LIVE stochastic questions via a helper
 cowork-harness skill ~/my-plugin 'review this deck' --upload deck.pdf      # attach a file → mnt/uploads (deck-review etc.)
 cowork-harness skill ~/my-plugin "..." --session-id s1                     # pin a session…
 cowork-harness skill ~/my-plugin '<next turn>' --session-id s1 --resume    # …then resume it (gated/checkpoint skills)
-cowork-harness skill ~/my-plugin "..." --keep                            # then: trace the run
+cowork-harness skill ~/my-plugin "..." --keep                            # keep the run dir, then: trace it
 cowork-harness trace <run-id> --view tools                                # tool calls + sub-agent dispatches from events.jsonl
 cowork-harness skill --help                                               # full per-command flag reference
 
@@ -280,7 +279,9 @@ option 1, loudly warn). Pick with `--on-unanswered`; left unset, `skill` is **ad
 a TTY, `fail` when piped/CI) and `run` is always `fail`. Exit codes: `0`
 pass · `1` assertion/agent failure · `2` usage / unanswered-under-`fail` / runtime · `3` boundary/integrity
 (the `boundary-check` **command**'s own probe failures are the exception — they follow the assertion
-convention and exit `1`; see SPEC.md §11).
+convention and exit `1`; see SPEC.md §11). `verify-cassettes` also reuses exit `3` with a different
+meaning — "could not verify" (vs. a verified failure's `1`); see the command table. Exit `4` is reserved
+on the `run`/`skill` family (SPEC §11).
 After a run, the footer **echoes every auto-answered
 question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them
 back to lock in a deterministic re-run.
@@ -359,6 +360,8 @@ Note: `cowork` above is one value of `fidelity:`. Two other `cowork`-named setti
 `CLAUDE_CODE_IS_COWORK=1` env flag every live tier passes to the agent binary, regardless of which
 fidelity tier you picked).
 
+Recorded cassettes pin the tier a `fidelity: cowork` scenario actually resolved to as `effectiveFidelity`, which backs the `resolved-tier`/`unverifiable-tier` staleness classes — see [docs/cassette.md](./docs/cassette.md).
+
 Set the tier with `fidelity:` in a scenario or `--fidelity` on `skill` or `chat`.
 
 ---
@@ -399,7 +402,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `vm <init\|status\|delete\|prune>` | Manage the L2 Apple-VZ / Lima microVM (`prune` removes orphaned VMs left by config/agent-version changes) | running `--fidelity microvm` |
 
 **Flags worth knowing** (the full list is always `<command> --help`):
-- `run`: a decider (`--decider-cmd <helper>`/`--decider-dir <dir>`, or a scenario's `on_unanswered: llm`) can answer unscripted gates; `--repeat N` (2-100) runs each scenario N times and aggregates a variance rollup instead of a single pass/fail (`--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd` tune the batch verdict/loop); `--matrix <matrix.yaml>` runs ONE scenario across the cross-product of baseline/model/skill_dir axes (worked example: `examples/matrices/csv-metrics-matrix.yaml`; `--max-cells`/`--concurrency` tune the cap/pool — any cell failing, assertion or infra, fails the run); `--compact`/`--demo` trim `run`/`skill` output for shareable screenshots/GIFs.
+- `run`: a decider (`--decider-cmd <helper>`/`--decider-dir <dir>`, or a scenario's `on_unanswered: llm` — a scenario-YAML key, not a CLI flag; `run` rejects `--on-unanswered llm`) can answer unscripted gates; `--repeat N` (2-100) runs each scenario N times and aggregates a variance rollup instead of a single pass/fail (`--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd` tune the batch verdict/loop); `--matrix <matrix.yaml>` runs ONE scenario across the cross-product of baseline/model/skill_dir axes (worked example: `examples/matrices/csv-metrics-matrix.yaml`; `--max-cells`/`--concurrency` tune the cap/pool — any cell failing, assertion or infra, fails the run); `--compact`/`--demo` trim `run`/`skill` output for shareable screenshots/GIFs.
 - `record`/`replay`: `--decider-llm`/`--decider-dir` answer gates live during recording; `--rerecord-stale`/`--concurrency <N>` batch re-record; `--assert-from <scenario.yaml>`/`--reassert` re-check the on-disk `assert:` instead of the frozen one; `--strict`/`--fail-on-skill-drift` control staleness handling on replay; `--no-redact` skips record-time redaction; `--allow-failing` relaxes the post-run verdict gate; `--dry-run` resolves without recording; `replay --best-effort-future-cassette` lets a cassette from a newer format version replay anyway (warn instead of the default hard error).
 - `verify-cassettes`: privacy scan (email/currency/domain/path/machine-inventory) + staleness — exit 1 when verification RAN and found a real problem (a finding, a genuine drift, or scenario-prompt drift), exit 3 when it could NOT complete (an unverifiable-class staleness finding, a too-new cassette format, or a read error); whole-token allows via `--allow <regex>` (a pattern) / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-machine-inventory` / `--allow-patterns-file <path>` (a **file** of patterns, one regex per line); `--skip-privacy` or `--skip-staleness` runs only part of the gate; a diverged scenario `prompt` vs. the cassette's frozen prompt is also a hard fail (its own `scenarioDrift` bucket), opt out with `--skip-scenario-drift`; `--margins` adds a per-cassette recorded-vs-budget report for count-bound assertions (a single-sample estimate — diagnostic only, never changes the gate verdict).
 - `stats`: reads `<runsRoot>/index.jsonl`, written automatically at every result; `--since`/`--baseline`/`--branch` filter; `--last <n>` windows per-scenario; `--reindex` rebuilds the index from the physical run-dir tree (the migration path for pre-index runs).
@@ -413,7 +416,7 @@ There's also a **Python `cowork` pytest lane** (`python/`) for driving any of th
 
 Configuration splits the way Cowork itself splits — *what you set up before the first prompt* vs. *what you ask*:
 
-- **Session setup** (`sessions/*.yaml`) — everything you'd configure in Cowork's pre-prompt setup: model, effort (`low|medium|high|extra|max`, per-model), extended thinking (on/off), permission mode, **mounted work folders / projects**, uploaded files, and **discovery** (marketplaces, plugins, skills, MCP servers). Hand-authored, one per project, reused across scenarios.
+- **Session setup** (`sessions/*.yaml`) — everything you'd configure in Cowork's pre-prompt setup: model, effort (`low|medium|high|xhigh|max`, per-model; `extra` is accepted as an alias for `xhigh`), extended thinking (on/off), permission mode, **mounted work folders / projects**, uploaded files, and **discovery** (marketplaces, plugins, skills, MCP servers). Hand-authored, one per project, reused across scenarios.
 - **Scenario** (`scenarios/*.yaml`) — the prompt, the **scripted answers**, and the assertions. References a session.
 
 > **Worked examples to copy** live under [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)). `examples/skills/csv-metrics/` + `examples/sessions/csv-metrics.yaml` + `examples/scenarios/csv-metrics.yaml` is a complete, non-trivial skill running end-to-end: the agent loads the skill, runs its **bundled producer** (`scripts/metrics.py`, stdlib-only so it works under default-deny egress), and writes a structured `outputs/metrics.json` + a `outputs/summary.md`. The scenario asserts the structure (skill loaded, producer ran, artifacts exist); the paired [`python/test_csv_metrics_lane.py`](./python/test_csv_metrics_lane.py) adds a predicate over the JSON content (`assert_artifact_json`). Read those files to see the whole loop — discovery → run → deliverable → assert — that every real skill follows. (`examples/scenarios/example-pdf-skill.yaml` is the minimal counterpart: harness plumbing, placeholder skill.)
@@ -456,7 +459,7 @@ assert:
 # examples/sessions/default.yaml  (abridged — see the file for every field)
 # Relative paths below resolve from THIS file's dir (absolute and ~ are used as-is).
 model: claude-opus-4-8
-effort: high                            # low | medium | high | extra | max — validated against the model
+effort: high                            # low | medium | high | xhigh | max (extra = alias for xhigh) — validated against the model
 extended_thinking: true                 # on/off toggle (default on). debug.max_thinking_tokens is a fenced, non-Cowork override
 permission_mode: default
 permission_parity: cowork                   # cowork (allow unscripted tool calls, the default) | strict (deny unscripted)
@@ -529,7 +532,7 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
 - **Timing & model:** `toolDurations` (per-tool call count / total / max ms), `models` (distinct model ids seen) — `trace <id> --view tool-durations` renders these as a table.
 - **Tool health:** `toolErrors` (per-tool call/error counts), `redundantToolCalls` (wasted repeated `{name,args}` calls), `thinking` (reasoning blocks, capped at the last 50), `modelUsage` (per-model tokens/cost/cache, denormalized from the SDK's own field). Don't conflate the three per-tool rollups: `toolCounts` is a flat `{tool: number}` call-count map, `toolErrors` is `{tool: {calls, errors}}`, and `toolDurations` is `{tool: {calls, totalMs, maxMs}}`. `trace <id> --view tool-errors` renders one row per errored tool call with the full multi-line stderr (capped 4KB), vs. the 120-char preview `--view tools` shows.
 - **Verdict:** `verdict` — a kept run's overall `{pass, exitCode, signals, guards, failures}`, the same `computeVerdict` source that also drives the run/skill exit code, the footer, and the JSON envelope's `ok`; persisted and streamed verdict are one shape, so they can never diverge. `failures[]` names the failing assert key (when a failure traces to one) or the hard-verdict guard reason (an infra error, an unanswered gate, a scan-based host-path leak, …) otherwise. `jq '.verdict' result.json` answers "did it pass, and why" without re-running `verify-run`. Scope: the run/asserted lane only — `chat` carries no assertions and no verdict, so the field is absent there. (New in 0.31.0.)
-- **Sub-agents & skills:** `subagents[]` now also carries `prompt`, `model`, `output`, and `attributedSkillId`; `skillActivity[]` attributes tool calls to whichever skill was active when they ran; `referencesRead[]` lists the skill's `references/*`/`scripts/*` files the agent's **main agent** actually **Read** (a progressive-disclosure signal — `SKILL.md` is delivered whole so it never appears, `assets/` is untracked; present on live and replay). `subagents[].referencesRead` is the per-dispatch counterpart, tracking a **sub-agent's own** reference/script Reads (new in 0.31.0) — top-level `referencesRead[]` remains main-agent-only.
+- **Sub-agents & skills:** `subagents[]` now also carries `prompt`, `dispatchModel`/`resolvedModel` (the dispatch-input vs binary-resolved model), `output`, and `attributedSkillId`; `skillActivity[]` attributes tool calls to whichever skill was active when they ran; `referencesRead[]` lists the skill's `references/*`/`scripts/*` files the agent's **main agent** actually **Read** (a progressive-disclosure signal — `SKILL.md` is delivered whole so it never appears, `assets/` is untracked; present on live and replay). `subagents[].referencesRead` is the per-dispatch counterpart, tracking a **sub-agent's own** reference/script Reads (new in 0.31.0) — top-level `referencesRead[]` remains main-agent-only.
 - **Panels:** `context` (available tools/mcpServers/skills), `tasks[]` (the agent's to-do list), `workspaceFiles[]` (every user-visible file, classified `output`/`mount`/`input`, with size + sha256). `trace <id> --view files` renders `workspaceFiles[]` as a class-grouped tree plus a diff against `preRunHashes` (added/modified/removed/unchanged); needs a run dir. `trace <id> --view usage` renders per-model tokens/cost/cache-read ratio from `modelUsage`; also needs a run dir.
 - **Runtime signals:** `hookEvents` (PreToolUse block/allow decisions), `mcpErrors` (failed MCP round-trips), `contextEvents` (incl. context-compaction boundaries), per-request `egress` detail (method/path/port/bytes + deny reason), `resources` (peak RSS, avg/peak CPU% — live lane only), `errorSource`/`stderrLogPath` (crash triage), `preRunHashes` (pre-run file hashes backing in-place-mutation checks), `resultErrorKind` (`transport`/`agent`/`usage_limit` — a usage/quota-limit failure is a spent quota surfaced distinctly, so a batch or CI job can halt-fast and retry after reset instead of treating it as a skill regression).
 - **Execution location:** `execution` — `{location:"local"|"cloud", environmentId?, taskKind?:"interactive"|"scheduled"}`, orthogonal to `fidelity` (a local privilege tier). Stamped `location:"local"` on every locally-executed run; absence is **not** a "local" signal — it means a pre-taxonomy result or the error-replay lane, not a positive local claim.
@@ -611,7 +614,7 @@ cowork-harness run scenarios/            # your repo's scenarios; runs every *.y
 The fastest path to CI: a composite action wrapping the token-free lane, with a PR job-summary reporter.
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v1
+- uses: yaniv-golan/cowork-harness@main
   with:
     command: replay              # replay | lint | lint-skill | analyze-skill | verify-cassettes | run
     path: cassettes/my-skill.cassette.json
@@ -639,24 +642,24 @@ jobs:
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
-      - uses: yaniv-golan/cowork-harness@v1
+      - uses: yaniv-golan/cowork-harness@main
         with:
           command: run
           path: scenarios/
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest`), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). See [`action.yml`](./action.yml) for the full input reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `@>=0.32.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). See [`action.yml`](./action.yml) for the full input reference.
 
-The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **six-stage pipeline**. The **unit** stage is the token-free gate you can copy into your skill repo; the `python`, `boundary`, `scenarios`, `action-self-test`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
+The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **six-stage pipeline**. The **unit** stage is the token-free gate you can copy into your skill repo; the `action-self-test`, `python`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 
 | Stage | Runs | Needs | Gates |
 |---|---|---|---|
 | **unit** | format check · typecheck · unit tests · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
+| **action-self-test** | packs this commit and runs the packaged `uses: ./` Action against the committed example-pdf-skill cassette (pass case) + a nonexistent path (fail case) | nothing | every push/PR |
 | **python** | `pytest` helper self-checks (`python/`, run with `-m 'not cowork'` — the token-free subset; the Docker/token `@pytest.mark.cowork` tests are excluded) | nothing (token-free assertions only) | every push/PR |
 | **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check`, then `npm run test:live` (live contract tests that guard the binary-resolution assumptions, no token needed) | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
 | **scenarios** | the live scenario suite (mixed `protocol` + `container` fidelity across `examples/scenarios/`), plus the `e2e/scenarios/*.yaml` smoke set (this repo's own L0/L1/hostloop self-tests, `microvm` excluded — needs a real VM); uploads transcripts/egress logs as artifacts; relies on a runner-local staged agent binary (no in-workflow download step). | `ANTHROPIC_API_KEY` | fork PRs: the whole job is skipped (`if:` guard); same-repo without a key: warns and exits 0 |
-| **action-self-test** | packs this commit and runs the packaged `uses: ./` Action against the committed example-pdf-skill cassette (pass case) + a nonexistent path (fail case) | nothing | every push/PR |
 | **parity-drift** | reminder to re-`sync` when Desktop updates | nothing | **fails CI** if the newest committed baseline is &gt; 90 days old |
 
 This ordering means cheap checks fail fast, the **boundary parity gate runs without secrets** (so forks get it too), and expensive live runs only happen when a key is present.

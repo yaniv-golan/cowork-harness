@@ -144,10 +144,11 @@ that skill instead of the shared root.
 an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
 same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the
-authored, uniform replacement: it applies across **all four tiers**, and the three keys above are
-additionally **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers that inherit
-one) before any baseline/knob overlay — so a stray shell value can never leak through on some tiers and
-not others.
+authored, uniform replacement: it applies across **all four execution tiers**
+(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and the three
+keys above are additionally **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers
+that inherit one) before any baseline/knob overlay — so a stray shell value can never leak through on some
+tiers and not others.
 
 | Field | Type | Env key | Notes |
 |---|---|---|---|

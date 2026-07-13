@@ -372,7 +372,7 @@ than a stuck `"running"`.)
 ### Place assertions in the right CI lane
 
 CI placement: a **token-free `replay` PR gate** (content/structure only) + a **nightly live `run`**
-(filesystem/egress). Fastest setup: `uses: yaniv-golan/cowork-harness@v1` (a packaged GitHub Action with a
+(filesystem/egress). Fastest setup: `uses: yaniv-golan/cowork-harness@main` (a packaged GitHub Action with a
 PR job-summary reporter). See `references/ci-recipe.md` for the Action, the manual step-by-step form, and
 the four-stage pipeline.
 

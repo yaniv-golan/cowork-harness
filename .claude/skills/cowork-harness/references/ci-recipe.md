@@ -6,11 +6,14 @@ Self-contained reference. Tracks `cowork-harness 0.32.0` (baseline `desktop-1.20
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v1
+- uses: yaniv-golan/cowork-harness@main
   with:
     command: replay
     path: cassettes/
 ```
+
+The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
+release; pin an exact version (e.g. `version: "0.32.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -35,7 +38,7 @@ jobs:
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
           # before trusting it — see docs/maintenance.md's "Agent-binary provenance" section.
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
-      - uses: yaniv-golan/cowork-harness@v1
+      - uses: yaniv-golan/cowork-harness@main
         with:
           command: run
           path: scenarios/
@@ -174,7 +177,7 @@ A typical skill repo runs four stages, fastest/cheapest first:
 
 ## GitHub Actions sketch
 
-The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v1` does
+The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@main` does
 in one step (see the top of this doc) — reach for this form when you need independent per-command
 gating/annotations rather than one action run per command. The nightly live job has no packaged-Action
 equivalent yet (the Action's `command: run` mode needs a self-hosted runner with Docker + the agent binary

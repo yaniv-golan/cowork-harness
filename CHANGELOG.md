@@ -6,6 +6,48 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Docs pointed the GitHub Action at a ref that doesn't exist.** README, `SKILL.md`, and
+  `references/ci-recipe.md` all said `uses: yaniv-golan/cowork-harness@v1`, but no `v1` tag has ever
+  been published — a copy-pasted workflow failed with "unable to resolve action" before running
+  anything. All six references now bind `@main`; a moving major tag is a 1.0.0 question. A new
+  token-free guard (`test/action-docs-sync.test.ts`) locks the ref policy and also validates that
+  every documented `with:` key is a real `action.yml` input and every documented `command:` value is
+  one the Action describes.
+- **`llms.txt` command list was three commands stale** — `lint-skill`, `analyze-skill`, and
+  `probe-dispatch` were missing. Now lists all 29, locked by a new COMMANDS ↔ llms.txt sync test
+  (set-equality, so stale names fail too), and the README "Commands at a glance" guard gained the
+  reverse direction (a README-only row now fails).
+- **README observability prose still called a `subagents[]` field `model`** — renamed to
+  `dispatchModel` (beside `resolvedModel`) in 0.30.0; the prose now names the real fields. Also
+  fixed: the effort enum shorthand now lists `xhigh` (`extra` is the accepted alias) in both places,
+  the CI stage table matches `ci.yml`'s declaration order, the exit-code summary notes
+  `verify-cassettes`' distinct exit-`3` meaning and the reserved exit `4`, a duplicated `--keep`
+  example was collapsed, and `on_unanswered: llm` is explicitly marked as a scenario-YAML key (not a
+  CLI flag).
+- **`status --latest-for` was undocumented in its own guide** — now covered in `docs/run-status.md`
+  (with the real output shape), the `docs/README.md` index row, and the top-level `--help` status
+  entry (with its own `0` found / `2` not found exit semantics).
+- **`probe-dispatch --help` didn't start with a `usage:` line** like every other command; it does
+  now.
+- **`debugging.md` showed only the scenario run-dir layout** — it now also names `chat`'s
+  `runs/chat/<sessionId>/` path. `docs/session.md`'s "all four tiers" now spells out the four
+  execution tiers and that `fidelity: cowork` resolves to one of them. `examples/README.md`'s
+  answer-policies pointer is now a real link. `effectiveFidelity` (the recorded resolved tier behind
+  the `resolved-tier`/`unverifiable-tier` staleness classes) is now mentioned in the README fidelity
+  section and `python/README.md`, not only in `docs/cassette.md`.
+
+### Added
+
+- **The Action's `version` default (`latest`) is now documented as intentional** — in `action.yml`'s
+  input description, the README inputs sentence, and `references/ci-recipe.md` — with
+  pin-an-exact-version guidance for reproducible CI, and why it deliberately differs from the
+  companion skill's `@>=0.32.0` floor for ad-hoc CLI installs.
+- **`--help` and unknown-flag structural-guard test coverage now spans all 29 commands** (previously
+  16 and 17 respectively); `lint`/`lint-skill` are asserted against their `scenario.py` passthrough
+  usage lines and skip cleanly when `python3` is absent.
+
 ## [0.32.0] — 2026-07-13
 
 ### Added

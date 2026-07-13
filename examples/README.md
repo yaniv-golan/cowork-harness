@@ -31,6 +31,8 @@ examples/
                     docs/scenario.md § Reusable answer policies (--answer-policy)
 ```
 
+Answer policies: see [docs/scenario.md § Reusable answer policies](../docs/scenario.md#reusable-answer-policies---answer-policy).
+
 `replays/` has its own [README](./replays/README.md) explaining what each committed cassette covers.
 
 Paths inside a scenario/session resolve **relative to that file** (see

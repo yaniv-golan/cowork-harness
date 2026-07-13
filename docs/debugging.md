@@ -20,7 +20,9 @@ agent stderr) — read those before re-running; a re-record rarely tells you mor
 already does.
 <!-- END triage-canonical -->
 
-Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (relocatable). The files there —
+Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (relocatable). A `chat` run instead
+writes to `runs/chat/<sessionId>/` — the first path segment is the literal `chat`, not a scenario name.
+The files there —
 `events.jsonl`, `run.jsonl`, `trace.json`, `result.json`, `egress.log`, `agent.stderr.log` — are the raw
 evidence; see [README → What you get out](../README.md#what-you-get-out-inspectable-output) for the layout
 and how to relocate it. The tools below digest them so you rarely hand-parse.
