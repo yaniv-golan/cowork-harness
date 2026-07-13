@@ -106,6 +106,25 @@ All notable changes to this project are documented here. The format is based on
   16 and 17 respectively); `lint`/`lint-skill` are asserted against their `scenario.py` passthrough
   usage lines and skip cleanly when `python3` is absent.
 
+### Documentation
+
+- **`on_unanswered: prompt` was described as "only valid for `chat`" — wrong on two counts.** `chat`
+  never reads a scenario YAML (it runs an inline interactive scenario), and `prompt` is really a
+  `skill`-command policy (the adaptive-TTY default, or explicit `skill --on-unanswered prompt`);
+  `run` rejects it. The schema `.describe()` (and regenerated `scenario.schema.json`) now say so.
+- **`ANTHROPIC_AUTH_TOKEN` is an accepted auth source but was under-documented.** It resolves
+  identically to `ANTHROPIC_API_KEY` (used only when no OAuth token is set) and was already in
+  `.env.example`, but the README auth text, the `record`/`doctor` `--help` blurbs, the `doctor`
+  no-token detail/remedy, the two `record` credential messages, `docs/cassette.md`, and the companion
+  skill's Auth note named only the other two — all now list it as the third alternative.
+- **`llms.txt` exit-code line** now flags that `3`/`1` carry per-command meanings (e.g.
+  `verify-cassettes` `3` = could-not-verify, `sync` hard-fail = `1`) and links the authoritative
+  SPEC §11 text, instead of implying one global meaning for `3`.
+- **README** gains a platform × tier support matrix (making explicit that Linux live runs are
+  `container`-only), doc-index rows for the spawn contract and `docs/decisions/`, the
+  `probe-dispatch` fidelity set, and a clearer global-install-ships-`examples/replays/`-only warning;
+  `docs/chat.md` notes that scaffolding a `chat` run yields an empty `assert:` block.
+
 ## [0.32.0] — 2026-07-13
 
 ### Added
