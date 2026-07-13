@@ -1,6 +1,9 @@
 name: release
 
-# Tag a release: `npm version <patch|minor|major>` then `git push --follow-tags`.
+# Cut a release via the branch→PR→merge→tag flow in RELEASING.md. Tag the MERGE COMMIT (main HEAD
+# after `gh pr merge`), NOT a release-branch head: the publish gate below (require-ci-success) looks
+# for a PUSH-event ci.yml run for the tagged SHA, and a branch/PR head only has a pull_request run.
+# Do NOT `npm version && git push --follow-tags` from a release branch — that tags the branch head.
 # A pushed `vX.Y.Z` tag (matching package.json) builds, tests, publishes to npm with
 # provenance, and creates a GitHub Release. Auth is npm Trusted Publishing (OIDC) —
 # no NPM_TOKEN secret: configure cowork-harness's trusted publisher on npmjs.com

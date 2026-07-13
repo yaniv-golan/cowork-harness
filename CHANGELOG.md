@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-07-13
+
+**First stable release.** The compatibility contract in
+[SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract) is now in force: the covered
+surfaces — the CLI commands + exit codes, the scenario / session / baseline / run-result / cassette /
+protocol schemas, the documented environment variables, and the packaged Action's inputs/outputs — are
+stable, and a breaking change to any of them requires a major version bump. Human-readable text output
+is explicitly not covered. There is **no runtime behavior change from `0.33.0`** — `1.0.0` blesses that
+runtime as stable and adds the release-engineering guards below.
+
+### Added
+
+- **Surface-contract guard** (`test/surface-contract.test.ts`, `npm run gen:surface` /
+  `npm run check:surface`) — snapshots the structured §12 surfaces (every `schema/*.json`'s field paths
+  and enums including exit codes, `action.yml` inputs/outputs, and the documented `COWORK_*` env-var
+  set) into `test/fixtures/surface-baseline.json`; CI reds on undocumented drift so a covered-surface
+  change can't ship silently. The CLI/exit-code-semantics/`PlatformBaseline` surfaces are frozen via a
+  manual review step in `RELEASING.md`.
+- **`npm run bump -- X.Y.Z --write`** — rewrites every version location via targeted patterns (dry-run
+  by default), leaving historical release notes, the baseline pin, and the `V=` agent pins untouched;
+  self-checks `check:versions`.
+- **`npm run preflight`** — a local pre-release gate (`check:versions`, CHANGELOG heading, unused tag,
+  clean tree, live-key reminder); `--for-tag` additionally asserts `HEAD == origin/main` and a green
+  push-event CI run for `HEAD`, mechanically preventing a tag on the wrong commit.
+
+### Changed
+
+- CI marks a skipped live scenario suite with a loud "NOT live-validated" job-summary banner; the
+  release docs (`RELEASING.md`, `release.yml`) now state that a release tag must go on the merge commit
+  (the SHA with a push-event CI run), with recovery steps.
+
 ## [0.33.0] — 2026-07-13
 
 ### Fixed

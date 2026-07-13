@@ -64,6 +64,21 @@ Never push the tag before CI is green for the exact commit you intend to tag. Th
 enforces this (`Require ci.yml success for this commit` step), but don't rely on it — tag a green
 SHA.
 
+**Tag the MERGE COMMIT (main HEAD after the merge), never the release-branch head — and here's why.**
+The publish gate (`require-ci-success`) queries `ci.yml` runs with `--event push` for the tagged SHA.
+`ci.yml` only triggers `on: push` for **`main`** (plus `pull_request` / `workflow_dispatch`), so a
+release-branch/PR head has *only* a `pull_request` run — which the `--event push` filter ignores.
+Tagging that SHA makes the gate poll ~30 min and then FAIL. Only the merge commit (produced by
+`gh pr merge`, then `git pull`ed onto `main`) has a push-event `ci.yml` run. This is why Phase 3 tags
+`main` HEAD after the merge — do **not** "optimize" by tagging the branch commit whose PR CI you just
+watched go green.
+
+When you query runs by SHA, use the **full 40-char SHA** (`git rev-parse HEAD`) —
+`gh run list --commit <short-sha>` silently returns empty. If you mis-tag: `git push origin
+:refs/tags/vX.Y.Z && git tag -d vX.Y.Z`, re-tag on `main` HEAD, re-push, and cancel the misfired
+release run. Running `npm run preflight -- --for-tag` right before the tag push mechanically catches
+this (it asserts `HEAD == origin/main` and that a push-event `ci.yml` run succeeded for `HEAD`).
+
 ## Versioning (semver, pre-1.0)
 
 Pre-1.0: **minor** (`0.N+1.0`) = new features and/or behavior changes; **patch** (`0.N.M+1`) =
@@ -75,7 +90,27 @@ From `1.0.0`, semver is enforced against the **covered surfaces enumerated in
 scenario/session/baseline/run-result/cassette/protocol schemas, the documented env vars, and the
 packaged Action's inputs/outputs). Human-readable text output is explicitly NOT covered.
 
+**Surface drift is partly automated.** `test/surface-contract.test.ts` snapshots the *structured*
+surfaces — every `schema/*.json` (field paths + enums, including exit-code enums), `action.yml`
+inputs/outputs, and the documented `COWORK_*` env-var set — into `test/fixtures/surface-baseline.json`.
+Any change to those reds CI until you regenerate (`npm run gen:surface`) and review the diff; at `1.0.0`
+a *removal or type/enum change* means a **major** bump. `npm run check:surface` prints the
+added/removed/changed breakdown.
+
+**1.0.0 surface-freeze review (one-time, MANUAL — the surfaces the snapshot can't cover).** Before
+tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-readable source:
+- **CLI command + flag surface** — walk `cowork-harness --help` per command; confirm no command/flag is
+  removed or repurposed vs `0.x` intent. (No structured source exists — `cli-structural-guard`'s `CASES`
+  and `cli-help`'s pinned strings are hand-maintained.)
+- **Per-command exit-code semantics** (SPEC §11) — confirm the documented meanings are the ones you
+  intend to hold stable.
+- **The `PlatformBaseline` shape** (Zod in `src/types.ts`; no `schema/*.json`).
+
 ## Version locations — bump ALL of these to the same `X.Y.Z`
+
+> **`npm run bump -- X.Y.Z --write` automates this whole section** (targeted patterns + lockfile +
+> `check:versions`). The list below documents *what it touches* — keep it accurate if you add a new
+> version-bearing string, and add that string to `scripts/bump-version.ts` too.
 
 1. `package.json` → `"version"` (then run `npm install` to update `package-lock.json`).
 2. `.claude-plugin/marketplace.json` → `plugins[0].version`.
@@ -92,8 +127,9 @@ packaged Action's inputs/outputs). Human-readable text output is explicitly NOT 
 8. `.claude/skills/cowork-harness/references/ci-recipe.md` → all `npm i -g "cowork-harness@>=X.Y.Z"` floors
    (currently 3 occurrences).
 9. `examples/replays/README.md` → the `npm i -g "cowork-harness@>=X.Y.Z"` floor.
-10. `README.md` → the three `npx "cowork-harness@>=X.Y.Z"` bootstrap-fallback floors. The
-    `check:versions` lockstep guard enforces these match the SKILL.md floor and will red CI otherwise.
+10. `README.md` → every `cowork-harness@>=X.Y.Z` floor (the bootstrap-fallback `npx`/`npm i -g` lines
+    plus the Action-inputs "companion skill's floor guidance" mention). The `check:versions` lockstep
+    guard enforces these match the SKILL.md floor and will red CI otherwise.
 
 ## Checklist
 
@@ -101,7 +137,14 @@ packaged Action's inputs/outputs). Human-readable text output is explicitly NOT 
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").
-- [ ] Bump every version location listed above (items 1–10). `npm install` after bumping `package.json`.
+- [ ] Bump every version location (items 1–10) with **`npm run bump -- X.Y.Z --write`** — it rewrites all
+      of them via targeted patterns and updates the lockfile + self-checks `check:versions` (run without
+      `--write` first to preview the diff; dry-run is the default). It deliberately does **not** touch the
+      CHANGELOG or add the SKILL.md `- **X.Y.Z:**` release-note bullet — do the CHANGELOG move (above) and
+      add that bullet by hand.
+- [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty,
+      tag `vX.Y.Z` not already used, clean tree; warns if the `ANTHROPIC_API_KEY` repo secret is missing so
+      the push-to-main live suite would need the `SKIP_LIVE_SCENARIOS` override — see §9).
 - [ ] `npm run format:check` — fix any issues (`npx prettier --write "src/**/*.ts" "test/**/*.ts"`).
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
@@ -128,8 +171,11 @@ packaged Action's inputs/outputs). Human-readable text output is explicitly NOT 
       git checkout main && git pull origin main
       git push origin main
       ```
-- [ ] **Phase 3 — tag and publish**:
+- [ ] **Phase 3 — tag and publish** (tag the MERGE COMMIT = current `main` HEAD, per the "why" above):
       ```
+      git checkout main && git pull origin main
+      npm run preflight -- --for-tag   # asserts HEAD==origin/main AND a green push-event ci.yml run for HEAD
+      git tag vX.Y.Z                   # on main HEAD (the merge commit)
       git push origin vX.Y.Z
       gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
       ```
