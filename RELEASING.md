@@ -79,16 +79,14 @@ When you query runs by SHA, use the **full 40-char SHA** (`git rev-parse HEAD`) 
 release run. Running `npm run preflight -- --for-tag` right before the tag push mechanically catches
 this (it asserts `HEAD == origin/main` and that a push-event `ci.yml` run succeeded for `HEAD`).
 
-## Versioning (semver, pre-1.0)
+## Versioning (semver)
 
-Pre-1.0: **minor** (`0.N+1.0`) = new features and/or behavior changes; **patch** (`0.N.M+1`) =
-backwards-compatible bug fixes only. New commands/flags, or changes to existing behavior (e.g. a
-stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
-
-From `1.0.0`, semver is enforced against the **covered surfaces enumerated in
+As of `1.0.0`, semver is enforced against the **covered surfaces enumerated in
 [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)** (CLI + exit codes, the
 scenario/session/baseline/run-result/cassette/protocol schemas, the documented env vars, and the
-packaged Action's inputs/outputs). Human-readable text output is explicitly NOT covered.
+packaged Action's inputs/outputs): a backwards-incompatible change to a covered surface is a
+**major**; a new command/flag or other additive change is a **minor**; a backwards-compatible bug
+fix is a **patch**. Human-readable text output is explicitly NOT covered.
 
 **Surface drift is partly automated.** `test/surface-contract.test.ts` snapshots the *structured*
 surfaces — every `schema/*.json` (field paths + enums, including exit-code enums), `action.yml`
