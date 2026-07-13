@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-07-13
+
 ### Fixed
 
 - **Empty thinking was surfaced as if the model hadn't reasoned — both `subagents[].reasoning` and the
