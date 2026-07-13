@@ -66,6 +66,53 @@ describe("captureSubagentReasoning (O — per-sub-agent reasoning from the child
     expect(subagents[0].reasoningElided).toBeUndefined();
   });
 
+  it("marks an omitted-by-request thinking turn (empty text + non-empty signature) with redacted:true", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-reasoning-"));
+    stageChild(
+      configDir,
+      "-proj",
+      "sess-uuid",
+      "aRedacted",
+      { agentType: "general-purpose", description: "redacted thinking", toolUseId: "toolu_redact", spawnDepth: 1 },
+      [
+        // The real on-disk shape: sub-agent thinking returns empty (display forced to "omitted"), signature kept.
+        assistantLine([{ type: "thinking", thinking: "", signature: "sig-continuation-token-abc123" }]),
+        assistantLine([{ type: "text", text: "The receipt the sub-agent actually returned." }]),
+      ],
+    );
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_redact")];
+    captureSubagentReasoning(configDir, subagents);
+    expect(subagents[0].reasoning).toEqual([
+      { kind: "thinking", text: "", redacted: true },
+      { kind: "text", text: "The receipt the sub-agent actually returned." },
+    ]);
+  });
+
+  it("does NOT mark redacted when a thinking block has real text, nor when empty text lacks a signature", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-reasoning-"));
+    stageChild(
+      configDir,
+      "-proj",
+      "sess-uuid",
+      "aNoRedact",
+      { agentType: "general-purpose", description: "no redact", toolUseId: "toolu_noredact", spawnDepth: 1 },
+      [
+        // Real text present → never redacted, even if a signature also rode along.
+        assistantLine([{ type: "thinking", thinking: "a genuine thought", signature: "sig-xyz" }]),
+        // Empty text with NO signature → no evidence any reasoning happened → left unflagged.
+        assistantLine([{ type: "thinking", thinking: "" }]),
+      ],
+    );
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_noredact")];
+    captureSubagentReasoning(configDir, subagents);
+    expect(subagents[0].reasoning).toEqual([
+      { kind: "thinking", text: "a genuine thought" },
+      { kind: "thinking", text: "" },
+    ]);
+    // redacted is omitted (not false) on both
+    expect(subagents[0].reasoning?.every((t) => !("redacted" in t))).toBe(true);
+  });
+
   it("caps at REASONING_CAP entries, keeping the MOST RECENT ones, and counts the overflow in reasoningElided", () => {
     const configDir = mkdtempSync(join(tmpdir(), "cwh-reasoning-"));
     const total = REASONING_CAP + 7;

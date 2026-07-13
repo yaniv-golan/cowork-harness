@@ -19,6 +19,35 @@ describe("parseMessage system-subtype catch-all", () => {
     }
   });
 
+  it("flags an assistant thinking block redacted when text is empty and a signature is present", () => {
+    // The "omitted" display mode (API default on Opus 4.8 / Sonnet 5) returns empty thinking + signature.
+    const evs = parseMessage({
+      type: "assistant",
+      message: { model: "claude-opus-4-8", content: [{ type: "thinking", thinking: "", signature: "sig-abc123" }] },
+    });
+    expect(evs).toContainEqual({ type: "thinking", text: "", model: "claude-opus-4-8", redacted: true });
+  });
+
+  it("does NOT flag a thinking block with real text, nor empty text without a signature", () => {
+    const withText = parseMessage({
+      type: "assistant",
+      message: { model: "claude-sonnet-4-6", content: [{ type: "thinking", thinking: "a real thought", signature: "sig" }] },
+    });
+    expect(withText).toContainEqual({ type: "thinking", text: "a real thought", model: "claude-sonnet-4-6" });
+    expect(withText.every((e) => !(e.type === "thinking" && "redacted" in e))).toBe(true);
+
+    const emptyNoSig = parseMessage({
+      type: "assistant",
+      message: { model: "claude-sonnet-4-6", content: [{ type: "thinking", thinking: "" }] },
+    });
+    expect(emptyNoSig.every((e) => !(e.type === "thinking" && "redacted" in e))).toBe(true);
+  });
+
+  it("does NOT flag the system-subtype thinking event (no signature channel there)", () => {
+    const evs = parseMessage({ type: "system", subtype: "thinking", content: "some system thinking" });
+    expect(evs.every((e) => !(e.type === "thinking" && "redacted" in e))).toBe(true);
+  });
+
   it("Item 1: parseMessage preserves api_error_status on a result event (so replay reclassifies usage_limit)", () => {
     // The replay re-drive re-parses the frozen raw events.jsonl through parseMessage, so api_error_status
     // must survive the parse for a recorded usage-limit run to re-classify identically on replay.

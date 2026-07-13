@@ -71,7 +71,7 @@ const full: RunResult = {
   webSearches: [{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Example Report", url: "https://example.com" }] }],
   toolDurations: { Bash: { calls: 1, totalMs: 240, maxMs: 240 } },
   models: ["claude-sonnet-4-5"],
-  thinking: [{ text: "considering the approach" }],
+  thinking: [{ text: "considering the approach" }, { text: "", redacted: true }],
   thinkingElided: 2,
   toolErrors: { Bash: { calls: 2, errors: 1 } },
   modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01, cacheReadInputTokens: 200 } },
@@ -104,6 +104,8 @@ const full: RunResult = {
       resolvedModel: "claude-haiku-x",
       attributedSkillId: "my-plugin:my-skill",
       reasoning: [
+        // A real (upstream-redacted) sub-agent thinking turn: empty text + redacted marker.
+        { kind: "thinking", text: "", redacted: true },
         { kind: "thinking", text: "considering how to explore this" },
         { kind: "text", text: "I'll start by reading the reference doc." },
       ],

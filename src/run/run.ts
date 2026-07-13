@@ -254,7 +254,7 @@ export interface RunRecord {
   skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept
   filesRead: string[]; // skill-relative reference/script files the agent Read (progressive-disclosure signal), deduped, first-seen order
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped
-  thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each
+  thinking: { text: string; redacted?: boolean }[]; // reasoning blocks, capped: last 50 × 10KB each. redacted:true = reasoned but text omitted by request (see noteThinking / RunResult.thinking)
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
   toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup
   modelUsage?: Record<string, Record<string, unknown>>; // per-model cost/token breakdown, from the SDK's own result-message field
@@ -452,9 +452,9 @@ export class Run {
     if (model && !this.rec.models.includes(model)) this.rec.models.push(model);
   }
 
-  private noteThinking(text: string): void {
+  private noteThinking(text: string, redacted?: boolean): void {
     const capped = text.length > Run.THINKING_TEXT_CAP_BYTES ? text.slice(0, Run.THINKING_TEXT_CAP_BYTES) : text;
-    this.rec.thinking.push({ text: capped });
+    this.rec.thinking.push({ text: capped, ...(redacted ? { redacted: true } : {}) });
     if (this.rec.thinking.length > Run.THINKING_CAP) {
       this.rec.thinking.shift();
       this.rec.thinkingElided++;
@@ -715,7 +715,7 @@ export class Run {
           }
           case "thinking":
             this.noteModel(ev.model);
-            this.noteThinking(ev.text);
+            this.noteThinking(ev.text, ev.redacted);
             break;
           case "subagent_dispatch":
             this.rec.subagents.push({

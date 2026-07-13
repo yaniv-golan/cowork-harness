@@ -91,7 +91,7 @@ export type AgentEvent =
       agentType?: string;
       status?: string;
     }
-  | { type: "thinking"; text: string; model?: string } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model)
+  | { type: "thinking"; text: string; model?: string; redacted?: boolean } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model). redacted:true = the model reasoned but returned empty thinking TEXT (empty `thinking` + a present `signature`) because the API's display mode was "omitted" (the default on newer models); see run.ts noteThinking / RunResult.thinking
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
   | {
@@ -965,8 +965,17 @@ export function parseMessage(msg: any): AgentEvent[] {
         // Block-level parent wins over message-level when both are present (see comment above).
         const parentToolUseId = block.parent_tool_use_id ? String(block.parent_tool_use_id) : msgParentToolUseId;
         if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId, model });
-        else if (block.type === "thinking") ev.push({ type: "thinking", text: block.thinking ?? block.text ?? "", model });
-        else if (block.type === "tool_use") {
+        else if (block.type === "thinking") {
+          // Normalize the same way as the sub-agent path (subagent-reasoning.ts) so both loops agree.
+          // An empty thinking TEXT with a present `signature` means the model reasoned but returned no
+          // text because the API display mode was "omitted" (the default on newer models like Opus 4.8 /
+          // Sonnet 5, where the harness — faithfully to real Cowork — passes no --thinking-display). Mark
+          // it redacted so `RunResult.thinking[]` isn't misread as "the model didn't reason." An empty
+          // block with NO signature carries no evidence of reasoning, so it stays unflagged.
+          const text = block.thinking ?? block.text ?? "";
+          const redacted = text === "" && typeof block.signature === "string" && block.signature.length > 0;
+          ev.push({ type: "thinking", text, model, ...(redacted ? { redacted: true } : {}) });
+        } else if (block.type === "tool_use") {
           ev.push({
             type: "tool_use",
             name: block.name,

@@ -10,6 +10,31 @@ import type { RunResult } from "../types.js";
  * agent binary ran, so this is called at execute.ts's finalize (after `assembleRunResult`, before
  * `result.json` is written) and never on replay (no child transcript to read).
  *
+ * KNOWN CAPTURE LIMIT — sub-agent thinking TEXT is empty by default. The child transcript records
+ * sub-agent thinking blocks as an EMPTY `thinking` string plus a non-empty `signature` (the
+ * cryptographic continuation token). This is NOT the binary stripping text at persist time — it's a
+ * REQUEST-side display mode: the API's `thinking.display` for a sub-agent turn is forced to `"omitted"`
+ * whenever the session is non-interactive (which the harness's `-p` spawn always is) and no explicit
+ * display was set, so the model returns empty thinking blocks (signature-only) that the transcript then
+ * faithfully records. (Binary-verified against the staged 2.1.205 agent: the non-interactive spawn path
+ * forces `display:"omitted"` unless `--thinking-display` was set explicitly or `forwardSubagentText` is
+ * on. Corpus-corroborated: 230/230 sub-agent thinking blocks were text-empty-but-signature-present,
+ * while the same binary's MAIN-LOOP transcripts — which resolve display to the API default,
+ * `"summarized"` on Sonnet-4.6 — keep 1810/1827 blocks with full text.) The signature is opaque (not a
+ * reversible encoding of the text), and the same-run parent event stream drops sub-agent thinking too,
+ * so with the default config the text is unrecoverable here.
+ *
+ * A lever exists but is OPT-IN and fidelity-diverging: the fenced `debug.thinking_display: "summarized"`
+ * session field emits the agent binary's `--thinking-display summarized`, which surfaces SUMMARIZED
+ * thinking text for BOTH loops (the API returns no raw chain-of-thought at all — `display` is only
+ * `summarized`|`omitted`, so "summarized" is the ceiling). Live-verified: a matched hostloop A/B on
+ * opus-4-8 showed the default run's sub-agent+main thinking blocks empty-but-signed, while the
+ * `summarized` run's carried real text (sub-agent ~189 chars, main ~242). Real Cowork passes no such
+ * flag, so the default `"omitted"` is the fidelity-faithful behavior; summarized is debug-only. Turns are
+ * surfaced as `{ kind: "thinking", text: "", redacted: true }` so a consumer can tell "the sub-agent
+ * reasoned, text omitted by request" from "no thought." Sub-agent TEXT turns (the visible receipt/output)
+ * persist verbatim and are captured fully regardless.
+ *
  * Same 50-entry / 10KB-per-entry cap convention as the main-thread `thinking[]` field
  * (`Run.THINKING_CAP` / `Run.THINKING_TEXT_CAP_BYTES` in src/run/run.ts) — kept as separate constants
  * here (not imported) because `Run` is a `run.ts`-private class with no exported cap; the VALUES are
@@ -75,19 +100,29 @@ function parseChildTranscript(jsonlPath: string): { reasoning: ReasoningTurn[]; 
     const content = rec.message?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
-      const b = block as { type?: string; text?: string; thinking?: string };
+      const b = block as { type?: string; text?: string; thinking?: string; signature?: string };
       let kind: "thinking" | "text" | undefined;
       let text: string | undefined;
+      let redacted = false;
       if (b?.type === "thinking" && typeof b.thinking === "string") {
         kind = "thinking";
         text = b.thinking;
+        // Sub-agent thinking turns arrive with an empty `thinking` string but a non-empty `signature`
+        // (the continuation token) — the model returned no thinking text because the non-interactive
+        // spawn forces `thinking.display:"omitted"` for sub-agents (see the module doc; NOT a
+        // persist-time strip). Flag that as `redacted: true` so a consumer reads it as "the sub-agent
+        // reasoned here, text omitted by request" rather than "no thought." An empty thinking block with
+        // NO signature carries no evidence any reasoning happened, so it is left unflagged.
+        if (text === "" && typeof b.signature === "string" && b.signature.length > 0) redacted = true;
       } else if (b?.type === "text" && typeof b.text === "string") {
         kind = "text";
         text = b.text;
       }
       if (kind === undefined || text === undefined) continue;
       const capped = text.length > REASONING_TEXT_CAP_BYTES ? text.slice(0, REASONING_TEXT_CAP_BYTES) : text;
-      reasoning.push({ kind, text: capped });
+      const turn: ReasoningTurn = { kind, text: capped };
+      if (redacted) turn.redacted = true;
+      reasoning.push(turn);
       if (reasoning.length > REASONING_CAP) {
         reasoning.shift();
         elided++;

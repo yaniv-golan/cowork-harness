@@ -417,11 +417,16 @@
     },
     "thinking": {
       "type": "array",
+      "description": "main-loop reasoning blocks (capped at the last 50). NOTE: on newer models (Opus 4.8, Sonnet 5) the API defaults the thinking display mode to 'omitted', so blocks arrive with empty text + a signature and are surfaced as {text:'', redacted:true} — read that as 'reasoned, text omitted by request', NOT 'no reasoning'. The harness passes no --thinking-display (faithful to real Cowork); the fenced debug.thinking_display:'summarized' opt-in can surface summarized (never raw) text. redacted is omitted (not false) on blocks that carry text.",
       "items": {
         "type": "object",
         "properties": {
           "text": {
             "type": "string"
+          },
+          "redacted": {
+            "type": "boolean",
+            "description": "present and true ONLY when the model reasoned but returned empty thinking text (empty thinking + present signature) because the display mode was 'omitted'. Omitted (not false) on blocks with text."
           }
         },
         "required": [
@@ -724,7 +729,7 @@
           },
           "reasoning": {
             "type": "array",
-            "description": "the sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result excluded — already covered by toolsUsed/referencesRead). Read from the on-disk child session transcript (LIVE/record lane only — undefined on replay, never embedded in a cassette). [] = a child transcript was found but captured no thinking/text turns; undefined = no child transcript joined to this dispatch.",
+            "description": "the sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result excluded — already covered by toolsUsed/referencesRead). Read from the on-disk child session transcript (LIVE/record lane only — undefined on replay, never embedded in a cassette). [] = a child transcript was found but captured no thinking/text turns; undefined = no child transcript joined to this dispatch. NOTE: sub-agent thinking TEXT is empty by default — the harness's non-interactive spawn forces the API's thinking.display to 'omitted' for sub-agent turns, so the model returns empty thinking blocks (signature-only) that the transcript records; a thinking turn is surfaced as {kind:'thinking', text:'', redacted:true}. `redacted:true` means the sub-agent reasoned here but the text was omitted by request — do NOT read empty text as 'no reasoning.' TEXT turns are never redacted (they persist verbatim). An opt-in --thinking-display summarized lever could surface summarized (never raw) sub-agent thinking, but the 'omitted' default is real-Cowork-faithful.",
             "items": {
               "type": "object",
               "required": [
@@ -741,6 +746,10 @@
                 },
                 "text": {
                   "type": "string"
+                },
+                "redacted": {
+                  "type": "boolean",
+                  "description": "present and true ONLY on a thinking turn whose text was stripped upstream (empty thinking + non-empty signature in the child transcript) — 'the sub-agent reasoned here, text withheld upstream.' Omitted (not false) on turns with text and on all TEXT turns."
                 }
               }
             }

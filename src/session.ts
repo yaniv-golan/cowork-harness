@@ -164,6 +164,14 @@ export const SessionConfig = z.strictObject({
       // disabled`) none at all — this exists purely as a harness-only escape hatch. Rejects 0/negative
       // (a non-positive budget has no real meaning for the flag).
       max_thinking_tokens: z.number().int().positive().optional(),
+      // Emits `--thinking-display <mode>`, which sets how thinking content is returned. Real Cowork passes
+      // NO such flag, so by default the API's per-model display default applies: `"summarized"` on older
+      // models (Sonnet 4.6), `"omitted"` on newer ones (Opus 4.8, Sonnet 5) — where thinking TEXT comes
+      // back empty (see RunResult.thinking's `redacted` marker). Set `"summarized"` to force readable
+      // (never raw — the API returns no chain-of-thought) thinking text for BOTH the main loop and
+      // sub-agents; this diverges from real Cowork and costs extra tokens, so use it only for local
+      // debugging of "did the model reason over the right thing." `"omitted"` forces the empty-text mode.
+      thinking_display: z.enum(["summarized", "omitted"]).optional(),
     })
     .default({}),
 
@@ -263,6 +271,10 @@ export interface LaunchPlan {
   // `extendedThinking` and emits `--max-thinking-tokens <N>` verbatim — real Cowork has no such
   // per-run override; a plan carrying this does not represent a real Cowork config.
   debugMaxThinkingTokens?: number;
+  // The fenced, non-Cowork `debug.thinking_display` override → `--thinking-display <mode>`. When set,
+  // forces how thinking content is returned for both loops (summarized surfaces readable text; omitted
+  // forces empty). Omitted ⇒ no flag ⇒ the API's per-model default applies. Real Cowork passes none.
+  debugThinkingDisplay?: "summarized" | "omitted";
   agentMaxTurns?: number; // session turn budget → --max-turns (omitted ⇒ agent default; distinct from the max_turns assertion)
   // The tier-uniform agent-env knob (agentEnvOverrides(session.agent_env)) — each runtime layers this
   // LAST over its own env construction (knob wins), after scrubbing SCRUBBED_AGENT_ENV_KEYS from the
@@ -858,6 +870,7 @@ export function buildLaunchPlan(
     effort: session.effort,
     extendedThinking: session.extended_thinking,
     debugMaxThinkingTokens: session.debug.max_thinking_tokens,
+    debugThinkingDisplay: session.debug.thinking_display,
     agentMaxTurns: session.agent_max_turns,
     agentEnv: agentEnvOverrides(session.agent_env),
     permissionMode: session.permission_mode,

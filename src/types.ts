@@ -972,7 +972,17 @@ export interface RunResult {
   // silently dropped; see `thinkingElided` below for the dropped count). An author reads the
   // tail of reasoning, not a full history.
   // Scrubbed by the same secret-redaction pass as the rest of result.json.
-  thinking?: Array<{ text: string }>;
+  //
+  // `redacted: true` on a block means the model reasoned here but returned EMPTY thinking text
+  // (empty `thinking` + a present `signature`) because the API's thinking display mode was "omitted".
+  // "omitted" is the API DEFAULT on newer models (Opus 4.8, Sonnet 5; Sonnet 4.6 defaulted to
+  // "summarized"), and the harness passes no `--thinking-display` — faithfully to real Cowork, whose
+  // spawn passes none either. So on current-gen models this field fills with `{text:"", redacted:true}`
+  // entries: read that as "reasoned, text omitted by request," NOT "the model didn't reason." The API
+  // never returns raw chain-of-thought — the fenced `debug.thinking_display: "summarized"` opt-in can
+  // surface SUMMARIZED text (at a fidelity + token cost), but "omitted" is the faithful default.
+  // `redacted` is omitted (not `false`) on blocks that carry text.
+  thinking?: Array<{ text: string; redacted?: boolean }>;
   /** Count of reasoning blocks dropped past the 50-block cap on `thinking[]` (see `thinking`'s own doc
    *  comment) — lets a consumer tell "this is everything" from "this is the tail of a much longer chain
    *  of reasoning." 0 whenever the run produced a `thinking[]` array at all (capped or not) — a
@@ -1145,8 +1155,23 @@ export interface RunResult {
      *  — never embedded in a cassette. Capped the same way the top-level `thinking[]` field is (~50
      *  entries, ~10KB/entry); `[]` is a valid "a child transcript was found but it captured no
      *  thinking/text turns" (a trivial dispatch may not reason at all) — distinct from `undefined`
-     *  ("no child transcript joined to this dispatch"). */
-    reasoning?: Array<{ kind: "thinking" | "text"; text: string }>;
+     *  ("no child transcript joined to this dispatch").
+     *
+     *  IMPORTANT — sub-agent thinking TEXT is empty by default. A sub-agent thinking block arrives with
+     *  an EMPTY `thinking` string but a non-empty cryptographic `signature` (the continuation token). This
+     *  is a REQUEST-side display mode, not a persist-time strip: the harness's non-interactive (`-p`)
+     *  spawn forces `thinking.display:"omitted"` for sub-agent turns, so the model returns empty thinking
+     *  blocks that the transcript faithfully records. (Binary-verified against the staged 2.1.205 agent;
+     *  corpus-corroborated — 230/230 sub-agent thinking blocks text-empty+signature-present, vs the same
+     *  binary's main-loop keeping full text.) Such a turn is surfaced as
+     *  `{ kind: "thinking", text: "", redacted: true }` — `redacted` means "the sub-agent DID reason here,
+     *  but the text was omitted by request." Read it as "reasoned, text unavailable," NOT as "emitted an
+     *  empty/absent thought." TEXT turns are never redacted (they persist verbatim), so what a sub-agent
+     *  SAID is fully captured — only what it THOUGHT is omitted. An opt-in `--thinking-display summarized`
+     *  lever could surface SUMMARIZED sub-agent thinking (the API exposes no raw chain-of-thought), but
+     *  the default `"omitted"` is the real-Cowork-faithful behavior. `redacted` is omitted (not `false`)
+     *  on non-redacted turns. */
+    reasoning?: Array<{ kind: "thinking" | "text"; text: string; redacted?: boolean }>;
     /** Count of `reasoning` turns dropped by the cap above (oldest-first) — mirrors `thinkingElided`. */
     reasoningElided?: number;
   }>;

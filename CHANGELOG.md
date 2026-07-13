@@ -8,6 +8,28 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Empty thinking was surfaced as if the model hadn't reasoned — both `subagents[].reasoning` and the
+  top-level `thinking[]`.** The 0.31.0 sub-agent field captured TEXT turns fine but every `thinking` turn
+  came through as `{kind:"thinking", text:""}`, and the older top-level `thinking[]` field does the same
+  on current-gen models — a consumer couldn't tell "reasoned but text unavailable" from "no thought."
+  Root cause (binary-verified against the staged 2.1.205 agent, corpus-corroborated): it is a
+  **request-side display mode**, not a persist-time strip — the API's `thinking.display` resolves to
+  `"omitted"` (empty thinking text + a signature) for sub-agent turns always, and for the MAIN loop too
+  on models whose API default is `"omitted"` (Opus 4.8, Sonnet 5; Sonnet 4.6 defaulted to `"summarized"`).
+  Corpus: main-loop thinking text is 1810/1810 on Sonnet-4.6 but **0/2 on Opus-4.8 and 0/15 on Sonnet-5**,
+  every empty carrying a signature; sub-agents 0/230. The harness passes no `--thinking-display` —
+  faithfully to real Cowork, whose spawn passes none either. Both fields now mark such blocks
+  `{text:"", redacted:true}` (`kind:"thinking"` for the sub-agent turn shape) so they read as "reasoned,
+  text omitted by request"; TEXT turns are never redacted, and `redacted` is omitted (not `false`) on
+  blocks that carry text.
+- **New `debug.thinking_display` escape hatch** (fenced, non-Cowork — like `debug.max_thinking_tokens`).
+  Set it to `"summarized"` to emit `--thinking-display summarized`, which flips **both** loops to
+  summarized thinking text (the API returns no raw chain-of-thought — `summarized` is the ceiling). It
+  diverges from real Cowork (which passes no such flag) and adds token cost, so it is a debug-only opt-in;
+  the default stays `"omitted"`, byte-identical argv. `docs/subagents.md`, `docs/session.md`,
+  `schema/run-result.json`, and the `RunResult`/`SessionConfig` types state the real capture semantics;
+  the released 0.31.0 note is corrected in place.
+
 - **Docs pointed the GitHub Action at a ref that doesn't exist.** README, `SKILL.md`, and
   `references/ci-recipe.md` all said `uses: yaniv-golan/cowork-harness@v1`, but no `v1` tag has ever
   been published — a copy-pasted workflow failed with "unable to resolve action" before running
@@ -203,6 +225,11 @@ All notable changes to this project are documented here. The format is based on
   `thinking[]` field is (~50 entries, ~10KB/entry each), with `reasoningElided` counting the overflow. A
   missing or malformed child transcript never fails the run — the affected dispatch's `reasoning` is just
   left absent.
+  - **Correction (see Unreleased):** in practice only the TEXT turns carry content — the harness's
+    non-interactive spawn forces the API's `thinking.display` to `"omitted"` for sub-agent turns, so
+    `thinking` turns come through empty (signature-only). The Unreleased `redacted` marker distinguishes
+    "reasoned, text omitted by request" from "no thought"; the "THINKING … turns" wording above
+    overstated what this captures by default.
 
 - **`status --latest-for <scenario-name-or-slug>`** — resolves and prints the NEWEST run dir for a
   scenario by actual run time, replacing the fragile `ls -td runs/<scenario>/* | head -1` idiom: bare

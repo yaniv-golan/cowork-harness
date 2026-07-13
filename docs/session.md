@@ -36,6 +36,11 @@ debug:
                                  # extended_thinking's on(31999)/off boundary. A run authored with this does
                                  # NOT represent a real Cowork config — real Cowork never emits any budget
                                  # besides 31999 (or no budget, when thinking is off).
+  thinking_display: summarized   # emits --thinking-display <summarized|omitted>. Forces readable (never
+                                 # raw) thinking TEXT for BOTH the main loop and sub-agents. Real Cowork
+                                 # passes NO such flag, so by default the API's per-model default applies
+                                 # (omitted on Opus 4.8 / Sonnet 5 → empty thinking text, surfaced as
+                                 # {text:"", redacted:true}). Debug-only; diverges from Cowork + costs tokens.
 
 # ── tier-uniform agent-env knob ───────────────────────────────────────────────
 agent_env:
@@ -133,6 +138,7 @@ that skill instead of the shared root.
 | `permission_parity` | enum | (harness policy) | `cowork` (default) \| `strict`. `cowork` mirrors Cowork's permission default — unscripted tool calls are allowed; `strict` denies any tool call that no scripted answer / decider covers. Affects the harness `Decider`, not a Cowork control. |
 | `account_name` | string | signed-in account name | Rendered into the prompt append's `<env>` "User name:" line (`{{accountName}}`, ≥1.18286.0 reconstruction). Real Cowork uses the signed-in account's name; defaults to `"User"` when unset. |
 | `debug.max_thinking_tokens` | number | *(none — harness-only escape hatch)* | **NOT reachable via Cowork's UI.** A fenced override that emits `--max-thinking-tokens <N>` verbatim, bypassing `extended_thinking`'s on(31999)/off boundary. A positive integer only (0/negative rejected). A run authored with this does not represent a real Cowork config — use it only for targeted local testing. |
+| `debug.thinking_display` | `"summarized"` \| `"omitted"` | *(none — harness-only escape hatch)* | **NOT reachable via Cowork's UI.** Emits `--thinking-display <mode>`. `"summarized"` forces readable (never raw — the API returns no chain-of-thought) thinking TEXT for BOTH the main loop and sub-agents; `"omitted"` forces the empty-text mode. Omitted ⇒ no flag ⇒ the API's per-model default applies (`"summarized"` on Sonnet 4.6, `"omitted"` on Opus 4.8 / Sonnet 5, where thinking text comes back empty → `RunResult.thinking` / `subagents[].reasoning` mark it `redacted:true`). Real Cowork passes no such flag; a run authored with this diverges from Cowork and costs extra tokens — local debugging only. |
 
 > **Removed:** the old numeric/per-model `max_thinking_tokens` field is gone — a session YAML that still
 > sets it fails to load with a targeted hint pointing at `extended_thinking` / `debug.max_thinking_tokens`.
