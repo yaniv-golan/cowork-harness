@@ -252,12 +252,12 @@ Full model in `references/scenario-schema.md`.
 Don't hand-write the YAML from memory — that's how invented keys (`assertions:` vs `assert:`,
 `json_file`, `answer_policy`) creep in. Start from the bundled generator, which emits the
 known-good skeleton (right tier, scripted `answers:` + `on_unanswered: fail`, content assertions
-separated from live-only ones, one concern per item) and **self-lints its own output**:
+separated from live-only ones, one concern per item) and **self-lints its own output**. The
+generator is the bundled `scripts/scenario.py` — installed as a plugin, point `S` at
+`${CLAUDE_PLUGIN_ROOT}/scripts/scenario.py`; from a repo checkout, use the literal path below:
 
 ```bash
-S="${CLAUDE_PLUGIN_ROOT}/scripts/scenario.py"
-# Working from a repo checkout instead of an installed plugin?
-# S=".claude/skills/cowork-harness/scripts/scenario.py"
+S=".claude/skills/cowork-harness/scripts/scenario.py"
 python3 "$S" scaffold --name report-check --skill ./skills/report-gen \
   --prompt "Generate the weekly report to outputs/report.md." \
   --content 'weekly report' --artifact outputs/report.md \
