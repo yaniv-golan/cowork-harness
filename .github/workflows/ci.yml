@@ -312,9 +312,21 @@ jobs:
             fi
             if [ -n "$SKIP_LIVE_SHA" ] && [ "$SKIP_LIVE_SHA" = "$GITHUB_SHA" ]; then
               echo "::warning::ADMIN OVERRIDE — SKIP_LIVE_SCENARIOS matches this commit ($GITHUB_SHA); the live scenario suite is being deliberately skipped for this publish. This is an explicit, auditable admin choice, not a silent skip."
+              REASON="admin override (SKIP_LIVE_SCENARIOS pinned to this commit)"
             else
-              echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (fork or Dependabot PR)."
+              # Not a fork — the job-level `if:` above skips forks entirely. This branch is a
+              # Dependabot PR (secrets withheld) or an unset secret on a canonical PR/push (the push
+              # lane hard-fails above, so here it's a PR/Dependabot lane).
+              echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (Dependabot PR, or the secret is unset)."
+              REASON="no ANTHROPIC_API_KEY (Dependabot PR, or the secret is unset)"
             fi
+            # Loud, non-log-only marker: a green check on THIS job is not proof of live validation.
+            {
+              echo "## ⚠️ Live scenario suite SKIPPED — NOT live-validated"
+              echo ""
+              echo "This run did **not** execute live inference (reason: $REASON). A green check on this"
+              echo "job is **not** proof the scenarios pass against a real model."
+            } >> "$GITHUB_STEP_SUMMARY"
             echo "live=false" >> "$GITHUB_OUTPUT"
           else
             echo "live=true" >> "$GITHUB_OUTPUT"

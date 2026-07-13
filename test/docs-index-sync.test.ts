@@ -1,22 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { scrapeCoworkEnvVars } from "../scripts/lib/env-scrape.js";
 
 // Anti-drift guards for the documentation *index* surfaces:
 //   1. every COWORK_* env var read anywhere in src/ is documented in README.md or docs/*.md;
 //   2. the judge-model default id the docs name matches the code's actual default;
 //   3. llms.txt links every top-level docs/*.md guide, and links nothing that doesn't exist.
 // Same scrape-the-source pattern as test/action-docs-sync.test.ts — token-free text parsing.
-
-function tsFilesUnder(dir: string): string[] {
-  return readdirSync(dir, { recursive: true, encoding: "utf8" })
-    .filter((f) => f.endsWith(".ts"))
-    .map((f) => join(dir, f));
-}
-
-const srcText = tsFilesUnder(resolve("src"))
-  .map((f) => readFileSync(f, "utf8"))
-  .join("\n");
+// The COWORK_* scraper itself lives in scripts/lib/env-scrape.ts (shared with the structured-surface
+// snapshot in scripts/lib/surface.ts) — imported here, not duplicated.
 
 // Top-level guides only — docs/internal/ and docs/superpowers/ are untracked/npm-excluded working
 // notes, not published index surfaces.
@@ -33,10 +26,7 @@ describe("COWORK_* env vars ↔ docs", () => {
   // env object appear only as `env.X` — so the scrape is the UNION of all three shapes.
   // Dot-access alone misses the helper-read STATUS_* / DECIDER_DIR_* / LLM_* / GITSET /
   // VM_PROXY_PORT families and the aliased NO_HYPERLINKS read.
-  const names = new Set<string>();
-  for (const re of [/process\.env\.(COWORK[A-Z0-9_]+)/g, /["'](COWORK[A-Z0-9_]+)["']/g, /\benv\.(COWORK[A-Z0-9_]+)/g]) {
-    for (const m of srcText.matchAll(re)) names.add(m[1]);
-  }
+  const names = scrapeCoworkEnvVars();
   // Intentionally-internal vars go here, each with a stated reason. Empty today: every env knob
   // the harness reads is documented somewhere in README.md or docs/*.md.
   const ALLOWLIST = new Set<string>([]);
