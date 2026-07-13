@@ -74,11 +74,33 @@ describe("semantic-judge default model ↔ docs", () => {
   });
 });
 
+describe("gotchas.md index blurbs don't claim non-existent content", () => {
+  it("no 'egress-proxy races' claim remains (gotchas.md has no such section)", () => {
+    expect(docsText).not.toMatch(/egress-proxy races/);
+  });
+});
+
+describe("verdict-signals docs ↔ code", () => {
+  const scenarioSchemaText = readFileSync(resolve(".claude/skills/cowork-harness/references/scenario-schema.md"), "utf8");
+  const scenarioMdText = readFileSync(resolve("docs/scenario.md"), "utf8");
+
+  it("neither doc uses the bare (wrong) `result.signals` JSON path — it's nested under `result.verdict.signals`", () => {
+    expect(scenarioSchemaText).not.toMatch(/`result\.signals/);
+    expect(scenarioMdText).not.toMatch(/`result\.signals/);
+  });
+
+  it('the docs\' "only three warn-severity signals" claim matches the actual count in verdict.ts', () => {
+    const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
+    const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
+    expect(warnCount).toBe(3);
+  });
+});
+
 describe("llms.txt ↔ docs/*.md", () => {
   const llms = readFileSync(resolve("llms.txt"), "utf8");
-  // docs/README.md is itself an index page; llms.txt is the agent-facing index, so it is the one
-  // deliberate omission.
-  const LLMS_ALLOWLIST = new Set<string>(["README.md"]);
+  // Every top-level docs/*.md guide, including docs/README.md itself, is now linked from llms.txt —
+  // no deliberate omissions remain.
+  const LLMS_ALLOWLIST = new Set<string>([]);
 
   it("every top-level docs guide is linked from llms.txt", () => {
     const missing = docFiles.filter((f) => !LLMS_ALLOWLIST.has(f) && !llms.includes(`docs/${f}`)).sort();

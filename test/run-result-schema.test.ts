@@ -207,3 +207,31 @@ describe("schema/run-result.json", () => {
     expect(validatePublished(withExtra)).toBe(true);
   });
 });
+
+// Pins the two hand-written PROSE descriptions of the verdict shape (SPEC.md §11, README.md's
+// --output-format json row) against the schema's `verdict.required` — a doc that drops or adds a
+// field fails loud instead of silently rotting.
+describe("docs ↔ schema/run-result.json verdict-shape sync", () => {
+  const verdictRequired = new Set<string>((schema as { properties: { verdict: { required: string[] } } }).properties.verdict.required);
+
+  it("SPEC.md §11's verdict shape literal names exactly the schema's required verdict keys", () => {
+    const spec = readFileSync(resolve("SPEC.md"), "utf8");
+    const m = spec.match(/`\{ "pass": bool, "exitCode"[^`]*\}`/);
+    expect(m, "SPEC.md §11 verdict shape literal not found — did the wording change?").toBeTruthy();
+    const keys = new Set([...m![0].matchAll(/"(\w+)"\s*:/g)].map((k) => k[1]));
+    expect(keys).toEqual(verdictRequired);
+  });
+
+  it("README.md's --output-format json row names exactly the schema's required verdict keys", () => {
+    const readme = readFileSync(resolve("README.md"), "utf8");
+    const m = readme.match(/verdict:\s*\{([^}]*)\}/);
+    expect(m, "README.md's `verdict: {...}` literal not found — did the wording change?").toBeTruthy();
+    const keys = new Set(
+      m![1]
+        .split(",")
+        .map((s) => s.trim().replace(/\[\]$/, ""))
+        .filter(Boolean),
+    );
+    expect(keys).toEqual(verdictRequired);
+  });
+});

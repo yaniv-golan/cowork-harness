@@ -51,17 +51,11 @@ already happened.
 2. **`trace` — what did it actually do?** Digests the run's `events.jsonl` into the tools it called, the
    questions (gates) it was asked and how they were answered, and the sub-agent dispatch tree. This is how
    you answer "how many sub-agents *really* dispatched?" or "which gate fired, with what offered labels?"
-3. **`chat` — reproduce it by hand.** An interactive multi-turn REPL against the live runtime, gates
-   answered at the TTY. Use it to reproduce a permission/gate flow interactively or poke a stochastic
-   multi-turn skill. It is *not* an asserted test — it's the exploratory loop. Full reference:
-   [chat.md](./chat.md); the debugging-specific notes (use the sandboxed `chat`, not the raw passthrough;
-   promote a finding to a scenario afterward) are in
-   [scenario.md → Debugging with `chat`](./scenario.md#debugging-with-chat).
-4. **`verify-run` — re-assert cheaply.** If the run itself was fine and only an *assertion* is wrong,
+3. **`verify-run` — re-assert cheaply.** If the run itself was fine and only an *assertion* is wrong,
    re-check the scenario's assertions against the kept run dir with no live re-record (~1s). When the
    scenario scripts answers, it also re-checks they still match the run's actual gates — so a reworded gate
    or a chosen option the run never offered fails here in a second instead of on a paid re-record.
-5. **`diff` — what changed between two runs (or a run and a cassette)?** Compares tool sequence,
+4. **`diff` — what changed between two runs (or a run and a cassette)?** Compares tool sequence,
    transcript, artifacts, and result/fidelity/baseline meta, with normalization masking per-run noise
    (tool-use ids, timestamps, session-dir markers, host paths) so two runs of the *same* scenario diff as
    identical despite that noise. Reach for it when "it worked yesterday" needs a concrete answer instead of
@@ -71,6 +65,12 @@ already happened.
    on stderr — added/removed rows may then reflect scenario differences, not drift.
    The same command also compares two committed platform baselines (`diff desktop-<a> desktop-<b>
    [--changelog]`) — see [maintenance.md](./maintenance.md).
+5. **`chat` — reproduce it by hand.** An interactive multi-turn REPL against the live runtime, gates
+   answered at the TTY. Use it to reproduce a permission/gate flow interactively or poke a stochastic
+   multi-turn skill. It is *not* an asserted test — it's the exploratory loop. Full reference:
+   [chat.md](./chat.md); the debugging-specific notes (use the sandboxed `chat`, not the raw passthrough;
+   promote a finding to a scenario afterward) are in
+   [scenario.md → Debugging with `chat`](./scenario.md#debugging-with-chat).
 
 > The cheap authoring loop falls out of this: keep **one** run, then iterate answers and assertions
 > against it with `trace` + `verify-run` for free. Re-keep after a skill change that moves gate phrasing —

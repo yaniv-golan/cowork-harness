@@ -161,7 +161,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
                                for hostloop/protocol recordings; review + tailor the patterns before recording)
-  prune [--keep-last <n>]      prune accumulated run dirs, keeping N most recent per scenario (default: 5)
+  prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
+                               prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
@@ -483,7 +484,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
-  prune: "usage: prune [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+  prune:
+    "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":

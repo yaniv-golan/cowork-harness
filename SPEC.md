@@ -478,11 +478,13 @@ else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go t
 ```
 
 Each emitted result carries a **`verdict`** — a non-mutating serialization-time projection of `computeVerdict`,
-`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }] }`
+`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }], "failures": [{ "assertion?","message" }] }`
 — so a consumer can read each result's pass/fail **and why** (the `signals[]`, e.g. an all-green-assertions run
-that is `pass:false` purely on a `stalled` signal) without recomputing. `verdict` is on the JSON envelope only,
-not on the on-disk `result.json` (which stays the raw `RunResult`). The top-level `ok` is derived from the same
-per-result verdicts, so it cannot diverge from them, the exit code, or the text footer.
+that is `pass:false` purely on a `stalled` signal, or `failures[]` for a flat jq-friendly reason list) without
+recomputing. As of 0.31.0, the same `verdict` is **also persisted on the on-disk `result.json`** for a kept run
+(`jq '.verdict' result.json`) — computed once by `computeVerdict` so the streamed and on-disk copies can't
+diverge; `chat` runs carry no `verdict` (field absent, not persisted). The top-level `ok` is derived from the
+same per-result verdicts, so it cannot diverge from them, the exit code, or the text footer.
 
 Other commands use dedicated envelopes — `verify-cassettes` (§11.1), and `decide` / `boundary-check`
 each emit their own shape — so this is not a single universal envelope across every command.

@@ -13,10 +13,10 @@ Self-contained reference. Tracks `cowork-harness 0.32.0` (baseline `desktop-1.20
 | `cowork` | Auto-picks `hostloop` vs `container` the way Cowork itself does for the synced release | "Do what real Cowork does for this release." |
 
 - `hostloop` / `cowork` are the production-faithful path; `container` is the practical default.
-- Boundary assertions (`egress_*`, `expect_denied`) are enforced at `container`, `microvm`, and
-  `hostloop` (`container`'s and `hostloop`'s `bash` share the same Docker sandbox + egress proxy —
-  `hostloop`'s native file tools run with no container at all, gated instead by a path-containment hook).
-  Only `protocol` is rejected.
+- Boundary assertions (`egress_*`, `expect_denied`) are enforced at `container`, `microvm`, `hostloop`,
+  and `cowork` (`cowork` auto-resolves to a sandboxed tier; `container`'s and `hostloop`'s `bash` share
+  the same Docker sandbox + egress proxy — `hostloop`'s native file tools run with no container at all,
+  gated instead by a path-containment hook). Only `protocol` is rejected.
 - A `hostloop` scenario with a **writable** connected folder (`mode: rw`/`rwd`) needs `allow_host_writes:
   true` — with no container around the native file tools, that combination gives the agent genuine,
   software-checked-only host filesystem access. Read-only folders and folder-less runs need no opt-in.

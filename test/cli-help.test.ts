@@ -90,6 +90,16 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage", ()
   }
 });
 
+// `runs-gc.ts` implements `--pinned-older-than` for real, but the flag was invisible in `prune --help`
+// — pin it so a future flag lands in help too.
+describe.skipIf(!can)("cli --help: prune documents --pinned-older-than", () => {
+  it("`prune --help` mentions --pinned-older-than", () => {
+    const { code, text } = help("prune");
+    expect(code).toBe(0);
+    expect(text).toContain("--pinned-older-than");
+  });
+});
+
 // `lint`/`lint-skill` are parseArgs-direct commands too, but unlike every case above they're thin
 // passthroughs to the bundled `scenario.py` (a Python argparse CLI invoked via subprocess), so their
 // `--help` text is argparse's own `usage: scenario.py lint ...` / `usage: scenario.py lint-skill ...`,

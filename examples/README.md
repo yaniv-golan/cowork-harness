@@ -21,6 +21,11 @@ See `.github/workflows/ci.yml`.
 > into the sandbox — `git add` a new skill/scenario file here or it (or the whole folder) mounts
 > empty. See [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command).
 
+**New here?** [docs/boundary.md](../docs/boundary.md) explains what the sandbox does and doesn't
+enforce (the limitations model); [docs/README.md](../docs/README.md) is the full documentation
+index; `cowork-harness doctor` checks your local prerequisites (Docker, agent binary, auth token)
+before you run anything above `protocol` fidelity.
+
 ## Layout
 
 ```
@@ -51,13 +56,18 @@ self-contained and relocatable.
 
 | Scenario | Fidelity | What it demonstrates |
 |---|---|---|
-| `scenarios/protocol-smoke.yaml` | `protocol` | the **smoke test with no Docker, no staged agent (still needs a token)** — just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written). L0 does **not** seal the filesystem, so a host-path leak is expected — the YAML's comment explains why `transcript_no_host_path` is **omitted** here (only `true` is a valid value; sandboxed tiers add `- transcript_no_host_path: true`) |
+| `scenarios/protocol-smoke.yaml` | `protocol` | the **smoke test with no Docker, no staged agent (still needs a token)** — just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written). See note below on the omitted `transcript_no_host_path` assertion. |
 | `scenarios/example-pdf-skill.yaml` | `container` | the minimal sandboxed shape — prompt + scripted answers + assertions (placeholder skill; harness plumbing only) |
 | `scenarios/csv-metrics.yaml` | `container` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `../python/test_csv_metrics_lane.py` for a JSON-content predicate) |
 | `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) |
 | `scenarios/skill-loads.yaml` | `container` | an acceptance check that a local skill loads and the python toolchain is present |
 | `scenarios/trigger-accuracy-sweep/` | `container` | a **trigger-accuracy sweep** — a positive prompt and a negative-control prompt against the same skill, each asserting `skill_triggered`/`no_skill_triggered`; run the directory under `run --repeat N` to measure how reliably a description/trigger phrase actually invokes the skill across repeated tries (see [docs/scenario.md § Measuring flakiness](../docs/scenario.md#measuring-flakiness-run---repeat)) |
 | `scenarios/hostloop-computer-links.yaml` | `hostloop` | the harness's **only `hostloop`-tier worked example** — the agent writes a file and shares it back as a `computer://` link, asserting the link `computer_links_resolve`s to the real collected artifact (the "host" side of a hostloop mount is production's own real host path, so this is where link resolution is most load-bearing). Committed as `replays/hostloop-computer-links.cassette.json`, the harness's only token-free replay fixture at the `hostloop` tier. |
+
+> **Why `protocol-smoke.yaml` omits `transcript_no_host_path`:** at `protocol` fidelity (L0), the
+> harness runs with no sandbox, so it does **not** seal the filesystem — a host-path leak into the
+> transcript is expected there, not a bug. The scenario's own comment explains the omission (only
+> `true` is a valid value for this assertion; sandboxed tiers add `- transcript_no_host_path: true`).
 
 ## Run them
 

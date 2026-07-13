@@ -2,6 +2,8 @@
 
 Thanks for helping make Cowork skill-testing reproducible.
 
+For the full documentation map, see [docs/README.md](./docs/README.md).
+
 ## Development setup
 
 ```bash

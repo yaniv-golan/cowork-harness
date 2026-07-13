@@ -37,7 +37,7 @@ fidelity: container                 # protocol | container | microvm | hostloop 
 execution: local                    # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
                                     # local): local (default) | cloud-describe (RESERVED — no runner
                                     # exists yet; authoring it is a load-time error, not a silent no-op)
-on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm
+on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 
 prompt: |                           # the user turn
@@ -329,7 +329,7 @@ paraphrases (that re-records red). Structured JSON → assert it in YAML with **
 `path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
 dotted path.
 
-**VerdictSignals in `result.signals`:** `computeVerdict` pushes signals into `result.signals`; most
+**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; most
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`) and only three are **warn**-severity (informational, never flip pass/fail). Current signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
@@ -353,7 +353,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.signals[].severity` or the run's exit code. Only the three **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the three **warn** codes are truly benign.
 
 ## Replay class
 
@@ -491,7 +491,7 @@ reference omits). Neither list is a strict superset of the other — reach for t
    the stochastic path flags the run `nonDeterministic`. The LLM decider is one mechanism, two
    spellings: `on_unanswered: llm` (YAML) and `--decider-llm` (CLI). The bare `--on-unanswered llm`
    is rejected (use `--decider-llm`). `agent` is **retired** — `on_unanswered: agent` is rejected by
-   the schema. (`src/types.ts:365` — the `on_unanswered` enum; `src/cli.ts:899` — the CLI-side
+   the schema. (`src/types.ts` — the `on_unanswered` enum; `src/cli.ts:899` — the CLI-side
    `--on-unanswered` value check.)
 
 4. **`--on-unanswered first` is non-deterministic too** — it picks option 1 and is flagged

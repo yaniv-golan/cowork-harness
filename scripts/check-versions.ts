@@ -22,6 +22,11 @@
 //                              re-verification pass. docs/cowork-spawn-contract-*.md is likewise NOT a
 //                              pin: it is frozen historical research, not updated per release — see its
 //                              own applicability note.)
+//   8. copy-paste CI `V=X.Y.Z` pins match the max baseline's agentVersion: the literal agent-binary
+//      version hardcoded in README.md / ci-recipe.md / docs/maintenance.md's "stage the agent binary"
+//      bash snippets (meant to be copy-pasted into a CONSUMER repo's own CI, which has no baselines/
+//      dir of its own — so these stay literals, not a dynamic `jq` read) must equal the newest
+//      baselines/desktop-*.json's `agentVersion`.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -57,16 +62,10 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   const floor = skillMd.match(/cowork-harness@>=(\d+\.\d+\.\d+)/)?.[1];
 
   // Baseline pins (invariant 7) — extracted here so they can ride in `values` alongside the rest.
-  const skillBaseline = skillMd.match(
-    /tracks-harness:\s*cowork-harness\s+\d+\.\d+\.\d+\s*\(baseline\s+desktop-(\d+\.\d+\.\d+)\)/,
-  )?.[1];
+  const skillBaseline = skillMd.match(/tracks-harness:\s*cowork-harness\s+\d+\.\d+\.\d+\s*\(baseline\s+desktop-(\d+\.\d+\.\d+)\)/)?.[1];
   const readmeText = r("README.md");
-  const readmeBaseline = readmeText.match(
-    /latest shipped baseline[^.]*?is\s+\*\*`desktop-(\d+\.\d+\.\d+)`\*\*/,
-  )?.[1];
-  const baselineFiles = readdirSync(join(REPO_ROOT, "baselines")).filter((f) =>
-    /^desktop-\d+\.\d+\.\d+\.json$/.test(f),
-  );
+  const readmeBaseline = readmeText.match(/latest shipped baseline[^.]*?is\s+\*\*`desktop-(\d+\.\d+\.\d+)`\*\*/)?.[1];
+  const baselineFiles = readdirSync(join(REPO_ROOT, "baselines")).filter((f) => /^desktop-\d+\.\d+\.\d+\.json$/.test(f));
   const baselineVersions = baselineFiles.map((f) => f.match(/^desktop-(\d+\.\d+\.\d+)\.json$/)![1]);
   const maxBaseline = baselineVersions.reduce((max, v) => (cmp(v, max) > 0 ? v : max), baselineVersions[0]);
 
@@ -92,9 +91,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   // 2. skill self-consistency
   const skillSet = new Set([market, plugin, skillVer]);
   if (skillSet.size !== 1 || [...skillSet][0] === undefined) {
-    errors.push(
-      `skill version mismatch — marketplace.json=${market}, plugin.json=${plugin}, SKILL.md=${skillVer} (all three must agree)`,
-    );
+    errors.push(`skill version mismatch — marketplace.json=${market}, plugin.json=${plugin}, SKILL.md=${skillVer} (all three must agree)`);
   }
 
   // 3. floor === tracks-harness
@@ -157,17 +154,39 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   if (maxBaseline) {
     for (const p of presentPins) {
       if (cmp(p.version, maxBaseline) < 0) {
-        errors.push(
-          `${p.label}="${p.version}" is behind the max baselines/desktop-*.json version "${maxBaseline}"`,
-        );
+        errors.push(`${p.label}="${p.version}" is behind the max baselines/desktop-*.json version "${maxBaseline}"`);
       }
     }
+  }
+
+  // 8. copy-paste CI `V=X.Y.Z` agent-binary pins must match the max baseline's agentVersion.
+  let maxAgentVersion: string | undefined;
+  if (maxBaseline) {
+    maxAgentVersion = json(`baselines/desktop-${maxBaseline}.json`).agentVersion as string | undefined;
+  }
+  const vPinFiles = ["README.md", ".claude/skills/cowork-harness/references/ci-recipe.md", "docs/maintenance.md"];
+  if (maxAgentVersion) {
+    for (const f of vPinFiles) {
+      const pin = r(f).match(/\bV=(\d+\.\d+\.\d+)\b/)?.[1];
+      if (!pin) {
+        errors.push(`${f} has no "V=X.Y.Z" agent-binary pin to verify against baseline agentVersion "${maxAgentVersion}"`);
+      } else if (pin !== maxAgentVersion) {
+        errors.push(`${f} pin "V=${pin}" != max baseline's agentVersion "${maxAgentVersion}" (baselines/desktop-${maxBaseline}.json)`);
+      }
+    }
+  } else if (maxBaseline) {
+    errors.push(`baselines/desktop-${maxBaseline}.json has no "agentVersion" field`);
   }
 
   return {
     ok: errors.length === 0,
     errors,
-    values: { ...values, readmeFloors: readmeFloors.join(","), baselineVersions: baselineVersions.join(",") },
+    values: {
+      ...values,
+      readmeFloors: readmeFloors.join(","),
+      baselineVersions: baselineVersions.join(","),
+      maxAgentVersion,
+    },
   };
 }
 
