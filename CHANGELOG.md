@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-07-14
+
+Patch: parity sync to Claude Desktop `1.20186.9`. No runtime/API change.
+
+### Changed
+
+- Synced the platform baseline to Claude Desktop `1.20186.9`
+  (`baselines/desktop-1.20186.9.json`, now what `baseline: latest` resolves to). A routine
+  per-release parity refresh: the app version, the native agent staging path, and the asar
+  fingerprint moved; the Cowork system prompt, egress allowlist, gate states, and agent (VM)
+  version are unchanged from `1.20186.1`. README and the companion skill's baseline pointer were
+  updated to match.
+
 ## [1.0.2] — 2026-07-14
 
 Patch: shorten the Action's Marketplace tagline. No runtime/API change.
