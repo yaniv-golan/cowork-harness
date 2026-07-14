@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.0.2
-  tracks-harness: cowork-harness 1.0.2 (baseline desktop-1.20186.1)
+  version: 1.0.3
+  tracks-harness: cowork-harness 1.0.3 (baseline desktop-1.20186.9)
 ---
 
 # cowork-harness
@@ -22,8 +22,8 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.0.2` (baseline
-> `desktop-1.20186.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.0.3` (baseline
+> `desktop-1.20186.9`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
@@ -39,9 +39,9 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.0.2**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.0.2" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.0.2"`. **Pin `@>=1.0.2`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.0.3**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.0.3" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.0.3"`. **Pin `@>=1.0.3`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 1.0.2 floor gates, by release:
+  What the ≥ 1.0.3 floor gates, by release:
 
   - **core set (pre-0.21.0 vintage, or mixed):** `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator (passes when the resolved value deep-equals one of the listed members — value ∈ your list, not the reverse), `verify-cassettes` incl. the `--allow-domain`/`--allow-email`/`--allow-patterns-file` allows (`--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.
   - **0.21.0:** `verify-cassettes --allow-path` (`path` — local absolute filesystem paths — is the scanner's 4th class), and `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field.
