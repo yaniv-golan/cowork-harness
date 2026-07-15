@@ -10,7 +10,7 @@
 //      stricter than release.yml — the section body is non-empty.
 //   3. The tag `v<version>` does not already exist, locally or on origin.
 //   4. The working tree is clean (`git status --porcelain` empty).
-//   5. Best-effort, WARN-only: nudge about the ANTHROPIC_API_KEY repo secret (live-suite gate).
+//   5. Best-effort, WARN-only: nudge about the ANTHROPIC_API_KEY repo secret (the live suite runs only with it).
 //   6. --for-tag only, HARD fail: HEAD == origin/main HEAD, and a successful push-event ci.yml run
 //      exists for HEAD — the exact check that would have caught the 0.33.0 mis-tag (tagging a
 //      release-branch head instead of the merge commit).
@@ -137,14 +137,15 @@ function checkWorkingTreeClean(): CheckResult {
  * Best-effort, WARN-only. `gh secret list` sees ONLY repo-level Actions secrets — an org- or
  * environment-level ANTHROPIC_API_KEY would false-warn here, and the call itself needs admin scope on
  * the repo. If `gh` is unavailable or unauthenticated, print the reminder unconditionally rather than
- * silently skipping — RELEASING.md §9 documents the SKIP_LIVE_SCENARIOS override.
+ * silently skipping. Without the key the live suite soft-skips in CI (it is not a publish gate) — see
+ * RELEASING.md.
  */
 function checkLiveSuiteKeyReminder(): CheckResult {
   const REMINDER =
-    "if ANTHROPIC_API_KEY is not set as a repo secret, push-to-main ci will hard-fail the live scenario " +
-    "suite — set the secret or plan the SKIP_LIVE_SCENARIOS override (RELEASING.md §9). Note: `gh secret " +
-    "list` only sees repo-level Actions secrets — an org/environment secret would false-warn here, and the " +
-    "call needs admin scope.";
+    "if ANTHROPIC_API_KEY is not set as a repo secret, the push-to-main live scenario suite soft-skips — " +
+    "this release won't be live-validated in CI (set the secret to run it; see RELEASING.md). Note: `gh " +
+    "secret list` only sees repo-level Actions secrets — an org/environment secret would false-warn here, " +
+    "and the call needs admin scope.";
 
   const ghVersion = run("gh", ["--version"]);
   if (!ghVersion.ok) {

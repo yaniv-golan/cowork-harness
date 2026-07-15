@@ -6,32 +6,18 @@ Pushing a `vX.Y.Z` tag triggers the `.github/workflows/release.yml` workflow, wh
 npm via **OIDC Trusted Publishing** (no stored token). Do **not** run `npm publish` manually — it
 requires an OTP and is not how this repo ships.
 
-## Admin override — deliberately skipping the live scenario suite for one release
+## The live scenario suite is best-effort (not a publish gate)
 
-The live scenario suite is part of the publish gate: on a canonical-repo push to `main` (the SHA
-`release.yml` gates on), `ci.yml` **hard-fails** if `ANTHROPIC_API_KEY` is missing, so a release can
-never silently publish without it. When you must ship a release without running the live suite (e.g.
-the key is temporarily unavailable), override it **explicitly and per-commit** — never by weakening the
-gate:
+The live scenario suite (the `scenarios` job in `ci.yml`) runs live inference only when
+`ANTHROPIC_API_KEY` is available to the runner. Without the key it **soft-skips (green)** on every
+event — pushes to `main` included — emitting a loud `⚠️ NOT live-validated` marker in the run summary.
+It does **not** block the run and is **not** a publish gate: `release.yml`'s `require-ci-success` still
+requires the `ci.yml` run for the tagged commit to be green, but a green run does not by itself prove
+the scenarios were validated against a real model.
 
-1. Set a repository **variable** (not a secret) named `SKIP_LIVE_SCENARIOS` to the **exact full commit
-   SHA** you are releasing:
-   ```
-   gh variable set SKIP_LIVE_SCENARIOS --repo yaniv-golan/cowork-harness --body "<full-40-char-SHA>"
-   ```
-   The `ci.yml` guard skips the live suite (loud `::warning::ADMIN OVERRIDE`) **only** when this
-   variable equals the running commit's SHA. Because it is pinned to one SHA, a later commit can never
-   inherit the skip — the override auto-expires. Setting a repo variable requires admin, so the bypass
-   is admin-gated and auditable in the run log.
-2. Push that commit / re-run `ci.yml`; the scenario job now passes, so `require-ci-success` (the publish
-   gate) is satisfied and the tag can publish.
-3. **Unset it afterward** so the next release runs the live suite normally:
-   ```
-   gh variable delete SKIP_LIVE_SCENARIOS --repo yaniv-golan/cowork-harness
-   ```
-
-This keeps the gate strict by default (a missing key still reds every un-overridden publish) while
-giving an admin a deliberate, one-release, logged escape hatch.
+To actually run the live suite in CI, set the `ANTHROPIC_API_KEY` repo secret. There is no
+`SKIP_LIVE_SCENARIOS` override — the suite never hard-fails on a missing key, so there is nothing to
+override.
 
 ## The preferred three-phase sequence (branch → PR → merge → tag)
 
@@ -142,7 +128,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       add that bullet by hand.
 - [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty,
       tag `vX.Y.Z` not already used, clean tree; warns if the `ANTHROPIC_API_KEY` repo secret is missing so
-      the push-to-main live suite would need the `SKIP_LIVE_SCENARIOS` override — see §9).
+      the push-to-main live suite will soft-skip and this release won't be live-validated in CI).
 - [ ] `npm run format:check` — fix any issues (`npx prettier --write "src/**/*.ts" "test/**/*.ts"`).
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.

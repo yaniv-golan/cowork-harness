@@ -13,6 +13,15 @@ All notable changes to this project are documented here. The format is based on
   unchanged — the version is already `isValidSemver`-gated to `X.Y.Z` before this runs — and it drops
   a redundant, only-partially-escaped regex flagged by CodeQL (`js/incomplete-sanitization`). Internal
   release tooling only; no runtime or API change.
+- **CI: the live scenario suite (`scenarios` job) is now best-effort, not a publish gate.** When
+  `ANTHROPIC_API_KEY` is absent it soft-skips green on every event — pushes to `main` included —
+  instead of hard-failing the run, so routine pushes to `main` (dependency bumps, docs, small fixes)
+  no longer turn CI red on a repo without the secret set. A loud `⚠️ NOT live-validated` marker still
+  flags any run that skipped live inference. The `SKIP_LIVE_SCENARIOS` admin-override variable is
+  removed (nothing hard-fails, so there is nothing to override). Trade-off: `release.yml` still gates
+  publish on `ci.yml` being green for the tagged commit, but a green `ci.yml` no longer proves the
+  scenarios were validated against a real model — set the `ANTHROPIC_API_KEY` repo secret to actually
+  run the live suite in CI. No runtime or API change.
 
 ## [1.0.4] — 2026-07-15
 
