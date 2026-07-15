@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.5] — 2026-07-15
+
+Patch: routine pushes to `main` no longer red CI on a repo without `ANTHROPIC_API_KEY` — the live
+scenario suite is best-effort now — plus a CodeQL cleanup in the release tooling. Internal tooling +
+CI only; no runtime or API change.
+
 ### Changed
 
 - `scripts/release-preflight.ts`: `changelogHasVersionSection` now finds the CHANGELOG heading with a
