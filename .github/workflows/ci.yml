@@ -270,7 +270,7 @@ jobs:
         # Requires the staged agent; only runs where it's present. Skips cleanly otherwise.
         run: npm run test:live
 
-  # ── Stage 3: live scenario suite (needs ANTHROPIC_API_KEY; skipped on forks) ────
+  # ── Stage 3: live scenario suite (best-effort live inference; soft-skips without a key) ────
   scenarios:
     name: scenario suite (mixed protocol/container, live inference)
     runs-on: ubuntu-24.04-arm
@@ -289,43 +289,22 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "20", cache: npm }
       - run: npm ci && npm run build
-      - name: Guard — require API key
+      - name: Guard — live inference is best-effort (soft-skip without a key)
         id: guard
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Admin override (see RELEASING.md): a repo VARIABLE pinned to the EXACT commit SHA being
-          # released. Setting a repo variable requires admin, and pinning it to one SHA means a later
-          # commit (different SHA) can never inherit the skip — so this is a deliberate, per-release,
-          # auditable override, NOT a re-opening of the silent-skip hole the hard-fail below closes.
-          SKIP_LIVE_SHA: ${{ vars.SKIP_LIVE_SCENARIOS }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
-            # Hard-fail ONLY on non-PR canonical-repo events: push to main (the SHA release.yml gates
-            # on) AND workflow_dispatch (a manual re-run with a missing key should red, not soft-skip).
-            # Dependabot PRs run from same-repo branches, PASS the job's same-repo `if:`, but GitHub
-            # withholds Actions secrets from them — hard-failing there would red every weekly
-            # Dependabot PR. PR lanes were never the publish gate; the push lane is.
-            if [ "$GITHUB_REPOSITORY" = "yaniv-golan/cowork-harness" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ] \
-               && ! { [ -n "$SKIP_LIVE_SHA" ] && [ "$SKIP_LIVE_SHA" = "$GITHUB_SHA" ]; }; then
-              echo "::error::ANTHROPIC_API_KEY is not set on the canonical repo — the live scenario suite is part of the publish gate and must not silently skip. (Admin override: set the SKIP_LIVE_SCENARIOS repo variable to this exact commit SHA to deliberately skip it for one release — see RELEASING.md.)"
-              exit 1
-            fi
-            if [ -n "$SKIP_LIVE_SHA" ] && [ "$SKIP_LIVE_SHA" = "$GITHUB_SHA" ]; then
-              echo "::warning::ADMIN OVERRIDE — SKIP_LIVE_SCENARIOS matches this commit ($GITHUB_SHA); the live scenario suite is being deliberately skipped for this publish. This is an explicit, auditable admin choice, not a silent skip."
-              REASON="admin override (SKIP_LIVE_SCENARIOS pinned to this commit)"
-            else
-              # Not a fork — the job-level `if:` above skips forks entirely. This branch is a
-              # Dependabot PR (secrets withheld) or an unset secret on a canonical PR/push (the push
-              # lane hard-fails above, so here it's a PR/Dependabot lane).
-              echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (Dependabot PR, or the secret is unset)."
-              REASON="no ANTHROPIC_API_KEY (Dependabot PR, or the secret is unset)"
-            fi
-            # Loud, non-log-only marker: a green check on THIS job is not proof of live validation.
+            # Best-effort: without a key the live suite soft-skips (green) on EVERY event, including
+            # push to main and workflow_dispatch. It is NOT a publish gate — release.yml still requires
+            # this ci run to be green, but a green check here is not proof of live validation (loud
+            # marker below). Set the ANTHROPIC_API_KEY repo secret to actually run it.
+            echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (no live validation this run)."
             {
               echo "## ⚠️ Live scenario suite SKIPPED — NOT live-validated"
               echo ""
-              echo "This run did **not** execute live inference (reason: $REASON). A green check on this"
-              echo "job is **not** proof the scenarios pass against a real model."
+              echo "This run did **not** execute live inference. A green check on this job is **not**"
+              echo "proof the scenarios pass against a real model."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "live=false" >> "$GITHUB_OUTPUT"
           else

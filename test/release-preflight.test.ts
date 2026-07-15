@@ -59,9 +59,9 @@ describe("changelogHasVersionSection", () => {
     expect(changelogHasVersionSection(text, "0.33.0")).toBe(false);
   });
 
-  it("escapes dots in the version so they are not treated as regex wildcards", () => {
+  it("matches the version literally, so dots are not treated as any-char wildcards", () => {
     const text = ["## [0.33.0]", "", "- body"].join("\n");
-    // A version differing only where the dots are should NOT match (dots must be literal, not `.`-any-char).
+    // A version differing only where the dots are should NOT match (the heading is a literal prefix).
     expect(changelogHasVersionSection(text, "0X33X0")).toBe(false);
   });
 });
