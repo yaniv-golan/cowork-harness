@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
+import { analyzeArtifacts } from "./analyze-artifact.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts / cassette.ts): machine→stdout, human→stderr.
 const out = (s: string) => writeSync(1, s + "\n");
@@ -33,13 +34,33 @@ const log = (s: string) => writeSync(2, s + "\n");
  * legitimately uses `/sessions` paths, or one that merely documents them in prose/teaching examples.
  */
 
-export type SkillAnalysisRuleId = "sessions-path-to-file-tool" | "sessions-find-into-file-read" | "unclosed-ignore-fence";
+export type SkillAnalysisRuleId =
+  | "sessions-path-to-file-tool"
+  | "sessions-find-into-file-read"
+  | "unclosed-ignore-fence"
+  // Item 1 (interactive-artifact write-back) findings — see analyze-artifact.ts + the plan §B2/§B3.
+  | "artifact-write-back-lost"
+  | "artifact-write-back-suspect";
 
+/** A per-file finding. `severity` (added for Item 1): `--strict` gates iff any finding is `"error"`,
+ *  so an `"advisory"` finding never fails CI on its own. The three legacy `/sessions` rules are all
+ *  `"error"` (they were deliberately gating). */
 export interface SkillFinding {
   rule: SkillAnalysisRuleId;
+  severity: "error" | "advisory";
   path: string;
   line: number;
   message: string;
+}
+
+/** A could-not-verify record — NOT a finding (no `severity`). An artifact *candidate* that couldn't be
+ *  selected/read/parsed/analyzed. Top-level (a `select` directory-enumeration failure has no discovered
+ *  file, so its `path` may be a directory). A non-empty `analysisFailures` is could-not-verify: the run
+ *  exits nonzero (exit 3 unless a strict `error` finding wins exit 1) regardless of `--strict`. */
+export interface AnalysisFailure {
+  path: string;
+  stage: "select" | "read" | "size" | "node-limit" | "deadline" | "extract" | "parse" | "unsupported-guard" | "waived";
+  reason: string;
 }
 
 /** Fenced-block languages treated as "legitimate in-VM bash" and therefore exempt from every rule.
@@ -572,7 +593,7 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
     const key = `${rule} ${lineNo} ${token}`;
     if (seen.has(key)) return;
     seen.add(key);
-    findings.push({ rule, path: filePath, line: lineNo, message });
+    findings.push({ rule, severity: "error", path: filePath, line: lineNo, message });
   };
 
   const { lines, blocks } = splitLines(text);
@@ -682,6 +703,7 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
   for (const lineNo of unclosedStartLines) {
     scoped.push({
       rule: "unclosed-ignore-fence",
+      severity: "error",
       path: filePath,
       line: lineNo,
       message:
@@ -1088,6 +1110,15 @@ export function cmdAnalyzeSkill(args: string[]): void {
     );
   }
 
+  // A genuinely missing target PATH is a usage error (exit 2), not a could-not-verify — check up-front,
+  // before the markdown-resolver error becomes non-fatal below. Glob targets (`*`) are literal patterns,
+  // not paths, so they're exempt from the existence check.
+  for (const target of p.positionals) {
+    if (!target.includes("*") && !existsSync(target)) {
+      return fail("analyze-skill", "usage", `analyze-skill: path not found: ${target}`, undefined, asJson);
+    }
+  }
+
   // Multiple positionals + a simple `*` glob (matching `lint-skill`'s `nargs="+"`) — resolve EACH
   // positional independently (a file/dir target via `resolveSkillTarget`, a `*`-bearing target via
   // `expandGlob`), then UNION + DEDUP by resolved absolute path across ALL of them, extending the
@@ -1096,20 +1127,35 @@ export function cmdAnalyzeSkill(args: string[]): void {
   // immediately — same usage-error posture a single bad positional had before multi-positional support.
   const files = new Set<string>();
   const unscannedSet = new Set<string>();
+  // A markdown-resolver error on a positional is NO LONGER immediately fatal: a target may legitimately
+  // have only artifact sources (code/HTML, no markdown contract file). Collect the errors and defer the
+  // usage decision until after Tier A runs — if the target had artifact sources, the run proceeds.
+  const markdownErrors: string[] = [];
   for (const target of p.positionals) {
     const resolved = resolvePositional(target);
     if ("error" in resolved) {
-      return fail("analyze-skill", "usage", `analyze-skill: ${resolved.error}`, undefined, asJson);
+      markdownErrors.push(resolved.error);
+      continue;
     }
     for (const f of resolved.files) files.add(resolve(f));
     for (const u of resolved.unscanned) unscannedSet.add(u);
   }
 
-  if (files.size === 0) {
+  // Item 1 (Tier A): artifact write-back analysis runs on its OWN source set (code + HTML), collected
+  // independently of the markdown `/sessions` resolver. Run it UP-FRONT so a target with only artifact
+  // sources (no markdown contract file) is still scanned rather than usage-erroring below.
+  const artifact = analyzeArtifacts(p.positionals);
+
+  // Usage error only if NOTHING at all was scannable (no markdown files AND no artifact source files) —
+  // e.g. a bad path, or a dir with neither markdown nor artifact code. Report the first markdown-resolver
+  // error (a bad path's "not found" message) when there is one, preserving the prior bad-target UX.
+  if (files.size === 0 && artifact.scanned.length === 0) {
     return fail(
       "analyze-skill",
       "usage",
-      `analyze-skill: no scannable files found across ${p.positionals.length} target(s): ${p.positionals.join(", ")}`,
+      markdownErrors.length > 0
+        ? `analyze-skill: ${markdownErrors[0]}`
+        : `analyze-skill: no scannable files (markdown contract or artifact source) found across ${p.positionals.length} target(s): ${p.positionals.join(", ")}`,
       undefined,
       asJson,
     );
@@ -1131,15 +1177,29 @@ export function cmdAnalyzeSkill(args: string[]): void {
     perFile.push({ file, findings, suppressed });
   }
 
-  const totalFindings = perFile.reduce((n, f) => n + f.findings.length, 0);
-  const failing = strict && totalFindings > 0; // suppressed files never contribute findings, so --strict can't fail on them
-  // `ok` mirrors the exit code (matches `action.yml`'s documented "`ok` mirrors the command's exit
-  // code" contract, and the same rule `lint`/`lint-skill` follow — see scenario-tool.ts's
-  // `runLintLike`): true on an advisory run with findings (exit 0), false only under `--strict` with
-  // findings or the exit-2 usage error above. This command is ADVISORY BY DEFAULT (see the doc comment
-  // above `cmdAnalyzeSkill`) — `ok:false` with a clean exit 0 would contradict the exit code AND
-  // action.yml's own contract, and render.js would print "Overall: ❌ fail" for a run that exited 0.
-  const ok = !failing;
+  // Item 1 (Tier A): the artifact write-back findings (computed up-front) join `files[]`; they are never
+  // touched by the `analyze-skill: ignore` marker above (§B3: artifact rules are not silenceable by the
+  // blanket marker, since they run on a separate source set). `analysisFailures` is a SEPARATE top-level
+  // could-not-verify channel.
+  const artifactByFile = new Map<string, SkillFinding[]>();
+  for (const f of artifact.findings) {
+    const arr = artifactByFile.get(f.path) ?? [];
+    arr.push(f);
+    artifactByFile.set(f.path, arr);
+  }
+  for (const [file, findings] of [...artifactByFile].sort((a, b) => a[0].localeCompare(b[0]))) {
+    perFile.push({ file, findings, suppressed: false });
+  }
+  const analysisFailures = artifact.analysisFailures;
+  const allFindings = perFile.flatMap((pf) => pf.findings);
+
+  // Exit precedence (plan §B3): a strict `error` finding wins exit 1; else any could-not-verify failure
+  // is exit 3; else advisory/clean exit 0. `analysisFailures` gate REGARDLESS of --strict (no-false-green:
+  // a candidate that couldn't be analyzed must never pass silently). `ok` mirrors the exit code.
+  const strictErrorFinding = strict && allFindings.some((f) => f.severity === "error");
+  const exitCode = strictErrorFinding ? 1 : analysisFailures.length > 0 ? 3 : 0;
+  const ok = exitCode === 0;
+  const totalFindings = allFindings.length;
 
   if (json) {
     out(
@@ -1147,6 +1207,7 @@ export function cmdAnalyzeSkill(args: string[]): void {
         files: perFile,
         scanned: fileList,
         unscanned,
+        analysisFailures,
         strict,
       }),
     );
@@ -1156,17 +1217,29 @@ export function cmdAnalyzeSkill(args: string[]): void {
       if (pf.suppressed) {
         log(`⊘ analyze-skill: ${pf.file} — path-fidelity warnings suppressed for this file by the ` + "`analyze-skill: ignore` marker");
       } else if (pf.findings.length === 0) {
-        log(`✓ analyze-skill: ${pf.file} — no /sessions-to-file-tool findings`);
+        log(`✓ analyze-skill: ${pf.file} — no findings`);
       } else {
-        for (const f of pf.findings) log(`⚠ ${f.path}:${f.line}: [${f.rule}] ${f.message}`);
+        for (const f of pf.findings) log(`⚠ ${f.path}:${f.line}: [${f.rule}] (${f.severity}) ${f.message}`);
       }
     }
-    if (totalFindings > 0) {
+    for (const af of analysisFailures) log(`⚠ could not analyze ${af.path} (${af.stage}): ${af.reason}`);
+    if (analysisFailures.length > 0 && !strictErrorFinding) {
       log(
-        `⚠ analyze-skill: ${totalFindings} finding(s) across ${fileList.length} file(s) — advisory (exit 0)` +
-          (strict ? ", failing on --strict (exit 1)" : "; pass --strict to fail on findings"),
+        `⚠ analyze-skill: ${analysisFailures.length} artifact candidate(s) could not be analyzed — could-not-verify (exit 3); ` +
+          "a candidate that can't be checked is not a pass — fix or exclude them.",
       );
-    } else {
+    }
+    if (totalFindings > 0) {
+      const errorCount = allFindings.filter((f) => f.severity === "error").length;
+      log(
+        `⚠ analyze-skill: ${totalFindings} finding(s) (${errorCount} error, ${totalFindings - errorCount} advisory) across ${perFile.length} file(s)` +
+          (strictErrorFinding
+            ? " — failing on --strict (exit 1)"
+            : strict
+              ? " — no error-severity findings (exit 0)"
+              : "; error-severity findings fail under --strict"),
+      );
+    } else if (analysisFailures.length === 0) {
       log(`✓ analyze-skill: ${fileList.length} file(s) scanned — no findings`);
     }
     log(
@@ -1176,5 +1249,5 @@ export function cmdAnalyzeSkill(args: string[]): void {
     log(`  scope: scanned ${fileList.length} file(s) — ${fileList.join(", ")}`);
     log(unscanned.length > 0 ? `  scope: left unscanned — ${unscanned.join("; ")}` : "  scope: no contract dirs left unscanned");
   }
-  return process.exit(failing ? 1 : 0);
+  return process.exit(exitCode);
 }

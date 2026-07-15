@@ -83,6 +83,48 @@ The `skill` command supports `--session-id` + `--resume` for checkpoint-resume s
 
 ---
 
+## Browser↔webview↔human-interaction boundary (interactive artifacts)
+
+**Real Cowork behaviour:** Desktop can render a self-contained HTML/React artifact in an embedded
+webview, served from Cowork's own origin. A human looks at the rendered page and can click it —
+including a "Submit" button that fires a client-side `fetch`/XHR/`sendBeacon`/form POST back to
+that origin, or a fallback that triggers a file download via a synthetic `<a>` click.
+
+**Harness behaviour:** The harness runs the agent headless. There is no rendered browser, no
+webview, and no human clicking anything. It can observe what the agent's tool calls *wrote* (file
+contents, HTTP requests the agent itself made) but not what a client-side script does once loaded
+into a real DOM by a person, nor what that person sees on screen.
+
+### Why it can't be replicated live
+
+This closes off an entire class of Cowork bug from live observation. The concrete shape: an
+interactive HTML artifact's "Submit" button issues a client-side write-back to a *relative*
+endpoint — `fetch("/api/save", {method:"POST"})`, an XHR POST, `sendBeacon("/…")`, or a plain
+`<form method=post action="/…">`. Under real Cowork the artifact is served from **Cowork's own
+origin**, so the relative URL *resolves* — but there's no such endpoint behind the webview, so the
+request comes back non-ok. A page that doesn't check `resp.ok` runs its success branch anyway,
+showing the user a false "Saved!". The common fallback — downloading the data via a synthetic `<a>`
+blob-URL click — is **also** broken under Cowork: `a.click()` blanks/navigates Cowork's own
+embedded artifact viewer instead of producing a retrievable download. A
+`location.protocol === "file:"` guard doesn't catch this either, since the origin is a real
+`http(s):` origin, not `file:`.
+
+None of this is visible from outside a rendered browser with someone driving it. The agent's own
+transcript shows a clean tool call and a well-formed artifact on disk; the failure only exists in
+the DOM state a human would see after clicking — the harness's headless agent never renders or
+clicks anything, so it never reaches that state. Reading the artifact's JavaScript closely enough
+to reconstruct what it does is the only way to catch this without an actual browser and a human in
+the loop.
+
+**Consequence for the harness's design:** because no live run — however faithfully sandboxed — can
+ever observe this, the fix has to live outside the live-execution path: either a static check of
+the artifact-generating source for the relative-write-back pattern (no browser needed, runs the
+same in CI as at authoring time), or an offline confirmer that loads the *materialized* artifact
+into a headless DOM and drives it programmatically after the run. Both work without a rendered
+browser or a human; a live run alone cannot.
+
+---
+
 ## Host-derived identity env vars
 
 **Real Cowork behaviour:** The Desktop→agent spawn sets a block of host-derived identity/telemetry env

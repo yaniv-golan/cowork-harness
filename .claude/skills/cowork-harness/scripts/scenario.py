@@ -17,6 +17,8 @@ Two subcommands:
 lint flags (see references/scenario-schema.md for the why of each):
   E  egress assertion on `fidelity: protocol`        (the harness rejects this run)
   E  `transcript_no_host_path` on hostloop/protocol  (fails BY DESIGN at those tiers)
+  E  `no_scratchpad_leak`/`present_files_called` off  (container-only: served only at fidelity:
+     protocol/microvm/hostloop                          container; off-container = cannot-verify)
   E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
                                                       unless allow_missing_capability)
   E  on_unanswered: agent / invalid value            (schema rejects `agent`)
@@ -24,6 +26,8 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
   W  `transcript_no_host_path` on `fidelity: cowork` (tier resolves per baseline gate —
                                                       incompatible if it lands hostloop)
+  W  `no_scratchpad_leak`/`present_files_called` on   (tier resolves per baseline gate — cannot-verify
+     `fidelity: cowork`                                if it resolves off-container)
   W  no content assertion → no-op on a replay gate    (every assertion is fs/egress)
   W  mixed-class assert item → fs/egress half dropped on replay
   W  unknown top-level / assertion key                (typo or hallucinated schema)
@@ -127,6 +131,10 @@ LIVE_ONLY_KEYS = {
     "semantic_matches",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
+# container-only: served only at fidelity: container (present_files / the scratchpad promotion path
+# it depends on). Off-container these report cannot-verify, not a meaningful pass/fail — same tier-fidelity
+# class as transcript_no_host_path below, just the opposite direction (container-only vs container-hostile).
+CONTAINER_ONLY_KEYS = {"no_scratchpad_leak", "present_files_called"}
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
 VERDICT_MODIFIER_KEYS = {
     "allow_permissive_auto_allow",
@@ -382,6 +390,41 @@ def lint_doc(doc, path, raw_lines):
                     "`transcript_no_host_path` on `fidelity: cowork` — the tier resolves per the "
                     f"baseline's host-loop gate ({HOST_LOOP_GATE_ID}); if it resolves to hostloop "
                     "this assertion fails by design (and a later gate flip re-stales the cassette).",
+                    "Pin fidelity: container if the assertion is load-bearing; keep cowork only if "
+                    "you accept the gate-resolution dependency.",
+                    path,
+                )
+            )
+
+    # E/W: CONTAINER_ONLY_KEYS (no_scratchpad_leak / present_files_called) are served only at
+    # fidelity: container — off-container they report cannot-verify, not a meaningful check. Mirrors
+    # the transcript_no_host_path tier check above, just the opposite direction: ERROR on the tiers
+    # where the runtime deterministically can't serve it, WARN on cowork (baseline-gate-resolution
+    # dependent — the linter stays offline, so the message names the dependency instead of resolving it).
+    container_only_present = sorted(assert_keys & CONTAINER_ONLY_KEYS)
+    if container_only_present:
+        if fidelity in ("protocol", "microvm", "hostloop"):
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "container-only-key-off-container",
+                    f"{container_only_present} on `fidelity: {fidelity}` — container-only (present_files "
+                    "is served only there); off-container it reports cannot-verify. Use fidelity: "
+                    "container for present_files/scratchpad delivery.",
+                    "Use fidelity: container (or drop the assertion for this tier).",
+                    path,
+                )
+            )
+        elif fidelity == "cowork":
+            findings.append(
+                Finding(
+                    "WARN",
+                    "container-only-key-off-container",
+                    f"{container_only_present} on `fidelity: cowork` — container-only (present_files "
+                    "is served only there); off-container it reports cannot-verify. Use fidelity: "
+                    f"container for present_files/scratchpad delivery. (The tier resolves per the "
+                    f"baseline's host-loop gate ({HOST_LOOP_GATE_ID}); if it resolves off-container this "
+                    "assertion cannot verify anything.)",
                     "Pin fidelity: container if the assertion is load-bearing; keep cowork only if "
                     "you accept the gate-resolution dependency.",
                     path,

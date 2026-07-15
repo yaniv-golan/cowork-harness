@@ -1312,3 +1312,59 @@ describe.skipIf(!can)("analyze-skill CLI — multiple positionals + a simple `*`
     expect(run(["analyze-skill", dirty, "--strict"], d).code).toBe(1);
   });
 });
+
+// ── Item 1 (Tier A) — artifact write-back analyzer, wired through cmdAnalyzeSkill ────────────────── //
+describe.skipIf(!can)("analyze-skill CLI — Tier A interactive-artifact write-back", () => {
+  const html = (body: string) => `<!DOCTYPE html><html><body><script>${body}</script></body></html>`;
+
+  it("a lost relative write-back gates under --strict (exit 1) and is an error finding in the envelope", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-art-lost-"));
+    writeFileSync(join(d, "viewer.html"), html(`fetch("/api/save",{method:"POST"}).then(()=>{document.body.innerHTML="Saved!"})`));
+    const strict = run(["analyze-skill", join(d, "viewer.html"), "--strict"], d);
+    expect(strict.code).toBe(1);
+    // advisory posture without --strict: printed, but exit 0
+    expect(run(["analyze-skill", join(d, "viewer.html")], d).code).toBe(0);
+    const j = run(["analyze-skill", join(d, "viewer.html"), "--output-format", "json"], d);
+    const env = JSON.parse(j.out);
+    const findings = env.files.flatMap((f: { findings: { rule: string; severity: string }[] }) => f.findings);
+    expect(findings.some((f: { rule: string; severity: string }) => f.rule === "artifact-write-back-lost" && f.severity === "error")).toBe(
+      true,
+    );
+    expect(env.analysisFailures).toEqual([]);
+  });
+
+  it("a candidate that cannot be parsed is could-not-verify: exit 3 even WITHOUT --strict", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-art-parse-"));
+    // `${broken}` outside a template literal is a syntax error → parse failure on a real candidate.
+    writeFileSync(join(d, "viewer.html"), html(`const url = ${"${broken}"}; fetch("/api/x",{method:"POST"})`));
+    const r = run(["analyze-skill", join(d, "viewer.html")], d);
+    expect(r.code).toBe(3);
+    const j = run(["analyze-skill", join(d, "viewer.html"), "--output-format", "json"], d);
+    const env = JSON.parse(j.out);
+    expect(env.analysisFailures.length).toBeGreaterThan(0);
+    expect(env.analysisFailures[0].stage).toBe("parse");
+    expect(env.ok).toBe(false);
+  });
+
+  it("a write-back behind a guard of unknown runtime value is advisory (suspect) — never gates on its own", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-art-suspect-"));
+    writeFileSync(join(d, "viewer.html"), html(`if (window.RUNTIME_FLAG) { fetch("/api/save",{method:"POST"}) }`));
+    expect(run(["analyze-skill", join(d, "viewer.html"), "--strict"], d).code).toBe(0);
+    const j = run(["analyze-skill", join(d, "viewer.html"), "--output-format", "json"], d);
+    const findings = JSON.parse(j.out).files.flatMap((f: { findings: { rule: string }[] }) => f.findings);
+    expect(findings.some((f: { rule: string }) => f.rule === "artifact-write-back-suspect")).toBe(true);
+  });
+
+  it("a scanned artifact source with no relative write-back is clean (exit 0), and the blanket ignore marker does NOT silence artifact rules", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-art-clean-"));
+    writeFileSync(join(d, "ok.html"), html(`fetch("https://api.example.com/x",{method:"POST"})`)); // remote = fine
+    expect(run(["analyze-skill", join(d, "ok.html"), "--strict"], d).code).toBe(0);
+    // marker present but a lost write-back still gates (artifact rules are unsuppressible by the blanket marker)
+    const d2 = mkdtempSync(join(tmpdir(), "as-art-marker-"));
+    writeFileSync(
+      join(d2, "v.html"),
+      `<!-- analyze-skill: ignore -->` + html(`fetch("/api/save",{method:"POST"}).then(()=>{document.body.innerHTML="Saved!"})`),
+    );
+    expect(run(["analyze-skill", join(d2, "v.html"), "--strict"], d2).code).toBe(1);
+  });
+});

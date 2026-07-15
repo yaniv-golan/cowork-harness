@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/doctor.json",
+  "title": "DoctorEnvelope",
+  "description": "Structured stdout of `cowork-harness doctor --output-format json` (SPEC §11.x) — the read-only prerequisite check for a given fidelity tier. A covered surface of the 1.0 compatibility contract (SPEC §12): parse this, not the human-readable text output. Two structurally distinct shapes, selected by which path produced the output: a completed probe (normal doctor output, `ok:true` on exit 0 or `ok:false` on blocking exit 1) or the shared error envelope (`results:[]`, any reachable `error.category` — doctor itself only reaches `usage` via bad-flag rejection and `internal` via its top-level catch, but the schema accepts the full shared shape). The `checks[].id` set is deliberately NOT enumerated here — it grows with new tiers/checks, like the `trace`-row exclusion in SPEC §12's NOT-covered list.",
+  "type": "object",
+  "oneOf": [
+    {
+      "title": "CompletedProbe",
+      "description": "Normal `doctor` output — the envelope now routes through the shared `jsonPayloadEnvelope` helper, so `error` is always `null` here (a completed probe never THROWS; `ok:false` on a blocking check is a normal result, not an error). Exit 0 when `ok:true`; exit 1 when `ok:false` (one or more `required` checks are `status:\"fail\"`).",
+      "type": "object",
+      "required": ["tool", "version", "command", "ok", "error", "tier", "checks"],
+      "properties": {
+        "tool": { "const": "cowork-harness", "description": "Shared machine-envelope discriminator (SPEC §11)." },
+        "version": { "type": "string", "description": "cowork-harness package version that produced this envelope." },
+        "command": { "const": "doctor" },
+        "ok": {
+          "type": "boolean",
+          "description": "true iff no `required` check has `status:\"fail\"` for the selected tier — i.e. `ok === !checks.some(c => c.required && c.status === \"fail\")`. Not expressible in JSON Schema; covered by a dedicated test instead."
+        },
+        "error": {
+          "type": "null",
+          "description": "Always `null` on a completed probe — the envelope frame every other command's normal-path JSON carries."
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["protocol", "container", "microvm", "hostloop", "cowork"],
+          "description": "The fidelity tier the checks were run against (`--tier`, default `container`)."
+        },
+        "checks": {
+          "type": "array",
+          "description": "One entry per prerequisite probed for the selected tier. The set of `id`s and how many run is tier-dependent and grows over time — deliberately NOT enumerated as a closed set here.",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "status", "detail", "required"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable per-check identifier (e.g. \"node\", \"runtime\", \"token\", \"baseline\"). The full id set is intentionally open — new tiers/checks add ids without that being a breaking change."
+              },
+              "title": { "type": "string" },
+              "status": { "type": "string", "enum": ["ok", "fail", "warn", "skip"] },
+              "detail": { "type": "string" },
+              "remedy": {
+                "type": "string",
+                "description": "Present when the check isn't a clean `ok` and a remediation hint exists; absent on a passing check."
+              },
+              "required": { "type": "boolean", "description": "Whether this check gates the exit code / `ok` for the selected tier." }
+            }
+          }
+        }
+      }
+    },
+    {
+      "title": "ErrorEnvelope",
+      "description": "The shared error envelope (`envelope.ts` `jsonError`) emitted when `doctor` THROWS before (or instead of) completing a probe — a bad flag (`category:\"usage\"`, exit 2, from `parseArgs`/`fail()`) or an unexpected failure caught by the top-level catch in `cli.ts` (`category:\"internal\"`, exit 2). The shared `ErrCategory` union (`usage|unanswered|boundary|runtime|internal`) is accepted in full — `unanswered`/`boundary` aren't currently reachable from `doctor`'s own code paths, but the schema describes the shared shape doctor's error output draws from, not a doctor-narrowed subset.",
+      "type": "object",
+      "required": ["tool", "version", "command", "ok", "results", "error"],
+      "properties": {
+        "tool": { "const": "cowork-harness" },
+        "version": { "type": "string" },
+        "command": { "const": "doctor" },
+        "ok": { "const": false },
+        "results": {
+          "type": "array",
+          "maxItems": 0,
+          "description": "Always empty — `doctor` has no per-item results to report on a thrown error; the shape is shared with every other command's error envelope."
+        },
+        "error": {
+          "type": "object",
+          "required": ["category", "message"],
+          "properties": {
+            "category": { "type": "string", "enum": ["usage", "unanswered", "boundary", "runtime", "internal"] },
+            "message": { "type": "string" },
+            "hint": { "type": "string" }
+          }
+        }
+      }
+    }
+  ]
+}

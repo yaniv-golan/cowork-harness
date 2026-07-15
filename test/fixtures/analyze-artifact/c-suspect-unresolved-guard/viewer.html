@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><title>Plus Viewer</title></head>
+<body>
+  <button id="submit">Submit</button>
+  <script>
+    // is_static is resolved from a runtime global the generator injects — NOT a literal here, so this
+    // guard's value cannot be proven statically (a merely LEXICAL guard match is not provable-truthy).
+    const IS_STATIC = window.__IS_STATIC__;
+
+    document.getElementById("submit").addEventListener("click", function () {
+      if (!IS_STATIC) {
+        fetch("/api/feedback", { method: "POST", body: JSON.stringify({ ok: true }) }).then(function () {
+          document.getElementById("submit").textContent = "Saved!";
+        });
+      }
+    });
+  </script>
+</body>
+</html>

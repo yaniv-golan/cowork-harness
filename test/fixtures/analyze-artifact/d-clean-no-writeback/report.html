@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><title>Report</title></head>
+<body>
+  <button id="save">Save to cloud</button>
+  <script>
+    document.getElementById("save").addEventListener("click", function () {
+      fetch("https://api.example.com/save", {
+        method: "POST",
+        body: JSON.stringify({ ok: true }),
+      }).then(function (resp) {
+        if (resp.ok) {
+          document.getElementById("save").textContent = "Saved!";
+        }
+      });
+    });
+  </script>
+</body>
+</html>
