@@ -10,7 +10,9 @@ name: release
 # (GitHub repo yaniv-golan/cowork-harness + workflow `release.yml`).
 on:
   push:
-    tags: ["v*"]
+    # Full semver tags only (incl. prereleases like v1.0.4-rc.1). The floating Marketplace
+    # aliases (v1, v1.0) must NOT trigger a publish — they'd only die at the version guard.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
 
 permissions:
   contents: write # create the GitHub Release

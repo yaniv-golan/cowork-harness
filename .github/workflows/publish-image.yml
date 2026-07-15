@@ -5,7 +5,9 @@ name: publish-image
 # Contains NO Anthropic binary — see docker/Dockerfile.agent's header; publishing it is clean.
 on:
   push:
-    tags: ["v*"]
+    # Full semver tags only (incl. prereleases). Floating Marketplace aliases (v1, v1.0)
+    # must NOT trigger an image publish — they point at an already-published release commit.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch: {} # manual republish of the current default-branch Dockerfile without cutting a release
 
 permissions:
