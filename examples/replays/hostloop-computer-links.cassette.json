@@ -78,7 +78,7 @@
   "preRunHashes": {},
   "scenarioSource": "../scenarios/hostloop-computer-links.yaml",
   "fingerprint": {
-    "baseline": "1.20186.9"
+    "baseline": "1.21459.0"
   },
   "timeline": [
     {

@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.6] — 2026-07-15
+
+Patch: platform baseline synced to Claude Desktop `1.21459.0`. The spawn contract and rendered system
+prompt are unchanged (a new design-tools hook is deployment-gated off on first-party). No runtime or
+API change.
+
+### Changed
+
+- **Platform baseline synced to Claude Desktop `1.21459.0`** (`baselines/desktop-1.21459.0.json`, now
+  what `baseline: latest` resolves to). Routine per-release parity refresh: app version, the staged
+  agent version (`2.1.205` → `2.1.209`) and its sha, and the asar fingerprint. The rendered spawn tool
+  list is unchanged.
+- **Spawn-contract extractor (`sync`) now tolerates an inert `CLAUDE_DESIGN_TOOLS` head spread.**
+  `1.21459.0` inserts `...CLAUDE_DESIGN_TOOLS` into the agent's `tools[]` head between `Task` and
+  `Bash`; it resolves to an empty array on first-party (deployment-gated off), so the rendered tool
+  list — and the hand-pinned 20-entry `spawn.tools` — are unchanged. The `S6` sentinel admits the
+  optional spread and a new `S6b` guard asserts it stays empty, failing the sync loud if a future build
+  ever populates it (a real spawn tool set that must be modeled). No runtime or API change.
+
 ## [1.0.5] — 2026-07-15
 
 Patch: routine pushes to `main` no longer red CI on a repo without `ANTHROPIC_API_KEY` — the live
