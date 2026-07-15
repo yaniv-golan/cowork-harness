@@ -654,7 +654,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.205   # match your scenario's pinned baseline's agentVersion
+          V=2.1.209   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
@@ -826,6 +826,6 @@ inputs/outputs. Human-readable terminal text is explicitly **not** part of the c
 ## Status
 
 The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is
-**`desktop-1.20186.9`**. Release-by-release verification notes (what was re-verified against
+**`desktop-1.21459.0`**. Release-by-release verification notes (what was re-verified against
 which live agent/asar) are recorded in [CHANGELOG.md](./CHANGELOG.md); the feature catalogue
 this section used to duplicate lives in the sections above.

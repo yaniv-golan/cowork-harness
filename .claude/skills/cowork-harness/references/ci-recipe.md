@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.205   # match your scenario's pinned baseline's agentVersion
+          V=2.1.209   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)

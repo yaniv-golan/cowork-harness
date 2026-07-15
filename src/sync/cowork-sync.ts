@@ -1295,17 +1295,44 @@ export function checkSpawnContractFacts(bundle: string): string[] {
 
   // A1: the spread target may now be a member expression (`...o.TASK_TOOL_NAMES`) instead of a bare
   // hoisted local const; widen the capture to admit `.`/`$` while the literal head+tail stay the anchor.
+  // A4 (Desktop 1.21459.0): an INERT design-tools spread `...o.CLAUDE_DESIGN_TOOLS` may now sit between
+  // "Task" and "Bash". It resolves to an EMPTY array on first-party (deployment-gated off, like the
+  // {{modelIdentity}} placeholder / the S17 negative invariant), so the rendered tools[] is unchanged and
+  // the hand-pinned spawn.tools stays 20 entries. Admit the spread OPTIONALLY (older asars lack it);
+  // S6b below resolves it and REQUIRES it empty — if a future build populates it, S6b fails loud (a real
+  // spawn tool set to model), never silently absorbed. Capture groups: s6[1]=optional design-tools spread
+  // id (undefined on older asars), s6[2]=TASK_TOOL_NAMES spread id.
   const s6 = bundle.match(
-    /tools:\["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.([\w.$]+),"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch"/,
+    /tools:\["Task",(?:\.\.\.([\w.$]+),)?"Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.([\w.$]+),"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch"/,
   );
   if (!s6) miss("S6 tools head", "the tools[] head list moved");
   else {
+    // S6b: the optional `...CLAUDE_DESIGN_TOOLS` head spread must resolve to an EMPTY array. A dotted id
+    // (`o.CLAUDE_DESIGN_TOOLS`) is an export-alias hop (`CLAUDE_DESIGN_TOOLS:Cde` / `=Cde`) to the real
+    // array site (`,Cde=[]`) — follow it exactly as S7 does below. Fail loud if the spread is present but
+    // unresolvable, or resolves to a non-empty array (a new design tool set that must be modeled).
+    const designId = s6[1];
+    if (designId !== undefined) {
+      const requireEmpty = (id: string): boolean => {
+        const esc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return has(new RegExp(`(?<![\\w$])${esc}=\\[\\]`));
+      };
+      if (designId.includes(".")) {
+        const last = designId.slice(designId.lastIndexOf(".") + 1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const aliasM = bundle.match(new RegExp(`${last}[:=]([A-Za-z_$][\\w$]*)`));
+        if (!aliasM) miss("S6b design-tools", "the CLAUDE_DESIGN_TOOLS export alias could not be resolved");
+        else if (!requireEmpty(aliasM[1]))
+          miss("S6b design-tools", "CLAUDE_DESIGN_TOOLS is no longer empty — a new spawn tool set to model");
+      } else if (!requireEmpty(designId)) {
+        miss("S6b design-tools", "CLAUDE_DESIGN_TOOLS is no longer empty — a new spawn tool set to model");
+      }
+    }
     // A2: a dotted id (`o.TASK_TOOL_NAMES`) is not a local-const definition — it is an export-alias hop
     // (`TASK_TOOL_NAMES:uae` / `TASK_TOOL_NAMES=uae`) to the real array site (`,uae=[...]`). Follow the
     // hop (identifier-shaped capture only, so a `:0`-style decoy can't be captured) and require the exact
     // five-name array at the resolved alias — never resolveConst, whose 40-char/no-comma value budget
     // can't hold the array literal. A bare id keeps the original local-const lookup.
-    const rawId = s6[1];
+    const rawId = s6[2];
     const taskArray = `\\["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"\\]`;
     if (rawId.includes(".")) {
       const last = rawId.slice(rawId.lastIndexOf(".") + 1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
