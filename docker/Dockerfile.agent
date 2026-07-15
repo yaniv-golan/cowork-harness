@@ -118,6 +118,15 @@ RUN useradd -u 1000 -m -s /bin/bash ubuntu \
     && printf 'prefix=/usr/local/lib/node_modules_global\ncache=/tmp/.npm\n' > /tmp/.npmrc \
     && chown 1000:1000 /tmp/.npmrc
 
+# --- OCI image metadata (drives the GHCR package page: repo link, description, license, provenance).
+#     Placed LAST so editing a label never invalidates the expensive toolchain layers above. The publish
+#     workflow overrides title/description per variant (base vs full) with `docker build --label`. ---
+LABEL org.opencontainers.image.title="cowork-agent-base" \
+      org.opencontainers.image.description="Sandbox runtime image for cowork-harness: a fidelity-matched Ubuntu 22.04 (linux/arm64) mirror of Claude Cowork's guest rootfs toolchain (Node 22 + the python document/data stack). Contains NO Anthropic binary — the agent is bind-mounted from the user's own Claude Desktop install at run time. Full-parity variant (OCR/Office/opencv) builds from the same Dockerfile with --build-arg COWORK_FULL_PARITY=1." \
+      org.opencontainers.image.source="https://github.com/yaniv-golan/cowork-harness" \
+      org.opencontainers.image.documentation="https://github.com/yaniv-golan/cowork-harness#readme" \
+      org.opencontainers.image.licenses="MIT"
+
 # cwd is /sessions/<id>; the whole session root is bind-mounted writable at run time.
 WORKDIR /sessions/local
 

@@ -28,6 +28,18 @@ const LIVE_TIERS: Tier[] = ["container", "microvm", "hostloop", "cowork"];
 const isLive = (t: Tier) => LIVE_TIERS.includes(t);
 
 type Status = "ok" | "fail" | "warn" | "skip";
+
+/** Result of the advisory image-freshness probe (container/hostloop/cowork only):
+ *  - `current` — the local pulled image matches the published GHCR `:2` digest.
+ *  - `stale`   — it's a PULLED image whose digest no longer matches the current published `:2` (re-pull).
+ *  - `local`   — built locally (no registry digest to compare); not a warning, just uncomparable.
+ *  - `unknown` — offline / buildx unavailable / custom `COWORK_AGENT_IMAGE` — verification skipped. */
+export type ImageFreshness =
+  | { state: "current"; detail: string }
+  | { state: "stale"; detail: string; ghcrRef: string }
+  | { state: "local"; detail: string }
+  | { state: "unknown"; detail: string };
+
 export interface DoctorCheck {
   id: string;
   title: string;
@@ -74,6 +86,22 @@ export interface DoctorProbe {
   // test doubles don't need updating: when a probe doesn't implement it, doctor falls back to a real
   // PATH check (mirrors realProbe's implementation below).
   hasPython3?(): boolean;
+  // Advisory, network best-effort (container/hostloop/cowork only): is the local pulled agent image the
+  // current published GHCR `:2`? OPTIONAL — omitted by test doubles so the freshness check is simply NOT
+  // run (keeps unit tests hermetic and offline; only realProbe touches the network). A locally-BUILT image
+  // returns `local` (uncomparable), never a false "stale".
+  imageFreshness?(): ImageFreshness;
+}
+
+/** Map a harness-published LOCAL image tag to its GHCR source ref, or null for a custom/overridden image.
+ *  The harness resolves the unqualified local tag (`cowork-agent-base:2`), never the `ghcr.io/…` path — so
+ *  a stale local image of that tag silently shadows the published one; the freshness probe compares them. */
+export function ghcrRefFor(localImage: string): string | null {
+  const known: Record<string, string> = {
+    "cowork-agent-base:2": "ghcr.io/yaniv-golan/cowork-agent-base:2",
+    "cowork-agent-full:2": "ghcr.io/yaniv-golan/cowork-agent-full:2",
+  };
+  return known[localImage] ?? null;
 }
 
 /** Package-root `docker build` line for the agent image — resolved relative to THIS file (works from a
@@ -184,6 +212,43 @@ export const realProbe: DoctorProbe = {
   hasPython3() {
     const r = spawnSync("python3", ["--version"], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
+  },
+  imageFreshness(): ImageFreshness {
+    const runtime = this.runtimeName();
+    const local = this.imageName();
+    const ghcrRef = ghcrRefFor(local);
+    if (!ghcrRef) return { state: "unknown", detail: `${local} is a custom image — not compared to GHCR` };
+    const repo = ghcrRef.split(":")[0]; // ghcr.io/owner/name (RepoDigests key on the digest side)
+
+    // Local registry digest — present ONLY on a pulled image; a locally-built image has an empty RepoDigests.
+    const li = spawnSync(runtime, ["image", "inspect", "--format", "{{json .RepoDigests}}", local], {
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    if (li.error || li.status !== 0) return { state: "unknown", detail: "could not inspect the local image" };
+    let localDigest: string | null = null;
+    try {
+      const digests: unknown = JSON.parse((li.stdout || "").trim() || "[]");
+      if (Array.isArray(digests)) {
+        const m = digests.find((d): d is string => typeof d === "string" && d.startsWith(repo + "@"));
+        if (m) localDigest = m.split("@")[1];
+      }
+    } catch {
+      /* fall through → treated as a local build */
+    }
+    if (!localDigest) return { state: "local", detail: `${local} was built locally (no GHCR digest to compare)` };
+
+    // Remote digest for the floating `:2` — best-effort, offline-tolerant. Parse the `Digest:` line rather
+    // than a Go-template field so it survives buildx output-shape churn across Docker versions.
+    const ri = spawnSync(runtime, ["buildx", "imagetools", "inspect", ghcrRef], { encoding: "utf8", timeout: 8000 });
+    if (ri.error || ri.status !== 0 || typeof ri.stdout !== "string") {
+      return { state: "unknown", detail: "could not reach GHCR (offline, or `docker buildx` unavailable)" };
+    }
+    const rm = ri.stdout.match(/^Digest:\s+(sha256:[0-9a-f]{64})/m);
+    if (!rm) return { state: "unknown", detail: "unexpected registry response" };
+    return localDigest === rm[1]
+      ? { state: "current", detail: `matches the published ${ghcrRef}` }
+      : { state: "stale", detail: `local ${local} differs from the current published ${ghcrRef} — a newer image is available`, ghcrRef };
   },
 };
 
@@ -358,6 +423,22 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     // gates the ELF parity tolerance (`agent` check) AND whether the native `hostAgent` binary is required:
     // requiring it on a VM-loop cowork rig would be the mirror false-NOT-ready of the `agent` false-green.
     const runsViaHostLoop = tier === "hostloop" || (tier === "cowork" && coworkIsHostLoop);
+
+    // Advisory image-freshness (never blocks): only when the image is present AND the probe implements it
+    // (test doubles omit it → hermetic). Compares a PULLED local image to the current published GHCR `:2`;
+    // a locally-built or uncomparable image stays a quiet `skip`, only a genuine drift `warn`s.
+    if (present && probe.imageFreshness) {
+      const f = probe.imageFreshness();
+      checks.push({
+        id: "image-freshness",
+        title: "Agent image freshness",
+        status: f.state === "current" ? "ok" : f.state === "stale" ? "warn" : "skip",
+        detail: f.detail,
+        remedy: f.state === "stale" ? `re-pull to match: ${runtime} pull ${f.ghcrRef} && ${runtime} tag ${f.ghcrRef} ${image}` : undefined,
+        required: false,
+      });
+    }
+
     checks.push(agentCheck(runsViaHostLoop));
 
     if (tier === "hostloop" || tier === "cowork") {
