@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-07-15
+
+Patch: release workflows no longer trigger on the floating Marketplace alias tags. No runtime/API change.
+
+### Fixed
+
+- `.github/workflows/release.yml` and `.github/workflows/publish-image.yml` now trigger only on
+  full semver tags (`v[0-9]+.[0-9]+.[0-9]+*`, prereleases included) instead of `v*`. Moving the
+  packaged Action's floating alias tags (`v1`, `v1.0`) after a release previously kicked off both
+  workflows, which then correctly died at the tag-vs-`package.json` version guard — four spurious
+  failed runs per release. The aliases point at an already-published release commit, so nothing
+  should (or now does) run.
+
 ## [1.0.3] — 2026-07-14
 
 Patch: parity sync to Claude Desktop `1.20186.9`. No runtime/API change.

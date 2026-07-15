@@ -184,7 +184,9 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       git tag -f vX vX.Y.Z && git tag -f vX.Y vX.Y.Z   # e.g. v1 and v1.0 → v1.2.3
       git push -f origin vX vX.Y
       ```
-      (Force-moving these ALIAS tags is expected; never force-move the immutable `vX.Y.Z` release tag.)
+      (Force-moving these ALIAS tags is expected; never force-move the immutable `vX.Y.Z` release tag.
+      As of 1.0.4 the alias tags do NOT trigger `release.yml` / `publish-image.yml` — their `on.push.tags`
+      globs match full `vX.Y.Z` semver only — so pushing them produces no workflow runs at all.)
 - [ ] Smoke the published artifact: `npx cowork-harness@X.Y.Z --version` and
       `npx cowork-harness@X.Y.Z doctor --tier protocol`.
 
