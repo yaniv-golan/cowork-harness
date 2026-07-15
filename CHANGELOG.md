@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.6] — 2026-07-15
+
+Patch: platform baseline synced to Claude Desktop `1.21459.0`. The spawn contract and rendered system
+prompt are unchanged (a new design-tools hook is deployment-gated off on first-party). No runtime or
+API change.
+
 ### Changed
 
 - **Platform baseline synced to Claude Desktop `1.21459.0`** (`baselines/desktop-1.21459.0.json`, now
