@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-16
+
+Minor: `analyze-skill` gains interactive-artifact write-back detection (static + an optional `--runtime`
+headless-DOM confirmer), `lint` gains a container-only-key tier check, and the `doctor` JSON envelope is
+frozen as a covered SPEC §12 surface. All additive.
+
 ### Added
 
 - **`analyze-skill` now detects interactive-artifact write-backs lost under Cowork.** Alongside the
