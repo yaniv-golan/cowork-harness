@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>Materialized Viewer (is_static:true)</title></head>
+<body>
+  <button id="submit">Submit</button>
+  <script>
+    // Materialized with is_static:true baked in at build time — a real literal, not a template
+    // placeholder — so the guard below constant-folds to true and the relative write-back is dead code.
+    const IS_STATIC = true;
+
+    document.getElementById("submit").addEventListener("click", function () {
+      if (!IS_STATIC) {
+        fetch("/api/feedback", { method: "POST", body: JSON.stringify({ ok: true }) }).then(function () {
+          document.getElementById("submit").textContent = "Saved!";
+        });
+      } else {
+        document.getElementById("submit").textContent = "Copy the JSON below instead — no live backend under Cowork.";
+      }
+    });
+  </script>
+</body>
+</html>

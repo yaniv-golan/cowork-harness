@@ -1,0 +1,4 @@
+{
+  "name": "fixture-plugin",
+  "description": "fixture plugin for collectArtifactSources — proves plugin-root union and sibling-skill exclusion"
+}

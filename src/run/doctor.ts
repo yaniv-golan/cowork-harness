@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
 import { resolveAgentBinary, resolveHostAgentBinary, classifyNativeStagingDrift, loadBaseline, sha256File } from "../baseline.js";
 import { limaPath, vmStatus, instanceName } from "../runtime/lima.js";
-import { pkgVersion, fail, isJsonOutput } from "./envelope.js";
+import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr. A `process.stdout.write` +
 // `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer); writeSync
@@ -408,7 +408,10 @@ export function cmdDoctor(args: string[]): void {
   const ok = blocking.length === 0;
 
   if (json) {
-    out(JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command: "doctor", tier, ok, checks }));
+    // Routed through the shared envelope (schema/doctor.json, SPEC §11.x/§12) so the completed-probe
+    // shape carries `error: null` like every other command's normal-path JSON — a consumer branching
+    // on `error !== null` sees a consistent frame across `doctor` and the rest of the CLI.
+    out(jsonPayloadEnvelope("doctor", ok, { tier, checks }));
   } else {
     log(`cowork-harness doctor — tier: ${tier}\n`);
     for (const c of checks) {

@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-16
+
+Minor: `analyze-skill` gains interactive-artifact write-back detection (static + an optional `--runtime`
+headless-DOM confirmer), `lint` gains a container-only-key tier check, and the `doctor` JSON envelope is
+frozen as a covered SPEC §12 surface. All additive.
+
+### Added
+
+- **`analyze-skill` now detects interactive-artifact write-backs lost under Cowork.** Alongside the
+  existing `/sessions` path scan, it statically analyzes `.html/.htm/.js/.mjs/.ts/.jsx/.tsx/.py` sources
+  under the target for a relative `fetch`/XHR/`sendBeacon`/`<form method=post>` write-back that silently
+  fails under Cowork (the artifact is served from Cowork's own origin, so a relative write-back resolves
+  non-ok and a page that doesn't check `resp.ok` shows a false "Saved"). Findings: `artifact-write-back-lost`
+  (error — gates under `--strict`), `artifact-write-back-suspect` (advisory), and a separate top-level
+  `analysisFailures` **could-not-verify** channel (a candidate that couldn't be parsed/analyzed) that
+  always exits `3`, `--strict`-independent. A guard that isn't statically provable-truthy is `suspect`,
+  never silently clean; the blanket `analyze-skill: ignore` marker does not silence artifact rules.
+  Each `SkillFinding` now carries a `severity` (`error|advisory`); `--strict` gates on any error finding.
+- **`analyze-skill --runtime`** — an optional headless-DOM confirmation that drives a materialized `.html`
+  artifact in jsdom (stubbed network + synthetic user actions, run twice) to *observe* whether a relative
+  write-back fires and is lost. Enrichment only (never changes the exit code); trusted-source scope. `jsdom`
+  is an optional, dynamically-imported dependency — absent it reports "run `npm i jsdom` to enable".
+- **`schema/doctor.json`** — the `doctor --output-format json` envelope is now a covered SPEC §12 surface
+  (`oneOf` the completed-probe shape and the shared error envelope for every category). `doctor`'s normal
+  JSON output is standardized through the shared envelope frame.
+- **`lint` flags container-only assertion keys off-container** — `no_scratchpad_leak`/`present_files_called`
+  on `fidelity: protocol|microvm|hostloop` is an ERROR, on `fidelity: cowork` a WARN, clean on `container`.
+
 ## [1.0.6] — 2026-07-15
 
 Patch: platform baseline synced to Claude Desktop `1.21459.0`. The spawn contract and rendered system

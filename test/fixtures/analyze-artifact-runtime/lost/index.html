@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <body>
+    <button id="save">Save</button>
+    <div id="msg"></div>
+    <script>
+      document.getElementById("save").addEventListener("click", function () {
+        fetch("/api/save", { method: "POST", body: JSON.stringify({ ok: true }) }).then(function () {
+          // Never consults resp.ok / resp.status / resp.json() / resp.text() — an unconditional
+          // "success" path regardless of what the server actually said.
+          document.getElementById("msg").textContent = "Saved!";
+        });
+      });
+    </script>
+  </body>
+</html>

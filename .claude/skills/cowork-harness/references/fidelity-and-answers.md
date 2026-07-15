@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 1.0.6` (baseline `desktop-1.20186.1`).
+Self-contained reference. Tracks `cowork-harness 1.1.0` (baseline `desktop-1.20186.1`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -170,6 +170,36 @@ A gate that fails loud (`on_unanswered: fail`, the default) still **salvages a P
 writes a `result.json` (marked `partial: true`) with the artifacts the agent produced before the whiff, so
 the work isn't discarded — then exits 2. Inspect it with `cowork-harness inspect <run-dir>`. `verify-run`
 and `scaffold` refuse to treat a partial run's half-finished output as a passing result.
+
+## What a green does NOT prove
+
+A passing run is evidence for exactly what it checked, not a blanket certificate. Three gaps come
+up often enough to spell out:
+
+- **A green `replay` proves "same as when recorded," not "correct today."** `replay` never touches
+  a filesystem or network — it re-evaluates assertions from the frozen cassette. A fixed set of
+  keys is live-only and **skipped outright** on replay (absent from `assertions[]`, not vacuously
+  passed): `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`,
+  `egress_allowed`, `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, and `expect_denied`.
+  Everything else that *is* evaluated is checked against the **recording**, not fresh behavior — a
+  green replay says the skill produced these events when it was recorded, not that it still does
+  (`staleness[]` flags skill/baseline drift as a hint; only a live `run` re-confirms current
+  behavior). See `docs/cassette.md` § "Still skipped on replay" and `docs/scenario.md` § "Which
+  assertions survive replay."
+- **Container-only assertions can't verify off the `container` tier.** `no_scratchpad_leak` and
+  `present_files_called` check the `present_files` delivery path, which is served **only** on
+  `container` — not `hostloop`/`microvm`. Asserting them off-container hard-fails at runtime (a red
+  run, not a false green), so you won't be fooled if you write the assertion. The quieter trap is a
+  scenario that runs at `hostloop`/`microvm`/`protocol` and simply omits these assertions: a green
+  run there proves **nothing** about scratchpad-leak safety or present_files delivery, because that
+  tier never exercises the delivery path the assertions would check. Use `fidelity: container` for
+  present_files/scratchpad-delivery coverage.
+- **The harness doesn't observe rendered-artifact interactions, browser downloads, or human
+  clicks.** It runs the agent headless — no webview, no browser, no person clicking "Submit." A
+  class of Cowork bug (a client-side write-back to a relative URL that resolves-but-fails against
+  Cowork's own origin, or a broken blob-download fallback) is invisible to any live run, however
+  faithfully sandboxed, because it only manifests in a rendered DOM a human is driving. See
+  `docs/fidelity-gaps.md` § "Browser↔webview↔human-interaction boundary."
 
 ## Relevant environment variables
 

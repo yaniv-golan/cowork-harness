@@ -10,6 +10,8 @@ import json
 import types as _types
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 SCENARIO_PY = REPO / ".claude/skills/cowork-harness/scripts/scenario.py"
 KEYS_JSON = REPO / ".claude/skills/cowork-harness/scripts/assertion-keys.json"
@@ -265,3 +267,89 @@ def test_empty_requires_capabilities_on_protocol_is_clean(tmp_path):
         "protocol", "requires_capabilities: []\nassert:\n  - result: success\n", tmp_path
     )
     assert "capabilities-on-protocol" not in rules
+
+
+# --- container-only keys (no_scratchpad_leak / present_files_called) off `fidelity: container` ---
+# Mirrors the transcript_no_host_path tier precedent above (test_host_path_assert_on_*), just the
+# opposite direction: container-only keys ERROR on tiers that can't serve present_files at all
+# (protocol/microvm/hostloop), WARN on cowork (baseline-gate-resolution dependent), clean on
+# container/omitted.
+
+CONTAINER_ONLY_KEYS = ("no_scratchpad_leak", "present_files_called")
+ERROR_TIERS = ("protocol", "microvm", "hostloop")
+
+
+@pytest.mark.parametrize("key", CONTAINER_ONLY_KEYS)
+@pytest.mark.parametrize("tier", ERROR_TIERS)
+def test_container_only_key_off_container_tiers_is_error(key, tier, tmp_path):
+    body = f"assert:\n  - {key}: true\n"
+    findings = [
+        f
+        for f in scenario.lint_file(str(_write_at(tmp_path, tier, body)))
+        if f.rule == "container-only-key-off-container"
+    ]
+    assert len(findings) == 1, (key, tier)
+    assert findings[0].severity == "ERROR"
+    assert key in findings[0].message
+    assert tier in findings[0].message
+
+
+@pytest.mark.parametrize("key", CONTAINER_ONLY_KEYS)
+def test_container_only_key_on_cowork_is_warn_naming_the_gate_dependency(key, tmp_path):
+    body = f"assert:\n  - {key}: true\n"
+    findings = [
+        f
+        for f in scenario.lint_file(str(_write_at(tmp_path, "cowork", body)))
+        if f.rule == "container-only-key-off-container"
+    ]
+    assert len(findings) == 1, key
+    assert findings[0].severity == "WARN"
+    assert key in findings[0].message
+    # offline gate fact: the message names the gate-resolution dependency (mirrors host-path-assert-cowork)
+    assert scenario.HOST_LOOP_GATE_ID in findings[0].message
+
+
+@pytest.mark.parametrize("key", CONTAINER_ONLY_KEYS)
+@pytest.mark.parametrize("tier", ("container", None))
+def test_container_only_key_on_container_or_omitted_is_clean(key, tier, tmp_path):
+    body = f"assert:\n  - {key}: true\n"
+    if tier is None:
+        # omitted fidelity defaults to container
+        f = tmp_path / "sc.yaml"
+        f.write_text(
+            "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\n" + body,
+            encoding="utf-8",
+        )
+        findings = scenario.lint_file(str(f))
+    else:
+        findings = scenario.lint_file(str(_write_at(tmp_path, tier, body)))
+    assert not any(f.rule == "container-only-key-off-container" for f in findings)
+
+
+def _write_at(tmp_path, tier, yaml_body, name="sc.yaml"):
+    f = tmp_path / name
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\n"
+        f"fidelity: {tier}\nprompt: hi\n" + yaml_body,
+        encoding="utf-8",
+    )
+    return f
+
+
+def test_container_only_key_error_gates_without_strict(tmp_path):
+    # ERROR always gates — nonzero exit even without --strict (mirrors host-path-assert-tier's exit class).
+    f = _write_at(tmp_path, "protocol", "assert:\n  - present_files_called: true\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    assert code != 0
+    assert any(x["rule"] == "container-only-key-off-container" and x["severity"] == "ERROR" for x in findings)
+
+
+def test_container_only_key_warn_gates_only_under_strict(tmp_path):
+    # WARN (cowork) is zero-exit without --strict, nonzero with --strict.
+    f = _write_at(tmp_path, "cowork", "assert:\n  - present_files_called: true\n")
+    code_plain, findings_plain = _lint_cmd([f], json_out=True, strict=False)
+    assert code_plain == 0
+    assert any(x["rule"] == "container-only-key-off-container" and x["severity"] == "WARN" for x in findings_plain)
+
+    code_strict, _ = _lint_cmd([f], json_out=True, strict=True)
+    assert code_strict != 0

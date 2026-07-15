@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <body>
+    <button id="save">Save</button>
+    <div id="msg"></div>
+    <script>
+      document.getElementById("save").addEventListener("click", function () {
+        fetch("/api/save", { method: "POST", body: JSON.stringify({ ok: true }) }).then(function (resp) {
+          if (resp.ok) {
+            document.getElementById("msg").textContent = "Saved!";
+          } else {
+            document.getElementById("msg").textContent = "Error saving — please retry.";
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

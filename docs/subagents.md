@@ -220,6 +220,44 @@ authoritative check remains the runtime `no_vm_path_file_op` / `vm_path_denied` 
 [scenario.md](./scenario.md)) against a real recorded/live run — `analyze-skill` exists to catch the
 obvious cases before paying for that run, not to replace it.
 
+### Interactive-artifact write-backs (`artifact-write-back-*`)
+
+Beyond `/sessions` addressing, `analyze-skill` flags a **Cowork-specific** bug class: a skill that emits
+an interactive HTML artifact (a form, a review dashboard) whose "Submit" does a client-side write-back
+that silently never reaches the agent. Under Cowork the artifact is served from Cowork's **own origin**,
+so a relative `fetch("/api/…", {method:"POST"})` / XHR-POST / `sendBeacon("/…")` / `<form method=post
+action="/…">` **resolves but returns non-ok**; a page that doesn't check `resp.ok` shows a false
+"Saved!" (and the common blob-download fallback is also broken in Cowork's embedded viewer). A live
+harness run is structurally blind to this (no browser, no human — see
+[fidelity-gaps.md](./fidelity-gaps.md)), so it is caught statically instead.
+
+`analyze-skill` scans `.html/.htm/.js/.mjs/.ts/.jsx/.tsx/.py` sources under the target (its OWN source
+set — the `.py`/`.js` *generator* that emits the HTML is scanned too, since the write-back string often
+lives in a template) and emits:
+
+- **`artifact-write-back-lost`** (severity `error` — gates under `--strict`) — a relative write-back with
+  a lost consequence: a broken download fallback, an unchecked success claim, or a native
+  `<form method=post>` (no JS handler, so `resp.ok` can't be checked).
+- **`artifact-write-back-suspect`** (severity `advisory` — never gates on its own) — a relative write-back
+  with a fully-local graceful fallback, or one behind a guard whose runtime value can't be statically
+  proven truthy. A merely *lexical* `is_static`-style guard does NOT clear a candidate to clean.
+- **could-not-verify** (`analysisFailures`, exit `3`, always — `--strict`-independent) — a candidate that
+  couldn't be parsed/analyzed. A candidate you can't check is never a silent pass. A strict `error`
+  finding's exit `1` takes precedence over exit `3`.
+
+These artifact rules are **not** silenced by the `analyze-skill: ignore` marker (that marker only affects
+the `/sessions` path-fidelity rules). Documented false negative: a generator whose markers/URLs are
+themselves computed is missed by the static tier — that's what `--runtime` is for.
+
+**`--runtime` (optional runtime confirmation).** Drives each materialized `.html` artifact in a headless
+DOM (jsdom): it stubs the network, fires synthetic user actions, and runs twice (server-200 vs -404) to
+**observe** whether a relative write-back fires and is lost (final DOM identical across 200/404, response
+never consulted, or an attributed blob-download). The verdict (`lost`/`suspect`/`clean`/`inconclusive` +
+evidence) is attached to the output as `runtimeConfirmations`. It is **enrichment only — it never changes
+the exit code.** `jsdom` is an optional, dynamically-imported dependency (`npm i jsdom` to enable);
+without it, `--runtime` reports that once. It executes artifact JS in-process, so it is for a
+**trusted-source scope** (an author testing their own skill), not adversarial third-party skills.
+
 ## Static `subagent_type` resolution (`resolve-agent-types` / `lint-skill`)
 
 A pinned `subagent_type` value that doesn't resolve to a real agent (e.g.

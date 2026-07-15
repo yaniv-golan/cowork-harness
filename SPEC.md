@@ -674,6 +674,34 @@ already-redacted markers. The TLD list used by the domain scanner was also exten
 entries (CB-5), adding major European, Asian, and Latin American ccTLDs
 (`ch|nl|se|no|it|jp|br|nz|in|sg|kr|mx|es|pt|pl|be|at|dk|fi|ie|ru|cn|tw|hu|cz|ro|il|za|ar|cl|pe|tr`).
 
+### 11.2 `doctor` — dedicated envelope
+
+`doctor [--tier <t>]` is the read-only prerequisite check ("can I run the live tiers — what's
+missing?"). Its `--output-format json` output does **not** reuse the `run/skill/replay` envelope (no
+`RunResult` to judge) — it emits its own, published as **`schema/doctor.json`** (a §12-covered contract
+surface):
+
+```jsonc
+// Completed probe (normal path — routed through the shared jsonPayloadEnvelope, so error is always null):
+{ "tool": "cowork-harness", "version": "...", "command": "doctor",
+  "ok": true,                        // false iff any `required` check has status:"fail" for the selected tier
+  "error": null,
+  "tier": "container",               // protocol|container|microvm|hostloop|cowork
+  "checks": [ { "id": "node", "title": "Node ≥ 20", "status": "ok", "detail": "node 22.x.x",
+                "remedy?": "string", "required": true } ] }  // status: ok|fail|warn|skip
+
+// Shared error envelope (a thrown failure — bad flag, or the top-level catch):
+{ "tool": "cowork-harness", "version": "...", "command": "doctor", "ok": false, "results": [],
+  "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string" } }
+```
+
+`ok = !checks.some(c => c.required && c.status === "fail")`. **Exit codes:** `0` all required checks
+pass · `1` a required check is `status:"fail"` for the selected tier (the completed-probe shape, still
+`error:null`) · `2` usage (bad `--tier`/unexpected args) or an unexpected internal failure caught by the
+top-level catch (`category:"internal"`). The `checks[].id` set is **not** enumerated as a closed
+contract — it grows as tiers/checks are added, the same way `trace` row shapes are excluded from §12's
+covered list.
+
 ## 12. Versioning & the 1.0 compatibility contract
 
 From `1.0.0` the project follows [semver](https://semver.org/). The surfaces below are the **covered
@@ -698,6 +726,12 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `findings` / `staleness` / `unverifiable` / `notes` / `version` / `error` channels, and the exit-code
   split (`0`/`1`/`2`/`3`, §11) they map to. This is the machine output the CI recipes and the packaged
   Action steer consumers to parse; renaming or removing a key is breaking, adding one is not.
+- **`doctor` envelope** — `schema/doctor.json` under `--output-format json` (§11.2): the completed-probe
+  shape (`tool` / `version` / `command` / `ok` / `error:null` / `tier` / `checks[]`, each check's
+  `id` / `title` / `status` / `detail` / `required` / optional `remedy`) and the shared error-envelope
+  shape (`results:[]` / `error.category`) it falls back to on a thrown failure; renaming or removing a
+  key is breaking, adding one is not. The `checks[].id` set itself is NOT covered — it grows with new
+  tiers/checks.
 - **Cassette format** — the current `cassetteVersion` (**10**, `schema/cassette.v10.json`) and its
   verdict-modifier assertion keys. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
