@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/release-preflight.ts`: `changelogHasVersionSection` now finds the CHANGELOG heading with a
+  literal line-prefix match instead of a regex assembled from the version string. Behavior is
+  unchanged — the version is already `isValidSemver`-gated to `X.Y.Z` before this runs — and it drops
+  a redundant, only-partially-escaped regex flagged by CodeQL (`js/incomplete-sanitization`). Internal
+  release tooling only; no runtime or API change.
+
 ## [1.0.4] — 2026-07-15
 
 Patch: release workflows no longer trigger on the floating Marketplace alias tags. No runtime/API change.

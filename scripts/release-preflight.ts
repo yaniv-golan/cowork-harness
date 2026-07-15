@@ -35,17 +35,15 @@ export function isValidSemver(v: string): boolean {
 }
 
 /**
- * Mirrors release.yml's "Verify CHANGELOG has a heading for this version" step (a literal
- * `^## \[<version>\]` match, dots escaped) — plus a stricter, preflight-only requirement that the
- * section body (everything between this heading and the next `## [`) is non-empty. release.yml itself
- * does NOT require a non-empty body (its release-notes extraction step has its own fallback for that);
- * this function is intentionally stricter so an accidentally-empty section is caught before the tag.
+ * Mirrors release.yml's "Verify CHANGELOG has a heading for this version" step (an anchored
+ * `^## \[<version>\]` heading match) — implemented here as a literal line-prefix test on
+ * `## [<version>]`, so the version is matched verbatim (dots stay literal; no regex built from the
+ * version) — plus a stricter, preflight-only requirement that the section body (everything between
+ * this heading and the next `## [`) is non-empty. release.yml itself does NOT require a non-empty body
+ * (its release-notes extraction step has its own fallback for that); this function is intentionally
+ * stricter so an accidentally-empty section is caught before the tag.
  */
 export function changelogHasVersionSection(changelogText: string, version: string): boolean {
-  const escaped = version.replace(/\./g, "\\.");
-  const headingRe = new RegExp(`^## \\[${escaped}\\]`, "m");
-  if (!headingRe.test(changelogText)) return false;
-
   const headingPrefix = `## [${version}]`;
   const lines = changelogText.split("\n");
   let inSection = false;
