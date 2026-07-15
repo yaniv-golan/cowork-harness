@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+  <body>
+    <button id="toggle">Toggle</button>
+    <div id="panel">closed</div>
+    <script>
+      document.getElementById("toggle").addEventListener("click", function () {
+        var panel = document.getElementById("panel");
+        panel.textContent = panel.textContent === "closed" ? "open" : "closed";
+      });
+    </script>
+  </body>
+</html>

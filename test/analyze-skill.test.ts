@@ -1368,3 +1368,36 @@ describe.skipIf(!can)("analyze-skill CLI — Tier A interactive-artifact write-b
     expect(run(["analyze-skill", join(d2, "v.html"), "--strict"], d2).code).toBe(1);
   });
 });
+
+// ── Item 1 (Tier B) — optional --runtime confirmation, wired through cmdAnalyzeSkill ─────────────── //
+describe.skipIf(!can)("analyze-skill CLI — Tier B --runtime enrichment", () => {
+  it("--runtime observes a lost write-back and adds runtimeConfirmations WITHOUT changing the exit code", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-rt-"));
+    writeFileSync(
+      join(d, "viewer.html"),
+      [
+        "<!DOCTYPE html><html><body><button id='s'>Save</button><script>",
+        "document.getElementById('s').addEventListener('click',function(){",
+        "  fetch('/api/save',{method:'POST'}).then(function(){document.body.innerHTML='Saved!';});",
+        "});",
+        "</script></body></html>",
+      ].join("\n"),
+    );
+    // Tier B enriches only: exit code is Tier A's (0 without --strict) — --runtime must NOT change it.
+    expect(run(["analyze-skill", join(d, "viewer.html"), "--runtime"], d).code).toBe(0);
+    expect(run(["analyze-skill", join(d, "viewer.html"), "--runtime", "--strict"], d).code).toBe(1);
+    const j = run(["analyze-skill", join(d, "viewer.html"), "--runtime", "--output-format", "json"], d);
+    const env = JSON.parse(j.out);
+    expect(Array.isArray(env.runtimeConfirmations)).toBe(true);
+    const c = env.runtimeConfirmations[0];
+    // Either an observed verdict (jsdom present) or a graceful unavailable — both are valid, never a throw.
+    expect(c.available === false || (c.available === true && ["lost", "suspect", "clean", "inconclusive"].includes(c.verdict))).toBe(true);
+  });
+
+  it("without --runtime, no runtimeConfirmations key is emitted", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-nort-"));
+    writeFileSync(join(d, "v.html"), "<!DOCTYPE html><html><body><script>fetch('/api/x',{method:'POST'})</script></body></html>");
+    const env = JSON.parse(run(["analyze-skill", join(d, "v.html"), "--output-format", "json"], d).out);
+    expect(env.runtimeConfirmations).toBeUndefined();
+  });
+});

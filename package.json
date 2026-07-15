@@ -108,6 +108,7 @@
   "devDependencies": {
     "@types/node": "^26.0.0",
     "ajv": "^8.17.1",
+    "jsdom": "^29.1.1",
     "prettier": "3.9.5",
     "tsx": "^4.19.0",
     "typescript": "^6.0.3",

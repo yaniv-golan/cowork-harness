@@ -4,6 +4,7 @@ import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { analyzeArtifacts } from "./analyze-artifact.js";
+import { confirmArtifactRuntime, type RuntimeVerdict } from "./analyze-artifact-runtime.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts / cassette.ts): machine→stdout, human→stderr.
 const out = (s: string) => writeSync(1, s + "\n");
@@ -1086,20 +1087,21 @@ function resolvePositional(target: string): SkillTargetResolution | { error: str
  * on-tier signal remains the runtime `no_vm_path_file_op` / `pathDenials` assertions (see
  * `docs/subagents.md`).
  */
-export function cmdAnalyzeSkill(args: string[]): void {
+export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
   const asJson = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(args, {
       values: ["--output-format"],
       enums: { "--output-format": ["text", "json"] },
-      booleans: ["--strict"],
+      booleans: ["--strict", "--runtime"],
     });
   } catch (e) {
     return fail("analyze-skill", "usage", String((e as Error).message), undefined, asJson);
   }
   const json = p.options["--output-format"] === "json";
   const strict = p.flags["--strict"] === true;
+  const runtime = p.flags["--runtime"] === true;
   if (p.positionals.length === 0) {
     return fail(
       "analyze-skill",
@@ -1193,6 +1195,26 @@ export function cmdAnalyzeSkill(args: string[]): void {
   const analysisFailures = artifact.analysisFailures;
   const allFindings = perFile.flatMap((pf) => pf.findings);
 
+  // Item 1 (Tier B): OPTIONAL runtime confirmation (--runtime). For each materialized HTML artifact source,
+  // drive it in a headless DOM and OBSERVE whether a relative write-back fires and is lost — enriching the
+  // static verdict with observed evidence (and catching guard-falseness / dynamic URLs Tier A can't).
+  // jsdom is an OPTIONAL, dynamically-imported dependency; if absent, this reports it once. Tier B ENRICHES
+  // only — it NEVER changes the exit code (§B4: only a Tier-A `error` finding under --strict gates); a
+  // `low`/`inconclusive`/`unavailable` runtime verdict never gates on its own. Trusted-source scope only.
+  type RuntimeConfirmation = { path: string } & RuntimeVerdict;
+  const runtimeConfirmations: RuntimeConfirmation[] = [];
+  if (runtime) {
+    for (const file of artifact.scanned.filter((f) => /\.html?$/i.test(f))) {
+      let html: string;
+      try {
+        html = readFileSync(file, "utf8");
+      } catch {
+        continue; // a read failure is already surfaced as an analysisFailure by Tier A
+      }
+      runtimeConfirmations.push({ path: file, ...(await confirmArtifactRuntime(file, html)) });
+    }
+  }
+
   // Exit precedence (plan §B3): a strict `error` finding wins exit 1; else any could-not-verify failure
   // is exit 3; else advisory/clean exit 0. `analysisFailures` gate REGARDLESS of --strict (no-false-green:
   // a candidate that couldn't be analyzed must never pass silently). `ok` mirrors the exit code.
@@ -1208,6 +1230,7 @@ export function cmdAnalyzeSkill(args: string[]): void {
         scanned: fileList,
         unscanned,
         analysisFailures,
+        ...(runtime ? { runtimeConfirmations } : {}),
         strict,
       }),
     );
@@ -1223,6 +1246,20 @@ export function cmdAnalyzeSkill(args: string[]): void {
       }
     }
     for (const af of analysisFailures) log(`⚠ could not analyze ${af.path} (${af.stage}): ${af.reason}`);
+    if (runtime) {
+      const unavailable = runtimeConfirmations.find((c) => c.available === false);
+      if (unavailable && unavailable.available === false) {
+        log(`· runtime confirmation unavailable — ${unavailable.reason}`);
+      }
+      for (const c of runtimeConfirmations) {
+        if (c.available !== true) continue;
+        const glyph = c.verdict === "lost" ? "⚠" : c.verdict === "clean" ? "✓" : "·";
+        log(
+          `${glyph} runtime: ${c.path} — observed ${c.verdict} (${c.confidence})${c.evidence.length ? `: ${c.evidence.join("; ")}` : ""}`,
+        );
+      }
+      log("  runtime confirmation is enrichment (trusted-source scope) — it never changes the exit code.");
+    }
     if (analysisFailures.length > 0 && !strictErrorFinding) {
       log(
         `⚠ analyze-skill: ${analysisFailures.length} artifact candidate(s) could not be analyzed — could-not-verify (exit 3); ` +
