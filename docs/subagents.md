@@ -258,6 +258,26 @@ the exit code.** `jsdom` is an optional, dynamically-imported dependency (`npm i
 without it, `--runtime` reports that once. It executes artifact JS in-process, so it is for a
 **trusted-source scope** (an author testing their own skill), not adversarial third-party skills.
 
+**Recipe — confirm artifacts the agent GENERATED at run time.** `analyze-skill` scans a skill's *source*,
+which catches artifacts (and their `.py`/`.js` generators) that ship in the skill. But an artifact the
+model *builds during a run* — HTML written straight to `outputs/`, or emitted by a generator whose output
+the static scan couldn't isolate — doesn't exist until the run happens. Because `analyze-skill` accepts a
+bare directory (no `SKILL.md` required), you confirm those directly by pointing `--runtime` at a completed
+run's outputs directory:
+
+```bash
+# container / hostloop runs:
+cowork-harness analyze-skill --runtime "<run-dir>/work/session/mnt/outputs" --output-format json
+# protocol runs: the outputs dir is <run-dir>/work/outputs
+```
+
+The `<run-dir>` is printed on `stderr` as `[status] <dir>` at run start (or find it with
+`cowork-harness trace <run-id>`). This is the same confirmer as above — `runtimeConfirmations` in the JSON,
+enrichment only, needs `jsdom` installed. Caveats: it confirms whatever `.html` is present in that dir
+(agent output AND any author fixtures there); on **`microvm`** the agent's outputs are **not** staged into
+the run dir (a known artifact-collection gap), so this recipe has nothing to read for a microvm run; and a
+**replay** run dir has no live filesystem to scan.
+
 ## Static `subagent_type` resolution (`resolve-agent-types` / `lint-skill`)
 
 A pinned `subagent_type` value that doesn't resolve to a real agent (e.g.
