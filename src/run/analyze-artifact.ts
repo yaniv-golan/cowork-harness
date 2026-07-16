@@ -308,6 +308,14 @@ function hasWriteBackPrimitive(text: string): boolean {
   return WRITE_BACK_PRIMITIVE_RE.test(text) || FORM_POST_TAG_RE.test(text);
 }
 
+/** Broader than `WRITE_BACK_PRIMITIVE_RE` — used ONLY to decide whether an UNPARSEABLE `<script>` block is
+ *  worth treating as a could-not-verify vs. discounting as prose. Mirrors every write-back kind
+ *  `analyzeScriptAst` recognizes: `fetch(`, a bare `.open(` XHR, `sendBeacon(`, and the `axios`/`$`/`jQuery`
+ *  `.post(` wrappers — so an unparseable block whose only write-back is `xhr.open("POST",…)` or
+ *  `$.post("/api/…")` is never silently discounted. Erring toward RECORDING (fail-closed): a block matching
+ *  this is escalated to could-not-verify, not dropped. */
+const BLOCK_WRITE_BACK_HINT_RE = /\bfetch\s*\(|XMLHttpRequest|\.open\s*\(|sendBeacon\s*\(|\baxios\b|\.post\s*\(/;
+
 /** A browser/HTML-emit marker: `<script`, `document.`, `innerHTML`, or a literal HTML-document string
  *  emit (`<!DOCTYPE html`/`<html …>`). Required (in addition to a write-back primitive) for the
  *  non-HTML extensions — the marker is the evidence that a `.py`/`.js` generator source actually emits a
@@ -814,16 +822,21 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
 // Per-file core
 // ------------------------------------------------------------------------------------------------- //
 
-/** Analyze ONE already-read source file for the Cowork write-back bug class. Returns EXACTLY ONE of:
- *   - `{finding}` — a verdict finding (`artifact-write-back-lost` error, or `artifact-write-back-suspect`
- *     advisory);
- *   - `{failure}` — a could-not-verify record (`AnalysisFailure`, see the stage enum on that type);
- *   - `{}` — either the source is not a Tier A CANDIDATE at all (ordinary code — no finding, no failure),
- *     or it IS a candidate but has no live relative write-back (no relative write-back at all, or every
- *     one found is behind a provably-dead guard) — genuinely clean.
- *  Never returns both `finding` and `failure` — a could-not-verify signal always wins over a same-file
- *  finding (see the parse-failure short-circuit below), so a real problem is never masked by a partial
- *  verdict from the rest of the file. */
+/** Analyze ONE already-read source file for the Cowork write-back bug class. Returns:
+ *   - `{finding}` — a verdict (`artifact-write-back-lost` error, or `artifact-write-back-suspect` advisory)
+ *     from the file's real, parseable script/form write-back(s);
+ *   - `{failure}` — a could-not-verify record (`AnalysisFailure`, see the stage enum): a block that carries
+ *     a write-back hint but could not be parsed/cap-analyzed, an `unsupported-guard`, or a candidate whose
+ *     every isolated `<script>` block was unparseable so nothing could be analyzed;
+ *   - `{finding, failure}` — BOTH, when the file has a real verdict AND a separate write-back-bearing block
+ *     that could not be analyzed (a parse/cap failure — the finding is surfaced, the could-not-verify is not
+ *     swallowed). NOTE: an `unsupported-guard` still short-circuits to `{failure}` alone.
+ *   - `{}` — not a Tier A candidate (ordinary code), or a candidate whose parseable write-back(s) are all
+ *     clean/dead — genuinely clean.
+ *  A block that fails to PARSE with no write-back hint is treated as prose (a docstring/comment the lexical
+ *  `<script>` regex mis-extracted) and DISCOUNTED — one phantom block never sinks a file the rest of the loop
+ *  could adjudicate. But if EVERY isolated block was discounted and no finding/form resulted, the file is a
+ *  could-not-verify (fail-closed), never a silent clean pass. */
 export function analyzeArtifactFile(path: string, text: string): { finding?: SkillFinding; failure?: AnalysisFailure } {
   const ext = extname(path).toLowerCase();
   if (!SOURCE_EXTS.has(ext)) return {};
@@ -874,33 +887,69 @@ export function analyzeArtifactFile(path: string, text: string): { finding?: Ski
     });
   }
 
+  // Per-block analysis. A block that FAILS TO PARSE (a genuine acorn SyntaxError) is NOT automatically
+  // fatal: if its body carries no write-back hint it is almost certainly a docstring/comment that merely
+  // mentions `<script>...</script>` (SCRIPT_BLOCK_RE is lexical and can't tell prose from real markup), so
+  // we DISCOUNT it — one phantom block can't sink a file whose real block(s) yielded a verdict. If a hint
+  // IS present we could not rule out a lost write-back, so we record a could-not-verify surfaced ALONGSIDE
+  // any finding (fail-closed). A CAP hit (node-limit/deadline) is thrown AFTER a successful parse (see
+  // parseWithCaps) — the block is proven-valid JS, never prose — so it is ALWAYS recorded, hint or not.
+  const blockFailures: AnalysisFailure[] = [];
+  let parsedBlockCount = 0;
+  let discountedBlockCount = 0;
   for (const block of blocks) {
     let ast: acorn.Node;
     try {
       ast = parseWithCaps(block.code);
     } catch (e) {
       if (e instanceof CapExceededError) {
-        return { failure: { path, stage: e.stage, reason: e.message } };
+        blockFailures.push({ path, stage: e.stage, reason: e.message });
+      } else if (BLOCK_WRITE_BACK_HINT_RE.test(block.code)) {
+        blockFailures.push({ path, stage: "parse", reason: (e as Error).message });
+      } else {
+        discountedBlockCount++;
       }
-      return { failure: { path, stage: "parse", reason: (e as Error).message } };
+      continue;
     }
+    parsedBlockCount++;
     outcomes.push(...analyzeScriptAst(ast, block, text));
   }
 
+  // A real, PARSED block using control flow the analyzer can't represent as a guard is a deliberate
+  // could-not-verify and still short-circuits the whole file (unchanged from prior behavior).
   const unsupported = outcomes.find((o): o is Extract<Outcome, { kind: "unsupported-guard" }> => o.kind === "unsupported-guard");
   if (unsupported) {
     return { failure: { path, stage: "unsupported-guard", reason: unsupported.reason } };
   }
 
   const live = outcomes.filter((o): o is Extract<Outcome, { kind: "lost" | "suspect" }> => o.kind === "lost" || o.kind === "suspect");
-  if (live.length === 0) return {}; // no relative write-back at all, or every one is provably dead code
-
-  const lost = live.find((o) => o.kind === "lost");
-  if (lost) {
-    return { finding: { rule: "artifact-write-back-lost", severity: "error", path, line: lost.line, message: lost.reason } };
+  let finding: SkillFinding | undefined;
+  if (live.length > 0) {
+    const lost = live.find((o) => o.kind === "lost");
+    finding = lost
+      ? { rule: "artifact-write-back-lost", severity: "error", path, line: lost.line, message: lost.reason }
+      : { rule: "artifact-write-back-suspect", severity: "advisory", path, line: live[0].line, message: live[0].reason };
   }
-  const suspect = live[0];
-  return { finding: { rule: "artifact-write-back-suspect", severity: "advisory", path, line: suspect.line, message: suspect.reason } };
+
+  let failure: AnalysisFailure | undefined = blockFailures[0];
+  // Fail-closed backstop: we isolated >=1 <script> block, NONE parsed (every one was discounted as
+  // unparseable prose-or-opaque-template), and neither a finding nor a declarative form write-back was
+  // produced. We confirmed nothing about the artifact's write-backs, so this is a could-not-verify, never a
+  // silent clean pass. Covers a .py generator whose only <script> matches were prose, AND a JS/HTML source
+  // whose only <script> was an unresolved/opaque template slot (e.g. `<script>${jsSlot}</script>`) the
+  // lexical extractor could not turn into analyzable JS. (A .py candidate with NO <script> pair at all is
+  // handled earlier, before this loop.)
+  if (!finding && !failure && parsedBlockCount === 0 && discountedBlockCount > 0 && formHits.length === 0) {
+    failure = {
+      path,
+      stage: "extract",
+      reason:
+        "candidate source has browser/write-back markers but every isolated <script>…</script> block was unparseable — no analyzable write-back could be confirmed",
+    };
+  }
+
+  if (finding || failure) return { finding, failure };
+  return {}; // parseable write-back(s) all clean/dead, and nothing unparseable — genuinely clean
 }
 
 // ------------------------------------------------------------------------------------------------- //

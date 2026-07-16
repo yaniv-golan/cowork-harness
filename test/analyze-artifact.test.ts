@@ -171,6 +171,120 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const result = analyzeArtifactFile("/virtual/README.md", '<script>fetch("/api/x",{method:"POST"})</script>');
     expect(result).toEqual({});
   });
+
+  // ---- phantom-<script>-block regression (docstring/comment prose mis-extracted by the lexical regex) ----
+
+  it("phantom <script> in a docstring (no write-back hint) does NOT sink the real parseable block", () => {
+    const path = "/virtual/probe.py";
+    const text = [
+      '"""Emit an interactive HTML review page from a Python generator."""',
+      "",
+      'TEMPLATE = """<!doctype html><body>',
+      '<button id="save">Save</button>',
+      "<script>",
+      'document.getElementById("save").onclick = function () {',
+      '  fetch("/api/save", { method: "POST", body: JSON.stringify(window.state) })',
+      '    .then(function (r) { if (!r.ok) throw new Error("server"); })',
+      "    .catch(function () { /* download fallback */ });",
+      "};",
+      "</script>",
+      '</body>"""',
+      "",
+      "def _embed(data):",
+      '    """Encode for a <script> block: escape \'<\' so a value with \'</script>\' stays inert."""',
+      "    return data",
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    // The real block is adjudicated (advisory suspect via the fall-through branch — OK_CHECK_RE wants
+    // resp/res/response.ok, so `r.ok` is not matched); the prose block is discounted, not fatal.
+    expect(result.failure).toBeUndefined();
+    expect(result.finding).toBeDefined();
+    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
+  });
+
+  it("phantom <script> prose alongside a LOST real block still reports the lost finding, no failure", () => {
+    const path = "/virtual/lost-plus-prose.py";
+    const text = [
+      'TEMPLATE = """<script>',
+      'fetch("/api/save", { method: "POST" });',
+      'alert("Saved successfully");',
+      '</script>"""',
+      "",
+      "def _doc():",
+      '    """See <script>the save handler</script> for details."""',
+      "    return None",
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.failure).toBeUndefined();
+    expect(result.finding).toBeDefined();
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.finding?.severity).toBe("error");
+  });
+
+  it("an unparseable block that DOES carry a write-back hint stays could-not-verify (no silent pass)", () => {
+    const path = "/virtual/clean-plus-broken.py";
+    const text = [
+      'CLEAN = """<script>',
+      'document.title = "ok";',
+      '</script>"""',
+      'BROKEN = """<script>',
+      'fetch("/api/" + ${OOPS}, { method: "POST" });',
+      '</script>"""',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("parse");
+  });
+
+  it("a real lost write-back AND a genuinely-unparseable hint block surface BOTH finding and failure", () => {
+    const path = "/virtual/both.py";
+    const text = [
+      'LOST = """<script>',
+      'fetch("/api/save", { method: "POST" });',
+      'alert("Saved successfully");',
+      '</script>"""',
+      'BROKEN = """<script>',
+      'fetch("/api/x" + ${OOPS}, { method: "POST" });',
+      '</script>"""',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeDefined();
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("parse");
+  });
+
+  it("a .py candidate whose only <script> matches are phantom prose yields extract could-not-verify (fail-closed)", () => {
+    const path = "/virtual/only-prose.py";
+    const text = [
+      '"""Doc: emit a <script>hello world</script> banner."""',
+      "def go():",
+      '    fetch("/api/save")  # python-side call; never co-located inside a <script> pair',
+      "    return None",
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("extract");
+  });
+
+  it("JS-family candidate whose only <script> is phantom prose is could-not-verify, NOT a silent clean pass", () => {
+    const path = "/virtual/generator.js";
+    const text = [
+      "// see the <script>save handler</script> docs",
+      'fetch("/api/save", { method: "POST" });',
+      'alert("Saved successfully");',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    // The top-level fetch is NOT inside a <script>, so it is not an extracted block; the only extracted
+    // block is the phantom comment prose. Every isolated block is discounted -> fail-closed backstop, not
+    // exit 0. (We intentionally do NOT whole-file-analyze a JS generator: that risks mis-attributing the
+    // generator's own server-side calls as artifact write-backs.)
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("extract");
+  });
 });
 
 describe("analyzeArtifacts — (j) precedence / aggregation across files", () => {
