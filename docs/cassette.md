@@ -348,7 +348,10 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
 stream, so `RunResult.mcpErrors` is absent on replay), `max_peak_rss_bytes` (replay never spawns a sandbox
 to sample, so `RunResult.resources` is absent on replay), `semantic_matches` (an LLM judge call — never
-evaluable from a frozen cassette)
+evaluable from a frozen cassette), `no_lost_write_back` (needs the run's authored-file set, which the replay
+`AssertContext` has no `authoredFiles` for — a manifest-keyed classification would hard-fail every embedding
+cassette's replay; re-deriving authorship from the cassette manifest is a deferred follow-up capped by the
+64 KiB body cap)
 (and `expect_denied` — a **scenario-level shorthand** that expands to `egress_denied` assertions, not an
 assertion key in its own right).
 

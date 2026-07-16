@@ -27,6 +27,7 @@
     "max_turns",
     "no_delete_in_outputs",
     "no_hook_blocked",
+    "no_lost_write_back",
     "no_mcp_error",
     "no_path_denied",
     "no_scratchpad_leak",

@@ -129,6 +129,7 @@ LIVE_ONLY_KEYS = {
     "no_mcp_error",
     "max_peak_rss_bytes",
     "semantic_matches",
+    "no_lost_write_back",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # container-only: served only at fidelity: container (present_files / the scratchpad promotion path

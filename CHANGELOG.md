@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`no_lost_write_back: true` scenario assertion** — gate a scenario on "the agent didn't emit an
+  interactive artifact whose Submit is lost under Cowork". It runs the shipped static Tier A analyzer
+  (`analyze-artifact`, deterministic, no headless DOM) over the files the run authored — diffed against the
+  pre-run manifest — so a lost relative `fetch`/XHR/`sendBeacon`/`<form method=post>` write-back becomes a
+  per-scenario verdict, not just an out-of-band `analyze-skill` scan. A lost write-back on an **added**
+  agent-authored source (`outputs/` or the scratchpad) fails; a **pre-existing** file the skill only modified
+  on a read-write connected mount is advisory (not the skill's to own); `-suspect` findings surface but pass.
+  Honest evidence-unavailable semantics: could-not-verify (fail-closed, never a silent clean) on **microvm**
+  (no pre-run manifest — use container/hostloop), a `--resume` scratchpad walk, or an authored candidate that
+  couldn't be analyzed. **Live/verify-run only** — skipped-loud on replay (a cassette embedding the key never
+  hard-fails its replay); `verify-run` recomputes the authored set from the kept work dir. Only `true` is
+  valid (omit to skip).
+
 ## [1.1.0] — 2026-07-16
 
 Minor: `analyze-skill` gains interactive-artifact write-back detection (static + an optional `--runtime`

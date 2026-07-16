@@ -3875,6 +3875,12 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   "no_mcp_error",
   "max_peak_rss_bytes",
   "semantic_matches", // LIVE-ONLY: LLM-judge grade; skipped-loud on replay (the judge is a live model call)
+  // LIVE-ONLY: needs the authored-file set (captured live), which the replay AssertContext has no
+  // `authoredFiles` for; a MANIFEST_KEYS classification would evaluate on every manifest-carrying cassette
+  // with authoredFiles===undefined → could-not-verify → hard-fail every embedding replay. Replay eval is a
+  // genuine follow-up (re-derive authorship from cassette.preRunHashes vs the manifest); its value is capped
+  // by the 64 KiB body cap (self-contained interactive HTML routinely exceeds it) + the assert-embed cost.
+  "no_lost_write_back",
 ];
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`

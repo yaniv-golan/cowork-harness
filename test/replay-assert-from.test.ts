@@ -113,6 +113,18 @@ describe.skipIf(!can)("replay default — frozen assertions drive; only the SILE
     expect(r.code).toBe(0); // frozen asserts still drive
     expect(r.json?.ok).toBe(true);
   });
+
+  it("live-only no_lost_write_back is STRIPPED on replay (loud-skip, not a hard-fail on the embedding cassette)", () => {
+    const cwd = tmp();
+    // A cassette embedding no_lost_write_back. On replay there is no authoredFiles/preRunHashes, so if the
+    // key were EVALUATED it would fail-closed (could-not-verify) and red the whole replay. Because it is
+    // classified LIVE_ONLY_KEYS it is stripped before evaluation — the sibling transcript_contains drives.
+    write(cwd, "c.cassette.json", cassetteJson({ assert: [{ no_lost_write_back: true }, { transcript_contains: "hello" }] }));
+    write(cwd, "c.yaml", scenarioYaml({ assert: "  - no_lost_write_back: true\n  - transcript_contains: hello\n" }));
+    const r = replay(cwd, ["c.cassette.json", "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    expect(r.json?.ok).toBe(true);
+  });
 });
 
 describe.skipIf(!can)("replay opt-in — --assert-from / --reassert, safe by construction", () => {

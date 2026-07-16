@@ -504,6 +504,12 @@ export const Assertion = z.strictObject({
       "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector)",
     ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
+  no_lost_write_back: z
+    .literal(true)
+    .optional()
+    .describe(
+      "fails if the run authored an interactive HTML artifact (or a .py/.js generator of one) whose relative Submit/POST write-back is lost under Cowork — runs the static Tier A analyzer over the files the run authored; a lost write-back on an ADDED agent-authored source fails, a pre-existing file the skill merely modified on a read-write mount is advisory; could-not-verify (fail-closed) on microvm (no pre-run manifest), --resume scratchpad, or an unanalyzable candidate; only `true` is valid (omit to skip). LIVE/verify-run only — skipped on replay",
+    ),
   transcript_no_host_path: z
     .literal(true)
     .optional()

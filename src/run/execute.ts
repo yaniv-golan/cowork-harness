@@ -408,7 +408,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // that never look at it; absence stays loud.
   plan.capturePreRun =
     scenario.assert.some(
-      (a) => a.no_unexpected_files !== undefined || a.input_unmodified !== undefined || a.no_delete_in_outputs !== undefined,
+      (a) =>
+        a.no_unexpected_files !== undefined ||
+        a.input_unmodified !== undefined ||
+        a.no_delete_in_outputs !== undefined ||
+        // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
+        // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
+        // baseline it can only report evidence-unavailable every run.
+        a.no_lost_write_back !== undefined,
     ) || opts.command === "record";
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
