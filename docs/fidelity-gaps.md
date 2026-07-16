@@ -123,6 +123,11 @@ same in CI as at authoring time), or an offline confirmer that loads the *materi
 into a headless DOM and drives it programmatically after the run. Both work without a rendered
 browser or a human; a live run alone cannot.
 
+The static check ships two ways: the out-of-band `analyze-skill` scan (source or a run dir), and the
+per-scenario `no_lost_write_back: true` assertion, which runs the same detector over the files a run
+authored and folds the result into the run's verdict (live/verify-run; see [subagents.md](./subagents.md)
+and [scenario.md](./scenario.md)).
+
 ---
 
 ## Host-derived identity env vars

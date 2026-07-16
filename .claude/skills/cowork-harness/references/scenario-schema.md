@@ -408,8 +408,8 @@ staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-ski
 skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.
 
 **Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
-`self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`.
-These run only on a live `run`/`record`.
+`self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
+`no_lost_write_back`. These run only on a live `run`/`record`.
 
 **Mixed assertions on replay:** before evaluating, `replay` strips each assertion to its replay-checkable
 keys and drops any left empty. So `{result, egress_denied}` evaluates on replay as `{result}` alone — its
