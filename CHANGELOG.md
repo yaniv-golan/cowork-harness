@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`analyze-skill`: a `<script>…</script>` pair inside a docstring or comment no longer aborts a whole
+  file to could-not-verify.** The lexical block extractor could pull English prose out of a docstring or
+  comment as a phantom "script block"; its parse failure short-circuited the entire file to a
+  could-not-verify (exit 3), discarding the verdict already computed for the file's real, parseable
+  write-back block. The per-block analysis now accumulates: a block that fails to parse with no
+  `fetch`/XHR-`open`/`sendBeacon`/`axios`/`.post()` write-back hint is discounted as prose, while one that
+  carries a hint — or any block large enough to trip the analysis cap — is still reported as a
+  could-not-verify surfaced alongside any finding. A candidate whose every isolated `<script>` block is
+  unparseable stays a could-not-verify (fail-closed), never a silent clean pass.
+
 ## [1.1.0] — 2026-07-16
 
 Minor: `analyze-skill` gains interactive-artifact write-back detection (static + an optional `--runtime`
