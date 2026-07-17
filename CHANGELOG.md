@@ -49,6 +49,13 @@ All notable changes to this project are documented here. The format is based on
   no longer false-alarms; the path-gate's actual allow/deny decision was already realpath-rooted and is
   unaffected.
 
+### Documentation
+
+- **Documented an `analyze-skill --runtime` recipe for agent-generated artifacts.**
+  `analyze-skill --runtime <run-dir>/work/session/mnt/outputs` confirms interactive-artifact write-backs in
+  HTML the agent *generates during a run* — content the source-only static scan can't see until a run has
+  happened. Notes the tier-specific output paths and the microvm/replay caveats.
+
 ## [1.1.0] — 2026-07-16
 
 Minor: `analyze-skill` gains interactive-artifact write-back detection (static + an optional `--runtime`
