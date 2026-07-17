@@ -30,8 +30,13 @@ const REQUEST_COWORK_DIRECTORY = "mcp__cowork__request_cowork_directory";
 // depends on Cowork app-data-root concepts this harness has no analog for; and the reverse containment
 // direction (an ANCESTOR request that would incidentally expose one of these paths, e.g. requesting `~`
 // itself) — production's exact semantics for that direction weren't confirmed during investigation. Both
-// gaps ABSTAIN rather than silently allow: a miss here still reaches the normal human-approval flow, it
-// just isn't auto-refused pre-prompt the way production refuses it. Also unhandled, unlike the sibling
+// gaps ABSTAIN rather than silently allow, but that ABSTAIN does NOT reach a human-approval prompt — this
+// harness has no human-prompt path for plain permission requests at all. It falls through the Chain
+// (execute.ts:698 / chat.ts:359-364) to PermissionDefaultDecider (decider.ts:236-256): under
+// `permission_parity: "strict"` that's a deny, but under the DEFAULT `"cowork"` parity (session.ts:90) it's
+// a decisive, loudly-flagged auto-ALLOW (rationale `PERMISSIVE_AUTOALLOW_RATIONALE` = "allow-unscripted
+// (cowork parity)", audit-visible as `rec.permissiveAutoAllow`) — an unattended allow, not a prompt. Either
+// way it just isn't auto-refused pre-prompt the way production refuses it. Also unhandled, unlike the sibling
 // PreToolUse gate (pretooluse-path-hook.ts, which trims + lexically resolves + realpaths): no `.trim()`
 // on the raw input and no case-folding — e.g. `" ~/.ssh"` (leading space) or `~/.SSH` (case-insensitive
 // filesystem) will miss the deny and fall through to ABSTAIN. `..` segments ARE normalized for tilde-form
@@ -84,7 +89,9 @@ export function makeHostLoopCanUseToolGate(): Decider {
         if (typeof raw === "string" && isProtectedHomePath(raw)) {
           return deny(FOLDER_GRANT_DENIED_MESSAGE, "hostloop canUseTool folder-grant deny (protected home path)");
         }
-        return ABSTAIN; // no protected-path match → left to the human-approval flow, same as production
+        return ABSTAIN; // no protected-path match → falls through the Chain to PermissionDefaultDecider:
+        // strict-parity deny, or default cowork-parity auto-ALLOW (PERMISSIVE_AUTOALLOW_RATIONALE) — NOT a
+        // human-approval prompt (see the doc comment above)
       }
       if (!GATED.has(req.tool)) return ABSTAIN;
       // xe: the /sessions guard (both keys, 5-set only — MultiEdit not in the set, matching production).
