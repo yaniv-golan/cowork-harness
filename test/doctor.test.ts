@@ -289,3 +289,83 @@ describe("doctor --tier hostloop — native agent binary", () => {
     expect(blocking(cs)).toContain("hostAgent");
   });
 });
+
+// The `agent` check (staged VM ELF) is strict on container/microvm (the ELF IS the executed agent there),
+// but on hostloop/cowork it's a non-executed parity mount into the bash sidecar, so doctor must ask the
+// probe for `parityMount` tolerance — mirroring resolveAgentBinary's `{ parityMount: true }` opt-in.
+describe("doctor — agent check parity-mount tolerance by tier", () => {
+  it("--tier cowork asks for the VM ELF in parity-mount mode (tolerant)", () => {
+    let sawParity: boolean | undefined;
+    const cs = runDoctorChecks(
+      "cowork",
+      probe({
+        agentBinary: (opts) => {
+          sawParity = opts?.parityMount;
+          return { ok: true, path: "/x/claude" };
+        },
+      }),
+    );
+    expect(sawParity).toBe(true);
+    expect(get(cs, "agent").status).toBe("ok");
+  });
+
+  it("--tier hostloop also asks for parity-mount tolerance", () => {
+    let sawParity: boolean | undefined;
+    runDoctorChecks(
+      "hostloop",
+      probe({
+        agentBinary: (opts) => {
+          sawParity = opts?.parityMount;
+          return { ok: true, path: "/x/claude" };
+        },
+      }),
+    );
+    expect(sawParity).toBe(true);
+  });
+
+  it("--tier container keeps the VM ELF check STRICT (no parity mount)", () => {
+    let sawParity: boolean | undefined;
+    runDoctorChecks(
+      "container",
+      probe({
+        agentBinary: (opts) => {
+          sawParity = opts?.parityMount;
+          return { ok: true, path: "/x/claude" };
+        },
+      }),
+    );
+    expect(sawParity).toBeFalsy();
+  });
+
+  it("--tier microvm keeps the VM ELF check STRICT (no parity mount)", () => {
+    let sawParity: boolean | undefined;
+    runDoctorChecks(
+      "microvm",
+      probe({
+        agentBinary: (opts) => {
+          sawParity = opts?.parityMount;
+          return { ok: true, path: "/x/claude" };
+        },
+      }),
+    );
+    expect(sawParity).toBeFalsy();
+  });
+
+  it("a parity-patch substitution note is surfaced in the agent check's detail", () => {
+    const cs = runDoctorChecks(
+      "cowork",
+      probe({
+        agentBinary: () => ({
+          ok: true,
+          path: "/x/claude-code-vm/2.1.178/claude",
+          note: "parity mount: patch-tolerated (pinned 2.1.177, using 2.1.178)",
+        }),
+      }),
+    );
+    const agent = get(cs, "agent");
+    expect(agent.status).toBe("ok");
+    expect(agent.detail).toMatch(/2\.1\.177/);
+    expect(agent.detail).toMatch(/2\.1\.178/);
+    expect(blocking(cs)).not.toContain("agent");
+  });
+});

@@ -144,7 +144,11 @@ export function spawnHostLoop(
   const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
 
   const agentNativeHost = resolveHostAgentBinary(baseline);
-  const agentVmHost = resolveAgentBinary(baseline); // unchanged — still the sidecar VM image's basis (bash execs into it)
+  // Bind-mounted into the bash sidecar for parity; not run by any harness-spawned process here (sidecar CMD
+  // is a keep-alive, bash is `docker exec … sh -c`, the executed agent is agentNativeHost above — model bash
+  // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer
+  // VM ELF when the pin was pruned by a Desktop update, instead of hard-failing a run that doesn't execute it.
+  const agentVmHost = resolveAgentBinary(baseline, { parityMount: true });
   const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
 
@@ -251,7 +255,7 @@ export function spawnHostLoop(
     sessionRoot,
     sessionHost,
     agentHost: agentVmHost,
-    agentIn: "/usr/local/bin/claude", // kept bind-mounted (unused by any process) for parity/inspection; harmless
+    agentIn: "/usr/local/bin/claude", // kept bind-mounted for parity/inspection; not run by any harness-spawned process (reachable only by model bash in the hardened sidecar, an accepted patch-only residual)
     image,
     env: {}, // NO CLAUDE_PLUGIN_ROOT — real host-loop leaves it unset in the VM; the agent self-heals via `find`
     name: containerName,

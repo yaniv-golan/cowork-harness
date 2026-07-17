@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve, isAbsolute, dirname } from "node:path";
+import { join, resolve, isAbsolute, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -61,8 +61,34 @@ export const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)),
  */
 export const MOUNT_BARE_NAME_MIN_VERSION = "1.14271.0";
 
-/** Resolve the host path to the staged agent ELF (COWORK_AGENT_BINARY override > baseline.stagedPath). */
-export function resolveAgentBinary(baseline: PlatformBaseline): string {
+/** True iff `found` is a same-major.minor, different-patch bump over `pinned` (both dotted version
+ *  strings). The single definition of "patch-only" shared by the native-binary drift classifier and the
+ *  VM-ELF parity-mount tolerance, so the two never diverge on what counts as a safe patch bump. */
+export function isPatchBump(pinned: string | undefined, found: string | undefined): boolean {
+  return (
+    !!pinned &&
+    !!found &&
+    pinned.split(".")[0] === found.split(".")[0] &&
+    pinned.split(".")[1] === found.split(".")[1] &&
+    cmpVersionStrings(pinned, found) !== 0
+  );
+}
+
+/**
+ * Resolve the host path to the staged agent ELF (COWORK_AGENT_BINARY override > baseline.stagedPath).
+ *
+ * `opts.parityMount` is an opt-in used ONLY by the hostloop VM-ELF bind-mount — that ELF is mounted
+ * read-only into the bash sidecar but is not run by any harness-spawned process there (the executed agent
+ * on hostloop is the NATIVE binary via `resolveHostAgentBinary`; only a model-initiated bash command could
+ * exec it inside the hardened, default-deny sidecar). When set, a pruned pin whose newest sibling is a
+ * same-major.minor PATCH bump is auto-accepted (loud stderr note, advisory sha) instead of throwing —
+ * mirroring `resolveHostAgentBinary`'s native-binary policy. Executed-agent callers (container/microvm/
+ * chat-raw) never pass this option, so their strict, sha-hard-fail behavior is unchanged. Crucially, this
+ * tolerance is reachable ONLY when the EXACT pinned path is absent — an existing pinned path is verified
+ * via `verifiedElf(staged, baseline)` (no `intentionalSubstitution`) before this branch is ever reached, so
+ * a `measured-local` sha mismatch on the pinned binary itself still hard-fails under `parityMount` too.
+ */
+export function resolveAgentBinary(baseline: PlatformBaseline, opts: { parityMount?: boolean } = {}): string {
   const override = process.env.COWORK_AGENT_BINARY;
   if (override) {
     if (!existsSync(override)) throw new Error(`COWORK_AGENT_BINARY not found: ${override}`);
@@ -75,6 +101,17 @@ export function resolveAgentBinary(baseline: PlatformBaseline): string {
   // Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to opt in to using the newest sibling binary.
   const exactPath = staged || "(unknown)";
   const fallback = staged ? newestStagedBinary(staged) : undefined;
+  if (opts.parityMount && fallback) {
+    const pinnedVer = basename(dirname(staged)); // .../claude-code-vm/<ver>/claude
+    const foundVer = basename(dirname(fallback));
+    if (isPatchBump(pinnedVer, foundVer)) {
+      process.stderr.write(
+        `cowork-harness: staged VM ELF ${pinnedVer} pruned by a Desktop update; using patch-newer ${foundVer} ` +
+          `for the hostloop parity mount (not run by any harness-spawned process) — behavior contract unchanged for a patch bump.\n`,
+      );
+      return verifiedElf(fallback, baseline, { intentionalSubstitution: true });
+    }
+  }
   if (fallback && process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
     process.stderr.write(`cowork-harness: staged agent binary "${staged}" not found; ` + `falling back to newest sibling "${fallback}".\n`);
     return verifiedElf(fallback, baseline, { intentionalSubstitution: true });
@@ -193,12 +230,7 @@ export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeSt
   if (!fallback) return { kind: "missing", stagedPath: staged, pinned: nativeVersionFromPath(staged) };
   const pinned = nativeVersionFromPath(staged);
   const found = nativeVersionFromPath(fallback);
-  const patchOnly =
-    !!pinned &&
-    !!found &&
-    pinned.split(".")[0] === found.split(".")[0] &&
-    pinned.split(".")[1] === found.split(".")[1] &&
-    cmpVersionStrings(pinned, found) !== 0;
+  const patchOnly = isPatchBump(pinned, found);
   return { kind: patchOnly ? "patch" : "major-minor", stagedPath: staged, pinned, found, fallbackPath: fallback };
 }
 

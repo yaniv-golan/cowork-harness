@@ -1,9 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, writeSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, basename } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
-import { resolveAgentBinary, resolveHostAgentBinary, classifyNativeStagingDrift, loadBaseline, sha256File } from "../baseline.js";
+import {
+  resolveAgentBinary,
+  resolveHostAgentBinary,
+  classifyNativeStagingDrift,
+  loadBaseline,
+  sha256File,
+  isPatchBump,
+} from "../baseline.js";
+import { decideLoopFromBaseline } from "../loop-decision.js";
 import { limaPath, vmStatus, instanceName } from "../runtime/lima.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 
@@ -42,7 +51,11 @@ export interface DoctorProbe {
   imagePresent(): boolean;
   proxyImageName(): string;
   proxyImagePresent(): boolean;
-  agentBinary(): { ok: true; path: string } | { ok: false; error: string };
+  // `opts.parityMount` mirrors `hostAgentBinary`'s patch tolerance — passed by the hostloop/cowork tiers
+  // ONLY, where this ELF is a non-executed parity mount into the bash sidecar (the binary actually
+  // executed there is the native one, via `hostAgentBinary`). `note` is set only for a genuine parity-patch
+  // substitution — never for a `COWORK_AGENT_BINARY` override or a major/minor fallback.
+  agentBinary(opts?: { parityMount?: boolean }): { ok: true; path: string; note?: string } | { ok: false; error: string };
   // Native macOS agent binary that `hostloop`/`cowork` spawn directly (distinct from the Linux ELF
   // `agentBinary()` resolves — see resolveHostAgentBinary in baseline.ts). Not meaningful for other tiers.
   // `note` is set when the resolved path came from a PATCH-tolerated staging-drift substitution (see
@@ -104,11 +117,27 @@ export const realProbe: DoctorProbe = {
     const r = spawnSync(this.runtimeName(), ["image", "inspect", this.proxyImageName()], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
   },
-  agentBinary() {
+  agentBinary(opts?: { parityMount?: boolean }) {
     try {
-      return { ok: true, path: resolveAgentBinary(loadBaseline("latest")) };
+      const baseline = loadBaseline("latest");
+      const path = resolveAgentBinary(baseline, opts);
+      // Only label the note "patch-tolerated" for a GENUINE parity patch substitution — NOT for a
+      // COWORK_AGENT_BINARY override (arbitrary path; version fields would be garbage) and NOT for a
+      // major/minor COWORK_HARNESS_ALLOW_AGENT_FALLBACK substitution (not patch-only). Mirrors the
+      // hostAgent probe's rule that its note can never disagree with what the resolver actually did.
+      const pinned = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
+      const isParityPatch =
+        !!opts?.parityMount &&
+        !!pinned &&
+        !process.env.COWORK_AGENT_BINARY &&
+        resolve(pinned) !== path &&
+        isPatchBump(basename(dirname(pinned)), basename(dirname(path)));
+      const note = isParityPatch
+        ? `parity mount: patch-tolerated (pinned ${basename(dirname(pinned))}, using ${basename(dirname(path))})`
+        : undefined;
+      return { ok: true as const, path, note };
     } catch (e) {
-      return { ok: false, error: (e as Error).message };
+      return { ok: false as const, error: (e as Error).message };
     }
   },
   hostAgentBinary() {
@@ -192,10 +221,16 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     required: tier === "microvm",
   });
 
-  // The staged agent ELF is bind-mounted into the sandbox at every live tier (container guest AND the
-  // Lima microVM guest), so this check is shared by both live paths.
-  const agentCheck = (): DoctorCheck => {
-    const agent = probe.agentBinary();
+  // This check is shared by every live tier, but its meaning differs by tier. On container/microvm the
+  // staged ELF IS the executed agent (bind-mounted into the sandbox guest), so resolution stays strict — a
+  // pruned pin hard-fails. On hostloop — and on cowork ONLY when it resolves to host-loop (see
+  // `coworkIsHostLoop` below) — the executed agent is the NATIVE macOS binary (see the `hostAgent` check
+  // below); this ELF is only bind-mounted into the bash sidecar as a non-executed parity mount, so a pruned
+  // pin there auto-accepts a patch-newer sibling (`parityMount: true`) instead of blocking, mirroring
+  // `hostAgent`'s own patch tolerance. A cowork baseline that resolves to VM-loop executes this ELF
+  // directly, so it stays strict — same as container/microvm.
+  const agentCheck = (parityMount: boolean): DoctorCheck => {
+    const agent = probe.agentBinary({ parityMount });
     // Surface the ELF's sha256 provenance so setup is self-explaining (a hard mismatch already fails the
     // resolve above and lands in agent.error). Best-effort re-hash — doctor is a read-only truth check.
     let shaNote = "";
@@ -210,14 +245,19 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
         /* provenance is a hint; never let it fail the check */
       }
     }
+    // A parity-patch substitution stays `ok` (it's safe — the ELF is never executed there), but the note
+    // names the pinned-vs-found versions so the substitution is visible rather than silent.
+    const parityNote = agent.ok && agent.note ? `  [${agent.note}]` : "";
     return {
       id: "agent",
-      title: "Staged agent binary (VM/container ELF)",
+      title: parityMount ? "Staged agent binary (VM ELF, parity mount)" : "Staged agent binary (VM/container ELF)",
       status: agent.ok ? "ok" : "fail",
-      detail: agent.ok ? agent.path + shaNote : agent.error.split("\n")[0],
+      detail: agent.ok ? agent.path + shaNote + parityNote : agent.error.split("\n")[0],
       remedy: agent.ok
         ? undefined
-        : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)",
+        : parityMount
+          ? "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token) — note: on this tier the ELF is a non-executed parity mount, not the binary that actually runs (that's the native `hostAgent` check below)"
+          : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)",
       required: true,
     };
   };
@@ -262,7 +302,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
           : "run `cowork-harness vm init` once to pre-provision (a live microvm run self-provisions too, just with first-run VM-boot latency)",
       required: false,
     });
-    checks.push(agentCheck());
+    checks.push(agentCheck(false));
   } else {
     const avail = probe.runtimeAvailable();
     const up = avail && probe.runtimeDaemonUp();
@@ -294,22 +334,67 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       required: up, // only gate on the image once the runtime is actually reachable
     });
 
-    checks.push(agentCheck());
+    // `cowork` doesn't pin a loop mode itself — it's resolved from the synced baseline gate at run time
+    // (decideLoopFromBaseline; see execute.ts's `cowork` dispatch). Computed here, BEFORE the `agent` check,
+    // so the VM-ELF parity-mount tolerance mirrors the runtime EXACTLY: `hostloop` is unconditionally
+    // host-loop (always tolerant), but `cowork` is tolerant ONLY when it resolves to host-loop on the
+    // synced baseline. A cowork baseline that resolves to VM-loop executes this ELF directly — same strict
+    // path as `container` — so tolerating a pruned pin there would be a doctor false-green (ok) against a
+    // real run that hard-fails. Resolved once and reused below for the `cowork-loop` note (DRY).
+    let coworkLoop: "host" | "vm" | null = null;
+    if (tier === "cowork") {
+      try {
+        coworkLoop = decideLoopFromBaseline(loadBaseline("latest"));
+      } catch {
+        coworkLoop = null; // best-effort; the agent check below falls back to the tolerant default
+      }
+    }
+    const coworkIsHostLoop = coworkLoop !== "vm"; // unknown (null) defaults tolerant — hostloop is the current-baseline default
+
+    // One predicate drives BOTH native-binary and ELF facts. hostloop — and cowork resolving to host-loop —
+    // run the NATIVE macOS binary as the agent and bind-mount the VM ELF only for parity; a cowork baseline
+    // resolving to VM-loop runs the ELF itself (like container) and does NOT use the native binary. So this
+    // gates the ELF parity tolerance (`agent` check) AND whether the native `hostAgent` binary is required:
+    // requiring it on a VM-loop cowork rig would be the mirror false-NOT-ready of the `agent` false-green.
+    const runsViaHostLoop = tier === "hostloop" || (tier === "cowork" && coworkIsHostLoop);
+    checks.push(agentCheck(runsViaHostLoop));
 
     if (tier === "hostloop" || tier === "cowork") {
       const hostAgent = probe.hostAgentBinary();
       // A patch-tolerated staging-drift substitution stays `ok` (it's safe — the native binary has no
       // sha256 pin), but the note names the pinned-vs-found versions so the substitution is visible.
       const note = hostAgent.ok && hostAgent.note ? `  [${hostAgent.note}]` : "";
+      // The native binary is REQUIRED only when the run actually executes it (hostloop, or cowork resolving
+      // to host-loop). A cowork baseline resolving to VM-loop runs the ELF, not this binary, so a missing
+      // native binary must NOT block `cowork` there — mirror of the `agent` check's tolerance gate above.
+      const naNote = runsViaHostLoop ? "" : "  [not the executed agent at this resolution — cowork runs the ELF in VM-loop]";
       checks.push({
         id: "hostAgent",
         title: "Staged native agent binary (hostloop)",
         status: hostAgent.ok ? "ok" : "fail",
-        detail: hostAgent.ok ? hostAgent.path + note : hostAgent.error.split("\n")[0],
+        detail: hostAgent.ok ? hostAgent.path + note : hostAgent.error.split("\n")[0] + naNote,
         remedy: hostAgent.ok
           ? undefined
           : "open Claude Cowork once to stage the native macOS binary, or set COWORK_HOST_AGENT_BINARY=<path>",
-        required: true,
+        required: runsViaHostLoop,
+      });
+    }
+
+    // Informational only (never blocks): reuses `coworkLoop`, resolved once above, so this note can never
+    // disagree with the tolerance the `agent` check just applied.
+    if (tier === "cowork") {
+      const loopDetail =
+        coworkLoop === "host"
+          ? "resolves to hostloop on this baseline — the VM ELF above is a non-executed parity mount; the native binary (`hostAgent`) is what actually runs"
+          : coworkLoop === "vm"
+            ? "resolves to VM-loop on this baseline — the whole agent runs in the sandbox, same as `container`/`microvm`, so the `agent` check above is STRICT (no parity tolerance)"
+            : "loop mode resolves from the synced baseline gate at run time (see the `agent`/`hostAgent` checks above)";
+      checks.push({
+        id: "cowork-loop",
+        title: "Cowork loop resolution",
+        status: "ok",
+        detail: loopDetail,
+        required: false,
       });
     }
 

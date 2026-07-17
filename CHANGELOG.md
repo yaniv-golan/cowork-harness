@@ -65,6 +65,18 @@ All notable changes to this project are documented here. The format is based on
   forms are now recognized (shape-matched on the response side, since `serverInfo` is server-authored, not
   Claude Code's own fixed string), and the CI gate no longer needs any `--allow-domain`/`--allow-email`
   flag to pass on the committed example cassettes.
+- **`hostloop`/`cowork` runs and `doctor --tier cowork` no longer hard-block when the pinned VM/container
+  ELF was pruned by a Desktop update but a patch-newer sibling is staged.** At that tier the ELF is
+  bind-mounted into the bash sidecar for parity and is not run by any harness-spawned process (the native
+  binary is the agent), so a same-major.minor patch bump is now auto-tolerated (loud note, advisory sha) —
+  matching the native binary's existing policy. The sha-pinned strictness is unchanged for
+  `container`/`microvm`, where the ELF is the executed agent.
+- **`doctor --tier cowork` now mirrors the resolved loop** (`decideLoopFromBaseline`) for both agent
+  binaries, so it neither false-greens nor false-not-readies. When `cowork` resolves to host-loop it
+  tolerates the ELF patch bump and requires the native binary (the executed agent there); when it resolves
+  to VM-loop it keeps the ELF strict like `container` **and** stops requiring the native binary that a
+  VM-loop run doesn't use. Previously the tier's checks were unconditional, disagreeing with the actual
+  run on a VM-loop-resolving baseline.
 
 ### Documentation
 
