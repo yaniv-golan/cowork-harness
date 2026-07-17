@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findLatestRunForScenario } from "../src/run/latest-run.js";
+import { findLatestRunForScenario, findLatestRunUnderRoot } from "../src/run/latest-run.js";
 
 // Unit coverage for the pure resolution logic: the CLI-level wiring (`status --latest-for`) is
 // covered in test/cli-status-latest-for.test.ts. This file exercises `findLatestRunForScenario` directly
@@ -130,5 +130,64 @@ describe("findLatestRunForScenario", () => {
     });
     const result = findLatestRunForScenario(root, "sluggy-name");
     expect(result?.scenario).toBe("Sluggy Name (display)");
+  });
+});
+
+describe("findLatestRunUnderRoot", () => {
+  it("finds the newest session two levels under a run-dir root", () => {
+    const root = mkdtempSync(join(tmpdir(), "ch-"));
+    const older = join(root, "skill-founder-skills", "local_a");
+    const newer = join(root, "skill-founder-skills", "local_b");
+    mkdirSync(older, { recursive: true });
+    mkdirSync(newer, { recursive: true });
+    writeFileSync(
+      join(older, "status.json"),
+      JSON.stringify({ startedAt: "2026-07-16T10:00:00.000Z", updatedAt: "2026-07-16T10:00:00.000Z", state: "done" }),
+    );
+    writeFileSync(
+      join(newer, "status.json"),
+      JSON.stringify({ startedAt: "2026-07-16T12:00:00.000Z", updatedAt: "2026-07-16T12:00:00.000Z", state: "done" }),
+    );
+    expect(findLatestRunUnderRoot(root)).toBe(newer);
+  });
+
+  it("ignores a dir that has a result.json but NO status.json (candidacy requires status.json)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ch-"));
+    const decoy = join(root, "some-project", "node_modules-ish");
+    mkdirSync(decoy, { recursive: true });
+    writeFileSync(join(decoy, "result.json"), "{}"); // unrelated file literally named result.json
+    expect(findLatestRunUnderRoot(root)).toBeUndefined();
+  });
+
+  it("returns undefined when no dir under root has a status.json", () => {
+    const root = mkdtempSync(join(tmpdir(), "ch-"));
+    mkdirSync(join(root, "empty"), { recursive: true });
+    expect(findLatestRunUnderRoot(root)).toBeUndefined();
+  });
+
+  it("finds a session at ONE level under root too (not only two)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ch-"));
+    const dir = join(root, "local_1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "status.json"),
+      JSON.stringify({ startedAt: "2026-07-16T10:00:00.000Z", updatedAt: "2026-07-16T10:00:00.000Z", state: "done" }),
+    );
+    expect(findLatestRunUnderRoot(root)).toBe(dir);
+  });
+
+  it("returns undefined for a root that doesn't exist", () => {
+    expect(findLatestRunUnderRoot(join(tmpdir(), "ch-does-not-exist-" + Date.now()))).toBeUndefined();
+  });
+
+  it("does NOT find a status.json THREE levels deep — the scan is capped at two levels", () => {
+    const root = mkdtempSync(join(tmpdir(), "ch-"));
+    const tooDeep = join(root, "skill-x", "sub-slug", "local_1");
+    mkdirSync(tooDeep, { recursive: true });
+    writeFileSync(
+      join(tooDeep, "status.json"),
+      JSON.stringify({ startedAt: "2026-07-16T10:00:00.000Z", updatedAt: "2026-07-16T10:00:00.000Z", state: "done" }),
+    );
+    expect(findLatestRunUnderRoot(root)).toBeUndefined();
   });
 });

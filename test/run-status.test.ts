@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir, homedir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { resolveStatusTarget } from "../src/run/status-target.js";
 import type { RunRecord } from "../src/run/run.js";
 import type { RunStatus } from "../src/types.js";
 import {
@@ -256,6 +258,105 @@ describe("resolveStatusDir", () => {
     } finally {
       rmSync(sub, { recursive: true, force: true });
     }
+  });
+});
+
+// Direct, always-running coverage of the `cmdStatus` root-resolution WIRING (src/run/status-target.ts).
+// This is the primary coverage for the wiring: it imports `resolveStatusTarget` directly, so it runs on
+// every `npm test` invocation — including CI, which runs `npm test` BEFORE `npm run build`, so the
+// dist-spawn describe block below (`can` gated on `dist/cli.js` existing) silently skips there and must
+// not be the only coverage of this behavior.
+describe("resolveStatusTarget", () => {
+  it("resolves a --run-dir ROOT (no status.json at the top) to the newest nested session, two levels down", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-status-target-root-"));
+    const dir = join(root, "skill-x", "local_1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "status.json"), JSON.stringify({ state: "done", startedAt: "2026-07-16T10:00:00.000Z" }));
+    expect(resolveStatusTarget(root)).toBe(dir);
+  });
+
+  it("returns a literal run dir (status.json at the top) UNCHANGED — no nested scan performed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-status-target-literal-"));
+    writeFileSync(join(dir, "status.json"), JSON.stringify({ state: "done", startedAt: "2026-07-16T10:00:00.000Z" }));
+    expect(resolveStatusTarget(dir)).toBe(dir);
+  });
+
+  it("falls back to the original (unresolved) dir when no nested session qualifies, so cmdStatus's own error reports against it", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-status-target-empty-"));
+    mkdirSync(join(root, "no-status-anywhere"), { recursive: true });
+    expect(resolveStatusTarget(root)).toBe(root);
+  });
+
+  it("resolveStatusDir('~') still returns homedir() — confirmed directly alongside resolveStatusTarget, since the root-resolution wiring layers on top of it, not inside it", () => {
+    expect(resolveStatusDir("~")).toBe(homedir());
+  });
+});
+
+// CLI-level coverage for `cmdStatus`'s root-resolution wiring (findLatestRunUnderRoot via
+// resolveStatusTarget): an EXTRA integration layer on top of the direct `resolveStatusTarget` unit tests
+// above (which are what must always run — see that block's comment for why). `cmdStatus` itself isn't
+// exported (it calls process.exit), so this drives the built CLI the same way test/cli-status.test.ts
+// does; `describe.skipIf(!can)`-gated on `dist/cli.js` existing, so it silently skips on a pre-build
+// `npm test` (e.g. this repo's CI, which runs tests before `build`) — intentional, since the wiring
+// itself is already covered above regardless of build state.
+describe("cmdStatus root-dir resolution", () => {
+  const CLI = resolve("dist/cli.js");
+  const can = existsSync(CLI);
+  function run(args: string[]) {
+    const r = spawnSync("node", [CLI, ...args], { encoding: "utf8" });
+    return { code: r.status, out: r.stdout + r.stderr };
+  }
+
+  it.skipIf(!can)("resolves a --run-dir ROOT (no status.json at the top) to the newest nested session", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-status-root-"));
+    const dir = join(root, "skill-x", "local_1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "status.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        state: "done",
+        pid: 1,
+        scenario: "skill-x",
+        fidelity: "container",
+        sessionId: "local_1",
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        elapsedMs: 100,
+        toolCounts: {},
+        subagentCount: 0,
+      }),
+    );
+    const { code, out } = run(["status", root]);
+    expect(code).toBe(0);
+    expect(out).toContain("skill-x");
+  });
+
+  it.skipIf(!can)("still uses a literal run dir (status.json at the top) UNCHANGED, not a nested scan", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-status-literal-"));
+    writeFileSync(
+      join(dir, "status.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        state: "done",
+        pid: 1,
+        scenario: "top-level",
+        fidelity: "container",
+        sessionId: "local_1",
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        elapsedMs: 100,
+        toolCounts: {},
+        subagentCount: 0,
+      }),
+    );
+    const { code, out } = run(["status", dir]);
+    expect(code).toBe(0);
+    expect(out).toContain("top-level");
+  });
+
+  it("resolveStatusDir('~') still returns homedir() — the root-resolution wiring lives in cmdStatus, not resolveStatusDir", () => {
+    expect(resolveStatusDir("~")).toBe(homedir());
   });
 });
 
