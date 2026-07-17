@@ -264,7 +264,9 @@ describe("cli sync command: platform guard message accuracy", () => {
   it("cmdSync on a non-macOS platform blames the harness's own sync tooling, not Desktop", () => {
     // This test only asserts the STRING CONTENT, not actual non-macOS execution (CI runs on macOS).
     // Read the source literal directly rather than mocking process.platform.
-    const m = src.match(/if \(process\.platform !== "darwin"\) \{\s*return fail\("sync", "usage", "([^"]+)"/);
+    // Tolerate Prettier reformatting the fail(...) call across multiple lines (one arg per line)
+    // as well as keeping it on a single line — only require "usage", then the message literal.
+    const m = src.match(/if \(process\.platform !== "darwin"\) \{\s*return fail\(\s*"sync",\s*"usage",\s*"([^"]+)"/);
     expect(m).not.toBeNull();
     expect(m![1]).not.toMatch(/Cowork Desktop app is macOS-only/);
     expect(m![1]).toMatch(/this harness|sync tooling|not (yet )?support/i);
