@@ -21,6 +21,7 @@ import {
   checkWebFetchFacts,
   readMainBundle,
   checkSubagentOverrideGate,
+  PINNED_GATES,
 } from "../src/sync/cowork-sync.js";
 import {
   deriveSpawnEnv,
@@ -152,6 +153,8 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(result).toEqual({
       "2614807392": { id: "2614807392", name: "skeletonHome", on: false, source: "absent", value: undefined },
       "1129419822": { id: "1129419822", name: "enableToolSearchAuto", on: false, source: "absent", value: undefined },
+      "4200321681": { id: "4200321681", name: "autoModeOverridesAlwaysAllow", on: false, source: "absent", value: undefined },
+      "1447478638": { id: "1447478638", name: "scheduledTaskToolsApprovableByAutoMode", on: false, source: "absent", value: undefined },
     });
   });
 
@@ -177,6 +180,11 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
       source: "force",
       value: true,
     });
+  });
+
+  it("PINNED_GATES tracks the two Desktop 1.22209.0 auto-mode gates", () => {
+    expect(PINNED_GATES["4200321681"]).toBe("autoModeOverridesAlwaysAllow");
+    expect(PINNED_GATES["1447478638"]).toBe("scheduledTaskToolsApprovableByAutoMode");
   });
 });
 
