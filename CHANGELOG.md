@@ -20,6 +20,34 @@ All notable changes to this project are documented here. The format is based on
   couldn't be analyzed. **Live/verify-run only** — skipped-loud on replay (a cassette embedding the key never
   hard-fails its replay); `verify-run` recomputes the authored set from the kept work dir. Only `true` is
   valid (omit to skip).
+- **`tool_result_matches` / `tool_result_not_matches` scenario assertion keys** — the case-insensitive regex
+  siblings of `tool_result_contains`/`tool_result_not_contains`, evaluated per captured tool result (subject
+  to the same 10 KB per-result assertText cap). Useful for catching an error-signature *family* (e.g. a
+  script's non-zero exit swallowed by its wrapper, but the message still printed) that a literal substring
+  match can't express. Same evidence-unavailable wording as the `_contains` pair: a bad regex fails the
+  assertion with a compile error, and a no-match against a display-truncated result is reported as
+  could-not-verify rather than a silent pass/fail.
+
+### Changed
+
+- **`cowork-harness status <run-dir>` now resolves the newest session under a run-dir root.** Previously
+  `status` only worked against the exact per-session out-dir printed at run start; pointing it at the root
+  passed to `run --run-dir` failed with "no status.json". It now scans up to two levels under a directory
+  lacking its own `status.json` for the newest session that has one, and reads that instead.
+- **`doctor`'s two staged-agent checks are now titled distinctly** — "Staged agent binary (VM/container
+  ELF)" vs. "Staged native agent binary (hostloop)" — so a failure on either is attributable to the right
+  one instead of reading as an ambiguous duplicate.
+- **The run-completion footer now prints a `→ result: <run-dir>/result.json` pointer**, on both success and
+  failure, since the run directory is always kept on disk. Suppressed on the replay lane, which never
+  writes a `result.json`.
+
+### Fixed
+
+- **The hostloop path-gate no longer emits a spurious "cwd mismatch" warning when the run-dir is reached
+  through a symlink** (e.g. macOS `/tmp` → `/private/tmp`). The diagnostic now compares the wire and
+  spawner cwds after best-effort realpath canonicalization, so the same directory reached via two spellings
+  no longer false-alarms; the path-gate's actual allow/deny decision was already realpath-rooted and is
+  unaffected.
 
 ## [1.1.0] — 2026-07-16
 
