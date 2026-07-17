@@ -80,7 +80,24 @@ describe("hostloop canUseTool gate — request_cowork_directory protected-path r
     expect(permResp(d).message).toBe(DENIAL_MESSAGE);
   });
 
-  it("abstains for an unprotected folder request (~/Projects/my-app), leaving it to the human-approval flow", async () => {
+  it("abstains for an unprotected folder request (~/Projects/my-app) — falls to the policy chain (default-parity auto-allow / strict deny), not a human prompt", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/Projects/my-app" } }), ctx);
+    expect(d).toBe(ABSTAIN);
+  });
+
+  it("denies a grant request targeting a darwin-specific protected path (~/Library/Keychains)", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/Library/Keychains" } }), ctx);
+    expect(permResp(d).behavior).toBe("deny");
+    expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+  });
+
+  it("denies a grant request for the home directory itself (ancestor-direction: exposes ~/.ssh)", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~" } }), ctx);
+    expect(permResp(d).behavior).toBe("deny");
+    expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+  });
+
+  it("still abstains for a genuinely unrelated folder request (~/Projects/my-app) — no false-positive from the ancestor check", async () => {
     const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/Projects/my-app" } }), ctx);
     expect(d).toBe(ABSTAIN);
   });
