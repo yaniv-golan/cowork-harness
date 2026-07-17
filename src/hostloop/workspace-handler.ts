@@ -564,8 +564,10 @@ async function fetchViaHost(
       } else {
         onEgress?.({ host, decision: "deny" });
         return textResult(
-          "URL not in provenance set. web_fetch can only retrieve URLs that appeared in a user message " +
-            "or a prior web_fetch result. Ask the user to include the URL in a message first.",
+          "URL not in provenance set. web_fetch can only retrieve URLs that appeared in a user message, a prior " +
+            "web_fetch result, or a WebSearch result. Retries will fail. Ask the person to include the verbatim URL " +
+            "in a message first. If you cannot ask (e.g. from a subagent), continue without this page and report the " +
+            "blocked URL in your findings.",
           true,
         );
       }
