@@ -227,12 +227,29 @@ export interface ClassifyWorkspaceFilesOpts {
   hashCapBytes?: number;
 }
 
-export function classifyWorkspaceFiles(
+export interface ClassifyWorkspaceFilesResult {
+  files: WorkspaceFile[];
+  /** True when the workspace ROOT ITSELF could not be resolved (`realpathSync(workRoot)` threw) — the walk
+   *  observed nothing, so an empty `files` here means "unavailable", NOT "the agent wrote nothing". The
+   *  canonical case is a microvm run whose outputs stage into the VM work tree, never into
+   *  `outDir/work/session/mnt` (#52); the persisted `workspaceFiles: []` was then indistinguishable from a
+   *  genuinely-empty run — a silent false-green. A caller persisting workspaceFiles/artifacts must record
+   *  UNAVAILABLE (`undefined`, the replay convention) instead of a false empty when this is set.
+   *  Precise: only `collectArtifactsWithHealth`'s root-resolution catch pushes an errors entry with an
+   *  empty `path`; a missing *prefix* subdir (e.g. no `outputs/` on a normal empty run) pushes the prefix
+   *  name, so it does NOT set `rootAbsent`. */
+  rootAbsent: boolean;
+}
+
+/** F18 consumption: like `classifyWorkspaceFiles`, but also reports whether the workspace root was
+ *  observable at all (`rootAbsent`). `classifyWorkspaceFiles` is the thin, behavior-preserving wrapper
+ *  every existing caller keeps using (it discards `rootAbsent`, exactly as before). */
+export function classifyWorkspaceFilesWithHealth(
   workRoot: string,
   userVisibleRoots: string[],
   readonlyFolderRoots: string[],
   opts: ClassifyWorkspaceFilesOpts = {},
-): WorkspaceFile[] {
+): ClassifyWorkspaceFilesResult {
   const cap = opts.hashCapBytes ?? DEFAULT_WORKSPACE_HASH_CAP;
   // On a read/hash failure (INCLUDING an over-cap file) returns `{ hashError }` instead of a `sha256` —
   // an empty-string hash would otherwise be indistinguishable from a legitimately-hashed empty file.
@@ -252,13 +269,23 @@ export function classifyWorkspaceFiles(
   };
   const rootOf = (path: string): string | undefined => userVisibleRoots.find((r) => path === r || path.startsWith(r + "/"));
   const out: WorkspaceFile[] = [];
-  for (const { path, bytes } of collectArtifacts(workRoot, userVisibleRoots)) {
+  const walk = collectArtifactsWithHealth(workRoot, userVisibleRoots);
+  for (const { path, bytes } of walk.files) {
     const root = rootOf(path);
     const cls: WorkspaceFileClass =
       root !== undefined && readonlyFolderRoots.includes(root) ? "input" : root === "outputs" ? "output" : "mount";
     out.push({ path, bytes, ...hashFile(path), class: cls });
   }
-  return out;
+  return { files: out, rootAbsent: walk.errors.some((e) => e.path === "") };
+}
+
+export function classifyWorkspaceFiles(
+  workRoot: string,
+  userVisibleRoots: string[],
+  readonlyFolderRoots: string[],
+  opts: ClassifyWorkspaceFilesOpts = {},
+): WorkspaceFile[] {
+  return classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, opts).files;
 }
 
 /** Walk options. `includeHardlinkPaths` lifts the nlink>1 rejection for PATHS-ONLY walks (the

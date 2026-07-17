@@ -63,6 +63,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Silent false-green on a missing workspace root (`#52`).** When the workspace root (`outDir/work/session/mnt`)
+  couldn't be walked — the canonical case is a **microvm** run, whose outputs stage into the VM work tree, not
+  into the run dir — `RunResult.workspaceFiles`/`artifacts` persisted as `[]`, **indistinguishable from a run
+  that genuinely wrote nothing.** A consumer reading `result.json` (e.g. skill-creator-plus) saw "zero
+  artifacts, clean." They now persist as **`undefined` (unavailable)** — the same convention replay already
+  uses for "no live filesystem to scan" — with a loud `::warning::` naming the reason. Applied across the
+  success, partial-salvage, and chat lanes; the walk's `complete`/root-absent health (F18) is now *consumed*
+  at the call site rather than discarded. A genuinely-empty run (root present, no files) still correctly
+  reports `[]`; only an unobservable root flips to unavailable. Note: this is the honest-marker half — the
+  deeper "stage microvm outputs into the run dir" root cause remains tracked separately.
+
 - **`sync`'s non-macOS guard no longer blames Claude Desktop for a limitation that's actually this
   harness's own.** The error previously read "sync requires macOS (the Cowork Desktop app is macOS-only)"
   — false, Desktop ships a Windows build too; only this harness's `sync` tooling doesn't support non-macOS

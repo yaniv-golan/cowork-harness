@@ -63,7 +63,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
+import { classifyWorkspaceFilesWithHealth, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { computeVerdict } from "./verdict.js";
@@ -1168,7 +1168,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
     // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
     // excluded outright.
-    const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
+    const wfHealth = classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots);
+    if (wfHealth.rootAbsent)
+      warn(
+        `::warning:: [artifacts] workspace root not found (${workRoot}) — the run's outputs were not staged into the run dir ` +
+          `(known on microvm: the agent's files land in the VM work tree, not outDir). Recording workspaceFiles/artifacts as ` +
+          `UNAVAILABLE (undefined), not empty, so a consumer can't mistake it for a zero-artifact run (#52).\n`,
+      );
+    // #52 false-green fix: a missing workspace root means we observed NOTHING — record UNAVAILABLE
+    // (`undefined`, matching the replay convention), never a false empty `[]` that reads as "wrote nothing".
+    const workspaceFiles = wfHealth.rootAbsent ? undefined : wfHealth.files;
 
     // Multi-turn: archive the prior turn's run.jsonl/result.json (if this is a --resume) and get THIS
     // turn's number, so the RunResult and run.jsonl agree and each turn's result stays recoverable.
@@ -1240,7 +1249,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       readonlyFolderRoots,
       // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
       // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
-      artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+      artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
@@ -1546,8 +1555,11 @@ export function buildPartialResult(args: {
     ...args.record.context,
     availableSkills: resolveAvailableSkills(availableSkillIds, args.configDir, args.pluginSkillRoots),
   };
-  // Working folder panel's file model — same walk `artifacts` below derives from.
-  const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
+  // Working folder panel's file model — same walk `artifacts` below derives from. #52: a missing workspace
+  // root (microvm partial: outputs stage into the VM work tree, not outDir) records UNAVAILABLE (undefined),
+  // never a false empty [] — same honest marker as the success path above.
+  const wfHealth = classifyWorkspaceFilesWithHealth(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
+  const workspaceFiles = wfHealth.rootAbsent ? undefined : wfHealth.files;
   const built = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -1611,7 +1623,7 @@ export function buildPartialResult(args: {
     readonlyFolderRoots: args.readonlyFolderRoots,
     // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
-    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles, // Working folder panel's canonical file model
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs

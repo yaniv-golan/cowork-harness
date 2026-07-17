@@ -751,6 +751,10 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
   explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
 - **`trace` row shapes** and other debug/diagnostic output.
+- **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
+  the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
+  (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your
+  own risk until they are promoted to a covered surface.
 - **`docs/internal/**`** — untracked working notes.
 - **The reconstructed system-prompt append text** — a paraphrase by design (see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.
