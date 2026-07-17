@@ -107,3 +107,27 @@ describe("doctor — cowork VM-ELF tolerance gated on the resolved loop", () => 
     expect(sawParity).toBe(true);
   });
 });
+
+describe("doctor — native `hostAgent` requirement gated on the resolved loop (mirror of the agent gate)", () => {
+  it("cowork resolving to VM-loop → hostAgent is NOT required (the ELF is the agent there, not the native binary)", () => {
+    state.gateOn = false; // cowork → vm
+    // native binary ABSENT: a VM-loop cowork run doesn't use it, so it must NOT block "not ready"
+    const cs = runDoctorChecks("cowork", probe({ hostAgentBinary: () => ({ ok: false, error: "not staged" }) }));
+    expect(get(cs, "hostAgent").required).toBe(false);
+    expect(get(cs, "hostAgent").detail).toMatch(/not the executed agent at this resolution/);
+    // and the overall verdict is not blocked by this check alone (no required check failed)
+    expect(cs.filter((c) => c.required && c.status === "fail")).toHaveLength(0);
+  });
+
+  it("cowork resolving to host-loop → hostAgent IS required (the native binary is the executed agent)", () => {
+    state.gateOn = true; // cowork → host
+    const cs = runDoctorChecks("cowork", probe({}));
+    expect(get(cs, "hostAgent").required).toBe(true);
+  });
+
+  it("hostloop tier → hostAgent IS required regardless of the cowork gate", () => {
+    state.gateOn = false;
+    const cs = runDoctorChecks("hostloop", probe({}));
+    expect(get(cs, "hostAgent").required).toBe(true);
+  });
+});

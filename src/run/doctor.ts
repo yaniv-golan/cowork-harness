@@ -351,22 +351,32 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     }
     const coworkIsHostLoop = coworkLoop !== "vm"; // unknown (null) defaults tolerant — hostloop is the current-baseline default
 
-    checks.push(agentCheck(tier === "hostloop" || (tier === "cowork" && coworkIsHostLoop)));
+    // One predicate drives BOTH native-binary and ELF facts. hostloop — and cowork resolving to host-loop —
+    // run the NATIVE macOS binary as the agent and bind-mount the VM ELF only for parity; a cowork baseline
+    // resolving to VM-loop runs the ELF itself (like container) and does NOT use the native binary. So this
+    // gates the ELF parity tolerance (`agent` check) AND whether the native `hostAgent` binary is required:
+    // requiring it on a VM-loop cowork rig would be the mirror false-NOT-ready of the `agent` false-green.
+    const runsViaHostLoop = tier === "hostloop" || (tier === "cowork" && coworkIsHostLoop);
+    checks.push(agentCheck(runsViaHostLoop));
 
     if (tier === "hostloop" || tier === "cowork") {
       const hostAgent = probe.hostAgentBinary();
       // A patch-tolerated staging-drift substitution stays `ok` (it's safe — the native binary has no
       // sha256 pin), but the note names the pinned-vs-found versions so the substitution is visible.
       const note = hostAgent.ok && hostAgent.note ? `  [${hostAgent.note}]` : "";
+      // The native binary is REQUIRED only when the run actually executes it (hostloop, or cowork resolving
+      // to host-loop). A cowork baseline resolving to VM-loop runs the ELF, not this binary, so a missing
+      // native binary must NOT block `cowork` there — mirror of the `agent` check's tolerance gate above.
+      const naNote = runsViaHostLoop ? "" : "  [not the executed agent at this resolution — cowork runs the ELF in VM-loop]";
       checks.push({
         id: "hostAgent",
         title: "Staged native agent binary (hostloop)",
         status: hostAgent.ok ? "ok" : "fail",
-        detail: hostAgent.ok ? hostAgent.path + note : hostAgent.error.split("\n")[0],
+        detail: hostAgent.ok ? hostAgent.path + note : hostAgent.error.split("\n")[0] + naNote,
         remedy: hostAgent.ok
           ? undefined
           : "open Claude Cowork once to stage the native macOS binary, or set COWORK_HOST_AGENT_BINARY=<path>",
-        required: true,
+        required: runsViaHostLoop,
       });
     }
 
