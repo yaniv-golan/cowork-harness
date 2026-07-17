@@ -212,7 +212,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     }
     return {
       id: "agent",
-      title: "Staged agent binary",
+      title: "Staged agent binary (VM/container ELF)",
       status: agent.ok ? "ok" : "fail",
       detail: agent.ok ? agent.path + shaNote : agent.error.split("\n")[0],
       remedy: agent.ok
@@ -226,7 +226,13 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
   if (!live) {
     checks.push({ id: "runtime", title: "Container runtime", status: "skip", detail: `not needed for ${tier}`, required: false });
     checks.push({ id: "image", title: "Agent image", status: "skip", detail: `not needed for ${tier}`, required: false });
-    checks.push({ id: "agent", title: "Staged agent binary", status: "skip", detail: `not needed for ${tier}`, required: false });
+    checks.push({
+      id: "agent",
+      title: "Staged agent binary (VM/container ELF)",
+      status: "skip",
+      detail: `not needed for ${tier}`,
+      required: false,
+    });
   } else if (tier === "microvm") {
     // L2 runs on Lima + Apple Virtualization.framework — NOT Docker. Check `limactl`, not the container
     // runtime / agent image / egress-proxy image (the microVM uses its own rootfs and a host-side proxy).
