@@ -48,6 +48,17 @@ All notable changes to this project are documented here. The format is based on
   spawner cwds after best-effort realpath canonicalization, so the same directory reached via two spellings
   no longer false-alarms; the path-gate's actual allow/deny decision was already realpath-rooted and is
   unaffected.
+- **`verify-cassettes` no longer flags `claude.com` as a `domain` PII finding on every MCP-session
+  cassette.** The scanner's capability-manifest exclusion (`isCapabilityManifest()`) recognized only two
+  structural forms (the `system/init` event and the `initialize` registry `control_response`); it missed
+  the MCP `initialize` handshake itself — both Claude Code's own `control_request` (`clientInfo.websiteUrl`)
+  and the configured MCP server's `control_response` (`serverInfo`) — which fell through to the full
+  `domain`/`currency` net on every recording that talks to an MCP server. The only previous workaround,
+  `--allow-domain 'claude\.com'` in CI, was a class-scoped (not location-scoped) allow that would have
+  silently cleared a genuine `claude.com`-hosted leak anywhere else in the same cassette. Both handshake
+  forms are now recognized (shape-matched on the response side, since `serverInfo` is server-authored, not
+  Claude Code's own fixed string), and the CI gate no longer needs any `--allow-domain`/`--allow-email`
+  flag to pass on the committed example cassettes.
 
 ### Documentation
 

@@ -617,27 +617,58 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
  *  is never silently implied. Real-class findings fail the gate; `unscanned` is informational. */
 /** The agent's CAPABILITY MANIFEST — environment boilerplate, never user data, and the sole concentrated
  *  source of `domain`/`currency` scan noise (tool/skill catalog descriptions + MCP-server names a regex
- *  can't tell apart from customer data). Two stable structural forms:
- *   - the `system/init` event (tools/mcp_servers/skills/cwd registry), and
- *   - the `initialize` `control_response` (`request_id: "init-1"`; body = commands/agents/models/account).
- *  These get `email` + `path` + `machine-inventory` scanning (email is universal — the `account` field
+ *  can't tell apart from customer data). Four stable structural forms, split across two trust levels:
+ *   - the `system/init` event (tools/mcp_servers/skills/cwd registry) — Claude-Code-owned, and
+ *   - the `initialize` `control_response` (`request_id: "init-1"`; body = commands/agents/models/account)
+ *     — third-party plugin/command prose, and
+ *   - the MCP `initialize` `control_request` (`clientInfo.name/version/websiteUrl`) — Claude Code's own
+ *     fixed handshake identity, same trust level as `system/init`, and
+ *   - the MCP `initialize` `control_response` (`mcp_response.result.serverInfo`) — SERVER-authored (the
+ *     configured MCP server's own name/version), same trust level as the third-party `init-1` prose.
+ *  Detection for the last form is a shape match (`protocolVersion`+`capabilities`+`serverInfo` all present
+ *  in the result), not a verified request/response pairing — `isCapabilityManifest` is deliberately
+ *  line-scoped (one string in, one boolean out), so a genuinely adversarial MCP server that echoed all
+ *  three keys in an unrelated result would also get suppressed here; no standard MCP method other than
+ *  `initialize` returns `protocolVersion` at the result's top level today, so this is an accepted residual,
+ *  not a gap to close with a cross-array request_id correlation (a larger refactor this bug doesn't warrant).
+ *  All four get `email` + `path` + `machine-inventory` scanning (email is universal — the `account` field
  *  can carry the dev's own email; path is universal too — these messages' own structural fields,
  *  `cwd`/`plugins[].path`/`memory_paths`, are exactly where a real local filesystem path lives;
  *  machine-inventory is universal too — a live-enumerated app/process inventory sentinel is never
  *  legitimate manifest boilerplate, unlike the noisy classes which are suppressed only here). */
 function isCapabilityManifest(line: string): boolean {
-  let m: { type?: string; subtype?: string; response?: { request_id?: string; response?: Record<string, unknown> } };
+  let m: {
+    type?: string;
+    subtype?: string;
+    response?: { request_id?: string; response?: Record<string, unknown> };
+    request?: { subtype?: string; message?: { method?: string } };
+  };
   try {
     m = JSON.parse(line);
   } catch {
     return false;
   }
   if (m?.type === "system" && m?.subtype === "init") return true;
+  // Claude Code's own MCP client handshake — clientInfo.name/version/websiteUrl is fixed boilerplate,
+  // identical in every real recording, never user data.
+  if (m?.type === "control_request" && m.request?.subtype === "mcp_message" && m.request?.message?.method === "initialize") return true;
   if (m?.type === "control_response") {
     const r = m.response ?? {};
     if (r.request_id === "init-1") return true;
     const body = r.response;
     if (body && typeof body === "object" && "commands" in body && "agents" in body) return true; // shape fallback
+    // The MCP server's initialize response — server-authored, shape-matched (see doc comment above).
+    const mcpResult = (
+      body as { mcp_response?: { result?: { protocolVersion?: unknown; capabilities?: unknown; serverInfo?: unknown } } } | undefined
+    )?.mcp_response?.result;
+    if (
+      mcpResult &&
+      typeof mcpResult === "object" &&
+      "protocolVersion" in mcpResult &&
+      "capabilities" in mcpResult &&
+      "serverInfo" in mcpResult
+    )
+      return true;
   }
   return false;
 }

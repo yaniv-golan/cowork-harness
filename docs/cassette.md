@@ -605,12 +605,16 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
   bare-`domain` + `path` + `machine-inventory`) runs over the **whole cassette** — the deliverable (`outputs/`
   bodies + filenames), the author-written `prompt`/`answers`/`assert`, AND the agent's reasoning + tool I/O —
-  with **one structural exception**: the agent's **capability-manifest** messages (the `system/init` event and
-  the `initialize` registry `control_response`, `request_id:"init-1"`) get `email` + `path` +
-  `machine-inventory` only, not the full net. Those two carry the tool/skill catalog (slash-command
-  descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server names (`claude.ai Gmail`, …) —
-  environment boilerplate a regex can't tell apart from customer data, and the sole concentrated source of
-  false positives — so `currency`/`domain` are excluded **as a unit**, not by domain. `email`, `path`, and
+  with **one structural exception**: the agent's **capability-manifest** messages — the `system/init` event,
+  the `initialize` registry `control_response` (`request_id:"init-1"`), the MCP `initialize`
+  `control_request` (Claude Code's own client handshake, `clientInfo.websiteUrl` etc.), and the MCP
+  `initialize` `control_response` (the configured MCP server's own handshake reply, `serverInfo`) — get
+  `email` + `path` + `machine-inventory` only, not the full net. The first two carry the tool/skill catalog
+  (slash-command descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server names
+  (`claude.ai Gmail`, …); the MCP handshake pair carries the agent's own product identity
+  (`claude.com`) and the server's own name/version — environment boilerplate a regex can't tell apart from
+  customer data, and the sole concentrated source of false positives — so `currency`/`domain` are excluded
+  **as a unit**, not by domain. `email`, `path`, and
   `machine-inventory` still scan them: the registry's `account` field can carry the developer's own email,
   those same messages' own structural fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real
   local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives, and a

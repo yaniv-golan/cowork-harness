@@ -86,22 +86,15 @@ jobs:
         # computer:// link resolves (computer_links_resolve) at hostloop.
         run: node dist/cli.js replay examples/replays/hostloop-computer-links.cassette.json --output-format json
       - name: Cassette privacy + staleness scan (committed fixtures)
-        # --allow-email covers the one expected email finding: the init-1 capability-manifest
-        # `account.email` field the harness bakes into every REAL recording (docs/cassette.md's
-        # "Privacy: cassettes are committed fixtures" section calls this out by name). This cassette
-        # was scrubbed post-hoc (the real recording account's email, MCP-server list, plugin cache
-        # paths, and private marketplace name were replaced with synthetic placeholders — see git
-        # history for examples/replays/example-multiselect-gate.cassette.json) — the placeholder
-        # `synthetic-user@example.com` in that same field is what's allow-listed here now. A NEW
-        # email finding elsewhere still fails the gate. The scanner's `path` class also runs on this cassette's
-        # capability-manifest and passes clean with NO --allow-path needed — its synthetic paths use
-        # a /tmp/ prefix specifically so they don't collide with that class, rather than being
-        # allow-listed.
-        # --allow-domain covers `claude.com`: the hostloop-computer-links cassette records the
-        # workspace MCP `initialize` handshake, whose clientInfo.websiteUrl is
-        # `https://claude.com/claude-code` — the agent's own public product URL, identical in every
-        # real recording, not PII. A NEW/different domain finding still fails the gate.
-        run: node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com' --allow-domain 'claude\.com'
+        # No --allow-* flags needed: isCapabilityManifest() (src/run/cassette.ts) suppresses domain/currency
+        # noise on all four capability-manifest forms — system/init, the init-1 registry control_response,
+        # and (as of the MCP-handshake false-positive fix) the MCP initialize control_request/control_response
+        # pair, whose clientInfo.websiteUrl/serverInfo previously tripped a `domain` finding on `claude.com`
+        # in every MCP-session cassette. The scanner's `path`/`email` classes also run clean on these fixtures
+        # with no allow needed — the synthetic placeholders used in example-multiselect-gate.cassette.json's
+        # scrubbed fields (see its git history) don't collide with any default pattern. A NEW/different
+        # finding of any class still fails the gate.
+        run: node dist/cli.js verify-cassettes examples/replays/
       - name: Lint example scenarios (no-silent-false-green invariants)
         run: node dist/cli.js lint examples/scenarios/*.yaml examples/scenarios/trigger-accuracy-sweep/*.yaml
 

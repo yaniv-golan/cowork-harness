@@ -80,20 +80,23 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
   },
 ];
 
-/** The high-precision subset scanned UNIVERSALLY — even on the agent capability-manifest messages
- *  (the `system/init` event and the `initialize` registry `control_response`). `email` because the
- *  registry's `account` field can carry the developer's own email (a real leak); `path` because those
- *  same messages' structural fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real
- *  local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives;
- *  `machine-inventory` because a future capability-manifest variant that inlines MCP tool
- *  descriptions (plausible: `system/init` already lists `mcp_servers`) could carry a live-enumerated
- *  app/process inventory in a structural field, and the sentinel is never legitimate catalog boilerplate
- *  the way a skill/tool description's prose can be. The noisy classes (`currency`/`domain`) are the ones
- *  suppressed on those two manifest messages, where every hit is the agent's tool/skill catalog or
- *  MCP-server names — environment boilerplate a regex can't tell apart from customer data. None of
- *  `email`/`path`/`machine-inventory` share that ambiguity: a real address, a real absolute path, or the
- *  live-inventory sentinel are never legitimate catalog boilerplate. Everywhere else (assistant
- *  reasoning, tool I/O, decisions, the deliverable) gets the full net. */
+/** The high-precision subset scanned UNIVERSALLY — even on the agent capability-manifest messages: the
+ *  `system/init` event, the `initialize` registry `control_response`, the MCP `initialize`
+ *  `control_request` (Claude Code's own client handshake), and the MCP `initialize` `control_response`
+ *  (the configured MCP server's own handshake reply) — see `isCapabilityManifest()` in
+ *  `src/run/cassette.ts` for the exact shape match on all four. `email` because the registry's `account`
+ *  field can carry the developer's own email (a real leak); `path` because those same messages' structural
+ *  fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real local filesystem path —
+ *  leaking a username, plugin-cache layout, or private marketplace name — lives; `machine-inventory`
+ *  because a future capability-manifest variant that inlines MCP tool descriptions (plausible:
+ *  `system/init` already lists `mcp_servers`) could carry a live-enumerated app/process inventory in a
+ *  structural field, and the sentinel is never legitimate catalog boilerplate the way a skill/tool
+ *  description's prose can be. The noisy classes (`currency`/`domain`) are the ones suppressed on those
+ *  four manifest messages, where every hit is the agent's tool/skill catalog, MCP-server names, or the
+ *  agent/server's own product identity (e.g. `claude.com`) — environment boilerplate a regex can't tell
+ *  apart from customer data. None of `email`/`path`/`machine-inventory` share that ambiguity: a real
+ *  address, a real absolute path, or the live-inventory sentinel are never legitimate catalog boilerplate.
+ *  Everywhere else (assistant reasoning, tool I/O, decisions, the deliverable) gets the full net. */
 export const MANIFEST_SCAN_PATTERNS = DEFAULT_SCAN_PATTERNS.filter(
   (p) => p.cls === "email" || p.cls === "path" || p.cls === "machine-inventory",
 );
