@@ -1379,7 +1379,14 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
     );
   // assert[] patterns
   for (const a of scenario.assert) {
-    for (const key of ["transcript_matches", "transcript_not_matches", "question_asked", "subagent_dispatched"] as const) {
+    for (const key of [
+      "transcript_matches",
+      "transcript_not_matches",
+      "question_asked",
+      "subagent_dispatched",
+      "tool_result_matches",
+      "tool_result_not_matches",
+    ] as const) {
       const pattern = a[key];
       if (pattern !== undefined) {
         const c = compileUserRegex(pattern);

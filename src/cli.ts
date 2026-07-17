@@ -40,8 +40,9 @@ import { cmdLint, cmdLintSkill } from "./run/scenario-tool.js";
 import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
 import { projectDispatchProbe, formatDispatchProbe } from "./run/probe-dispatch.js";
 import { cmdDoctor } from "./run/doctor.js";
-import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
+import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
+import { resolveStatusTarget } from "./run/status-target.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -3020,7 +3021,10 @@ async function cmdStatus(args: string[]) {
   }
   let dir: string;
   try {
-    dir = resolveStatusDir(p.positionals[0]);
+    // resolveStatusTarget layers root-resolution on top of resolveStatusDir: if the caller passed their
+    // --run-dir ROOT (or any dir that isn't itself a run dir), it resolves to the newest session beneath
+    // it so `status <run-dir>` works — not only the exact outDir printed at run start.
+    dir = resolveStatusTarget(p.positionals[0]);
   } catch (e) {
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }

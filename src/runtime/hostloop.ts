@@ -1,6 +1,6 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
-import { appendFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
@@ -67,6 +67,21 @@ export function buildHostLoopNativeEnv(
   delete nativeEnv.MAX_THINKING_TOKENS;
   Object.assign(nativeEnv, opts.agentEnv ?? {});
   return nativeEnv;
+}
+
+/** True iff wire and spawner cwd differ after best-effort realpath canonicalization. A symlinked run-dir
+ *  (/tmp→/private/tmp, /var→/private/var on macOS) makes the agent's realpath'd wire cwd differ from the
+ *  un-canonicalized spawner cwd even for the SAME directory — a false alarm this collapses. The gate
+ *  decision is unaffected (it realpaths candidate and roots itself); this only governs the diagnostic. */
+export function pathGateCwdMismatch(wireCwd: string, spawnerCwd: string): boolean {
+  const canon = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p; // non-resolvable path still deserves the loud compare
+    }
+  };
+  return canon(wireCwd) !== canon(spawnerCwd);
 }
 
 /**
@@ -215,7 +230,7 @@ export function spawnHostLoop(
       // Wire-cwd cross-check: the hook payload carries input.cwd. The RESOLVER input stays the closure
       // hostCwd (faithful to production's own resolver, which uses its own cwd variable, not the wire
       // value), but a mismatch means the native spawn's cwd drifted from the gate's assumption — loud, never silent.
-      if (typeof input?.cwd === "string" && input.cwd !== gateCfg.hostCwd)
+      if (typeof input?.cwd === "string" && pathGateCwdMismatch(input.cwd, gateCfg.hostCwd))
         warn(`::warning:: [hostloop] path-gate cwd mismatch: wire=${input.cwd} spawner=${gateCfg.hostCwd}\n`);
       return checkHostLoopPathGate(input?.tool_name, input?.tool_input ?? {}, gateCfg);
     },

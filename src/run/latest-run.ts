@@ -132,3 +132,41 @@ export function findLatestRunForScenario(runsRoot: string, arg: string): LatestR
   const { scenario, verdict } = readResultJson(best.outDir);
   return { scenario: scenario ?? arg, outDir: best.outDir, createdAt: best.createdAt, verdict };
 }
+
+/** The newest run/session dir at most TWO levels under `root`, by actual RUN TIME (same recency signal
+ *  as findLatestRunForScenario: .origin createdAt → result.json mtime → status.json startedAt). Handles a
+ *  `--run-dir` root passed to `status`, whose layout is `<root>/<scenario-slug>/<sessionId>/`. A candidate
+ *  MUST contain a status.json — every harness run writes one early, and gating on it prevents an unrelated
+ *  dir that merely holds a file named `result.json` from matching when `root` is large (e.g. $HOME).
+ *  Returns undefined when nothing under root qualifies. */
+export function findLatestRunUnderRoot(root: string): string | undefined {
+  let best: { dir: string; createdAt: string } | undefined;
+  const consider = (dir: string): void => {
+    if (!existsSync(join(dir, "status.json"))) return; // candidacy gate — no random result.json matches
+    const createdAt = originCreatedAt(dir) ?? resultJsonMtime(dir) ?? statusStartedAt(dir);
+    if (createdAt === undefined) return;
+    if (!best || createdAt > best.createdAt) best = { dir, createdAt };
+  };
+  const children = (d: string): string[] => {
+    try {
+      return readdirSync(d)
+        .map((n) => join(d, n))
+        .filter((p) => {
+          try {
+            return statSync(p).isDirectory();
+          } catch {
+            return false;
+          }
+        });
+    } catch {
+      return [];
+    }
+  };
+  // level 1 (root/<sessionId>) and level 2 (root/<scenario-slug>/<sessionId>) — cap the depth so this
+  // never walks an arbitrarily deep tree.
+  for (const lvl1 of children(root)) {
+    consider(lvl1);
+    for (const lvl2 of children(lvl1)) consider(lvl2);
+  }
+  return best?.dir;
+}

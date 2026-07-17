@@ -235,6 +235,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `tool_not_called` | agent never invoked it |
 | `tool_result_contains` | literal substring in a tool result |
 | `tool_result_not_contains` | literal absent from all tool results |
+| `tool_result_matches` | case-insensitive regex matches a tool result — the regex sibling of `tool_result_contains`, for an error-signature family rather than one literal string |
+| `tool_result_not_matches` | regex does not match any tool result — the regex sibling of `tool_result_not_contains` |
 | `subagent_tool_used` | a sub-agent used the tool |
 | `subagent_tool_absent` | no sub-agent used the tool |
 | `no_vm_path_file_op` | **`fidelity: hostloop` only** — no gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, re-derived from the frozen `tool_use` stream; any other tier FAILS "cannot verify" (`/sessions/...` is valid there) |

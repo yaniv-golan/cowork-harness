@@ -859,6 +859,60 @@ function check(
       }
     }
   }
+  // Regex siblings of tool_result_contains/tool_result_not_contains — catch an error-signature FAMILY
+  // (e.g. a script's non-zero exit swallowed by its wrapper, but the message still printed) that a
+  // literal substring can't express. Same evidence-unavailable / truncation-fail wording as the _contains
+  // pair above; compileUserRegex + try/catch discipline matches transcript_matches below.
+  if (a.tool_result_matches !== undefined) {
+    if (ctx.toolResultsMissing) {
+      results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_matches`));
+    } else {
+      const c = compileUserRegex(a.tool_result_matches);
+      if ("error" in c) {
+        results.push(fail(`tool_result_matches: bad regex "${a.tool_result_matches}": ${c.error}`));
+      } else if (ctx.toolResultTexts.some((t) => c.re.test(t))) {
+        results.push(ok());
+      } else {
+        // No match found — but a match could sit PAST the display cap of a truncated result (assertText
+        // absent). Mirror tool_result_contains: fail closed, but say WHY honestly.
+        const anyTruncated =
+          ctx.toolResultsTruncated !== undefined && ctx.toolResultTexts.some((_, i) => ctx.toolResultsTruncated![i] === true);
+        results.push(
+          anyTruncated
+            ? fail(
+                `evidence unavailable: no captured tool result matched /${a.tool_result_matches}/i, but one or more results are display-truncated (no assertText) — a match may be past the cap`,
+              )
+            : fail(`no tool result matched /${a.tool_result_matches}/i`),
+        );
+      }
+    }
+  }
+  if (a.tool_result_not_matches !== undefined) {
+    if (ctx.toolResultsMissing) {
+      results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_not_matches`));
+    } else {
+      const c = compileUserRegex(a.tool_result_not_matches);
+      if ("error" in c) {
+        results.push(fail(`tool_result_not_matches: bad regex "${a.tool_result_not_matches}": ${c.error}`));
+      } else {
+        const positiveHit = ctx.toolResultTexts.some((t) => c.re.test(t));
+        if (positiveHit) {
+          results.push(fail(`a tool result matched forbidden /${a.tool_result_not_matches}/i`));
+        } else {
+          const hasTruncatedAbsence =
+            ctx.toolResultsTruncated !== undefined &&
+            ctx.toolResultTexts.some((t, i) => !c.re.test(t) && ctx.toolResultsTruncated![i] === true);
+          results.push(
+            hasTruncatedAbsence
+              ? fail(
+                  `evidence unavailable: one or more tool results are display-truncated (no assertText) — cannot rule out a forbidden regex match`,
+                )
+              : ok(),
+          );
+        }
+      }
+    }
+  }
   // Fuzzy content for stochastic prose. All regex-building assertions are try/catch-wrapped —
   // `evaluate()` is a bare `.map(check)` with no error boundary, so a malformed pattern must be a
   // clean assertion failure, not an uncaught throw. Case-insensitive ("i").
