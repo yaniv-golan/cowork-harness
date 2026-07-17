@@ -28,6 +28,20 @@ All notable changes to this project are documented here. The format is based on
   assertion with a compile error, and a no-match against a display-truncated result is reported as
   could-not-verify rather than a silent pass/fail.
 
+- **A folder-grant refusal for `request_cowork_directory`, ported from Desktop 1.22209.0.** Cowork now
+  refuses (pre-prompt) a mid-session folder grant that targets a security-sensitive home-directory path —
+  `.ssh`, `.aws`, `.gnupg`, `.kube`, `.docker`, `.claude`, `.config/{gcloud,gh,powershell}`, the darwin
+  `Library/{Keychains,LaunchAgents,LaunchDaemons,Application Support,Cookies}` paths, or a protected shell
+  dotfile (`.zshrc`, `.netrc`, etc.) — either directly, as a descendant, or as an ancestor whose grant would
+  incidentally expose one (e.g. requesting the home directory itself). The harness's `hostloop` canUseTool
+  gate ports this byte-faithfully, denying with Desktop's own message. **Currently dead code in a stock
+  run**: no built-in workspace/cowork server registers `request_cowork_directory` yet (a pre-existing,
+  separately tracked gap), so this only fires for a scenario that supplies its own `mcp_config` registering
+  a matching tool name. Ported ahead of that gap closing so the refusal semantics are ready the moment it
+  does. Two GrowthBook feature-gate ids Desktop 1.22209.0 introduced for a related "auto mode always-allow"
+  tool-approval feature are pinned as drift sentinels (`sync`'s `PINNED_GATES`) without being behaviorally
+  modeled — this harness has no persistent per-tool permission concept to model them against.
+
 ### Changed
 
 - **`cowork-harness status <run-dir>` now resolves the newest session under a run-dir root.** Previously
@@ -49,6 +63,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`sync`'s non-macOS guard no longer blames Claude Desktop for a limitation that's actually this
+  harness's own.** The error previously read "sync requires macOS (the Cowork Desktop app is macOS-only)"
+  — false, Desktop ships a Windows build too; only this harness's `sync` tooling doesn't support non-macOS
+  install layouts yet. The message now says so.
+- **The web_fetch provenance-miss denial is synced to Desktop 1.22209.0's wording.** The message now notes
+  that a URL surfaced in a WebSearch result also counts as provenance, and tells a subagent that can't ask
+  the user to continue without the page and report the blocked URL rather than stall. No logic change —
+  Desktop's underlying provenance rules are unchanged between releases, only the wording moved.
 - **The hostloop path-gate no longer emits a spurious "cwd mismatch" warning when the run-dir is reached
   through a symlink** (e.g. macOS `/tmp` → `/private/tmp`). The diagnostic now compares the wire and
   spawner cwds after best-effort realpath canonicalization, so the same directory reached via two spellings
