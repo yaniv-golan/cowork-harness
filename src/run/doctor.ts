@@ -223,10 +223,12 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
 
   // This check is shared by every live tier, but its meaning differs by tier. On container/microvm the
   // staged ELF IS the executed agent (bind-mounted into the sandbox guest), so resolution stays strict — a
-  // pruned pin hard-fails. On hostloop/cowork the executed agent is the NATIVE macOS binary (see the
-  // `hostAgent` check below); this ELF is only bind-mounted into the bash sidecar as a non-executed parity
-  // mount, so a pruned pin there auto-accepts a patch-newer sibling (`parityMount: true`) instead of
-  // blocking, mirroring `hostAgent`'s own patch tolerance.
+  // pruned pin hard-fails. On hostloop — and on cowork ONLY when it resolves to host-loop (see
+  // `coworkIsHostLoop` below) — the executed agent is the NATIVE macOS binary (see the `hostAgent` check
+  // below); this ELF is only bind-mounted into the bash sidecar as a non-executed parity mount, so a pruned
+  // pin there auto-accepts a patch-newer sibling (`parityMount: true`) instead of blocking, mirroring
+  // `hostAgent`'s own patch tolerance. A cowork baseline that resolves to VM-loop executes this ELF
+  // directly, so it stays strict — same as container/microvm.
   const agentCheck = (parityMount: boolean): DoctorCheck => {
     const agent = probe.agentBinary({ parityMount });
     // Surface the ELF's sha256 provenance so setup is self-explaining (a hard mismatch already fails the
@@ -332,7 +334,24 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       required: up, // only gate on the image once the runtime is actually reachable
     });
 
-    checks.push(agentCheck(tier === "hostloop" || tier === "cowork"));
+    // `cowork` doesn't pin a loop mode itself — it's resolved from the synced baseline gate at run time
+    // (decideLoopFromBaseline; see execute.ts's `cowork` dispatch). Computed here, BEFORE the `agent` check,
+    // so the VM-ELF parity-mount tolerance mirrors the runtime EXACTLY: `hostloop` is unconditionally
+    // host-loop (always tolerant), but `cowork` is tolerant ONLY when it resolves to host-loop on the
+    // synced baseline. A cowork baseline that resolves to VM-loop executes this ELF directly — same strict
+    // path as `container` — so tolerating a pruned pin there would be a doctor false-green (ok) against a
+    // real run that hard-fails. Resolved once and reused below for the `cowork-loop` note (DRY).
+    let coworkLoop: "host" | "vm" | null = null;
+    if (tier === "cowork") {
+      try {
+        coworkLoop = decideLoopFromBaseline(loadBaseline("latest"));
+      } catch {
+        coworkLoop = null; // best-effort; the agent check below falls back to the tolerant default
+      }
+    }
+    const coworkIsHostLoop = coworkLoop !== "vm"; // unknown (null) defaults tolerant — hostloop is the current-baseline default
+
+    checks.push(agentCheck(tier === "hostloop" || (tier === "cowork" && coworkIsHostLoop)));
 
     if (tier === "hostloop" || tier === "cowork") {
       const hostAgent = probe.hostAgentBinary();
@@ -351,20 +370,15 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       });
     }
 
-    // Informational only (never blocks): `cowork` doesn't pin a loop mode itself — it's resolved from the
-    // synced baseline gate at run time (see decideLoopFromBaseline). Surfacing that here explains why the
-    // `agent` check above is tolerant (parity mount) while `hostAgent` is the one that's actually executed.
+    // Informational only (never blocks): reuses `coworkLoop`, resolved once above, so this note can never
+    // disagree with the tolerance the `agent` check just applied.
     if (tier === "cowork") {
-      let loopDetail = "loop mode resolves from the synced baseline gate at run time (see the `agent`/`hostAgent` checks above)";
-      try {
-        const loop = decideLoopFromBaseline(loadBaseline("latest"));
-        loopDetail =
-          loop === "host"
-            ? "resolves to hostloop on this baseline — the VM ELF above is a non-executed parity mount; the native binary (`hostAgent`) is what actually runs"
-            : "resolves to VM-loop on this baseline — the whole agent runs in the sandbox, same as `container`/`microvm`";
-      } catch {
-        /* best-effort informational note only; never let this block doctor */
-      }
+      const loopDetail =
+        coworkLoop === "host"
+          ? "resolves to hostloop on this baseline — the VM ELF above is a non-executed parity mount; the native binary (`hostAgent`) is what actually runs"
+          : coworkLoop === "vm"
+            ? "resolves to VM-loop on this baseline — the whole agent runs in the sandbox, same as `container`/`microvm`, so the `agent` check above is STRICT (no parity tolerance)"
+            : "loop mode resolves from the synced baseline gate at run time (see the `agent`/`hostAgent` checks above)";
       checks.push({
         id: "cowork-loop",
         title: "Cowork loop resolution",
