@@ -225,6 +225,20 @@ export const Assertion = z.strictObject({
     .min(1)
     .optional()
     .describe("no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
+  tool_result_matches: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "regex (case-insensitive) — at least one tool result matches (per-result, 10 KB cap). The regex sibling of tool_result_contains; use for an error-signature FAMILY a script may print even when its exit code was swallowed by its wrapper",
+    ),
+  tool_result_not_matches: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "regex (case-insensitive) that must NOT match any tool result (per-result, 10 KB cap). The regex sibling of tool_result_not_contains",
+    ),
   file_exists: z.string().min(1).optional().describe("a file exists at this path under the agent's work root"),
   user_visible_artifact: z
     .string()

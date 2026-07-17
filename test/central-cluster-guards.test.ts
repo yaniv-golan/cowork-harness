@@ -213,6 +213,14 @@ describe("#7/#8 tool-glob validation rejects vacuous negatives at scenario load"
   it("accepts a literal tool glob unchanged", () => {
     expect(() => parseScenarioFile(writeScenario(`  - tool_not_called: "WebFetch"`))).not.toThrow();
   });
+
+  it("rejects a bad tool_result_matches regex at scenario load", () => {
+    expect(() => parseScenarioFile(writeScenario(`  - tool_result_matches: "("`))).toThrow(/regex/i);
+  });
+
+  it("rejects a bad tool_result_not_matches regex at scenario load", () => {
+    expect(() => parseScenarioFile(writeScenario(`  - tool_result_not_matches: "("`))).toThrow(/regex/i);
+  });
 });
 
 describe("#10 the judged document is budget-capped with a truncation marker", () => {

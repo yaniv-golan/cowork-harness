@@ -259,6 +259,8 @@ same set live from the schema.
 | `tool_not_called: <glob>` | NO tool the agent ran matched this glob (`mcp__*` = "no MCP tool ran"). Same glob semantics as `tool_called`, including the empty/regex-ish rejection |
 | `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match) |
 | `tool_result_not_contains: <str>` | no tool result includes the literal string (content / replay-checkable; fails loud when tool results are absent) |
+| `tool_result_matches: <regex>` | the regex sibling of `tool_result_contains` — case-insensitive regex matches at least one tool result; use for an error-signature family, not just one literal string |
+| `tool_result_not_matches: <regex>` | the regex sibling of `tool_result_not_contains` — same fails-loud-on-absent-evidence semantics |
 | `subagent_tool_used: <glob>` | a sub-agent used a tool matching this glob (same `*`/`?`, anchored, case-sensitive semantics as `tool_called`, including the empty/regex-ish rejection) |
 | `subagent_tool_absent: <glob>` | no sub-agent used a tool matching this glob (same rejection) |
 | `no_vm_path_file_op: true` | **`fidelity: hostloop` only** — NO gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, replay-checkable without `controlOut`; any other tier FAILS "cannot verify" (`/sessions/...` is valid there). **Only `true` is valid** |

@@ -158,6 +158,16 @@
             "type": "string",
             "minLength": 1
           },
+          "tool_result_matches": {
+            "description": "regex (case-insensitive) — at least one tool result matches (per-result, 10 KB cap). The regex sibling of tool_result_contains; use for an error-signature FAMILY a script may print even when its exit code was swallowed by its wrapper",
+            "type": "string",
+            "minLength": 1
+          },
+          "tool_result_not_matches": {
+            "description": "regex (case-insensitive) that must NOT match any tool result (per-result, 10 KB cap). The regex sibling of tool_result_not_contains",
+            "type": "string",
+            "minLength": 1
+          },
           "file_exists": {
             "description": "a file exists at this path under the agent's work root",
             "type": "string",
