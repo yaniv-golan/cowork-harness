@@ -1,6 +1,8 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { ABSTAIN, type Abstain, type Decider, type Decision, type RunContext } from "../decide/decider.js";
 import type { DecisionRequest } from "../agent/session.js";
-import { PATH_GATE_TOOL_NAMES } from "./pretooluse-path-hook.js";
+import { PATH_GATE_TOOL_NAMES, expandTilde } from "./pretooluse-path-hook.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 
 /** The SDK's own working-directory deny reason (asar `Zt`, `.vite/build/index.chunk-CS-g0Skn.js`,
@@ -11,6 +13,46 @@ export const SDK_WORKING_DIR_DENY = "Path is outside allowed working directories
 
 const GATED = new Set<string>(PATH_GATE_TOOL_NAMES);
 const PATH_KEYS = ["file_path", "path"] as const;
+
+const REQUEST_COWORK_DIRECTORY = "mcp__cowork__request_cowork_directory";
+
+// Faithful (partial) port of Cowork's protected-folder-grant refusal (production `deniedCoworkMountRoot`
+// / telemetry `lam_folder_grant_refused_protected`, Desktop 1.22209.0, `.vite/build/index.chunk-B6ZcqAwc.js`).
+//
+// UNREACHABLE TODAY: request_cowork_directory is not a registered/invokable tool in any lane of this
+// harness (hostloop registers only bash+web_fetch, container only present_files — see
+// docs/internal/2026-07-03-host-vm-bridge-capability-gaps.md, Tier 2, "the tool itself is never
+// invokable. Emulated: no."). This check can never fire until that separate, larger gap is closed. It's
+// ported now anyway so the exact refusal semantics are ready to activate the moment it is.
+//
+// Two closed sets, both resolved as exact-match-or-descendant of homedir()+entry. Deliberately NOT ported:
+// the "managed" (Cowork-internal Scheduled/Artifacts/config-dir) branch of production's check, which
+// depends on Cowork app-data-root concepts this harness has no analog for; and the reverse containment
+// direction (an ANCESTOR request that would incidentally expose one of these paths, e.g. requesting `~`
+// itself) — production's exact semantics for that direction weren't confirmed during investigation. Both
+// gaps ABSTAIN rather than silently allow: a miss here still reaches the normal human-approval flow, it
+// just isn't auto-refused pre-prompt the way production refuses it. Also unhandled, unlike the sibling
+// PreToolUse gate (pretooluse-path-hook.ts, which trims + lexically resolves + realpaths): no `.trim()`
+// on the raw input and no case-folding — e.g. `" ~/.ssh"` (leading space) or `~/.SSH` (case-insensitive
+// filesystem) will miss the deny and fall through to ABSTAIN. `..` segments ARE normalized for tilde-form
+// input (expandTilde uses path.join, which collapses them — `~/foo/../.ssh` IS denied); a non-tilde
+// absolute path containing `..` (e.g. `${home}/foo/../.ssh`) is NOT normalized and will miss.
+const PROTECTED_DIRS = [".ssh", ".aws", ".gnupg", ".kube", ".docker", ".claude", ".config/gcloud", ".config/gh", ".config/powershell"];
+const PROTECTED_DOTFILES = [".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".bash_login", ".profile", ".netrc"];
+
+const FOLDER_GRANT_DENIED_MESSAGE =
+  "A requested folder can't be granted to this session. Ask the user to connect the folder they want using the folder picker on their device, or pick a different folder.";
+
+/** True if `requested` (already tilde/absolute-resolved) equals or descends from `homedir()/entry`. */
+function isUnderHomeEntry(requested: string, entry: string): boolean {
+  const root = join(homedir(), entry);
+  return requested === root || requested.startsWith(root + "/") || requested.startsWith(root + "\\");
+}
+
+function isProtectedHomePath(rawPath: string): boolean {
+  const resolved = expandTilde(rawPath);
+  return [...PROTECTED_DIRS, ...PROTECTED_DOTFILES].some((entry) => isUnderHomeEntry(resolved, entry));
+}
 
 /** Every non-abstain return is a FULL Decision ({response, by, rationale} — decider.ts:25-30): the
  *  permission payload nests under `response`, matching PermissionDefaultDecider's shape. */
@@ -36,7 +78,15 @@ const deny = (message: string, rationale: string): Decision => ({
 export function makeHostLoopCanUseToolGate(): Decider {
   return {
     async decide(req: DecisionRequest, _ctx?: RunContext): Promise<Decision | Abstain> {
-      if (req.kind !== "permission" || !GATED.has(req.tool)) return ABSTAIN;
+      if (req.kind !== "permission") return ABSTAIN;
+      if (req.tool === REQUEST_COWORK_DIRECTORY) {
+        const raw = req.input.path;
+        if (typeof raw === "string" && isProtectedHomePath(raw)) {
+          return deny(FOLDER_GRANT_DENIED_MESSAGE, "hostloop canUseTool folder-grant deny (protected home path)");
+        }
+        return ABSTAIN; // no protected-path match → left to the human-approval flow, same as production
+      }
+      if (!GATED.has(req.tool)) return ABSTAIN;
       // xe: the /sessions guard (both keys, 5-set only — MultiEdit not in the set, matching production).
       for (const key of PATH_KEYS) {
         const v = req.input[key];
