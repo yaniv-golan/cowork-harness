@@ -40,6 +40,12 @@ All notable changes to this project are documented here. The format is based on
 - **The run-completion footer now prints a `→ result: <run-dir>/result.json` pointer**, on both success and
   failure, since the run directory is always kept on disk. Suppressed on the replay lane, which never
   writes a `result.json`.
+- **The `on_unanswered=fail` unscripted-gate error now also mentions `on_unanswered: llm` as a secondary
+  escape valve.** Previously it suggested only `--answer "<regex>=<choice>"`, which is the right primary
+  fix but the wrong tool for a gate whose wording drifts run-to-run — a regex chases a moving target. The
+  added line explicitly says "in the scenario YAML" (`--on-unanswered llm` is rejected on the CLI in favor
+  of `--decider-llm`) and notes the tradeoff (non-deterministic, one model call per gate) so it doesn't
+  read as unconditionally preferable to fixing the script.
 
 ### Fixed
 
