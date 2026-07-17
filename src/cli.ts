@@ -2337,7 +2337,13 @@ async function fetchOfficialElfChecksum(version: string): Promise<string | undef
 async function cmdSync(args: string[]) {
   // platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
   if (process.platform !== "darwin") {
-    return fail("sync", "usage", "sync requires macOS (the Cowork Desktop app is macOS-only).", undefined, isJsonOutput(args));
+    return fail(
+      "sync",
+      "usage",
+      "sync requires macOS (this harness's sync tooling only supports macOS installs today).",
+      undefined,
+      isJsonOutput(args),
+    );
   }
   // use parseArgs to reject unknown flags and positionals.
   // accept --force as a canonical alias for --allow-empty; normalize before parsing.

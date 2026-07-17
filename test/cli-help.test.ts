@@ -255,3 +255,18 @@ describe("cli COMMANDS ↔ llms.txt command list", () => {
     expect(stale, `llms.txt's "commands are" list has a stale/unknown entry: ${stale.join(", ")}`).toEqual([]);
   });
 });
+
+// Message accuracy guard: the CLI sync command's non-macOS error message should describe the harness's
+// own limitation, not claim the Cowork Desktop app is macOS-only (it ships a Windows build too).
+describe("cli sync command: platform guard message accuracy", () => {
+  const src = readFileSync(resolve("src/cli.ts"), "utf8");
+
+  it("cmdSync on a non-macOS platform blames the harness's own sync tooling, not Desktop", () => {
+    // This test only asserts the STRING CONTENT, not actual non-macOS execution (CI runs on macOS).
+    // Read the source literal directly rather than mocking process.platform.
+    const m = src.match(/if \(process\.platform !== "darwin"\) \{\s*return fail\("sync", "usage", "([^"]+)"/);
+    expect(m).not.toBeNull();
+    expect(m![1]).not.toMatch(/Cowork Desktop app is macOS-only/);
+    expect(m![1]).toMatch(/this harness|sync tooling|not (yet )?support/i);
+  });
+});
