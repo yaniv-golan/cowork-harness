@@ -66,10 +66,14 @@ jobs:
           fi
       - name: Typecheck
         run: npm run typecheck
-      - name: Unit tests (schema, answerer, egress, launch plan, example validation)
-        run: npm test
+      # Build BEFORE the unit tests: ~40 test files gate their CLI integration cases on
+      # `existsSync("dist/cli.js")` (describe.skipIf(!can)) so a bare `vitest` during dev skips them
+      # cleanly. The `npm run ci` script orders build-then-test for exactly this reason; keep this job in
+      # the same order, or those CLI cases silently skip here (a green run that never exercised them).
       - name: Build
         run: npm run build
+      - name: Unit tests (schema, answerer, egress, launch plan, example validation)
+        run: npm test
       - name: Validate CLI wiring
         run: node dist/cli.js list
       - name: Token-free replay gate (example-pdf-skill fixture)
