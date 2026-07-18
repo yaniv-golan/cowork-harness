@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Finding 31: correct code that consumes the XHR response via `responseText` and registers TWO
+         `load` listeners. The old stub (a) exposed `responseText` as a plain field whose reads did not
+         set `bodyConsulted`, so the page looked like it ignored the response (→ mislabeled lost), and
+         (b) stored one listener per type, so the body-capturing listener was overwritten. -->
+    <button id="save">Save</button>
+    <div id="msg"></div>
+    <script>
+      var lastBody = null;
+      document.getElementById("save").addEventListener("click", function () {
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/save");
+        // First listener captures the body; second renders based on it. Both must run.
+        xhr.addEventListener("load", function () {
+          lastBody = xhr.responseText;
+        });
+        xhr.addEventListener("load", function () {
+          var ok = lastBody && lastBody.charAt(0) === "{";
+          document.getElementById("msg").textContent = ok ? "Saved!" : "Save failed — please retry.";
+        });
+        xhr.send("data=1");
+      });
+    </script>
+  </body>
+</html>

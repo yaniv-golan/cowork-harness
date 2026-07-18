@@ -144,6 +144,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     preRunPaths: undefined,
     preRunLinkAware: undefined,
     preRunHashes: undefined,
+    preRunOrigin: undefined,
     partial: undefined,
     unansweredGate: undefined,
     staleness: undefined,

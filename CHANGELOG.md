@@ -8,6 +8,43 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Filesystem-evidence assertions no longer pass on incomplete evidence.** `input_unmodified` now fails
+  loud when its glob matches **no** pre-run path (a typo or renamed mount was a silent vacuous pass), and
+  fails evidence-unavailable when a manifest path escapes the workspace root or a matched file exceeds the
+  hash cap. The pre-run baseline records its provenance, so `no_unexpected_files` / `input_unmodified` fail
+  evidence-unavailable on an unreadable connected-folder baseline instead of diffing a partial tree
+  (`RunResult` gains `preRunOrigin`). `no_lost_write_back` no longer silently misses a modified-but-unreadable
+  or over-cap file, an authored file under an unreadable subtree, or a scratchpad deliverable behind a
+  symlink/hardlink — each now surfaces as could-not-verify.
+- **Static artifact analysis (`analyze-skill` / `no_lost_write_back` Tier A)** closes several false-green and
+  false-positive holes: recognizes `axios`/jQuery and library write-backs, computed member calls
+  (`xhr["open"]`), unquoted and submitter-overridden `<form>` actions, and ES-module sources; classifies URLs
+  with the WHATWG parser so `localhost.evil.com`, protocol-relative `//host`, and `mailto:`/`data:` are no
+  longer misread as local; scope-aware constant folding and member-mutation tracking stop live code being
+  proven dead; an unresolved URL or method (including spread request options) yields could-not-verify instead
+  of a silent clean; and every write-back in a file is reported, not just the first. The advertised
+  `.ts/.tsx/.jsx` source extensions are dropped (no compatible parser) — treated as out-of-scope rather than
+  parse-noise.
+- **Runtime artifact confirmation (Tier B)** now confirms edit-fired autosaves and load-time write-backs (not
+  only explicit commits), handles `fetch(Request)`, models browser-faithful XHR response/listener semantics,
+  skips disabled/hidden controls and honors a submitter's `formaction`, analyzes observed writes before
+  downgrading on an external script, matches loopback hosts exactly, and no longer swallows unrelated harness
+  exceptions.
+- **`analyze-skill` orchestration** fails could-not-verify (exit `3`) when a `references`/`agents`/`commands`/
+  `skills` subtree is unreadable (was a silent clean); an ignore marker inside a fenced or block-quoted
+  example no longer suppresses real findings; a mixed invocation fails on a positional that resolves to no
+  scannable source; JSON coverage lists clean artifact sources; and runtime mode honors the 3 MB read cap.
+- **Protocol / decision handling fails closed on drift.** Unknown control-request subtypes and duplicate
+  outstanding request IDs are rejected as protocol errors; malformed user/tool-result blocks increment a new
+  `evidenceErrors.protocolMalformed` counter; the ABSTAIN permission/dialog fallback reconciles answer
+  delivery like a normal decision; `present_files` leak classification normalizes `..` paths; gate answers
+  require a request id; and an `allow_if` expression no longer fails to compile when a permission input key is
+  a reserved word.
+- **CI / release gates.** The baseline-staleness check rejects non-finite, future-dated, and corrupt
+  timestamps (extracted to a unit-tested `scripts/check-baseline-staleness.ts`); manual container-image
+  publishes require a green CI run unless an explicit break-glass input is set; and the composite Action
+  passes inputs via the environment (closing a shell-injection surface) and accepts a JSON-array `extra-args`
+  that preserves quoting and spaces.
 - **`analyze-skill` top-level `--help`** now documents the `--runtime` flag and exit code `3`
   (could-not-verify); previously these appeared only in the per-command `analyze-skill --help`.
 - Corrected a phantom assertion key in the `record --margins` documentation

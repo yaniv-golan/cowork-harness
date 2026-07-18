@@ -42,7 +42,7 @@ describe("ExternalDecider", () => {
   });
 
   it("coerces a 1-based INDEX answer to the option label", async () => {
-    const { channel } = memChannel(['{"answers":{"Which format?":2}}']); // id optional; 2 → PDF
+    const { channel } = memChannel(['{"id":"req_3","answers":{"Which format?":2}}']); // 2 → PDF
     const d = await new ExternalDecider(channel).decide(ask, ctx());
     expect((d as any).response.answers).toEqual({ "Which format?": "PDF" });
   });
@@ -51,7 +51,7 @@ describe("ExternalDecider", () => {
     const perm: DecisionRequest = { id: "p1", kind: "permission", tool: "Bash", input: { command: "ls" } };
     const allow = await new ExternalDecider(memChannel(['{"id":"p1","behavior":"allow"}']).channel).decide(perm, ctx());
     expect((allow as any).response).toEqual({ kind: "permission", behavior: "allow", updatedInput: { command: "ls" } });
-    const deny = await new ExternalDecider(memChannel(['{"behavior":"deny"}']).channel).decide(perm, ctx());
+    const deny = await new ExternalDecider(memChannel(['{"id":"p1","behavior":"deny"}']).channel).decide(perm, ctx());
     expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
   });
 
@@ -69,7 +69,7 @@ describe("ExternalDecider", () => {
 
   it("SCRUBS injected secrets from the emitted request — no token leak", async () => {
     const TOKEN = "sk-ant-oat01-SECRETVALUE123";
-    const { channel, sent } = memChannel(['{"answers":{"Which format?":"Markdown"}}']);
+    const { channel, sent } = memChannel(['{"id":"req_3","answers":{"Which format?":"Markdown"}}']);
     await new ExternalDecider(channel, [TOKEN]).decide(ask, ctx(`the user said ${TOKEN} earlier`));
     expect(sent[0]).not.toContain(TOKEN);
     expect(sent[0]).toContain("[REDACTED]");
@@ -103,6 +103,14 @@ describe("ExternalDecider", () => {
   it("answering the WRONG request id → UnansweredError", async () => {
     await expect(new ExternalDecider(memChannel(['{"id":"WRONG","answers":{}}']).channel).decide(ask, ctx())).rejects.toThrow(
       /wrong request/,
+    );
+  });
+
+  it("a reply that OMITS the request id → UnansweredError (id is the only strong identity; no answer-by-key-coincidence)", async () => {
+    // The gate has id "req_3"; a reply with no id used to be accepted purely on the question-key match,
+    // letting a stale/mis-sequenced answer satisfy the current gate. It must now fail loud.
+    await expect(new ExternalDecider(memChannel(['{"answers":{"Which format?":"PDF"}}']).channel).decide(ask, ctx())).rejects.toThrow(
+      /omitted the request id/,
     );
   });
 });
@@ -319,6 +327,24 @@ describe("gates stream + answer (the in-band transport the harness owns)", () =>
     writeFileSync(join(dir, "req-3.json"), '{"id":"c","kind":"question","questions":[{"question":"Go?","options":[{"label":"Yes"}]}]}\n');
     answerGate(dir, 3, { "Go?": "Yes" });
     expect(JSON.parse(readFileSync(join(dir, "resp-3.json"), "utf8"))).toEqual({ id: "c", answers: { "Go?": "Yes" } });
+  });
+
+  it("answerGate recovers the id from a CONSUMED (.done) req file too (answer after consumption still carries identity)", () => {
+    const dir = tmp();
+    // the harness renames req-N.json → req-N.json.done once consumed; the id must still be recoverable.
+    writeFileSync(
+      join(dir, "req-5.json.done"),
+      '{"id":"d5","kind":"question","questions":[{"question":"Go?","options":[{"label":"Yes"}]}]}\n',
+    );
+    answerGate(dir, 5, { "Go?": "Yes" });
+    expect(JSON.parse(readFileSync(join(dir, "resp-5.json"), "utf8"))).toEqual({ id: "d5", answers: { "Go?": "Yes" } });
+  });
+
+  it("answerGate FAILS LOUD when it cannot recover the request id (never writes an id-less response)", () => {
+    const dir = tmp();
+    // No req-6.json / req-6.json.done exists → the id is unrecoverable.
+    expect(() => answerGate(dir, 6, { "Go?": "Yes" })).toThrow(/cannot recover the request id/);
+    expect(existsSync(join(dir, "resp-6.json"))).toBe(false); // no id-less response left behind
   });
 
   it("answerGate carries a multiSelect ARRAY value unjoined (the wire shape normalize reads back)", () => {

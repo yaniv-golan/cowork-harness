@@ -859,7 +859,9 @@ export class PromptDecider implements Decider {
  * `DecisionChannel` and reads one reply line back. This is the stochastic-question fix: the answerer
  * decides the ACTUAL live question (with a scrubbed transcript-tail for context), not a pre-written
  * `--answer` regex. The channel is a spawned helper (`--decider-cmd`) or a file rendezvous
- * (`--decider-dir`). Replies are lenient (label OR 1-based index, `id` optional).
+ * (`--decider-dir`). Replies are lenient on ANSWER shape (label OR 1-based index) but MUST echo the
+ * request `id` — the advertised `reply_with` template always carries it, and it is the only strong
+ * identity that stops a stale/mis-sequenced reply from answering the wrong gate.
  */
 export class ExternalDecider implements Decider {
   constructor(
@@ -880,8 +882,17 @@ export class ExternalDecider implements Decider {
     } catch {
       throw new UnansweredError("external decider sent invalid JSON", request.reply_with);
     }
-    if (parsed.id && req.id && parsed.id !== req.id)
-      throw new UnansweredError(`external decider answered the wrong request (got ${parsed.id}, expected ${req.id})`, request.reply_with);
+    // Require the reply to carry the request id AND match it. The `reply_with` template always advertises
+    // `{"id":"<req.id>",…}`, so a well-behaved helper/agent always echoes it; the id is the only strong
+    // identity, and accepting an id-less reply lets a stale or mis-sequenced answer satisfy the current gate
+    // by question-key coincidence (non-deterministic). Reject a MISSING id as well as a mismatched one.
+    if (req.id && parsed.id !== req.id)
+      throw new UnansweredError(
+        parsed.id == null
+          ? `external decider reply omitted the request id (expected ${req.id}) — every reply must echo its gate's id`
+          : `external decider answered the wrong request (got ${parsed.id}, expected ${req.id})`,
+        request.reply_with,
+      );
     return { response: this.normalize(req, parsed), by: "external", rationale: "answered externally" };
   }
 
@@ -1096,6 +1107,10 @@ export class ExternalDecider implements Decider {
   }
 }
 
+// Cache of whether an identifier-shaped input key is legal as a strict-mode `new Function` parameter
+// (reserved words like `class`/`for` are not). Module-scoped so the parser probe runs at most once per
+// distinct key across a whole run. See `isBindableParam` in evalPredicate.
+const bindableParamCache = new Map<string, boolean>();
 function evalPredicate(expr: string, input: Record<string, unknown>): boolean {
   // (additive): expose the whole input object as `input` so predicates can reach keys that are not
   // valid JS identifiers — `input["file-path"]`, `input["foo.bar"]`. We ALSO keep binding each input key as
@@ -1103,10 +1118,30 @@ function evalPredicate(expr: string, input: Record<string, unknown>): boolean {
   // dropping it would silently false-deny those on first run. Only identifier-shaped keys can be bound as a
   // bare parameter (a key like `file-path` is not a legal parameter name and would fail `new Function`
   // compilation regardless of the predicate body); non-identifier keys are reachable only via `input[...]`.
-  const isIdentifier = (k: string) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k);
+  // A key is bound as a bare parameter ONLY if it is a legal strict-mode parameter name. The bare regex
+  // `/^[A-Za-z_$][A-Za-z0-9_$]*$/` is necessary but NOT sufficient: reserved words (`class`, `for`, `new`,
+  // `in`, …) and strict-mode-reserved words (`let`, `yield`, `static`, `eval`, `arguments`, …) are
+  // identifier-SHAPED yet throw a SyntaxError as `new Function` parameter names — which would crash
+  // compilation of an UNRELATED predicate that merely happened to receive such an input key. Probe each
+  // candidate against the real parser (cached) so the exclusion set never drifts from the engine. Excluded
+  // keys stay reachable via `input[...]`, exactly like non-identifier keys.
+  const isBindableParam = (k: string): boolean => {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k)) return false;
+    const cached = bindableParamCache.get(k);
+    if (cached !== undefined) return cached;
+    let ok = true;
+    try {
+      // regex above guarantees `k` cannot contain a comma/paren/etc., so this is not an injection surface.
+      new Function(k, '"use strict"; return;');
+    } catch {
+      ok = false;
+    }
+    bindableParamCache.set(k, ok);
+    return ok;
+  };
   // `input` itself is always available; if an input key is literally named "input" the explicit object wins
   // (don't bind it twice — a duplicate parameter name is a compile error under "use strict").
-  const namedKeys = Object.keys(input).filter((k) => isIdentifier(k) && k !== "input");
+  const namedKeys = Object.keys(input).filter((k) => isBindableParam(k) && k !== "input");
   const params = ["input", ...namedKeys];
   const args: unknown[] = [input, ...namedKeys.map((k) => input[k])];
   // scenario YAML is author-supplied (same trust class as --decider-cmd), so `new Function` is NOT

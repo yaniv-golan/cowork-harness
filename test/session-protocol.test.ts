@@ -219,6 +219,88 @@ describe("session protocol loud-failure fixes", () => {
     expect(warnings.some((w) => w.includes("unknown decision id") && w.includes("does-not-exist"))).toBe(true);
   });
 
+  it("an UNKNOWN control_request subtype gets a fail-closed error control_response, then a typed protocol error (no deadlock) ", async () => {
+    const { proc, outDir, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    // A subtype toDecisionRequest doesn't recognize (and not hook_callback/mcp_message). Previously this
+    // fell through parseMessage producing NO event and NO response → the in-VM agent blocks forever.
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "ctrl-unknown",
+        request: { subtype: "some_future_subtype", payload: {} },
+      }) + "\n",
+    );
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "error", source: "protocol" });
+    expect((first.value as any).message).toMatch(/unsupported control_request subtype/);
+    // generator terminates after the typed error
+    const second = await it.next();
+    expect(second.done).toBe(true);
+    // and a fail-closed error control_response was written so the agent unblocks
+    const controlOut = await waitForFileContent(join(outDir, "control-out.jsonl"), "ctrl-unknown");
+    const lines = controlOut.trim().split("\n").filter(Boolean);
+    const resp = lines.map((l) => JSON.parse(l)).find((m) => m.type === "control_response");
+    expect(resp.response).toMatchObject({ subtype: "error", request_id: "ctrl-unknown" });
+    expect(resp.response.error).toMatch(/some_future_subtype/);
+    proc.stdout.end();
+  });
+
+  it("a DUPLICATE OUTSTANDING control_request id (prior one unanswered) fails closed as a typed protocol error ", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    const frame = (rid: string) =>
+      JSON.stringify({
+        type: "control_request",
+        request_id: rid,
+        request: { subtype: "can_use_tool", tool_name: "Write", input: { path: "x" } },
+      }) + "\n";
+    // First request registers reqById["dup-1"]; it is NOT answered.
+    proc.stdout.write(frame("dup-1"));
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "decision" });
+    // A SECOND request re-using the same still-outstanding id would overwrite the pending waiter — reject it.
+    const nextP = it.next();
+    proc.stdout.write(frame("dup-1"));
+    const second = await nextP;
+    expect(second.value).toMatchObject({ type: "error", source: "protocol" });
+    expect((second.value as any).message).toMatch(/duplicate outstanding control_request id/);
+    const third = await it.next();
+    expect(third.done).toBe(true);
+    proc.stdout.end();
+  });
+
+  it("re-using a control_request id AFTER it was answered warns (benign re-send) but does NOT terminate ", async () => {
+    const { proc, session } = newSession();
+    proc.stdin.resume(); // drain stdin so respond()'s write completes
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    const frame = (rid: string) =>
+      JSON.stringify({
+        type: "control_request",
+        request_id: rid,
+        request: { subtype: "can_use_tool", tool_name: "Write", input: { path: "x" } },
+      }) + "\n";
+    proc.stdout.write(frame("ans-1"));
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "decision" });
+    // Answer it → id moves from reqById into the completed set.
+    session.respond("ans-1", { kind: "permission", behavior: "allow" });
+    // Same id re-appears — a benign re-send, not a blocked waiter. It must warn and re-register, not error.
+    const nextP = it.next();
+    proc.stdout.write(frame("ans-1"));
+    const second = await nextP;
+    expect(second.value).toMatchObject({ type: "decision" }); // re-registered, stream continues
+    expect(warnings.some((w) => w.includes("already answered and re-appeared"))).toBe(true);
+    proc.stdout.end();
+    await drain(it).catch(() => {});
+  });
+
   it("an mcp_message with a missing request_id yields a typed protocol error event then ends the generator", async () => {
     const { proc, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();

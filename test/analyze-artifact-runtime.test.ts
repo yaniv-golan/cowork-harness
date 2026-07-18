@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { confirmArtifactRuntime, confirmArtifactRuntimeWithLoader } from "../src/run/analyze-artifact-runtime.js";
+import {
+  confirmArtifactRuntime,
+  confirmArtifactRuntimeWithLoader,
+  isLoopbackHostname,
+  isClearlyHarnessException,
+} from "../src/run/analyze-artifact-runtime.js";
 
 // This repo is pure ESM ("type": "module") — `__dirname` is undefined; derive the repo root from
 // `import.meta.url` instead (this file lives at `<repoRoot>/test/analyze-artifact-runtime.test.ts`),
@@ -119,6 +124,150 @@ describe("confirmArtifactRuntime — jsdom-available path (real jsdom, this dev 
     },
     RUNTIME_TIMEOUT_MS,
   );
+});
+
+describe("confirmArtifactRuntime — bug-review regression fixtures (findings 18, 28-33)", () => {
+  it(
+    "an autosave fired by an `input` (edit) event, unread response -> lost (was clean/high)",
+    async () => {
+      const { path, html } = readFixture("edit-autosave-lost", "index.html");
+      const result = await confirmArtifactRuntime(path, html);
+      expect(result.available).toBe(true);
+      if (!result.available) throw new Error("unreachable");
+      // The old commit-only filter excluded the edit-attributed write entirely -> clean/high.
+      expect(result.verdict).toBe("lost");
+      expect(result.evidence.some((e) => e.includes("never consulted"))).toBe(true);
+    },
+    RUNTIME_TIMEOUT_MS,
+  );
+
+  it(
+    "a load-time (null-action) write-back, unread response -> lost (was clean/high)",
+    async () => {
+      const { path, html } = readFixture("load-time-writeback-lost", "index.html");
+      const result = await confirmArtifactRuntime(path, html);
+      expect(result.available).toBe(true);
+      if (!result.available) throw new Error("unreachable");
+      expect(result.verdict).toBe("lost");
+      // Unattributed writes are surfaced, labeled as load-time/async, never silently dropped to clean.
+      expect(result.evidence.some((e) => e.includes("load-time/async"))).toBe(true);
+    },
+    RUNTIME_TIMEOUT_MS,
+  );
+
+  it(
+    "fetch(new Request(...)) with a page-supplied Request polyfill -> lost (was clean, [object Object] GET)",
+    async () => {
+      const { path, html } = readFixture("request-object-writeback", "index.html");
+      const result = await confirmArtifactRuntime(path, html);
+      expect(result.available).toBe(true);
+      if (!result.available) throw new Error("unreachable");
+      expect(result.verdict).toBe("lost");
+      // The recorded URL must be the Request's real url, not "[object Object]".
+      expect(result.evidence.some((e) => e.includes("/api/save"))).toBe(true);
+      expect(result.evidence.some((e) => e.includes("[object Object]"))).toBe(false);
+    },
+    RUNTIME_TIMEOUT_MS,
+  );
+
+  it(
+    "XHR whose page reads responseText and distinguishes 200 vs 404 -> suspect (was mislabeled lost)",
+    async () => {
+      const { path, html } = readFixture("xhr-response-consumed-suspect", "index.html");
+      const result = await confirmArtifactRuntime(path, html);
+      expect(result.available).toBe(true);
+      if (!result.available) throw new Error("unreachable");
+      // Reading responseText now sets bodyConsulted, and both `load` listeners run -> the page provably
+      // distinguishes success from failure -> suspect, not lost.
+      expect(result.verdict).toBe("suspect");
+    },
+    RUNTIME_TIMEOUT_MS,
+  );
+
+  it(
+    "a disabled destructive control is never activated -> clean (was lost via synthetic dispatch)",
+    async () => {
+      const { path, html } = readFixture("disabled-control-clean", "index.html");
+      const result = await confirmArtifactRuntime(path, html);
+      expect(result.available).toBe(true);
+      if (!result.available) throw new Error("unreachable");
+      expect(result.verdict).toBe("clean");
+    },
+    RUNTIME_TIMEOUT_MS,
+  );
+
+  it(
+    "an unrelated external script + an observed native relative POST form -> lost (was inconclusive)",
+    async () => {
+      const { path, html } = readFixture("external-script-native-form-lost", "index.html");
+      const result = await confirmArtifactRuntime(path, html);
+      expect(result.available).toBe(true);
+      if (!result.available) throw new Error("unreachable");
+      // Observed write is analyzed FIRST — the external-script dependency no longer erases it.
+      expect(result.verdict).toBe("lost");
+    },
+    RUNTIME_TIMEOUT_MS,
+  );
+
+  it(
+    "a form targeting https://localhost.evil.com is remote -> clean (was a local lost false-positive)",
+    async () => {
+      const { path, html } = readFixture("localhost-lookalike-remote", "index.html");
+      const result = await confirmArtifactRuntime(path, html);
+      expect(result.available).toBe(true);
+      if (!result.available) throw new Error("unreachable");
+      expect(result.verdict).toBe("clean");
+      expect(result.evidence.some((e) => e.includes("remote"))).toBe(true);
+    },
+    RUNTIME_TIMEOUT_MS,
+  );
+});
+
+describe("isLoopbackHostname — exact normalized-hostname matching, not a prefix test", () => {
+  it("recognizes genuine loopback hosts", () => {
+    for (const h of ["localhost", "LOCALHOST", "localhost.", "127.0.0.1", "127.1.2.3", "0.0.0.0", "::1", "[::1]", "0:0:0:0:0:0:0:1"]) {
+      expect(isLoopbackHostname(h)).toBe(true);
+    }
+  });
+  it("rejects attacker hosts that merely start with a loopback token", () => {
+    for (const h of [
+      "localhost.evil.com",
+      "127.evil.com",
+      "0.0.0.0.evil.com",
+      "127001.example.com",
+      "notlocalhost",
+      "example.com",
+      "128.0.0.1",
+      "227.0.0.1",
+    ]) {
+      expect(isLoopbackHostname(h)).toBe(false);
+    }
+  });
+});
+
+describe("isClearlyHarnessException — only re-throw exceptions clearly not from the page", () => {
+  it("attributes jsdom/page-origin-framed exceptions to the page (not harness) so they stay swallowed→inconclusive", () => {
+    const pageErr = new Error("boom");
+    pageErr.stack = "Error: boom\n    at https://artifacts.cowork.invalid/v1/view/artifact/index.html:3:5";
+    expect(isClearlyHarnessException(pageErr)).toBe(false);
+
+    const jsdomErr = new Error("boom");
+    jsdomErr.stack = "Error: boom\n    at Script.runInContext (node_modules/jsdom/lib/jsdom.js:1:1)";
+    expect(isClearlyHarnessException(jsdomErr)).toBe(false);
+  });
+  it("flags an unrelated harness/test-runner exception (no page frame) so it is re-thrown fail-loud", () => {
+    const harnessErr = new Error("unrelated");
+    harnessErr.stack =
+      "Error: unrelated\n    at Object.<anonymous> (/repo/test/some-other.test.ts:10:3)\n    at node_modules/vitest/dist/index.js:1:1";
+    expect(isClearlyHarnessException(harnessErr)).toBe(true);
+  });
+  it("stays conservative (page attribution) when there is no usable stack", () => {
+    const noStack = new Error("stack cleared");
+    noStack.stack = "";
+    expect(isClearlyHarnessException(noStack)).toBe(false);
+    expect(isClearlyHarnessException("a string, not an Error")).toBe(false);
+    expect(isClearlyHarnessException(undefined)).toBe(false);
+  });
 });
 
 describe("confirmArtifactRuntime — jsdom-unavailable guard (dependency rule: jsdom is a devDependency only)", () => {

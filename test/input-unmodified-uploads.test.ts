@@ -89,3 +89,46 @@ describe("input_unmodified guards an upload on the replay lane (pre vs post hash
     expect(r.message).not.toMatch(/EXTERNAL/); // NOT the readonly-connected-folder external excuse
   });
 });
+
+// input_unmodified vacuous-pass and manifest-path-escape / unbounded-read guards.
+describe("input_unmodified fails loud instead of vacuously passing", () => {
+  it("a glob matching ZERO pre-run paths fails (was a silent vacuous pass)", () => {
+    const c = ctx({
+      preRunHashes: { "uploads/safe.xlsx": sha("orig") },
+      postRunHashes: { "uploads/safe.xlsx": sha("orig") },
+    });
+    const [r] = evaluate([{ input_unmodified: "uploads/DOES-NOT-EXIST/**" }], c);
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/matched no pre-run/);
+  });
+
+  it("a manifest key escaping workRoot fails evidence-unavailable (live lane, never reads outside)", () => {
+    const wr = mkdtempSync(join(tmpdir(), "cwh-ium-esc-"));
+    try {
+      // A hostile/hand-edited manifest key. No postRunHashes ⇒ live lane ⇒ would readFileSync(join(wr, key)).
+      const c = ctx({ workRoot: wr, preRunHashes: { "../escape.txt": sha("orig") } });
+      const [r] = evaluate([{ input_unmodified: "**" }], c);
+      expect(r.pass).toBe(false);
+      expect(r.message).toMatch(/escape the workspace root/);
+    } finally {
+      rmSync(wr, { recursive: true, force: true });
+    }
+  });
+
+  it("a matched file over the post-run hash cap fails evidence-unavailable (bounded read)", () => {
+    const wr = mkdtempSync(join(tmpdir(), "cwh-ium-cap-"));
+    const prev = process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
+    try {
+      writeFileSync(join(wr, "big.bin"), Buffer.alloc(4096));
+      process.env.COWORK_HARNESS_PRERUN_HASH_CAP = "1024";
+      const c = ctx({ workRoot: wr, preRunHashes: { "big.bin": sha("placeholder") } });
+      const [r] = evaluate([{ input_unmodified: "big.bin" }], c);
+      expect(r.pass).toBe(false);
+      expect(r.message).toMatch(/over size cap/);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
+      else process.env.COWORK_HARNESS_PRERUN_HASH_CAP = prev;
+      rmSync(wr, { recursive: true, force: true });
+    }
+  });
+});

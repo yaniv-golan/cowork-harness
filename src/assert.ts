@@ -13,6 +13,31 @@ import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
 import { isVmSessionsPath } from "./vm-paths.js";
 
+/** Bytes cap for re-hashing a matched input file on the live / verify-run lane (`input_unmodified`).
+ *  Mirrors the pre-run manifest's 50 MiB default and the same env override so the post-run re-hash is
+ *  bounded exactly like the baseline it compares against — a file that grows huge DURING the run would
+ *  otherwise be `readFileSync`'d whole here. Over-cap ⇒ evidence-unavailable, never a silent pass. */
+function postRunHashCap(): number {
+  const env = process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
+  if (env === undefined || env === "") return 50 * 1024 * 1024;
+  const n = Number(env);
+  return Number.isInteger(n) && n > 0 ? n : 50 * 1024 * 1024;
+}
+
+/** Resolve a manifest-supplied relative path against `workRoot`, rejecting anything that is not a
+ *  normalized in-root relative path (absolute, `..` escape, or a NUL). Returns the absolute path when
+ *  safe, else null. The manifest is trusted evidence in normal operation, but a hand-edited manifest, a
+ *  future producer, or a hostile run dir handed to `verify-run` could carry a traversal key; this stops
+ *  input hashing from reading OUTSIDE the retained workspace or comparing the wrong file. */
+function resolveContainedManifestPath(workRoot: string, p: string): string | null {
+  if (typeof p !== "string" || p.length === 0 || p.includes("\0")) return null;
+  if (isAbsolute(p)) return null;
+  const abs = resolve(workRoot, p);
+  const rel = relative(workRoot, abs);
+  if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return null;
+  return abs;
+}
+
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
  *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (the
  *  shared UsageInfo/CostInfo types), so this is one function, not four copies. Each field's own
@@ -225,7 +250,7 @@ export interface AssertContext {
   /** Set by verify-run only when `result.egress` is undefined in result.json (a run predating the egress
    *  field). Distinct from a legitimately-empty [] (a run that made zero egress attempts — the proxy
    *  writes the log lazily on the first decision, so absent ≠ missing evidence). egress_denied/allowed
-   *  fail evidence-unavailable when set, rather than the misleading "expected egress denied". #5 */
+   *  fail evidence-unavailable when set, rather than the misleading "expected egress denied". */
   egressMissing?: boolean;
   result: "success" | "error";
   workRoot: string; // dir under which file_exists paths resolve (L0: work/, L1/L2: work/session/mnt)
@@ -272,7 +297,7 @@ export interface AssertContext {
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
     output?: string;
-    outputTruncated?: boolean; // #9: output was cut at the assert cap — a negative content check is unverifiable
+    outputTruncated?: boolean; // output was cut at the assert cap — a negative content check is unverifiable
   }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
@@ -516,7 +541,7 @@ export async function runSemanticJudges(
  *  files the run authored (each headed), scrubbed of secrets. Grading the authored files (not only the
  *  inlined prose) is what makes a claim about a *written* artifact presentation-stable; keeping the
  *  finalMessage/transcript is what still grades a correct *inline* answer that wrote no file. */
-// Per-section and aggregate character budgets for the judged document (#10). Authored files already carry
+// Per-section and aggregate character budgets for the judged document. Authored files already carry
 // their own caps (16 KiB/file, 64 KiB total, in captureAuthoredFiles), but finalMessage and the transcript
 // were previously concatenated WHOLE — so a long run could overflow the model context or make grading cost
 // and latency unbounded. Cap each section and the joined document with an explicit truncation marker, so the
@@ -530,7 +555,7 @@ function capForJudge(text: string, cap: number): string {
 }
 
 function buildJudgedDocument(ctx: AssertContext): string {
-  // SCRUB BEFORE CAP (#10): scrub is exact-string replacement, so a secret straddling a cap boundary would
+  // SCRUB BEFORE CAP: scrub is exact-string replacement, so a secret straddling a cap boundary would
   // be truncated mid-token and slip past scrub into the doc sent to the (external) judge. Scrub each raw
   // section FIRST, then cap the already-redacted text — capping redacted content can never re-expose a secret.
   const secrets = ctx.secrets ?? [];
@@ -707,6 +732,36 @@ function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
   if (health?.scratchpadSkippedOnResume) {
     cantVerify.push("scratchpad deliverables were skipped on --resume (unattributable across turns) — that class is unchecked");
   }
+  // an unreadable user-visible subtree means an authored file there was never enumerated — fail-closed.
+  if (health?.workspaceWalkErrors.length) {
+    const sample = health.workspaceWalkErrors
+      .slice(0, 3)
+      .map((e) => `${e.path}: ${e.error}`)
+      .join("; ");
+    cantVerify.push(
+      `${health.workspaceWalkErrors.length} user-visible subtree(s) could not be walked (${sample}) — an authored file there is unobserved`,
+    );
+  }
+  // an unreadable scratchpad subtree could hide a deliverable — fail-closed rather than a false clean.
+  if (health?.scratchpadWalkErrors.length) {
+    const sample = health.scratchpadWalkErrors
+      .slice(0, 3)
+      .map((e) => `${e.path}: ${e.error}`)
+      .join("; ");
+    cantVerify.push(
+      `${health.scratchpadWalkErrors.length} scratchpad subtree(s) could not be walked (${sample}) — a deliverable there is unobserved`,
+    );
+  }
+  // a scratchpad deliverable written through a symlink/hardlink is never followed; if it's a Tier A
+  // write-back source (.html/.js/…) it could carry a lost write-back we never analyzed.
+  const skippedTierALinks = (health?.scratchpadSkippedLinks ?? []).filter((p) => WRITE_BACK_SOURCE_EXTS.has(extname(p).toLowerCase()));
+  if (skippedTierALinks.length) {
+    cantVerify.push(
+      `${skippedTierALinks.length} scratchpad deliverable(s) skipped as a symlink/hardlink (${skippedTierALinks
+        .slice(0, 3)
+        .join(", ")}) — not followed, so a write-back there is unchecked`,
+    );
+  }
   if (unresolvedScratchpad.length) {
     cantVerify.push(`${unresolvedScratchpad.length} scratchpad source(s) could not be resolved to a real on-disk path`);
   }
@@ -821,7 +876,7 @@ function check(
     const needle = a.tool_result_contains;
     if (ctx.toolResultsMissing) {
       // Mirror tool_result_not_contains: when the channel is absent, say WHY (evidence unavailable)
-      // instead of the misleading substantive "no tool result contained X". #1
+      // instead of the misleading substantive "no tool result contained X".
       results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_contains`));
     } else if (ctx.toolResultTexts.some((t) => t.includes(needle))) {
       results.push(ok());
@@ -1018,7 +1073,7 @@ function check(
     const hit = [...ctx.toolsCalled].find((t) => toolMatches(a.tool_called!, t));
     results.push(
       ctx.toolsCalledMissing
-        ? // Mirror tool_not_called: a missing tool-count channel is "cannot evaluate", not "not called". #2
+        ? // Mirror tool_not_called: a missing tool-count channel is "cannot evaluate", not "not called".
           fail(`evidence unavailable: tool counts absent from result.json — cannot evaluate tool_called`)
         : hit !== undefined
           ? ok(`tool_called: "${a.tool_called}" matched ${hit}`)
@@ -1041,7 +1096,7 @@ function check(
     const hit = [...ctx.subagentTools].find((t) => toolMatches(a.subagent_tool_used!, t));
     results.push(
       ctx.subagentsMissing
-        ? // Mirror subagent_tool_absent: a missing dispatch tree is "cannot evaluate", not "did not use". #3
+        ? // Mirror subagent_tool_absent: a missing dispatch tree is "cannot evaluate", not "did not use".
           fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_tool_used`)
         : hit !== undefined
           ? ok(`subagent_tool_used: "${a.subagent_tool_used}" matched ${hit}`)
@@ -1067,7 +1122,7 @@ function check(
     const c = compileUserRegex(a.subagent_dispatched);
     if ("error" in c) results.push(fail(`subagent_dispatched: bad regex "${a.subagent_dispatched}": ${c.error}`));
     else if (ctx.subagentsMissing)
-      // Mirror the sibling subagent assertions: a missing dispatch tree is "cannot evaluate". #4
+      // Mirror the sibling subagent assertions: a missing dispatch tree is "cannot evaluate".
       results.push(fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_dispatched`));
     else
       results.push(
@@ -1104,7 +1159,7 @@ function check(
             ? ok()
             : candidates.length === 0
               ? fail(`no sub-agent matching "${match}" was dispatched`)
-              : // #9: a miss against a TRUNCATED output is unverifiable, not a proven absence — the substring
+              : // a miss against a TRUNCATED output is unverifiable, not a proven absence — the substring
                 // could lie past the assert-cap cut. Only claim absence when the searched output was complete.
                 candidates.some((s) => s.outputTruncated)
                 ? fail(
@@ -1441,7 +1496,7 @@ function check(
     else if (ctx.evidenceErrors?.taskTracking)
       // Mirror all_tasks_completed / task_count_min: known-corrupt TaskCreate telemetry means the surviving
       // task subset is incomplete, so a status match against it could pass against demonstrably-partial
-      // evidence. Refuse to evaluate rather than pass on a subset. #6
+      // evidence. Refuse to evaluate rather than pass on a subset.
       results.push(
         fail(
           `task_status: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task telemetry is incomplete, cannot verify (malformed)`,
@@ -1509,7 +1564,18 @@ function check(
       // otherwise every pre-existing symlink would false-stray. (Moot on replay: the materialized tree has
       // no real symlinks.)
       const walk = collectArtifactPathsWithHealth(ctx.workRoot, ctx.userVisiblePrefixes);
-      if (!walk.complete) {
+      if (walk.containmentSkips.length) {
+        // a subtree under a user-visible prefix escaped containment (a symlink/bind-mount out of the
+        // work root) and was excluded from the walk. "Security-skipped" is not "observed empty" — a stray
+        // could hide there, so a "no unexpected files" verdict would be vacuous. Fail evidence-unavailable.
+        results.push(
+          fail(
+            `evidence unavailable: ${walk.containmentSkips.length} subtree(s) under the user-visible roots were skipped for escaping the work root (${walk.containmentSkips
+              .slice(0, 3)
+              .join(", ")}) — cannot prove no unexpected files were created there`,
+          ),
+        );
+      } else if (!walk.complete) {
         // #18: an incomplete walk (an unreadable subtree — EACCES, etc.) can HIDE a stray, so "no strays
         // found" would be a vacuous pass. Require a complete filesystem observation for this absence check.
         results.push(
@@ -1552,34 +1618,69 @@ function check(
       const modified: string[] = []; // present post-run with a different hash
       const removed: string[] = []; // gone post-run (deletion is also a content change)
       const uncheckable: string[] = [];
-      for (const p of matched) {
-        const pre = ctx.preRunHashes[p];
-        if (pre === null) {
-          uncheckable.push(p);
-          continue;
-        }
-        let post: string | null;
-        if (ctx.postRunHashes !== undefined) {
-          // Replay lane: authoritative post-run hash from the cassette manifest (the materialized tree
-          // has 0-byte placeholders for body-less entries, so re-hashing it would be wrong). Absent ⇒
-          // the file isn't in the post-run tree ⇒ removed.
-          post = ctx.postRunHashes[p] ?? null;
-        } else {
-          // Live / verify-run: re-hash the real file. Throw (gone/unreadable) ⇒ removed.
-          try {
-            post = createHash("sha256")
-              .update(readFileSync(join(ctx.workRoot, p)))
-              .digest("hex");
-          } catch {
-            post = null;
+      const escaped: string[] = []; // a manifest key that is not a safe in-root relative path
+      // a glob that matches ZERO pre-run paths verifies nothing — a typo, a renamed mount, or a stale
+      // scenario glob would otherwise report input integrity as proven while checking no files at all.
+      // Fail loud instead of a vacuous pass. (The verdict modifiers above still let a scenario that truly
+      // expects no match fail explicitly rather than silently.)
+      if (matched.length === 0) {
+        results.push(
+          fail(
+            `input_unmodified matched no pre-run path(s): glob(s) ${globs.join(", ")} matched nothing in the pre-run manifest — nothing to verify; check the mount name/glob (a typo or renamed mount reads as a vacuous pass otherwise)`,
+          ),
+        );
+      } else {
+        for (const p of matched) {
+          const pre = ctx.preRunHashes[p];
+          if (pre === null) {
+            uncheckable.push(p);
+            continue;
           }
+          let post: string | null;
+          if (ctx.postRunHashes !== undefined) {
+            // Replay lane: authoritative post-run hash from the cassette manifest (the materialized tree
+            // has 0-byte placeholders for body-less entries, so re-hashing it would be wrong). Absent ⇒
+            // the file isn't in the post-run tree ⇒ removed. (Cassette keys are producer-controlled, not
+            // re-read from disk, so no containment check is needed on this lane.)
+            post = ctx.postRunHashes[p] ?? null;
+          } else {
+            // Live / verify-run: re-hash the real file. validate the manifest key stays inside
+            // workRoot before touching disk. bound the read so a file that grew huge during the run
+            // can't be materialized whole. Throw (gone/unreadable) ⇒ removed.
+            const abs = resolveContainedManifestPath(ctx.workRoot, p);
+            if (abs === null) {
+              escaped.push(p);
+              continue;
+            }
+            try {
+              if (statSync(abs).size > postRunHashCap()) {
+                uncheckable.push(p); // too large to bound-hash post-run — evidence-unavailable, not a pass
+                continue;
+              }
+              post = createHash("sha256").update(readFileSync(abs)).digest("hex");
+            } catch {
+              post = null;
+            }
+          }
+          if (post === null) removed.push(p);
+          else if (post !== pre) modified.push(p);
         }
-        if (post === null) removed.push(p);
-        else if (post !== pre) modified.push(p);
       }
-      // uncheckable dominates: if any matched path is unmeasurable, don't imply the rest were fully
-      // checked — surface evidence-unavailable rather than a clean verdict.
-      if (uncheckable.length)
+      // a manifest path that escapes the workspace root is a malformed/incompatible manifest — dominates
+      // every other outcome (we cannot trust ANY key from it) and fails evidence-unavailable.
+      if (escaped.length)
+        results.push(
+          fail(
+            `evidence unavailable: pre-run manifest contains path(s) that escape the workspace root: ${escaped
+              .slice(0, 5)
+              .join(", ")} — the manifest may be hand-edited or from an incompatible producer; cannot verify input integrity`,
+          ),
+        );
+      // uncheckable dominates the remaining outcomes: if any matched path is unmeasurable, don't imply the
+      // rest were fully checked — surface evidence-unavailable rather than a clean verdict.
+      else if (matched.length === 0) {
+        /* handled above (zero-match fail already pushed) */
+      } else if (uncheckable.length)
         results.push(
           fail(
             `evidence unavailable: pre-run hash missing (over size cap) for: ${uncheckable.slice(0, 5).join(", ")} — raise COWORK_HARNESS_PRERUN_HASH_CAP or narrow the glob`,

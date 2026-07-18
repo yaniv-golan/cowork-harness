@@ -8,7 +8,19 @@ on:
     # Full semver tags only (incl. prereleases). Floating Marketplace aliases (v1, v1.0)
     # must NOT trigger an image publish — they point at an already-published release commit.
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
-  workflow_dispatch: {} # manual republish of the current default-branch Dockerfile without cutting a release
+  workflow_dispatch:
+    # Manual republish of the current default-branch Dockerfile without cutting a release. By default
+    # this is STILL gated on ci.yml success for the checked-out commit (same invariant as a tag push) —
+    # a manual run must not become a hole that ships a consumer-facing `:2` image from a red commit.
+    inputs:
+      force_untested:
+        description: >-
+          BREAK-GLASS: publish even if ci.yml is red / never ran for this commit. Leave false unless
+          you are deliberately shipping an emergency image and accept the untested risk. A loud warning
+          is emitted and the run is auditable in the Actions log.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -23,9 +35,15 @@ jobs:
 
       # A red-CI tag must not overwrite the floating :2 tags packaged-Action consumers pull.
       # The publish gate must be no weaker than the merge gate (same rule as release.yml).
-      # workflow_dispatch stays ungated on purpose — the documented manual-republish escape hatch.
-      - name: Require ci.yml success for this commit (tag pushes only)
-        if: github.event_name == 'push'
+      # This gate applies to BOTH tag pushes AND manual (workflow_dispatch) republishes — the only
+      # way past it is the explicit `force_untested` break-glass input, handled by the step below.
+      - name: Loud warning when break-glass (force_untested) is used
+        if: github.event_name == 'workflow_dispatch' && inputs.force_untested
+        run: |
+          echo "::warning::force_untested=true — publishing WITHOUT verifying ci.yml for commit ${GITHUB_SHA}. This can ship a consumer-facing :2 image from a red/untested commit."
+      - name: Require ci.yml success for this commit
+        # Runs for tag pushes always; for manual runs unless force_untested was deliberately set.
+        if: github.event_name == 'push' || !inputs.force_untested
         uses: ./.github/actions/require-ci-success
 
       - name: Verify the tag matches package.json version (tag pushes only)

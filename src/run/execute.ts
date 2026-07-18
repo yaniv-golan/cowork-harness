@@ -63,8 +63,19 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFilesWithHealth, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
-import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
+import {
+  classifyWorkspaceFilesWithHealth,
+  collectArtifactPaths,
+  captureAuthoredFilesWithHealth,
+  authoredFilesHealthNonEmpty,
+} from "./artifacts.js";
+import {
+  readPreRunManifest,
+  readPreRunManifestHashes,
+  readPreRunManifestLinkAware,
+  readPreRunManifestOrigin,
+  readPreRunManifestStats,
+} from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { computeVerdict } from "./verdict.js";
 
@@ -850,6 +861,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     const preRunPaths = readPreRunManifest(outDir);
     const preRunLinkAware = readPreRunManifestLinkAware(outDir);
     const preRunHashes = readPreRunManifestHashes(outDir);
+    // the baseline's PROVENANCE — "local-unreadable" when a connected-folder source couldn't be
+    // walked, so the path/hash maps are partial. Persisted to RunResult and threaded into the assert ctx
+    // so no_unexpected_files / input_unmodified fail evidence-unavailable instead of diffing an
+    // incomplete baseline. Read from the SAME single manifest read the paths/hashes came from.
+    const preRunOrigin = readPreRunManifestOrigin(outDir);
 
     // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
     // scanEvents' regex (which only inspects Bash/mcp__workspace__bash tool_use commands and so misses a
@@ -984,10 +1000,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       authoredFiles: authored.files,
       // #14/#16: carry capture health (omitted-at-cap / unreadable files) so a semantic grade over an
       // incomplete authored document is refused, not trusted. Undefined when the capture was complete.
-      authoredFilesHealth:
-        authored.health.omittedPaths.length || authored.health.readErrors.length || authored.health.scratchpadSkippedOnResume
-          ? authored.health
-          : undefined,
+      authoredFilesHealth: authoredFilesHealthNonEmpty(authored.health) ? authored.health : undefined,
       secrets,
       toolsCalled: record.toolsCalled,
       subagentTools: record.subagentTools,
@@ -1001,6 +1014,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       preRunPaths,
       preRunLinkAware,
       preRunHashes,
+      preRunOrigin,
       outputsDeletes: scan.outputsDeletes,
       questions: record.questions,
       hostPathLeaked: scan.hostPathLeaked,
@@ -1283,6 +1297,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       preRunPaths,
       preRunLinkAware,
       preRunHashes,
+      preRunOrigin,
       nonDeterministic:
         // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
         // option order can vary run-to-run; it's already pushed to unanswered[], so include it here to agree.
@@ -1423,7 +1438,7 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
       }
     }
     // (Empty / regex-ish / brace-expansion tool globs are rejected by the `toolGlob` schema in types.ts —
-    // enforced on EVERY parse path including a recorded cassette's frozen asserts, not just here. #7/#8)
+    // enforced on EVERY parse path including a recorded cassette's frozen asserts, not just here. )
   }
   // answers[].when_question patterns (ScriptedDecider uses these)
   for (const rule of scenario.answers) {
@@ -1654,6 +1669,7 @@ export function buildPartialResult(args: {
     preRunPaths: readPreRunManifest(args.outDir),
     preRunLinkAware: readPreRunManifestLinkAware(args.outDir),
     preRunHashes: readPreRunManifestHashes(args.outDir),
+    preRunOrigin: readPreRunManifestOrigin(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
     gateProvenance: gp.total ? gp : undefined,
     fingerprint: args.fingerprint,

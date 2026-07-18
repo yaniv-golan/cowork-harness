@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Finding 32: a DISABLED destructive control a user could never activate. The old loop dispatched a
+         synthetic MouseEvent directly (bypassing the disabled-activation check), firing the handler and
+         inventing a write-back that no user could trigger → false lost. The fix skips non-interactable
+         controls, so this page correctly comes out clean. -->
+    <button id="danger" disabled>Delete everything</button>
+    <div id="msg"></div>
+    <script>
+      document.getElementById("danger").addEventListener("click", function () {
+        fetch("/api/delete-all", { method: "POST" }).then(function () {
+          document.getElementById("msg").textContent = "Deleted!";
+        });
+      });
+    </script>
+  </body>
+</html>

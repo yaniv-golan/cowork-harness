@@ -100,6 +100,30 @@ describe("Run derives presentedFiles from present_files tool_use + tool_result",
     expect(rec.presentedFiles).toEqual([{ from: `${CWD}/a.md`, to: `${CWD}/mnt/outputs/a.md`, promoted: false, leaked: false }]);
   });
 
+  it("a `from` that uses ../ to escape mnt/ is resolved to its real scratchpad location and classified LEAKED (not masked as a mount passthrough)", async () => {
+    // `<cwd>/mnt/outputs/../../secret.txt` LEXICALLY starts with `<cwd>/mnt/`, so the old startsWith check
+    // short-circuited it as a mount passthrough (leaked:false) — masking a genuine scratchpad leak. It
+    // actually resolves to `<cwd>/secret.txt` (scratchpad), and here the copy failed so `to` stayed there.
+    const rec = await drive([
+      initEv(CWD),
+      presentFilesUse("tu1", [`${CWD}/mnt/outputs/../../secret.txt`]),
+      presentFilesResult("tu1", [`${CWD}/mnt/outputs/../../secret.txt`]),
+      { type: "result", isError: false },
+    ]);
+    expect(rec.presentedFiles).toEqual([{ from: `${CWD}/secret.txt`, to: `${CWD}/secret.txt`, promoted: false, leaked: true }]);
+  });
+
+  it("a non-absolute (ambiguous) present_files path is counted malformed, not classified from a lexical prefix", async () => {
+    const rec = await drive([
+      initEv(CWD),
+      presentFilesUse("tu1", ["relative/path.txt"]),
+      presentFilesResult("tu1", ["relative/out.txt"]),
+      { type: "result", isError: false },
+    ]);
+    expect(rec.presentedFiles).toEqual([]); // no verdict fabricated from an un-normalizable path
+    expect(rec.evidenceErrors.presentFilesMalformed).toBe(1);
+  });
+
   it("a malformed present_files input (non-array files) yields no presented entries, does not throw", async () => {
     const rec = await drive([
       initEv(CWD),

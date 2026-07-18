@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, extname, join, resolve, sep } from "node:path";
 import * as acorn from "acorn";
 import * as walk from "acorn-walk";
 import type { AnalysisFailure, SkillFinding } from "./analyze-skill.js";
@@ -33,8 +33,19 @@ import type { AnalysisFailure, SkillFinding } from "./analyze-skill.js";
 // ------------------------------------------------------------------------------------------------- //
 
 const HTML_EXTS = new Set([".html", ".htm"]);
-const CODE_EXTS = new Set([".js", ".mjs", ".ts", ".jsx", ".tsx", ".py"]);
+/** Code/generator extensions this analyzer can PARSE with the in-process acorn parser: plain scripts
+ *  (`.js`), ES modules (`.mjs`, parsed as `sourceType:"module"`), and `.py` generator templates (the
+ *  archetype — the browser artifact lives in a Python triple-quoted string, extracted lexically as a
+ *  `<script>` block). `.ts`/`.tsx`/`.jsx` are DELIBERATELY NOT advertised here (findings 13/14): acorn
+ *  cannot parse TypeScript type-annotations or JSX, so advertising them only produced fail-closed
+ *  `stage:"parse"` noise on every real generator/frontend source. Narrowing the advertised contract (no
+ *  TypeScript/Babel dependency in this pass) is the pragmatic fix — a `.ts`/`.tsx`/`.jsx` target is now
+ *  simply out of scope (like a `.md`), not a could-not-verify. */
+const CODE_EXTS = new Set([".js", ".mjs", ".py"]);
 const SOURCE_EXTS = new Set<string>([...HTML_EXTS, ...CODE_EXTS]);
+/** Extensions whose whole-file body is an ES module (`import`/`export` at top level is legal). Drives
+ *  `parseWithCaps`'s module-first parse order. */
+const MODULE_EXTS = new Set([".mjs"]);
 
 /** Directory names never descended into during source collection: `node_modules`/`.git`/`dist` (vendored
  *  or build-output trees, never a skill's own authored surface) plus any dot-prefixed directory. Mirrors
@@ -88,17 +99,32 @@ function listSubdirNames(dir: string, failures: AnalysisFailure[]): string[] {
 }
 
 /** Recursive walk under `dir` collecting every file whose extension is in `SOURCE_EXTS`
- *  (`.html/.htm/.js/.mjs/.ts/.jsx/.tsx/.py`), skipping `node_modules`/`.git`/`dist`/dot-dirs and
- *  `*.min.js` files. Follows directory symlinks (loop-guarded via `visited`, a `Set` of realpaths
- *  threaded by reference through the recursion — the same technique `analyze-skill.ts`'s
- *  `walkMarkdownDeep` uses). A `realpathSync`/`readdirSync` failure on a directory pushes a `select`-stage
- *  `AnalysisFailure` and yields `[]` for that branch — NEVER a silent empty return, per §B2. */
-function walkSourceFiles(dir: string, visited: Set<string>, failures: AnalysisFailure[]): string[] {
+ *  (`.html/.htm/.js/.mjs/.py`), skipping `node_modules`/`.git`/`dist`/dot-dirs and `*.min.js` files.
+ *  Follows directory symlinks (loop-guarded via `visited`, a `Set` of realpaths threaded by reference
+ *  through the recursion — the same technique `analyze-skill.ts`'s `walkMarkdownDeep` uses). A
+ *  `realpathSync`/`readdirSync` failure on a directory pushes a `select`-stage `AnalysisFailure` and yields
+ *  `[]` for that branch — NEVER a silent empty return, per §B2.
+ *
+ *  CONTAINMENT: the FIRST call establishes `rootReal` (its own realpath); every descendant
+ *  directory whose realpath resolves OUTSIDE that root is REJECTED with a `select`-stage failure and not
+ *  descended into. Without this a directory symlink pointing outside the target (`skill/link -> /etc`)
+ *  would traverse unrelated host trees, leak path names into reports, and generate findings outside the
+ *  requested review boundary — mirrors the containment guard in `artifacts.ts`'s `collectArtifacts`. */
+function walkSourceFiles(dir: string, visited: Set<string>, failures: AnalysisFailure[], rootReal?: string): string[] {
   let real: string;
   try {
     real = realpathSync(dir);
   } catch (e) {
     failures.push({ path: dir, stage: "select", reason: (e as Error).message });
+    return [];
+  }
+  const root = rootReal ?? real; // first call anchors the containment root at its own realpath
+  if (real !== root && !real.startsWith(root + sep)) {
+    failures.push({
+      path: dir,
+      stage: "select",
+      reason: `skipped: resolves to ${real}, outside the target root ${root} (directory symlink escaping scope)`,
+    });
     return [];
   }
   if (visited.has(real)) return [];
@@ -117,7 +143,7 @@ function walkSourceFiles(dir: string, visited: Set<string>, failures: AnalysisFa
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       if (isDenylistedDirName(e.name)) continue;
-      out.push(...walkSourceFiles(full, visited, failures));
+      out.push(...walkSourceFiles(full, visited, failures, root));
       continue;
     }
     let isFile = e.isFile();
@@ -130,7 +156,7 @@ function walkSourceFiles(dir: string, visited: Set<string>, failures: AnalysisFa
       }
       if (st.isDirectory()) {
         if (isDenylistedDirName(e.name)) continue;
-        out.push(...walkSourceFiles(full, visited, failures));
+        out.push(...walkSourceFiles(full, visited, failures, root));
         continue;
       }
       isFile = st.isFile();
@@ -296,10 +322,18 @@ export function collectArtifactSources(target: string): { files: string[]; failu
 // Candidacy
 // ------------------------------------------------------------------------------------------------- //
 
-/** `fetch(`, `XMLHttpRequest`, or `sendBeacon(` anywhere in the raw text — the write-back primitives
- *  named verbatim in §B2. Checked lexically (not via AST) so it applies uniformly to `.html` markup,
- *  plain JS/TS, AND `.py` generator templates (the archetype: the tell-tale string lives in a Python
- *  triple-quoted string, which this regex sees exactly as written). Also matches the optional-call
+/** The candidacy write-back primitives — DERIVED FROM THE SAME TABLE the AST visitor (`analyzeScriptAst`)
+ *  recognizes, not a narrower fetch/XHR/sendBeacon subset. Matches `fetch(`,
+ *  `XMLHttpRequest`, `sendBeacon(`, the bare word `axios` (covers every axios shape — `axios.post(`,
+ *  `axios.put(`, a bare `axios({…})`, `axios.request({…})`, and an axios INSTANCE via `axios.create(`,
+ *  all of which spell the literal token "axios"), and a jQuery/`$` write verb (`$.post(`/`jQuery.put(`/…).
+ *  Before the fix an HTML whose ONLY write-back was `axios.post("/save", …)` failed candidacy and returned
+ *  `{}` (a silent false-clean) before the AST — which DOES recognize axios — ever ran. A bare `.post(` on
+ *  an arbitrary receiver is deliberately NOT a candidacy tell (it is the axios-instance/Express-route
+ *  ambiguity the AST only ever treats as advisory) — but any real axios instance carries the `axios`
+ *  token elsewhere, so it is still caught. Checked lexically (not via AST) so it applies uniformly to
+ *  `.html` markup, plain JS, AND `.py` generator templates (the archetype: the tell-tale string lives in a
+ *  Python triple-quoted string, which this regex sees exactly as written). Also matches the optional-call
  *  spellings (`fetch?.(`, `sendBeacon?.(`) for the same reason `BLOCK_WRITE_BACK_HINT_RE` does below —
  *  a source whose ONLY write-back is spelled with `?.` must still reach candidacy, strictly widening
  *  (never narrowing) which sources are analyzed. The optional-call group nests its trailing `\s*` INSIDE
@@ -308,12 +342,17 @@ export function collectArtifactSources(target: string): { files: string[]; failu
  *  (e.g. `fetch` followed by a very long whitespace run and no `(`) fails in linear time instead of
  *  backtracking over every whitespace-split combination. This regex runs over every candidate file before
  *  any byte/parse cap applies, so it must stay linear on adversarial input. */
-const WRITE_BACK_PRIMITIVE_RE = /\bfetch\s*(\?\.\s*)?\(|XMLHttpRequest|sendBeacon\s*(\?\.\s*)?\(/;
-/** A native declarative write-back: `<form … method=post …>` (any attribute order, quote style). Its own
- *  primitive per §B2 — an HTML candidate needs no `<script>` at all to qualify if this is present. */
-const FORM_POST_TAG_RE = /<form\b[^>]*\bmethod\s*=\s*["']?post["']?[^>]*>/i;
+const WRITE_BACK_PRIMITIVE_RE =
+  /\bfetch\s*(\?\.\s*)?\(|XMLHttpRequest|sendBeacon\s*(\?\.\s*)?\(|\baxios\b|(\$|jQuery)\s*\.\s*(post|put|patch|delete|postForm|putForm|patchForm)\s*(\?\.\s*)?\(/;
+/** A native declarative write-back: `<form … method=post …>` (any attribute order, quote style,
+ *  quoted OR unquoted `method` value). Its own primitive per §B2 — an HTML candidate needs no `<script>`
+ *  at all to qualify if this is present. */
+const FORM_POST_TAG_RE = /<form\b[^>]*\bmethod\s*=\s*["']?post\b/i;
+/** A submit control that overrides its form's method to POST via `formmethod=post` — a candidacy tell for
+ *  an otherwise-GET `<form>` whose button forces a POST submission. */
+const FORM_POST_SUBMIT_RE = /\bformmethod\s*=\s*["']?post\b/i;
 function hasWriteBackPrimitive(text: string): boolean {
-  return WRITE_BACK_PRIMITIVE_RE.test(text) || FORM_POST_TAG_RE.test(text);
+  return WRITE_BACK_PRIMITIVE_RE.test(text) || FORM_POST_TAG_RE.test(text) || FORM_POST_SUBMIT_RE.test(text);
 }
 
 /** Broader than `WRITE_BACK_PRIMITIVE_RE` — used ONLY to decide whether an UNPARSEABLE `<script>` block is
@@ -398,11 +437,37 @@ class CapExceededError extends Error {
 
 /** `acorn.parse` plus a bounded `acorn-walk` full pass that enforces `NODE_LIMIT`/`DEADLINE_MS`. Throws
  *  the underlying `SyntaxError` on a genuine parse failure (caller maps that to `stage:"parse"`), or a
- *  `CapExceededError` on a cap hit (caller maps that to `stage:"node-limit"`/`"deadline"`). */
-function parseWithCaps(code: string): acorn.Node {
-  const ast = acorn.parse(code, { ecmaVersion: "latest", allowReturnOutsideFunction: true, sourceType: "script" });
-  let count = 0;
+ *  `CapExceededError` on a cap hit (caller maps that to `stage:"node-limit"`/`"deadline"`).
+ *
+ *  SOURCE TYPE (findings 13/14): tries `sourceType:"script"` then `"module"` (order flipped when
+ *  `preferModule`, e.g. a `.mjs` whole-file or a `<script type="module">` block). A script whose only
+ *  invalid-as-script construct is a top-level `import`/`export` reparses cleanly as a module — this is the
+ *  "controlled script→module retry" that makes real ES modules analyzable instead of a `stage:"parse"`
+ *  could-not-verify. A genuinely broken source fails BOTH and the FIRST error (the preferred source type's)
+ *  is thrown, preserving the original diagnostic.
+ *
+ *  DEADLINE: the wall-clock start is captured BEFORE `acorn.parse`, and parse time is charged
+ *  against `DEADLINE_MS` immediately after. acorn's own `parse` is not interruptible in-process, so a
+ *  pathological ≤`BYTE_CAP` source can still spend up to a few seconds inside a single `parse` call before
+ *  the check fires — that residual is accepted this pass (a worker-isolated interruptible parser is out of
+ *  scope). What is fixed: a slow parse now yields a typed `stage:"deadline"` analysis failure instead of
+ *  being invisibly excluded from the deadline the analyzer advertises. */
+function parseWithCaps(code: string, preferModule = false): acorn.Node {
   const start = Date.now();
+  const order: acorn.Options["sourceType"][] = preferModule ? ["module", "script"] : ["script", "module"];
+  let ast: acorn.Node | undefined;
+  let firstErr: unknown;
+  for (const sourceType of order) {
+    try {
+      ast = acorn.parse(code, { ecmaVersion: "latest", allowReturnOutsideFunction: true, sourceType });
+      break;
+    } catch (e) {
+      if (firstErr === undefined) firstErr = e;
+    }
+  }
+  if (!ast) throw firstErr; // genuine parse failure under BOTH source types
+  if (Date.now() - start > DEADLINE_MS) throw new CapExceededError("deadline", `per-file analysis deadline (${DEADLINE_MS}ms) exceeded`);
+  let count = 0;
   walk.full(ast, () => {
     count++;
     if (count > NODE_LIMIT) throw new CapExceededError("node-limit", `parser node cap (${NODE_LIMIT}) exceeded`);
@@ -420,19 +485,24 @@ interface ScriptBlock {
   /** Byte offset of `code` within the ORIGINAL file text — used to map an AST node's `.start` back to a
    *  real source line via `lineOf`. */
   offset: number;
+  /** `<script type="module">` — parsed module-first (findings 13/14), since a module inline script may use
+   *  top-level `import`/`export`. */
+  module: boolean;
 }
 
 /** Non-external `<script>…</script>` blocks (skips `<script src=…>`) — works identically whether the
  *  literal `<script>` tag lives in real HTML markup or inside a `.py`/`.js` template string, since this
- *  is a lexical regex over the raw file text, not an HTML parse. */
-const SCRIPT_BLOCK_RE = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+ *  is a lexical regex over the raw file text, not an HTML parse. Captures the opening tag separately so a
+ *  `type="module"` attribute can select module-first parsing. */
+const SCRIPT_BLOCK_RE = /<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi;
+const SCRIPT_MODULE_TYPE_RE = /\btype\s*=\s*["']?module\b/i;
 function extractScriptBlocks(text: string): ScriptBlock[] {
   const blocks: ScriptBlock[] = [];
   SCRIPT_BLOCK_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = SCRIPT_BLOCK_RE.exec(text))) {
-    const offset = m.index + m[0].indexOf(m[1]);
-    blocks.push({ code: m[1], offset });
+    const offset = m.index + m[0].indexOf(m[2]);
+    blocks.push({ code: m[2], offset, module: SCRIPT_MODULE_TYPE_RE.test(m[1]) });
   }
   return blocks;
 }
@@ -442,49 +512,156 @@ function lineOf(text: string, offset: number): number {
 }
 
 // ------------------------------------------------------------------------------------------------- //
-// Declarative `<form method=post>` write-back
+// Declarative `<form>` write-back — form ownership, submitter overrides, JS-handler awareness
 // ------------------------------------------------------------------------------------------------- //
 
-const FORM_TAG_RE = /<form\b[^>]*>/gi;
-const METHOD_ATTR_RE = /\bmethod\s*=\s*["']?([a-zA-Z]+)["']?/i;
-const ACTION_ATTR_RE = /\baction\s*=\s*["']([^"']*)["']/i;
-/** An absolute, non-local scheme URL (`https://example.com/...`) — the ONE thing that makes a form
- *  target NOT this bug class. `localhost`/`127.*`/`0.0.0.0` are still treated as local/in-scope, same as
- *  the JS URL classifier below. */
-const ABSOLUTE_REMOTE_URL_RE = /^[a-z][a-z0-9+.-]*:\/\/(?!(localhost|127\.|0\.0\.0\.0))/i;
-
-interface DeclarativeFormHit {
-  line: number;
+/** Read one HTML attribute's value from a tag's attribute string, supporting the double-quoted,
+ *  single-quoted, AND unquoted attribute grammars (`action=https://…` with no quotes was
+ *  previously invisible, folding a genuinely-remote form action to `""` → a false LOST). Returns `null`
+ *  when the attribute is absent, `""` for a present-but-empty value. */
+function getAttr(attrs: string, name: string): string | null {
+  const re = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s"'\`<>]+))`, "i");
+  const m = re.exec(attrs);
+  if (!m) return null;
+  return m[2] ?? m[3] ?? m[4] ?? "";
 }
 
-/** Every native `<form method=post …>` whose `action` is relative/local (or absent — an absent `action`
- *  submits back to the current page URL, which is inherently same-origin). Each hit is, by definition, a
- *  LOST write-back per §B2/§B3: there is no JS handler, so no `resp.ok` check is even possible, and the
- *  browser's default navigate-to-response is what silently eats Cowork's non-ok response.
- *
- *  DOCUMENTED GAP (out of scope here, a separate follow-up): this reads only the `<form>` tag's OWN
- *  `action`/`method`. A submit button/input's `formaction`/`formmethod` attribute overrides those for that
- *  one submission — so `<form action="https://remote-host.example/x" method="post"><button
- *  formaction="/api/save">Save</button></form>` is a real relative, in-scope write-back (the button's
- *  `formaction` wins over the form's own remote `action`) that this function currently never sees, since
- *  the enclosing form is skipped as out-of-scope remote egress before any button inside it is examined. A
- *  `formaction`/`formmethod` scan would need to walk each `<button>`/`<input type=submit>` inside every
- *  `<form>`, not just the form tag itself. */
-function relativeFormPosts(text: string): DeclarativeFormHit[] {
-  const hits: DeclarativeFormHit[] = [];
-  FORM_TAG_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = FORM_TAG_RE.exec(text))) {
-    const tag = m[0];
-    const methodMatch = METHOD_ATTR_RE.exec(tag);
-    const method = (methodMatch ? methodMatch[1] : "GET").toUpperCase();
-    if (method !== "POST") continue;
-    const actionMatch = ACTION_ATTR_RE.exec(tag);
-    const action = actionMatch ? actionMatch[1] : "";
-    if (ABSOLUTE_REMOTE_URL_RE.test(action)) continue; // real remote egress, not this bug class
-    hits.push({ line: lineOf(text, m.index) });
+interface FormNode {
+  id: string | null;
+  method: string; // uppercased; default "GET"
+  action: string; // raw attribute value; "" when absent (submits to the current page URL)
+  hasInlineHandler: boolean; // `onsubmit=` on the form tag
+  line: number;
+  openStart: number;
+  innerEnd: number; // index of the closing `</form>` (or EOF) — bounds enclosed controls
+}
+
+interface SubmitControl {
+  formId: string | null; // `form="<id>"` association (a control OUTSIDE its owning form)
+  formaction: string | null;
+  formmethod: string | null; // uppercased
+  index: number;
+}
+
+/** A JS submit-handling signal anywhere in the page — an explicit `submit` listener, an `onsubmit`
+ *  assignment in script, or a `requestSubmit(` call. Presence means a native form's default submission MAY
+ *  be intercepted (preventDefault + a real `resp.ok` check), so a relative POST form is DOWNGRADED from
+ *  hard-LOST to SUSPECT — we cannot prove the handler is correct, but we also must not
+ *  hard-fail a progressive-enhancement form as "no JS handler". */
+const SUBMIT_LISTENER_RE = /addEventListener\s*\(\s*["']submit["']|\.onsubmit\s*=|\brequestSubmit\s*\(/i;
+
+/** Model every native `<form>` and every submit control (`<button>`, `<input type=submit|image>`),
+ *  resolve each control's EFFECTIVE action/method (`formaction`/`formmethod` override the owning form;
+ *  `form="<id>"` links a control to a form it is not nested inside), and emit an `Outcome` per POST
+ *  submission whose effective action is relative/local (findings 20/21/22). Both override directions are
+ *  handled: a remote form with a relative-`formaction` submitter IS flagged; a relative form with a
+ *  remote-`formaction` submitter is NOT (the actual submission goes remote). A relative POST submission is
+ *  LOST when no JS submit handler is in evidence, else SUSPECT. */
+function analyzeForms(text: string): Outcome[] {
+  const forms: FormNode[] = [];
+  const formOpenRe = /<form\b([^>]*)>/gi;
+  let fm: RegExpExecArray | null;
+  while ((fm = formOpenRe.exec(text))) {
+    const attrs = fm[1];
+    const openStart = fm.index;
+    const innerStart = fm.index + fm[0].length;
+    const closeIdx = text.toLowerCase().indexOf("</form>", innerStart);
+    const innerEnd = closeIdx === -1 ? text.length : closeIdx;
+    const methodRaw = getAttr(attrs, "method");
+    forms.push({
+      id: getAttr(attrs, "id"),
+      method: (methodRaw ?? "GET").toUpperCase(),
+      action: getAttr(attrs, "action") ?? "",
+      hasInlineHandler: getAttr(attrs, "onsubmit") !== null,
+      line: lineOf(text, openStart),
+      openStart,
+      innerEnd,
+    });
   }
-  return hits;
+
+  // Submit controls: <button> (submit is the DEFAULT type — anything but type=button/reset submits) and
+  // <input type=submit|image>.
+  const controls: SubmitControl[] = [];
+  const buttonRe = /<button\b([^>]*)>/gi;
+  let bm: RegExpExecArray | null;
+  while ((bm = buttonRe.exec(text))) {
+    const attrs = bm[1];
+    const type = (getAttr(attrs, "type") ?? "submit").toLowerCase();
+    if (type === "button" || type === "reset") continue;
+    const fmm = getAttr(attrs, "formmethod");
+    controls.push({
+      formId: getAttr(attrs, "form"),
+      formaction: getAttr(attrs, "formaction"),
+      formmethod: fmm === null ? null : fmm.toUpperCase(),
+      index: bm.index,
+    });
+  }
+  const inputRe = /<input\b([^>]*)>/gi;
+  let im: RegExpExecArray | null;
+  while ((im = inputRe.exec(text))) {
+    const attrs = im[1];
+    const type = (getAttr(attrs, "type") ?? "text").toLowerCase();
+    if (type !== "submit" && type !== "image") continue;
+    const fmm = getAttr(attrs, "formmethod");
+    controls.push({
+      formId: getAttr(attrs, "form"),
+      formaction: getAttr(attrs, "formaction"),
+      formmethod: fmm === null ? null : fmm.toUpperCase(),
+      index: im.index,
+    });
+  }
+
+  const owningForm = (c: SubmitControl): FormNode | undefined => {
+    if (c.formId != null) return forms.find((f) => f.id === c.formId);
+    return forms.find((f) => c.index >= f.openStart && c.index < f.innerEnd);
+  };
+
+  const pageHasSubmitHandler = SUBMIT_LISTENER_RE.test(text);
+  const outcomes: Outcome[] = [];
+
+  // Each form's set of effective submissions: one per owned submit control (its `formaction`/`formmethod`
+  // override applied), or — when the form owns NO submit control — the form's own action/method (an
+  // Enter-key / `requestSubmit()` submission still fires). Evaluating ONLY the controls when they exist is
+  // what prevents the "relative form + remote formaction" false LOST: the actual submission uses the
+  // submitter's remote `formaction`, so no relative submission is manufactured from the form default.
+  for (const form of forms) {
+    const owned = controls.filter((c) => owningForm(c) === form);
+    const submissions =
+      owned.length === 0
+        ? [{ action: form.action, method: form.method }]
+        : owned.map((c) => ({ action: c.formaction ?? form.action, method: c.formmethod ?? form.method }));
+
+    for (const sub of submissions) {
+      if (sub.method !== "POST") continue;
+      const target = classifyUrl(sub.action);
+      if (target === "remote") continue; // real remote egress — not this bug class
+      const actionDisplay = sub.action === "" ? "(current page)" : sub.action;
+      if (target === "unknown") {
+        outcomes.push({
+          kind: "suspect",
+          line: form.line,
+          reason: `native <form method=post> submits to an action ("${actionDisplay}") that could not be resolved to a concrete origin — cannot rule out a same-origin write-back lost under Cowork`,
+        });
+        continue;
+      }
+      if (form.hasInlineHandler || pageHasSubmitHandler) {
+        outcomes.push({
+          kind: "suspect",
+          line: form.line,
+          reason: `native <form method=post> to a relative/local-origin endpoint ("${actionDisplay}") has a JS submit handler in scope that may intercept the submission (preventDefault + a resp.ok check) — advisory: the native submission would still lose the write-back under Cowork if the handler does not fully take over`,
+        });
+        continue;
+      }
+      outcomes.push({
+        kind: "lost",
+        line: form.line,
+        reason:
+          `native <form method=post> submits to a relative/local-origin endpoint ("${actionDisplay}") with no JS handler — resp.ok can ` +
+          "never be checked, so the browser's default navigate-to-response silently swallows Cowork's non-ok reply",
+      });
+    }
+  }
+  return outcomes;
 }
 
 // ------------------------------------------------------------------------------------------------- //
@@ -492,6 +669,32 @@ function relativeFormPosts(text: string): DeclarativeFormHit[] {
 // ------------------------------------------------------------------------------------------------- //
 
 type ConstsMap = Map<string, acorn.Expression | null>;
+
+/** Collect every Identifier bound by a function parameter pattern (`Identifier`, and the nested names of
+ *  `Object`/`Array`/`Assignment`/`Rest` patterns). Used to detect a file-level const NAME that is ALSO a
+ *  parameter somewhere — i.e. it can be shadowed at a call site. */
+function collectPatternNames(pattern: acorn.Pattern, out: Set<string>): void {
+  switch (pattern.type) {
+    case "Identifier":
+      out.add(pattern.name);
+      break;
+    case "ObjectPattern":
+      for (const p of pattern.properties) {
+        if (p.type === "RestElement") collectPatternNames(p.argument, out);
+        else collectPatternNames(p.value, out);
+      }
+      break;
+    case "ArrayPattern":
+      for (const el of pattern.elements) if (el) collectPatternNames(el, out);
+      break;
+    case "AssignmentPattern":
+      collectPatternNames(pattern.left, out);
+      break;
+    case "RestElement":
+      collectPatternNames(pattern.argument, out);
+      break;
+  }
+}
 
 /** File-level single-assignment approximation: every `const x = <init>` (well, every `VariableDeclarator`
  *  regardless of `const`/`let`/`var` — a conservative over-approximation, since a REASSIGNED `let` would
@@ -505,6 +708,7 @@ function buildConstsMap(ast: acorn.Node): ConstsMap {
   // names so `foldStr`/`evalBool` treat them as UNKNOWN (→ a guard becomes `suspect`, a URL becomes a
   // documented false negative — never a silent clean).
   const poisoned = new Set<string>();
+  const paramNames = new Set<string>();
   walk.simple(ast, {
     VariableDeclarator(n) {
       if (n.id.type === "Identifier" && n.init) {
@@ -513,12 +717,48 @@ function buildConstsMap(ast: acorn.Node): ConstsMap {
       }
     },
     AssignmentExpression(n) {
-      if (n.left.type === "Identifier") poisoned.add(n.left.name); // reassigned after declaration
+      if (n.left.type === "Identifier") {
+        poisoned.add(n.left.name); // reassigned after declaration
+      } else if (n.left.type === "MemberExpression" && !n.left.computed && n.left.object.type === "Identifier") {
+        // a property write (`cfg.enabled = true`) mutates the object binding — its folded
+        // INITIALIZER is now stale. Poison the object name so a later `if (cfg.enabled)` guard reads as
+        // UNKNOWN (→ suspect), never folds the stale `false` initializer to dead/clean.
+        poisoned.add(n.left.object.name);
+      } else if (n.left.type === "MemberExpression" && n.left.computed && n.left.object.type === "Identifier") {
+        poisoned.add(n.left.object.name); // `cfg["enabled"] = true`
+      }
     },
     UpdateExpression(n) {
-      if (n.argument.type === "Identifier") poisoned.add(n.argument.name); // x++/x--
+      if (n.argument.type === "Identifier") {
+        poisoned.add(n.argument.name); // x++/x--
+      } else if (n.argument.type === "MemberExpression" && n.argument.object.type === "Identifier") {
+        poisoned.add(n.argument.object.name); // `cfg.count++` mutates cfg
+      }
+    },
+    UnaryExpression(n) {
+      // `delete cfg.enabled` removes a property — the folded initializer is stale.
+      if (n.operator === "delete" && n.argument.type === "MemberExpression" && n.argument.object.type === "Identifier") {
+        poisoned.add(n.argument.object.name);
+      }
+    },
+    FunctionDeclaration(n) {
+      for (const p of n.params) collectPatternNames(p, paramNames);
+    },
+    FunctionExpression(n) {
+      for (const p of n.params) collectPatternNames(p, paramNames);
+    },
+    ArrowFunctionExpression(n) {
+      for (const p of n.params) collectPatternNames(p, paramNames);
     },
   });
+  // Scope safety: a file-level const NAME that is also bound as a function parameter anywhere
+  // can be SHADOWED at a call site — e.g. `const ENABLED=false; function save(ENABLED){ if(ENABLED) … }`.
+  // The flat map cannot tell the top-level const from the parameter, so folding the const's value at the
+  // shadowed call site would prove LIVE code dead (a deterministic false green). Poisoning any such
+  // collision forces those identifiers to UNKNOWN (→ suspect), never dead. Conservative: it also downgrades
+  // a legitimately-foldable top-level const that merely SHARES a name with an unrelated parameter to
+  // suspect — a precision loss, never a false green.
+  for (const name of paramNames) if (consts.has(name)) poisoned.add(name);
   for (const name of poisoned) consts.delete(name);
   return consts;
 }
@@ -587,6 +827,11 @@ function methodOf(optsNode: acorn.Expression | null | undefined, consts: ConstsM
   }
   if (o.type !== "ObjectExpression") return "UNKNOWN";
   for (const p of o.properties) {
+    // a spread (`fetch(u, {...opts})`) can carry ANY `method` — the options shape is not
+    // statically readable, so the whole object is UNKNOWN. Falling through to the default `"GET"` (the old
+    // behavior) directly contradicted this function's own contract ("a spread → UNKNOWN — never silently
+    // assumed safe") and produced the same silent-clean false green as .
+    if (p.type === "SpreadElement") return "UNKNOWN";
     if (p.type !== "Property") continue;
     const keyName = p.key.type === "Identifier" ? p.key.name : p.key.type === "Literal" ? String(p.key.value) : null;
     if (keyName === "method") {
@@ -623,15 +868,55 @@ const COMMIT_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 type UrlTarget = "relative" | "remote" | "unknown";
 
-/** Classify a folded URL string. `localhost`/`127.*`/`0.0.0.0` absolute URLs are treated as
- *  same-origin-local (still in scope — a relative/same-origin-local target IS the bug class); any other
- *  absolute scheme is real remote egress and is skipped entirely (not this bug class). A relative path
- *  (starts with `/`, or has no `scheme://` at all) is `"relative"`. */
+/** A fixed synthetic page origin to resolve relative/protocol-relative URLs against. The host
+ *  (`cowork.local.invalid`) is a reserved-TLD sentinel that can never collide with a real remote host, so
+ *  "resolved host === page host" reliably means "same-origin / relative". */
+const PAGE_ORIGIN = "http://cowork.local.invalid/artifact/index.html";
+const PAGE_HOST = "cowork.local.invalid";
+
+/** True iff `host` (already lowercased, IPv6 brackets stripped) is a loopback/local host that Cowork
+ *  serves the artifact from — `localhost`, the whole IPv4 loopback block `127.0.0.0/8`, `0.0.0.0`, and the
+ *  IPv6 loopback `::1` (and its IPv4-mapped form). A HOSTNAME-EXACT test — the pre-fix
+ *  `/^https?:\/\/(localhost|127\.|0\.0\.0\.0)/` prefix match classified `localhost.evil.com` and
+ *  `127.attacker.example` as local. */
+function isLoopbackHost(host: string): boolean {
+  if (host === "localhost" || host === "0.0.0.0") return true;
+  if (host === "::1" || host === "::ffff:127.0.0.1" || host === "0:0:0:0:0:0:0:1") return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (m) {
+    const oct = [m[1], m[2], m[3], m[4]].map((s) => Number(s));
+    if (oct.every((n) => n >= 0 && n <= 255) && oct[0] === 127) return true;
+  }
+  return false;
+}
+
+/** Classify a URL string by RESOLVING it with the WHATWG URL parser against a fixed page origin, then
+ *  comparing NORMALIZED hostnames exactly (findings 18/19) — never by regex shape:
+ *   - a relative path (`/api/save`, `save`, `?x`, `#f`), a protocol-relative URL that resolves to the page
+ *     host, or an absolute `http(s)` URL whose host is the page host or a loopback host → `"relative"`
+ *     (same-origin-local — IS the Cowork bug class);
+ *   - any other resolved `http(s)` host (`localhost.evil.com`, `//example.com/save`, a leading-space
+ *     absolute URL) → `"remote"` (real egress, not this bug class);
+ *   - a non-`http(s)` scheme after resolution (`mailto:`, `data:`, `tel:`, `blob:`, `javascript:`) →
+ *     `"remote"` — it does NOT resolve against Cowork's origin, so it is not a local write-back and must
+ *     not be flagged as one;
+ *   - `null` (a computed/unresolvable URL) or a string the URL parser rejects → `"unknown"` (a documented
+ *     Tier A could-not-verify — the caller decides suspect vs. silent per context). */
 function classifyUrl(url: string | null): UrlTarget {
-  if (url == null) return "unknown"; // documented Tier A false negative — computed/unresolvable URL
-  if (/^https?:\/\/(localhost|127\.|0\.0\.0\.0)/i.test(url)) return "relative";
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return "remote";
-  return "relative";
+  if (url == null) return "unknown"; // computed/unresolvable URL
+  const trimmed = url.trim();
+  let u: URL;
+  try {
+    u = new URL(trimmed, PAGE_ORIGIN);
+  } catch {
+    return "unknown";
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return "remote"; // mailto:/data:/tel:/blob:/…
+  let host = u.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (host === PAGE_HOST) return "relative"; // resolved same-origin (relative or protocol-relative-to-page)
+  if (isLoopbackHost(host)) return "relative";
+  return "remote";
 }
 
 // ---- guard-truthiness: provable-truthy vs unknown vs unsupported (the headline false-green fix) ---- //
@@ -655,7 +940,9 @@ function evalBool(node: acorn.Node | null | undefined, consts: ConstsMap, depth 
     if (consts.has(n.name)) return evalBool(consts.get(n.name), consts, depth + 1);
     return "unknown";
   }
-  if (n.type === "MemberExpression" && !n.computed && n.property.type === "Identifier") {
+  if (n.type === "MemberExpression") {
+    const readName = staticPropName(n); // handles `obj.flag` AND `obj["flag"]`
+    if (readName === null) return "unknown";
     let obj: acorn.AnyNode = n.object;
     if (obj.type === "Identifier" && consts.has(obj.name)) {
       const resolved = consts.get(obj.name);
@@ -665,7 +952,7 @@ function evalBool(node: acorn.Node | null | undefined, consts: ConstsMap, depth 
       for (const p of obj.properties) {
         if (p.type !== "Property") continue;
         const keyName = p.key.type === "Identifier" ? p.key.name : p.key.type === "Literal" ? String(p.key.value) : null;
-        if (keyName === n.property.name) return evalBool(p.value, consts, depth + 1);
+        if (keyName === readName) return evalBool(p.value, consts, depth + 1);
       }
     }
     return "unknown";
@@ -731,13 +1018,80 @@ type Outcome =
   | { kind: "remote" }
   | { kind: "unsupported-guard"; line: number; reason: string };
 
-function classifyConsequence(params: { kind: string; method: string; url: string | null; line: number; after: string }): Outcome {
-  const { kind, method, url, line, after } = params;
+/** The property NAME of a member callee for BOTH the plain `obj.open` (non-computed Identifier) AND the
+ *  literal computed `obj["open"]`/`xhr["open"]` spellings — a formatter/minifier that emits
+ *  bracketed string property access was previously invisible to every AST arm (they all gated on
+ *  `!computed && property.type === "Identifier"`). A NON-literal computed access (`obj[k]`) stays `null`
+ *  (genuinely dynamic). */
+function staticPropName(m: acorn.MemberExpression): string | null {
+  if (!m.computed && m.property.type === "Identifier") return m.property.name;
+  if (m.computed && m.property.type === "Literal" && typeof m.property.value === "string") return m.property.value;
+  return null;
+}
+
+/** Statement-type test — the span used to bound consequence analysis to the write-back call's
+ *  OWN statement/promise chain rather than a fixed 1500-char forward slice that could vacuum up an
+ *  unrelated later request/comment/string. */
+function isStatementNode(t: string): boolean {
+  return t.endsWith("Statement") || t === "VariableDeclaration";
+}
+
+/** The nearest enclosing statement node of the call (innermost). `fetch(...).then(...)` lives inside one
+ *  `ExpressionStatement`, so its whole promise chain is captured; an unrelated following statement is not. */
+function enclosingStatement(ancestors: acorn.AnyNode[]): acorn.AnyNode | null {
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (isStatementNode(ancestors[i].type)) return ancestors[i];
+  }
+  return null;
+}
+
+/** True iff the call's RESULT flows OUT of its own statement — assigned to a variable, returned, spread,
+ *  stored in an object/array, or passed as an argument — so its response-handling happens through data
+ *  flow this static pass does not trace. Such a call is treated as SUSPECT (unresolved flow),
+ *  never hard-LOST, avoiding the "an unconventional but correct response variable looks lost" false
+ *  positive. Being the OBJECT of a `.then(...)`/`.catch(...)` member chain is NOT an escape — that chain is
+ *  part of the same statement and IS inspected. */
+function resultEscapesStatement(ancestors: acorn.AnyNode[]): boolean {
+  let idx = ancestors.length - 1; // the call node itself (visitor passes it last)
+  let node: acorn.AnyNode = ancestors[idx];
+  let parent = ancestors[idx - 1];
+  // Unwrap transparent wrappers: `await fetch(...)` (AwaitExpression) and `fetch?.(...)` (an optional call
+  // is wrapped in a ChainExpression by the parser) — the WRAPPER is not a use of the value, so look through
+  // it to the real consuming context.
+  while (parent && (parent.type === "AwaitExpression" || parent.type === "ChainExpression")) {
+    node = parent;
+    idx -= 1;
+    parent = ancestors[idx - 1];
+  }
+  if (!parent) return false;
+  switch (parent.type) {
+    case "ExpressionStatement":
+      return false;
+    case "MemberExpression":
+      // `call.then(...)` (promise chain) → object === node → not an escape; `x.call` where call is the
+      // property side can't happen for a call node, so object !== node means the call is used as a computed
+      // key / receiver elsewhere → escape.
+      return (parent as acorn.MemberExpression).object !== node;
+    default:
+      return true;
+  }
+}
+
+function classifyConsequence(params: {
+  kind: string;
+  method: string;
+  url: string | null;
+  line: number;
+  okWindow: string;
+  consWindow: string;
+  escapes: boolean;
+}): Outcome {
+  const { kind, method, url, line, okWindow, consWindow, escapes } = params;
   const urlDisplay = url ?? "(unresolved)";
-  const dl = DOWNLOAD_FALLBACK_RE.test(after);
+  const dl = DOWNLOAD_FALLBACK_RE.test(consWindow);
   const noResponseChannel = kind === "beacon"; // fire-and-forget: can never learn of a non-ok response
-  const okChecked = OK_CHECK_RE.test(after.split(".catch")[0] ?? after);
-  const persistClaim = PERSIST_CLAIM_RE.test(after);
+  const okChecked = OK_CHECK_RE.test(okWindow.split(".catch")[0] ?? okWindow);
+  const persistClaim = PERSIST_CLAIM_RE.test(consWindow);
 
   if (dl) {
     return {
@@ -762,6 +1116,15 @@ function classifyConsequence(params: { kind: string; method: string; url: string
       kind: "suspect",
       line,
       reason: `relative ${method} write-back to "${urlDisplay}" (${kind}) consults the response before proceeding — degrades locally on a non-ok Cowork response, but the write-back itself still never reaches a real backend under Cowork`,
+    };
+  }
+  if (escapes) {
+    // The response flows out of the call's own statement (assigned/returned/passed); this static pass does
+    // not trace it, so a persist-claim heuristic could false-positive. Treat as SUSPECT, not LOST.
+    return {
+      kind: "suspect",
+      line,
+      reason: `relative ${method} write-back to "${urlDisplay}" (${kind}) — its result is stored/returned and consumed by data flow this static analyzer does not trace, so response handling could not be confirmed; treated as advisory rather than silently clean or hard-lost`,
     };
   }
   if (persistClaim) {
@@ -812,10 +1175,7 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
         CallExpression(c) {
           const isFetchCallee =
             (c.callee.type === "Identifier" && c.callee.name === "fetch") ||
-            (c.callee.type === "MemberExpression" &&
-              !c.callee.computed &&
-              c.callee.property.type === "Identifier" &&
-              c.callee.property.name === "fetch");
+            (c.callee.type === "MemberExpression" && staticPropName(c.callee) === "fetch");
           if (isFetchCallee && c.arguments[0]?.type === "Identifier") {
             const argName = (c.arguments[0] as acorn.Identifier).name;
             const idx = fn.params.findIndex((p) => p.type === "Identifier" && p.name === argName);
@@ -831,6 +1191,11 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
   walk.ancestor(ast, {
     CallExpression(n, _state, ancestors) {
       const c = n.callee;
+      // `propName` resolves BOTH `obj.open` and the literal computed `obj["open"]`/`xhr["open"]` spellings
+      // — every member arm below keys off it instead of an inline `!computed && Identifier`
+      // check, so a formatter/minifier's bracketed property access is no longer invisible.
+      const propName = c.type === "MemberExpression" ? staticPropName(c) : null;
+      const recvName = c.type === "MemberExpression" && c.object.type === "Identifier" ? c.object.name : null;
       let kind: string | null = null;
       let urlNode: acorn.Expression | undefined;
       let method = "GET";
@@ -838,14 +1203,10 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
       // `suspect` regardless of response-handling heuristics, never `lost` — see that arm's comment.
       let forceAdvisory = false;
 
-      if (
-        (c.type === "Identifier" && c.name === "fetch") ||
-        (c.type === "MemberExpression" && !c.computed && c.property.type === "Identifier" && c.property.name === "fetch")
-      ) {
+      if ((c.type === "Identifier" && c.name === "fetch") || (c.type === "MemberExpression" && propName === "fetch")) {
         // Covers both the bare identifier call (`fetch(...)`) and a member-spelled call on any receiver
-        // (`window.fetch(...)`, `globalThis.fetch(...)`, `self.fetch(...)`, or any other `<obj>.fetch(...)`)
-        // — acorn gives these the same CallExpression/arguments shape either way, and there is no scoping
-        // reason to believe a `.fetch(` call is anything other than the global fetch API.
+        // (`window.fetch(...)`, `globalThis.fetch(...)`, `self.fetch(...)`, or any other `<obj>.fetch(...)`,
+        // including the computed `window["fetch"](...)`).
         kind = "fetch";
         urlNode = n.arguments[0] as acorn.Expression | undefined;
         method = methodOf(n.arguments[1] as acorn.Expression | undefined, consts);
@@ -853,105 +1214,67 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
         kind = "fetch-wrapper";
         urlNode = n.arguments[wrappers.get(c.name)!] as acorn.Expression | undefined;
         method = "POST";
-      } else if (
-        c.type === "MemberExpression" &&
-        !c.computed &&
-        c.property.type === "Identifier" &&
-        c.property.name === "open" &&
-        n.arguments.length >= 2
-      ) {
+      } else if (c.type === "MemberExpression" && propName === "open" && n.arguments.length >= 2) {
         const m = (foldStr(n.arguments[0] as acorn.Expression, consts) ?? "UNKNOWN").toUpperCase();
         if (m !== "GET") {
+          // An XHR `.open(method, url)` whose method could not be folded is `"UNKNOWN"` — a recognized write
+          // primitive with an unresolved method, surfaced as suspect below, never silent.
           kind = "xhr";
           urlNode = n.arguments[1] as acorn.Expression;
           method = m;
         }
-      } else if (
-        (c.type === "Identifier" && c.name === "sendBeacon") ||
-        (c.type === "MemberExpression" && !c.computed && c.property.type === "Identifier" && c.property.name === "sendBeacon")
-      ) {
-        // Mirrors the fetch arm above: a bare `sendBeacon(...)` identifier (a local alias, e.g.
-        // `const sendBeacon = navigator.sendBeacon.bind(navigator)`) is recognized the same as the
-        // member-spelled `navigator.sendBeacon(...)`. Accepted over-approximation, same as any-receiver
-        // `.fetch(`: a same-file function coincidentally named `sendBeacon` would also match.
+      } else if ((c.type === "Identifier" && c.name === "sendBeacon") || (c.type === "MemberExpression" && propName === "sendBeacon")) {
+        // Mirrors the fetch arm: a bare `sendBeacon(...)` alias or the member-spelled
+        // `navigator.sendBeacon(...)` / `navigator["sendBeacon"](...)`.
         kind = "beacon";
         urlNode = n.arguments[0] as acorn.Expression | undefined;
         method = "POST";
       } else if (
         c.type === "MemberExpression" &&
-        !c.computed &&
-        c.property.type === "Identifier" &&
-        ["post", "put", "patch", "delete", "postForm", "putForm", "patchForm"].includes(c.property.name) &&
-        c.object.type === "Identifier" &&
-        ["axios", "$", "jQuery"].includes(c.object.name)
+        propName !== null &&
+        ["post", "put", "patch", "delete", "postForm", "putForm", "patchForm"].includes(propName) &&
+        recvName !== null &&
+        ["axios", "$", "jQuery"].includes(recvName)
       ) {
-        // `.post(`/`.put(`/`.patch(`/`.delete(` on the known axios/$/jQuery identifiers — covers
-        // `axios.put(...)`, `$.patch(...)`, `axios.delete(...)`, etc. the same way `axios.post(...)` was
-        // already covered. `.delete(` is included HERE (unlike the any-receiver arm below) because the
-        // ambiguity that arm exists to avoid — a same-named method on an unrelated object, e.g. a
-        // `Map`/`Set`/cache `.delete(key)` — doesn't apply to the LITERAL `axios`/`$`/`jQuery` identifier:
-        // there is no ambiguity about what `axios.delete(...)` means. Also covers axios v1's multipart
-        // form-data verb aliases — `.postForm(`/`.putForm(`/`.patchForm(` — which are genuine write-backs
-        // with the verb embedded in the name (`method` below strips the `Form` suffix before uppercasing,
-        // so `postForm` → `POST`, `put`/`putForm` both → `PUT`, etc.).
-        kind = `lib-${c.property.name}`;
+        // `.post(`/`.put(`/`.patch(`/`.delete(` on the known axios/$/jQuery identifiers (including the
+        // computed `axios["post"](...)`). `.delete(` is included HERE (unlike the any-receiver arm below)
+        // because the LITERAL `axios`/`$`/`jQuery` receiver is unambiguous. Also covers axios v1's multipart
+        // form-data verb aliases `.postForm(`/`.putForm(`/`.patchForm(` (the `Form` suffix is stripped
+        // before uppercasing, so `postForm` → `POST`).
+        kind = `lib-${propName}`;
         urlNode = n.arguments[0] as acorn.Expression | undefined;
-        method = c.property.name.replace(/Form$/, "").toUpperCase();
+        method = propName.replace(/Form$/, "").toUpperCase();
       } else if (
         ((c.type === "Identifier" && c.name === "axios") ||
-          (c.type === "MemberExpression" &&
-            !c.computed &&
-            c.property.type === "Identifier" &&
-            c.property.name === "request" &&
-            c.object.type === "Identifier" &&
-            c.object.name === "axios")) &&
+          (c.type === "MemberExpression" && propName === "request" && recvName === "axios")) &&
         (n.arguments[0]?.type === "ObjectExpression" || n.arguments[0]?.type === "Identifier")
       ) {
-        // A bare `axios({...})` call (axios itself is callable as a request function) OR
-        // `axios.request({...})` — a "config object" call shape distinct from every other primitive here:
-        // `method` AND `url` are both fields on the single object argument, rather than a URL first
-        // argument plus a separate options argument. Reuses `methodOf` (already built to fold a `method`
-        // key out of an object/one-hop-identifier) for the method, and the sibling `urlNodeFromConfig`
-        // helper for the `url` key. The argument may be an inline object literal OR a HOISTED identifier
-        // (`const cfg = {method:"POST", url:"/api/save"}; axios(cfg)`) — both `methodOf` and
-        // `urlNodeFromConfig` already one-hop-resolve an `Identifier` through `consts`, so accepting either
-        // node type here just stops gating that resolution out before it runs. An identifier that ISN'T a
-        // resolvable config object (not in `consts`, or resolves to something other than an object literal)
-        // folds to `method: "UNKNOWN"` — filtered by the shared `COMMIT_METHODS` check below exactly like
-        // every other computed-value case in this file, not a new source of noise.
+        // A bare `axios({...})` call OR `axios.request({...})` — a "config object" shape where `method` AND
+        // `url` are both fields on the single object argument (inline literal OR a hoisted identifier
+        // resolved one hop through `consts`). A spread in the config → `methodOf` returns UNKNOWN (finding
+        // surfaced as suspect below, never a silent GET.
         kind = "axios-config";
         method = methodOf(n.arguments[0] as acorn.Expression, consts);
         urlNode = urlNodeFromConfig(n.arguments[0] as acorn.Expression, consts);
-      } else if (
-        c.type === "MemberExpression" &&
-        !c.computed &&
-        c.property.type === "Identifier" &&
-        ["post", "put", "patch"].includes(c.property.name)
-      ) {
-        // A `.post(`/`.put(`/`.patch(` call on a receiver OUTSIDE the known axios/$/jQuery set — the
-        // dominant real-world miss is an axios INSTANCE (`const api = axios.create({}); api.put(...)`),
-        // which is lexically indistinguishable from unrelated code that merely has a same-named method
-        // (the canonical false-positive risk: Express `app.post("/route", handler)`). We can't tell these
-        // apart, so this NEVER escalates to `lost` (an error) — only ever `suspect` (advisory), enforced
-        // below at the "live" branch via `forceAdvisory`. Never silently invisible either way. `.delete(`
-        // is deliberately EXCLUDED from this arm (unlike the whitelisted-receiver arm above, which has no
-        // `.delete` either, for the same reason): on an arbitrary receiver, `.delete("/some/key")` is
-        // common on non-HTTP collection types (e.g. `Map`/`Set`/a cache object), and flagging every one of
-        // those would be real advisory noise rather than a plausible write-back call.
-        kind = `lib-${c.property.name}-other-receiver`;
+      } else if (c.type === "MemberExpression" && propName !== null && ["post", "put", "patch"].includes(propName)) {
+        // A `.post(`/`.put(`/`.patch(` call on a receiver OUTSIDE the known axios/$/jQuery set — dominantly
+        // an axios INSTANCE (`const api = axios.create({}); api.put(...)`), lexically indistinguishable from
+        // unrelated code with a same-named method (Express `app.post("/route", handler)`). NEVER escalates
+        // to `lost` — only ever `suspect` (advisory) via `forceAdvisory`. `.delete(` is deliberately
+        // EXCLUDED (a `Map`/`Set`/cache `.delete(key)` would be advisory noise).
+        kind = `lib-${propName}-other-receiver`;
         urlNode = n.arguments[0] as acorn.Expression | undefined;
-        method = c.property.name.toUpperCase();
+        method = propName.toUpperCase();
         forceAdvisory = true;
       }
 
-      if (!kind || !COMMIT_METHODS.has(method)) return;
+      if (!kind) return; // not a recognized write primitive — ordinary code
 
-      const url = foldStr(urlNode, consts);
-      const target = classifyUrl(url);
-      if (target === "remote" || target === "unknown") return; // real egress, or a documented false negative
-
-      const status = guardStatusOf(ancestors, consts);
       const line = lineOf(fileText, block.offset + n.start);
+
+      // Guard first: a provably-dead call never fires, so it yields NO finding even if its URL/method are
+      // unresolved; an unsupported guard is a could-not-verify regardless of URL/method.
+      const status = guardStatusOf(ancestors, consts);
       if (status === "unsupported") {
         outcomes.push({
           kind: "unsupported-guard",
@@ -964,29 +1287,65 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
         outcomes.push({ kind: "dead" });
         return;
       }
+
+      // a recognized write primitive whose METHOD could not be resolved (`UNKNOWN` — a
+      // computed method string, a spread options object) is a could-not-verify, NOT a silent return. A
+      // method resolved to a NON-commit verb (a determined GET/HEAD) is a genuine read — silent, no finding.
+      if (method === "UNKNOWN") {
+        outcomes.push({
+          kind: "suspect",
+          line,
+          reason: `a recognized write primitive (${kind}) has an HTTP method this static analyzer could not resolve (a computed method string or a spread options object) — cannot rule out a committing method lost under Cowork; treated as advisory rather than silently clean`,
+        });
+        return;
+      }
+      if (!COMMIT_METHODS.has(method)) return; // determined read (GET/HEAD/…) — not a write-back
+
+      const url = foldStr(urlNode, consts);
+      const target = classifyUrl(url);
+      if (target === "remote") return; // real remote egress — not this bug class
+      // a recognized COMMITTING write primitive whose URL could not be folded is a
+      // could-not-verify, not a silent false negative. (A `forceAdvisory` any-receiver `.post(` with an
+      // unresolved URL is likewise surfaced as suspect below via its own branch — kept advisory.)
+      if (target === "unknown") {
+        outcomes.push({
+          kind: "suspect",
+          line,
+          reason: `a recognized ${method} write primitive (${kind}) targets a URL this static analyzer could not resolve to a concrete origin (a computed/runtime-constructed URL) — cannot rule out a same-origin write-back lost under Cowork; treated as advisory rather than silently clean`,
+        });
+        return;
+      }
+
+      // target === "relative": reachable, committing, same-origin-local.
       if (status === "unknown") {
         outcomes.push({
           kind: "suspect",
           line,
-          reason: `relative ${method} write-back to "${url ?? "(unresolved)"}" (${kind}) is behind a guard whose runtime value cannot be proven statically — cannot rule out it firing under Cowork's origin`,
+          reason: `relative ${method} write-back to "${url}" (${kind}) is behind a guard whose runtime value cannot be proven statically — cannot rule out it firing under Cowork's origin`,
         });
         return;
       }
-      // status === "live": either genuinely unguarded, or a guard that provably evaluates truthy for
-      // this branch — either way the call is reachable. `forceAdvisory` (the any-receiver `.post(`/`.put(`/
-      // `.patch(` arm) skips the normal consequence heuristics entirely — we cannot confidently read
-      // response-handling for an unknown receiver, so it is always `suspect`, never escalated to `lost`
-      // via a heuristic that was tuned for a KNOWN write-back primitive.
       if (forceAdvisory) {
         outcomes.push({
           kind: "suspect",
           line,
-          reason: `a "${method.toLowerCase()}(" call on a receiver outside the known axios/$/jQuery set targets a relative URL ("${url ?? "(unresolved)"}") — likely the axios-instance write-back idiom (const api = axios.create(); api.${method.toLowerCase()}(...)), but the receiver is not provably a write-back client, so this is advisory rather than an error`,
+          reason: `a "${method.toLowerCase()}(" call on a receiver outside the known axios/$/jQuery set targets a relative URL ("${url}") — likely the axios-instance write-back idiom (const api = axios.create(); api.${method.toLowerCase()}(...)), but the receiver is not provably a write-back client, so this is advisory rather than an error`,
         });
         return;
       }
-      const after = fileText.slice(block.offset + n.start, block.offset + n.start + LOOKAHEAD_WINDOW);
-      outcomes.push(classifyConsequence({ kind, method, url, line, after }));
+      // bound consequence analysis to the call's OWN statement/promise chain instead of a fixed
+      // 1500-char forward slice. `okWindow` (response-consulted detection) is the enclosing statement — a
+      // `.then(r => r.ok)` chain is in-statement; an unrelated later `resp.ok` is not. `consWindow`
+      // (download-fallback / persist-claim detection) extends a short, bounded tail past the statement to
+      // catch a trailing success toast (`fetch(POST); alert("Saved")`) without vacuuming up distant code.
+      const stmt = enclosingStatement(ancestors);
+      const callStart = n.start;
+      const stmtEnd = stmt ? stmt.end : n.end;
+      const consEnd = Math.min(Math.max(stmtEnd, n.end) + 300, callStart + LOOKAHEAD_WINDOW);
+      const okWindow = fileText.slice(block.offset + callStart, block.offset + stmtEnd);
+      const consWindow = fileText.slice(block.offset + callStart, block.offset + consEnd);
+      const escapes = resultEscapesStatement(ancestors);
+      outcomes.push(classifyConsequence({ kind, method, url, line, okWindow, consWindow, escapes }));
     },
   });
 
@@ -997,17 +1356,17 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
 // Per-file core
 // ------------------------------------------------------------------------------------------------- //
 
-/** Analyze ONE already-read source file for the Cowork write-back bug class. Returns:
- *   - `{finding}` — a verdict (`artifact-write-back-lost` error, or `artifact-write-back-suspect` advisory)
- *     from the file's real, parseable script/form write-back(s);
- *   - `{failure}` — a could-not-verify record (`AnalysisFailure`, see the stage enum): a block that carries
- *     a write-back hint but could not be parsed/cap-analyzed, an `unsupported-guard`, or a candidate whose
- *     every isolated `<script>` block was unparseable so nothing could be analyzed;
- *   - `{finding, failure}` — BOTH, when the file has a real verdict AND a separate write-back-bearing block
- *     that could not be analyzed (a parse/cap failure — the finding is surfaced, the could-not-verify is not
- *     swallowed). NOTE: an `unsupported-guard` still short-circuits to `{failure}` alone.
- *   - `{}` — not a Tier A candidate (ordinary code), or a candidate whose parseable write-back(s) are all
- *     clean/dead — genuinely clean.
+/** Analyze ONE already-read source file for the Cowork write-back bug class. Returns
+ *  `{ findings, failure? }`:
+ *   - `findings` — EVERY verdict in the file (`artifact-write-back-lost` error / `artifact-write-back-suspect`
+ *     advisory) from its real, parseable script/form write-back(s), deduped and errors-first
+ *     (one artifact can carry several distinct endpoints). Empty when there is nothing to report.
+ *   - `failure` — an OPTIONAL could-not-verify record (`AnalysisFailure`, see the stage enum): a block that
+ *     carries a write-back hint but could not be parsed/cap-analyzed, an `unsupported-guard`, or a candidate
+ *     whose every isolated `<script>` block was unparseable so nothing could be analyzed. Surfaced ALONGSIDE
+ *     any `findings` (fail-closed) except an `unsupported-guard`, which short-circuits to `{findings:[], failure}`.
+ *   - `{findings:[]}` (no failure) — not a Tier A candidate (ordinary code), or a candidate whose parseable
+ *     write-back(s) are all clean/dead — genuinely clean.
  *  A block that fails to PARSE with no write-back hint is treated as prose (a docstring/comment the lexical
  *  `<script>` regex mis-extracted) and DISCOUNTED — one phantom block never sinks a file the rest of the loop
  *  could adjudicate. But discounting a block is never enough on its own to reach a silent clean pass: a
@@ -1016,35 +1375,39 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
  *  OUTSIDE every extracted block's span (top-level code, an inline `on*=` handler, surrounding template
  *  markup) still carries a write-back hint the block loop never got to analyze — a parseable sibling must
  *  not vouch for that un-analyzed remainder. Either trigger yields a could-not-verify, never `{}`. */
-export function analyzeArtifactFile(path: string, text: string): { finding?: SkillFinding; failure?: AnalysisFailure } {
+export function analyzeArtifactFile(path: string, text: string): { findings: SkillFinding[]; failure?: AnalysisFailure } {
   const ext = extname(path).toLowerCase();
-  if (!SOURCE_EXTS.has(ext)) return {};
+  if (!SOURCE_EXTS.has(ext)) return { findings: [] };
 
   if (Buffer.byteLength(text, "utf8") > BYTE_CAP) {
     return {
+      findings: [],
       failure: { path, stage: "size", reason: `source is ${Buffer.byteLength(text, "utf8")} bytes, exceeds the ${BYTE_CAP} byte cap` },
     };
   }
 
-  if (!isCandidate(ext, text)) return {}; // ordinary code — not a candidate, not a failure
+  if (!isCandidate(ext, text)) return { findings: [] }; // ordinary code — not a candidate, not a failure
 
   const isHtmlLike = HTML_EXTS.has(ext);
+  const preferModule = MODULE_EXTS.has(ext);
 
-  // Declarative <form method=post> write-backs — evaluated independent of any <script> extraction, so a
+  // Declarative <form> write-backs — form ownership, submitter formaction/formmethod overrides, and
+  // JS-handler awareness (findings 20/21/22). Evaluated independent of any <script> extraction, so a
   // pure-declarative HTML page (no <script> at all) still produces a verdict (§B2/§B3 test (h)).
-  const formHits = relativeFormPosts(text);
+  const outcomes: Outcome[] = analyzeForms(text);
 
   let blocks = extractScriptBlocks(text);
   if (blocks.length === 0) {
     if (!isHtmlLike && ext !== ".py") {
       // A plain JS-family file (no <script> wrapper needed — the file itself IS the script).
-      blocks = [{ code: text, offset: 0 }];
+      blocks = [{ code: text, offset: 0, module: preferModule }];
     } else if (ext === ".py") {
       // Candidacy already confirmed browser + write-back markers are present in the raw text, but no
       // <script> block could be isolated from a Python source — the archetype (write-back string in a
       // template) needs that extraction to succeed; when it can't, this is a could-not-verify, never a
       // silent pass.
       return {
+        findings: [],
         failure: {
           path,
           stage: "extract",
@@ -1052,18 +1415,7 @@ export function analyzeArtifactFile(path: string, text: string): { finding?: Ski
         },
       };
     }
-    // isHtmlLike with zero <script> blocks: fine — a pure-declarative candidate, handled via formHits.
-  }
-
-  const outcomes: Outcome[] = [];
-  for (const hit of formHits) {
-    outcomes.push({
-      kind: "lost",
-      line: hit.line,
-      reason:
-        "native <form method=post> submits to a relative/local-origin endpoint with no JS handler — resp.ok can " +
-        "never be checked, so the browser's default navigate-to-response silently swallows Cowork's non-ok reply",
-    });
+    // isHtmlLike with zero <script> blocks: fine — a pure-declarative candidate, handled via analyzeForms.
   }
 
   // Per-block analysis. A block that FAILS TO PARSE (a genuine acorn SyntaxError) is NOT automatically
@@ -1079,7 +1431,7 @@ export function analyzeArtifactFile(path: string, text: string): { finding?: Ski
   for (const block of blocks) {
     let ast: acorn.Node;
     try {
-      ast = parseWithCaps(block.code);
+      ast = parseWithCaps(block.code, block.module || preferModule);
     } catch (e) {
       if (e instanceof CapExceededError) {
         blockFailures.push({ path, stage: e.stage, reason: e.message });
@@ -1105,16 +1457,30 @@ export function analyzeArtifactFile(path: string, text: string): { finding?: Ski
   // false-clean hole.
   const unsupported = outcomes.find((o): o is Extract<Outcome, { kind: "unsupported-guard" }> => o.kind === "unsupported-guard");
   if (unsupported) {
-    return { failure: { path, stage: "unsupported-guard", reason: unsupported.reason } };
+    return { findings: [], failure: { path, stage: "unsupported-guard", reason: unsupported.reason } };
   }
 
+  // surface EVERY lost/suspect write-back in the file as its own finding (one artifact can
+  // carry several distinct endpoints/bugs), deduped by rule+line+message, ordered errors-first then by
+  // line so the highest-severity finding leads. Previously only the first lost (or first live) was kept,
+  // hiding independent bugs in the same generated artifact.
   const live = outcomes.filter((o): o is Extract<Outcome, { kind: "lost" | "suspect" }> => o.kind === "lost" || o.kind === "suspect");
-  let finding: SkillFinding | undefined;
-  if (live.length > 0) {
-    const lost = live.find((o) => o.kind === "lost");
-    finding = lost
-      ? { rule: "artifact-write-back-lost", severity: "error", path, line: lost.line, message: lost.reason }
-      : { rule: "artifact-write-back-suspect", severity: "advisory", path, line: live[0].line, message: live[0].reason };
+  const findings: SkillFinding[] = [];
+  const seenFindingKeys = new Set<string>();
+  const ordered = [...live].sort((a, b) => {
+    const sev = (a.kind === "lost" ? 0 : 1) - (b.kind === "lost" ? 0 : 1);
+    return sev !== 0 ? sev : a.line - b.line;
+  });
+  for (const o of ordered) {
+    const rule = o.kind === "lost" ? "artifact-write-back-lost" : "artifact-write-back-suspect";
+    const key = `${rule}:${o.line}:${o.reason}`;
+    if (seenFindingKeys.has(key)) continue;
+    seenFindingKeys.add(key);
+    findings.push(
+      o.kind === "lost"
+        ? { rule, severity: "error", path, line: o.line, message: o.reason }
+        : { rule, severity: "advisory", path, line: o.line, message: o.reason },
+    );
   }
 
   let failure: AnalysisFailure | undefined = blockFailures[0];
@@ -1147,7 +1513,7 @@ export function analyzeArtifactFile(path: string, text: string): { finding?: Ski
   //      never analyzes that surface, so neither a parseable sibling block nor an already-flagged form can
   //      vouch for it. A hint there is a could-not-verify, recorded ALONGSIDE any finding.
   if (!failure && discountedBlockCount > 0) {
-    if (parsedBlockCount === 0 && !finding) {
+    if (parsedBlockCount === 0 && findings.length === 0) {
       failure = {
         path,
         stage: "extract",
@@ -1173,8 +1539,7 @@ export function analyzeArtifactFile(path: string, text: string): { finding?: Ski
     }
   }
 
-  if (finding || failure) return { finding, failure };
-  return {}; // parseable write-back(s) all clean/dead, and nothing unparseable — genuinely clean
+  return { findings, failure }; // findings may be empty and failure undefined → genuinely clean
 }
 
 // ------------------------------------------------------------------------------------------------- //
@@ -1216,6 +1581,20 @@ export function analyzeArtifacts(targets: string[]): { findings: SkillFinding[];
         pushFailure({ path: resolved, stage: "read", reason: (e as Error).message });
         continue;
       }
+      // a WALK path already filters to regular files, but an explicitly NAMED file target
+      // (`collectArtifactSources` file branch) does not — a named FIFO/socket/device would reach the
+      // `readFileSync` below and could BLOCK indefinitely (a named pipe reports size 0, defeating the byte
+      // cap, and the per-file deadline only covers the AST walk). Accept regular files only; anything else
+      // is a could-not-verify, never a hang or a silent skip. (`statSync` follows a symlink to its target,
+      // so a symlink-to-regular-file is still accepted.)
+      if (!st.isFile()) {
+        pushFailure({
+          path: resolved,
+          stage: "read",
+          reason: "not a regular file (FIFO/socket/device or other non-regular file) — cannot be safely read for analysis",
+        });
+        continue;
+      }
       if (st.size > BYTE_CAP) {
         pushFailure({ path: resolved, stage: "size", reason: `source is ${st.size} bytes, exceeds the ${BYTE_CAP} byte cap` });
         continue;
@@ -1229,9 +1608,9 @@ export function analyzeArtifacts(targets: string[]): { findings: SkillFinding[];
         continue;
       }
 
-      const { finding, failure } = analyzeArtifactFile(resolved, text);
+      const { findings: fileFindings, failure } = analyzeArtifactFile(resolved, text);
       if (failure) pushFailure({ ...failure, path: failure.path || resolved });
-      if (finding) findings.push(finding);
+      for (const finding of fileFindings) findings.push(finding);
     }
   }
 

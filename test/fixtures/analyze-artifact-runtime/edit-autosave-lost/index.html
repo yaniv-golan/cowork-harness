@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Finding 28: a debounced/immediate autosave fired from an `input` (EDIT) event, not a click.
+         The write-back is recorded under an `edit` action; the old commit-only verdict filter excluded
+         it and reported clean/high even though this is the exact persistence pattern to catch. -->
+    <input id="title" />
+    <div id="msg"></div>
+    <script>
+      document.getElementById("title").addEventListener("input", function () {
+        fetch("/api/autosave", { method: "POST", body: JSON.stringify({ v: this.value }) }).then(function () {
+          // Never consults resp.ok/status/body — an unconditional success path.
+          document.getElementById("msg").textContent = "Saved!";
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -47,7 +47,13 @@ inputs:
     required: false
     default: "false"
   extra-args:
-    description: "Additional raw CLI arguments, space-separated, appended verbatim after the standard flags"
+    description: >-
+      Additional CLI arguments appended verbatim after the standard flags. TWO accepted forms:
+      (1) PREFERRED — a JSON array of strings, e.g. `["--answer", ".*=Option A"]`; each element is
+      passed as one argument with quoting/spaces/regex metacharacters preserved exactly. (2) LEGACY —
+      a plain space-separated string, e.g. `--assert-from path/to.yaml`; split on whitespace, so it
+      CANNOT carry an argument that itself contains spaces (use the JSON-array form for that). The
+      value is passed to the runner via the environment, never interpolated into the shell body.
     required: false
     default: ""
   summary:
@@ -104,25 +110,45 @@ runs:
     - name: Run cowork-harness
       id: run
       shell: bash
+      # All user inputs are passed via the environment, NOT interpolated into the script body — an
+      # `extra-args` value like `--answer ".*=$(...)"` can never be evaluated as shell here.
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        HARNESS_COMMAND: ${{ inputs.command }}
+        HARNESS_PATH: ${{ inputs.path }}
+        HARNESS_STRICT: ${{ inputs.strict }}
+        HARNESS_FAIL_ON_SKILL_DRIFT: ${{ inputs.fail-on-skill-drift }}
+        HARNESS_EXTRA_ARGS: ${{ inputs.extra-args }}
       run: |
         set +e
-        args=("${{ inputs.command }}" "${{ inputs.path }}" "--output-format" "json")
+        args=("$HARNESS_COMMAND" "$HARNESS_PATH" "--output-format" "json")
         # --strict is accepted only by replay/lint/lint-skill/analyze-skill; verify-cassettes/run exit 2
         # ("unknown flag") on it, so it must NOT be forwarded to those two commands.
-        case "${{ inputs.command }}" in
+        case "$HARNESS_COMMAND" in
           replay | lint | lint-skill | analyze-skill)
-            [ "${{ inputs.strict }}" = "true" ] && args+=("--strict")
+            [ "$HARNESS_STRICT" = "true" ] && args+=("--strict")
             ;;
         esac
         # --fail-on-skill-drift is REPLAY-only (a cassette/skill-drift staleness flag); lint/lint-skill/
         # analyze-skill don't know it — forwarding it there would be the same class of "unknown flag"
         # breakage --output-format used to cause, just for a narrower input combination.
-        [ "${{ inputs.command }}" = "replay" ] && [ "${{ inputs.fail-on-skill-drift }}" = "true" ] && args+=("--fail-on-skill-drift")
-        if [ -n "${{ inputs.extra-args }}" ]; then
-          # deliberately word-split: extra-args is documented as space-separated raw flags
-          read -ra extra <<< "${{ inputs.extra-args }}"
+        [ "$HARNESS_COMMAND" = "replay" ] && [ "$HARNESS_FAIL_ON_SKILL_DRIFT" = "true" ] && args+=("--fail-on-skill-drift")
+        if [ -n "$HARNESS_EXTRA_ARGS" ]; then
+          # extra-args may be a JSON array (quoting/spaces preserved) or a legacy space-separated
+          # string. Node normalizes both to a NUL-delimited stream so each argument survives verbatim;
+          # a NUL-safe read loop (portable to bash 3.2, unlike `mapfile -d`) rebuilds the array.
+          extra=()
+          while IFS= read -r -d '' item; do
+            extra+=("$item")
+          done < <(node -e '
+            const raw = process.env.HARNESS_EXTRA_ARGS || "";
+            let parsed;
+            try { parsed = JSON.parse(raw); } catch { /* not JSON — fall through to legacy split */ }
+            const out = Array.isArray(parsed)
+              ? parsed.map((x) => String(x))
+              : (raw.trim() === "" ? [] : raw.trim().split(/\s+/));
+            process.stdout.write(out.map((s) => s + "\0").join(""));
+          ')
           args+=("${extra[@]}")
         fi
         cowork-harness "${args[@]}" > cowork-harness-envelope.json

@@ -153,7 +153,16 @@ describe("no_lost_write_back — evidence-unavailable (fail-closed, never a sile
 
   it("could-not-verify when the scratchpad walk was skipped on --resume", () => {
     const wr = mkWorkRoot();
-    const health: AuthoredFilesHealth = { omittedPaths: [], totalCapExhausted: false, readErrors: [], scratchpadSkippedOnResume: true };
+    const health: AuthoredFilesHealth = {
+      omittedPaths: [],
+      totalCapExhausted: false,
+      readErrors: [],
+      hashUnknownPaths: [],
+      scratchpadWalkErrors: [],
+      scratchpadSkippedLinks: [],
+      workspaceWalkErrors: [],
+      scratchpadSkippedOnResume: true,
+    };
     const r = one(evaluate([{ no_lost_write_back: true }], ctx({ workRoot: wr, authoredFiles: [], authoredFilesHealth: health })));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/evidence unavailable/i);
@@ -167,6 +176,10 @@ describe("no_lost_write_back — evidence-unavailable (fail-closed, never a sile
       omittedPaths: [],
       totalCapExhausted: false,
       readErrors: [{ path: "outputs/gone.html", error: "EIO" }],
+      hashUnknownPaths: [],
+      scratchpadWalkErrors: [],
+      scratchpadSkippedLinks: [],
+      workspaceWalkErrors: [],
     };
     const r = one(evaluate([{ no_lost_write_back: true }], ctx({ workRoot: wr, authoredFiles: [], authoredFilesHealth: health })));
     expect(r.pass).toBe(false);
@@ -178,7 +191,15 @@ describe("no_lost_write_back — omitted-at-cap paths are still analyzed (never 
   it("CATCHES a lost write-back listed only in omittedPaths (dropped at the capture cap, but on disk)", () => {
     const wr = mkWorkRoot();
     write(wr, "outputs/big.html", LOST_FORM);
-    const health: AuthoredFilesHealth = { omittedPaths: ["outputs/big.html"], totalCapExhausted: true, readErrors: [] };
+    const health: AuthoredFilesHealth = {
+      omittedPaths: ["outputs/big.html"],
+      totalCapExhausted: true,
+      readErrors: [],
+      hashUnknownPaths: [],
+      scratchpadWalkErrors: [],
+      scratchpadSkippedLinks: [],
+      workspaceWalkErrors: [],
+    };
     const r = one(evaluate([{ no_lost_write_back: true }], ctx({ workRoot: wr, authoredFiles: [], authoredFilesHealth: health })));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/lost interactive-artifact write-back/i);

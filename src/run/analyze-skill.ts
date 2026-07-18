@@ -10,6 +10,21 @@ import { confirmArtifactRuntime, type RuntimeVerdict } from "./analyze-artifact-
 const out = (s: string) => writeSync(1, s + "\n");
 const log = (s: string) => writeSync(2, s + "\n");
 
+/** The static-analysis source-read cap, mirrored from `analyze-artifact.ts`'s own (unexported) `BYTE_CAP`
+ *  = 3 MB. Kept as a literal here (with this comment) rather than importing, since the artifact module
+ *  does not export it; used by `--runtime` (Tier B) to refuse executing an HTML file the static tier
+ *  already rejected for size. Keep in sync with `analyze-artifact.ts`. */
+const STATIC_BYTE_CAP = 3_000_000;
+
+/** A "missing/legitimately-empty" filesystem error — ENOENT (path never existed) or ENOTDIR (a path
+ *  component is not a directory). Mirrors `src/run/artifacts.ts`'s `isMissingErr`: a missing subtree is a
+ *  legitimate empty, NOT an evidence gap, whereas any OTHER error (EACCES, EIO, …) means the subtree
+ *  exists but could not be observed — that IS an evidence gap and must surface as could-not-verify. */
+function isMissingErr(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 /**
  * `analyze-skill` — a token-free, static CI check that flags a `/sessions/...` path handed to a
  * FILE TOOL or used as a dispatch/sub-agent OUTPUT path in a SKILL.md. On host-loop that class of
@@ -505,11 +520,53 @@ const IGNORE_START_MARKER_RE = buildMarkerLineRe("ignore-start");
  *  `computeScopedIgnores`. */
 const IGNORE_END_MARKER_RE = buildMarkerLineRe("ignore-end");
 
-/** Does `text` carry the `analyze-skill: ignore` marker as its OWN line (see `IGNORE_MARKER_LINE_RE`)?
- *  Exported so the CLI can print an explanatory note distinguishing "suppressed by marker" from
- *  "genuinely clean" without re-deriving the regex. */
+/** Finding 37: the 1-based line numbers on which a directive marker may be HONORED — every line OUTSIDE a
+ *  fenced code block and not a `>` blockquote line. A marker inside a ``` / ~~~ fence or a blockquote is a
+ *  TEACHING EXAMPLE (documentation showing a user how the marker works) and must NEVER suppress analysis —
+ *  the regression where a fenced ``analyze-skill: ignore`` example silenced the whole file. Fence
+ *  open/close mirrors `splitLines` (same `FENCE_RE`), but here EVERY fence language counts (bash-ish or
+ *  not): an example marker sits in a ```md/```text/``` block just as readily as a bash one. A genuine
+ *  top-level marker (column-0, outside any fence/blockquote) still works exactly as before. */
+function markerActiveLineSet(text: string): Set<number> {
+  const rawLines = text.split(/\r?\n/);
+  const active = new Set<number>();
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i];
+    const fm = FENCE_RE.exec(raw);
+    if (fm) {
+      const marker = fm[1];
+      const isCloser = fm[2] === ""; // a bare fence line (no language token) can close an open block
+      if (!inFence) {
+        inFence = true;
+        fenceChar = marker[0];
+        fenceLen = marker.length;
+        continue; // the fence marker line itself never carries a directive marker
+      }
+      if (marker[0] === fenceChar && marker.length >= fenceLen && isCloser) {
+        inFence = false;
+        fenceChar = "";
+        fenceLen = 0;
+        continue;
+      }
+      // a fence-looking line inside an open block is ordinary content — fall through
+    }
+    if (inFence) continue; // inside a fenced block — any marker here is example text
+    if (/^\s*>/.test(raw)) continue; // a `>` blockquote line — a quoted example marker must not suppress
+    active.add(i + 1);
+  }
+  return active;
+}
+
+/** Does `text` carry the `analyze-skill: ignore` marker as its OWN line (see `IGNORE_MARKER_LINE_RE`),
+ *  OUTSIDE any fenced code block or blockquote? Exported so the
+ *  CLI can print an explanatory note distinguishing "suppressed by marker" from "genuinely clean" without
+ *  re-deriving the regex. */
 export function hasIgnoreMarker(text: string): boolean {
-  return text.split(/\r?\n/).some((line) => IGNORE_MARKER_LINE_RE.test(line));
+  const active = markerActiveLineSet(text);
+  return text.split(/\r?\n/).some((line, i) => active.has(i + 1) && IGNORE_MARKER_LINE_RE.test(line));
 }
 
 /** Result of one pass over `text` for the two SCOPED ignore markers (`ignore-next-line` and the
@@ -539,6 +596,9 @@ interface ScopedIgnores {
  *  work, since that finding is added directly, never filtered against `suppressedLines`. */
 function computeScopedIgnores(text: string): ScopedIgnores {
   const rawLines = text.split(/\r?\n/);
+  // Finding 37: the scoped markers are recognized ONLY on lines outside a fenced block/blockquote too — a
+  // fenced `ignore-start`/`ignore-next-line` example is documentation, not a live directive.
+  const active = markerActiveLineSet(text);
   const suppressedLines = new Set<number>();
   const unclosedStartLines: number[] = [];
   let openStart: number | null = null;
@@ -546,6 +606,7 @@ function computeScopedIgnores(text: string): ScopedIgnores {
   for (let i = 0; i < rawLines.length; i++) {
     const lineNo = i + 1;
     const line = rawLines[i];
+    if (!active.has(lineNo)) continue; // fenced/blockquoted line — never a live scoped marker
     if (openStart === null) {
       if (IGNORE_NEXT_LINE_MARKER_RE.test(line)) {
         if (lineNo + 1 <= rawLines.length) suppressedLines.add(lineNo + 1);
@@ -731,6 +792,11 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
 export interface SkillTargetResolution {
   files: string[];
   unscanned: string[];
+  /** Could-not-verify records for contract subtrees that exist on disk but could NOT be read/enumerated
+   *  (EACCES/EIO/…) — findings 35 & 36. A plain-missing dir is a legitimate empty and never lands here.
+   *  The caller merges these into the top-level `analysisFailures` channel so an unreadable subtree forces
+   *  exit 3 (could-not-verify) instead of silently vanishing into a clean pass. */
+  failures: AnalysisFailure[];
 }
 
 /** `.claude-plugin/plugin.json` OR bare `plugin.json` at `dir` — the plugin-root manifest test, shared by
@@ -791,12 +857,15 @@ function isDenylistedWalkDirName(name: string): boolean {
  *  VCS trees are never a skill's own contract surface and can be large enough to make an unfiltered walk
  *  expensive. A dangling symlink (its `statSync` throws) is silently skipped: there is nothing on the
  *  other end to scan, which is not the same failure class as a real contract dir being out of scope. */
-function walkMarkdownDeep(dir: string, visited: Set<string> = new Set()): string[] {
-  if (!existsSync(dir)) return [];
+function walkMarkdownDeep(dir: string, visited: Set<string> = new Set(), failures: AnalysisFailure[] = []): string[] {
+  if (!existsSync(dir)) return []; // a never-created contract dir is a legitimate empty, not a gap
   let real: string;
   try {
     real = realpathSync(dir);
-  } catch {
+  } catch (e) {
+    // A realpath failure that is NOT plain-missing (e.g. EACCES on a path component) means the subtree
+    // exists but could not be resolved — an evidence gap, not a silent empty.
+    if (!isMissingErr(e)) failures.push({ path: dir, stage: "select", reason: `cannot resolve directory: ${(e as Error).message}` });
     return [];
   }
   if (visited.has(real)) return [];
@@ -805,7 +874,10 @@ function walkMarkdownDeep(dir: string, visited: Set<string> = new Set()): string
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    // An unreadable contract subtree (EACCES/EIO/…) must surface as could-not-verify, never vanish into
+    // a false clean. A plain-missing dir was already handled by `existsSync` above.
+    if (!isMissingErr(e)) failures.push({ path: dir, stage: "select", reason: `cannot read directory: ${(e as Error).message}` });
     return [];
   }
 
@@ -814,19 +886,22 @@ function walkMarkdownDeep(dir: string, visited: Set<string> = new Set()): string
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       if (isDenylistedWalkDirName(e.name)) continue;
-      out.push(...walkMarkdownDeep(full, visited));
+      out.push(...walkMarkdownDeep(full, visited, failures));
       continue;
     }
     if (e.isSymbolicLink()) {
       let st;
       try {
         st = statSync(full); // follows the link — resolves to the TARGET's type
-      } catch {
-        continue; // dangling symlink — nothing on the other end to scan
+      } catch (se) {
+        // A dangling symlink (ENOENT) is a legitimate skip; any other stat failure on a real target is a gap.
+        if (!isMissingErr(se))
+          failures.push({ path: full, stage: "select", reason: `cannot stat symlink target: ${(se as Error).message}` });
+        continue;
       }
       if (st.isDirectory()) {
         if (isDenylistedWalkDirName(e.name)) continue;
-        out.push(...walkMarkdownDeep(full, visited));
+        out.push(...walkMarkdownDeep(full, visited, failures));
       } else if (st.isFile() && /\.md$/i.test(e.name)) {
         out.push(full);
       }
@@ -851,12 +926,16 @@ function walkMarkdownDeep(dir: string, visited: Set<string> = new Set()): string
  *  plainly had a scannable skill, and in a mixed plugin (a symlinked skill alongside real ones) a silent
  *  false green: the symlinked skill's contents were never analyzed and nothing said so. A dangling
  *  symlink is silently skipped — nothing on the other end. */
-function listSubdirs(dir: string): string[] {
-  if (!existsSync(dir)) return [];
+function listSubdirs(dir: string, failures: AnalysisFailure[] = []): string[] {
+  if (!existsSync(dir)) return []; // no skills/ dir at all is a legitimate empty (a plugin may have none)
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    // An unreadable skills/ directory (EACCES/EIO/…) must NOT read as "no nested skills" — that would be a
+    // false clean over only the remaining contract files. A plain-missing dir was already handled above; anything else is
+    // an evidence gap that surfaces as could-not-verify.
+    if (!isMissingErr(e)) failures.push({ path: dir, stage: "select", reason: `cannot read skills directory: ${(e as Error).message}` });
     return [];
   }
   const out: string[] = [];
@@ -869,7 +948,9 @@ function listSubdirs(dir: string): string[] {
       let st;
       try {
         st = statSync(join(dir, e.name));
-      } catch {
+      } catch (se) {
+        if (!isMissingErr(se))
+          failures.push({ path: join(dir, e.name), stage: "select", reason: `cannot stat skills entry: ${(se as Error).message}` });
         continue; // dangling symlink
       }
       if (st.isDirectory()) out.push(e.name);
@@ -913,42 +994,45 @@ function listSubdirs(dir: string): string[] {
  *  HAD one. */
 export function resolveSkillTarget(target: string): SkillTargetResolution | { error: string } {
   if (!existsSync(target)) return { error: `path not found: ${target}` };
-  if (!statSync(target).isDirectory()) return { files: [target], unscanned: [] };
+  if (!statSync(target).isDirectory()) return { files: [target], unscanned: [], failures: [] };
 
   const dir = resolve(target);
   const files = new Set<string>();
   const unscanned: string[] = [];
+  // Findings 35 & 36: every walk/enumeration below threads this accumulator so an unreadable (non-missing)
+  // contract subtree becomes a could-not-verify record instead of silently disappearing into a clean pass.
+  const failures: AnalysisFailure[] = [];
 
   const topSkillMd = join(dir, "SKILL.md");
   const hasTopSkillMd = existsSync(topSkillMd);
   if (hasTopSkillMd) {
     files.add(topSkillMd);
-    for (const f of walkMarkdownDeep(join(dir, "references"))) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "references"), new Set(), failures)) files.add(f);
   }
 
   const isPluginRoot = isPluginManifestDir(dir);
   if (isPluginRoot) {
-    for (const f of walkMarkdownDeep(join(dir, "agents"))) files.add(f);
-    for (const f of walkMarkdownDeep(join(dir, "references"))) files.add(f);
-    for (const f of walkMarkdownDeep(join(dir, "commands"))) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "agents"), new Set(), failures)) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "references"), new Set(), failures)) files.add(f);
+    for (const f of walkMarkdownDeep(join(dir, "commands"), new Set(), failures)) files.add(f);
     const skillsDir = join(dir, "skills");
-    for (const name of listSubdirs(skillsDir)) {
+    for (const name of listSubdirs(skillsDir, failures)) {
       const subSkillMd = join(skillsDir, name, "SKILL.md");
       if (!existsSync(subSkillMd)) {
         unscanned.push(`${join(skillsDir, name)} (no SKILL.md — not a scannable skill dir)`);
         continue;
       }
       files.add(subSkillMd);
-      for (const f of walkMarkdownDeep(join(skillsDir, name, "references"))) files.add(f);
+      for (const f of walkMarkdownDeep(join(skillsDir, name, "references"), new Set(), failures)) files.add(f);
     }
   } else if (hasTopSkillMd) {
     const enclosing = findEnclosingPluginDir(dir);
     if (enclosing) {
-      for (const f of walkMarkdownDeep(join(enclosing, "agents"))) files.add(f);
-      for (const f of walkMarkdownDeep(join(enclosing, "references"))) files.add(f);
-      for (const f of walkMarkdownDeep(join(enclosing, "commands"))) files.add(f);
+      for (const f of walkMarkdownDeep(join(enclosing, "agents"), new Set(), failures)) files.add(f);
+      for (const f of walkMarkdownDeep(join(enclosing, "references"), new Set(), failures)) files.add(f);
+      for (const f of walkMarkdownDeep(join(enclosing, "commands"), new Set(), failures)) files.add(f);
       const siblingSkillsDir = join(enclosing, "skills");
-      for (const name of listSubdirs(siblingSkillsDir)) {
+      for (const name of listSubdirs(siblingSkillsDir, failures)) {
         const siblingDir = join(siblingSkillsDir, name);
         if (siblingDir === dir) continue; // this skill itself, already in scope
         unscanned.push(`${siblingDir} (sibling skill in the enclosing plugin — out of scope for a skill-dir target)`);
@@ -957,6 +1041,10 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
   }
 
   if (files.size === 0) {
+    // Findings 35 & 36: if a contract subtree was UNREADABLE (not merely absent), the empty file set is a
+    // could-not-verify, NOT a "no shape / hooks-only plugin" usage error. Return the failures so the caller
+    // surfaces exit 3 rather than a misleading exit-2 usage message (or, worse, a clean pass).
+    if (failures.length > 0) return { files: [], unscanned, failures };
     if (!hasTopSkillMd && !isPluginRoot) {
       return {
         error:
@@ -980,7 +1068,7 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
     };
   }
 
-  return { files: [...files].sort(), unscanned };
+  return { files: [...files].sort(), unscanned, failures };
 }
 
 /** Translate ONE glob path segment (the filename component, e.g. `*.md`, `agent-*.md`) into a
@@ -1013,7 +1101,7 @@ function globSegmentToRegExp(segment: string): RegExp {
  *  glob against an `agents/` dir with only non-matching files is a valid, if empty, expansion) — the
  *  caller's cross-positional "zero total files" check is what turns an empty run into exit 2.
  */
-function expandGlob(pattern: string): { files: string[] } | { error: string } {
+function expandGlob(pattern: string): { files: string[]; failures: AnalysisFailure[] } | { error: string } {
   const segments = pattern.split("/");
   const nameSegment = segments[segments.length - 1];
   let dirSegments = segments.slice(0, -1);
@@ -1028,17 +1116,20 @@ function expandGlob(pattern: string): { files: string[] } | { error: string } {
 
   const dir = dirSegments.length > 0 ? dirSegments.join("/") : ".";
   const nameRe = globSegmentToRegExp(nameSegment);
+  // Findings 35 & 36: propagate unreadable-subtree gaps from the walk/enumeration below.
+  const failures: AnalysisFailure[] = [];
 
   if (recursive) {
-    return { files: walkMarkdownDeep(resolve(dir)).filter((f) => nameRe.test(basename(f))) };
+    return { files: walkMarkdownDeep(resolve(dir), new Set(), failures).filter((f) => nameRe.test(basename(f))), failures };
   }
 
-  if (!existsSync(dir)) return { files: [] };
+  if (!existsSync(dir)) return { files: [], failures };
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return { files: [] };
+  } catch (e) {
+    if (!isMissingErr(e)) failures.push({ path: dir, stage: "select", reason: `cannot read glob directory: ${(e as Error).message}` });
+    return { files: [], failures };
   }
   const files: string[] = [];
   for (const e of entries) {
@@ -1058,7 +1149,7 @@ function expandGlob(pattern: string): { files: string[] } | { error: string } {
       if (st.isFile()) files.push(resolve(full));
     }
   }
-  return { files };
+  return { files, failures };
 }
 
 /** Resolve ONE CLI positional (a file, a directory, or a `*`-bearing glob) to the files it names. A
@@ -1070,7 +1161,7 @@ function resolvePositional(target: string): SkillTargetResolution | { error: str
   if (target.includes("*")) {
     const g = expandGlob(target);
     if ("error" in g) return g;
-    return { files: g.files, unscanned: [] };
+    return { files: g.files, unscanned: [], failures: g.failures };
   }
   return resolveSkillTarget(target);
 }
@@ -1129,18 +1220,43 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
   // immediately — same usage-error posture a single bad positional had before multi-positional support.
   const files = new Set<string>();
   const unscannedSet = new Set<string>();
+  // Findings 35 & 36: unreadable-subtree could-not-verify records surfaced by the resolver, merged into the
+  // top-level `analysisFailures` channel below so an EACCES references/agents/commands/skills dir forces
+  // exit 3 instead of silently narrowing the scan.
+  const resolverFailures: AnalysisFailure[] = [];
   // A markdown-resolver error on a positional is NO LONGER immediately fatal: a target may legitimately
   // have only artifact sources (code/HTML, no markdown contract file). Collect the errors and defer the
   // usage decision until after Tier A runs — if the target had artifact sources, the run proceeds.
   const markdownErrors: string[] = [];
+  // Finding 38: a positional that contributes NO source set of its own (no markdown files, no artifact
+  // sources) must fail the invocation on its OWN account — a good sibling target must not mask it. Tracked
+  // per-positional so `analyze good-dir shapeless-dir` cannot exit 0.
+  const unresolved: string[] = [];
   for (const target of p.positionals) {
     const resolved = resolvePositional(target);
     if ("error" in resolved) {
       markdownErrors.push(resolved.error);
+      // This positional yielded no markdown source. It is salvageable ONLY if it contributes an artifact
+      // source (code/HTML). Check THIS positional in isolation — a zero-match glob or a shape-less dir that
+      // contributes nothing here is an unresolved target that must fail, independent of other positionals.
+      if (analyzeArtifacts([target]).scanned.length === 0) unresolved.push(`${target}: ${resolved.error}`);
       continue;
     }
     for (const f of resolved.files) files.add(resolve(f));
     for (const u of resolved.unscanned) unscannedSet.add(u);
+    for (const fa of resolved.failures) resolverFailures.push(fa);
+  }
+
+  // Finding 38: every unresolved positional fails the whole invocation as a usage error — the operator
+  // explicitly asked for that target and it named nothing scannable. Reported before any heavier work.
+  if (unresolved.length > 0) {
+    return fail(
+      "analyze-skill",
+      "usage",
+      `analyze-skill: ${unresolved.length} target(s) resolved to no scannable source (markdown contract or artifact source): ${unresolved.join("; ")}`,
+      undefined,
+      asJson,
+    );
   }
 
   // Item 1 (Tier A): artifact write-back analysis runs on its OWN source set (code + HTML), collected
@@ -1150,8 +1266,10 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
 
   // Usage error only if NOTHING at all was scannable (no markdown files AND no artifact source files) —
   // e.g. a bad path, or a dir with neither markdown nor artifact code. Report the first markdown-resolver
-  // error (a bad path's "not found" message) when there is one, preserving the prior bad-target UX.
-  if (files.size === 0 && artifact.scanned.length === 0) {
+  // error (a bad path's "not found" message) when there is one, preserving the prior bad-target UX. Note a
+  // resolver FAILURE (unreadable subtree) is distinct: it lands in `analysisFailures` below and forces
+  // exit 3 rather than this exit-2 usage path.
+  if (files.size === 0 && artifact.scanned.length === 0 && resolverFailures.length === 0) {
     return fail(
       "analyze-skill",
       "usage",
@@ -1192,7 +1310,17 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
   for (const [file, findings] of [...artifactByFile].sort((a, b) => a[0].localeCompare(b[0]))) {
     perFile.push({ file, findings, suppressed: false });
   }
-  const analysisFailures = artifact.analysisFailures;
+  // Findings 35 & 36: the resolver's unreadable-subtree gaps join Tier A's artifact could-not-verify
+  // records in ONE `analysisFailures` channel (deduped by stage+path+reason) — a non-empty channel forces
+  // exit 3 regardless of --strict, so an unscanned contract subtree is could-not-verify, never a false clean.
+  const analysisFailures: AnalysisFailure[] = [];
+  const seenFailureKey = new Set<string>();
+  for (const f of [...resolverFailures, ...artifact.analysisFailures]) {
+    const key = `${f.stage}:${f.path}:${f.reason}`;
+    if (seenFailureKey.has(key)) continue;
+    seenFailureKey.add(key);
+    analysisFailures.push(f);
+  }
   const allFindings = perFile.flatMap((pf) => pf.findings);
 
   // Item 1 (Tier B): OPTIONAL runtime confirmation (--runtime). For each materialized HTML artifact source,
@@ -1205,6 +1333,18 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
   const runtimeConfirmations: RuntimeConfirmation[] = [];
   if (runtime) {
     for (const file of artifact.scanned.filter((f) => /\.html?$/i.test(f))) {
+      // Finding 40: `artifact.scanned` includes files the static tier registered BEFORE its size/read
+      // check, so an over-cap HTML — already rejected by Tier A as a `size` could-not-verify (exit 3) — is
+      // still present here. Re-stat and SKIP any file exceeding the SAME 3 MB cap the static tier uses
+      // (`STATIC_BYTE_CAP`, mirrored from analyze-artifact.ts's `BYTE_CAP`): Tier B must never read or
+      // jsdom-execute a file Tier A refused for size. Its gap is already surfaced in `analysisFailures`.
+      let st;
+      try {
+        st = statSync(file);
+      } catch {
+        continue; // a stat/read failure is already surfaced as an analysisFailure by Tier A
+      }
+      if (st.size > STATIC_BYTE_CAP) continue; // over-cap: already surfaced by Tier A; do NOT execute
       let html: string;
       try {
         html = readFileSync(file, "utf8");
@@ -1227,7 +1367,14 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
     out(
       jsonPayloadEnvelope("analyze-skill", ok, {
         files: perFile,
+        // Finding 39: `scanned` (kept for back-compat) is MARKDOWN-only, and a CLEAN artifact source enters
+        // `files`/`perFile` only when it has findings — so a green artifact scan was invisible in coverage.
+        // Emit both source kinds explicitly: `markdownScanned` (= `scanned`) and `artifactScanned` (every
+        // artifact source Tier A actually read, clean or not), so a reviewer can see exactly what the green
+        // covered.
         scanned: fileList,
+        markdownScanned: fileList,
+        artifactScanned: artifact.scanned,
         unscanned,
         analysisFailures,
         ...(runtime ? { runtimeConfirmations } : {}),

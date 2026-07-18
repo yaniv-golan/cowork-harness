@@ -31,6 +31,12 @@ export interface WalkHealth {
   /** path-scoped errors encountered during the walk (relative path — "" for a root-level failure — plus a
    *  short reason). */
   errors: { path: string; error: string }[];
+  /** subtrees skipped because their realpath escaped the containment root (a symlink/bind-mount out of
+   *  the work root). This is an intentional SECURITY skip, NOT a read error, so it does not set
+   *  `complete: false` — but "security-skipped" is not the same as "observed empty": a subtree excluded
+   *  here is unobserved, so an assertion that requires EXHAUSTIVE coverage (no_unexpected_files) must treat
+   *  a skip at/under one of its prefix roots as evidence-unavailable rather than "no strays found". */
+  containmentSkips: string[];
 }
 
 /** ENV-MANIFEST: recursively list files under each user-visible prefix (relative path + byte size).
@@ -56,7 +62,7 @@ export function collectArtifactsWithHealth(
 ): { files: { path: string; bytes: number }[] } & WalkHealth {
   const out: { path: string; bytes: number }[] = [];
   const visited = new Set<string>();
-  const health: WalkHealth = { complete: true, errors: [] };
+  const health: WalkHealth = { complete: true, errors: [], containmentSkips: [] };
   // Resolve workRoot once — used in the containment assertion inside walk().
   let workRootReal: string;
   try {
@@ -99,7 +105,7 @@ export function collectArtifactPaths(workRoot: string, prefixes: string[]): Arti
 export function collectArtifactPathsWithHealth(workRoot: string, prefixes: string[]): { entries: ArtifactPathEntry[] } & WalkHealth {
   const out: ArtifactPathEntry[] = [];
   const visited = new Set<string>();
-  const health: WalkHealth = { complete: true, errors: [] };
+  const health: WalkHealth = { complete: true, errors: [], containmentSkips: [] };
   let workRootReal: string;
   try {
     workRootReal = realpathSync(workRoot);
@@ -115,15 +121,30 @@ export function collectArtifactPathsWithHealth(workRoot: string, prefixes: strin
 /** Like `collectArtifactPaths` but rooted at an ARBITRARY directory mapped to `prefix` (the hostloop
  *  pre-run variant). Returns `prefix/<rel>` entries with link-kind. */
 export function collectArtifactPathsAt(dir: string, prefix: string): ArtifactPathEntry[] {
+  return collectArtifactPathsAtWithHealth(dir, prefix).entries;
+}
+
+/** F18: like `collectArtifactPathsAt`, but also reports walk completeness + path-scoped errors so the
+ *  pre-run baseline (`capturePreRunManifest`) can mark its `origin` `local-unreadable` when a nested
+ *  connected-folder subtree is unreadable, instead of silently narrowing the baseline. `collectArtifactPathsAt`
+ *  is the thin, behavior-preserving wrapper that discards the health half. */
+export function collectArtifactPathsAtWithHealth(dir: string, prefix: string): { entries: ArtifactPathEntry[] } & WalkHealth {
   const out: ArtifactPathEntry[] = [];
+  const health: WalkHealth = { complete: true, errors: [], containmentSkips: [] };
   let dirReal: string;
   try {
     dirReal = realpathSync(dir);
-  } catch {
-    return out;
+  } catch (err) {
+    // Root missing/unreadable: caller (capturePreRunManifest) already guards the whole-source case with an
+    // explicit realpathSync, but record it here too so this entry point is honest on its own.
+    if (!isMissingErr(err)) {
+      health.complete = false;
+      health.errors.push({ path: "", error: errMsg(err) });
+    }
+    return { entries: out, ...health };
   }
-  walkPaths(dir, prefix, dirReal, new Set<string>(), out);
-  return out;
+  walkPaths(dir, prefix, dirReal, new Set<string>(), out, health);
+  return { entries: out, ...health };
 }
 
 function walkPaths(
@@ -146,8 +167,12 @@ function walkPaths(
       return;
     }
     // A real directory whose realpath escapes the containment root (e.g. a bind mount) — skip the subtree.
-    // Intentional security-skip, not an observation gap: does NOT mark health incomplete.
-    if (real !== containReal && !real.startsWith(containReal + sep)) return;
+    // Intentional security-skip, not an observation gap: does NOT mark health incomplete — but record
+    // it so an exhaustive-coverage assertion knows this subtree was unobserved (not proven empty).
+    if (real !== containReal && !real.startsWith(containReal + sep)) {
+      if (health) health.containmentSkips.push(rel);
+      return;
+    }
     if (visited.has(real)) return;
     visited.add(real);
     let entries: string[];
@@ -239,6 +264,12 @@ export interface ClassifyWorkspaceFilesResult {
    *  empty `path`; a missing *prefix* subdir (e.g. no `outputs/` on a normal empty run) pushes the prefix
    *  name, so it does NOT set `rootAbsent`. */
   rootAbsent: boolean;
+  /** false when SOME part of the user-visible tree could not be observed — a nested unreadable subdir
+   *  (EACCES/EIO), not just the root. Previously only `rootAbsent` survived, collapsing a partial list into
+   *  a complete-looking one: an authored file inside an unreadable subtree vanished with no signal. */
+  walkComplete: boolean;
+  /** the path-scoped walk errors behind `walkComplete === false` (relative path + short reason). */
+  walkErrors: { path: string; error: string }[];
 }
 
 /** F18 consumption: like `classifyWorkspaceFiles`, but also reports whether the workspace root was
@@ -276,7 +307,14 @@ export function classifyWorkspaceFilesWithHealth(
       root !== undefined && readonlyFolderRoots.includes(root) ? "input" : root === "outputs" ? "output" : "mount";
     out.push({ path, bytes, ...hashFile(path), class: cls });
   }
-  return { files: out, rootAbsent: walk.errors.some((e) => e.path === "") };
+  return {
+    files: out,
+    rootAbsent: walk.errors.some((e) => e.path === ""),
+    walkComplete: walk.complete,
+    // the nested (non-root) errors — a caller diffing against this list (authored-file capture) can now
+    // fail evidence-unavailable instead of treating a partial enumeration as a complete one.
+    walkErrors: walk.errors.filter((e) => e.path !== ""),
+  };
 }
 
 export function classifyWorkspaceFiles(
@@ -329,6 +367,7 @@ function walkInto(
     // Intentional security-skip, not an observation gap: does NOT mark health incomplete.
     if (real !== containReal && !real.startsWith(containReal + sep)) {
       warn(`::warning:: collectArtifacts: skipping "${rel}" — real path escapes work root\n`);
+      if (health) health.containmentSkips.push(rel); // unobserved subtree, not proven empty
       return;
     }
     if (visited.has(real)) return;
@@ -405,6 +444,24 @@ export interface AuthoredFilesHealth {
    *  "this run authored no such file" from "it existed and was authored, but became unreadable at
    *  read-back time" (F16) — previously a bare `catch {}` with no trace either way. */
   readErrors: { path: string; error: string }[];
+  /** PRE-EXISTING files whose POST-run hash could not be computed (over-cap or unreadable), so whether
+   *  the agent modified them is UNKNOWN. Previously these were silently classified "not authored" and
+   *  dropped — hiding a modified-then-unreadable/over-cap artifact from `no_lost_write_back` and the judge.
+   *  They are now captured (content bounded-read via `pushFile`) and listed here so authorship reads as
+   *  unknown, not false; the dependent assertions still analyze the captured content. */
+  hashUnknownPaths: string[];
+  /** per-path errors from the SCRATCHPAD deliverable walk (realpath/readdir/lstat failures). An
+   *  unreadable scratchpad subtree no longer vanishes silently — an absence-sensitive assertion can treat
+   *  it as evidence-unavailable rather than "nothing was authored there". */
+  scratchpadWalkErrors: { path: string; error: string }[];
+  /** scratchpad deliverables SKIPPED because they are a symlink/hardlink (never followed — escape/cycle
+   *  guard, mirroring the artifact walk). A skill can write a deliverable through such a link; recording it
+   *  lets a dependent assertion avoid a false clean over an artifact it never observed. */
+  scratchpadSkippedLinks: string[];
+  /** path-scoped errors from the user-visible-roots walk that produced the authored set (an unreadable
+   *  subtree, EACCES/EIO). An authored file inside such a subtree is never enumerated, so a dependent
+   *  absence-sensitive assertion must treat this as evidence-unavailable, not "nothing authored there". */
+  workspaceWalkErrors: { path: string; error: string }[];
   /** F17: true when the scratchpad walk was skipped because this is a `--resume` (the reused session root
    *  makes prior-turn scratchpad files unattributable). Scratchpad deliverables are absent-by-policy, not
    *  absent-in-fact — informational (does NOT force a semantic verdict to evidence-unavailable). */
@@ -414,6 +471,22 @@ export interface AuthoredFilesHealth {
 export interface CaptureAuthoredFilesResult {
   files: AuthoredFile[];
   health: AuthoredFilesHealth;
+}
+
+/** True iff any evidence-health signal is set — i.e. the capture was NOT fully clean. The lanes persist
+ *  `health` only when this holds (an all-clean capture stays `undefined`, the "nothing to report" signal
+ *  every consumer already expects). One helper so a newly-added health field can't be forgotten at a
+ *  persistence site (execute.ts / cli.ts verify-run) and silently dropped. */
+export function authoredFilesHealthNonEmpty(h: AuthoredFilesHealth): boolean {
+  return Boolean(
+    h.omittedPaths.length ||
+    h.readErrors.length ||
+    h.hashUnknownPaths.length ||
+    h.scratchpadWalkErrors.length ||
+    h.scratchpadSkippedLinks.length ||
+    h.workspaceWalkErrors.length ||
+    h.scratchpadSkippedOnResume,
+  );
 }
 
 export interface CaptureAuthoredFilesOpts {
@@ -471,7 +544,15 @@ export function captureAuthoredFilesWithHealth(
   preRunHashes: Record<string, string | null> | undefined,
   opts: CaptureAuthoredFilesOpts = {},
 ): CaptureAuthoredFilesResult {
-  const health: AuthoredFilesHealth = { omittedPaths: [], totalCapExhausted: false, readErrors: [] };
+  const health: AuthoredFilesHealth = {
+    omittedPaths: [],
+    totalCapExhausted: false,
+    readErrors: [],
+    hashUnknownPaths: [],
+    scratchpadWalkErrors: [],
+    scratchpadSkippedLinks: [],
+    workspaceWalkErrors: [],
+  };
   if (preRunHashes === undefined) return { files: [], health }; // no pre-run manifest → can't diff → no capture
   const perFile = opts.perFileBytes ?? 16 * 1024;
   const total = opts.totalBytes ?? 64 * 1024;
@@ -518,7 +599,11 @@ export function captureAuthoredFilesWithHealth(
     }
   };
 
-  for (const f of classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots)) {
+  // health-aware classify — a nested unreadable subtree records walkErrors (an authored file there is
+  // never enumerated), so no_lost_write_back fails evidence-unavailable rather than a false clean.
+  const classified = classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots);
+  for (const e of classified.walkErrors) health.workspaceWalkErrors.push(e);
+  for (const f of classified.files) {
     if (f.class === "input") continue; // read-only mount — not authored by this run
     const sha = (f as { sha256?: string }).sha256;
     const prior = preRunHashes[f.path]; // undefined = new file; null = unavailable pre-run; string = prior hash
@@ -526,7 +611,17 @@ export function captureAuthoredFilesWithHealth(
     if (prior === undefined) {
       authored = true; // no pre-run entry at all → genuinely new path
     } else if (prior !== null) {
-      authored = sha !== undefined && sha !== prior; // normal before/after hash compare
+      if (sha === undefined) {
+        // the POST-run hash failed (over-cap or unreadable) for a PRE-EXISTING file, so whether the
+        // agent modified it is UNKNOWN. The old `sha !== undefined && ...` classified it "not authored" and
+        // dropped it — hiding a modified-then-unreadable/over-cap artifact from no_lost_write_back and the
+        // judge. Treat authorship as unknown: record it and capture it (bounded read below) so downstream
+        // analysis still sees the changed content, instead of a false "not authored".
+        health.hashUnknownPaths.push(f.path);
+        authored = true;
+      } else {
+        authored = sha !== prior; // normal before/after hash compare
+      }
     } else {
       // F15: prior === null means the pre-run capture couldn't hash this path (over-cap or unreadable) —
       // an UNKNOWN baseline, not a "no file existed" signal. Blindly treating it as authored (the prior
@@ -565,7 +660,10 @@ export function captureAuthoredFilesWithHealth(
       let real: string;
       try {
         real = realpathSync(absDir);
-      } catch {
+      } catch (err) {
+        // a directory that exists but can't be resolved (EACCES, EIO) is an evidence gap, not "empty".
+        // ENOENT (the scratchpad root simply has nothing) is a legitimate empty case — don't record it.
+        if (!isMissingErr(err)) health.scratchpadWalkErrors.push({ path: relDir || ".", error: errMsg(err) });
         return;
       }
       if (visited.has(real)) return;
@@ -573,7 +671,8 @@ export function captureAuthoredFilesWithHealth(
       let entries: string[];
       try {
         entries = readdirSync(absDir).sort();
-      } catch {
+      } catch (err) {
+        if (!isMissingErr(err)) health.scratchpadWalkErrors.push({ path: relDir || ".", error: errMsg(err) });
         return;
       }
       for (const name of entries) {
@@ -584,13 +683,20 @@ export function captureAuthoredFilesWithHealth(
         let st;
         try {
           st = lstatSync(childAbs);
-        } catch {
+        } catch (err) {
+          if (!isMissingErr(err)) health.scratchpadWalkErrors.push({ path: childRel, error: errMsg(err) });
           continue;
         }
-        if (st.isSymbolicLink()) continue; // not followed (may escape/cycle)
+        if (st.isSymbolicLink()) {
+          health.scratchpadSkippedLinks.push(`scratchpad/${childRel}`); // not followed (may escape/cycle) — but recorded
+          continue;
+        }
         if (st.isDirectory()) walk(childAbs, childRel);
         else if (st.isFile()) {
-          if (st.nlink > 1) continue; // hardlink → may reference out-of-root content
+          if (st.nlink > 1) {
+            health.scratchpadSkippedLinks.push(`scratchpad/${childRel}`); // hardlink → may reference out-of-root content
+            continue;
+          }
           pushFile(childAbs, `scratchpad/${childRel}`);
         }
       }

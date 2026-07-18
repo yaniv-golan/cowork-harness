@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <head>
+    <!-- An UNRELATED external bundle jsdom never fetches. The old ordering returned inconclusive
+         ("depends on external script") BEFORE examining recorded requests. -->
+    <script src="https://cdn.example.com/analytics.js"></script>
+  </head>
+  <body>
+    <!-- Finding 33: a native relative POST form whose submission is DIRECTLY observed. The write-back
+         must be analyzed first; the external script may only qualify UNOBSERVED behavior, not erase this. -->
+    <form method="post" action="/api/save">
+      <input name="title" />
+      <button type="submit">Save</button>
+    </form>
+  </body>
+</html>

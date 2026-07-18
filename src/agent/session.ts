@@ -109,6 +109,11 @@ export type AgentEvent =
       modelUsage?: Record<string, Record<string, unknown>>;
     }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
+  // A malformed USER-message block skipped at ingress (a non-object content entry, or a tool_result with
+  // no correlatable tool_use_id). NON-fatal — unlike the assistant loop (which THROWS on a corrupt block),
+  // a bad user block is degraded evidence, not a crash. Run bumps `evidenceErrors.protocolMalformed` so the
+  // incompleteness is visible (delivery/pairing verification can't silently read as complete).
+  | { type: "protocol_evidence_error"; reason: string }
   | { type: "infra_error"; message: string } // an infrastructure frame (e.g. VM/egress sidecar crash) appended to events.jsonl outside the SDK stream
   | { type: "raw"; line: string }
   | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
@@ -235,6 +240,13 @@ const QuestionsSchema = z.array(QSpecSchema);
  *  a lookalike; it has no other external callers. */
 export function successEnvelope(requestId: string, body: Record<string, unknown>) {
   return { type: "control_response", response: { subtype: "success", request_id: requestId, response: body } };
+}
+/** The fail-closed counterpart to `successEnvelope`: a `subtype:"error"` control_response. Sent when the
+ *  harness cannot faithfully answer a control_request (e.g. an unrecognized subtype) — the in-VM agent
+ *  gets a well-formed error reply and unblocks its round-trip instead of waiting forever (which would
+ *  present as a wall-clock timeout, not a typed protocol drift). Mirrors the mcp_message no-handler guard. */
+export function errorEnvelope(requestId: string, message: string) {
+  return { type: "control_response", response: { subtype: "error", request_id: requestId, error: message } };
 }
 function allowEnvelope(requestId: string, updatedInput: Record<string, unknown>) {
   return successEnvelope(requestId, { behavior: "allow", updatedInput });
@@ -454,6 +466,12 @@ export class LiveAgentSession implements AgentSession {
   private timeline: TimelineWriter;
   private lineIndex = 0;
   private reqById = new Map<string, DecisionRequest>();
+  // Bounded set of decision ids we've already answered (deleted from `reqById` after a serialized
+  // response). Used ONLY for duplicate-id diagnostics in translate() — distinguishes a benign re-send of
+  // an already-answered id (warn) from a duplicate OUTSTANDING id (fail closed). Insertion-ordered, so the
+  // oldest entry is evicted first once it exceeds the cap (a long live run can answer thousands of gates).
+  private completedIds = new Set<string>();
+  private static readonly COMPLETED_IDS_CAP = 2000;
   private sdkMcp?: SdkMcp;
   private hookBundle?: HookBundle;
   private initWritten = false;
@@ -705,8 +723,45 @@ export class LiveAgentSession implements AgentSession {
       yield { type: "mcp_error", server, code: -32601, message: "no sdkMcp handler configured" };
       return;
     }
+    // A control_request whose subtype we don't recognize (not hook_callback/mcp_message above, and
+    // `toDecisionRequest` returns null) would fall through parseMessage producing NO event and NO
+    // response — the in-VM agent then blocks forever on the round-trip (a hang that presents as a
+    // timeout, not a typed drift error). Fail closed: reply with an error control_response so the agent
+    // unblocks, then surface a typed protocol error (which terminates the run loudly, mirroring the
+    // mcp_message no-handler deadlock guard above). `toDecisionRequest` throws on a malformed request_id
+    // (caught by start()'s try/catch → same typed protocol error), so a bad id can't slip through here.
+    if (msg.type === "control_request" && toDecisionRequest(msg) === null) {
+      const reqId = requireRequestId(msg);
+      const sub = msg.request?.subtype;
+      // Reply with a fail-closed error control_response FIRST so the in-VM agent unblocks its round-trip,
+      // THEN throw — start()'s catch surfaces it as a typed {type:"error",source:"protocol"} event and
+      // terminates the run loudly (a genuinely unrecognized subtype is protocol drift the harness can't
+      // faithfully emulate). Same throw-and-catch convention as requireRequestId / requireInitArray.
+      this.write(errorEnvelope(reqId, `unsupported control_request subtype ${JSON.stringify(sub)}`));
+      throw new Error(
+        `control-in: unsupported control_request subtype ${JSON.stringify(sub)} (id ${reqId}) — replied with a fail-closed error control_response so the agent unblocks`,
+      );
+    }
     for (const ev of parseMessage(msg)) {
-      if (ev.type === "decision") this.reqById.set(ev.request.id, ev.request);
+      if (ev.type === "decision") {
+        const id = ev.request.id;
+        // A duplicate id that is STILL OUTSTANDING (a prior request with the same id has not been
+        // answered) would overwrite the pending waiter in `reqById` — the eventual response would carry
+        // the newer request's shape for the older waiter, blocking one request and mis-attributing the
+        // decision. Fail closed (the throw is caught by start() → typed protocol error).
+        if (this.reqById.has(id))
+          throw new Error(
+            `control-in: duplicate outstanding control_request id ${JSON.stringify(id)} — the prior request with this id has not been answered (protocol drift)`,
+          );
+        // An id that was ALREADY answered (in the bounded completed set) re-appearing is drift too, but
+        // far less dangerous — no blocked waiter — so warn and re-register instead of terminating a run
+        // over a benign agent re-send after its answer landed.
+        if (this.completedIds.has(id))
+          warn(
+            `::warning:: control-in: control_request id ${JSON.stringify(id)} was already answered and re-appeared — re-registering (protocol drift)\n`,
+          );
+        this.reqById.set(id, ev.request);
+      }
       yield ev;
     }
   }
@@ -738,12 +793,25 @@ export class LiveAgentSession implements AgentSession {
     // `hasUndeliveredReconciliation`, even though the `delivered:true` returned below is only a
     // synchronous "queued successfully" signal, not stdin write confirmation.
     const delivered = this.write(serializeDecision(req, r), decisionId);
-    // Invariant: each decision id is answered at most once. Delete after the write so stale
-    // entries don't accumulate (live sessions may process thousands of decisions per run).
+    // Invariant: each decision id is answered at most once. Delete after the write (a successfully
+    // serialized response) so stale entries don't accumulate (live sessions may process thousands of
+    // decisions per run), and remember it in the bounded completed set so a later re-send of the same id
+    // is recognized as a benign re-appearance rather than mistaken for a fresh (duplicate-outstanding) one.
     this.reqById.delete(decisionId);
+    this.rememberCompleted(decisionId);
     // If the session was already draining, write() discarded the frame — report non-delivery so the
     // caller records the truth instead of a false "answered".
     return delivered ? { delivered: true } : { delivered: false, reason: "session-closing" };
+  }
+
+  /** Record an answered decision id in the bounded completed set, evicting the oldest when over the cap
+   *  (Set preserves insertion order). Diagnostics-only — see `completedIds`. */
+  private rememberCompleted(id: string): void {
+    this.completedIds.add(id);
+    if (this.completedIds.size > LiveAgentSession.COMPLETED_IDS_CAP) {
+      const oldest = this.completedIds.values().next().value;
+      if (oldest !== undefined) this.completedIds.delete(oldest);
+    }
   }
 
   /** True once a `respond()`-written control_response for `decisionId` is confirmed to have NEVER
@@ -1067,14 +1135,27 @@ export function parseMessage(msg: any): AgentEvent[] {
       }
       for (const block of msg.message?.content ?? []) {
         // Guard a non-object content entry (null/scalar — a malformed/corrupt frame): `block.type` on a
-        // primitive silently returns undefined, but `block === null` throws. Mirror the assistant loop's
-        // up-front object check so a bad user block is skipped, not a crash. #2
-        if (!block || typeof block !== "object") continue;
+        // primitive silently returns undefined, but `block === null` throws. The assistant loop THROWS on
+        // this (a fatal protocol error); a bad USER block is degraded evidence, not a crash — skip it, but
+        // RECORD the incompleteness (Run bumps evidenceErrors.protocolMalformed) so delivery/pairing
+        // verification can't silently read as complete. (the old "mirrors the assistant loop" note was
+        // wrong: the assistant loop throws — this path never did).
+        if (!block || typeof block !== "object") {
+          ev.push({ type: "protocol_evidence_error", reason: "malformed user content block (non-object)" });
+          continue;
+        }
         if (block.type === "tool_result") {
+          const toolUseId = block.tool_use_id ? String(block.tool_use_id) : undefined;
+          // A tool_result with no non-empty tool_use_id has no correlation key — it can never pair with
+          // its tool_use (gate delivery, subagent output). Emitting it with `toolUseId: undefined` would
+          // silently read downstream as "unobserved" for the WRONG reason. Annotate the incompleteness so
+          // it's visible; the tool_result is still emitted so its text remains available for content
+          // assertions (Run guards every pairing on a truthy toolUseId).
+          if (!toolUseId) ev.push({ type: "protocol_evidence_error", reason: "tool_result block missing a non-empty tool_use_id" });
           const provText = toolResultRaw(block.content);
           ev.push({
             type: "tool_result",
-            toolUseId: block.tool_use_id ? String(block.tool_use_id) : undefined,
+            toolUseId,
             isError: !!block.is_error,
             text: toolResultText(block.content),
             provenanceText: provText,

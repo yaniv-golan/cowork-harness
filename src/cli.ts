@@ -33,8 +33,8 @@ import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
-import { captureAuthoredFilesWithHealth } from "./run/artifacts.js";
-import { readPreRunManifestStats } from "./run/pre-run-manifest.js";
+import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./run/artifacts.js";
+import { readPreRunManifestOrigin, readPreRunManifestStats } from "./run/pre-run-manifest.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint, cmdLintSkill } from "./run/scenario-tool.js";
 import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
@@ -675,7 +675,7 @@ async function main() {
     fail(cmd, "usage", `COWORK_HARNESS_OUTPUT_FORMAT must be "text" or "json" (got "${envOutFmt}")`, undefined, isJsonOutput(rest));
   // `--dotenv` / `--run-dir` are GLOBAL flags, honored ONLY in leading position (both stripped above before
   // dispatch). An exact `--dotenv` / `--run-dir` token surviving in `rest` sits AFTER the subcommand — a
-  // misplaced global, the #1 footgun: the bare per-command "unknown flag: --dotenv" (or, for run/assertions,
+  // misplaced global, the footgun: the bare per-command "unknown flag: --dotenv" (or, for run/assertions,
   // an unrelated positional / "unexpected argument" error) sent users hunting for a per-command flag that
   // doesn't exist (campaign-2 H-2/H-4 — `--dotenv` where the pre-0.17.0 docs put it). Reject with a position
   // hint. Placed here — AFTER the --version/--help short-circuits (so a `--help`/`-h` request still wins,
@@ -3603,16 +3603,15 @@ async function cmdVerifyRun(args: string[]) {
     // post walk, so re-verifying an old run dir doesn't false-stray its pre-existing symlinks.
     preRunLinkAware: result.preRunLinkAware,
     preRunHashes: result.preRunHashes,
+    // baseline provenance. Prefer the value persisted in result.json; fall back to reading it straight
+    // from the run dir's pre-run-manifest.json so re-verifying an OLD run dir (whose result.json predates
+    // the field) still fails evidence-unavailable on a local-unreadable baseline instead of diffing it.
+    preRunOrigin: result.preRunOrigin ?? readPreRunManifestOrigin(runDir),
     // Recomputed above (only when no_lost_write_back is asserted) from the kept work dir. undefined when the
     // key isn't asserted — no_lost_write_back then never runs, so the undefined is never read.
     authoredFiles: recomputedAuthored?.files,
     authoredFilesHealth:
-      recomputedAuthored &&
-      (recomputedAuthored.health.omittedPaths.length ||
-        recomputedAuthored.health.readErrors.length ||
-        recomputedAuthored.health.scratchpadSkippedOnResume)
-        ? recomputedAuthored.health
-        : undefined,
+      recomputedAuthored && authoredFilesHealthNonEmpty(recomputedAuthored.health) ? recomputedAuthored.health : undefined,
     outputsDeletes: scan.outputsDeletes,
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,

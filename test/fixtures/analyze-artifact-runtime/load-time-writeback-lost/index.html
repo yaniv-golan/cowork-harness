@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Finding 29: an on-load / queue-flush / recovery write-back fires with NO user interaction, so it
+         is recorded with `action: null`. The old commit-only filter excluded null-action writes and, with
+         an inert control present so `controlsCount > 0`, reported clean/high. -->
+    <button id="ok">OK</button>
+    <div id="msg"></div>
+    <script>
+      // Fires immediately when the script is evaluated — a recovery/queue flush on page load.
+      fetch("/api/flush", { method: "POST", body: "queued-edits" }).then(function () {
+        document.getElementById("msg").textContent = "Synced";
+      });
+    </script>
+  </body>
+</html>

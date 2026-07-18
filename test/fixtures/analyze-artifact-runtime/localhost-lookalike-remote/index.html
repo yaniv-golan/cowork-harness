@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Finding 18 (runtime side): the host is `localhost.evil.com` — an attacker-controlled REMOTE host
+         that merely starts with "localhost". The old `/^(localhost|127\.|0\.0\.0\.0)/` prefix test on
+         `hostname` classified it as loopback → local write-back → false lost. Exact normalized-hostname
+         matching classifies it as remote → clean (different bug class). -->
+    <form method="post" action="https://localhost.evil.com/api/save">
+      <button type="submit">Save</button>
+    </form>
+    <div id="msg"></div>
+  </body>
+</html>

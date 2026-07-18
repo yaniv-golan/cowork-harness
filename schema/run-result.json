@@ -345,6 +345,10 @@
         },
         "egressParse": {
           "type": "number"
+        },
+        "protocolMalformed": {
+          "type": "number",
+          "description": "Count of malformed control-stream user/tool-result blocks skipped at ingress (a non-object block, or a tool_result missing a non-empty tool_use_id). A >0 count means delivery/tool-result pairing evidence is incomplete."
         }
       }
     },
@@ -957,6 +961,11 @@
         ]
       },
       "description": "Per-path sha256 of the user-visible tree BEFORE the agent ran (null = over the pre-run hash cap). Powers `input_unmodified`. Absent when the tier didn't capture it (microvm) or the run predates the seam."
+    },
+    "preRunOrigin": {
+      "type": "string",
+      "enum": ["local-walk", "remote-unavailable", "local-unreadable"],
+      "description": "Provenance of the pre-run baseline. local-walk = complete local walk; local-unreadable = a connected-folder source could not be walked so the baseline is partial (no_unexpected_files / input_unmodified then fail evidence-unavailable); remote-unavailable is reserved for a future cloud producer. Absent on an older run predating the field."
     },
     "partial": {
       "type": "boolean"

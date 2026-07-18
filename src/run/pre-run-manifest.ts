@@ -1,8 +1,8 @@
-import { writeFileSync, readFileSync, statSync, realpathSync } from "node:fs";
+import { writeFileSync, readFileSync, statSync, realpathSync, openSync, fstatSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { userVisibleRootsFromPlan, type LaunchPlan } from "../session.js";
-import { collectArtifactPaths, collectArtifactPathsAt } from "./artifacts.js";
+import { collectArtifactPathsWithHealth, collectArtifactPathsAtWithHealth } from "./artifacts.js";
 
 // Written at outDir/ — ABOVE workRoot (work/ at protocol, work/session/mnt elsewhere), the same
 // placement rule as the `.origin` marker, so it is structurally invisible to collectArtifacts /
@@ -43,11 +43,26 @@ export type HashUnavailableReason = "over-cap" | "unreadable";
  *  would still read the whole file first). */
 function hashFileCapped(baseDir: string, relPath: string, cap: number): { hash: string } | { hash: null; reason: HashUnavailableReason } {
   const abs = join(baseDir, relPath);
+  // open ONCE, then `fstat` the DESCRIPTOR (not the path) for the size gate, and read at most that
+  // many bytes from the same fd. A stat-then-open-a-different-inode race (an external writer swapping the
+  // file after a path-based statSync) can no longer bypass the cap or hash a different file than was sized.
+  let fd: number | undefined;
   try {
-    if (statSync(abs).size > cap) return { hash: null, reason: "over-cap" };
-    return { hash: createHash("sha256").update(readFileSync(abs)).digest("hex") };
+    fd = openSync(abs, "r");
+    const size = fstatSync(fd).size;
+    if (size > cap) return { hash: null, reason: "over-cap" };
+    const buf = Buffer.alloc(size);
+    if (size > 0) readSync(fd, buf, 0, size, 0);
+    return { hash: createHash("sha256").update(buf).digest("hex") };
   } catch {
     return { hash: null, reason: "unreadable" };
+  } finally {
+    if (fd !== undefined)
+      try {
+        closeSync(fd);
+      } catch {
+        /* best-effort close */
+      }
   }
 }
 
@@ -119,7 +134,11 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     // "outputs" + "uploads" are both STAGED under workRoot (unlike connected folders, walked at their live
     // source below). "uploads" is a read-only INPUT root: including it in the baseline lets input_unmodified
     // guard an uploaded file (absent when there are no uploads — the walk is a no-op). #Item2
-    for (const e of collectArtifactPaths(workRoot, ["outputs", "uploads"])) add(e.path, workRoot, e.linkKind);
+    // health-aware walk — a nested unreadable subtree (EACCES, etc.) no longer vanishes silently; it
+    // marks the baseline unreadable so `origin` becomes local-unreadable and the assertion fails loud.
+    const staged = collectArtifactPathsWithHealth(workRoot, ["outputs", "uploads"]);
+    if (!staged.complete) baselineUnreadable = true;
+    for (const e of staged.entries) add(e.path, workRoot, e.linkKind);
     for (const m of folderMounts) {
       try {
         realpathSync(m.hostPath);
@@ -130,8 +149,11 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
         continue;
       }
       // collectArtifactPathsAt returns mountPath-prefixed paths; the real bytes live under hostPath at the
-      // path with the mountPath prefix stripped (leading "<mountPath>/" removed).
-      for (const e of collectArtifactPathsAt(m.hostPath, m.mountPath)) {
+      // path with the mountPath prefix stripped (leading "<mountPath>/" removed). a nested unreadable
+      // subdir under the mount now marks the baseline unreadable rather than silently narrowing it.
+      const walked = collectArtifactPathsAtWithHealth(m.hostPath, m.mountPath);
+      if (!walked.complete) baselineUnreadable = true;
+      for (const e of walked.entries) {
         paths.push(e.path);
         if (e.linkKind === "symlink") continue; // symlink: path-only, never hashed/dereferenced (hardlink IS hashed)
         const rel = e.path === m.mountPath ? "" : e.path.slice(m.mountPath.length + 1);
@@ -146,7 +168,10 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     // userVisible roots (outputs + folder mounts) PLUS "uploads" — the read-only INPUT root, so
     // input_unmodified can guard an uploaded file. "uploads" is NOT a userVisible root (kept out of
     // no_unexpected_files's post-walk and cassette.userVisibleRoots); it only enlarges the baseline. #Item2
-    for (const e of collectArtifactPaths(workRoot, [...userVisibleRootsFromPlan(plan), "uploads"])) add(e.path, workRoot, e.linkKind);
+    // health-aware — a nested unreadable subtree flips origin to local-unreadable (loud), not a false-empty baseline.
+    const staged = collectArtifactPathsWithHealth(workRoot, [...userVisibleRootsFromPlan(plan), "uploads"]);
+    if (!staged.complete) baselineUnreadable = true;
+    for (const e of staged.entries) add(e.path, workRoot, e.linkKind);
     paths.sort();
   }
   // origin of the pre-run baseline. "local-walk" = the filesystem was walked locally by this function.

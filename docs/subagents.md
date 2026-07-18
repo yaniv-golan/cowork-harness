@@ -231,7 +231,7 @@ action="/…">` **resolves but returns non-ok**; a page that doesn't check `resp
 harness run is structurally blind to this (no browser, no human — see
 [fidelity-gaps.md](./fidelity-gaps.md)), so it is caught statically instead.
 
-`analyze-skill` scans `.html/.htm/.js/.mjs/.ts/.jsx/.tsx/.py` sources under the target (its OWN source
+`analyze-skill` scans `.html/.htm/.js/.mjs/.py` sources under the target (its OWN source
 set — the `.py`/`.js` *generator* that emits the HTML is scanned too, since the write-back string often
 lives in a template) and emits:
 

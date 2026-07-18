@@ -85,7 +85,7 @@ describe("#38 no_unexpected_files — live lane", () => {
     expect(r.pass).toBe(true);
   });
 
-  // #2 follow-up: re-verifying a PRE-#38 run dir (links-blind baseline, preRunLinkAware false) must NOT
+  // follow-up: re-verifying a PRE-#38 run dir (links-blind baseline, preRunLinkAware false) must NOT
   // false-stray a pre-existing symlink the old baseline never listed — compare on the same links-blind basis.
   it("does NOT flag a pre-existing symlink when the baseline is links-blind (preRunLinkAware false)", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-nuf-old-"));
@@ -160,12 +160,17 @@ describe("#38 capturePreRunManifest — links path-only, never hashed/dereferenc
     const workRoot = join(outDir, "work", "session", "mnt");
     mkdirSync(join(workRoot, "outputs"), { recursive: true });
     symlinkSync("/etc/hosts", join(workRoot, "outputs", "link"));
+    // A REGULAR file so the glob has a genuine match — under a zero-match glob now fails loud (a symlink
+    // being excluded from hashes must not be the ONLY thing the glob "matches", or that reads as a vacuous
+    // pass). The regular file is unchanged, so the assertion passes and the symlink is correctly excluded.
+    writeFileSync(join(workRoot, "outputs", "real.txt"), "unchanged input");
     capturePreRunManifest(minimalPlan(), workRoot, outDir, "container");
     const hashes = readPreRunManifestHashes(outDir)!;
-    // A glob that WOULD match the symlink path: it must not enter `matched` (link not in the hash map),
-    // so the assertion is vacuously satisfied rather than evidence-unavailable.
+    // The symlink path must NOT enter `matched` (link not in the hash map); the regular file is matched and
+    // verified unchanged → pass, WITHOUT the symlink causing a false-fail.
     const [r] = evaluate([{ input_unmodified: ["outputs/**"] }], ctx(workRoot, { preRunHashes: hashes }));
     expect(r.pass).toBe(true);
+    expect(hashes["outputs/link"]).toBeUndefined(); // symlink is path-only, never hashed
   });
 });
 

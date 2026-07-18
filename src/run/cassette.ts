@@ -178,6 +178,13 @@ export interface Cassette {
   // sha256 no longer matches the raw pre-run hash, so a false "modified in place" would otherwise fire on
   // replay; nulling makes that path report evidence-unavailable instead (loud, never a false verdict).
   preRunHashes?: Record<string, string | null>;
+  // provenance of the pre-run baseline (RunResult.preRunOrigin). A cassette recorded from a run whose
+  // connected-folder source was unreadable carries `local-unreadable` here, so replay makes
+  // no_unexpected_files / input_unmodified fail evidence-unavailable rather than diffing an incomplete
+  // baseline — the same verdict the live lane reaches. Optional metadata (same looseObject precedent as
+  // preRunPaths above): NO cassetteVersion bump; absent on a pre-field cassette ⇒ the replay ctx falls
+  // back to the preRunPaths/preRunHashes presence check, never assuming local-walk.
+  preRunOrigin?: "local-walk" | "remote-unavailable" | "local-unreadable";
   // provenance: how this cassette's gate answers were authored. PRESENT with nonDeterministic:true means a
   // live decider actually answered ≥1 gate during recording (a driving agent via `--decider-dir`, a model
   // via `--decider-llm`, or an `--on-unanswered first` auto-pick) — so RE-recording may drift. The cassette
@@ -2521,6 +2528,7 @@ async function recordScenarioObject(
     // co-present with userVisibleRoots by construction — a cassette carrying preRunPaths never hits
     // replay's legacy-roots fallback.
     preRunPaths: result.preRunPaths,
+    preRunOrigin: result.preRunOrigin, // baseline provenance — replay fails evidence-unavailable on a non-local-walk baseline
     // Nulled (not `result.preRunHashes` verbatim) for any path whose artifact body was secret-scrubbed
     // above — see the scrubbedPaths/nullOutScrubbedPreRunHashes block.
     preRunHashes,
@@ -2643,6 +2651,7 @@ function replayErrorResult(file: string): RunResult {
     preRunPaths: undefined,
     preRunLinkAware: undefined,
     preRunHashes: undefined,
+    preRunOrigin: undefined,
     partial: undefined,
     unansweredGate: undefined,
     nonDeterministic: undefined,
@@ -4204,7 +4213,7 @@ export async function replayCassette(
     };
     const replayable = cassette.scenario.assert.map(stripToContent).filter((a) => Object.keys(a).length > 0);
 
-    // #1 footgun: replay must be LOUD about anything it can't check, in two distinct classes —
+    // footgun: replay must be LOUD about anything it can't check, in two distinct classes —
     // a silent partial false-green is the project's cardinal sin.
     //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress, or pure
     //    gate-keys when controlOut is absent) + every `expect_denied` host. Not evaluated on replay.
@@ -4267,6 +4276,7 @@ export async function replayCassette(
       preRunPaths: cassette.preRunPaths,
       preRunLinkAware: replayLinkAware,
       preRunHashes: cassette.preRunHashes,
+      preRunOrigin: cassette.preRunOrigin, // a cassette from a local-unreadable baseline fails evidence-unavailable on replay too
       // The authoritative post-run per-path sha256 from the manifest — NOT a re-hash of replayWorkRoot,
       // which materializeManifest fills with 0-byte placeholders for body-less entries (read-only inputs,
       // over-cap files). Re-hashing that placeholder would false-fail input_unmodified for a large-or-
@@ -4547,6 +4557,7 @@ export async function replayCassette(
       // result doesn't misrepresent them. Same source of truth as the evaluate() ctx.
       preRunLinkAware: replayLinkAware,
       preRunHashes: undefined,
+      preRunOrigin: undefined,
       partial: undefined,
       unansweredGate: undefined,
       nonDeterministicTerminal: undefined,

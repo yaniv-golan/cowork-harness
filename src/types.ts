@@ -200,7 +200,6 @@ export type AnswerRule = z.infer<typeof AnswerRule>;
 // A tool GLOB value (only `*`/`?` are special). Reject an empty string AND regex/brace-expansion
 // metacharacters — both match no real tool name and would pass a `_not_`/`_absent` assert VACUOUSLY. Enforced
 // in the schema (so a recorded cassette's frozen assert is caught on read too, not only authored scenarios).
-// #7/#8
 const toolGlob = z
   .string()
   .min(1, "tool glob is empty — an empty glob matches no tool and passes vacuously")
@@ -977,7 +976,16 @@ export interface RunResult {
    *  fail "malformed" rather than silently dropping the bad entries (`taskTracking` → task assertions,
    *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` and `egressParse` are observability-only
    *  (no assertion — egress asserts are positive-only, so a dropped line already fails loud). */
-  evidenceErrors?: { taskTracking?: number; webSearchParse?: number; presentFilesMalformed?: number; egressParse?: number };
+  // `protocolMalformed` counts malformed control-stream USER blocks skipped at ingress (a non-object
+  // content entry, or a tool_result with no correlatable tool_use_id) — observability-only, so a run whose
+  // evidence is partially corrupt is visible rather than silently dropping the bad entries.
+  evidenceErrors?: {
+    taskTracking?: number;
+    webSearchParse?: number;
+    presentFilesMalformed?: number;
+    egressParse?: number;
+    protocolMalformed?: number;
+  };
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
   // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between
@@ -1163,7 +1171,7 @@ export interface RunResult {
     dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it)
     resolvedModel?: string; // the RESOLVED child model from the dispatch's tool_use_result envelope
     output?: string; // the dispatch's own paired tool_result, assertText-capped
-    outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)
+    outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence
     attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
     /** The sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result are
      *  excluded — already covered by `toolsUsed`/`referencesRead` above). Read from the on-disk child
@@ -1242,6 +1250,14 @@ export interface RunResult {
    *  `hashes`). null for a file over the pre-run hash cap. Powers `input_unmodified`. undefined =
    *  no manifest / an older run without hashes — the assertion then fails evidence-unavailable. */
   preRunHashes?: Record<string, string | null>;
+  /** Provenance of the pre-run baseline (`pre-run-manifest.json`'s `origin`). "local-walk" = the tree was
+   *  walked locally and the path/hash maps are complete; "local-unreadable" = a connected-folder source
+   *  could not be walked so the baseline is PARTIAL; "remote-unavailable" is reserved for a future cloud
+   *  producer. Persisted so the plan-less lanes (verify-run reads result.json; replay reads the cassette)
+   *  can make `no_unexpected_files` / `input_unmodified` fail evidence-unavailable on a non-`local-walk`
+   *  baseline instead of diffing an incomplete tree. undefined = an older run/manifest predating the field
+   *  (the assertion falls back to the preRunPaths/preRunHashes presence check, never assumes local-walk). */
+  preRunOrigin?: "local-walk" | "remote-unavailable" | "local-unreadable";
   /** True when the run did NOT complete because it exited on an unanswered gate, but its work (artifacts,
    *  events, partial transcript) was salvaged to disk anyway so it's still inspectable. A partial run still
    *  exits non-zero; consumers (verify-run, scaffold) must NOT treat its artifacts/result as a passing

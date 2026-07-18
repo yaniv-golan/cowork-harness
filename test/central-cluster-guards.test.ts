@@ -95,7 +95,15 @@ describe("#14/#16 semantic_matches refuses a grade made over incomplete authored
       [a],
       ctx({
         semanticResults: new Map([[a, [{ index: 0, claim: "the skill wrote a valid report", pass: false }]]]),
-        authoredFilesHealth: { omittedPaths: ["outputs/report.bin"], totalCapExhausted: true, readErrors: [] },
+        authoredFilesHealth: {
+          omittedPaths: ["outputs/report.bin"],
+          totalCapExhausted: true,
+          readErrors: [],
+          hashUnknownPaths: [],
+          scratchpadWalkErrors: [],
+          scratchpadSkippedLinks: [],
+          workspaceWalkErrors: [],
+        },
       }),
     );
     expect(r.pass).toBe(false);
@@ -109,7 +117,15 @@ describe("#14/#16 semantic_matches refuses a grade made over incomplete authored
       [a],
       ctx({
         semanticResults: new Map([[a, [{ index: 0, claim: "c", pass: true }]]]),
-        authoredFilesHealth: { omittedPaths: [], totalCapExhausted: false, readErrors: [{ path: "outputs/x", error: "EACCES" }] },
+        authoredFilesHealth: {
+          omittedPaths: [],
+          totalCapExhausted: false,
+          readErrors: [{ path: "outputs/x", error: "EACCES" }],
+          hashUnknownPaths: [],
+          scratchpadWalkErrors: [],
+          scratchpadSkippedLinks: [],
+          workspaceWalkErrors: [],
+        },
       }),
     );
     expect(r.pass).toBe(false);
@@ -127,7 +143,16 @@ describe("#14/#16 semantic_matches refuses a grade made over incomplete authored
       [a],
       ctx({
         semanticResults: passing,
-        authoredFilesHealth: { omittedPaths: [], totalCapExhausted: false, readErrors: [], scratchpadSkippedOnResume: true },
+        authoredFilesHealth: {
+          omittedPaths: [],
+          totalCapExhausted: false,
+          readErrors: [],
+          hashUnknownPaths: [],
+          scratchpadWalkErrors: [],
+          scratchpadSkippedLinks: [],
+          workspaceWalkErrors: [],
+          scratchpadSkippedOnResume: true,
+        },
       }),
     );
     expect(ok2.pass).toBe(true);

@@ -349,27 +349,17 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      # Fails on a stale (>90d) newest baseline AND on any baseline with an invalid / future
+      # capturedAt (the inline `node -e` this replaced silently green-lit NaN and future timestamps,
+      # and a single corrupt file could permanently disable the gate). Unit-tested — see
+      # test/check-baseline-staleness.test.ts.
       - name: Baseline staleness gate (90-day ceiling on the newest committed baseline)
-        run: |
-          node -e '
-            const fs = require("fs");
-            const path = require("path");
-            const dir = "baselines";
-            const files = fs.readdirSync(dir).filter((f) => /^desktop-.*\.json$/.test(f));
-            if (files.length === 0) { console.error("::error::no baselines/desktop-*.json found"); process.exit(1); }
-            let newest = null;
-            for (const f of files) {
-              const b = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
-              const t = Date.parse(b.capturedAt);
-              if (!newest || t > newest.t) newest = { t, f, capturedAt: b.capturedAt };
-            }
-            const ageDays = (Date.now() - newest.t) / 86400000;
-            console.log(`newest baseline: ${newest.f} (capturedAt ${newest.capturedAt}, ${ageDays.toFixed(1)} days ago)`);
-            if (ageDays > 90) {
-              console.error(`::error::newest baseline is ${ageDays.toFixed(0)} days old (>90) — run \`cowork-harness sync --diff\` on macOS against the current Claude Desktop and commit the refreshed baseline.`);
-              process.exit(1);
-            }
-          '
+        run: npx tsx scripts/check-baseline-staleness.ts baselines
       - name: Note
         run: |
           echo "Platform baselines are synced from a developer's installed Claude Desktop via"

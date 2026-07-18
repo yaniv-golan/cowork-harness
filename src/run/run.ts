@@ -17,6 +17,7 @@ import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
 import { isVmSessionsPath } from "../vm-paths.js";
+import { posix as posixPath } from "node:path";
 
 /** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
  *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). Exported so the replay
@@ -102,7 +103,7 @@ export function evidenceErrorsForResult(rec: Pick<RunRecord, "evidenceErrors">):
   const e = rec.evidenceErrors;
   // egressParse (#39) MUST be in this presence gate — otherwise a run whose ONLY evidence problem is dropped
   // proxy-log lines serializes evidenceErrors:undefined, silently absorbing exactly what the counter records.
-  return e.taskTracking || e.webSearchParse || e.presentFilesMalformed || e.egressParse ? e : undefined;
+  return e.taskTracking || e.webSearchParse || e.presentFilesMalformed || e.egressParse || e.protocolMalformed ? e : undefined;
 }
 
 /** Find the JSON array following a WebSearch tool_result's "Links: " marker, respecting quoted-string
@@ -321,7 +322,13 @@ export interface RunRecord {
    *  was partially unparseable, so the dependent assertion fails "malformed" rather than silently dropping
    *  the bad entries. (resource malformed lines live on `resources.malformedLines`; hash errors on
    *  `workspaceFiles[].hashError`.) */
-  evidenceErrors: { taskTracking: number; webSearchParse: number; presentFilesMalformed: number; egressParse?: number };
+  evidenceErrors: {
+    taskTracking: number;
+    webSearchParse: number;
+    presentFilesMalformed: number;
+    egressParse?: number;
+    protocolMalformed?: number;
+  };
 }
 
 export interface RunHooks {
@@ -885,6 +892,13 @@ export class Run {
           case "mcp_error":
             this.rec.mcpErrors.push({ server: ev.server, code: ev.code, message: ev.message });
             break;
+          case "protocol_evidence_error":
+            // A malformed control-stream user/tool_result block was skipped at ingress (session.ts). Bump
+            // the observability counter so the run's evidence incompleteness is visible instead of a bad
+            // block silently vanishing (a gate answer could otherwise read undelivered for the wrong
+            // reason). Re-derives identically on the replay drive (parseMessage is shared).
+            this.rec.evidenceErrors.protocolMalformed = (this.rec.evidenceErrors.protocolMalformed ?? 0) + 1;
+            break;
           case "hook_event":
             this.rec.hookEvents.push({ callbackId: ev.callbackId, decision: ev.decision, reason: ev.reason, tool: ev.tool });
             // pathDenials producer (1): INGEST ONLY the path gate's own callbackId — hookEventFrom
@@ -1045,17 +1059,33 @@ export class Run {
     if (!froms) return;
     this.pendingPresentFiles.delete(toolUseId);
     const tos = textBlocks ?? [];
-    const cwd = this.rec.cwd;
+    // Normalize cwd (an absolute VM posix session root) so the containment prefixes below are built from a
+    // canonical value. present_files paths are VM posix strings on the host, so path.posix — never realpath
+    // (the VM tree doesn't exist on the host).
+    const cwd = this.rec.cwd !== undefined ? posixPath.normalize(this.rec.cwd) : undefined;
     // Without cwd we CANNOT classify any presented path as scratchpad-or-not, so every file below would
     // be recorded leaked:false — a silently permissive pass. Count it as incomplete leak telemetry so
     // no_scratchpad_leak fails "cannot verify" instead of vacuously green (the from/to are still recorded
     // for forensics; only the promoted/leaked booleans are unreliable in this case). #14
     if (cwd === undefined && froms.length > 0) this.rec.evidenceErrors.presentFilesMalformed += froms.length;
+    // Resolve `.`/`..`/`//` BEFORE the lexical containment checks: an absolute path is normalized, a
+    // relative/empty (non-absolute) one is ambiguous and returns undefined → malformed. Without this a
+    // `from`/`to` like `<cwd>/mnt/outputs/../../leak` would short-circuit the `startsWith(<cwd>/mnt/)`
+    // mount-passthrough test and record a genuine scratchpad leak as leaked:false (its real resolved
+    // location, `<cwd>/leak`, is scratchpad, not a mount).
+    const norm = (p: string): string | undefined => (typeof p === "string" && p.startsWith("/") ? posixPath.normalize(p) : undefined);
     const isScratchpad = (p: string): boolean => cwd !== undefined && p.startsWith(`${cwd}/`) && !p.startsWith(`${cwd}/mnt/`);
     for (let i = 0; i < froms.length; i++) {
-      const from = froms[i];
-      const to = tos[i];
-      if (to === undefined) {
+      const rawTo = tos[i];
+      if (rawTo === undefined) {
+        this.rec.evidenceErrors.presentFilesMalformed++;
+        continue;
+      }
+      const from = norm(froms[i]);
+      const to = norm(rawTo);
+      // A non-absolute / un-normalizable from or to can't be classified against cwd — record malformed
+      // instead of guessing a promoted/leaked verdict from a lexical prefix on an ambiguous path.
+      if (from === undefined || to === undefined) {
         this.rec.evidenceErrors.presentFilesMalformed++;
         continue;
       }
@@ -1135,8 +1165,25 @@ export class Run {
         );
       }
       const fallback = denyLike(req);
-      this.session.respond(req.id, fallback);
-      this.rec.decisions.push({ kind: kindOf(req), name: nameOf(req), decision: "abstain→deny", by: "none" });
+      const delivery = this.session.respond(req.id, fallback);
+      if (!delivery.delivered) {
+        // The fail-closed deny never reached the agent (the session was already draining when respond()
+        // ran). Record the TRUTH ("undelivered"), not "abstain→deny" — otherwise the result evidence
+        // claims a deny the agent never received. Mirrors the normal-decision non-delivery branch below.
+        this.rec.decisions.push({
+          kind: kindOf(req),
+          name: nameOf(req),
+          decision: "undelivered",
+          by: "none",
+          requestId: req.id,
+          rationale: `fail-closed deny not delivered (${delivery.reason ?? "unknown"})`,
+        });
+      } else {
+        // Carry requestId so the post-loop EPIPE reconciliation (which only flips decisions carrying a
+        // requestId) can downgrade this to "undelivered" if the queued frame later fails its async stdin
+        // write — the same ground-truth path the normal decisions already get, previously skipped here.
+        this.rec.decisions.push({ kind: kindOf(req), name: nameOf(req), decision: "abstain→deny", by: "none", requestId: req.id });
+      }
       return;
     }
     const delivery = this.session.respond(req.id, decided.response);

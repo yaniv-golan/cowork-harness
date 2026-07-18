@@ -224,12 +224,51 @@ function errMessage(e: unknown): string {
   return String(e);
 }
 
+/** Finding 34 discriminator. During a run this module installs PROCESS-WIDE `uncaughtException` /
+ *  `unhandledRejection` listeners; without a worker boundary they could swallow an unrelated harness or
+ *  test-runner exception and misrecord it as a page crash. This returns `true` only when the error is
+ *  CLEARLY not the page under test — a stack that references our own harness or the test runner and has NO
+ *  jsdom / page-origin frame at all — in which case the caller re-throws to stay fail-loud. It is
+ *  deliberately conservative: a page async throw routed through jsdom (or our timer wrappers, whose stack
+ *  still carries a jsdom/page frame) stays attributed to the page, and an error with no usable stack keeps
+ *  the pre-existing best-effort page attribution rather than crashing the harness. */
+export function isClearlyHarnessException(e: unknown): boolean {
+  const stack = e instanceof Error && typeof e.stack === "string" ? e.stack : "";
+  if (!stack) return false; // no evidence either way → keep conservative page attribution
+  // Any frame from jsdom's script machinery or the simulated page origin means this IS the page under test.
+  if (/jsdom|evalmachine|node:vm\b|runInContext|VirtualConsole|artifacts\.cowork\.invalid/i.test(stack)) return false;
+  // Otherwise, a frame pointing squarely at our own runtime module or the test runner (with no page frame)
+  // is an unrelated fault that must not be masked.
+  return /analyze-artifact-runtime|node_modules[/\\]vitest|[/\\]test[/\\]/.test(stack);
+}
+
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 function isWrite(r: RequestRecord): boolean {
   return WRITE_METHODS.has(r.method) || r.kind === "beacon";
 }
 function isLocalTarget(t: UrlTarget): boolean {
   return t === "relative" || t === "localhost" || t === "same-origin-absolute";
+}
+
+/** Exact loopback-host recognition (runtime side). The old check was a `/^(localhost|127\.|
+ *  0\.0\.0\.0)/` prefix test against `hostname`, which treats attacker-controlled hosts like
+ *  `localhost.evil.com` or `127.evil.com` as loopback → the runtime confirmer then mislabels genuine
+ *  remote egress as this local-origin bug class. Compare NORMALIZED hostnames exactly instead: the literal
+ *  `localhost`, `0.0.0.0`, the whole IPv4 loopback CIDR (127.0.0.0/8), and bracketed/bare loopback IPv6.
+ *  Anything else is remote. */
+export function isLoopbackHostname(hostname: string): boolean {
+  let h = hostname.toLowerCase();
+  if (h.endsWith(".")) h = h.slice(0, -1); // trailing-dot FQDN form (e.g. "localhost.")
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1); // bracketed IPv6 literal
+  if (h === "localhost" || h === "0.0.0.0") return true;
+  if (h === "::1" || h === "0:0:0:0:0:0:0:1") return true; // IPv6 loopback (compressed + expanded)
+  // IPv4 loopback CIDR 127.0.0.0/8 — the ENTIRE /8, exactly, not a "127." prefix on an arbitrary host.
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (m) {
+    const octets = [m[1], m[2], m[3], m[4]].map(Number);
+    return octets.every((o) => o <= 255) && octets[0] === 127;
+  }
+  return false;
 }
 
 // ------------------------------------------------------------------------------------------------- //
@@ -276,7 +315,7 @@ function installStubs(window: any, hooks: StubHooks): void {
   const classify = (url: string): UrlTarget => {
     try {
       const u = new window.URL(url, pageUrl);
-      if (/^(localhost|127\.|0\.0\.0\.0)/.test(u.hostname)) return "localhost";
+      if (isLoopbackHostname(String(u.hostname))) return "localhost";
       if (u.origin === new window.URL(pageUrl).origin) {
         // Written as an absolute same-origin URL, or as a bare relative path?
         return /^[a-z]+:\/\//i.test(String(url)) ? "same-origin-absolute" : "relative";
@@ -362,19 +401,54 @@ function installStubs(window: any, hooks: StubHooks): void {
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  window.fetch = (url: string, opts: any = {}) => {
-    const rec = record("fetch", url, opts.method, opts.body != null);
+  window.fetch = (input: any, opts: any = {}) => {
+    // Implement the `fetch(input, init)` RequestInfo contract. `input` may be a string, a
+    // `URL` object, or a `Request`(-like) instance carrying its own `url`/`method`/`body`; the `init`
+    // argument overrides those. The old stub assumed a string URL and read method/body only from `init`,
+    // so `fetch(new Request("/save", {method:"POST"}))` recorded `[object Object]` as the URL and a
+    // default GET — silently missing a real write-back on any page that ships a Request-like polyfill
+    // (native `Request` is absent from the installed jsdom, so it otherwise throws → inconclusive).
+    const o = opts ?? {};
+    let url: string;
+    let method: string | undefined;
+    let hasBody: boolean;
+    if (input && typeof input === "object" && typeof input.url === "string") {
+      // Request instance (or a page-supplied Request-like polyfill): url/method/body live on the object.
+      url = input.url;
+      method = o.method ?? input.method;
+      hasBody = o.body != null || input.body != null;
+    } else if (input && typeof input === "object" && typeof input.href === "string") {
+      // WHATWG `URL` object — stringify via its `href`, never `[object Object]`.
+      url = input.href;
+      method = o.method;
+      hasBody = o.body != null;
+    } else {
+      url = String(input);
+      method = o.method;
+      hasBody = o.body != null;
+    }
+    const rec = record("fetch", url, method, hasBody);
     return wrapPromise(Promise.resolve(makeResponse(rec)), ctxBox.current ? { ...ctxBox.current } : null);
   };
 
+  // A browser-faithful XHR stub. Reads of `status`/`statusText` set `statusAccessed`, and
+  // reads of `responseText`/`response`/headers set `bodyConsulted`, so a page that DOES consult the
+  // response is no longer mislabeled as ignoring it (the old plain `responseText` field could be read
+  // without recording that the response was consulted → a correct page looked like an unconditional
+  // success path). `addEventListener` stores an ARRAY per type and dispatch fires every registered
+  // listener in registration order — the old single-slot map silently dropped all but the last handler.
   window.XMLHttpRequest = class FakeXHR {
     _rec: RequestRecord | undefined;
     readyState = 0;
-    status = 0;
-    responseText = "";
     onreadystatechange: (() => void) | null = null;
     onload: (() => void) | null = null;
-    _l: Record<string, () => void> | undefined;
+    onloadend: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    _listeners: Record<string, Array<(ev?: unknown) => void>> = {};
+    _status = 0;
+    _statusTextValue = "";
+    _responseTextValue = "";
+    _responseValue: unknown = null;
     open(m: string, u: string) {
       this._rec = record("xhr", u, m, false);
       this.readyState = 1;
@@ -382,27 +456,72 @@ function installStubs(window: any, hooks: StubHooks): void {
     setRequestHeader() {
       /* no-op stub */
     }
-    addEventListener(t: string, fn: () => void) {
-      (this._l ??= {})[t] = fn;
+    addEventListener(t: string, fn: (ev?: unknown) => void) {
+      (this._listeners[t] ??= []).push(fn);
+    }
+    removeEventListener(t: string, fn: (ev?: unknown) => void) {
+      const arr = this._listeners[t];
+      if (!arr) return;
+      const i = arr.indexOf(fn);
+      if (i >= 0) arr.splice(i, 1);
+    }
+    get status() {
+      if (this._rec) this._rec.statusAccessed = true;
+      return this._status;
+    }
+    get statusText() {
+      if (this._rec) this._rec.statusAccessed = true;
+      return this._statusTextValue;
+    }
+    get responseText() {
+      if (this._rec) this._rec.bodyConsulted = true;
+      return this._responseTextValue;
+    }
+    get response() {
+      if (this._rec) this._rec.bodyConsulted = true;
+      return this._responseValue;
+    }
+    getResponseHeader(h: string) {
+      if (this._rec) this._rec.bodyConsulted = true;
+      return /content-type/i.test(h) ? (mode === "ok" ? "application/json" : "text/html") : null;
+    }
+    getAllResponseHeaders() {
+      if (this._rec) this._rec.bodyConsulted = true;
+      return mode === "ok" ? "content-type: application/json\r\n" : "content-type: text/html\r\n";
+    }
+    _fire(type: string) {
+      const ev = { type, target: this, currentTarget: this };
+      // The `on<type>` property handler runs first, then every `addEventListener` listener in order —
+      // each guarded so one throwing handler cannot abort the rest (matching browser event dispatch).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const on = (this as any)["on" + type];
+      if (typeof on === "function") {
+        try {
+          on.call(this, ev);
+        } catch (e) {
+          errors.push(`xhr on${type}: ${errMessage(e).slice(0, 120)}`);
+        }
+      }
+      for (const fn of [...(this._listeners[type] ?? [])]) {
+        try {
+          fn.call(this, ev);
+        } catch (e) {
+          errors.push(`xhr ${type} listener: ${errMessage(e).slice(0, 120)}`);
+        }
+      }
     }
     send(body: unknown) {
       if (body != null && this._rec) this._rec.hasBody = true;
-      const rec = this._rec;
       origSetTimeout(
         wrapCb(() => {
           this.readyState = 4;
-          const st = mode === "ok" ? 200 : 404;
-          this.responseText = mode === "ok" ? okBody : failBody;
-          Object.defineProperty(this, "status", {
-            get() {
-              if (rec) rec.statusAccessed = true;
-              return st;
-            },
-            configurable: true,
-          });
-          this.onreadystatechange?.();
-          this.onload?.();
-          this._l?.load?.call(this);
+          this._status = mode === "ok" ? 200 : 404;
+          this._statusTextValue = mode === "ok" ? "OK" : "Not Found";
+          this._responseTextValue = mode === "ok" ? okBody : failBody;
+          this._responseValue = this._responseTextValue;
+          this._fire("readystatechange");
+          this._fire("load");
+          this._fire("loadend");
         }),
         5,
       );
@@ -440,8 +559,20 @@ function installStubs(window: any, hooks: StubHooks): void {
   window.HTMLFormElement.prototype.submit = function (this: { getAttribute: (n: string) => string | null; method?: string }) {
     record("form", this.getAttribute("action") || window.location.href, this.method || "GET", true);
   };
-  window.HTMLFormElement.prototype.requestSubmit = function (this: { getAttribute: (n: string) => string | null; method?: string }) {
-    record("form", this.getAttribute("action") || window.location.href, this.method || "GET", true);
+  // `requestSubmit(submitter)` records the EFFECTIVE endpoint: a submit control's
+  // `formaction`/`formmethod` override the owning form's `action`/`method`. Reading only the form tag lost
+  // the submitter's identity, so a relative form submitted by a button that redirected the POST remotely
+  // (or vice-versa) was classified against the wrong target.
+  window.HTMLFormElement.prototype.requestSubmit = function (
+    this: { getAttribute: (n: string) => string | null; method?: string },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    submitter?: any,
+  ) {
+    const fa = submitter && typeof submitter.getAttribute === "function" ? submitter.getAttribute("formaction") : null;
+    const fm = submitter && typeof submitter.getAttribute === "function" ? submitter.getAttribute("formmethod") : null;
+    const action = fa || this.getAttribute("action") || window.location.href;
+    const method = fm || this.method || this.getAttribute("method") || "GET";
+    record("form", action, method, true);
   };
 
   // jsdom dispatches this exactly like a real browser's `window.onerror` for an uncaught synchronous
@@ -476,9 +607,22 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
   // See the module header's hardening note: an async page-script throw (a timer callback, an unattached
   // promise chain) does not always surface as a synchronous exception out of the JSDOM constructor call —
   // catch it at the process level too, scoped strictly to this single run via add-then-remove.
+  //
+  // Finding 34 (pragmatic, non-worker mitigation): these listeners are PROCESS-WIDE, so during the run
+  // window they would also intercept an UNRELATED harness/test exception and silently record it as a page
+  // crash — masking a real defect and corrupting attribution. A full fix isolates each artifact in a
+  // worker; short of that, only ATTRIBUTABLE exceptions are recorded here. An exception whose stack is
+  // clearly NOT the page's evaluated code (no jsdom / page-origin frame, but a frame in our own harness or
+  // the test runner) is RE-THROWN so it stays fail-loud instead of being swallowed and mislabeled.
   const crashes: string[] = [];
-  const onUncaught = (e: unknown) => crashes.push(errMessage(e).slice(0, 200));
-  const onRejection = (reason: unknown) => crashes.push(`unhandled rejection: ${errMessage(reason).slice(0, 200)}`);
+  const onUncaught = (e: unknown) => {
+    if (isClearlyHarnessException(e)) throw e; // not the page under test — do not mask
+    crashes.push(errMessage(e).slice(0, 200));
+  };
+  const onRejection = (reason: unknown) => {
+    if (isClearlyHarnessException(reason)) throw reason;
+    crashes.push(`unhandled rejection: ${errMessage(reason).slice(0, 200)}`);
+  };
   process.on("uncaughtException", onUncaught);
   process.on("unhandledRejection", onRejection);
 
@@ -543,6 +687,54 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
         el.dispatchEvent(new ctor(type, { bubbles: true, cancelable: true }));
       };
 
+      // A real user cannot activate a disabled or hidden control: the synthetic loop must
+      // not fire events on one either, or it invents write-backs (and can trigger destructive controls)
+      // that no user could reach. jsdom does no layout, so `offsetParent`/computed geometry are
+      // unreliable — key off the attributes and inline styles that ARE meaningful under jsdom.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const isInteractable = (el: any): boolean => {
+        if (el.disabled === true) return false;
+        if (typeof el.hasAttribute === "function" && el.hasAttribute("disabled")) return false;
+        if (el.hidden === true) return false;
+        const get = (n: string) => (typeof el.getAttribute === "function" ? el.getAttribute(n) : null);
+        if ((get("type") || "").toLowerCase() === "hidden") return false;
+        if (get("aria-disabled") === "true") return false;
+        if (get("aria-hidden") === "true") return false;
+        const style = (get("style") || "").toLowerCase();
+        if (/display\s*:\s*none/.test(style) || /visibility\s*:\s*hidden/.test(style)) return false;
+        return true;
+      };
+
+      // A submit control participating in a FORM is exercised through that form's submission below (so its
+      // `formaction`/`formmethod` and the form's submit handlers are honored together), not as a bare
+      // click — avoiding a double submit-event and preserving submitter identity.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const isFormSubmitControl = (el: any): boolean => {
+        const tag = el.tagName;
+        const rawType = typeof el.getAttribute === "function" ? el.getAttribute("type") : null;
+        const type = (rawType || "").toLowerCase();
+        const isSubmit =
+          (tag === "BUTTON" && (type === "" || type === "submit")) || (tag === "INPUT" && (type === "submit" || type === "image"));
+        return isSubmit && !!el.form;
+      };
+
+      // The submitter is the first interactable submit control the form owns; its formaction/formmethod
+      // (read by the `requestSubmit` stub) override the form's own action/method.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const findSubmitter = (form: any) => {
+        const candidates = [
+          ...form.querySelectorAll('button, input[type="submit"], input[type="image"]'),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ] as any[];
+        return (
+          candidates.find((b) => {
+            const type = (typeof b.getAttribute === "function" ? b.getAttribute("type") || "" : "").toLowerCase();
+            const isSubmit = b.tagName === "INPUT" ? type === "submit" || type === "image" : type === "" || type === "submit";
+            return isSubmit && isInteractable(b);
+          }) || null
+        );
+      };
+
       const withAction = async (type: ActionType, label: string, fn: () => void) => {
         ctxBox.current = { id: ++actionSeq, type, label: String(label).slice(0, 40) };
         try {
@@ -557,6 +749,7 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
       // Phase 1: EDIT actions — populate every field, dispatch input/change.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const el of [...document.querySelectorAll("input, textarea, select")] as any[]) {
+        if (!isInteractable(el)) continue; // a user cannot edit a disabled/hidden field
         await withAction("edit", el.id || el.name || el.tagName, () => {
           if (el.tagName === "SELECT") {
             if (el.options && el.options.length) el.selectedIndex = el.options.length - 1;
@@ -583,17 +776,33 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
         for (const el of clickables) {
           if (clicked.has(el)) continue;
           clicked.add(el);
+          if (!isInteractable(el)) continue; // don't fire on controls a user could not activate
+          if (isFormSubmitControl(el)) continue; // exercised via its form's submission below
           const label = (el.textContent || el.value || el.id || "").trim().slice(0, 40);
-          await withAction("commit", `click:${label}`, () => dispatch(el, "click", window.MouseEvent));
+          // Prefer the element's real `.click()` (running the browser default action) over a bare
+          // synthetic MouseEvent, which loses button default behavior. Anchors/forms have stubbed
+          // click()/submit() that record; plain buttons run their listeners as a real click would.
+          await withAction("commit", `click:${label}`, () => {
+            if (typeof el.click === "function") el.click();
+            else dispatch(el, "click", window.MouseEvent);
+          });
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const form of [...document.querySelectorAll("form")] as any[]) {
           if (clicked.has(form)) continue;
           clicked.add(form);
           await withAction("commit", "submit-form", () => {
+            const submitter = findSubmitter(form);
             const ev = new window.Event("submit", { bubbles: true, cancelable: true });
+            // Best-effort: expose the chosen submitter to any onsubmit handler, as a real submit event would.
+            try {
+              Object.defineProperty(ev, "submitter", { value: submitter, configurable: true });
+            } catch {
+              /* some Event impls forbid redefining props — non-fatal */
+            }
             form.dispatchEvent(ev);
-            if (!ev.defaultPrevented) form.submit();
+            // Native submission honors the submitter's formaction/formmethod.
+            if (!ev.defaultPrevented) form.requestSubmit(submitter);
           });
         }
       }
@@ -642,6 +851,63 @@ function computeVerdict(
     return { verdict: "inconclusive", confidence: "low", evidence };
   }
 
+  // Findings 28/29: evaluate EVERY local write-back, regardless of which action triggered it. A debounced
+  // `oninput` autosave fires under an `edit` action; a queue-flush / recovery / on-load persistence write
+  // fires with NO action context at all (`action: null`). The old filter kept only `action?.type ===
+  // "commit"`, so both of those — the exact persistence patterns this confirmer exists to catch — were
+  // silently excluded and the page reported clean/high. Including them means any observed local write
+  // that isn't provably handled is reported (never clean), and an uncertainly-attributed write still
+  // counts rather than vanishing.
+  const writebacks = failRun.requests.filter((r) => isWrite(r) && isLocalTarget(r.target));
+  const remoteWritebacks = failRun.requests.filter((r) => isWrite(r) && r.target === "remote");
+
+  // Finding 33: observed write-backs are CONCRETE evidence — analyze them BEFORE any "could not exercise
+  // this page" downgrade. A page can contain an unrelated external <script src> (or, in principle, no
+  // controls the loop recognized) AND a native relative POST form whose submission we DIRECTLY recorded;
+  // the old ordering returned inconclusive for external-script pages up front, erasing that observation.
+  if (writebacks.length > 0) {
+    const domEqual = okRun.finalDOM === failRun.finalDOM && failRun.finalDOM.length > 0;
+    const wbActionIds = new Set(writebacks.map((w) => w.action?.id).filter((id): id is number => id != null));
+    const dlAfterFail = failRun.downloads.filter((d) => d.action && wbActionIds.has(d.action.id));
+    const unread = writebacks.filter((w) => !w.okAccessed && !w.statusAccessed && !w.bodyConsulted);
+
+    const describe = (w: RequestRecord) =>
+      `${w.method} ${w.url} [${w.action ? `${w.action.type} "${w.action.label}"` : "load-time/async"}]`;
+    evidence.push(`${writebacks.length} relative/local write-back(s) fired (${writebacks.map(describe).join("; ")})`);
+
+    const lostReasons: string[] = [];
+    if (dlAfterFail.length > 0) {
+      lostReasons.push(
+        `blob/download fallback fired after the non-ok write-back (${dlAfterFail.map((d) => d.href).join(", ")}) — broken under Cowork's embedded artifact viewer`,
+      );
+    }
+    if (domEqual) {
+      lostReasons.push(
+        'final DOM after a simulated server FAILURE (404) is identical to the final DOM after a simulated server SUCCESS (200) — the page cannot distinguish failure from success (false "Saved!")',
+      );
+    }
+    if (unread.length > 0) {
+      lostReasons.push(
+        `response never consulted for ${unread.length} write-back(s) (ok/status/body unread: ${unread
+          .map((w) => `${w.method} ${w.url}`)
+          .join(", ")}) — unconditional success path`,
+      );
+    }
+
+    if (lostReasons.length > 0) {
+      evidence.push(...lostReasons);
+      return { verdict: "lost", confidence: "high", evidence };
+    }
+
+    evidence.push(
+      "the page correctly distinguished the simulated failure (response consulted, final DOM differs from the success run, no blind download fallback) — but the write-back still targets Cowork's own origin and will never actually persist the data",
+    );
+    return { verdict: "suspect", confidence: "high", evidence };
+  }
+
+  // ── No local write-back was observed. Now qualify whether that ABSENCE is trustworthy, or just means
+  // the page could not be driven (external framework / no controls), before concluding clean.
+  //
   // The page's real behavior lives entirely in an external <script src> bundle jsdom never fetched (no
   // external resource loading — see runOnce). Whatever controls exist in the raw markup were never
   // wired by that bundle, so this could not be meaningfully driven at all.
@@ -658,61 +924,16 @@ function computeVerdict(
     return { verdict: "inconclusive", confidence: "low", evidence };
   }
 
-  const writebacks = failRun.requests.filter((r) => isWrite(r) && isLocalTarget(r.target) && r.action?.type === "commit");
-  const remoteWritebacks = failRun.requests.filter((r) => isWrite(r) && r.target === "remote" && r.action?.type === "commit");
-
-  if (writebacks.length === 0) {
-    if (remoteWritebacks.length > 0) {
-      evidence.push(
-        `only remote absolute write-back(s) observed (${remoteWritebacks.map((r) => `${r.method} ${r.url}`).join(", ")}) — resolves against a real external origin, not this bug class`,
-      );
-    } else {
-      evidence.push("no relative/local write-back fired from any user action");
-    }
-    // A CLEAN verdict on a page that references external scripts, made zero requests of any kind, and
-    // logged errors may just mean the page could not fully wire its handlers under jsdom — flag lower
-    // confidence rather than claim certainty it is genuinely bug-free.
-    const suspiciouslyQuiet = failRun.externalScripts.length > 0 && failRun.requests.length === 0 && failRun.errors.length > 0;
-    return { verdict: "clean", confidence: suspiciouslyQuiet ? "low" : "high", evidence };
-  }
-
-  const domEqual = okRun.finalDOM === failRun.finalDOM && failRun.finalDOM.length > 0;
-  const wbActionIds = new Set(writebacks.map((w) => w.action!.id));
-  const dlAfterFail = failRun.downloads.filter((d) => d.action && wbActionIds.has(d.action.id));
-  const unread = writebacks.filter((w) => !w.okAccessed && !w.statusAccessed && !w.bodyConsulted);
-
-  evidence.push(
-    `${writebacks.length} relative/local write-back(s) fired on a user commit action (${writebacks
-      .map((w) => `${w.method} ${w.url} on "${w.action!.label}"`)
-      .join("; ")})`,
-  );
-
-  const lostReasons: string[] = [];
-  if (dlAfterFail.length > 0) {
-    lostReasons.push(
-      `blob/download fallback fired after the non-ok write-back (${dlAfterFail.map((d) => d.href).join(", ")}) — broken under Cowork's embedded artifact viewer`,
+  if (remoteWritebacks.length > 0) {
+    evidence.push(
+      `only remote absolute write-back(s) observed (${remoteWritebacks.map((r) => `${r.method} ${r.url}`).join(", ")}) — resolves against a real external origin, not this bug class`,
     );
+  } else {
+    evidence.push("no relative/local write-back fired from any user action");
   }
-  if (domEqual) {
-    lostReasons.push(
-      'final DOM after a simulated server FAILURE (404) is identical to the final DOM after a simulated server SUCCESS (200) — the page cannot distinguish failure from success (false "Saved!")',
-    );
-  }
-  if (unread.length > 0) {
-    lostReasons.push(
-      `response never consulted for ${unread.length} write-back(s) (ok/status/body unread: ${unread
-        .map((w) => `${w.method} ${w.url}`)
-        .join(", ")}) — unconditional success path`,
-    );
-  }
-
-  if (lostReasons.length > 0) {
-    evidence.push(...lostReasons);
-    return { verdict: "lost", confidence: "high", evidence };
-  }
-
-  evidence.push(
-    "the page correctly distinguished the simulated failure (response consulted, final DOM differs from the success run, no blind download fallback) — but the write-back still targets Cowork's own origin and will never actually persist the data",
-  );
-  return { verdict: "suspect", confidence: "high", evidence };
+  // A CLEAN verdict on a page that references external scripts, made zero requests of any kind, and
+  // logged errors may just mean the page could not fully wire its handlers under jsdom — flag lower
+  // confidence rather than claim certainty it is genuinely bug-free.
+  const suspiciouslyQuiet = failRun.externalScripts.length > 0 && failRun.requests.length === 0 && failRun.errors.length > 0;
+  return { verdict: "clean", confidence: suspiciouslyQuiet ? "low" : "high", evidence };
 }

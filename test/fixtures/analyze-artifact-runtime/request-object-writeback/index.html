@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Finding 30: fetch called with a Request(-like) object, not a string URL. The installed jsdom has
+         no native `Request`, so this page ships its own polyfill (the only shape under which the old
+         string-only stub silently missed the write-back rather than throwing → inconclusive). The old
+         stub recorded `[object Object]` as the URL and a default GET; the fix reads url/method/body off
+         the object per the RequestInfo contract. -->
+    <button id="save">Save</button>
+    <div id="msg"></div>
+    <script>
+      function Request(url, init) {
+        this.url = url;
+        this.method = (init && init.method) || "GET";
+        this.body = (init && init.body) || null;
+      }
+      document.getElementById("save").addEventListener("click", function () {
+        fetch(new Request("/api/save", { method: "POST", body: "payload" })).then(function () {
+          // Unconditional success — never consults the response.
+          document.getElementById("msg").textContent = "Saved!";
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -114,6 +114,75 @@ describe("recordDecision — undelivered answer (#20)", () => {
   });
 });
 
+describe("— ABSTAIN permission fallback routes through delivery handling + request-id reconciliation", () => {
+  // A ScriptedDecider with no matching rule ABSTAINs on a permission → handleDecision's fail-closed
+  // fallback (denyLike) runs. Previously it discarded respond()'s DecisionDelivery and recorded
+  // "abstain→deny" with NO requestId, so it was invisible to both the non-delivery branch and the
+  // post-loop EPIPE reconciliation. It must now behave like a normal decision.
+  const permEv = (): AgentEvent[] => [
+    { type: "decision", request: { id: "p1", kind: "permission", tool: "Bash", input: { command: "curl evil" } } },
+    { type: "result", isError: false },
+  ];
+
+  class ClosingSession extends MockSession {
+    respond(_id: string, _r: DecisionResponse): DecisionDelivery {
+      return { delivered: false, reason: "session-closing" };
+    }
+  }
+  class EpipeSession extends MockSession {
+    constructor(
+      events: AgentEvent[],
+      private undeliveredIds: Set<string>,
+    ) {
+      super(events);
+    }
+    hasUndeliveredReconciliation(decisionId: string): boolean {
+      return this.undeliveredIds.has(decisionId);
+    }
+  }
+
+  it("records 'abstain→deny' WITH the requestId when the fail-closed deny is delivered", async () => {
+    const rec = await new Run(new MockSession(permEv()), new ScriptedDecider([])).drive("go");
+    const d = rec.decisions.find((x) => x.decision === "abstain→deny");
+    expect(d).toBeDefined();
+    expect(d!.requestId).toBe("p1"); // carried so post-loop reconciliation can reach it
+  });
+
+  it("records 'undelivered' (not 'abstain→deny') when the fail-closed deny never reaches the agent", async () => {
+    const rec = await new Run(new ClosingSession(permEv()), new ScriptedDecider([])).drive("go");
+    expect(rec.decisions.some((d) => d.decision === "abstain→deny")).toBe(false);
+    const u = rec.decisions.find((d) => d.decision === "undelivered");
+    expect(u).toBeDefined();
+    expect(u!.requestId).toBe("p1");
+    expect(u!.rationale).toMatch(/not delivered/i);
+  });
+
+  it("a fail-closed deny reported delivered:true but later EPIPE'd is reconciled to 'undelivered' (was invisible without a requestId)", async () => {
+    const rec = await new Run(new EpipeSession(permEv(), new Set(["p1"])), new ScriptedDecider([])).drive("go");
+    const d = rec.decisions.find((x) => x.requestId === "p1");
+    expect(d).toBeDefined();
+    expect(d!.decision).toBe("undelivered");
+    expect(d!.rationale).toMatch(/epipe/i);
+  });
+});
+
+describe("— a protocol_evidence_error event bumps evidenceErrors.protocolMalformed", () => {
+  it("each malformed-block signal increments the counter (surfaced into RunResult, not silently dropped)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "protocol_evidence_error", reason: "malformed user content block (non-object)" },
+      { type: "protocol_evidence_error", reason: "tool_result block missing a non-empty tool_use_id" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.evidenceErrors.protocolMalformed).toBe(2);
+  });
+
+  it("a clean run leaves protocolMalformed unset (companion counter absent when healthy)", async () => {
+    const rec = await new Run(new MockSession([{ type: "result", isError: false }]), new ScriptedDecider([])).drive("go");
+    expect(rec.evidenceErrors.protocolMalformed ?? 0).toBe(0);
+  });
+});
+
 describe("F4 — gate-delivery reconciliation (respond()'s optimistic delivered:true vs. a later EPIPE)", () => {
   // Mirrors LiveAgentSession's real contract: respond() reports the control_response frame QUEUED
   // (`delivered:true`) synchronously, exactly like the real optimistic return — but the async stdin

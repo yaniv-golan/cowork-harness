@@ -116,6 +116,32 @@ describe("F2: parseMessage — assistant content block guards (crash fix)", () =
   });
 });
 
+// ---------------------------------------------------------------------------
+// — malformed USER content blocks are recorded as protocol evidence errors (not silently skipped)
+// ---------------------------------------------------------------------------
+describe("parseMessage — malformed user/tool_result blocks bump a protocol evidence-error signal", () => {
+  it("a non-object user content block emits a protocol_evidence_error (not a silent skip)", () => {
+    const evs = parseMessage({ type: "user", message: { content: [null, "scalar"] } });
+    const errs = evs.filter((e) => e.type === "protocol_evidence_error");
+    expect(errs).toHaveLength(2);
+    expect((errs[0] as any).reason).toMatch(/malformed user content block/);
+  });
+
+  it("a tool_result block missing tool_use_id emits a protocol_evidence_error AND still emits the tool_result (content preserved, undefined correlation annotated)", () => {
+    const evs = parseMessage({ type: "user", message: { content: [{ type: "tool_result", content: "some output" }] } });
+    expect(evs.some((e) => e.type === "protocol_evidence_error" && /missing a non-empty tool_use_id/.test((e as any).reason))).toBe(true);
+    const tr = evs.find((e) => e.type === "tool_result") as any;
+    expect(tr).toBeTruthy();
+    expect(tr.toolUseId).toBeUndefined();
+    expect(tr.text).toBe("some output");
+  });
+
+  it("a well-formed tool_result (with tool_use_id) emits NO protocol_evidence_error (regression guard)", () => {
+    const evs = parseMessage({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } });
+    expect(evs.some((e) => e.type === "protocol_evidence_error")).toBe(false);
+  });
+});
+
 describe("subagent_dispatch — typeOmitted is a parse-time fact (full input parse, never a prefix grep)", () => {
   const dispatchMsg = (input: Record<string, unknown>) => ({
     type: "assistant",

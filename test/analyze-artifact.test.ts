@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, symlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -51,10 +52,10 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
     expect(result.failure).toBeUndefined();
-    expect(result.finding).toBeDefined();
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
-    expect(result.finding?.severity).toBe("error");
-    expect(result.finding?.path).toBe(path);
+    expect(result.findings[0]).toBeDefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.severity).toBe("error");
+    expect(result.findings[0]?.path).toBe(path);
   });
 
   it('(b) "/api/check" local-fallback with response consulted -> artifact-write-back-suspect (advisory)', () => {
@@ -62,9 +63,9 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
     expect(result.failure).toBeUndefined();
-    expect(result.finding).toBeDefined();
-    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
-    expect(result.finding?.severity).toBe("advisory");
+    expect(result.findings[0]).toBeDefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect");
+    expect(result.findings[0]?.severity).toBe("advisory");
   });
 
   it("(c) parseable is_static-guarded write-back with an UNKNOWN runtime value -> suspect, NOT clean", () => {
@@ -72,9 +73,9 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
     expect(result.failure).toBeUndefined();
-    expect(result.finding).toBeDefined();
-    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
-    expect(result.finding?.severity).toBe("advisory");
+    expect(result.findings[0]).toBeDefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect");
+    expect(result.findings[0]?.severity).toBe("advisory");
     // The headline false-green: a merely LEXICAL guard match must never clear to clean.
   });
 
@@ -82,14 +83,14 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const path = fixture("d-clean-no-writeback", "report.html");
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
-    expect(result).toEqual({});
+    expect(result).toEqual({ findings: [] });
   });
 
   it("(e) unparseable candidate (invalid JS from an unresolved template placeholder) -> failure stage=parse", () => {
     const path = fixture("e-parse-failure", "generate.py");
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("parse");
     expect(result.failure?.path).toBe(path);
@@ -100,7 +101,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const path = fixture("f-not-candidate", "utils.py");
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
-    expect(result).toEqual({});
+    expect(result).toEqual({ findings: [] });
   });
 
   it("(h) declarative .html whose only write-back is <form method=post action=/...> -> lost (HTML-inherent candidacy)", () => {
@@ -108,23 +109,23 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
     expect(result.failure).toBeUndefined();
-    expect(result.finding).toBeDefined();
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
-    expect(result.finding?.severity).toBe("error");
+    expect(result.findings[0]).toBeDefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.severity).toBe("error");
   });
 
   it("a provable build-time-truthy guard (materialized is_static:true) -> clean (dead code)", () => {
     const path = fixture("provable-truthy-clean", "viewer.html");
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
-    expect(result).toEqual({});
+    expect(result).toEqual({ findings: [] });
   });
 
   it("bonus: control flow the analyzer can't represent as a guard (switch case) -> failure stage=unsupported-guard", () => {
     const path = fixture("unsupported-guard", "viewer.html");
     const text = readFileText(path);
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("unsupported-guard");
   });
@@ -133,7 +134,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const path = "/virtual/oversized.html";
     const huge = `<script>fetch("/api/x",{method:"POST"});</script>` + "x".repeat(3_000_001);
     const result = analyzeArtifactFile(path, huge);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("size");
   });
@@ -143,7 +144,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const statements = Array.from({ length: 8000 }, (_, i) => `var x${i}=${i};`).join("\n");
     const text = `<html><body><script>\nfetch("/api/x",{method:"POST"});\n${statements}\n</script></body></html>`;
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("node-limit");
   });
@@ -162,14 +163,14 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       '"""',
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("extract");
   });
 
   it("a non-source extension is never even a candidate (returns {})", () => {
     const result = analyzeArtifactFile("/virtual/README.md", '<script>fetch("/api/x",{method:"POST"})</script>');
-    expect(result).toEqual({});
+    expect(result).toEqual({ findings: [] });
   });
 
   // ---- phantom-<script>-block regression (docstring/comment prose mis-extracted by the lexical regex) ----
@@ -198,8 +199,8 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     // The real block is adjudicated (advisory suspect via the fall-through branch — OK_CHECK_RE wants
     // resp/res/response.ok, so `r.ok` is not matched); the prose block is discounted, not fatal.
     expect(result.failure).toBeUndefined();
-    expect(result.finding).toBeDefined();
-    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
+    expect(result.findings[0]).toBeDefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect");
   });
 
   it("phantom <script> prose alongside a LOST real block still reports the lost finding, no failure", () => {
@@ -216,9 +217,9 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
     expect(result.failure).toBeUndefined();
-    expect(result.finding).toBeDefined();
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
-    expect(result.finding?.severity).toBe("error");
+    expect(result.findings[0]).toBeDefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.severity).toBe("error");
   });
 
   it("an unparseable block that DOES carry a write-back hint stays could-not-verify (no silent pass)", () => {
@@ -232,7 +233,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       '</script>"""',
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("parse");
   });
@@ -249,8 +250,8 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       '</script>"""',
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeDefined();
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]).toBeDefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("parse");
   });
@@ -264,7 +265,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       "    return None",
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("extract");
   });
@@ -281,7 +282,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     // block is the phantom comment prose. Every isolated block is discounted -> fail-closed backstop, not
     // exit 0. (We intentionally do NOT whole-file-analyze a JS generator: that risks mis-attributing the
     // generator's own server-side calls as artifact write-backs.)
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("extract");
   });
@@ -299,7 +300,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       'alert("Saved successfully");',
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("extract");
   });
@@ -314,7 +315,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       "</body>",
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("extract");
   });
@@ -330,7 +331,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       "</body>",
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("parse");
   });
@@ -344,7 +345,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       "</body>",
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("parse");
   });
@@ -358,7 +359,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       "</body>",
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeUndefined();
+    expect(result.findings).toEqual([]);
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("parse");
   });
@@ -370,7 +371,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<!-- doc: see <script>prose about saving</script> for details -->\n` + // discounted prose (no hint)
       `<button onclick="fetch('/api/save',{method:'POST'}).then(()=>alert('Saved!'))">Save</button>`; // LOST, in the remainder
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-suspect"); // the advisory is still surfaced
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect"); // the advisory is still surfaced
     expect(result.failure?.stage).toBe("extract"); // AND the un-analyzed remainder is could-not-verify
   });
 
@@ -381,7 +382,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>window.fetch('/api/save',{method:'POST'}).then(()=>alert('Saved!'))</script>`, // LOST, parses fine
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("a form-lost finding with zero parsed blocks does not suppress an un-analyzed inline-handler remainder", () => {
@@ -392,7 +393,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<button onclick="fetch('/api/backup',{method:'POST'})">Backup</button>`, // never analyzed, in the remainder
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
     expect(result.failure?.stage).toBe("extract");
   });
 
@@ -403,7 +404,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>function save(u){ return window.fetch(u,{method:"POST"}); } save("/api/save"); alert("Saved!");</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("a bare sendBeacon( identifier call is recognized, not just navigator.sendBeacon(", () => {
@@ -413,7 +414,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>const sendBeacon = navigator.sendBeacon.bind(navigator); sendBeacon('/api/save', payload); alert('Saved!');</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("a .post( call on a non-whitelisted receiver (an axios instance) with a relative URL is advisory, not invisible", () => {
@@ -423,7 +424,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       '<script>const api = axios.create({}); api.post("/api/save", d);</script>',
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect");
   });
 
   // ---- axios verb/config-shape regressions: the AST must recognize every axios spelling the hint layer
@@ -436,7 +437,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>axios.put("/api/save", d).then(()=>alert("Saved!"));</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("a bare axios({...}) config-object call is classified, not invisible", () => {
@@ -446,7 +447,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>axios({ method: "POST", url: "/api/save", data }).then(()=>alert("Saved!"));</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("axios.request({...}) is classified, not invisible", () => {
@@ -456,7 +457,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>axios.request({ method: "POST", url: "/api/save" });</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding).toBeDefined();
+    expect(result.findings[0]).toBeDefined();
   });
 
   it("api.put( on a non-whitelisted axios-instance receiver is advisory, not invisible", () => {
@@ -466,7 +467,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       '<script>const api = axios.create({}); api.put("/api/save", d);</script>',
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect");
   });
 
   it("(guard) map.delete( on an arbitrary receiver is never flagged — .delete is deliberately excluded", () => {
@@ -476,7 +477,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       '<script>const map = new Map(); map.delete("/x");</script>',
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result).toEqual({});
+    expect(result).toEqual({ findings: [] });
   });
 
   it("axios.delete( on the literal axios identifier is classified — no ambiguity like an arbitrary receiver's .delete(", () => {
@@ -486,14 +487,14 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>axios.delete("/api/item/3").then(()=>alert("Saved!"));</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("a DELETE flow whose only success signal is a 'Deleted'/'Removed' toast classifies as lost, not just suspect", () => {
     const path = "/virtual/delete-toast.html";
     const text = `<script>fetch("/api/item/3", { method: "DELETE" }).then(()=>alert("Removed!"));</script>`;
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost"); // "Removed!" is a persist claim (delete-flow vocabulary)
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost"); // "Removed!" is a persist claim (delete-flow vocabulary)
   });
 
   it("a hoisted axios(cfg) config identifier is classified the same as an inline axios({...}) call", () => {
@@ -503,7 +504,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>const cfg = { method: "POST", url: "/api/save", data }; axios(cfg).then(()=>alert("Saved!"));</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("a hoisted axios.request(cfg) config identifier is classified the same as an inline axios.request({...}) call", () => {
@@ -513,7 +514,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>const cfg = { method: "POST", url: "/api/save" }; axios.request(cfg).then(()=>alert("Saved!"));</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("axios.postForm( (a v1 multipart form-data verb alias) is classified with the embedded POST verb", () => {
@@ -523,7 +524,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
       `<script>const fd = new FormData(); axios.postForm("/api/save", fd).then(()=>alert("Saved!"));</script>`,
     ].join("\n");
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   // ---- pins (already-correct boundaries): hint tokens + cap hits must be recorded, never discounted ----
@@ -564,7 +565,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const path = "/virtual/optional-fetch-only.html";
     const text = `<script>fetch?.("/api/save",{method:"POST"}); alert("Saved!");</script>`;
     const result = analyzeArtifactFile(path, text);
-    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
   });
 
   it("multiple unparseable sibling blocks note the extra count in the failure reason", () => {
@@ -592,7 +593,7 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     const result = analyzeArtifactFile(path, text);
     const elapsedMs = Date.now() - start;
     expect(elapsedMs).toBeLessThan(1000);
-    expect(result).toEqual({}); // no "(" ever follows -> not a write-back primitive -> not a candidate
+    expect(result).toEqual({ findings: [] }); // no "(" ever follows -> not a write-back primitive -> not a candidate
   });
 });
 
@@ -711,6 +712,296 @@ describe("rule-id sanity", () => {
     const legacy = new Set(["sessions-path-to-file-tool", "sessions-find-into-file-read", "unclosed-ignore-fence"]);
     expect(legacy.has("artifact-write-back-lost")).toBe(false);
     expect(legacy.has("artifact-write-back-suspect")).toBe(false);
+  });
+});
+
+// ================================================================================================= //
+// no-false-green regressions
+// ================================================================================================= //
+
+describe("— library-only write-backs reach candidacy", () => {
+  it('HTML whose ONLY write-back is axios.post("/save") is a candidate and flagged (was a silent {})', () => {
+    const text = `<script>axios.post("/api/save", d).then(()=>alert("Saved!"));</script>`;
+    const result = analyzeArtifactFile("/virtual/axios-only.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it('HTML whose only write-back is $.post("/save") reaches candidacy (jQuery)', () => {
+    const text = `<script>$.post("/api/save", d).then(()=>alert("Saved successfully"));</script>`;
+    const result = analyzeArtifactFile("/virtual/jquery-only.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("an axios INSTANCE-only page (api.put) still reaches candidacy via the bare axios token", () => {
+    const text = `<script>const api = axios.create({}); api.put("/api/save", d);</script>`;
+    const result = analyzeArtifactFile("/virtual/axios-instance-only.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect"); // any-receiver .put -> advisory
+  });
+});
+
+describe("— literal computed member calls are visible to the AST", () => {
+  it('xhr["open"]("POST", url) is recognized (computed literal property)', () => {
+    const text = `<script>const xhr = new XMLHttpRequest(); xhr["open"]("POST", "/api/save"); xhr.send(d); alert("Saved!");</script>`;
+    const result = analyzeArtifactFile("/virtual/computed-open.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it('axios["post"]("/save") is recognized (computed literal property)', () => {
+    const text = `<script>axios["post"]("/api/save", d).then(()=>alert("Saved!"));</script>`;
+    const result = analyzeArtifactFile("/virtual/computed-post.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it('window["fetch"]("/save",{method:"POST"}) is recognized by the AST (candidacy via a sibling primitive)', () => {
+    // Computed spellings are an AST-layer fix, not a candidacy tell — the bare `fetch(` GET
+    // sibling establishes candidacy, then the AST resolves the computed `window["fetch"]` call.
+    const text = `<script>fetch("/api/data");</script>\n<script>window["fetch"]("/api/save",{method:"POST"}).then(()=>alert("Saved!"));</script>`;
+    const result = analyzeArtifactFile("/virtual/computed-fetch.html", text);
+    expect(result.findings.some((f) => f.rule === "artifact-write-back-lost")).toBe(true);
+  });
+});
+
+describe("findings 13/14 — module parsing and narrowed source contract", () => {
+  it(".mjs with top-level import is parsed as a module and analyzed (not a parse could-not-verify)", () => {
+    const text = `import { z } from "./z.js";\ndocument.title = z;\nfetch("/api/save", { method: "POST" });\nalert("Saved!");`;
+    const result = analyzeArtifactFile("/virtual/gen.mjs", text);
+    expect(result.failure).toBeUndefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a .js with a top-level import reparses as a module (controlled script->module retry)", () => {
+    const text = `import x from "./x.js";\ndocument.write(x);\nfetch("/api/save", { method: "POST" });\nalert("Saved!");`;
+    const result = analyzeArtifactFile("/virtual/gen.js", text);
+    expect(result.failure).toBeUndefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it('an inline <script type="module"> with an import is analyzed, not a parse failure', () => {
+    const text = `<!doctype html><script type="module">import {a} from "./a.js"; fetch("/api/save",{method:"POST"}); alert("Saved!");</script>`;
+    const result = analyzeArtifactFile("/virtual/module-inline.html", text);
+    expect(result.failure).toBeUndefined();
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it(".ts/.tsx/.jsx are no longer advertised source extensions — a .tsx target is out of scope, not a parse failure", () => {
+    const result = analyzeArtifactFile("/virtual/comp.tsx", `<script>fetch("/api/save",{method:"POST"})</script>`);
+    expect(result).toEqual({ findings: [] });
+    // An EXISTING .ts file is simply out of scope (like a .md), never a select/parse failure.
+    const dir = makeTmpDir();
+    const tsFile = join(dir, "whatever.ts");
+    writeFileSync(tsFile, `fetch("/api/save",{method:"POST"})`);
+    const { files, failures } = collectArtifactSources(tsFile);
+    expect(files).toEqual([]);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("— a named non-regular file (FIFO) is a could-not-verify, never a hang", () => {
+  it("analyzeArtifacts on a named FIFO records a read failure without blocking", () => {
+    const dir = makeTmpDir();
+    const fifo = join(dir, "pipe.html");
+    try {
+      execFileSync("mkfifo", [fifo]);
+    } catch {
+      return; // mkfifo unavailable on this platform — skip
+    }
+    const { analysisFailures } = analyzeArtifacts([fifo]);
+    expect(analysisFailures.some((f) => f.stage === "read" && /not a regular file/.test(f.reason))).toBe(true);
+  });
+});
+
+describe("— the source walker rejects directory symlinks that escape the target root", () => {
+  it("a symlinked subdirectory pointing outside the target is skipped with a select failure", () => {
+    const outside = makeTmpDir();
+    writeFileSync(join(outside, "evil.html"), `<script>fetch("/api/x",{method:"POST"})</script>`);
+    const target = makeTmpDir();
+    writeFileSync(join(target, "ok.html"), `<script>fetch("/api/ok",{method:"POST"})</script>`);
+    try {
+      symlinkSync(outside, join(target, "escape"), "dir");
+    } catch {
+      return; // symlink unsupported — skip
+    }
+    const { files, failures } = collectArtifactSources(target);
+    expect(files.some((f) => f.endsWith("ok.html"))).toBe(true);
+    expect(files.some((f) => f.endsWith("evil.html"))).toBe(false);
+    expect(failures.some((f) => f.stage === "select" && /outside the target root/.test(f.reason))).toBe(true);
+  });
+});
+
+describe("— hostname is compared exactly, not by prefix", () => {
+  it("localhost.evil.com is REMOTE (was misclassified as local loopback)", () => {
+    const text = `<script>fetch("https://localhost.evil.com/save",{method:"POST"}).then(()=>alert("Saved!"));</script>`;
+    expect(analyzeArtifactFile("/virtual/host-evil.html", text)).toEqual({ findings: [] });
+  });
+
+  it("a form action to https://127.attacker.example is REMOTE, not loopback", () => {
+    const text = `<form method="post" action="https://127.attacker.example/save"></form>`;
+    expect(analyzeArtifactFile("/virtual/form-evil.html", text)).toEqual({ findings: [] });
+  });
+
+  it("a genuine loopback host (127.0.0.5) IS in scope", () => {
+    const text = `<script>fetch("http://127.0.0.5/save",{method:"POST"}).then(()=>alert("Saved!"));</script>`;
+    expect(analyzeArtifactFile("/virtual/loopback.html", text).findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("http://localhost:3000 is in scope (loopback with a port)", () => {
+    const text = `<script>fetch("http://localhost:3000/save",{method:"POST"}).then(()=>alert("Saved!"));</script>`;
+    expect(analyzeArtifactFile("/virtual/localhost-port.html", text).findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+});
+
+describe("— protocol-relative / whitespace / non-slash schemes resolved via WHATWG URL", () => {
+  it("//example.com/save is REMOTE (protocol-relative), not a local write-back", () => {
+    const text = `<script>fetch("//example.com/save",{method:"POST"}).then(()=>alert("Saved!"));</script>`;
+    expect(analyzeArtifactFile("/virtual/proto-rel.html", text)).toEqual({ findings: [] });
+  });
+
+  it("a leading-space absolute URL is REMOTE, not local", () => {
+    const text = `<script>fetch(" https://example.com/save",{method:"POST"}).then(()=>alert("Saved!"));</script>`;
+    expect(analyzeArtifactFile("/virtual/space-url.html", text)).toEqual({ findings: [] });
+  });
+
+  it("a mailto: form action is REMOTE (non-http scheme), never a local write-back", () => {
+    const text = `<form method="post" action="mailto:ops@example.com"></form>`;
+    expect(analyzeArtifactFile("/virtual/mailto-form.html", text)).toEqual({ findings: [] });
+  });
+});
+
+describe("— unquoted remote form actions are NOT treated as local", () => {
+  it("<form method=post action=https://api.example.com/save> (unquoted) is remote -> clean", () => {
+    const text = `<form method=post action=https://api.example.com/save><input name=x></form>`;
+    expect(analyzeArtifactFile("/virtual/unquoted-remote.html", text)).toEqual({ findings: [] });
+  });
+
+  it("<form method=post action=/api/save> (unquoted relative) is still lost", () => {
+    const text = `<form method=post action=/api/save><input name=x></form>`;
+    expect(analyzeArtifactFile("/virtual/unquoted-rel.html", text).findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+});
+
+describe("— submitter formaction/formmethod overrides and form= linkage", () => {
+  it("remote form + relative formaction button -> the relative submission IS flagged", () => {
+    const text = `<form method="post" action="https://remote.example/x"><button formaction="/api/save">Save</button></form>`;
+    expect(analyzeArtifactFile("/virtual/remote-form-rel-btn.html", text).findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("relative form + remote formaction button -> NO false lost (the submission goes remote)", () => {
+    const text = `<form method="post" action="/api/save"><button formaction="https://remote.example/x">Go</button></form>`;
+    expect(analyzeArtifactFile("/virtual/rel-form-remote-btn.html", text)).toEqual({ findings: [] });
+  });
+
+  it("a submit control linked via form=<id> to a relative POST form is flagged", () => {
+    const text = `<form id="f1" method="post" action="/api/save"></form><button type="submit" form="f1">Save</button>`;
+    expect(analyzeArtifactFile("/virtual/form-linked.html", text).findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a GET form whose button forces formmethod=post to a relative action is flagged", () => {
+    const text = `<form method="get" action="/api/save"><button formmethod="post">Save</button></form>`;
+    expect(analyzeArtifactFile("/virtual/get-form-post-btn.html", text).findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+});
+
+describe("— native-form findings account for JS submit handlers", () => {
+  it("a relative POST form with an inline onsubmit handler is DOWNGRADED to suspect, not hard-lost", () => {
+    const text = `<form method="post" action="/api/save" onsubmit="return handle(event)"><button>Save</button></form>`;
+    expect(analyzeArtifactFile("/virtual/form-onsubmit.html", text).findings[0]?.rule).toBe("artifact-write-back-suspect");
+  });
+
+  it("a page-level addEventListener('submit', …) downgrades a relative POST form to suspect", () => {
+    const text = `<form id="f" method="post" action="/api/save"></form><script>document.getElementById("f").addEventListener("submit", e => e.preventDefault());</script>`;
+    const result = analyzeArtifactFile("/virtual/form-listener.html", text);
+    expect(result.findings.some((f) => f.rule === "artifact-write-back-suspect")).toBe(true);
+    expect(result.findings.some((f) => f.rule === "artifact-write-back-lost")).toBe(false);
+  });
+});
+
+describe("— constant folding is scope-aware (a shadowing parameter never folds live code dead)", () => {
+  it("const ENABLED=false shadowed by a function parameter does NOT fold the guarded write-back dead", () => {
+    const text = `<script>const ENABLED = false; function save(ENABLED){ if (ENABLED){ fetch("/api/save",{method:"POST"}); alert("Saved!"); } } save(true);</script>`;
+    const result = analyzeArtifactFile("/virtual/shadow-param.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect"); // shadowed -> unknown -> suspect, NOT clean
+  });
+});
+
+describe("— member mutation poisons a folded config object", () => {
+  it("cfg.enabled=true after a false initializer does NOT fold the guarded write-back dead", () => {
+    const text = `<script>const cfg = { enabled: false }; cfg.enabled = true; if (cfg.enabled){ fetch("/api/save",{method:"POST"}); alert("Saved!"); }</script>`;
+    const result = analyzeArtifactFile("/virtual/member-mutate.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect"); // stale initializer must NOT clean
+  });
+
+  it("delete cfg.enabled also poisons the object binding", () => {
+    const text = `<script>const cfg = { enabled: true }; delete cfg.enabled; if (cfg.enabled){ fetch("/api/save",{method:"POST"}); alert("Saved!"); }</script>`;
+    const result = analyzeArtifactFile("/virtual/member-delete.html", text);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-suspect");
+  });
+});
+
+describe("computed URL/method and spread options are could-not-verify, never silent", () => {
+  it("a recognized write primitive with a computed URL yields suspect, not a silent clean", () => {
+    const text = `<script>const u = "/api/" + part; fetch(u, { method: "POST" });</script>`;
+    expect(analyzeArtifactFile("/virtual/computed-url.html", text).findings[0]?.rule).toBe("artifact-write-back-suspect");
+  });
+
+  it("a fetch with a computed method identifier yields suspect (method UNKNOWN)", () => {
+    const text = `<script>fetch("/api/save", { method: verb });</script>`;
+    expect(analyzeArtifactFile("/virtual/computed-method.html", text).findings[0]?.rule).toBe("artifact-write-back-suspect");
+  });
+
+  it("a spread options object (fetch(u, {...opts})) yields suspect, not a silent GET", () => {
+    const text = `<script>fetch("/api/save", { ...opts });</script>`;
+    expect(analyzeArtifactFile("/virtual/spread-opts.html", text).findings[0]?.rule).toBe("artifact-write-back-suspect");
+  });
+
+  it("axios({ ...cfg }) with a spread config yields suspect, not a silent clean", () => {
+    const text = `<script>axios({ ...cfg, url: "/api/save" });</script>`;
+    expect(analyzeArtifactFile("/virtual/axios-spread.html", text).findings[0]?.rule).toBe("artifact-write-back-suspect");
+  });
+});
+
+describe("— consequence analysis is bounded to the call's own statement/promise chain", () => {
+  it("an unrelated later resp.ok elsewhere in the block does NOT make a lost write-back look handled", () => {
+    const text = `<script>fetch("/api/save",{method:"POST"}); alert("Saved!"); function other(resp){ return resp.ok; }</script>`;
+    expect(analyzeArtifactFile("/virtual/late-ok.html", text).findings[0]?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a write-back whose result escapes to an assigned variable is SUSPECT, not a false lost", () => {
+    const text = `<script>async function s(){ const r = await fetch("/api/save",{method:"POST"}); alert("Saved!"); if (!r.ok) show(); }</script>`;
+    expect(analyzeArtifactFile("/virtual/escaped-result.html", text).findings[0]?.rule).toBe("artifact-write-back-suspect");
+  });
+});
+
+describe("— every distinct write-back in a file is surfaced", () => {
+  it("two independent lost fetch write-backs produce TWO findings", () => {
+    const text = `<script>fetch("/api/a",{method:"POST"}); alert("Saved!");</script>\n<script>fetch("/api/b",{method:"POST"}); alert("Done successfully");</script>`;
+    const result = analyzeArtifactFile("/virtual/two-lost.html", text);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings.every((f) => f.rule === "artifact-write-back-lost")).toBe(true);
+  });
+
+  it("a lost form AND a lost script write-back both surface (form + JS)", () => {
+    const text = `<form method="post" action="/api/save"></form>\n<script>fetch("/api/other",{method:"POST"}); alert("Saved!");</script>`;
+    const result = analyzeArtifactFile("/virtual/form-plus-js.html", text);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings.every((f) => f.rule === "artifact-write-back-lost")).toBe(true);
+  });
+
+  it("errors sort before advisories — findings[0] is the lost when a file has both", () => {
+    const text = `<script>if (window.flag){ fetch("/api/guarded",{method:"POST"}); }</script>\n<script>fetch("/api/save",{method:"POST"}); alert("Saved!");</script>`;
+    const result = analyzeArtifactFile("/virtual/mixed-sev.html", text);
+    expect(result.findings.length).toBeGreaterThanOrEqual(2);
+    expect(result.findings[0]?.rule).toBe("artifact-write-back-lost");
+    expect(result.findings.some((f) => f.rule === "artifact-write-back-suspect")).toBe(true);
+  });
+
+  it("analyzeArtifacts aggregates multiple per-file findings into the flat findings list", () => {
+    const dir = makeTmpDir();
+    writeFileSync(
+      join(dir, "page.html"),
+      `<script>fetch("/api/a",{method:"POST"}); alert("Saved!");</script>\n<script>fetch("/api/b",{method:"POST"}); alert("Saved!");</script>`,
+    );
+    const { findings } = analyzeArtifacts([join(dir, "page.html")]);
+    expect(findings.filter((f) => f.rule === "artifact-write-back-lost")).toHaveLength(2);
   });
 });
 

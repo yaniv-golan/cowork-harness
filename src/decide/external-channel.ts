@@ -121,14 +121,29 @@ export function streamGates(dir: string, write: (line: string) => void, opts: { 
  *  may be a string (single-select) or a string[] (multiSelect) — the array is the on-wire multiSelect
  *  shape that ExternalDecider.normalize expects, so it must round-trip through here unjoined. */
 export function answerGate(dir: string, seq: number, answers: Record<string, string | string[]>): void {
-  let id: string | undefined;
-  try {
-    id = JSON.parse(readFileSync(join(dir, `req-${seq}.json`), "utf8")).id;
-  } catch {
-    /* req may already be consumed; id is optional */
+  // The request id is the ONLY strong identity binding a response to its gate — a key/label match alone
+  // can answer the WRONG gate if a stale or mis-sequenced response file lands. Recover the id from the gate
+  // request (the live `req-N.json`, or its consumed `.done` rename) and FAIL LOUD if it can't be read,
+  // rather than writing an id-less response that could satisfy a different gate by question-key coincidence.
+  let id: unknown;
+  let readErr: unknown;
+  for (const name of [`req-${seq}.json`, `req-${seq}.json.done`]) {
+    try {
+      id = JSON.parse(readFileSync(join(dir, name), "utf8")).id;
+      readErr = undefined;
+      break;
+    } catch (e) {
+      readErr = e;
+    }
   }
+  if (typeof id !== "string" || id === "")
+    throw new Error(
+      `answerGate: cannot recover the request id for seq ${seq} in ${dir} — refusing to write an id-less response ` +
+        `(a response must carry its gate's id so it cannot answer the wrong gate)` +
+        (readErr ? `: ${String((readErr as Error)?.message ?? readErr)}` : id === undefined ? "" : `: req file had no string "id"`),
+    );
   const tmp = join(dir, `.resp-${seq}.json.tmp`);
-  writeFileSync(tmp, JSON.stringify({ ...(id ? { id } : {}), answers }), { mode: 0o600 });
+  writeFileSync(tmp, JSON.stringify({ id, answers }), { mode: 0o600 });
   renameSync(tmp, join(dir, `resp-${seq}.json`));
 }
 

@@ -114,6 +114,28 @@ describe("evalPredicate — additive input object + bare identifiers", () => {
     expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
   });
 
+  it("a reserved-word input key (class/for/new/in) no longer breaks an UNRELATED allow_if compilation", async () => {
+    // `class`/`for`/... are identifier-SHAPED but illegal as `new Function` parameter names → they used to
+    // crash compilation of a predicate that merely referenced an unrelated key. The predicate must still
+    // evaluate; the reserved-word key stays reachable via input[...].
+    for (const reserved of ["class", "for", "new", "in", "let", "yield", "static", "eval", "arguments"]) {
+      const d = new ScriptedDecider(rule("command === 'ls'"));
+      const allow = await d.decide(permWith({ command: "ls", [reserved]: "whatever" }), ctx());
+      expect((allow as any).response, `reserved key ${reserved} broke compilation`).toMatchObject({
+        kind: "permission",
+        behavior: "allow",
+      });
+    }
+  });
+
+  it("a reserved-word input key is still reachable via input['class'] (excluded only from bare binding)", async () => {
+    const d = new ScriptedDecider(rule("input['class'] === 'gold'"));
+    const allow = await d.decide(permWith({ class: "gold" }), ctx());
+    expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
+    const deny = await new ScriptedDecider(rule("input['class'] === 'gold'")).decide(permWith({ class: "silver" }), ctx());
+    expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
+  });
+
   it("an input key literally named `input` does not double-bind (the explicit object wins, no compile error)", async () => {
     // `input` must not be bound twice (a duplicate parameter is a "use strict" compile error). The explicit
     // object wins, so `input.command` is reachable even when there is also an `input` key.

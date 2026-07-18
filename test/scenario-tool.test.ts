@@ -288,10 +288,11 @@ describe.skipIf(!can || !havePython)("cowork-harness lint/lint-skill --output-fo
 
 // action.yml's Run step builds the cowork-harness arg array in bash. --strict is accepted only by
 // replay/lint/lint-skill/analyze-skill — verify-cassettes/run exit 2 ("unknown flag") on it — so the
-// step must NOT unconditionally append --strict; it has to guard on inputs.command the same way it
-// already guards --fail-on-skill-drift to replay-only. This asserts the guard textually (no bash
-// interpreter here) so a future edit that removes the case-guard and reintroduces the unconditional
-// append is caught.
+// step must NOT unconditionally append --strict; it has to guard on the command the same way it
+// already guards --fail-on-skill-drift to replay-only. The command is read from the HARNESS_COMMAND
+// env var (inputs are passed via `env:`, not interpolated into the script body, to close a shell
+// injection surface). This asserts the guard textually (no bash interpreter here) so a future edit
+// that removes the case-guard and reintroduces the unconditional append is caught.
 describe("action.yml — --strict is guarded to the commands that accept it", () => {
   const actionYml = readFileSync(resolve("action.yml"), "utf8");
   const runStep = actionYml.slice(actionYml.indexOf("Run cowork-harness"), actionYml.indexOf("Report"));
@@ -299,14 +300,14 @@ describe("action.yml — --strict is guarded to the commands that accept it", ()
   it("guards the --strict append behind a case/if that lists exactly the four commands that accept it", () => {
     expect(runStep).toMatch(/replay\s*\|\s*lint\s*\|\s*lint-skill\s*\|\s*analyze-skill/);
     // the --strict append line itself must appear AFTER the case guard opens (i.e. inside the case body)
-    const caseIdx = runStep.search(/case "\$\{\{ inputs\.command \}\}" in/);
+    const caseIdx = runStep.search(/case "\$HARNESS_COMMAND" in/);
     const strictAppendIdx = runStep.indexOf('args+=("--strict")');
     expect(caseIdx).toBeGreaterThan(-1);
     expect(strictAppendIdx).toBeGreaterThan(caseIdx);
   });
 
   it("verify-cassettes and run are absent from the --strict guard's command list", () => {
-    const caseIdx = runStep.search(/case "\$\{\{ inputs\.command \}\}" in/);
+    const caseIdx = runStep.search(/case "\$HARNESS_COMMAND" in/);
     const esacIdx = runStep.indexOf("esac", caseIdx);
     const guardBody = runStep.slice(caseIdx, esacIdx);
     expect(guardBody).not.toMatch(/verify-cassettes/);

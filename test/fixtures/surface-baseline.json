@@ -984,6 +984,9 @@
       ".evidenceErrors.presentFilesMalformed": {
         "type": "number"
       },
+      ".evidenceErrors.protocolMalformed": {
+        "type": "number"
+      },
       ".evidenceErrors.taskTracking": {
         "type": "number"
       },
@@ -1289,6 +1292,10 @@
       },
       ".preRunLinkAware": {
         "type": "boolean"
+      },
+      ".preRunOrigin": {
+        "type": "string",
+        "enum": ["local-walk", "remote-unavailable", "local-unreadable"]
       },
       ".preRunPaths": {
         "type": "array"
