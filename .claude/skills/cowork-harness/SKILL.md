@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.1.0
-  tracks-harness: cowork-harness 1.1.0 (baseline desktop-1.21459.0)
+  version: 1.2.0
+  tracks-harness: cowork-harness 1.2.0 (baseline desktop-1.21459.0)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.1.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.2.0` (baseline
 > `desktop-1.21459.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,9 +39,9 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.1.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.1.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.1.0"`. **Pin `@>=1.1.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.2.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.2.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.2.0"`. **Pin `@>=1.2.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 1.1.0 floor gates, by release:
+  What the ≥ 1.2.0 floor gates, by release:
 
   - **core set (pre-0.21.0 vintage, or mixed):** `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator (passes when the resolved value deep-equals one of the listed members — value ∈ your list, not the reverse), `verify-cassettes` incl. the `--allow-domain`/`--allow-email`/`--allow-patterns-file` allows (`--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.
   - **0.21.0:** `verify-cassettes --allow-path` (`path` — local absolute filesystem paths — is the scanner's 4th class), and `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field.
@@ -53,6 +53,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   - **0.33.0:** the `redacted` marker on display-omitted reasoning — `subagents[].reasoning` and the top-level `thinking[]` now carry `{text:"", redacted:true}` when the model returns a signed-but-empty thought (so "reasoned, text omitted" is distinct from "no thought"), plus the fenced `debug.thinking_display` escape hatch.
   - **1.0.0:** first stable release — the SPEC §12 compatibility contract takes effect (covered CLI/schema/env/Action surfaces are now stable; breaking changes need a major bump). No new author-facing command; the floor simply tracks the 1.0 release.
   - **1.1.0:** `analyze-skill` now also flags **interactive-artifact write-backs lost under Cowork** — a relative `fetch`/XHR/`sendBeacon`/`<form method=post>` in an emitted `.html` (or its `.py`/`.js` generator) that silently fails when the artifact is served from Cowork's own origin. `artifact-write-back-lost` gates under `--strict`; `artifact-write-back-suspect` is advisory; an unanalyzable candidate is a could-not-verify exit 3. An optional **`analyze-skill --runtime`** drives the artifact in a headless DOM (needs `jsdom`) to *observe* the lost write-back — enrichment only, never changes the exit code. Plus a `lint` check for a container-only assertion key (`no_scratchpad_leak`/`present_files_called`) used off the `container` tier, and the `doctor --output-format json` envelope frozen as a covered SPEC §12 surface (`schema/doctor.json`).
+  - **1.2.0:** three new assertion keys — `no_lost_write_back: true` (the write-back detector above wired as a per-scenario gate over the run's authored files, live-only) and the regex siblings `tool_result_matches`/`tool_result_not_matches` (case-insensitive per-result, for an error-signature *family* a literal substring can't express). **`microvm` outputs are now observable** — its session tree is snapshotted from the VM into the run dir, so `file_exists`/`artifact_json`/`user_visible_artifact`/`no_unexpected_files`/`input_unmodified`/`no_lost_write_back`/`semantic_matches` all work there, no longer `container`/`hostloop`-only. `status <dir>` also resolves the newest session under a `--run-dir` root; the completion footer prints a `→ result: …/result.json` pointer; the `on_unanswered=fail` error also points to `on_unanswered: llm`. `analyze-skill` hardening: a phantom `<script>` prose block no longer sinks a real verdict, a delete/remove flow claiming success classifies as lost (error) not just suspect, and write-back detection widened (optional-call `?.` spellings, member-spelled/aliased `fetch`/`sendBeacon`, axios instance/config forms).
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred), or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
@@ -221,7 +222,7 @@ them by what you're trying to prove:
 | a skill actually **ran** (or must NOT) | `skill_triggered: <regex>`, `no_skill_triggered: <regex>` |
 | a tool ran **inside** a skill's scope | `skill_tool_used: {skill, tool}` |
 | a sub-agent did the work | `subagent_output_contains: {contains}`, `subagent_dispatched: <regex>`, `dispatch_count_max: <N>` |
-| a pre-existing input wasn't mutated (incl. `uploads/**`) | `input_unmodified: <glob>` or `[<glob>, …]` (live/verify-run; not microvm) |
+| a pre-existing input wasn't mutated (incl. `uploads/**`) | `input_unmodified: <glob>` or `[<glob>, …]` (live/verify-run) |
 | no authored interactive artifact silently loses its Submit under Cowork | `no_lost_write_back: true` (**live-only**; static Tier A over the run's authored `.html`/`.py`/`.js`; per-scenario gate for the same class `analyze-skill` scans) |
 | a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |
 | a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
@@ -375,7 +376,9 @@ harness writes/updates throughout the run's lifecycle (including a crash-safety 
 error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no exit handler can catch —
 either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
 checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
-run starts, so capture stderr to get the exact directory. `--follow` fails loud on a timeout/staleness
+run starts, so capture stderr to get the exact directory — but `<dir>` also accepts the run-dir root
+passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the
+newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. (Fuller recipe in `docs/run-status.md` — repo-only, not in the installed
 payload; `cowork-harness status --help` has the flags.)
 

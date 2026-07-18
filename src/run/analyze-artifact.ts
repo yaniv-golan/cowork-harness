@@ -299,14 +299,60 @@ export function collectArtifactSources(target: string): { files: string[]; failu
 /** `fetch(`, `XMLHttpRequest`, or `sendBeacon(` anywhere in the raw text — the write-back primitives
  *  named verbatim in §B2. Checked lexically (not via AST) so it applies uniformly to `.html` markup,
  *  plain JS/TS, AND `.py` generator templates (the archetype: the tell-tale string lives in a Python
- *  triple-quoted string, which this regex sees exactly as written). */
-const WRITE_BACK_PRIMITIVE_RE = /\bfetch\s*\(|XMLHttpRequest|sendBeacon\s*\(/;
+ *  triple-quoted string, which this regex sees exactly as written). Also matches the optional-call
+ *  spellings (`fetch?.(`, `sendBeacon?.(`) for the same reason `BLOCK_WRITE_BACK_HINT_RE` does below —
+ *  a source whose ONLY write-back is spelled with `?.` must still reach candidacy, strictly widening
+ *  (never narrowing) which sources are analyzed. The optional-call group nests its trailing `\s*` INSIDE
+ *  the group (`(\?\.\s*)?` — never two independent `\s*` runs flanking one optional group) so there is
+ *  exactly one way to partition a run of whitespace between the two alternatives; a non-matching tail
+ *  (e.g. `fetch` followed by a very long whitespace run and no `(`) fails in linear time instead of
+ *  backtracking over every whitespace-split combination. This regex runs over every candidate file before
+ *  any byte/parse cap applies, so it must stay linear on adversarial input. */
+const WRITE_BACK_PRIMITIVE_RE = /\bfetch\s*(\?\.\s*)?\(|XMLHttpRequest|sendBeacon\s*(\?\.\s*)?\(/;
 /** A native declarative write-back: `<form … method=post …>` (any attribute order, quote style). Its own
  *  primitive per §B2 — an HTML candidate needs no `<script>` at all to qualify if this is present. */
 const FORM_POST_TAG_RE = /<form\b[^>]*\bmethod\s*=\s*["']?post["']?[^>]*>/i;
 function hasWriteBackPrimitive(text: string): boolean {
   return WRITE_BACK_PRIMITIVE_RE.test(text) || FORM_POST_TAG_RE.test(text);
 }
+
+/** Broader than `WRITE_BACK_PRIMITIVE_RE` — used ONLY to decide whether an UNPARSEABLE `<script>` block is
+ *  worth treating as a could-not-verify vs. discounting as prose. Mirrors every write-back kind
+ *  `analyzeScriptAst` recognizes: `fetch(`, a bare `.open(` XHR, `sendBeacon(`, and the bare word `axios`
+ *  (deliberately NOT `\.post\s*\(` alone — the `\baxios\b` alternative already matches ANY axios call
+ *  shape lexically, including `axios.put(`/`axios.patch(`/a bare `axios({...})`/`axios.request({...})`,
+ *  since the literal word "axios" is present in all of them; the `.post(` alternative below exists only to
+ *  catch `$.post(`/`jQuery.post(`, which have no such bare-word tell) — so an unparseable block whose only
+ *  write-back is `xhr.open("POST",…)` or `$.post("/api/…")` is never silently discounted. Erring toward
+ *  RECORDING (fail-closed): a block matching this is escalated to could-not-verify, not dropped.
+ *
+ *  Also mirrors OPTIONAL-CALL spellings (`?.`) of every one of those primitives — `xhr?.open?.(`,
+ *  `fetch?.(`, `$.post?.(`, `navigator?.sendBeacon?.(` — because `analyzeScriptAst`'s AST visitor matches
+ *  on the callee's property name only and never inspects acorn's `optional` flag, so a PARSEABLE block
+ *  using `?.` is flagged identically to its non-optional spelling; an UNPARSEABLE block using `?.` must be
+ *  recorded too, not discounted, for the same reason. Each optional-call group nests its trailing `\s*`
+ *  INSIDE the group (`(\?\.\s*)?`, never a `\s*` on both sides of one optional group) for the same linear-
+ *  time reason documented on `WRITE_BACK_PRIMITIVE_RE` above. One recognized form stays a documented,
+ *  lexically undetectable limitation: a call to a same-file fetch-WRAPPER by its own (arbitrary) name
+ *  inside an unparseable block — there is no fixed token to match on an arbitrary identifier; the
+ *  wrapper's own `fetch(` body is still caught whenever it shares the block. (A member-spelled
+ *  `window.fetch(`/`globalThis.fetch(`/`self.fetch(` is NOT in that category — `\bfetch` already matches
+ *  right after the `.`, so this regex sees it fine; `analyzeScriptAst`'s AST visitor is what needed a
+ *  matching `MemberExpression` arm, below.) `.put(`/`.patch(` sit alongside `.post(` for the same
+ *  `$`/`jQuery` reason (no bare-word tell the way `axios` has one) — kept in step with the AST's
+ *  whitelisted-receiver and any-receiver-advisory arms, which now recognize all three verbs; `.delete(` is
+ *  deliberately NOT added here either, matching the AST's deliberate exclusion (see that arm's comment) —
+ *  an unparseable block whose only token is `.delete(` on an arbitrary receiver is exactly the
+ *  `Map`/`Set`/cache-object noise the AST side already declined to flag, so the hint side declines too. A
+ *  few forms stay invisible to BOTH this regex AND the AST visitor below — the same accepted-approximation
+ *  class as the wrapper-name limitation, not specific to either layer: a COMPUTED member spelling
+ *  (`xhr["open"](…)`, `obj["post"](…)`) — neither the regex nor the visitor's `!c.computed` checks look
+ *  inside a bracketed property access; a dot-with-whitespace member spelling (`xhr . open (…)` — legal JS,
+ *  but this regex requires the `.` and property name adjacent) — the same limitation the pre-existing
+ *  regex already had; and a call reached only through an aliased/re-exported binding the visitor's
+ *  one-hop `consts` resolution can't unwind. */
+const BLOCK_WRITE_BACK_HINT_RE =
+  /\bfetch\s*(\?\.\s*)?\(|XMLHttpRequest|\.open\s*(\?\.\s*)?\(|sendBeacon\s*(\?\.\s*)?\(|\baxios\b|\.post\s*(\?\.\s*)?\(|\.put\s*(\?\.\s*)?\(|\.patch\s*(\?\.\s*)?\(/;
 
 /** A browser/HTML-emit marker: `<script`, `document.`, `innerHTML`, or a literal HTML-document string
  *  emit (`<!DOCTYPE html`/`<html …>`). Required (in addition to a write-back primitive) for the
@@ -414,7 +460,16 @@ interface DeclarativeFormHit {
 /** Every native `<form method=post …>` whose `action` is relative/local (or absent — an absent `action`
  *  submits back to the current page URL, which is inherently same-origin). Each hit is, by definition, a
  *  LOST write-back per §B2/§B3: there is no JS handler, so no `resp.ok` check is even possible, and the
- *  browser's default navigate-to-response is what silently eats Cowork's non-ok response. */
+ *  browser's default navigate-to-response is what silently eats Cowork's non-ok response.
+ *
+ *  DOCUMENTED GAP (out of scope here, a separate follow-up): this reads only the `<form>` tag's OWN
+ *  `action`/`method`. A submit button/input's `formaction`/`formmethod` attribute overrides those for that
+ *  one submission — so `<form action="https://remote-host.example/x" method="post"><button
+ *  formaction="/api/save">Save</button></form>` is a real relative, in-scope write-back (the button's
+ *  `formaction` wins over the form's own remote `action`) that this function currently never sees, since
+ *  the enclosing form is skipped as out-of-scope remote egress before any button inside it is examined. A
+ *  `formaction`/`formmethod` scan would need to walk each `<button>`/`<input type=submit>` inside every
+ *  `<form>`, not just the form tag itself. */
 function relativeFormPosts(text: string): DeclarativeFormHit[] {
   const hits: DeclarativeFormHit[] = [];
   FORM_TAG_RE.lastIndex = 0;
@@ -542,6 +597,28 @@ function methodOf(optsNode: acorn.Expression | null | undefined, consts: ConstsM
   return "GET";
 }
 
+/** Resolve the `url` FIELD (not a folded string — the raw expression node, so the caller folds it exactly
+ *  the way every other primitive's `urlNode` is folded) from an axios "config object" argument —
+ *  `axios({method:"POST", url:"/api/save", data})`, `axios.request({...})`. Same one-hop `consts`
+ *  resolution `methodOf` uses for `method`, applied to the sibling `url` key. `undefined` (no options, not
+ *  an object, no `url` key) means "nothing to fold" — the caller's `foldStr(undefined, …)` already returns
+ *  `null`, which is treated as the existing documented false negative, not a failure. */
+function urlNodeFromConfig(optsNode: acorn.Expression | null | undefined, consts: ConstsMap): acorn.Expression | undefined {
+  if (!optsNode) return undefined;
+  let o: acorn.AnyNode = optsNode;
+  if (o.type === "Identifier" && consts.has(o.name)) {
+    const resolved = consts.get(o.name);
+    if (resolved) o = resolved;
+  }
+  if (o.type !== "ObjectExpression") return undefined;
+  for (const p of o.properties) {
+    if (p.type !== "Property") continue;
+    const keyName = p.key.type === "Identifier" ? p.key.name : p.key.type === "Literal" ? String(p.key.value) : null;
+    if (keyName === "url") return p.value as acorn.Expression;
+  }
+  return undefined;
+}
+
 const COMMIT_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 type UrlTarget = "relative" | "remote" | "unknown";
@@ -644,7 +721,7 @@ function guardStatusOf(ancestors: acorn.AnyNode[], consts: ConstsMap): GuardStat
 
 const OK_CHECK_RE = /(resp?\.ok\b|res\.ok\b|response\.ok\b|\.status\s*(===|!==|==|!=|<=|>=|<|>))/;
 const DOWNLOAD_FALLBACK_RE = /(createObjectURL|\.download\s*=|triggerDownload)/;
-const PERSIST_CLAIM_RE = /\b(saved|submitt\w*|persist\w*|complet\w*|success\w*)\b/i;
+const PERSIST_CLAIM_RE = /\b(saved|submitt\w*|persist\w*|complet\w*|success\w*|delet\w*|remov\w*)\b/i;
 const LOOKAHEAD_WINDOW = 1500;
 
 type Outcome =
@@ -691,7 +768,7 @@ function classifyConsequence(params: { kind: string; method: string; url: string
     return {
       kind: "lost",
       line,
-      reason: `relative ${method} write-back to "${urlDisplay}" (${kind}) claims success without checking resp.ok/status — under Cowork the request resolves against Cowork's own origin with a non-ok response, producing a false "saved" claim`,
+      reason: `relative ${method} write-back to "${urlDisplay}" (${kind}) claims success without checking resp.ok/status — under Cowork the request resolves against Cowork's own origin with a non-ok response, producing a false success claim (saved/deleted/removed/etc.)`,
     };
   }
   return {
@@ -701,21 +778,45 @@ function classifyConsequence(params: { kind: string; method: string; url: string
   };
 }
 
-/** Walk one parsed `<script>` block's AST for write-back call sites (`fetch`, an XHR `.open(method,url)`
- *  with a non-GET method, `sendBeacon`, a one-level fetch-wrapper, or an `axios`/`$`/`jQuery` `.post`) and
- *  classify each into an `Outcome`. `block.offset` + `fileText` are used only to map an AST `.start` back
- *  to a real 1-based source line via `lineOf`. */
+/** Walk one parsed `<script>` block's AST for write-back call sites — `fetch` (bare identifier OR
+ *  member-spelled on any receiver: `window.fetch(`/`self.fetch(`/…), an XHR `.open(method,url)` with a
+ *  non-GET method, `sendBeacon` (bare identifier OR member-spelled), a one-level fetch-wrapper (its inner
+ *  call recognized with the same bare/member rule as top-level `fetch`), an `axios`/`$`/`jQuery`
+ *  `.post`/`.put`/`.patch`/`.delete`/`.postForm`/`.putForm`/`.patchForm` (classified normally, may be
+ *  `lost` — `.delete` is INCLUDED here, unlike the any-receiver arm below, because the literal
+ *  `axios`/`$`/`jQuery` identifier has no ambiguity the way an arbitrary receiver's `.delete(` does), a
+ *  bare `axios({...})` call OR `axios.request({...})` — the config-object argument may be an inline
+ *  object literal OR a hoisted identifier resolved one hop through `consts` (`method`/`url` folded out of
+ *  it the same way a `fetch` options argument is) — or a `.post`/`.put`/`.patch` on any OTHER receiver
+ *  (classified `suspect` only, never `lost` — see that arm's comment; `.delete` is deliberately excluded
+ *  there, see the same comment) — and classifies each into an `Outcome`. `block.offset` + `fileText` are
+ *  used only to map an AST `.start` back to a real 1-based source line via `lineOf`. Two gaps stay
+ *  documented, out of scope here: axios's OWN alternate config-call shape, `$.ajax({...})`, is not
+ *  recognized (a different config-key vocabulary than axios's `method`/`url`); and a `formaction`/
+ *  `formmethod` attribute on a submit button/input, which overrides its enclosing `<form>`'s own
+ *  `action`/`method` — `relativeFormPosts` reads only the `<form>` tag itself, so a
+ *  `<form action="https://remote"><button formaction="/api/save">` (a relative override on an otherwise
+ *  remote, out-of-scope form) is a real declarative write-back this analyzer currently misses. */
 function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string): Outcome[] {
   const consts = buildConstsMap(ast);
 
   // Pass 1: one-level fetch-wrapper helpers — `function f(url, ...) { ... fetch(url, {method:"POST"}) ... }`.
+  // The inner fetch call is recognized identically to the main visitor below: a bare `fetch` identifier OR
+  // a member-spelled call on any receiver (`window.fetch(...)`, `self.fetch(...)`, …) — a wrapper whose
+  // body happens to spell it the member way must still be recognized as a wrapper.
   const wrappers = new Map<string, number>();
   walk.simple(ast, {
     FunctionDeclaration(fn) {
       if (!fn.id) return;
       walk.simple(fn.body, {
         CallExpression(c) {
-          if (c.callee.type === "Identifier" && c.callee.name === "fetch" && c.arguments[0]?.type === "Identifier") {
+          const isFetchCallee =
+            (c.callee.type === "Identifier" && c.callee.name === "fetch") ||
+            (c.callee.type === "MemberExpression" &&
+              !c.callee.computed &&
+              c.callee.property.type === "Identifier" &&
+              c.callee.property.name === "fetch");
+          if (isFetchCallee && c.arguments[0]?.type === "Identifier") {
             const argName = (c.arguments[0] as acorn.Identifier).name;
             const idx = fn.params.findIndex((p) => p.type === "Identifier" && p.name === argName);
             const meth = methodOf(c.arguments[1] as acorn.Expression | undefined, consts);
@@ -733,8 +834,18 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
       let kind: string | null = null;
       let urlNode: acorn.Expression | undefined;
       let method = "GET";
+      // Set only by the any-receiver `.post(` arm below: forces the final "live" classification to
+      // `suspect` regardless of response-handling heuristics, never `lost` — see that arm's comment.
+      let forceAdvisory = false;
 
-      if (c.type === "Identifier" && c.name === "fetch") {
+      if (
+        (c.type === "Identifier" && c.name === "fetch") ||
+        (c.type === "MemberExpression" && !c.computed && c.property.type === "Identifier" && c.property.name === "fetch")
+      ) {
+        // Covers both the bare identifier call (`fetch(...)`) and a member-spelled call on any receiver
+        // (`window.fetch(...)`, `globalThis.fetch(...)`, `self.fetch(...)`, or any other `<obj>.fetch(...)`)
+        // — acorn gives these the same CallExpression/arguments shape either way, and there is no scoping
+        // reason to believe a `.fetch(` call is anything other than the global fetch API.
         kind = "fetch";
         urlNode = n.arguments[0] as acorn.Expression | undefined;
         method = methodOf(n.arguments[1] as acorn.Expression | undefined, consts);
@@ -755,7 +866,14 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
           urlNode = n.arguments[1] as acorn.Expression;
           method = m;
         }
-      } else if (c.type === "MemberExpression" && !c.computed && c.property.type === "Identifier" && c.property.name === "sendBeacon") {
+      } else if (
+        (c.type === "Identifier" && c.name === "sendBeacon") ||
+        (c.type === "MemberExpression" && !c.computed && c.property.type === "Identifier" && c.property.name === "sendBeacon")
+      ) {
+        // Mirrors the fetch arm above: a bare `sendBeacon(...)` identifier (a local alias, e.g.
+        // `const sendBeacon = navigator.sendBeacon.bind(navigator)`) is recognized the same as the
+        // member-spelled `navigator.sendBeacon(...)`. Accepted over-approximation, same as any-receiver
+        // `.fetch(`: a same-file function coincidentally named `sendBeacon` would also match.
         kind = "beacon";
         urlNode = n.arguments[0] as acorn.Expression | undefined;
         method = "POST";
@@ -763,13 +881,67 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
         c.type === "MemberExpression" &&
         !c.computed &&
         c.property.type === "Identifier" &&
-        c.property.name === "post" &&
+        ["post", "put", "patch", "delete", "postForm", "putForm", "patchForm"].includes(c.property.name) &&
         c.object.type === "Identifier" &&
         ["axios", "$", "jQuery"].includes(c.object.name)
       ) {
-        kind = "lib-post";
+        // `.post(`/`.put(`/`.patch(`/`.delete(` on the known axios/$/jQuery identifiers — covers
+        // `axios.put(...)`, `$.patch(...)`, `axios.delete(...)`, etc. the same way `axios.post(...)` was
+        // already covered. `.delete(` is included HERE (unlike the any-receiver arm below) because the
+        // ambiguity that arm exists to avoid — a same-named method on an unrelated object, e.g. a
+        // `Map`/`Set`/cache `.delete(key)` — doesn't apply to the LITERAL `axios`/`$`/`jQuery` identifier:
+        // there is no ambiguity about what `axios.delete(...)` means. Also covers axios v1's multipart
+        // form-data verb aliases — `.postForm(`/`.putForm(`/`.patchForm(` — which are genuine write-backs
+        // with the verb embedded in the name (`method` below strips the `Form` suffix before uppercasing,
+        // so `postForm` → `POST`, `put`/`putForm` both → `PUT`, etc.).
+        kind = `lib-${c.property.name}`;
         urlNode = n.arguments[0] as acorn.Expression | undefined;
-        method = "POST";
+        method = c.property.name.replace(/Form$/, "").toUpperCase();
+      } else if (
+        ((c.type === "Identifier" && c.name === "axios") ||
+          (c.type === "MemberExpression" &&
+            !c.computed &&
+            c.property.type === "Identifier" &&
+            c.property.name === "request" &&
+            c.object.type === "Identifier" &&
+            c.object.name === "axios")) &&
+        (n.arguments[0]?.type === "ObjectExpression" || n.arguments[0]?.type === "Identifier")
+      ) {
+        // A bare `axios({...})` call (axios itself is callable as a request function) OR
+        // `axios.request({...})` — a "config object" call shape distinct from every other primitive here:
+        // `method` AND `url` are both fields on the single object argument, rather than a URL first
+        // argument plus a separate options argument. Reuses `methodOf` (already built to fold a `method`
+        // key out of an object/one-hop-identifier) for the method, and the sibling `urlNodeFromConfig`
+        // helper for the `url` key. The argument may be an inline object literal OR a HOISTED identifier
+        // (`const cfg = {method:"POST", url:"/api/save"}; axios(cfg)`) — both `methodOf` and
+        // `urlNodeFromConfig` already one-hop-resolve an `Identifier` through `consts`, so accepting either
+        // node type here just stops gating that resolution out before it runs. An identifier that ISN'T a
+        // resolvable config object (not in `consts`, or resolves to something other than an object literal)
+        // folds to `method: "UNKNOWN"` — filtered by the shared `COMMIT_METHODS` check below exactly like
+        // every other computed-value case in this file, not a new source of noise.
+        kind = "axios-config";
+        method = methodOf(n.arguments[0] as acorn.Expression, consts);
+        urlNode = urlNodeFromConfig(n.arguments[0] as acorn.Expression, consts);
+      } else if (
+        c.type === "MemberExpression" &&
+        !c.computed &&
+        c.property.type === "Identifier" &&
+        ["post", "put", "patch"].includes(c.property.name)
+      ) {
+        // A `.post(`/`.put(`/`.patch(` call on a receiver OUTSIDE the known axios/$/jQuery set — the
+        // dominant real-world miss is an axios INSTANCE (`const api = axios.create({}); api.put(...)`),
+        // which is lexically indistinguishable from unrelated code that merely has a same-named method
+        // (the canonical false-positive risk: Express `app.post("/route", handler)`). We can't tell these
+        // apart, so this NEVER escalates to `lost` (an error) — only ever `suspect` (advisory), enforced
+        // below at the "live" branch via `forceAdvisory`. Never silently invisible either way. `.delete(`
+        // is deliberately EXCLUDED from this arm (unlike the whitelisted-receiver arm above, which has no
+        // `.delete` either, for the same reason): on an arbitrary receiver, `.delete("/some/key")` is
+        // common on non-HTTP collection types (e.g. `Map`/`Set`/a cache object), and flagging every one of
+        // those would be real advisory noise rather than a plausible write-back call.
+        kind = `lib-${c.property.name}-other-receiver`;
+        urlNode = n.arguments[0] as acorn.Expression | undefined;
+        method = c.property.name.toUpperCase();
+        forceAdvisory = true;
       }
 
       if (!kind || !COMMIT_METHODS.has(method)) return;
@@ -801,7 +973,18 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
         return;
       }
       // status === "live": either genuinely unguarded, or a guard that provably evaluates truthy for
-      // this branch — either way the call is reachable, so classify its consequence normally.
+      // this branch — either way the call is reachable. `forceAdvisory` (the any-receiver `.post(`/`.put(`/
+      // `.patch(` arm) skips the normal consequence heuristics entirely — we cannot confidently read
+      // response-handling for an unknown receiver, so it is always `suspect`, never escalated to `lost`
+      // via a heuristic that was tuned for a KNOWN write-back primitive.
+      if (forceAdvisory) {
+        outcomes.push({
+          kind: "suspect",
+          line,
+          reason: `a "${method.toLowerCase()}(" call on a receiver outside the known axios/$/jQuery set targets a relative URL ("${url ?? "(unresolved)"}") — likely the axios-instance write-back idiom (const api = axios.create(); api.${method.toLowerCase()}(...)), but the receiver is not provably a write-back client, so this is advisory rather than an error`,
+        });
+        return;
+      }
       const after = fileText.slice(block.offset + n.start, block.offset + n.start + LOOKAHEAD_WINDOW);
       outcomes.push(classifyConsequence({ kind, method, url, line, after }));
     },
@@ -814,16 +997,25 @@ function analyzeScriptAst(ast: acorn.Node, block: ScriptBlock, fileText: string)
 // Per-file core
 // ------------------------------------------------------------------------------------------------- //
 
-/** Analyze ONE already-read source file for the Cowork write-back bug class. Returns EXACTLY ONE of:
- *   - `{finding}` — a verdict finding (`artifact-write-back-lost` error, or `artifact-write-back-suspect`
- *     advisory);
- *   - `{failure}` — a could-not-verify record (`AnalysisFailure`, see the stage enum on that type);
- *   - `{}` — either the source is not a Tier A CANDIDATE at all (ordinary code — no finding, no failure),
- *     or it IS a candidate but has no live relative write-back (no relative write-back at all, or every
- *     one found is behind a provably-dead guard) — genuinely clean.
- *  Never returns both `finding` and `failure` — a could-not-verify signal always wins over a same-file
- *  finding (see the parse-failure short-circuit below), so a real problem is never masked by a partial
- *  verdict from the rest of the file. */
+/** Analyze ONE already-read source file for the Cowork write-back bug class. Returns:
+ *   - `{finding}` — a verdict (`artifact-write-back-lost` error, or `artifact-write-back-suspect` advisory)
+ *     from the file's real, parseable script/form write-back(s);
+ *   - `{failure}` — a could-not-verify record (`AnalysisFailure`, see the stage enum): a block that carries
+ *     a write-back hint but could not be parsed/cap-analyzed, an `unsupported-guard`, or a candidate whose
+ *     every isolated `<script>` block was unparseable so nothing could be analyzed;
+ *   - `{finding, failure}` — BOTH, when the file has a real verdict AND a separate write-back-bearing block
+ *     that could not be analyzed (a parse/cap failure — the finding is surfaced, the could-not-verify is not
+ *     swallowed). NOTE: an `unsupported-guard` still short-circuits to `{failure}` alone.
+ *   - `{}` — not a Tier A candidate (ordinary code), or a candidate whose parseable write-back(s) are all
+ *     clean/dead — genuinely clean.
+ *  A block that fails to PARSE with no write-back hint is treated as prose (a docstring/comment the lexical
+ *  `<script>` regex mis-extracted) and DISCOUNTED — one phantom block never sinks a file the rest of the loop
+ *  could adjudicate. But discounting a block is never enough on its own to reach a silent clean pass: a
+ *  fail-closed backstop with two triggers covers it — (1) EVERY isolated block was discounted and no
+ *  finding/form resulted (nothing was ever analyzed), or (2) at least one block parsed, but the file text
+ *  OUTSIDE every extracted block's span (top-level code, an inline `on*=` handler, surrounding template
+ *  markup) still carries a write-back hint the block loop never got to analyze — a parseable sibling must
+ *  not vouch for that un-analyzed remainder. Either trigger yields a could-not-verify, never `{}`. */
 export function analyzeArtifactFile(path: string, text: string): { finding?: SkillFinding; failure?: AnalysisFailure } {
   const ext = extname(path).toLowerCase();
   if (!SOURCE_EXTS.has(ext)) return {};
@@ -874,33 +1066,115 @@ export function analyzeArtifactFile(path: string, text: string): { finding?: Ski
     });
   }
 
+  // Per-block analysis. A block that FAILS TO PARSE (a genuine acorn SyntaxError) is NOT automatically
+  // fatal: if its body carries no write-back hint it is almost certainly a docstring/comment that merely
+  // mentions `<script>...</script>` (SCRIPT_BLOCK_RE is lexical and can't tell prose from real markup), so
+  // we DISCOUNT it — one phantom block can't sink a file whose real block(s) yielded a verdict. If a hint
+  // IS present we could not rule out a lost write-back, so we record a could-not-verify surfaced ALONGSIDE
+  // any finding (fail-closed). A CAP hit (node-limit/deadline) is thrown AFTER a successful parse (see
+  // parseWithCaps) — the block is proven-valid JS, never prose — so it is ALWAYS recorded, hint or not.
+  const blockFailures: AnalysisFailure[] = [];
+  let parsedBlockCount = 0;
+  let discountedBlockCount = 0;
   for (const block of blocks) {
     let ast: acorn.Node;
     try {
       ast = parseWithCaps(block.code);
     } catch (e) {
       if (e instanceof CapExceededError) {
-        return { failure: { path, stage: e.stage, reason: e.message } };
+        blockFailures.push({ path, stage: e.stage, reason: e.message });
+      } else if (BLOCK_WRITE_BACK_HINT_RE.test(block.code)) {
+        blockFailures.push({ path, stage: "parse", reason: (e as Error).message });
+      } else {
+        discountedBlockCount++;
       }
-      return { failure: { path, stage: "parse", reason: (e as Error).message } };
+      continue;
     }
+    parsedBlockCount++;
     outcomes.push(...analyzeScriptAst(ast, block, text));
   }
 
+  // A real, PARSED block using control flow the analyzer can't represent as a guard is a deliberate
+  // could-not-verify and still short-circuits the whole file (unchanged from prior behavior), unlike the
+  // parse-failure path above (which surfaces a failure ALONGSIDE any finding). Rationale for the
+  // asymmetry: an unsupported guard means the analyzer cannot trust ANY of its own same-file
+  // classifications — the un-modelable control flow (e.g. a switch case) may gate the very call sites it
+  // already classified as clean/dead — so a single could-not-verify that forces exit 3 is the
+  // conservative verdict, and surfacing a possibly-wrong finding beside it could misdirect a fix. Both
+  // paths are fail-closed (exit 3 either way); this is a difference in what gets SURFACED, not a
+  // false-clean hole.
   const unsupported = outcomes.find((o): o is Extract<Outcome, { kind: "unsupported-guard" }> => o.kind === "unsupported-guard");
   if (unsupported) {
     return { failure: { path, stage: "unsupported-guard", reason: unsupported.reason } };
   }
 
   const live = outcomes.filter((o): o is Extract<Outcome, { kind: "lost" | "suspect" }> => o.kind === "lost" || o.kind === "suspect");
-  if (live.length === 0) return {}; // no relative write-back at all, or every one is provably dead code
-
-  const lost = live.find((o) => o.kind === "lost");
-  if (lost) {
-    return { finding: { rule: "artifact-write-back-lost", severity: "error", path, line: lost.line, message: lost.reason } };
+  let finding: SkillFinding | undefined;
+  if (live.length > 0) {
+    const lost = live.find((o) => o.kind === "lost");
+    finding = lost
+      ? { rule: "artifact-write-back-lost", severity: "error", path, line: lost.line, message: lost.reason }
+      : { rule: "artifact-write-back-suspect", severity: "advisory", path, line: live[0].line, message: live[0].reason };
   }
-  const suspect = live[0];
-  return { finding: { rule: "artifact-write-back-suspect", severity: "advisory", path, line: suspect.line, message: suspect.reason } };
+
+  let failure: AnalysisFailure | undefined = blockFailures[0];
+  if (failure && blockFailures.length > 1) {
+    // More than one sibling block failed to parse/cap-out — don't silently drop the rest; note the count
+    // in the surfaced reason so a reader knows this file has multiple unresolved blocks, not just one.
+    failure = { ...failure, reason: `${failure.reason} (+${blockFailures.length - 1} more unparseable block(s))` };
+  }
+  // Fail-closed backstop, two triggers. Gate the whole block on `!failure` ONLY — NOT `!finding`. An
+  // ADVISORY `suspect` finding gates NOTHING downstream (exit precedence in analyze-skill.ts: a strict
+  // `error` ⇒ 1, any `analysisFailures` ⇒ 3, else 0), and an ERROR finding gates nothing downstream
+  // EITHER unless `--strict` is passed — so neither finding severity may suppress an un-analyzed-remainder
+  // could-not-verify; doing so would leave a real un-analyzed write-back surface silently unreported under
+  // default (non-strict) invocation. `blockFailures[0]` already set means a could-not-verify was recorded,
+  // so `!failure` is the correct guard. The `{finding, failure}` return shape is already produced by the
+  // hint-block path, so a finding-plus-remainder-failure file is consistent.
+  //
+  //  (1) NOTHING parsed AND no finding (`parsedBlockCount === 0 && !finding`): every isolated block was
+  //      discounted as unparseable prose-or-opaque-template — could-not-verify. Kept as its own
+  //      unconditional trigger (NOT folded into the remainder test): candidacy here can come from a
+  //      declarative <form method=post> with a REMOTE action (skipped by relativeFormPosts → no finding,
+  //      and no BLOCK_WRITE_BACK_HINT_RE token anywhere in the text), so the remainder is hint-free — a
+  //      remainder-only test would false-green exactly that shape.
+  //  (2) The remainder scan runs in every OTHER case reached here (trigger (1) did not fire): whether
+  //      because a block parsed (`parsedBlockCount > 0`), or because nothing parsed but a finding DID
+  //      result (a relative `<form method=post>` with zero <script> blocks at all — that finding must not
+  //      suppress checking the rest of the file for an independent, un-analyzed write-back). The
+  //      un-analyzed REMAINDER — the file text minus every extracted block's code span — is tested for a
+  //      write-back hint (top-level JS-file code, an inline on*= handler, template markup); the block loop
+  //      never analyzes that surface, so neither a parseable sibling block nor an already-flagged form can
+  //      vouch for it. A hint there is a could-not-verify, recorded ALONGSIDE any finding.
+  if (!failure && discountedBlockCount > 0) {
+    if (parsedBlockCount === 0 && !finding) {
+      failure = {
+        path,
+        stage: "extract",
+        reason:
+          "candidate source has browser/write-back markers but every isolated <script>…</script> block was unparseable — no analyzable write-back could be confirmed",
+      };
+    } else {
+      let remainder = "";
+      let cursor = 0;
+      for (const block of blocks) {
+        remainder += text.slice(cursor, block.offset);
+        cursor = block.offset + block.code.length;
+      }
+      remainder += text.slice(cursor);
+      if (BLOCK_WRITE_BACK_HINT_RE.test(remainder)) {
+        failure = {
+          path,
+          stage: "extract",
+          reason:
+            "a write-back outside every isolated <script>…</script> block (top-level code or an inline handler) was never analyzed while an unparseable block was discounted as prose — could not rule out a lost write-back",
+        };
+      }
+    }
+  }
+
+  if (finding || failure) return { finding, failure };
+  return {}; // parseable write-back(s) all clean/dead, and nothing unparseable — genuinely clean
 }
 
 // ------------------------------------------------------------------------------------------------- //

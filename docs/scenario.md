@@ -128,7 +128,10 @@ fabricates an answer. Set it per scenario (`on_unanswered: fail | prompt | first
 (`--on-unanswered`). **The two accept different value sets:** the CLI `--on-unanswered` flag takes only
 `fail|first` on `run` (`fail|prompt|first` on `skill`) — `llm` is a scenario-YAML-only value, never a
 valid `--on-unanswered` argument (the CLI equivalent is the separate `--decider-llm` flag). Default for
-`run` is **`fail`** (the error names the exact `--answer`/`choose` to add); `first` picks option 1 and
+`run` is **`fail`** (the error names the exact `--answer`/`choose` to add, and also now mentions
+`on_unanswered: llm` in the scenario YAML as a secondary escape valve — useful when a gate's wording
+drifts run-to-run and a regex chases a moving target, but non-deterministic and one model call per gate,
+so it's not unconditionally preferable to fixing the script); `first` picks option 1 and
 warns loudly; `prompt` asks at the TTY. (`run` rejects `prompt` — it would break determinism.)
 
 `llm` lets an **in-band LLM decider** answer the unscripted question (the scenario-YAML equivalent of

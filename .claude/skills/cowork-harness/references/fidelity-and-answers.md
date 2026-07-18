@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 1.1.0` (baseline `desktop-1.20186.1`).
+Self-contained reference. Tracks `cowork-harness 1.2.0` (baseline `desktop-1.20186.1`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -130,7 +130,10 @@ hands `fn` exactly this dict.
 ### Determinism contract
 
 - `fail` — the default for `run`. On an unscripted gate it hard-errors; the error names the exact
-  `--answer`/`choose` to add. Correct, but flaky for skills whose gates appear stochastically.
+  `--answer`/`choose` to add, and also suggests `on_unanswered: llm` (in the scenario YAML) as a
+  secondary escape valve for a gate whose wording drifts run-to-run — a regex chases a moving target,
+  at the cost of non-determinism (one model call per gate). Correct, but flaky for skills whose gates
+  appear stochastically.
 - `first` — picks option 1 and warns loudly. **Flagged `nonDeterministic`** — not a deterministic
   substitute for scripted answers. (For a web_fetch approval gate it abstains → fail-closed.)
 - `prompt` — asks at the TTY (`skill` only).
