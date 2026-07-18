@@ -100,6 +100,30 @@ describe.skipIf(!can)("cli --help: prune documents --pinned-older-than", () => {
   });
 });
 
+// The TOP-LEVEL `--help` summary for `analyze-skill` once lagged the per-command help: it omitted
+// `--runtime` and exit code `3`. Pin the top-level block specifically (NOT `analyze-skill --help`,
+// which already documents both — a pin there would pass without guarding the top-level drift).
+describe.skipIf(!can)("cli --help: top-level analyze-skill summary documents --runtime and exit 3", () => {
+  function topLevelHelp() {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-help-"));
+    const r = spawnSync("node", [CLI, "--help"], { encoding: "utf8", cwd });
+    return { code: r.status, text: (r.stderr || "") + (r.stdout || "") };
+  }
+  it("`cowork-harness --help` mentions analyze-skill's --runtime flag and exit 3", () => {
+    const { text } = topLevelHelp();
+    // Slice to the analyze-skill entry only (start at its command line, stop at the next command
+    // `assertions --list`). Whole-text `toContain` would false-pass: "exit 3" also appears in the
+    // verify-cassettes summary, so an unanchored check couldn't detect a regression in THIS block.
+    const start = text.indexOf("analyze-skill <");
+    const end = text.indexOf("assertions --list", start);
+    expect(start, "top-level help has no analyze-skill entry").toBeGreaterThan(-1);
+    expect(end, "could not bound the analyze-skill block").toBeGreaterThan(start);
+    const block = text.slice(start, end);
+    expect(block).toContain("--runtime");
+    expect(block).toContain("exit 3");
+  });
+});
+
 // `lint`/`lint-skill` are parseArgs-direct commands too, but unlike every case above they're thin
 // passthroughs to the bundled `scenario.py` (a Python argparse CLI invoked via subprocess), so their
 // `--help` text is argparse's own `usage: scenario.py lint ...` / `usage: scenario.py lint-skill ...`,

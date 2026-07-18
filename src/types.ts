@@ -244,7 +244,7 @@ export const Assertion = z.strictObject({
     .string()
     .optional()
     .describe(
-      "a file exists AND is under a user-visible prefix: mnt/outputs, each connected-folder mount (mnt/<folder>), or the legacy mnt/.projects fallback (pre-1.14271.0)",
+      "a file exists AND is under a user-visible prefix. Write the path workRoot-relative (e.g. `outputs/x.md`), NOT with an `mnt/` prefix: the accepted prefixes are `outputs/`, each connected-folder mount (`<folder>/`), or the legacy `.projects` fallback (pre-1.14271.0). (At fidelity tiers the workRoot is the `mnt/` mount, so the file lands at `mnt/outputs/…` on disk, but the assertion value is the relative form.)",
     ),
   tool_called: toolGlob
     .optional()
@@ -553,7 +553,7 @@ export const Assertion = z.strictObject({
     .boolean()
     .optional()
     .describe(
-      "every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model); zero gates fired passes vacuously — pair with gate_answer_count_min to also require a gate",
+      "accepts a boolean. `true`: every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model); zero gates fired passes vacuously — pair with gate_answer_count_min to also require a gate. `false` is the inverse — it asserts a CONFIRMED delivery failure (at least one gate whose delivered === false), for negative-path scenarios; an unobserved (delivered === null) delivery satisfies neither true nor false",
     ),
   gate_answer_count_min: z
     .number()

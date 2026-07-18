@@ -113,6 +113,11 @@ under `cassettes/`, which is **gitignored** — this repo's own committed exampl
 `examples/replays/` instead. Pass `--out examples/replays/<name>.cassette.json` (or your own tracked
 path) if the cassette should be committed.
 
+On that default path, `record` refuses to overwrite an existing cassette that belongs to a **different**
+scenario name (their names slugify to the same default path — a silent-clobber guard, not a general
+"don't overwrite" check; a routine same-scenario re-record is unaffected). `--force` narrowly opts out of
+just that refusal; pass `--out <file>` instead if you want to disambiguate rather than overwrite.
+
 ## Answering gates during recording
 
 By default `record` answers gates from the scenario's scripted `answers:` and falls to `on_unanswered`
@@ -123,6 +128,7 @@ separate discovery run to learn the gates, then encoding answers, then recording
 - `--decider-dir <dir>` — a driving agent answers in-band (pair with `gates`/`answer`). Single scenario
   only (not a `dir/` batch).
 - `--decider-llm [--intent "<one line>"]` — a model answers the gates.
+- `--decider-model <model>` — pins which model answers the gates; requires `--decider-llm`.
 - `--on-unanswered first` — auto-pick option 1 for any unmatched gate.
 
 These are rejected together with `--rerecord-stale` (it re-records committed cassettes at the default
@@ -266,7 +272,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `task_status` | a task whose `subject` OR `id` matches the `match` regex reached the given `status` — evidence-unavailable when `tasks` telemetry is absent |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
-| `gate_answers_delivered` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min` to also require a gate |
+| `gate_answers_delivered: true` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min` to also require a gate |
+| `gate_answers_delivered: false` | the inverse — asserts a *confirmed* delivery failure (at least one gate whose `delivered === false`); an unobserved (`null`) delivery satisfies neither `true` nor `false` |
 | `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass |
 | `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
 | `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
@@ -661,7 +668,7 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
     slash-free glob matches that name at any depth; a slashed glob is anchored to the mount root.
 
 - **`--margins`** (diagnostic only, never affects the gate verdict) — reports a recorded-vs-budget count
-  plus margin for each count-bound assert (e.g. `max_tool_calls`, `max_redundant_tool_calls`), replaying
+  plus margin for each count-bound assert (e.g. `tool_calls_max`, `max_redundant_tool_calls`), replaying
   each affected cassette once to fold the count. A single-sample estimate — one cassette isn't a
   distribution; use `run --repeat` for real variance. See `verify-cassettes --help`.
 

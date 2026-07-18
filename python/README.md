@@ -5,6 +5,9 @@ beside your normal Python tests. This is an **opt-in lane** (mark tests `@pytest
 not the fast inner loop: each call spawns the node CLI (and Docker at `container`/`hostloop`/`cowork`,
 or Lima for `microvm`).
 
+**See also:** [docs index / reading order](../docs/README.md) ·
+[boundary model](../docs/boundary.md) · [troubleshooting / gotchas](../docs/gotchas.md).
+
 > **Just want to replay a committed cassette via pytest, no Docker/token?** `cowork.replay(cassette_path)`
 > is deterministic and needs neither Docker nor an auth token — see the `cowork.replay(...)` entry under
 > [API](#api) below. You still need Prerequisites 1 (build the CLI), 4 (pytest), and 5 (make
@@ -111,7 +114,9 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   - `prompt` (or `prompt_file=` for a verbatim file — avoids shell `$`-expansion)
   - `answers={q: choice}` — pre-script AskUserQuestions; `on_unanswered="fail|first|prompt"`
   - `fidelity="container"` (also `protocol|microvm|hostloop|cowork`)
-  - `upload=` (str or list) — attach files at `mnt/uploads/` (deck-review, financial-model-review)
+  - `upload=` (str or list) — attach files at `mnt/uploads/`, e.g.
+    `upload=str(REPO_ROOT / "examples/data/sales.csv")` for `csv-metrics` (see the worked example above)
+    or a PDF for `my-pdf-skill`
   - `folder=` (str or list) — connect folders at `mnt/<basename>` (collision-resolved; older baselines use `.projects/<id>`)
   - `session_id="…"` + `resume=True` — pin then resume a session (checkpoint-and-resume gated skills)
   - `decider_cmd="python decider.py"` — answer **live** (stochastic) questions via a spawned helper. The
@@ -172,10 +177,14 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   (the `mnt/outputs` deliverable path), `.subagents`, `.failed_assertions()`, and from the json envelope
   `.ok` (overall pass) / `.error` (`{category, message, hint?}` if the run threw).
 
-Resume example (deck-review's checkpoint gate):
+Resume example (checkpoint-gate skill) — **ILLUSTRATIVE**, not runnable as-is: none of the shipped
+`examples/skills/` skills have a checkpoint gate, so `PLUGIN`, the upload path, and the prompts below
+are placeholders. Substitute your own skill folder (a `str`/`Path`, same as `cowork.skill(...)` takes
+elsewhere in this doc) and a prompt that matches its actual checkpoint/gate wording:
 ```python
-sid = "deck-acme"
-cowork.skill(PLUGIN).run("Review this pitch deck.", upload="decks/acme.pdf",
+PLUGIN = "path/to/your/checkpoint-gated-skill"    # substitute: a real skill folder, e.g. str(REPO_ROOT / "examples/skills/…")
+sid = "example-session"
+cowork.skill(PLUGIN).run("Review this document.", upload="path/to/your/upload.pdf",
                          session_id=sid, fidelity="cowork")          # run 1: ingests + hits the gate
 # … answer the gate (write gate_state.json, or carry the RUN_ID in the next prompt) …
 r = cowork.skill(PLUGIN).run("Continue review for RUN_ID …; stage confirmed.",

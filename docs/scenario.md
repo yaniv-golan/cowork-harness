@@ -445,7 +445,7 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 `skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
 `max_tool_errors`, `max_redundant_tool_calls`, `skill_available`, `connector_available`,
 `skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
-`present_files_called`,
+`present_files_called`, `no_vm_path_file_op`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
 `allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.

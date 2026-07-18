@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Assertion } from "../src/types.js";
-import { MANIFEST_KEYS } from "../src/run/cassette";
+import { MANIFEST_KEYS, ALWAYS_CONTENT_KEYS } from "../src/run/cassette";
 
 // Anti-drift guard: docs/scenario.md's "Full schema" assertion table hand-documents every key in
 // the Assertion zod schema (src/types.ts) — the same source `assertion-keys.json` / `Assertion.shape`
@@ -106,5 +106,15 @@ describe("docs/scenario.md ↔ src/run/cassette.ts MANIFEST_KEYS sync", () => {
   it("every MANIFEST_KEYS member is covered in the section", () => {
     const missing = MANIFEST_KEYS.filter((k) => !covered(k));
     expect(missing, `docs/scenario.md's replay section is missing: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  // Same guard, applied to the content-class bucket ("Evaluated on replay (content assertions)") whose
+  // authoritative list is ALWAYS_CONTENT_KEYS (src/run/cassette.ts). This bucket's prose summary drifted
+  // stale once (it omitted no_vm_path_file_op while listing the rest), so pin it too: every content-class
+  // key must be named in the section, either literally or via one of the `prefix_*` wildcard tokens the
+  // covered() helper accepts (transcript_*/tool_*/subagent_* today).
+  it("every ALWAYS_CONTENT_KEYS member is covered in the section", () => {
+    const missing = ALWAYS_CONTENT_KEYS.filter((k) => !covered(k));
+    expect(missing, `docs/scenario.md's replay content-assertion summary is missing: ${missing.join(", ")}`).toEqual([]);
   });
 });

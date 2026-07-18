@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`analyze-skill` top-level `--help`** now documents the `--runtime` flag and exit code `3`
+  (could-not-verify); previously these appeared only in the per-command `analyze-skill --help`.
+- Corrected a phantom assertion key in the `record --margins` documentation
+  (`max_tool_calls` → the real `tool_calls_max`).
+
+### Documentation
+
+- Documented previously-undocumented CLI flags: `record --force` (narrowly overrides the
+  different-scenario slug-collision overwrite refusal) and `record --decider-model`; `probe-dispatch`'s
+  inherited `--decider-cmd` / `--decider-dir` / `--on-unanswered` / `--ablate-skill`; and
+  `skill --timeout` / `--answer-policy`.
+- Clarified the scenario-schema descriptions for `user_visible_artifact` (the assertion value is
+  workRoot-relative — e.g. `outputs/x.md`, not `mnt/`-prefixed) and `gate_answers_delivered`
+  (documented the `: false` confirmed-non-delivery inverse). Regenerated `schema/scenario.schema.json`.
+- Qualified the stable JSON-envelope contract: SPEC §11 now maps commands to envelope families by
+  mechanism (`jsonEnvelope` / `jsonPayloadEnvelope` / dedicated), and README defers to it; clarified
+  that `replay` exit `2` is a whole-cassette operational failure, distinct from an in-cassette
+  malformation (which fails as an exit-`1` assertion).
+- Added a `docs/decisions/` ADR index, `python/README.md` cross-links into the main doc spine, and
+  `RELEASING.md` to `llms.txt`; signposted the specialized `docs/*.md` guides and added `lint-skill` /
+  `analyze-skill` rows to the docs index.
+
 ## [1.2.0] — 2026-07-18
 
 ### Added

@@ -486,8 +486,29 @@ recomputing. As of 0.31.0, the same `verdict` is **also persisted on the on-disk
 diverge; `chat` runs carry no `verdict` (field absent, not persisted). The top-level `ok` is derived from the
 same per-result verdicts, so it cannot diverge from them, the exit code, or the text footer.
 
-Other commands use dedicated envelopes — `verify-cassettes` (§11.1), and `decide` / `boundary-check`
-each emit their own shape — so this is not a single universal envelope across every command.
+Other commands intentionally do NOT share this exact shape. By mechanism (`src/run/envelope.ts`),
+there are three families:
+
+- **`results[]`-bearing (internally `jsonEnvelope`)** — the stable `{tool, version, command, ok,
+  results[], error}` shape described above. Emitted by **`run`, `skill`, `record`, `replay`**.
+  (`chat` writes the same `RunResult`-shaped `result.json` to disk, but has no `--output-format
+  json`/`isJsonOutput` support at all — it never emits a stdout envelope of any shape.)
+- **Payload-shaped (internally `jsonPayloadEnvelope`)** — shares the `{tool, version, command, ok,
+  error}` frame but swaps `results[]` for a command-specific payload. The `ok` is the caller's own
+  success criterion, not a per-`RunResult` verdict (the helper itself never calls `computeVerdict`,
+  though a caller may compute `ok` however it likes — e.g. `probe-dispatch` sets it from its
+  projection's `verdict.pass`). Callers include **`verify-run`, `assertions`, `probe-dispatch`,
+  `diff`, `trace`, `analyze-skill`, `lint`/`lint-skill`**, plus `record --dry-run`'s discovery
+  payload, `verify-cassettes` (§11.1), `doctor` (§11.2), and `rehash`.
+- **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
+  array, no wrapper object), **`boundary-check`**, **`init-redact`**, **`decide`**, **`answer`**,
+  **`gates --follow`** (an NDJSON stream, not a single object), **`stats`**, **`status`**,
+  **`inspect`**, and **`vm`**.
+
+The command lists above are illustrative, not a frozen contract — this is not a single universal
+envelope across every command, so check a given command's own section (or grep its
+`jsonEnvelope`/`jsonPayloadEnvelope` call site in `src/run/envelope.ts`/`src/cli.ts`) for its exact
+shape before parsing it generically.
 
 `ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass) && computeVerdict(r).pass)`.
 `result:"success"` and passing assertions are necessary but **not sufficient** — `computeVerdict` adds a
@@ -583,8 +604,15 @@ unused — reserving it now keeps a later addition additive rather than a renumb
 with its own meanings); this reservation applies only to the `run`/`skill` family.
 
 **Per-command exceptions:** `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
-`2` on a malformed/unreadable cassette (distinct from the `0`/`1` verdict); `sync` exits `2` on a
-non-macOS platform (the platform guard, alongside the `sync` hard-failure → `1` note below).
+`2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
+shape, unsupported version, unrecognized assertion key) or any per-file throw, plus the batch loop's
+own source-resolution failures (`--assert-from`/`--reassert` drift, scenario-parse errors, `--write`
+persistence refusals). Each is caught per-file in the batch loop, tallied as an error result, and never
+aborts the rest of the batch. This is distinct from a malformation found *inside* an otherwise-parseable
+cassette (e.g. a corrupt `events` line, a bad control frame) — those surface as ordinary **exit-`1`
+assertion failures** (`replay_protocol_error` / `replay_protocol_fidelity`) via the normal `0`/`1`
+verdict, not exit `2`. `sync` exits `2` on a non-macOS platform (the platform guard,
+alongside the `sync` hard-failure → `1` note below).
 **`verify-cassettes` uses its OWN three-way split, not the `run`/`skill` meanings above:** `0` clean ·
 `1` verification RAN and found a real problem (any PII finding, any staleness finding whose
 `StalenessFinding.class` is NOT `unverifiable-*`, or scenario-prompt drift) · `2` usage · `3`

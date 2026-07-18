@@ -173,11 +173,12 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
       [--strict]               fail on any finding (the two footguns are WARN-only by default), not just ERROR
-  analyze-skill <SKILL.md | skill-dir/ | glob>…  ADVISORY token-free scan: warns on a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
+  analyze-skill <SKILL.md | skill-dir/ | glob>…  ADVISORY token-free scan: warns on a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) AND on interactive-artifact write-backs lost under Cowork — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
       A directory target scans the UNION of every contract-bearing markdown file present, not just SKILL.md: top-level SKILL.md + references/**, a plugin root's agents/*.md + references/**/commands/*.md/skills/*/SKILL.md(+references/**), and (for a skill dir inside a plugin) the enclosing plugin's agents/*.md. Multiple positionals are accepted (matches lint-skill's nargs="+"), incl. a simple hand-rolled '*' glob — "dir/*.md" (shallow) or "dir/**/*.md" (recursive) — with the results of ALL positionals UNIONed + deduped by resolved path. Zero scannable files across every positional is a usage error (exit 2), never a silent clean pass.
       [--strict]               fail (exit 1) on any finding instead of just warning (mirrors lint-skill's --strict)
-      analyze-skill: ignore    a line with this marker (bare or in an HTML comment) in a SKILL.md silences EVERY finding for that file, even under --strict
-      [--output-format json]   {tool,version,command,ok,files:[{file,findings,suppressed}],scanned,unscanned,strict,error} — exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage; a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution
+      [--runtime]              optional headless-DOM confirmation of interactive-artifact write-back findings (needs jsdom; ENRICHMENT only — never changes the exit code)
+      analyze-skill: ignore    a line with this marker (bare or in an HTML comment) in a SKILL.md silences EVERY path-fidelity finding for that file, even under --strict
+      [--output-format json]   {tool,version,command,ok,files:[{file,findings,suppressed}],scanned,unscanned,strict,error} — exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage · exit 3 = could-not-verify (an artifact candidate that couldn't be parsed; --strict-independent); a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution — see 'analyze-skill --help'
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
@@ -1990,6 +1991,12 @@ Probe tuning:
   --model <id>                   override the session model (e.g. pin a cheaper model for the probe)
   --expect-write <suffix>         narrow "delivered" to a sub-agent write whose path ends with this suffix
                                  (default: ANY sub-agent-origin write under the dispatch's own toolUseId)
+
+Answering / common flags (inherited from the shared flag set, honored here too):
+  --decider-cmd <cmd>            answer gates via an external command
+  --decider-dir <dir>            answer gates from a directory of scripted answers
+  --on-unanswered <policy>       what to do when a gate has no scripted answer (see 'run --help')
+  --ablate-skill                 run with the target skill removed (baseline/ablation control)
 
 Output:
   --output-format text|json      text = one line per dispatch + verdict (default); json = a compact
