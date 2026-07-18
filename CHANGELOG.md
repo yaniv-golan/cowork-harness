@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-18
+
 ### Added
 
 - **`no_lost_write_back: true` scenario assertion** — gate a scenario on "the agent didn't emit an
