@@ -16,7 +16,39 @@ All notable changes to this project are documented here. The format is based on
   `fetch`/XHR-`open`/`sendBeacon`/`axios`/`.post()` write-back hint is discounted as prose, while one that
   carries a hint — or any block large enough to trip the analysis cap — is still reported as a
   could-not-verify surfaced alongside any finding. A candidate whose every isolated `<script>` block is
-  unparseable stays a could-not-verify (fail-closed), never a silent clean pass.
+  unparseable stays a could-not-verify (fail-closed), never a silent clean pass. Several follow-on gaps in
+  that accumulation are also closed. First: whenever at least one `<script>` block was discounted as
+  prose, a parseable sibling block (or an already-flagged `<form method=post>`) no longer vouches for
+  write-back surface OUTSIDE every extracted block (top-level `.js`/`.ts` code, an inline `on*=` handler,
+  or surrounding template markup) — any write-back hint left in that un-analyzed remainder is now its own
+  could-not-verify, reported alongside any finding rather than silently passed; a source with no
+  discounted block, or an inline-handler write-back with nothing else in play, is unaffected. Second: the
+  write-back hint check (and the earlier candidacy check) now also recognizes optional-call spellings —
+  `fetch?.(`, `xhr?.open?.(`, `$.post?.(`, `navigator?.sendBeacon?.(` — so a source whose only write-back
+  uses `?.` is neither missed as a candidate nor discounted as prose inside an unparseable block; that
+  optional-call matching is also linearized (no more quadratic backtracking on a long non-matching
+  whitespace run). Third: a member-spelled write-back inside a block that DOES parse —
+  `window.fetch(...)`, `globalThis.fetch(...)`, `self.fetch(...)`, or the same spelling inside a same-file
+  fetch-wrapper's own body — is now classified the same as a bare `fetch(...)` call instead of going
+  unrecognized and falling through as clean; a bare `sendBeacon(...)` identifier call (e.g. a locally
+  bound alias of `navigator.sendBeacon`) is now recognized the same way as the member-spelled
+  `navigator.sendBeacon(...)`. Fourth: a `.post(...)`/`.put(...)`/`.patch(...)` call on a receiver outside
+  the known `axios`/`$`/`jQuery` set — the common miss being an axios instance,
+  `const api = axios.create(); api.post("/api/save", data)` — targeting a relative URL is no longer
+  invisible; it is now reported as an advisory finding (never escalated to an error, since the receiver
+  isn't provably a write-back client and could be unrelated code; `.delete(...)` is deliberately excluded
+  from this, since it's common on non-HTTP collection types). Fifth: the axios/`$`/`jQuery` verb set
+  recognized on the whitelisted identifier itself is widened from `.post(...)` alone to
+  `.post(...)`/`.put(...)`/`.patch(...)`/`.delete(...)`/`.postForm(...)`/`.putForm(...)`/`.patchForm(...)`
+  (the last three are axios v1's multipart form-data verb aliases; `.delete(...)` is INCLUDED here,
+  unlike the any-receiver advisory case above, since the literal `axios`/`$`/`jQuery` identifier has no
+  ambiguity about what it means); a bare config-object call — `axios({method:"POST", url:"/api/save",
+  ...})` — and `axios.request({...})` are both recognized, whether the config argument is an inline
+  object literal or a hoisted identifier (`const cfg = {...}; axios(cfg)`). This is not exhaustive: axios's
+  alternate `$.ajax({...})`-style config-key vocabulary, and any computed-member, whitespace-separated, or
+  aliased/re-exported spelling, remain a documented, lexically/structurally invisible accepted class (see
+  the relevant doc comments in `analyze-artifact.ts`) — as does a `formaction`/`formmethod` override on a
+  submit button that redirects an otherwise-remote `<form>` back to a relative, in-scope URL.
 
 ## [1.1.0] — 2026-07-16
 

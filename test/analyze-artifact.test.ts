@@ -285,6 +285,308 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     expect(result.failure).toBeDefined();
     expect(result.failure?.stage).toBe("extract");
   });
+
+  // ---- false-clean regressions: parsed-sibling backstop bypass + optional-call hint blindness ----
+
+  it("a parseable sibling block must not disable the fail-closed backstop (.js, out-of-block write-back)", () => {
+    const path = "/virtual/app.js";
+    // Real write-back lives at TOP LEVEL (never extracted as a block); the only <script> pairs are a
+    // phantom prose comment (unparseable, no hint -> discounted) and a trivially-parseable one.
+    const text = [
+      "// docs: the page embeds <script>just prose here explaining things</script> markers",
+      "// helper: <script>var ok = 1;</script>",
+      'fetch("/api/save", { method: "POST", body: JSON.stringify(state) });',
+      'alert("Saved successfully");',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("extract");
+  });
+
+  it("phantom prose + parseable block + inline-handler write-back (.html) is could-not-verify, not clean", () => {
+    const path = "/virtual/inline-handler.html";
+    const text = [
+      "<!doctype html><body>",
+      "<!-- note: <script>prose about the save flow</script> -->",
+      "<script>var ready = 1;</script>",
+      `<button onclick="fetch('/api/save',{method:'POST',body:data}).then(()=>alert('Saved!'))">Save</button>`,
+      "</body>",
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("extract");
+  });
+
+  it("an unparseable block whose write-back is spelled xhr?.open?.( is recorded, not discounted", () => {
+    const path = "/virtual/optional-open.html";
+    // Candidacy rides on the parseable GET-fetch sibling (WRITE_BACK_PRIMITIVE_RE does not see
+    // optional-call spellings); the broken block's ONLY write-back token is the optional-call XHR open.
+    const text = [
+      "<!doctype html><body>",
+      '<script>fetch("/api/data").then(r => r.json());</script>',
+      '<script>const xhr = makeXhr(; xhr?.open?.("POST", "/api/save"); xhr?.send?.(payload);</script>',
+      "</body>",
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("parse");
+  });
+
+  it("an unparseable block whose write-back is spelled $.post?.( is recorded, not discounted", () => {
+    const path = "/virtual/optional-post.html";
+    const text = [
+      "<!doctype html><body>",
+      '<script>fetch("/api/data");</script>',
+      '<script>saveAll((; $.post?.("/api/save", data);</script>',
+      "</body>",
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("parse");
+  });
+
+  it("an unparseable block whose write-back is spelled fetch?.( is recorded, not discounted", () => {
+    const path = "/virtual/optional-fetch.html";
+    const text = [
+      "<!doctype html><body>",
+      '<script>fetch("/api/data");</script>',
+      '<script>go((; fetch?.("/api/save", { method: "POST" });</script>',
+      "</body>",
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeUndefined();
+    expect(result.failure).toBeDefined();
+    expect(result.failure?.stage).toBe("parse");
+  });
+
+  it("a SUSPECT (advisory) parsed block does not let a discounted-prose sibling mask a lost remainder write-back", () => {
+    const path = "/virtual/suspect-plus-remainder.html";
+    const text =
+      `<script>if (window.flag) { fetch('/api/log', {method:'POST'}); }</script>\n` + // parses -> SUSPECT (advisory, guarded)
+      `<!-- doc: see <script>prose about saving</script> for details -->\n` + // discounted prose (no hint)
+      `<button onclick="fetch('/api/save',{method:'POST'}).then(()=>alert('Saved!'))">Save</button>`; // LOST, in the remainder
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-suspect"); // the advisory is still surfaced
+    expect(result.failure?.stage).toBe("extract"); // AND the un-analyzed remainder is could-not-verify
+  });
+
+  it("a member-spelled window.fetch( write-back inside a PARSED block is flagged, not silently clean", () => {
+    const path = "/virtual/member-fetch.html";
+    const text = [
+      "<!-- doc: see <script>prose about the save flow</script> for details -->", // discounted prose (no hint)
+      `<script>window.fetch('/api/save',{method:'POST'}).then(()=>alert('Saved!'))</script>`, // LOST, parses fine
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a form-lost finding with zero parsed blocks does not suppress an un-analyzed inline-handler remainder", () => {
+    const path = "/virtual/form-plus-handler.html";
+    const text = [
+      '<form method="post" action="/api/legacy-save"><input name="x"/></form>', // relative form POST -> lost (error)
+      "<!-- doc: see <script>prose about saving</script> for details -->", // discounted prose (no hint)
+      `<button onclick="fetch('/api/backup',{method:'POST'})">Backup</button>`, // never analyzed, in the remainder
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+    expect(result.failure?.stage).toBe("extract");
+  });
+
+  it("a fetch-wrapper whose body calls window.fetch( is recognized as a wrapper, not just a bare fetch( body", () => {
+    const path = "/virtual/member-fetch-wrapper.html";
+    const text = [
+      "<!-- doc: see <script>prose about the save flow</script> for details -->", // discounted prose (no hint)
+      `<script>function save(u){ return window.fetch(u,{method:"POST"}); } save("/api/save"); alert("Saved!");</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a bare sendBeacon( identifier call is recognized, not just navigator.sendBeacon(", () => {
+    const path = "/virtual/bare-sendbeacon.html";
+    const text = [
+      "<!-- doc: see <script>prose about saving</script> for details -->", // discounted prose (no hint)
+      `<script>const sendBeacon = navigator.sendBeacon.bind(navigator); sendBeacon('/api/save', payload); alert('Saved!');</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a .post( call on a non-whitelisted receiver (an axios instance) with a relative URL is advisory, not invisible", () => {
+    const path = "/virtual/axios-instance-post.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling; GET yields no outcome itself
+      '<script>const api = axios.create({}); api.post("/api/save", d);</script>',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
+  });
+
+  // ---- axios verb/config-shape regressions: the AST must recognize every axios spelling the hint layer
+  //      already treats as a write-back primitive (the bare word "axios"), not just `axios.post(` ----
+
+  it("axios.put( is classified the same as axios.post( — not a silent clean parsed block", () => {
+    const path = "/virtual/axios-put.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      `<script>axios.put("/api/save", d).then(()=>alert("Saved!"));</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a bare axios({...}) config-object call is classified, not invisible", () => {
+    const path = "/virtual/axios-config-call.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      `<script>axios({ method: "POST", url: "/api/save", data }).then(()=>alert("Saved!"));</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("axios.request({...}) is classified, not invisible", () => {
+    const path = "/virtual/axios-request-call.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      `<script>axios.request({ method: "POST", url: "/api/save" });</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding).toBeDefined();
+  });
+
+  it("api.put( on a non-whitelisted axios-instance receiver is advisory, not invisible", () => {
+    const path = "/virtual/axios-instance-put.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      '<script>const api = axios.create({}); api.put("/api/save", d);</script>',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-suspect");
+  });
+
+  it("(guard) map.delete( on an arbitrary receiver is never flagged — .delete is deliberately excluded", () => {
+    const path = "/virtual/map-delete-guard.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      '<script>const map = new Map(); map.delete("/x");</script>',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result).toEqual({});
+  });
+
+  it("axios.delete( on the literal axios identifier is classified — no ambiguity like an arbitrary receiver's .delete(", () => {
+    const path = "/virtual/axios-delete.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      `<script>axios.delete("/api/item/3").then(()=>alert("Saved!"));</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a hoisted axios(cfg) config identifier is classified the same as an inline axios({...}) call", () => {
+    const path = "/virtual/axios-hoisted-config.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      `<script>const cfg = { method: "POST", url: "/api/save", data }; axios(cfg).then(()=>alert("Saved!"));</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("a hoisted axios.request(cfg) config identifier is classified the same as an inline axios.request({...}) call", () => {
+    const path = "/virtual/axios-request-hoisted-config.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      `<script>const cfg = { method: "POST", url: "/api/save" }; axios.request(cfg).then(()=>alert("Saved!"));</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("axios.postForm( (a v1 multipart form-data verb alias) is classified with the embedded POST verb", () => {
+    const path = "/virtual/axios-post-form.html";
+    const text = [
+      '<script>fetch("/api/data");</script>', // candidacy GET-fetch sibling
+      `<script>const fd = new FormData(); axios.postForm("/api/save", fd).then(()=>alert("Saved!"));</script>`,
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  // ---- pins (already-correct boundaries): hint tokens + cap hits must be recorded, never discounted ----
+
+  it("an unparseable block whose only write-back token is $.post( is recorded (hint boundary)", () => {
+    const path = "/virtual/dollar-post-only.html";
+    const text = ['<script>fetch("/api/data");</script>', '<script>saveAll((; $.post("/api/save", data);</script>'].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.failure?.stage).toBe("parse");
+  });
+
+  it("an unparseable block whose only write-back token is xhr.open( is recorded (hint boundary)", () => {
+    const path = "/virtual/xhr-open-only.html";
+    const text = ['<script>fetch("/api/data");</script>', '<script>mk((; xhr.open("POST", "/api/save");</script>'].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.failure?.stage).toBe("parse");
+  });
+
+  it("a cap-exceeded block beside a parseable sibling is recorded even WITHOUT a write-back hint", () => {
+    const path = "/virtual/cap-sibling-no-hint.html";
+    const statements = Array.from({ length: 8000 }, (_, i) => `var x${i}=${i};`).join("\n");
+    const text = `<script>fetch("/api/data");</script>\n<script>\n${statements}\n</script>`;
+    const result = analyzeArtifactFile(path, text);
+    expect(result.failure?.stage).toBe("node-limit");
+  });
+
+  it("a cap-exceeded block beside a parseable sibling is recorded WITH a write-back hint", () => {
+    const path = "/virtual/cap-sibling-with-hint.html";
+    const statements = Array.from({ length: 8000 }, (_, i) => `var x${i}=${i};`).join("\n");
+    const text = `<script>fetch("/api/data");</script>\n<script>\nfetch("/api/save",{method:"POST"});\n${statements}\n</script>`;
+    const result = analyzeArtifactFile(path, text);
+    expect(result.failure?.stage).toBe("node-limit");
+  });
+
+  // ---- candidacy-level regression: an optional-call spelling must still make the file a candidate ----
+
+  it("a source whose only write-back spelling is fetch?.( still reaches candidacy and is flagged lost", () => {
+    const path = "/virtual/optional-fetch-only.html";
+    const text = `<script>fetch?.("/api/save",{method:"POST"}); alert("Saved!");</script>`;
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost");
+  });
+
+  it("multiple unparseable sibling blocks note the extra count in the failure reason", () => {
+    const path = "/virtual/multi-broken.py";
+    const text = [
+      'HELPER1 = """',
+      "<script>fetch('/api/save1', {method:'POST');</script>",
+      '"""',
+      'HELPER2 = """',
+      "<script>fetch('/api/save2', {method:'POST');</script>",
+      '"""',
+    ].join("\n");
+    const result = analyzeArtifactFile(path, text);
+    expect(result.failure?.stage).toBe("parse");
+    expect(result.failure?.reason).toMatch(/\(\+1 more unparseable block\(s\)\)$/);
+  });
+
+  it("candidacy check on a long non-matching whitespace run completes in linear time (no catastrophic backtracking)", () => {
+    const path = "/virtual/whitespace-bomb.html";
+    // "fetch" followed by a long run of whitespace and NO "(" — the shape that made the un-nested
+    // `\s*(\?\.)?\s*` grouping quadratic (two independent `\s*` spans around one optional group admit
+    // many equivalent partitions of the same whitespace run when the overall match ultimately fails).
+    const text = `<!doctype html><body>fetch${" ".repeat(200_000)}</body>`;
+    const start = Date.now();
+    const result = analyzeArtifactFile(path, text);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1000);
+    expect(result).toEqual({}); // no "(" ever follows -> not a write-back primitive -> not a candidate
+  });
 });
 
 describe("analyzeArtifacts — (j) precedence / aggregation across files", () => {
