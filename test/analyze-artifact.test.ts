@@ -489,6 +489,13 @@ describe("analyzeArtifactFile — outcome matrix", () => {
     expect(result.finding?.rule).toBe("artifact-write-back-lost");
   });
 
+  it("a DELETE flow whose only success signal is a 'Deleted'/'Removed' toast classifies as lost, not just suspect", () => {
+    const path = "/virtual/delete-toast.html";
+    const text = `<script>fetch("/api/item/3", { method: "DELETE" }).then(()=>alert("Removed!"));</script>`;
+    const result = analyzeArtifactFile(path, text);
+    expect(result.finding?.rule).toBe("artifact-write-back-lost"); // "Removed!" is a persist claim (delete-flow vocabulary)
+  });
+
   it("a hoisted axios(cfg) config identifier is classified the same as an inline axios({...}) call", () => {
     const path = "/virtual/axios-hoisted-config.html";
     const text = [

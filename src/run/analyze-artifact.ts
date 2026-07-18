@@ -721,7 +721,7 @@ function guardStatusOf(ancestors: acorn.AnyNode[], consts: ConstsMap): GuardStat
 
 const OK_CHECK_RE = /(resp?\.ok\b|res\.ok\b|response\.ok\b|\.status\s*(===|!==|==|!=|<=|>=|<|>))/;
 const DOWNLOAD_FALLBACK_RE = /(createObjectURL|\.download\s*=|triggerDownload)/;
-const PERSIST_CLAIM_RE = /\b(saved|submitt\w*|persist\w*|complet\w*|success\w*)\b/i;
+const PERSIST_CLAIM_RE = /\b(saved|submitt\w*|persist\w*|complet\w*|success\w*|delet\w*|remov\w*)\b/i;
 const LOOKAHEAD_WINDOW = 1500;
 
 type Outcome =
@@ -768,7 +768,7 @@ function classifyConsequence(params: { kind: string; method: string; url: string
     return {
       kind: "lost",
       line,
-      reason: `relative ${method} write-back to "${urlDisplay}" (${kind}) claims success without checking resp.ok/status — under Cowork the request resolves against Cowork's own origin with a non-ok response, producing a false "saved" claim`,
+      reason: `relative ${method} write-back to "${urlDisplay}" (${kind}) claims success without checking resp.ok/status — under Cowork the request resolves against Cowork's own origin with a non-ok response, producing a false success claim (saved/deleted/removed/etc.)`,
     };
   }
   return {

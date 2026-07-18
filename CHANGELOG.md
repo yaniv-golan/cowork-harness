@@ -49,6 +49,13 @@ All notable changes to this project are documented here. The format is based on
   aliased/re-exported spelling, remain a documented, lexically/structurally invisible accepted class (see
   the relevant doc comments in `analyze-artifact.ts`) — as does a `formaction`/`formmethod` override on a
   submit button that redirects an otherwise-remote `<form>` back to a relative, in-scope URL.
+- **`analyze-skill`: a delete/remove flow that claims success now classifies as a lost write-back (error),
+  not just a suspect (advisory).** The success-claim vocabulary that distinguishes a lost write-back (an
+  unconditional "it worked" toast) from a merely-suspect one gained delete-flow words (`deleted`,
+  `removed`, …) alongside the existing `saved`/`submitted`/`persisted`/`completed`/`success`. A relative
+  `DELETE` write-back whose only success signal is a "Deleted!"/"Removed!" toast — no `resp.ok`/status
+  check — is now flagged at error severity like its save-flow equivalent, since under Cowork it resolves
+  non-ok against Cowork's own origin and the false confirmation is identical.
 
 ## [1.1.0] — 2026-07-16
 
