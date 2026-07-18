@@ -293,8 +293,8 @@ could vacuously pass `no_hook_blocked`/`no_path_denied` even if a custom hook or
 `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
 `no_unexpected_files`, and `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only
 when the cassette carries an artifacts manifest (`no_unexpected_files` also requires `preRunPaths`,
-recorded since 0.24 on container/hostloop; `input_unmodified` requires `preRunHashes`, the per-path
-sha256 baseline recorded alongside it — microvm cannot capture either baseline).
+recorded since 0.24 on every live sandbox tier including microvm; `input_unmodified` requires `preRunHashes`,
+the per-path sha256 baseline recorded alongside it).
 
 ### Filesystem assertions — replay-checkable WITH an artifact manifest
 
