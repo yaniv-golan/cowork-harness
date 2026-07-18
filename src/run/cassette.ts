@@ -2843,8 +2843,7 @@ function classifyUncheckableOnDiskKeys(
       else if (k === "no_unexpected_files" && !hasPreRun)
         entry = {
           code: "prerunpaths-missing",
-          message:
-            "no pre-run manifest in this cassette (recorded pre-0.24 or on microvm) — re-record on harness ≥0.24 (container/hostloop)",
+          message: "no pre-run manifest in this cassette (recorded before the manifest seam) — re-record on a current harness",
         };
       // input_unmodified mirrors no_unexpected_files: checkable needs BOTH the artifacts manifest and the
       // preRunHashes baseline (a different pre-run field than no_unexpected_files' preRunPaths).
@@ -4133,7 +4132,7 @@ export async function replayCassette(
   // without controlOut) — the recording cannot support the key, not a vacuous pass.
   if (cassette.scenario.assert.some((a) => a.no_unexpected_files !== undefined) && nufExcludedLoudly)
     warn(
-      "::warning:: [replay] no_unexpected_files: cassette has no pre-run manifest (recorded pre-0.24 or on microvm) — key skipped on replay; re-record on harness ≥0.24 (container/hostloop)\n",
+      "::warning:: [replay] no_unexpected_files: cassette has no pre-run manifest (recorded before the manifest seam) — key skipped on replay; re-record on a current harness\n",
     );
   if (cassette.scenario.assert.some((a) => a.input_unmodified !== undefined) && iumExcludedLoudly)
     warn(

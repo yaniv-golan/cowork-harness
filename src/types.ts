@@ -509,7 +509,7 @@ export const Assertion = z.strictObject({
     .array(z.string().min(1))
     .optional()
     .describe(
-      "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; microvm cannot capture (use container/hostloop)",
+      "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), except a --resume run (no fresh manifest ⇒ fails loud)",
     ),
   input_unmodified: z
     .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
@@ -522,7 +522,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if the run authored an interactive HTML artifact (or a .py/.js generator of one) whose relative Submit/POST write-back is lost under Cowork — runs the static Tier A analyzer over the files the run authored; a lost write-back on an ADDED agent-authored source fails, a pre-existing file the skill merely modified on a read-write mount is advisory; could-not-verify (fail-closed) on microvm (no pre-run manifest), --resume scratchpad, or an unanalyzable candidate; only `true` is valid (omit to skip). LIVE/verify-run only — skipped on replay",
+      "fails if the run authored an interactive HTML artifact (or a .py/.js generator of one) whose relative Submit/POST write-back is lost under Cowork — runs the static Tier A analyzer over the files the run authored; a lost write-back on an ADDED agent-authored source fails, a pre-existing file the skill merely modified on a read-write mount is advisory; could-not-verify (fail-closed) on a --resume scratchpad or an unanalyzable candidate; runs on every live sandbox tier including microvm (outputs snapshotted from the VM); only `true` is valid (omit to skip). LIVE/verify-run only — skipped on replay",
     ),
   transcript_no_host_path: z
     .literal(true)
@@ -1229,8 +1229,9 @@ export interface RunResult {
   artifacts?: { path: string; bytes: number }[];
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
-   *  against. undefined = the tier didn't capture (microvm) or the run predates the seam; the
-   *  assertion then fails evidence-unavailable, never vacuous-passes. */
+   *  against. undefined = the run didn't capture it (a --resume run, or the run predates the seam); the
+   *  assertion then fails evidence-unavailable, never vacuous-passes. (microvm captures it now — its
+   *  session tree is snapshotted from the VM into the run dir before this walk.) */
   preRunPaths?: string[];
   /** True iff `preRunPaths` was captured with the LINK-AWARE walk (manifest v2+, post-#38) — i.e. it lists
    *  symlink/hardlink entries. Absent/false ⇒ a pre-#38 baseline; `no_unexpected_files` then excludes link

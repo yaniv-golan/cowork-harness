@@ -404,7 +404,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `computer_links_resolve_if_present`, `no_unexpected_files`, `input_unmodified`) are evaluated **when the cassette carries an `artifacts` manifest**
   (`record` snapshots `outputs/` + connected folders; `replay` materializes it token-free — `artifact_json` needs the
   small JSON body inlined). `no_unexpected_files` additionally requires `preRunPaths` (optional cassette
-  metadata since 0.24; container/hostloop recordings only — microvm cannot capture the baseline); without it
+  metadata since 0.24; captured on every live sandbox recording tier including microvm — its outputs are snapshotted from the VM into the run dir); without it
   replay **excludes** the key with a loud warning (live/verify-run without a
   pre-run manifest hard-fails evidence-unavailable). `input_unmodified` (the in-place-mutation detector —
   every pre-existing file matching a glob keeps an unchanged content hash) mirrors this exactly against its
@@ -543,7 +543,7 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "userVisibleRoots?": ["string"],               // user-visible mount roots (relative to mnt/) — `outputs` plus each connected folder's resolved mount name; plugins excluded
   "readonlyFolderRoots?": ["string"],            // subset of userVisibleRoots that are read-only (mode:"r") connected-folder mounts — inputs, not deliverables; `artifacts` excludes them
   "artifacts?": [{ "path","bytes" }],            // files written under the user-visible roots (paths + sizes only — no content snapshot)
-  "preRunPaths?": ["string"],                    // workRoot-relative paths under the user-visible roots that existed BEFORE the agent ran — the `no_unexpected_files` baseline; absent when the tier didn't capture it (microvm) or the run predates the seam
+  "preRunPaths?": ["string"],                    // workRoot-relative paths under the user-visible roots that existed BEFORE the agent ran — the `no_unexpected_files` baseline; absent on a --resume run or when the run predates the seam (every live sandbox tier captures it now, microvm included)
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
   "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)

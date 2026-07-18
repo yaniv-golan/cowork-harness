@@ -438,7 +438,7 @@ export interface CaptureAuthoredFilesOpts {
 /** Files the run CREATED or MODIFIED under user-visible roots (added/modified vs the pre-run manifest),
  *  read back at their final on-disk content. Excludes read-only inputs (unchanged mounts). Size-bounded:
  *  a per-file cap and a total cap; over-cap content is truncated and flagged. Returns `[]` when there is
- *  no pre-run manifest (e.g. microvm) — no diff is possible, so the caller notes evidence-unavailable
+ *  no pre-run manifest (e.g. a --resume run) — no diff is possible, so the caller notes evidence-unavailable
  *  rather than dumping the whole workspace. Must be called AFTER the run completes (files finalized).
  *
  *  `scratchpadRoot` (the session root, i.e. the PARENT of the `mnt` workspace) closes a real coin-flip: at

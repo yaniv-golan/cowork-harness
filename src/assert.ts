@@ -209,7 +209,8 @@ export interface AssertContext {
    *  correct *inline* answer is graded even when no file is written. */
   finalMessage?: string;
   /** Files the run authored (final on-disk content) — appended to the judged document so the judge grades
-   *  what the skill PRODUCED, not only what it inlined. Populated live; absent on replay/microvm. */
+   *  what the skill PRODUCED, not only what it inlined. Populated on every live sandbox tier (microvm
+   *  included — its session tree is snapshotted from the VM into the run dir); absent on replay. */
   authoredFiles?: import("./run/artifacts.js").AuthoredFile[];
   /** Health of the authored-file capture (#14/#16): files dropped at the total-size cap (`omittedPaths`)
    *  or authored-but-unreadable at read-back (`readErrors`). When either is non-empty the judged document
@@ -230,8 +231,9 @@ export interface AssertContext {
   workRoot: string; // dir under which file_exists paths resolve (L0: work/, L1/L2: work/session/mnt)
   userVisiblePrefixes: string[]; // path prefixes promoted to the user (e.g. outputs, .projects)
   /** workRoot-relative paths under userVisiblePrefixes BEFORE the agent ran (RunResult.preRunPaths /
-   *  cassette.preRunPaths). undefined = no pre-run manifest (older run/cassette, or microvm) —
-   *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. */
+   *  cassette.preRunPaths). undefined = no pre-run manifest (a --resume run, or an older run/cassette) —
+   *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. (microvm captures it now —
+   *  its session tree is snapshotted from the VM into the run dir.) */
   preRunPaths?: string[];
   /** True iff `preRunPaths` was captured link-aware (manifest v2+). When false/undefined (a pre-#38
    *  baseline, or a re-verified pre-upgrade run dir), `no_unexpected_files` excludes link entries from the
@@ -585,18 +587,19 @@ const SCRATCHPAD_PREFIX = "scratchpad/";
  *  - A `-lost` finding on a MODIFIED file on a read-write connected mount (a user's pre-existing HTML the
  *    skill edited) is downgraded to advisory — not the skill's failure to own; surfaced, never a hard fail.
  *  - `-suspect` findings → PASS with the advisory surfaced.
- *  - Missing pre-run manifest (microvm), a scratchpad walk skipped on `--resume`, an unresolvable scratchpad
- *    path, or an `analysisFailure` on a produced candidate → could-not-verify (fail-closed), never a silent
- *    clean.
+ *  - Missing pre-run manifest (a `--resume` run, or a run predating the manifest seam), a scratchpad walk
+ *    skipped on `--resume`, an unresolvable scratchpad path, or an `analysisFailure` on a produced
+ *    candidate → could-not-verify (fail-closed), never a silent clean. (Every live sandbox tier captures
+ *    a manifest now, microvm included — its session tree is snapshotted from the VM into the run dir.)
  */
 function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
-  // No pre-run manifest → captureAuthoredFiles can't diff, so we cannot know what the run authored. microvm
-  // never captures one (use container/hostloop). Evidence-unavailable, never a silent clean.
+  // No pre-run manifest → captureAuthoredFiles can't diff, so we cannot know what the run authored. This
+  // is a `--resume` run (no fresh manifest) or a pre-seam run — evidence-unavailable, never a silent clean.
   if (ctx.preRunHashes === undefined) {
     return {
       pass: false,
       message:
-        "evidence unavailable: no pre-run manifest for this run (microvm never captures one — use container/hostloop) — " +
+        "evidence unavailable: no pre-run manifest for this run (a --resume run, or a run predating the manifest seam) — " +
         "cannot determine which files the run authored, so a lost interactive-artifact write-back cannot be ruled out",
     };
   }
@@ -1493,7 +1496,7 @@ function check(
     } else if (ctx.preRunPaths === undefined) {
       results.push(
         fail(
-          "evidence unavailable: no pre-run manifest for this run/cassette (predates 0.24 or tier cannot capture — microvm) — cannot compute created files; re-run/re-record on container/hostloop",
+          "evidence unavailable: no pre-run manifest for this run/cassette (a --resume run, or a run/cassette predating 0.24) — cannot compute created files; re-run without --resume, or re-record",
         ),
       );
     } else {
@@ -1540,7 +1543,7 @@ function check(
     } else if (ctx.preRunHashes === undefined) {
       results.push(
         fail(
-          "evidence unavailable: no pre-run hash manifest for this run/cassette (predates the fingerprinted manifest, or a tier that cannot capture — microvm) — cannot compare content; re-run/re-record on container/hostloop",
+          "evidence unavailable: no pre-run hash manifest for this run/cassette (a --resume run, or a run/cassette predating the fingerprinted manifest) — cannot compare content; re-run without --resume, or re-record",
         ),
       );
     } else {

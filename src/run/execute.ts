@@ -31,7 +31,7 @@ import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
-import { spawnMicroVm } from "../runtime/microvm.js";
+import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import {
   probeImageOmitted,
   probeMicrovmOmitted,
@@ -789,6 +789,26 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       }
     }
 
+    // #52: microvm outputs live on the host at VM_WORK_HOST/<id> (the /sessions mount), NOT in the run
+    // dir the post-run pipeline walks. Snapshot the SESSION ROOT into outDir/work/session NOW — before any
+    // workRoot-relative code below — so collectArtifacts / captureAuthoredFiles / the fs-diff / cassette
+    // record see the deliverables. UNCONDITIONAL (independent of capturePreRun): this fixes the
+    // workspaceFiles/artifacts observability even when no manifest-triggering key is asserted. Same
+    // salvage semantics as hostloop above.
+    if (effectiveFidelity === "microvm") {
+      try {
+        snapshotMicroVmWorkspace(sessionId, join(outDir, "work", "session"));
+      } catch (err) {
+        if (unansweredErr) {
+          warn(
+            `::warning:: [microvm] workspace snapshot failed during salvage — artifacts may be missing from this partial result: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        } else {
+          throw err;
+        }
+      }
+    }
+
     const scan = scanEvents(join(outDir, "events.jsonl"));
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
@@ -942,7 +962,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
     // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
     // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
-    // added/modified files. (`[]` when there's no manifest, e.g. microvm.)
+    // added/modified files. (`[]` when there's no manifest, e.g. a --resume run.)
     // F12: at container/hostloop the agent's cwd is the SESSION ROOT (parent of `mnt`), not `mnt` — so a
     // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
     // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).

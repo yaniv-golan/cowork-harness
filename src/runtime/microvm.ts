@@ -1,12 +1,51 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { limaPath, vmInit, applyGuestFirewall, vmGatewayIp, VM_WORK_HOST } from "./lima.js";
 import { resolveMounts } from "../baseline.js";
 import { spawnEnv, baseAgentArgs } from "./argv.js";
 import { stageWorkspace } from "./stage.js";
+import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { runtimeAuthEnv, SECRET_ENV_KEYS } from "./host-env.js";
+
+/**
+ * #52 root-cause fix: snapshot a microvm run's SESSION-ROOT tree from the host-side Lima mount into the
+ * run dir, so the post-run pipeline (`classifyWorkspaceFiles`, `captureAuthoredFiles`, the fs-diff,
+ * cassette record) sees the agent's outputs — the same frozen, self-contained tree the copy-based tiers
+ * always produced. Mirrors `snapshotHostLoopWorkspace`.
+ *
+ * The agent's outputs are ALREADY on host disk: `VM_WORK_HOST` (`~/.cowork-harness/vm-work`) is mounted
+ * WRITABLE into the VM at `/sessions` (lima.ts), and the agent's cwd is `/sessions/<id>`, so its writes
+ * land live at `VM_WORK_HOST/<id>/…`. This is a host→host copy, not a copy out of a VM disk image — no
+ * new isolation boundary is crossed (files already cross via the mount the harness itself configured).
+ *
+ * We snapshot the SESSION ROOT (`VM_WORK_HOST/<id>` → `outDir/work/session`), NOT just `mnt`: the agent's
+ * cwd is the session root, so a cwd-relative `Write outputs/x` lands ABOVE `mnt` in the scratchpad tier
+ * (`execute.ts` `scratchpadRoot`). An mnt-only snapshot would miss those deliverables and silently
+ * false-green `no_lost_write_back` / `semantic_matches`, which grade the authored set.
+ */
+export function snapshotMicroVmWorkspace(sessionId: string, sessionDest: string): void {
+  const src = join(VM_WORK_HOST, sessionId); // session root: guest /sessions/<id> == this host path
+  // A staged run always creates this tree (`stageWorkspace` below). Absent post-run ⇒ a genuine infra
+  // fault (stale VM / wiped vm-work), never "the agent wrote nothing". Throw LOUD rather than persist a
+  // run whose artifacts are silently missing; the caller downgrades this to a warning ONLY on the
+  // unanswered-gate salvage path (same as hostloop).
+  if (!existsSync(src))
+    throw new Error(
+      `cowork-harness: microvm session tree not found at ${src} — the agent's outputs can't be snapshotted into the run dir ` +
+        `(stale VM / wiped vm-work?). Refusing to persist a run whose artifacts would be silently missing.`,
+    );
+  // rm BEFORE copy: `cpSync` MERGES, so a file the agent DELETED would otherwise survive from a prior
+  // run/resume and false-pass `file_exists`. `dereference: false`: an agent-planted symlink is copied
+  // verbatim, never followed (no host escape — `collectArtifacts` records symlinks path-only). The dest
+  // is a fixed harness path (no user component), so the per-mount containment guard hostloop needs isn't
+  // required here.
+  rmSync(sessionDest, { recursive: true, force: true });
+  mkdirSync(dirname(sessionDest), { recursive: true });
+  cpSync(src, sessionDest, { recursive: true, dereference: false });
+}
 
 /** Sentinel terminating the stdin secret prologue (unlikely to collide with env content). */
 export const MICROVM_SECRET_SENTINEL = "__COWORK_SECRETS_END__";
@@ -34,7 +73,7 @@ export function spawnMicroVm(
   _scenario: Scenario,
   baseline: PlatformBaseline,
   plan: LaunchPlan,
-  _outDir: string,
+  outDir: string,
   sessionId: string,
   opts: { systemPromptAppend?: string; proxyPort?: number } = {},
 ) {
@@ -51,11 +90,12 @@ export function spawnMicroVm(
   const sessionHost = join(VM_WORK_HOST, sessionId);
   const mntHost = join(sessionHost, "mnt");
   const { mcpStaged } = stageWorkspace(plan, mntHost);
-  // DELIBERATELY no capturePreRunManifest here: microvm stages into VM_WORK_HOST/<id>/mnt, a
-  // different tree from the outDir/work/session/mnt that execute.ts's post-run collectArtifacts
-  // walks (a pre-existing microvm artifact-collection gap) — a pre/post diff would be vacuously
-  // empty, silently false-greening no_unexpected_files. Absent manifest ⇒ the assertion fails
-  // LOUD as evidence-unavailable at this tier (use container/hostloop for it).
+  // #52: capture the pre-run manifest against the staged mnt tree (same as container/hostloop). The
+  // post-run walk reads execute.ts's SESSION-ROOT snapshot (snapshotMicroVmWorkspace), which preserves
+  // relative structure, so the pre (walked at mntHost) and post (walked at outDir/work/session) path
+  // spaces line up — un-killing no_unexpected_files / no_lost_write_back / input_unmodified on microvm.
+  // Internally gated on plan.capturePreRun|record and !plan.resume, so it's zero-cost when unneeded.
+  capturePreRunManifest(plan, mntHost, outDir, "microvm");
   const mcpVm = mcpStaged ? `${configVm}/mcp.json` : undefined;
   // (Local marketplaces are resolved to --plugin-dir in buildLaunchPlan; the registry
   // is inert in cowork mode — SPEC §6. No registration step.)

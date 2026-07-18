@@ -135,12 +135,13 @@ describe("no_lost_write_back — read-write connected-mount policy", () => {
 });
 
 describe("no_lost_write_back — evidence-unavailable (fail-closed, never a silent clean)", () => {
-  it("could-not-verify on microvm (no pre-run manifest)", () => {
+  it("could-not-verify when there is no pre-run manifest (a --resume / pre-seam run — NOT tier-gated: microvm captures now)", () => {
     const wr = mkWorkRoot();
     const r = one(evaluate([{ no_lost_write_back: true }], ctx({ workRoot: wr, preRunHashes: undefined, authoredFiles: [] })));
-    expect(r.pass).toBe(false);
+    expect(r.pass).toBe(false); // fail-closed on absent manifest — unchanged behavior
     expect(r.message).toMatch(/evidence unavailable/i);
-    expect(r.message).toMatch(/microvm/i);
+    expect(r.message).toMatch(/no pre-run manifest/i);
+    expect(r.message).not.toMatch(/microvm/i); // #52: microvm no longer means "no manifest"
   });
 
   it("could-not-verify when authoredFiles was never wired for the lane", () => {

@@ -15,9 +15,10 @@ All notable changes to this project are documented here. The format is based on
   per-scenario verdict, not just an out-of-band `analyze-skill` scan. A lost write-back on an **added**
   agent-authored source (`outputs/` or the scratchpad) fails; a **pre-existing** file the skill only modified
   on a read-write connected mount is advisory (not the skill's to own); `-suspect` findings surface but pass.
-  Honest evidence-unavailable semantics: could-not-verify (fail-closed, never a silent clean) on **microvm**
-  (no pre-run manifest — use container/hostloop), a `--resume` scratchpad walk, or an authored candidate that
-  couldn't be analyzed. **Live/verify-run only** — skipped-loud on replay (a cassette embedding the key never
+  Honest evidence-unavailable semantics: could-not-verify (fail-closed, never a silent clean) on a `--resume`
+  scratchpad walk or an authored candidate that couldn't be analyzed. Runs on every live sandbox tier
+  including **microvm** (its outputs are snapshotted from the VM into the run dir — see the #52 entry below).
+  **Live/verify-run only** — skipped-loud on replay (a cassette embedding the key never
   hard-fails its replay); `verify-run` recomputes the authored set from the kept work dir. Only `true` is
   valid (omit to skip).
 - **`tool_result_matches` / `tool_result_not_matches` scenario assertion keys** — the case-insensitive regex
@@ -71,8 +72,19 @@ All notable changes to this project are documented here. The format is based on
   uses for "no live filesystem to scan" — with a loud `::warning::` naming the reason. Applied across the
   success, partial-salvage, and chat lanes; the walk's `complete`/root-absent health (F18) is now *consumed*
   at the call site rather than discarded. A genuinely-empty run (root present, no files) still correctly
-  reports `[]`; only an unobservable root flips to unavailable. Note: this is the honest-marker half — the
-  deeper "stage microvm outputs into the run dir" root cause remains tracked separately.
+  reports `[]`; only an unobservable root flips to unavailable.
+
+- **microvm outputs are now observable — root-cause fix for `#52`.** A microvm run's outputs already live on
+  host disk (`VM_WORK_HOST` is mounted writable into the VM at `/sessions`), just at a different path than the
+  run dir the post-run pipeline walks. The run now **snapshots the session-root tree from the VM mount into
+  `outDir/work/session`** (mirroring how `hostloop` snapshots connected folders) — rm-before-copy,
+  symlinks copied verbatim (`dereference: false`), fail-loud if the tree is unexpectedly absent — plus captures
+  the pre-run manifest on this tier. Result: **`workspaceFiles`/`artifacts`, `file_exists`, `artifact_json`,
+  `user_visible_artifact`, `no_lost_write_back`, `no_unexpected_files`, and `input_unmodified` now work on
+  `microvm`** instead of being evidence-unavailable — verified live to be identical to `container`. It's also
+  fidelity-positive: real Cowork's VM outputs are host-observable too. (`no_scratchpad_leak` /
+  `present_files_called` stay `container`-only — they key off the `present_files` tool, not workspace
+  observability.) Doc/message sweep: the "use container/hostloop" carve-outs for these keys are removed.
 
 - **`sync`'s non-macOS guard no longer blames Claude Desktop for a limitation that's actually this
   harness's own.** The error previously read "sync requires macOS (the Cowork Desktop app is macOS-only)"

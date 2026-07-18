@@ -179,8 +179,9 @@ export function readPreRunManifestLinkAware(outDir: string): boolean {
   }
 }
 
-/** undefined = no manifest (an older kept run, a run that didn't capture, or a tier that can't —
- *  microvm) — the assertion then fails evidence-unavailable rather than vacuously passing. */
+/** undefined = no manifest (an older kept run, a --resume run, or a run that didn't capture) — the
+ *  assertion then fails evidence-unavailable rather than vacuously passing. (Every live sandbox tier
+ *  captures now, microvm included — its session tree is snapshotted from the VM into the run dir.) */
 export function readPreRunManifest(outDir: string): string[] | undefined {
   try {
     const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { paths?: unknown };
