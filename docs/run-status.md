@@ -60,6 +60,11 @@ result (`result.json`, exit code, assertions).
 - `<run-id | run-dir>` accepts either the literal directory printed in the `[status] <outDir>` stderr
   line (works from the very first moment, even before the run has produced any events), or a run-id /
   scenario fragment resolved the same way `trace`/`inspect` already do.
+- **Pointing `status` at a run-dir ROOT (not the exact per-session out-dir) now resolves.** If the
+  resolved directory itself has no `status.json` — e.g. you passed the same root you gave `run
+  --run-dir`, rather than the per-session dir it printed — `status` scans up to two levels under it for
+  the newest session that has one and reads that instead. Falls back to reporting "no status.json"
+  against the original dir, unchanged, when no nested session qualifies.
 
 ## Recipe
 

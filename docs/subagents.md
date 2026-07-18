@@ -266,7 +266,7 @@ bare directory (no `SKILL.md` required), you confirm those directly by pointing 
 run's outputs directory:
 
 ```bash
-# container / hostloop runs:
+# container / hostloop / microvm runs:
 cowork-harness analyze-skill --runtime "<run-dir>/work/session/mnt/outputs" --output-format json
 # protocol runs: the outputs dir is <run-dir>/work/outputs
 ```
@@ -274,9 +274,9 @@ cowork-harness analyze-skill --runtime "<run-dir>/work/session/mnt/outputs" --ou
 The `<run-dir>` is printed on `stderr` as `[status] <dir>` at run start (or find it with
 `cowork-harness trace <run-id>`). This is the same confirmer as above — `runtimeConfirmations` in the JSON,
 enrichment only, needs `jsdom` installed. Caveats: it confirms whatever `.html` is present in that dir
-(agent output AND any author fixtures there); on **`microvm`** the agent's outputs are **not** staged into
-the run dir (a known artifact-collection gap), so this recipe has nothing to read for a microvm run; and a
-**replay** run dir has no live filesystem to scan.
+(agent output AND any author fixtures there); on **`microvm`** its outputs are snapshotted from the VM
+mount into the run dir same as `container`, so this recipe works there too; a **replay** run dir has no
+live filesystem to scan, so there's nothing for `--runtime` to read against a replayed run.
 
 **Per-scenario gate — `no_lost_write_back: true`.** The same static Tier A detector is also wired as a
 scenario assertion: instead of scanning source or a run dir out-of-band, it runs over the files the run

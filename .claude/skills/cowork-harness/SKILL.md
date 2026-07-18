@@ -221,7 +221,7 @@ them by what you're trying to prove:
 | a skill actually **ran** (or must NOT) | `skill_triggered: <regex>`, `no_skill_triggered: <regex>` |
 | a tool ran **inside** a skill's scope | `skill_tool_used: {skill, tool}` |
 | a sub-agent did the work | `subagent_output_contains: {contains}`, `subagent_dispatched: <regex>`, `dispatch_count_max: <N>` |
-| a pre-existing input wasn't mutated (incl. `uploads/**`) | `input_unmodified: <glob>` or `[<glob>, …]` (live/verify-run; not microvm) |
+| a pre-existing input wasn't mutated (incl. `uploads/**`) | `input_unmodified: <glob>` or `[<glob>, …]` (live/verify-run) |
 | no authored interactive artifact silently loses its Submit under Cowork | `no_lost_write_back: true` (**live-only**; static Tier A over the run's authored `.html`/`.py`/`.js`; per-scenario gate for the same class `analyze-skill` scans) |
 | a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |
 | a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
@@ -375,7 +375,9 @@ harness writes/updates throughout the run's lifecycle (including a crash-safety 
 error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no exit handler can catch —
 either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
 checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
-run starts, so capture stderr to get the exact directory. `--follow` fails loud on a timeout/staleness
+run starts, so capture stderr to get the exact directory — but `<dir>` also accepts the run-dir root
+passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the
+newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. (Fuller recipe in `docs/run-status.md` — repo-only, not in the installed
 payload; `cowork-harness status --help` has the flags.)
 

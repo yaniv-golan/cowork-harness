@@ -287,8 +287,10 @@ cowork-harness chat ~/my-plugin                  # interactive multi-turn REPL (
 ```
 
 **Input policy — no silent false-greens.** When an AskUserQuestion arrives with no scripted
-`--answer`, the policy is explicit: `fail` (error + the exact `--answer` to add — the default for
-`run`/CI), `prompt` (ask at the TTY — the default for `skill` when interactive), or `first` (pick
+`--answer`, the policy is explicit: `fail` (error + the exact `--answer` to add, plus a note that a
+scenario can instead set `on_unanswered: llm` as a secondary escape valve for a gate whose wording
+drifts run-to-run — the default for `run`/CI), `prompt` (ask at the TTY — the default for `skill`
+when interactive), or `first` (pick
 option 1, loudly warn). Pick with `--on-unanswered`; left unset, `skill` is **adaptive** (`prompt` on
 a TTY, `fail` when piped/CI) and `run` is always `fail`. Exit codes: `0`
 pass · `1` assertion/agent failure · `2` usage / unanswered-under-`fail` / runtime · `3` boundary/integrity.
@@ -406,7 +408,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `assertions --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
 | `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
 | `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
-| `status <run-id \| run-dir> [--follow]` \| `status --latest-for <scenario>` | Check whether a background run is alive (state/elapsed/tool counts) by reading `status.json` — no `ps aux` needed (unreliable across sandbox/PID-namespace boundaries). `--follow` streams one line per change until done/error; staleness detection catches a `SIGKILL`'d process. `--latest-for <scenario-name-or-slug>` resolves and prints the NEWEST run dir for a scenario by actual run time (its `.origin`/`result.json` timestamps) — NOT `ls -td`'s directory mtime, which can return a stale prior-session dir | a **driving agent** (or script) checking on a run it launched in the background, or locating the run it just kept |
+| `status <run-id \| run-dir> [--follow]` \| `status --latest-for <scenario>` | Check whether a background run is alive (state/elapsed/tool counts) by reading `status.json` — no `ps aux` needed (unreliable across sandbox/PID-namespace boundaries). Pointing it at a run-dir **root** (no `status.json` of its own) resolves to the newest session under it (scanned up to two levels deep) instead of failing with "no status.json". `--follow` streams one line per change until done/error; staleness detection catches a `SIGKILL`'d process. `--latest-for <scenario-name-or-slug>` resolves and prints the NEWEST run dir for a scenario by actual run time (its `.origin`/`result.json` timestamps) — NOT `ls -td`'s directory mtime, which can return a stale prior-session dir | a **driving agent** (or script) checking on a run it launched in the background, or locating the run it just kept |
 | `stats [<scenario>]` | Queryable summary over every indexed `run`/`skill`/`record` invocation — run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp (filters and `--reindex` below). See [docs/stats.md](./docs/stats.md) | "is this scenario flaky/expensive over time?" without hand-aggregating `result.json` files |
 | `boundary-check [baseline] [--session <file>]` | Prove the **L1 Docker** sandbox enforces Cowork's limitations (sealed FS + default-deny egress; `container`/`hostloop` share this sandbox — `microvm`'s guest firewall is not probed here); `--session` folds a session's `egress.extra_allow` into the probe allowlist | verifying the harness's own fidelity |
 | `sync` / `list` | Derive/refresh (`sync [--diff] [--allow-empty\|--force]`) & list platform baselines from the Desktop install | after Claude Desktop updates (baselines ship, so it's optional otherwise) |
@@ -563,9 +565,10 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
 ```
 ✓ success [container] · 4 tools · 12.3s ⚠ non-deterministic (LLM-decided)
    gates: 3 · 2 decided(llm), 1 scripted
+   → result: ~/.cowork-harness/runs/my-scenario/s1/result.json
 ```
 
-It is informational — it never changes the verdict. The block is a live/`partial`-lane surface (absent on the replay lane, which reports reproducibility via `nonDeterministic: false`).
+It is informational — it never changes the verdict. The block is a live/`partial`-lane surface (absent on the replay lane, which reports reproducibility via `nonDeterministic: false`). The `→ result:` pointer itself prints on every kept run (success or failure) since the run directory is always retained on disk — it's suppressed only on the replay lane, which never writes a `result.json`.
 
 **Debugging a run** — when a run misbehaves or a green looks too good to trust, [docs/debugging.md](./docs/debugging.md) is the map: `inspect` → `trace` → `verify-run` → `diff` → `chat` for a misbehaving skill, and the false-green hunt for a green you don't trust. `replay --explain` is the flagship false-green tool: it prints the evidence trail behind every passing assert (which link resolved, which file matched, which value satisfied a bound), text mode only (`--output-format json` already carries `assertions[].evidence`).
 
