@@ -61,7 +61,11 @@ This **overwrites** `index.jsonl` wholesale (it never appends in place), so it's
 once. It is not a pure from-disk rebuild, though: rows for run dirs that are gone from disk (e.g. pruned)
 are carried over from the prior index, so pruned-run history survives a reindex — see
 [Interplay with `prune`](#interplay-with-prune). A run dir with a missing or corrupt `result.json` is
-skipped, not fatal — one bad run dir never blocks indexing everything else.
+skipped, not fatal — one bad run dir never blocks indexing everything else. A stray `command:"replay"`
+`result.json` is also skipped — a replay is a re-check against a frozen recording, not new evidence (the
+not-indexed rule above), so reindex leaves it out rather than relabeling it `"run"`; any prior index row
+for that run dir is preserved as-is. The report line counts the two skip classes distinctly: `N skipped —
+missing/corrupt result.json` vs `N skipped — replay re-check, not evidence`.
 
 `result.json` now persists a `command` field (`run`/`skill`/`record`/`chat`), and `--reindex` prefers it:
 `result.command` first, falling back to the prior index row's `command` (for results written before that

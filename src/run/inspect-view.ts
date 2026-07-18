@@ -25,6 +25,7 @@ interface InspectDigest {
   durationMs?: number;
   cost?: RunResult["cost"];
   workDirAvailable: boolean;
+  artifactsRecorded: boolean; // false = result.artifacts was undefined (replay, or a run whose root vanished) — evidence UNAVAILABLE, distinct from an empty []
   artifacts: { path: string; bytes: number; preview?: Record<string, unknown> | string }[];
 }
 
@@ -50,6 +51,10 @@ function digestFor(runDir: string): InspectDigest {
   }
   const workDir = result.workDir ?? "";
   const workDirAvailable = !!workDir && existsSync(workDir);
+  // artifacts === undefined means evidence-unavailable (replay, or a run whose root was missing at
+  // collection), NOT a genuine zero-artifact run. Distinguish it from [] so `inspect` can't present
+  // absent evidence as "produced nothing".
+  const artifactsRecorded = result.artifacts !== undefined;
   const artifacts = (result.artifacts ?? []).map((a) => {
     const entry: InspectDigest["artifacts"][number] = { path: a.path, bytes: a.bytes };
     if (workDirAvailable && a.path.endsWith(".json")) {
@@ -73,6 +78,7 @@ function digestFor(runDir: string): InspectDigest {
     durationMs: result.durationMs,
     ...(result.cost ? { cost: result.cost } : {}),
     workDirAvailable,
+    artifactsRecorded,
     artifacts,
   };
 }
@@ -89,6 +95,12 @@ export function buildInspectView(runDir: string, opts: { json?: boolean } = {}):
   if (d.partial) {
     lines.push(`⚠ PARTIAL — this run did NOT complete (exited on an unanswered gate); artifacts below are pre-failure.`);
     if (d.unansweredGate) lines.push(`  gate: ${d.unansweredGate.message.split("\n")[0]}`);
+  }
+  if (!d.artifactsRecorded) {
+    lines.push(
+      `artifacts: UNAVAILABLE — result.json has no artifacts manifest; this is a replay result or a run whose workspace root was missing at collection, NOT a run that produced nothing.`,
+    );
+    return lines.join("\n");
   }
   lines.push(`artifacts (${d.artifacts.length}):`);
   for (const a of d.artifacts) {

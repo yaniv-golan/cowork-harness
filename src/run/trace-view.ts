@@ -623,13 +623,28 @@ interface FileRow {
 export interface FilesView {
   available: boolean; // false = no sibling result.json (bare events.jsonl was traced)
   reason?: string; // set when !available
+  workspaceFilesRecorded: boolean; // false = workspaceFiles was undefined (replay, or a run whose root vanished) — evidence UNAVAILABLE, distinct from an empty []
   diffAvailable: boolean; // false = the run captured no preRunHashes (microvm / pre-0.27)
   rows: FileRow[];
 }
 
 export function buildFilesView(file: string): FilesView {
   const result = readSiblingResult(file);
-  if (!result) return { available: false, reason: "files view needs a run dir (no sibling result.json)", diffAvailable: false, rows: [] };
+  if (!result)
+    return {
+      available: false,
+      reason: "files view needs a run dir (no sibling result.json)",
+      workspaceFilesRecorded: false,
+      diffAvailable: false,
+      rows: [],
+    };
+  // workspaceFiles === undefined means evidence-unavailable (replay, or a live run whose workspace root
+  // was missing at collection — the honest-marker lane), NOT an empty workspace. Short-circuit here:
+  // fall through to `?? []` and the removed-diff loop would otherwise emit a phantom "removed" row for
+  // every preRunHashes entry (preRunHashes is persisted even when workspaceFiles is dropped). Force
+  // rows:[] and diffAvailable:false — evidence-unavailable is not "an available, empty diff".
+  const workspaceFilesRecorded = result.workspaceFiles !== undefined;
+  if (!workspaceFilesRecorded) return { available: true, workspaceFilesRecorded: false, diffAvailable: false, rows: [] };
   const wf = result.workspaceFiles ?? [];
   const pre = result.preRunHashes; // Record<path, string | null> | undefined
   const diffAvailable = pre !== undefined;
@@ -656,12 +671,16 @@ export function buildFilesView(file: string): FilesView {
       rows.push({ path: p, diff: "removed" });
     }
   }
-  return { available: true, diffAvailable, rows };
+  return { available: true, workspaceFilesRecorded: true, diffAvailable, rows };
 }
 
 export function formatFilesView(v: FilesView): string {
   if (!v.available) return `(${v.reason})`;
-  if (!v.rows.length) return "(no workspace files recorded for this run)";
+  // Absent evidence (workspaceFiles undefined) must read differently from a genuinely empty run —
+  // a silent "no files" here would let a replay result or a root-vanished run pass as "wrote nothing".
+  if (!v.workspaceFilesRecorded)
+    return "(workspace file evidence UNAVAILABLE — result.json has no workspaceFiles; this is a replay result or a run whose workspace root was missing at collection, NOT a run that wrote nothing)";
+  if (!v.rows.length) return "(run recorded an empty workspace — no files)";
   const mark = { added: "+", modified: "~", removed: "-", unchanged: " ", unavailable: "?" } as const;
   const groups: Record<string, FileRow[]> = {};
   for (const r of v.rows) (groups[r.class ?? "(removed)"] ??= []).push(r);

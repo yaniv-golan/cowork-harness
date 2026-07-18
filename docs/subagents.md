@@ -275,8 +275,12 @@ The `<run-dir>` is printed on `stderr` as `[status] <dir>` at run start (or find
 `cowork-harness trace <run-id>`). This is the same confirmer as above — `runtimeConfirmations` in the JSON,
 enrichment only, needs `jsdom` installed. Caveats: it confirms whatever `.html` is present in that dir
 (agent output AND any author fixtures there); on **`microvm`** its outputs are snapshotted from the VM
-mount into the run dir same as `container`, so this recipe works there too; a **replay** run dir has no
-live filesystem to scan, so there's nothing for `--runtime` to read against a replayed run.
+mount into the run dir same as `container`, so this recipe works there too; a **replay** writes no run
+dir at all — nothing is persisted under `runs/` (its JSON result goes to stdout only, tagged
+`command:"replay"` with `workspaceFiles` absent), so there is no directory to point `--runtime` at;
+doing so anyway is a loud usage error (exit 2), never a clean pass. In any `result.json`,
+`workspaceFiles: undefined` means evidence-unavailable (replay, or a run whose workspace root was
+missing) — distinct from `[]`, a run that genuinely wrote nothing.
 
 **Per-scenario gate — `no_lost_write_back: true`.** The same static Tier A detector is also wired as a
 scenario assertion: instead of scanning source or a run dir out-of-band, it runs over the files the run

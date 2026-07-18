@@ -2820,8 +2820,12 @@ function cmdStats(args: string[]) {
 
   const root = runsRoot();
   if (reindex) {
-    const { written, skipped } = reindexFromRunsTree(root);
-    log(`stats: reindexed ${written} run(s) from ${root}${skipped ? ` (${skipped} skipped — missing/corrupt result.json)` : ""}`);
+    const { written, skipped, skippedReplay } = reindexFromRunsTree(root);
+    const notes = [
+      skipped ? `${skipped} skipped — missing/corrupt result.json` : "",
+      skippedReplay ? `${skippedReplay} skipped — replay re-check, not evidence` : "",
+    ].filter(Boolean);
+    log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
   const rows = readIndex(root);
   const stats = buildStats(rows, { scenario, since, baseline, branch, last });
@@ -3513,6 +3517,34 @@ async function cmdVerifyRun(args: string[]) {
       "runtime",
       `verify-run: ${runDir} is a PARTIAL run — it did not complete (exited on an unanswered gate). ` +
         `Re-run to completion before verifying. (can't verify ⇒ not green)`,
+      undefined,
+      isJsonOutput(args),
+    );
+  }
+  // A `command:"replay"` result is a RE-CHECK of a recorded cassette, not run evidence (same rule
+  // as the stats indexer, which never indexes replay rows). Certifying it would launder a re-check into a
+  // fresh verification. Keyed on `command`, not `workspaceFiles` — an old live result.json that simply
+  // lacks workspaceFiles must keep verifying (absent optional fields degrade loud via the evidence flags).
+  if (result.command === "replay") {
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: ${resultPath} was produced by \`replay\` (command:"replay") — a replay is a ` +
+        `re-check of a recorded cassette, not run evidence; verify the original live run dir, or re-run live. ` +
+        `(can't verify ⇒ not green)`,
+      undefined,
+      isJsonOutput(args),
+    );
+  }
+  // A chat result carries no assertions and no verdict by contract (RunResult.mode doc) — reading it as
+  // pass/fail is forbidden to consumers, including this one. Chat dirs DO persist result.json, so unlike
+  // the replay case this is reachable with an ordinary on-disk run dir.
+  if (result.mode === "chat") {
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: ${runDir} is a CHAT session (mode:"chat") — chat results carry no assertions or ` +
+        `verdict and must not be read as pass/fail. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );

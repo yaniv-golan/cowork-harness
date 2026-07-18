@@ -146,6 +146,43 @@ describe("trace --view files", () => {
     expect(v.diffAvailable).toBe(false);
     expect(v.rows.every((r) => r.diff === "unavailable")).toBe(true);
   });
+
+  // workspaceFiles ABSENT (undefined) means evidence-unavailable (replay, or a live run whose workspace
+  // root vanished — the honest-marker lane), distinct from [] (a run that wrote nothing). The `?? []`
+  // collapse erased that distinction; these lock the honest passthrough.
+  it("workspaceFiles ABSENT → workspaceFilesRecorded:false and a loud UNAVAILABLE marker (not the empty-tree line)", () => {
+    const f = runDir(events, { result: "success" }); // no workspaceFiles key at all
+    const v = buildFilesView(f);
+    expect(v.available).toBe(true);
+    expect(v.workspaceFilesRecorded).toBe(false);
+    expect(formatFilesView(v)).toMatch(/UNAVAILABLE/);
+  });
+
+  it("workspaceFiles: [] → workspaceFilesRecorded:true and an affirming empty-workspace line — and the two texts differ", () => {
+    const absent = buildFilesView(runDir(events, { result: "success" }));
+    const empty = buildFilesView(runDir(events, { workspaceFiles: [] }));
+    expect(empty.available).toBe(true);
+    expect(empty.workspaceFilesRecorded).toBe(true);
+    // genuinely-empty must NOT say UNAVAILABLE, and must read differently from the absent case
+    expect(formatFilesView(empty)).not.toMatch(/UNAVAILABLE/);
+    expect(formatFilesView(empty)).not.toBe(formatFilesView(absent));
+  });
+
+  // The defect the fix must actually kill: workspaceFiles absent BUT preRunHashes present (the live
+  // root-vanished shape — execute.ts sets workspaceFiles undefined on rootAbsent yet still persists
+  // preRunHashes). The old removed-diff loop then emits a phantom "removed" row per pre-run file. A test WITHOUT preRunHashes
+  // passes even against the unfixed collapse, so this preRunHashes-present case is the one that catches it.
+  it("workspaceFiles absent + preRunHashes present → NO phantom 'removed' rows (rows:[], diffAvailable:false)", () => {
+    const f = runDir(events, {
+      result: "success",
+      preRunHashes: { "in/a.txt": "h1", "in/b.txt": "h2", "in/c.txt": "h3" },
+    });
+    const v = buildFilesView(f);
+    expect(v.workspaceFilesRecorded).toBe(false);
+    expect(v.rows).toEqual([]); // NOT three "removed" rows
+    expect(v.diffAvailable).toBe(false); // evidence-unavailable is not "an available, empty diff"
+    expect(formatFilesView(v)).toMatch(/UNAVAILABLE/);
+  });
 });
 
 // ── Item 10: usage view — modelUsage per-model tokens/cost/cache-ratio ────────────────────────────

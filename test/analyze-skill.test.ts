@@ -1313,6 +1313,41 @@ describe.skipIf(!can)("analyze-skill CLI — multiple positionals + a simple `*`
   });
 });
 
+// ── Lock the SINGLE-target fail-loud contract the documented `analyze-skill --runtime <dir>` recipe
+// depends on. The multi-positional exit-2 posture is already locked above; these pin the single-target
+// message SHAPE and the --output-format json error envelope a CI consumer parses, so pointing the recipe
+// at a replay/empty/absent target can never silently regress into a clean pass. ────────────────────── //
+describe.skipIf(!can)("analyze-skill CLI — single-target fail-loud contract (recipe consumer)", () => {
+  it("an existing-but-empty directory target is a loud usage error (exit 2, names the missing markdown)", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-53-emptydir-"));
+    const empty = join(d, "nothing-here");
+    mkdirSync(empty);
+    const r = run(["analyze-skill", empty], d);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/no contract-bearing markdown/);
+  });
+
+  it("a nonexistent path target is a loud usage error (exit 2, path not found)", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-53-nopath-"));
+    const r = run(["analyze-skill", join(d, "does-not-exist")], d);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/path not found/);
+  });
+
+  it("both failure shapes carry an ok:false error envelope under --output-format json (the CI shape)", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-53-json-"));
+    const empty = join(d, "empty");
+    mkdirSync(empty);
+    const rEmpty = run(["analyze-skill", empty, "--output-format", "json"], d);
+    expect(rEmpty.code).toBe(2);
+    expect(JSON.parse(rEmpty.out.trim()).ok).toBe(false);
+
+    const rMissing = run(["analyze-skill", join(d, "gone"), "--output-format", "json"], d);
+    expect(rMissing.code).toBe(2);
+    expect(JSON.parse(rMissing.out.trim()).ok).toBe(false);
+  });
+});
+
 // ── Item 1 (Tier A) — artifact write-back analyzer, wired through cmdAnalyzeSkill ────────────────── //
 describe.skipIf(!can)("analyze-skill CLI — Tier A interactive-artifact write-back", () => {
   const html = (body: string) => `<!DOCTYPE html><html><body><script>${body}</script></body></html>`;

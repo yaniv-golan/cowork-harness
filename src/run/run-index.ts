@@ -166,13 +166,14 @@ export function readIndex(runsRoot: string): RunIndexRow[] {
  *
  *  A missing/corrupt result.json is skipped, not fatal — a partial/crashed run dir shouldn't block indexing
  *  everything else. */
-export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; written: number; skipped: number } {
+export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; written: number; skipped: number; skippedReplay: number } {
   const priorByOutDir = new Map<string, RunIndexRow>();
   for (const r of readIndex(runsRoot)) priorByOutDir.set(r.outDir, r);
 
   const walkedOutDirs = new Set<string>();
   const walked: RunIndexRow[] = [];
   let skipped = 0;
+  let skippedReplay = 0;
   if (existsSync(runsRoot)) {
     for (const slug of readdirSync(runsRoot)) {
       const slugDir = join(runsRoot, slug);
@@ -189,16 +190,24 @@ export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; wr
         if (!existsSync(resultPath)) continue;
         try {
           const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+          // A `command:"replay"` result is a RE-CHECK, not new evidence. Skip it entirely rather
+          // than relabeling it "run" (the fallback below would, since replay carries mode:"run") and
+          // laundering a re-check into the evidence index. `continue` leaves this outDir out of
+          // walkedOutDirs, so any PRIOR index row for it is PRESERVED as-is by the merge below — the one
+          // intentional exception to "every on-disk run dir gets a fresh row".
+          if (result.command === "replay") {
+            skippedReplay++;
+            continue;
+          }
           const ts = statSync(resultPath).mtime.toISOString();
           // RunResult.mode has no "skill"/"record" value, so a run originally recorded under one of those
           // commands would otherwise be relabeled "run"/"chat" on every reindex. Prefer the command now
           // persisted in result.json (#48); fall back to a prior index row (for results written before that
           // field existed), then to deriving from `result.mode` for a brand-new outDir with neither.
           const prior = priorByOutDir.get(outDir);
-          // "replay" is never indexed (re-checks aren't new evidence), so exclude it from the index row's
-          // narrower command union; it can't legitimately appear here anyway.
-          const persisted = result.command && result.command !== "replay" ? result.command : undefined;
-          const command = persisted ?? prior?.command ?? (result.mode === "chat" ? "chat" : "run");
+          // `result.command` here is already narrowed to exclude "replay" (skipped above), so it maps
+          // straight onto the index row's command union — no re-check ever reaches this row.
+          const command = result.command ?? prior?.command ?? (result.mode === "chat" ? "chat" : "run");
           walked.push(
             indexRowFromResult(result, {
               command,
@@ -218,7 +227,7 @@ export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; wr
   const rows = [...walked, ...preserved];
   mkdirSync(runsRoot, { recursive: true });
   writeFileSync(indexPath(runsRoot), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
-  return { rows, written: walked.length, skipped };
+  return { rows, written: walked.length, skipped, skippedReplay };
 }
 
 /** An exact `runId` or `slug/runId` match — split out from `resolveRunsFromIndex` (below) so

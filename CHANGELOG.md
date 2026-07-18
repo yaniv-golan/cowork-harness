@@ -16,6 +16,18 @@ All notable changes to this project are documented here. The format is based on
   (`RunResult` gains `preRunOrigin`). `no_lost_write_back` no longer silently misses a modified-but-unreadable
   or over-cap file, an authored file under an unreadable subtree, or a scratchpad deliverable behind a
   symlink/hardlink — each now surfaces as could-not-verify.
+- **Run-dir consumers no longer read absent evidence as empty, or a replay re-check as run evidence.**
+  `verify-run` now refuses (exit `2`, "can't verify ⇒ not green") a run dir whose `result.json` was produced
+  by `replay` (`command:"replay"` — a re-check of a recorded cassette, not run evidence) or by `chat`
+  (`mode:"chat"` — no assertions or verdict by contract); the refusal keys on `command`/`mode`, never on
+  `workspaceFiles`, so a live run merely lacking optional evidence fields still verifies. `stats --reindex`
+  skips a stray `command:"replay"` `result.json` instead of stripping the label and relabeling it `"run"`,
+  and its report line separates `skipped — replay re-check, not evidence` from `skipped — missing/corrupt
+  result.json`. `trace --view files` reports workspace-file evidence **UNAVAILABLE**
+  (`workspaceFilesRecorded: false` in JSON) when `workspaceFiles` is absent — distinct from a run that
+  genuinely wrote nothing — and no longer emits phantom "removed" diff rows against a persisted
+  `preRunHashes` in that case. `inspect` likewise prints `artifacts: UNAVAILABLE`
+  (`artifactsRecorded: false`) instead of `artifacts (0):` when `result.artifacts` is absent.
 - **Static artifact analysis (`analyze-skill` / `no_lost_write_back` Tier A)** closes several false-green and
   false-positive holes: recognizes `axios`/jQuery and library write-backs, computed member calls
   (`xhr["open"]`), unquoted and submitter-overridden `<form>` actions, and ES-module sources; classifies URLs

@@ -59,4 +59,23 @@ describe("buildInspectView — surface what a run produced", () => {
     expect(digest.artifacts[0].path).toBe("outputs/model.json");
     expect(digest.artifacts[0].preview.detected_stage).toBe("seed");
   });
+
+  // artifacts === undefined means evidence-unavailable (replay, or a run whose root vanished — the same
+  // lanes workspaceFiles is dropped in), NOT a genuine zero-artifact run. `artifacts ?? []` +
+  // "artifacts (0):" erased that; these lock the honest marker.
+  it("artifacts ABSENT → artifactsRecorded:false and a loud UNAVAILABLE marker (not 'artifacts (0):')", () => {
+    const text = buildInspectView(runDir({ artifacts: undefined })); // JSON.stringify drops the key
+    expect(text).toMatch(/UNAVAILABLE/);
+    expect(text).not.toContain("artifacts (0):");
+    const digest = JSON.parse(buildInspectView(runDir({ artifacts: undefined }), { json: true }));
+    expect(digest.artifactsRecorded).toBe(false);
+  });
+
+  it("artifacts: [] → artifactsRecorded:true and the affirming zero-artifact line, distinct from the absent case", () => {
+    const text = buildInspectView(runDir({ artifacts: [] }));
+    expect(text).not.toMatch(/UNAVAILABLE/);
+    expect(text).toContain("artifacts (0):");
+    const digest = JSON.parse(buildInspectView(runDir({ artifacts: [] }), { json: true }));
+    expect(digest.artifactsRecorded).toBe(true);
+  });
 });

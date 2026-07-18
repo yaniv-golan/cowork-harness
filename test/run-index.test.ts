@@ -412,6 +412,61 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     expect(skipped).toBe(1);
   });
 
+  // A stray `command:"replay"` result.json (e.g. hand-saved replay stdout dropped in a run dir) is a
+  // RE-CHECK, not new evidence. It must be skipped, never relabeled "run" and indexed as a fresh run.
+  it('SKIPS a command:"replay" result.json — not indexed, not laundered into a "run" row', () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const outDir = join(runsRoot, "s", "local_replay");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "result.json"),
+      JSON.stringify({
+        scenario: "s",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir,
+        command: "replay",
+        mode: "run",
+      }),
+    );
+    const { rows, written, skippedReplay } = reindexFromRunsTree(runsRoot);
+    expect(rows.find((r) => r.outDir === outDir)).toBeUndefined(); // no row at all — not a laundered "run"
+    expect(written).toBe(0);
+    expect(skippedReplay).toBe(1);
+  });
+
+  // Documented consequence of skip-via-continue: a replay result.json doesn't get walked, so a prior
+  // index row for that outDir is PRESERVED as-is (the intentional exception to "every on-disk run dir
+  // gets a fresh row") — never relabeled off the prior provenance.
+  it("a replay result.json is skipped but any PRIOR index row for that outDir is preserved (not relabeled)", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const outDir = join(runsRoot, "s", "local_1");
+    appendIndexRow(runsRoot, indexRowFromResult(rr({ scenario: "s", outDir }), { command: "run", partial: false }));
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "result.json"),
+      JSON.stringify({
+        scenario: "s",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir,
+        command: "replay",
+        mode: "run",
+      }),
+    );
+    const kept = reindexFromRunsTree(runsRoot).rows.filter((r) => r.outDir === outDir);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].command).toBe("run"); // preserved prior provenance, NOT the replay result
+  });
+
   it(
     "MERGES with any prior index.jsonl — a row whose outDir no longer exists on disk (pruned) is " +
       "PRESERVED, never dropped; a row whose outDir DOES exist is refreshed from its real result.json",

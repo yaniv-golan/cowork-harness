@@ -234,6 +234,47 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
     expect(text).toContain("no result.json");
   });
 
+  // A `command:"replay"` result is a re-check of a recorded cassette, not run evidence — certifying
+  // it would launder a re-check into a fresh green. Refuse loudly.
+  it("refuses (exit 2) a REPLAY result — a re-check is not run evidence", () => {
+    const run = keptRun();
+    const fs = require("node:fs");
+    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    result.command = "replay";
+    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    // An assertion that WOULD pass on this kept run, so a non-zero exit can only be the replay guard.
+    const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
+    const { code, text } = verifyRun(run, sc);
+    expect(text).toMatch(/re-check/);
+    expect(code).toBe(2);
+  });
+
+  // A chat result has no assertions and no verdict by contract — reading it as pass/fail is forbidden.
+  it("refuses (exit 2) a CHAT result — chat carries no assertions or verdict", () => {
+    const run = keptRun();
+    const fs = require("node:fs");
+    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    result.mode = "chat";
+    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
+    const { code, text } = verifyRun(run, sc);
+    expect(text).toMatch(/CHAT session/);
+    expect(code).toBe(2);
+  });
+
+  // Control: the provenance guard must key on `command`, NOT on workspaceFiles — a plain live run that
+  // simply never captured workspaceFiles (the root-vanished honest-marker lane) must still verify normally.
+  it("still verifies a live result.json with workspaceFiles ABSENT (guard must not key on workspaceFiles)", () => {
+    const run = keptRun(); // keptRun omits workspaceFiles entirely
+    const fs = require("node:fs");
+    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    result.command = "run"; // explicit live provenance, still no workspaceFiles
+    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
+    const { code } = verifyRun(run, sc);
+    expect(code).toBe(0);
+  });
+
   it("refuses a result.json that parses but is structurally invalid", () => {
     const run = mkdtempSync(join(tmpdir(), "cwh-vr-bad-"));
     // Valid JSON, but no `result` field — the field the verdict hinges on.

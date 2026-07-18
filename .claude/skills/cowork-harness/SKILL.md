@@ -311,8 +311,10 @@ your `answers:` against that kept run, then record once. **But the kept run is a
 skill's gate phrasing afterward, re-`--keep` — verify-run's answer-coverage *refuses* (exit 2, "predates the
 current skill") rather than vouch against stale labels, but the trace/inspect path can't warn you, so re-keep
 deliberately. (Same fail-closed family: corrupt gate evidence — unparseable `events.jsonl` lines, or fewer
-gates than `trace.json` recorded questions — and a structurally invalid `result.json` also refuse rather
-than certify.) (A token-free probe of "which gates fire" isn't possible — gates are model-decided per run.)
+gates than `trace.json` recorded questions — a structurally invalid `result.json`, a `command:"replay"`
+result (a replay is a re-check of a recorded cassette, not run evidence — verify the original live run dir),
+and a `mode:"chat"` result (chat carries no assertions or verdict by contract) also refuse rather than
+certify.) (A token-free probe of "which gates fire" isn't possible — gates are model-decided per run.)
 
 Run artifacts are written to `~/.cowork-harness/runs/…` by default — **outside any working tree**, so a run
 launched from a repo root never drops sensitive skill inputs/outputs into it. Pass `--run-dir <path>` (or set
@@ -472,7 +474,11 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
 - **Debugging a wrong Cowork UI panel.** Each panel is reconstructed in `result.json`: **Progress** =
   `tasks[]`, **Working folder** = `workspaceFiles[]` (classified output/mount/input, with a
   `trace --view files` diff), **Context / Connectors** = `context` (tools / mcpServers / availableSkills),
-  **Scratch-pad → outputs** = `presentedFiles[]`. If a panel looks wrong in a run, read its field.
+  **Scratch-pad → outputs** = `presentedFiles[]`. If a panel looks wrong in a run, read its field. An
+  **absent** `workspaceFiles`/`artifacts` (a replay result, or a run whose workspace root was missing at
+  collection) is evidence **UNAVAILABLE**, not an empty run — `trace --view files` reports a loud
+  UNAVAILABLE marker (`workspaceFilesRecorded: false` in JSON, and no phantom "removed" diff rows) and
+  `inspect` prints `artifacts: UNAVAILABLE` (`artifactsRecorded: false`) instead of `artifacts (0):`.
 
 ### Debugging with `chat`
 

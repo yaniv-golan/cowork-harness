@@ -798,7 +798,13 @@ edit, or raw agent-stdout noise), or one that yields fewer gates than `trace.jso
 also refuses — a present-but-corrupt stream is otherwise indistinguishable from "zero gates fired" and
 would certify answer coverage at a hollow 0/0. And independent of answers, a `result.json` that parses
 but is structurally invalid (no `"success" | "error"` result field — truncated, hand-edited, or not
-harness-written) refuses instead of being certified as success.
+harness-written) refuses instead of being certified as success. The refusal also keys on provenance: a
+`result.json` produced by `replay` (`command:"replay"`) refuses — a replay is a re-check of a recorded
+cassette, not run evidence, so certifying it would launder a re-check into a fresh verification; point
+`verify-run` at the original live run dir (or re-run live). A `mode:"chat"` result refuses too — chat
+carries no assertions and no verdict by contract, so it must not be read as pass/fail. Both are keyed on
+`command`/`mode`, never on `workspaceFiles` — a live run merely lacking an optional evidence field still
+verifies.
 A scenario with no `answers:` is unaffected (assert-only, exactly as before). Scenarios using
 `on_unanswered: first`/`llm` treat an unmatched gate as an acceptable auto-answer, not a failure.
 
