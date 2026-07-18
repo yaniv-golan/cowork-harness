@@ -5,8 +5,13 @@
  *   - extract:    `Ien` over gen=/https?:\/\/…/ , len=/www\.…/ , uen=/bare domain.tld/, each ZHA-trimmed
  *   - membership: `set.has(zG(url))` (exact, normalized)
  *
- * The harness has no WebSearch tool, so the WebSearch-result seed path (`Een`) is N/A; we seed from
- * user-turn text and tool-result text — the faithful subset for this harness.
+ * WebSearch results are NOT given a dedicated seed path — Desktop's structured extractor over the
+ * search-result objects themselves (`Een`) is not ported. Instead, WebSearch tool-call results fall
+ * through the same generic `seedFromToolResult` → `extractUrls` text-regex path as every other tool
+ * result (see src/run/run.ts, which does invoke this for WebSearch results — WebSearch IS a pinned
+ * spawn tool, real-SDK-executed). This is a faithful-but-less-precise subset: URLs embedded in
+ * WebSearch's rendered text are still seeded, just via regex-over-text rather than Een's structured
+ * per-result extraction.
  */
 
 /** Port of `zG`: parse + http/https-only + drop fragment + strip one trailing slash → normalized href. */

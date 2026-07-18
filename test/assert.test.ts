@@ -1192,6 +1192,69 @@ describe("evidence-missing flags fail negative assertions loud (absent ≠ empty
   });
 });
 
+describe("tool_result_matches / tool_result_not_matches: regex siblings of the _contains pair", () => {
+  it("tool_result_matches passes when a result matches the regex (RED before impl: 'empty assertion')", () => {
+    const c = ctx({ toolResultTexts: ["[exit 1]\nE_NO_EQUITY_BASE: base missing"] });
+    expect(evaluate([{ tool_result_matches: "E_[A-Z_]+|invariant violation" }], c)[0].pass).toBe(true);
+  });
+
+  it("tool_result_not_matches fails with the SPECIFIC forbidden-match message", () => {
+    const c = ctx({ toolResultTexts: ["… invariant violation …"] });
+    const r = evaluate([{ tool_result_not_matches: "invariant violation" }], c)[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/matched forbidden/); // not the pre-impl "empty assertion"
+  });
+
+  it("tool_result_matches reports evidence-unavailable when tool results are absent", () => {
+    const c = ctx({ toolResultsMissing: true });
+    expect(evaluate([{ tool_result_matches: "x" }], c)[0].message).toMatch(/evidence unavailable/);
+  });
+
+  it("tool_result_not_matches reports evidence-unavailable when tool results are absent", () => {
+    const c = ctx({ toolResultsMissing: true });
+    expect(evaluate([{ tool_result_not_matches: "x" }], c)[0].message).toMatch(/evidence unavailable/);
+  });
+
+  it("tool_result_matches rejects a bad regex", () => {
+    const c = ctx({ toolResultTexts: ["ok"] });
+    expect(evaluate([{ tool_result_matches: "(" }], c)[0].message).toMatch(/bad regex/);
+  });
+
+  it("tool_result_not_matches rejects a bad regex", () => {
+    const c = ctx({ toolResultTexts: ["ok"] });
+    expect(evaluate([{ tool_result_not_matches: "(" }], c)[0].message).toMatch(/bad regex/);
+  });
+
+  it("tool_result_matches fails (no match) with a plain message when nothing is truncated", () => {
+    const c = ctx({ toolResultTexts: ["all clear"] });
+    const r = evaluate([{ tool_result_matches: "E_[A-Z_]+" }], c)[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).not.toContain("evidence unavailable");
+  });
+
+  it("tool_result_matches fails closed with evidence-unavailable when the miss coincides with a display-truncated result", () => {
+    const c = ctx({ toolResultTexts: ["all clear"], toolResultsTruncated: [true] });
+    const r = evaluate([{ tool_result_matches: "E_[A-Z_]+" }], c)[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).toContain("evidence unavailable");
+  });
+
+  it("tool_result_not_matches: is case-insensitive, mirroring transcript_matches", () => {
+    const c = ctx({ toolResultTexts: ["INVARIANT VIOLATION"] });
+    expect(pass(evaluate([{ tool_result_not_matches: "invariant violation" }], c))).toBe(false);
+  });
+
+  it("tool_result_not_matches: passes (empty-but-present) and fails closed on an untruncated-but-hidden risk", () => {
+    expect(pass(evaluate([{ tool_result_not_matches: "secret" }], ctx({ toolResultTexts: [] })))).toBe(true);
+    const r = evaluate(
+      [{ tool_result_not_matches: "secret" }],
+      ctx({ toolResultTexts: ["nothing here"], toolResultsTruncated: [true] }),
+    )[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).toContain("evidence unavailable");
+  });
+});
+
 // artifact_json: dotted-path resolver (three states) + operators; live-only (stripped on replay).
 import { resolveDotPath } from "../src/assert.js";
 import { collectArtifacts } from "../src/run/execute.js";

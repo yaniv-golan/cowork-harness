@@ -273,6 +273,7 @@ export function renderFooter(
   if (passed) {
     write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + tildeify(r.outDir) : ""}\n`);
     if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + tildeify(r.outputsDir))}\n`);
+    if (opts.lane !== "replay" && r.outDir) write(`   ${dim(plan, "→ result: " + tildeify(r.outDir) + "/result.json")}\n`);
     renderGuards(verdict.guards, plan, write); // make the safety nets that ran an enumerable, visible fact
     renderGateProvenance(r, plan, write);
     renderAnswerHints(r, plan, write);
@@ -321,6 +322,7 @@ export function renderFooter(
     write(`   ${dim(plan, "→ full run: " + tildeify(r.outDir) + "/run.jsonl")}\n`);
     if (r.outputsDir) write(`   ${dim(plan, "→ outputs:  " + tildeify(r.outputsDir))}\n`);
   }
+  if (opts.lane !== "replay" && r.outDir) write(`   ${dim(plan, "→ result: " + tildeify(r.outDir) + "/result.json")}\n`);
 }
 
 /**

@@ -49,9 +49,11 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
   // Only trust a CLEAN timeline (parsed header, no malformed entry lines) — a corrupt/partial timeline is
   // evidence-unavailable, not present-empty, so derived tool-duration/skill-activity stay undefined. #43
   const timeline = timelineRaw && timelineRaw.malformedLines === 0 && !timelineRaw.headerCorrupt ? timelineRaw : undefined;
+  // #52: a missing workspace root is UNAVAILABLE (undefined, the replay convention), not a false empty [] —
+  // otherwise a microvm chat (outputs stage into the VM work tree, not outDir) reads as "wrote nothing".
   const workspaceFiles = existsSync(opts.workRoot)
     ? classifyWorkspaceFiles(opts.workRoot, opts.userVisibleRoots, opts.readonlyFolderRoots)
-    : [];
+    : undefined;
   const resources = foldResources(opts.outDir, opts.fidelity, resolveIntervalMs());
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
@@ -110,7 +112,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     outputsDir: join(opts.workRoot, "outputs"),
     userVisibleRoots: opts.userVisibleRoots,
     readonlyFolderRoots: opts.readonlyFolderRoots.length ? opts.readonlyFolderRoots : undefined,
-    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles,
     contextEvents: record.contextEvents,
     mcpErrors: record.mcpErrors,

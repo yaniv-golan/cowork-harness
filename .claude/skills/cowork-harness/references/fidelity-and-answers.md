@@ -180,7 +180,7 @@ up often enough to spell out:
   a filesystem or network — it re-evaluates assertions from the frozen cassette. A fixed set of
   keys is live-only and **skipped outright** on replay (absent from `assertions[]`, not vacuously
   passed): `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`,
-  `egress_allowed`, `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, and `expect_denied`.
+  `egress_allowed`, `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `no_lost_write_back`, and `expect_denied`.
   Everything else that *is* evaluated is checked against the **recording**, not fresh behavior — a
   green replay says the skill produced these events when it was recorded, not that it still does
   (`staleness[]` flags skill/baseline drift as a hint; only a live `run` re-confirms current

@@ -666,7 +666,7 @@ export function formatFilesView(v: FilesView): string {
   const groups: Record<string, FileRow[]> = {};
   for (const r of v.rows) (groups[r.class ?? "(removed)"] ??= []).push(r);
   const lines: string[] = [];
-  if (!v.diffAvailable) lines.push("diff vs pre-run: unavailable (no preRunHashes — microvm or pre-0.27 run)\n");
+  if (!v.diffAvailable) lines.push("diff vs pre-run: unavailable (no preRunHashes — a --resume or pre-0.27 run)\n");
   for (const cls of Object.keys(groups)) {
     lines.push(`${cls}:`);
     for (const r of groups[cls]) {

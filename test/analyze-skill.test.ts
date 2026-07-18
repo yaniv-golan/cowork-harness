@@ -1392,7 +1392,10 @@ describe.skipIf(!can)("analyze-skill CLI — Tier B --runtime enrichment", () =>
     const c = env.runtimeConfirmations[0];
     // Either an observed verdict (jsdom present) or a graceful unavailable — both are valid, never a throw.
     expect(c.available === false || (c.available === true && ["lost", "suspect", "clean", "inconclusive"].includes(c.verdict))).toBe(true);
-  });
+    // Spawns the jsdom `--runtime` subprocess 3× (each loads jsdom + drives a headless DOM). That's ~5s+
+    // and flirts with vitest's 5000ms default on a loaded CI runner — an explicit generous timeout keeps it
+    // from flaking (locally ~2.8s; the per-spawn budget is 10s, so 30s covers the worst case). Not #52-related.
+  }, 30_000);
 
   it("without --runtime, no runtimeConfirmations key is emitted", () => {
     const d = mkdtempSync(join(tmpdir(), "as-nort-"));

@@ -28,8 +28,9 @@ describe("scanCassette — whole-surface privacy scan", () => {
   });
 
   it("capability-manifest exclusion: domain/currency suppressed on the agent registry, but FLAGGED in agent reasoning", () => {
-    // The two manifest forms: a system/init event (mcp_servers names) and the init-1 registry control_response
-    // (slash-command descriptions naming docsend.com). Catalog noise → NOT flagged.
+    // Two of the four manifest forms: a system/init event (mcp_servers names) and the init-1 registry
+    // control_response (slash-command descriptions naming docsend.com). Catalog noise → NOT flagged.
+    // The other two (MCP initialize control_request/control_response) have their own dedicated tests below.
     const manifest = {
       scenario: scenario([{ result: "success" }]),
       events: [
@@ -51,6 +52,112 @@ describe("scanCassette — whole-surface privacy scan", () => {
       events: [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "pulling the cap table from acme.co" }] } })],
     } as unknown as Cassette;
     expect(scanCassette(reasoning, []).some((f) => f.cls === "domain")).toBe(true);
+  });
+
+  it("MCP initialize control_request (Claude Code's own client handshake) suppresses domain, but email/path still scan it", () => {
+    // The real shape recorded in examples/replays/hostloop-computer-links.cassette.json events[1] and
+    // example-pdf-skill.cassette.json events[1] — Claude Code's own clientInfo.websiteUrl is
+    // https://claude.com/claude-code, previously flagged as a `domain` finding (the bug this test locks in).
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_request",
+          request_id: "2496128b-7635-4185-8e2e-4f056867b640",
+          request: {
+            subtype: "mcp_message",
+            server_name: "workspace",
+            message: {
+              method: "initialize",
+              params: {
+                protocolVersion: "2025-11-25",
+                capabilities: {},
+                clientInfo: { name: "claude-code", version: "2.1.202", websiteUrl: "https://claude.com/claude-code" },
+              },
+              jsonrpc: "2.0",
+              id: 0,
+            },
+          },
+        }),
+      ],
+    } as unknown as Cassette;
+    expect(scanCassette(c, []).some((f) => f.cls === "domain")).toBe(false);
+
+    // Parity: email must still fire on this new form, the way it does on the other three (see the other
+    // capability-manifest tests in this file).
+    const withEmail = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_request",
+          request_id: "x",
+          request: { subtype: "mcp_message", message: { method: "initialize", params: { clientInfo: { name: "dev@company.com" } } } },
+        }),
+      ],
+    } as unknown as Cassette;
+    expect(scanCassette(withEmail, []).some((f) => f.cls === "email")).toBe(true);
+  });
+
+  it("MCP initialize control_response (the configured MCP server's own handshake reply) suppresses domain, but email/path still scan it", () => {
+    // The real shape recorded in both example cassettes' controlOut[2] — serverInfo is SERVER-authored
+    // (unlike the request form above), so this is a shape match on protocolVersion+capabilities+serverInfo
+    // together, not a verified request/response pairing (see isCapabilityManifest's doc comment).
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: "2496128b-7635-4185-8e2e-4f056867b640",
+            response: {
+              mcp_response: {
+                jsonrpc: "2.0",
+                id: 0,
+                result: { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "acme.io", version: "1.0.0" } },
+              },
+            },
+          },
+        }),
+      ],
+    } as unknown as Cassette;
+    expect(scanCassette(c, []).some((f) => f.cls === "domain")).toBe(false);
+
+    // Parity: email must still fire on this new form.
+    const withEmail = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: "x",
+            response: {
+              mcp_response: { result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "dev@company.com" } } },
+            },
+          },
+        }),
+      ],
+    } as unknown as Cassette;
+    expect(scanCassette(withEmail, []).some((f) => f.cls === "email")).toBe(true);
+
+    // Negative: a non-initialize mcp_response result (missing protocolVersion/capabilities) must NOT be
+    // treated as a manifest message — confirms the three-key tightening actually excludes other shapes,
+    // not just any object with a `serverInfo`-like key.
+    const notInitialize = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: "y",
+            response: { mcp_response: { result: { content: [{ type: "text", text: "see acme.io for details" }] } } },
+          },
+        }),
+      ],
+    } as unknown as Cassette;
+    expect(scanCassette(notInitialize, []).some((f) => f.cls === "domain")).toBe(true);
   });
 
   it("email is scanned EVEN on the capability manifest (the registry `account` field can carry the dev's email)", () => {

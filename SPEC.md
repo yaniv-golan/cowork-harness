@@ -404,7 +404,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `computer_links_resolve_if_present`, `no_unexpected_files`, `input_unmodified`) are evaluated **when the cassette carries an `artifacts` manifest**
   (`record` snapshots `outputs/` + connected folders; `replay` materializes it token-free — `artifact_json` needs the
   small JSON body inlined). `no_unexpected_files` additionally requires `preRunPaths` (optional cassette
-  metadata since 0.24; container/hostloop recordings only — microvm cannot capture the baseline); without it
+  metadata since 0.24; captured on every live sandbox recording tier including microvm — its outputs are snapshotted from the VM into the run dir); without it
   replay **excludes** the key with a loud warning (live/verify-run without a
   pre-run manifest hard-fails evidence-unavailable). `input_unmodified` (the in-place-mutation detector —
   every pre-existing file matching a glob keeps an unchanged content hash) mirrors this exactly against its
@@ -412,7 +412,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
-  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `egress_*`, `expect_denied`) are always skipped on replay — absent
+  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `no_lost_write_back`, `egress_*`, `expect_denied`) are always skipped on replay — absent
   from `assertions[]`. The count of skipped (full / partial) assertions is reported in
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated
   everything.
@@ -543,14 +543,14 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "userVisibleRoots?": ["string"],               // user-visible mount roots (relative to mnt/) — `outputs` plus each connected folder's resolved mount name; plugins excluded
   "readonlyFolderRoots?": ["string"],            // subset of userVisibleRoots that are read-only (mode:"r") connected-folder mounts — inputs, not deliverables; `artifacts` excludes them
   "artifacts?": [{ "path","bytes" }],            // files written under the user-visible roots (paths + sizes only — no content snapshot)
-  "preRunPaths?": ["string"],                    // workRoot-relative paths under the user-visible roots that existed BEFORE the agent ran — the `no_unexpected_files` baseline; absent when the tier didn't capture it (microvm) or the run predates the seam
+  "preRunPaths?": ["string"],                    // workRoot-relative paths under the user-visible roots that existed BEFORE the agent ran — the `no_unexpected_files` baseline; absent on a --resume run or when the run predates the seam (every live sandbox tier captures it now, microvm included)
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
   "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
   "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier|prompt-assets|unverifiable-prompt-assets", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines. `prompt-assets` = the baseline's committed prompt-asset files (spawn.promptTemplate/subagentAppend/subagentAppendHostLoop) changed since record under the SAME appVersion — warn by default, `--strict` fails, re-record; `unverifiable-prompt-assets` = a recorded `fingerprint.promptAssetsHash` exists but the live baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
-  "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains
+  "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains and their regex siblings tool_result_matches/tool_result_not_matches
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
   "skillToolAvailable?": bool,                    // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
   "evidenceErrors?": { "taskTracking?": number, "webSearchParse?": number, "presentFilesMalformed?": number, "egressParse?": number } // dropped/malformed telemetry lines per stream; a >0 taskTracking/presentFilesMalformed count fails the dependent assertion "malformed" rather than silently dropping bad entries; webSearchParse/egressParse are observability-only
@@ -751,6 +751,10 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
   explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
 - **`trace` row shapes** and other debug/diagnostic output.
+- **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
+  the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
+  (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your
+  own risk until they are promoted to a covered surface.
 - **`docs/internal/**`** — untracked working notes.
 - **The reconstructed system-prompt append text** — a paraphrase by design (see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.

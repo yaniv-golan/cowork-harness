@@ -62,6 +62,8 @@ CONTENT_KEYS = {
     "transcript_not_matches",
     "tool_result_contains",
     "tool_result_not_contains",
+    "tool_result_matches",
+    "tool_result_not_matches",
     "tool_called",
     "tool_not_called",
     "subagent_tool_used",
@@ -129,6 +131,7 @@ LIVE_ONLY_KEYS = {
     "no_mcp_error",
     "max_peak_rss_bytes",
     "semantic_matches",
+    "no_lost_write_back",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # container-only: served only at fidelity: container (present_files / the scratchpad promotion path
@@ -229,6 +232,8 @@ REGEX_KEYS = {
     "subagent_dispatched",
     "question_asked",
     "hook_blocked",
+    "tool_result_matches",
+    "tool_result_not_matches",
 }
 VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
 VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")

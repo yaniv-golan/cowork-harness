@@ -117,7 +117,12 @@ describe("web_fetch provenance gate (G1t port, via the handler)", () => {
   it("a MISS with no approval (prompt gate off) is a hard deny with the verbatim provenance string", async () => {
     const r = await callWebFetch(fake({ isAllowed: () => false, promptGateOn: false }), "https://x.example/x");
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/URL not in provenance set\. web_fetch can only retrieve URLs that appeared/);
+    expect(r.text).toBe(
+      "URL not in provenance set. web_fetch can only retrieve URLs that appeared in a user message, a prior " +
+        "web_fetch result, or a WebSearch result. Retries will fail. Ask the person to include the verbatim URL " +
+        "in a message first. If you cannot ask (e.g. from a subagent), continue without this page and report the " +
+        "blocked URL in your findings.",
+    );
     expect(r.egress).toEqual([{ host: "x.example", decision: "deny" }]);
   });
 

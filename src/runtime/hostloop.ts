@@ -1,6 +1,6 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
-import { appendFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
@@ -69,6 +69,21 @@ export function buildHostLoopNativeEnv(
   return nativeEnv;
 }
 
+/** True iff wire and spawner cwd differ after best-effort realpath canonicalization. A symlinked run-dir
+ *  (/tmp→/private/tmp, /var→/private/var on macOS) makes the agent's realpath'd wire cwd differ from the
+ *  un-canonicalized spawner cwd even for the SAME directory — a false alarm this collapses. The gate
+ *  decision is unaffected (it realpaths candidate and roots itself); this only governs the diagnostic. */
+export function pathGateCwdMismatch(wireCwd: string, spawnerCwd: string): boolean {
+  const canon = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p; // non-resolvable path still deserves the loud compare
+    }
+  };
+  return canon(wireCwd) !== canon(spawnerCwd);
+}
+
 /**
  * HOST-LOOP runtime — reproduces Cowork's REAL host-loop architecture: the agent LOOP is a native macOS
  * process spawned directly on the host — no Docker sandbox around the file tools, matching production.
@@ -129,7 +144,11 @@ export function spawnHostLoop(
   const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
 
   const agentNativeHost = resolveHostAgentBinary(baseline);
-  const agentVmHost = resolveAgentBinary(baseline); // unchanged — still the sidecar VM image's basis (bash execs into it)
+  // Bind-mounted into the bash sidecar for parity; not run by any harness-spawned process here (sidecar CMD
+  // is a keep-alive, bash is `docker exec … sh -c`, the executed agent is agentNativeHost above — model bash
+  // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer
+  // VM ELF when the pin was pruned by a Desktop update, instead of hard-failing a run that doesn't execute it.
+  const agentVmHost = resolveAgentBinary(baseline, { parityMount: true });
   const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
 
@@ -215,7 +234,7 @@ export function spawnHostLoop(
       // Wire-cwd cross-check: the hook payload carries input.cwd. The RESOLVER input stays the closure
       // hostCwd (faithful to production's own resolver, which uses its own cwd variable, not the wire
       // value), but a mismatch means the native spawn's cwd drifted from the gate's assumption — loud, never silent.
-      if (typeof input?.cwd === "string" && input.cwd !== gateCfg.hostCwd)
+      if (typeof input?.cwd === "string" && pathGateCwdMismatch(input.cwd, gateCfg.hostCwd))
         warn(`::warning:: [hostloop] path-gate cwd mismatch: wire=${input.cwd} spawner=${gateCfg.hostCwd}\n`);
       return checkHostLoopPathGate(input?.tool_name, input?.tool_input ?? {}, gateCfg);
     },
@@ -236,7 +255,7 @@ export function spawnHostLoop(
     sessionRoot,
     sessionHost,
     agentHost: agentVmHost,
-    agentIn: "/usr/local/bin/claude", // kept bind-mounted (unused by any process) for parity/inspection; harmless
+    agentIn: "/usr/local/bin/claude", // kept bind-mounted for parity/inspection; not run by any harness-spawned process (reachable only by model bash in the hardened sidecar, an accepted patch-only residual)
     image,
     env: {}, // NO CLAUDE_PLUGIN_ROOT — real host-loop leaves it unset in the VM; the agent self-heals via `find`
     name: containerName,

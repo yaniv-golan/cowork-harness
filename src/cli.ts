@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSync, existsSync, copyFileSync } from "node:fs";
-import { join, basename, resolve, isAbsolute, dirname } from "node:path";
+import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
@@ -33,13 +33,16 @@ import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
+import { captureAuthoredFilesWithHealth } from "./run/artifacts.js";
+import { readPreRunManifestStats } from "./run/pre-run-manifest.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint, cmdLintSkill } from "./run/scenario-tool.js";
 import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
 import { projectDispatchProbe, formatDispatchProbe } from "./run/probe-dispatch.js";
 import { cmdDoctor } from "./run/doctor.js";
-import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
+import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
+import { resolveStatusTarget } from "./run/status-target.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -2334,7 +2337,13 @@ async function fetchOfficialElfChecksum(version: string): Promise<string | undef
 async function cmdSync(args: string[]) {
   // platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
   if (process.platform !== "darwin") {
-    return fail("sync", "usage", "sync requires macOS (the Cowork Desktop app is macOS-only).", undefined, isJsonOutput(args));
+    return fail(
+      "sync",
+      "usage",
+      "sync requires macOS (this harness's sync tooling only supports macOS installs today).",
+      undefined,
+      isJsonOutput(args),
+    );
   }
   // use parseArgs to reject unknown flags and positionals.
   // accept --force as a canonical alias for --allow-empty; normalize before parsing.
@@ -3018,7 +3027,10 @@ async function cmdStatus(args: string[]) {
   }
   let dir: string;
   try {
-    dir = resolveStatusDir(p.positionals[0]);
+    // resolveStatusTarget layers root-resolution on top of resolveStatusDir: if the caller passed their
+    // --run-dir ROOT (or any dir that isn't itself a run dir), it resolves to the newest session beneath
+    // it so `status <run-dir>` works — not only the exact outDir printed at run start.
+    dir = resolveStatusTarget(p.positionals[0]);
   } catch (e) {
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
@@ -3517,14 +3529,23 @@ async function cmdVerifyRun(args: string[]) {
   // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
   // belongs here too: on a missing workRoot its post-run walk returns [] → zero created files → a vacuous
   // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
-  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "no_unexpected_files", "input_unmodified"];
+  const FS_KEYS: (keyof Assertion)[] = [
+    "file_exists",
+    "user_visible_artifact",
+    "artifact_json",
+    "no_unexpected_files",
+    "input_unmodified",
+    // no_lost_write_back re-reads the run's authored sources from workRoot (recomputed below) — a missing
+    // work dir can't be faithfully re-checked, so refuse rather than false-fail.
+    "no_lost_write_back",
+  ];
   const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
   if (hasFsAssert && !existsSync(workRoot)) {
     return fail(
       "verify-run",
       "runtime",
       `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
-        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files/input_unmodified) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files/input_unmodified/no_lost_write_back) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );
@@ -3532,6 +3553,27 @@ async function cmdVerifyRun(args: string[]) {
 
   const sidecarTranscript = readTranscriptSidecar(join(runDir, "run.jsonl"));
   const sidecarQuestions = readQuestionsSidecar(join(runDir, "trace.json"));
+
+  // no_lost_write_back needs the run's authored-file set. It isn't persisted in result.json, so recompute it
+  // from the KEPT work dir (verify-run re-checks on the same machine, exactly as input_unmodified re-hashes
+  // the real tree under workRoot). The FS_KEYS refusal above already handled a missing work dir; only
+  // recompute when the key is actually asserted (a live connected folder walk is not free). Absent here
+  // (key not asserted) → authoredFiles stays undefined, harmless for every other assertion.
+  const wantsWriteBackCheck = scenario.assert.some((a) => a.no_lost_write_back !== undefined);
+  const recomputedAuthored =
+    wantsWriteBackCheck && existsSync(workRoot)
+      ? captureAuthoredFilesWithHealth(
+          workRoot,
+          result.userVisibleRoots ?? ["outputs", ".projects"],
+          result.readonlyFolderRoots ?? [],
+          result.preRunHashes,
+          {
+            scratchpadRoot: workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined,
+            preRunStats: readPreRunManifestStats(runDir),
+          },
+        )
+      : undefined;
+
   const ctx: AssertContext = {
     transcript: sidecarTranscript ?? "",
     toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
@@ -3554,6 +3596,16 @@ async function cmdVerifyRun(args: string[]) {
     // post walk, so re-verifying an old run dir doesn't false-stray its pre-existing symlinks.
     preRunLinkAware: result.preRunLinkAware,
     preRunHashes: result.preRunHashes,
+    // Recomputed above (only when no_lost_write_back is asserted) from the kept work dir. undefined when the
+    // key isn't asserted — no_lost_write_back then never runs, so the undefined is never read.
+    authoredFiles: recomputedAuthored?.files,
+    authoredFilesHealth:
+      recomputedAuthored &&
+      (recomputedAuthored.health.omittedPaths.length ||
+        recomputedAuthored.health.readErrors.length ||
+        recomputedAuthored.health.scratchpadSkippedOnResume)
+        ? recomputedAuthored.health
+        : undefined,
     outputsDeletes: scan.outputsDeletes,
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,

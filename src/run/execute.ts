@@ -31,7 +31,7 @@ import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
-import { spawnMicroVm } from "../runtime/microvm.js";
+import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import {
   probeImageOmitted,
   probeMicrovmOmitted,
@@ -63,7 +63,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
+import { classifyWorkspaceFilesWithHealth, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { computeVerdict } from "./verdict.js";
@@ -408,7 +408,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // that never look at it; absence stays loud.
   plan.capturePreRun =
     scenario.assert.some(
-      (a) => a.no_unexpected_files !== undefined || a.input_unmodified !== undefined || a.no_delete_in_outputs !== undefined,
+      (a) =>
+        a.no_unexpected_files !== undefined ||
+        a.input_unmodified !== undefined ||
+        a.no_delete_in_outputs !== undefined ||
+        // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
+        // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
+        // baseline it can only report evidence-unavailable every run.
+        a.no_lost_write_back !== undefined,
     ) || opts.command === "record";
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
@@ -782,6 +789,26 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       }
     }
 
+    // #52: microvm outputs live on the host at VM_WORK_HOST/<id> (the /sessions mount), NOT in the run
+    // dir the post-run pipeline walks. Snapshot the SESSION ROOT into outDir/work/session NOW — before any
+    // workRoot-relative code below — so collectArtifacts / captureAuthoredFiles / the fs-diff / cassette
+    // record see the deliverables. UNCONDITIONAL (independent of capturePreRun): this fixes the
+    // workspaceFiles/artifacts observability even when no manifest-triggering key is asserted. Same
+    // salvage semantics as hostloop above.
+    if (effectiveFidelity === "microvm") {
+      try {
+        snapshotMicroVmWorkspace(sessionId, join(outDir, "work", "session"));
+      } catch (err) {
+        if (unansweredErr) {
+          warn(
+            `::warning:: [microvm] workspace snapshot failed during salvage — artifacts may be missing from this partial result: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        } else {
+          throw err;
+        }
+      }
+    }
+
     const scan = scanEvents(join(outDir, "events.jsonl"));
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
@@ -935,7 +962,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
     // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
     // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
-    // added/modified files. (`[]` when there's no manifest, e.g. microvm.)
+    // added/modified files. (`[]` when there's no manifest, e.g. a --resume run.)
     // F12: at container/hostloop the agent's cwd is the SESSION ROOT (parent of `mnt`), not `mnt` — so a
     // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
     // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
@@ -1161,7 +1188,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
     // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
     // excluded outright.
-    const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
+    const wfHealth = classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots);
+    if (wfHealth.rootAbsent)
+      warn(
+        `::warning:: [artifacts] workspace root not found (${workRoot}) — the run's outputs were not staged into the run dir ` +
+          `(known on microvm: the agent's files land in the VM work tree, not outDir). Recording workspaceFiles/artifacts as ` +
+          `UNAVAILABLE (undefined), not empty, so a consumer can't mistake it for a zero-artifact run (#52).\n`,
+      );
+    // #52 false-green fix: a missing workspace root means we observed NOTHING — record UNAVAILABLE
+    // (`undefined`, matching the replay convention), never a false empty `[]` that reads as "wrote nothing".
+    const workspaceFiles = wfHealth.rootAbsent ? undefined : wfHealth.files;
 
     // Multi-turn: archive the prior turn's run.jsonl/result.json (if this is a --resume) and get THIS
     // turn's number, so the RunResult and run.jsonl agree and each turn's result stays recoverable.
@@ -1233,7 +1269,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       readonlyFolderRoots,
       // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
       // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
-      artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+      artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
@@ -1372,7 +1408,14 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
     );
   // assert[] patterns
   for (const a of scenario.assert) {
-    for (const key of ["transcript_matches", "transcript_not_matches", "question_asked", "subagent_dispatched"] as const) {
+    for (const key of [
+      "transcript_matches",
+      "transcript_not_matches",
+      "question_asked",
+      "subagent_dispatched",
+      "tool_result_matches",
+      "tool_result_not_matches",
+    ] as const) {
       const pattern = a[key];
       if (pattern !== undefined) {
         const c = compileUserRegex(pattern);
@@ -1532,8 +1575,11 @@ export function buildPartialResult(args: {
     ...args.record.context,
     availableSkills: resolveAvailableSkills(availableSkillIds, args.configDir, args.pluginSkillRoots),
   };
-  // Working folder panel's file model — same walk `artifacts` below derives from.
-  const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
+  // Working folder panel's file model — same walk `artifacts` below derives from. #52: a missing workspace
+  // root (microvm partial: outputs stage into the VM work tree, not outDir) records UNAVAILABLE (undefined),
+  // never a false empty [] — same honest marker as the success path above.
+  const wfHealth = classifyWorkspaceFilesWithHealth(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
+  const workspaceFiles = wfHealth.rootAbsent ? undefined : wfHealth.files;
   const built = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -1597,7 +1643,7 @@ export function buildPartialResult(args: {
     readonlyFolderRoots: args.readonlyFolderRoots,
     // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
-    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles, // Working folder panel's canonical file model
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs

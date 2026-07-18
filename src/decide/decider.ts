@@ -270,7 +270,16 @@ export class FailDecider implements Decider {
         // `\` that makes the suggested `--answer` regex uncompilable. Slicing the source makes that impossible.
         return `  • "${text}"  options: ${opts}\n    add: --answer "${escapeRx(text.slice(0, 40))}=<choice>"`;
       });
-      throw new UnansweredError(`unscripted AskUserQuestion (on_unanswered=fail):\n${lines.join("\n")}`, lines.join("\n"));
+      // --answer is the primary fix (deterministic, reproducible); the tip below is a secondary escape valve
+      // for the case --answer can't solve — gate wording that drifts run-to-run, where a regex chases a
+      // moving target. Deliberately says "in the scenario YAML": `--on-unanswered llm` is REJECTED on the
+      // CLI (kept in the --decider-* family instead), so a bare mention would point at a spelling that fails.
+      // Appended into `lines` (not tacked onto message alone) so it reaches both `.message` and `.hint` —
+      // the CLI prints `.hint`, not `.message`, on this path.
+      const tip =
+        "(if the gate's wording varies run-to-run, `on_unanswered: llm` in the scenario YAML answers it dynamically — non-deterministic, one model call per gate)";
+      const body = `${lines.join("\n")}\n${tip}`;
+      throw new UnansweredError(`unscripted AskUserQuestion (on_unanswered=fail):\n${body}`, body);
     }
     if (req.kind === "dialog" || req.kind === "elicit") {
       throw new UnansweredError(

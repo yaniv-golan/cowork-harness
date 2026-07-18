@@ -1,6 +1,8 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { ABSTAIN, type Abstain, type Decider, type Decision, type RunContext } from "../decide/decider.js";
 import type { DecisionRequest } from "../agent/session.js";
-import { PATH_GATE_TOOL_NAMES } from "./pretooluse-path-hook.js";
+import { PATH_GATE_TOOL_NAMES, expandTilde } from "./pretooluse-path-hook.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 
 /** The SDK's own working-directory deny reason (asar `Zt`, `.vite/build/index.chunk-CS-g0Skn.js`,
@@ -11,6 +13,84 @@ export const SDK_WORKING_DIR_DENY = "Path is outside allowed working directories
 
 const GATED = new Set<string>(PATH_GATE_TOOL_NAMES);
 const PATH_KEYS = ["file_path", "path"] as const;
+
+const REQUEST_COWORK_DIRECTORY = "mcp__cowork__request_cowork_directory";
+
+// Faithful (partial) port of Cowork's protected-folder-grant refusal (production `deniedCoworkMountRoot`
+// / telemetry `lam_folder_grant_refused_protected`, Desktop 1.22209.0, `.vite/build/index.chunk-B6ZcqAwc.js`).
+//
+// NOT REGISTERED BY THIS HARNESS'S BUILT-IN SERVERS TODAY: request_cowork_directory isn't a tool the
+// hostloop (bash+web_fetch only) or container (present_files only) lanes expose — see
+// docs/internal/2026-07-03-host-vm-bridge-capability-gaps.md, Tier 2, "the tool itself is never
+// invokable. Emulated: no." A scenario CAN reach this path today via a custom `mcp_config` (staged and
+// passed to the spawned agent as --mcp-config, src/runtime/hostloop-stage.ts:58-69) declaring a server
+// named `cowork` with a matching tool name — contrived, but not literally impossible. Ported regardless
+// so the refusal semantics are ready the moment a built-in registration lands.
+//
+// Two closed sets, both resolved with BIDIRECTIONAL containment against homedir()+entry (production
+// `Te(e,r)=C(e,r)||C(r,e)`, verbatim-confirmed 2026-07-17): a request FOR a protected path/descendant is
+// denied, and so is a request for an ANCESTOR that would incidentally expose one (e.g. requesting `~`
+// itself exposes `~/.ssh`) — matching production's own `protected_path`/`protected_ancestor` telemetry
+// split. Deliberately NOT ported: the "managed" (Cowork-internal Scheduled/Artifacts/config-dir) branch
+// of production's check, which depends on Cowork app-data-root concepts this harness has no analog for;
+// and production's win32-conditional protected-dirs entries, not verbatim-extracted this pass (this
+// harness's hostloop lane runs natively on darwin/linux, so the gap has no live consequence here). A
+// miss on either ABSTAINs rather than silently allowing, but that ABSTAIN does NOT reach a human-approval
+// prompt — this harness has no human-prompt path for plain permission requests at all. It falls through
+// the Chain (execute.ts:698 / chat.ts:359-364) to PermissionDefaultDecider (decider.ts:236-256): under
+// `permission_parity: "strict"` that's a deny, but under the DEFAULT `"cowork"` parity (session.ts:90) it's
+// a decisive, loudly-flagged auto-ALLOW (rationale `PERMISSIVE_AUTOALLOW_RATIONALE` = "allow-unscripted
+// (cowork parity)") — an unattended allow, not a prompt. That auto-allow is fully audit-visible in the RUN
+// lane (`rec.permissiveAutoAllow`, fails the verdict unless opted in — src/run/verdict.ts:181), but in the
+// CHAT lane the persisted result drops the field entirely (src/run/chat-result.ts:133; chat has no verdict
+// pass) — the only surviving trace there is a stderr warning. Either way it isn't auto-refused pre-prompt
+// the way production refuses it. Also unhandled, unlike the sibling PreToolUse gate
+// (pretooluse-path-hook.ts, which trims + lexically resolves + realpaths): no `.trim()` on the raw input
+// and no case-folding — e.g. `" ~/.ssh"` (leading space) or `~/.SSH` (case-insensitive filesystem) will
+// miss the deny and fall through to ABSTAIN. `..` segments ARE normalized for tilde-form input
+// (expandTilde uses path.join, which collapses them — `~/foo/../.ssh` IS denied); a non-tilde absolute
+// path containing `..` (e.g. `${home}/foo/../.ssh`) is NOT normalized and will miss.
+// Verbatim from the asar's unconditional set, plus the darwin-conditional set (both confirmed 2026-07-17
+// against the saved 1.22209.0 extraction). Production also has a win32-conditional set (AppData/Documents/
+// OneDrive PowerShell/gcloud/gh/gnupg paths) that was NOT fully/verbatim extracted this pass — deliberately
+// NOT ported rather than guessed at; this harness's hostloop lane runs natively on darwin/linux anyway, so
+// the win32 gap has no live consequence here.
+const PROTECTED_DIRS = [
+  ".ssh",
+  ".aws",
+  ".gnupg",
+  ".kube",
+  ".docker",
+  ".claude",
+  ".config/gcloud",
+  ".config/gh",
+  ".config/powershell",
+  ...(process.platform === "darwin"
+    ? ["Library/Keychains", "Library/LaunchAgents", "Library/LaunchDaemons", "Library/Application Support", "Library/Cookies"]
+    : []),
+];
+const PROTECTED_DOTFILES = [".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".bash_login", ".profile", ".netrc"];
+
+const FOLDER_GRANT_DENIED_MESSAGE =
+  "A requested folder can't be granted to this session. Ask the user to connect the folder they want using the folder picker on their device, or pick a different folder.";
+
+/** True if `inner` equals or descends from `outer` (plain path-string containment, no fs access). */
+function isContainedIn(inner: string, outer: string): boolean {
+  return inner === outer || inner.startsWith(outer + "/") || inner.startsWith(outer + "\\");
+}
+
+/** Bidirectional containment against `homedir()/entry` (production `Te(e,r)=C(e,r)||C(r,e)`, verbatim
+ *  confirmed 2026-07-17): denies both a request FOR a protected path/descendant, and a request for an
+ *  ANCESTOR that would incidentally expose it (e.g. requesting `~` itself exposes `~/.ssh`). */
+function isUnderHomeEntry(requested: string, entry: string): boolean {
+  const root = join(homedir(), entry);
+  return isContainedIn(requested, root) || isContainedIn(root, requested);
+}
+
+function isProtectedHomePath(rawPath: string): boolean {
+  const resolved = expandTilde(rawPath);
+  return [...PROTECTED_DIRS, ...PROTECTED_DOTFILES].some((entry) => isUnderHomeEntry(resolved, entry));
+}
 
 /** Every non-abstain return is a FULL Decision ({response, by, rationale} — decider.ts:25-30): the
  *  permission payload nests under `response`, matching PermissionDefaultDecider's shape. */
@@ -36,7 +116,17 @@ const deny = (message: string, rationale: string): Decision => ({
 export function makeHostLoopCanUseToolGate(): Decider {
   return {
     async decide(req: DecisionRequest, _ctx?: RunContext): Promise<Decision | Abstain> {
-      if (req.kind !== "permission" || !GATED.has(req.tool)) return ABSTAIN;
+      if (req.kind !== "permission") return ABSTAIN;
+      if (req.tool === REQUEST_COWORK_DIRECTORY) {
+        const raw = req.input.path;
+        if (typeof raw === "string" && isProtectedHomePath(raw)) {
+          return deny(FOLDER_GRANT_DENIED_MESSAGE, "hostloop canUseTool folder-grant deny (protected home path)");
+        }
+        return ABSTAIN; // no protected-path match → falls through the Chain to PermissionDefaultDecider:
+        // strict-parity deny, or default cowork-parity auto-ALLOW (PERMISSIVE_AUTOALLOW_RATIONALE) — NOT a
+        // human-approval prompt (see the doc comment above)
+      }
+      if (!GATED.has(req.tool)) return ABSTAIN;
       // xe: the /sessions guard (both keys, 5-set only — MultiEdit not in the set, matching production).
       for (const key of PATH_KEYS) {
         const v = req.input[key];

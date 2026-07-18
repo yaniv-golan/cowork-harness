@@ -50,7 +50,7 @@ export interface SyncResult {
  * Behavior-affecting + provenance GrowthBook gates the harness pins (feature id → human name).
  * The ids are the numeric feature keys in the fcache; the names mirror provenance.gates in the baselines.
  */
-const PINNED_GATES: Record<string, string> = {
+export const PINNED_GATES: Record<string, string> = {
   "1143815894": "hostLoop", // loop decision (decideLoopFromBaseline)
   // Binary-verified 2026-07-04 (asar 1.18286.0, class L9t "[ScheduledTasks]"): the SCHEDULED-TASK
   // (cron) session limiter (<=1 concurrent session per scheduled task, <=3 concurrent scheduled-task
@@ -84,6 +84,12 @@ const PINNED_GATES: Record<string, string> = {
   "1936081873": "oauthScopesEnv", // CLAUDE_CODE_OAUTH_SCOPES (value host-derived; allowlisted)
   "4153934152": "skipPrecompactLoad", // CLAUDE_CODE_SKIP_PRECOMPACT_LOAD:"1"
   "1129419822": "enableToolSearchAuto", // ENABLE_TOOL_SEARCH:"auto" — dark (see DARK_GATES)
+  // Dormant drift-sentinels (Desktop 1.22209.0): tool-approval auto-mode gates. Neither is behaviorally
+  // modeled — this harness has no persistent per-tool "always allow" concept to model against (no
+  // updatedPermissions analog anywhere in src/decide/ or src/session.ts). Pinned so a live flip from
+  // off to on surfaces as a provenance.gates diff, which is the trigger to revisit modeling this.
+  "4200321681": "autoModeOverridesAlwaysAllow", // auto mode: force re-prompt (not silent-allow) for destructiveHint MCP tools
+  "1447478638": "scheduledTaskToolsApprovableByAutoMode", // auto mode: scheduled-task tools auto-approvable (unless MDM workspace.autoModeEnabled=false)
 };
 
 /**
@@ -98,6 +104,9 @@ const DARK_GATES = new Set([
   "2614807392",
   "1129419822", // enableToolSearchAuto — a spawn-env gate absent from a standard fcache (dark); pinned so an
   //                absent→present flip on the ENABLE_TOOL_SEARCH conditional surfaces as a visible diff.
+  "4200321681", // autoModeOverridesAlwaysAllow — absent from a standard 1.22209.0 fcache at pin time (dark);
+  //                pinned so a rollout (absent→present) surfaces as a visible diff.
+  "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale.
 ]);
 
 /**

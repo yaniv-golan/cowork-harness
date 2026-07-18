@@ -1990,6 +1990,10 @@
         "type": "boolean",
         "const": true
       },
+      ".assert[].no_lost_write_back": {
+        "type": "boolean",
+        "const": true
+      },
       ".assert[].no_mcp_error": {
         "type": "boolean",
         "const": true
@@ -2183,7 +2187,13 @@
       ".assert[].tool_result_contains": {
         "type": "string"
       },
+      ".assert[].tool_result_matches": {
+        "type": "string"
+      },
       ".assert[].tool_result_not_contains": {
+        "type": "string"
+      },
+      ".assert[].tool_result_not_matches": {
         "type": "string"
       },
       ".assert[].transcript_contains": {

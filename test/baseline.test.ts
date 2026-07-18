@@ -21,6 +21,7 @@ import {
   checkWebFetchFacts,
   readMainBundle,
   checkSubagentOverrideGate,
+  PINNED_GATES,
 } from "../src/sync/cowork-sync.js";
 import {
   deriveSpawnEnv,
@@ -152,6 +153,8 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(result).toEqual({
       "2614807392": { id: "2614807392", name: "skeletonHome", on: false, source: "absent", value: undefined },
       "1129419822": { id: "1129419822", name: "enableToolSearchAuto", on: false, source: "absent", value: undefined },
+      "4200321681": { id: "4200321681", name: "autoModeOverridesAlwaysAllow", on: false, source: "absent", value: undefined },
+      "1447478638": { id: "1447478638", name: "scheduledTaskToolsApprovableByAutoMode", on: false, source: "absent", value: undefined },
     });
   });
 
@@ -177,6 +180,11 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
       source: "force",
       value: true,
     });
+  });
+
+  it("PINNED_GATES tracks the two Desktop 1.22209.0 auto-mode gates", () => {
+    expect(PINNED_GATES["4200321681"]).toBe("autoModeOverridesAlwaysAllow");
+    expect(PINNED_GATES["1447478638"]).toBe("scheduledTaskToolsApprovableByAutoMode");
   });
 });
 
@@ -380,6 +388,86 @@ describe("resolveHostAgentBinary / classifyNativeStagingDrift — native staging
     const elfBaseline = { agentBinary: { stagedPath: join(vmRoot, "2.1.205", "claude") } } as unknown as PlatformBaseline;
 
     expect(() => resolveAgentBinary(elfBaseline)).toThrow("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1");
+  });
+});
+
+// `{ parityMount: true }` is the opt-in used ONLY by the hostloop VM-ELF bind-mount (never executed by a
+// harness-spawned process there — reachable only by model-initiated bash inside the hardened sidecar). It
+// mirrors the native binary's patch-only auto-tolerance, but must NEVER weaken the sha256 hard-fail on an
+// EXISTING pinned path (S3 below) — that hard-fail protects the one case the ELF resolver still guards
+// strictly. The default (no opts) path is unchanged and covered by the regression guard above.
+describe("resolveAgentBinary({ parityMount: true }) — VM ELF non-executed parity-mount tolerance", () => {
+  const baselineWith = (stagedPath: string) => ({ agentBinary: { stagedPath } }) as unknown as PlatformBaseline;
+
+  const stageVm = (versions: string[]) => {
+    const root = mkdtempSync(join(tmpdir(), "cowork-vm-parity-"));
+    const vmRoot = join(root, "claude-code-vm");
+    for (const v of versions) {
+      mkdirSync(join(vmRoot, v), { recursive: true });
+      writeFileSync(join(vmRoot, v, "claude"), "#!/bin/sh\n");
+    }
+    return vmRoot;
+  };
+
+  afterEach(() => {
+    delete process.env.COWORK_AGENT_BINARY;
+    delete process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK;
+    vi.restoreAllMocks();
+  });
+
+  it("parityMount: auto-accepts a PATCH-only sibling with no env var — loud note, no ALLOW_AGENT_FALLBACK mention", () => {
+    const vmRoot = stageVm(["2.1.209"]); // pin 2.1.205 is gone; only a patch-newer sibling remains
+    const baseline = baselineWith(join(vmRoot, "2.1.205", "claude"));
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      const p = resolveAgentBinary(baseline, { parityMount: true });
+      expect(p).toBe(resolve(join(vmRoot, "2.1.209", "claude")));
+    } finally {
+      spy.mockRestore();
+    }
+    const note = writes.join("");
+    expect(note).toMatch(/2\.1\.209/);
+    expect(note).toMatch(/parity mount/i);
+    expect(note).not.toMatch(/COWORK_HARNESS_ALLOW_AGENT_FALLBACK/); // auto-tolerated, not env-gated
+  });
+
+  it("parityMount: STILL throws on a MAJOR/MINOR sibling (tolerance is patch-only)", () => {
+    const vmRoot = stageVm(["2.2.0"]); // minor bump
+    const baseline = baselineWith(join(vmRoot, "2.1.205", "claude"));
+    expect(() => resolveAgentBinary(baseline, { parityMount: true })).toThrow(/COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1/);
+  });
+
+  it("parityMount: STILL throws when NO sibling ELF exists at all", () => {
+    const vmRoot = stageVm([]); // empty
+    const baseline = baselineWith(join(vmRoot, "2.1.205", "claude"));
+    expect(() => resolveAgentBinary(baseline, { parityMount: true })).toThrow(/Staged agent binary not found/);
+  });
+
+  // S3 — the security invariant that matters most: parityMount must NEVER reach the pruned-pin fallback
+  // branch when the EXACT pinned path exists. verifiedElf(staged, baseline) (no intentionalSubstitution)
+  // runs BEFORE the parityMount branch is even reachable, so a measured-local sha mismatch on the pinned
+  // path itself hard-throws regardless of opts. Mirrors the "HARD-FAILS by default on a measured-local
+  // mismatch" fixture above (stageBinary + stagedBaseline shape) verbatim, just adding parityMount: true.
+  it("parityMount does NOT weaken the exact-pin sha hard-fail (measured-local mismatch still throws)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-elf-parity-sha-"));
+    const bin = join(dir, "claude");
+    writeFileSync(bin, "#!/bin/sh\n");
+    const baseline = {
+      agentBinary: { stagedPath: bin, sha256: "deadbeef", shaProvenance: "measured-local" },
+    } as unknown as PlatformBaseline;
+    expect(() => resolveAgentBinary(baseline, { parityMount: true })).toThrow(/sha256 mismatch/);
+  });
+
+  it("parityMount respects COWORK_AGENT_BINARY override precedence", () => {
+    const vmRoot = stageVm(["2.1.170", "2.1.177"]);
+    const override = join(vmRoot, "2.1.170", "claude"); // an existing, distinct binary
+    process.env.COWORK_AGENT_BINARY = override;
+    const baseline = baselineWith(join(vmRoot, "2.1.999", "claude")); // pinned path irrelevant when overridden
+    expect(resolveAgentBinary(baseline, { parityMount: true })).toBe(override);
   });
 });
 

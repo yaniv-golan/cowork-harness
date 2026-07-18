@@ -278,6 +278,16 @@ enrichment only, needs `jsdom` installed. Caveats: it confirms whatever `.html` 
 the run dir (a known artifact-collection gap), so this recipe has nothing to read for a microvm run; and a
 **replay** run dir has no live filesystem to scan.
 
+**Per-scenario gate — `no_lost_write_back: true`.** The same static Tier A detector is also wired as a
+scenario assertion: instead of scanning source or a run dir out-of-band, it runs over the files the run
+authored (diffed against the pre-run manifest) and participates in the run's verdict. A lost write-back on
+an **added** agent-authored source (`outputs/`, scratchpad) fails; a pre-existing file the skill only
+modified on a read-write mount is advisory. **Live/verify-run only** (skipped-loud on replay); runs on
+every live sandbox tier including **microvm** (its outputs are snapshotted from the VM into the run dir);
+could-not-verify (fail-closed) on a `--resume` scratchpad or an unanalyzable candidate. See [scenario.md](./scenario.md)'s assertion catalog. Reach for the assertion when
+you want a red/green gate per run; reach for `analyze-skill`/`--runtime` when you want an out-of-band scan or
+runtime confirmation.
+
 ## Static `subagent_type` resolution (`resolve-agent-types` / `lint-skill`)
 
 A pinned `subagent_type` value that doesn't resolve to a real agent (e.g.

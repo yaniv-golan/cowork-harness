@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, resolve, relative, isAbsolute, sep } from "node:path";
+import { join, resolve, relative, isAbsolute, sep, dirname, extname } from "node:path";
 import type { Assertion, RunResult, UsageInfo, CostInfo } from "./types.js";
 import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
@@ -9,6 +9,7 @@ import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext }
 import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
 import { collectArtifactPathsWithHealth } from "./run/artifacts.js";
+import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
 import { isVmSessionsPath } from "./vm-paths.js";
 
@@ -208,7 +209,8 @@ export interface AssertContext {
    *  correct *inline* answer is graded even when no file is written. */
   finalMessage?: string;
   /** Files the run authored (final on-disk content) — appended to the judged document so the judge grades
-   *  what the skill PRODUCED, not only what it inlined. Populated live; absent on replay/microvm. */
+   *  what the skill PRODUCED, not only what it inlined. Populated on every live sandbox tier (microvm
+   *  included — its session tree is snapshotted from the VM into the run dir); absent on replay. */
   authoredFiles?: import("./run/artifacts.js").AuthoredFile[];
   /** Health of the authored-file capture (#14/#16): files dropped at the total-size cap (`omittedPaths`)
    *  or authored-but-unreadable at read-back (`readErrors`). When either is non-empty the judged document
@@ -229,8 +231,9 @@ export interface AssertContext {
   workRoot: string; // dir under which file_exists paths resolve (L0: work/, L1/L2: work/session/mnt)
   userVisiblePrefixes: string[]; // path prefixes promoted to the user (e.g. outputs, .projects)
   /** workRoot-relative paths under userVisiblePrefixes BEFORE the agent ran (RunResult.preRunPaths /
-   *  cassette.preRunPaths). undefined = no pre-run manifest (older run/cassette, or microvm) —
-   *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. */
+   *  cassette.preRunPaths). undefined = no pre-run manifest (a --resume run, or an older run/cassette) —
+   *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. (microvm captures it now —
+   *  its session tree is snapshotted from the VM into the run dir.) */
   preRunPaths?: string[];
   /** True iff `preRunPaths` was captured link-aware (manifest v2+). When false/undefined (a pre-#38
    *  baseline, or a re-verified pre-upgrade run dir), `no_unexpected_files` excludes link entries from the
@@ -560,6 +563,168 @@ function buildJudgedDocument(ctx: AssertContext): string {
 // evidence is a clean opt-out (a check with nothing concrete to cite, e.g. a verdict modifier).
 type KeyResult = { pass: true; evidence?: string } | { pass: false; message: string };
 
+// ------------------------------------------------------------------------------------------------- //
+// no_lost_write_back — run the shipped static Tier A analyzer over the files this run authored, so a
+// scenario can GATE on "the agent didn't emit an interactive artifact whose Submit is lost under Cowork".
+// ------------------------------------------------------------------------------------------------- //
+
+/** Tier A source extensions — mirrors `analyze-artifact.ts`'s `SOURCE_EXTS` (HTML + code/generator
+ *  extensions), duplicated here (not exported there) only to PRE-filter the authored set before handing the
+ *  real on-disk absolute paths to `analyzeArtifacts` (which re-filters internally). Pre-filtering keeps the
+ *  candidate set honest so could-not-verify reasoning is per-source. */
+const WRITE_BACK_SOURCE_EXTS = new Set([".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".py"]);
+const SCRATCHPAD_PREFIX = "scratchpad/";
+
+/**
+ * Evaluate `no_lost_write_back`. Selects the files the run authored (from `ctx.authoredFiles`, plus the
+ * capture-health `omittedPaths`/`readErrors` so a dropped/unreadable authored source is never treated as
+ * clean), resolves each to its real on-disk absolute path (scratchpad entries carry a synthetic
+ * `scratchpad/<rel>` prefix whose real path lives under `dirname(workRoot)`), and runs the deterministic
+ * static analyzer `analyzeArtifacts` over them.
+ *
+ *  - Any `artifact-write-back-lost` finding on an agent-authored source (reserved root, or a newly ADDED
+ *    file on a read-write connected mount) → FAIL.
+ *  - A `-lost` finding on a MODIFIED file on a read-write connected mount (a user's pre-existing HTML the
+ *    skill edited) is downgraded to advisory — not the skill's failure to own; surfaced, never a hard fail.
+ *  - `-suspect` findings → PASS with the advisory surfaced.
+ *  - Missing pre-run manifest (a `--resume` run, or a run predating the manifest seam), a scratchpad walk
+ *    skipped on `--resume`, an unresolvable scratchpad path, or an `analysisFailure` on a produced
+ *    candidate → could-not-verify (fail-closed), never a silent clean. (Every live sandbox tier captures
+ *    a manifest now, microvm included — its session tree is snapshotted from the VM into the run dir.)
+ */
+function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
+  // No pre-run manifest → captureAuthoredFiles can't diff, so we cannot know what the run authored. This
+  // is a `--resume` run (no fresh manifest) or a pre-seam run — evidence-unavailable, never a silent clean.
+  if (ctx.preRunHashes === undefined) {
+    return {
+      pass: false,
+      message:
+        "evidence unavailable: no pre-run manifest for this run (a --resume run, or a run predating the manifest seam) — " +
+        "cannot determine which files the run authored, so a lost interactive-artifact write-back cannot be ruled out",
+    };
+  }
+  // The authored-file list must be wired by the lane (live/verify-run). Absent (a lane that never populated
+  // it) is evidence-unavailable, NOT an empty authored set — an empty [] is a real "authored nothing".
+  if (ctx.authoredFiles === undefined) {
+    return {
+      pass: false,
+      message:
+        "evidence unavailable: authored-file capture was not wired for this lane — cannot evaluate no_lost_write_back " +
+        "(re-run live to check this)",
+    };
+  }
+
+  const health = ctx.authoredFilesHealth;
+  const workRootAbs = resolve(ctx.workRoot);
+  // The scratchpad walk resolves relative to the session root (parent of `mnt`), the same guard the capture
+  // uses (execute.ts). Only meaningful when workRoot is the `.../session/mnt` shape.
+  const scratchpadRoot = ctx.workRoot.endsWith(`${sep}mnt`) ? dirname(workRootAbs) : undefined;
+
+  // Selector: authored ∪ omitted-at-cap ∪ read-back-error, workRoot-relative (scratchpad entries synthetic).
+  const relPaths = new Set<string>();
+  for (const f of ctx.authoredFiles) relPaths.add(f.path);
+  for (const p of health?.omittedPaths ?? []) relPaths.add(p);
+  for (const e of health?.readErrors ?? []) relPaths.add(e.path);
+
+  const absToRel = new Map<string, string>(); // resolved-abs → display rel, for finding-path readability
+  const targets: string[] = [];
+  const unresolvedScratchpad: string[] = []; // scratchpad source with no session root to resolve against
+  for (const rel of relPaths) {
+    if (!WRITE_BACK_SOURCE_EXTS.has(extname(rel).toLowerCase())) continue; // not a Tier A source
+    let abs: string;
+    if (rel.startsWith(SCRATCHPAD_PREFIX)) {
+      if (!scratchpadRoot) {
+        unresolvedScratchpad.push(rel);
+        continue;
+      }
+      abs = resolve(join(scratchpadRoot, rel.slice(SCRATCHPAD_PREFIX.length)));
+    } else {
+      abs = resolve(join(workRootAbs, rel));
+    }
+    absToRel.set(abs, rel);
+    targets.push(abs);
+  }
+
+  const { findings, analysisFailures } = analyzeArtifacts(targets);
+
+  // Severity per finding: a `-lost` on an agent-authored source (reserved root, or an ADDED file on a rw
+  // connected mount) is a hard FAIL; a `-lost` on a MODIFIED file on a rw connected mount (a user's own
+  // pre-existing artifact the skill merely edited) is advisory. `-suspect` findings are always advisory.
+  const displayOf = (findingPath: string): string => absToRel.get(resolve(findingPath)) ?? findingPath;
+  const isReservedRoot = (rel: string): boolean => {
+    if (rel.startsWith(SCRATCHPAD_PREFIX)) return true; // scratchpad is agent-authored by construction
+    const root = ctx.userVisiblePrefixes.find((r) => rel === r || rel.startsWith(r + "/"));
+    return root === "outputs"; // `outputs/` starts empty; everything else visible is a connected mount
+  };
+  const wasModified = (rel: string): boolean => {
+    if (rel.startsWith(SCRATCHPAD_PREFIX)) return false; // scratchpad files aren't in the pre-run manifest
+    const prior = ctx.preRunHashes?.[rel];
+    return typeof prior === "string" || prior === null; // a prior entry (or unknown baseline) → pre-existing
+  };
+
+  const hardLost: { rel: string; line?: number; message: string }[] = [];
+  const advisories: string[] = [];
+  for (const f of findings) {
+    const rel = displayOf(f.path);
+    if (f.rule === "artifact-write-back-lost") {
+      if (!isReservedRoot(rel) && wasModified(rel)) {
+        advisories.push(
+          `suspect: "${rel}"${f.line ? `:${f.line}` : ""} has a lost write-back but was a PRE-EXISTING file on a ` +
+            `read-write connected mount that the skill only modified — not attributable to the skill; surfaced, not failed (${f.message})`,
+        );
+      } else {
+        hardLost.push({ rel, line: f.line, message: f.message });
+      }
+    } else {
+      // artifact-write-back-suspect (advisory)
+      advisories.push(`suspect: "${rel}"${f.line ? `:${f.line}` : ""} — ${f.message}`);
+    }
+  }
+
+  // A concrete lost write-back on an agent-authored source is the strongest signal — report it definitively,
+  // ahead of any could-not-verify caveat about OTHER sources.
+  if (hardLost.length) {
+    const h = hardLost[0];
+    const more = hardLost.length > 1 ? ` (+${hardLost.length - 1} more)` : "";
+    return {
+      pass: false,
+      message: `lost interactive-artifact write-back in "${h.rel}"${h.line ? `:${h.line}` : ""}: ${h.message}${more}`,
+    };
+  }
+
+  // Could-not-verify: a produced candidate we couldn't analyze (unreadable/parse/size/unsupported-guard/
+  // .py-extract), a scratchpad walk skipped on resume, or a scratchpad path we couldn't resolve. Fail-closed
+  // — a lost write-back could hide in the source we couldn't read.
+  const cantVerify: string[] = [];
+  if (analysisFailures.length) {
+    const sample = analysisFailures
+      .slice(0, 3)
+      .map((af) => `${absToRel.get(resolve(af.path)) ?? af.path} (${af.stage}: ${af.reason})`)
+      .join("; ");
+    const more = analysisFailures.length > 3 ? ` (+${analysisFailures.length - 3} more)` : "";
+    cantVerify.push(`${analysisFailures.length} authored source(s) could not be analyzed: ${sample}${more}`);
+  }
+  if (health?.scratchpadSkippedOnResume) {
+    cantVerify.push("scratchpad deliverables were skipped on --resume (unattributable across turns) — that class is unchecked");
+  }
+  if (unresolvedScratchpad.length) {
+    cantVerify.push(`${unresolvedScratchpad.length} scratchpad source(s) could not be resolved to a real on-disk path`);
+  }
+  if (cantVerify.length) {
+    return { pass: false, message: `evidence unavailable: ${cantVerify.join("; ")} — cannot rule out a lost write-back` };
+  }
+
+  // No hard fail, nothing unverifiable. Surface any advisory (suspect / downgraded rw-mount finding) but pass.
+  if (advisories.length) {
+    return { pass: true, evidence: `no_lost_write_back: no lost write-back; ${advisories.length} advisory — ${advisories[0]}` };
+  }
+  const scanned = targets.length;
+  return {
+    pass: true,
+    evidence: `no_lost_write_back: ${scanned} authored source(s) scanned, no lost interactive-artifact write-back`,
+  };
+}
+
 /**
  * Evaluate EVERY present key (AND semantics) — a multi-key assertion passes iff all of its
  * keys pass. (The previous first-key-wins `if (a.X) return …` chain silently ignored every key
@@ -697,6 +862,60 @@ function check(
       }
     }
   }
+  // Regex siblings of tool_result_contains/tool_result_not_contains — catch an error-signature FAMILY
+  // (e.g. a script's non-zero exit swallowed by its wrapper, but the message still printed) that a
+  // literal substring can't express. Same evidence-unavailable / truncation-fail wording as the _contains
+  // pair above; compileUserRegex + try/catch discipline matches transcript_matches below.
+  if (a.tool_result_matches !== undefined) {
+    if (ctx.toolResultsMissing) {
+      results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_matches`));
+    } else {
+      const c = compileUserRegex(a.tool_result_matches);
+      if ("error" in c) {
+        results.push(fail(`tool_result_matches: bad regex "${a.tool_result_matches}": ${c.error}`));
+      } else if (ctx.toolResultTexts.some((t) => c.re.test(t))) {
+        results.push(ok());
+      } else {
+        // No match found — but a match could sit PAST the display cap of a truncated result (assertText
+        // absent). Mirror tool_result_contains: fail closed, but say WHY honestly.
+        const anyTruncated =
+          ctx.toolResultsTruncated !== undefined && ctx.toolResultTexts.some((_, i) => ctx.toolResultsTruncated![i] === true);
+        results.push(
+          anyTruncated
+            ? fail(
+                `evidence unavailable: no captured tool result matched /${a.tool_result_matches}/i, but one or more results are display-truncated (no assertText) — a match may be past the cap`,
+              )
+            : fail(`no tool result matched /${a.tool_result_matches}/i`),
+        );
+      }
+    }
+  }
+  if (a.tool_result_not_matches !== undefined) {
+    if (ctx.toolResultsMissing) {
+      results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_not_matches`));
+    } else {
+      const c = compileUserRegex(a.tool_result_not_matches);
+      if ("error" in c) {
+        results.push(fail(`tool_result_not_matches: bad regex "${a.tool_result_not_matches}": ${c.error}`));
+      } else {
+        const positiveHit = ctx.toolResultTexts.some((t) => c.re.test(t));
+        if (positiveHit) {
+          results.push(fail(`a tool result matched forbidden /${a.tool_result_not_matches}/i`));
+        } else {
+          const hasTruncatedAbsence =
+            ctx.toolResultsTruncated !== undefined &&
+            ctx.toolResultTexts.some((t, i) => !c.re.test(t) && ctx.toolResultsTruncated![i] === true);
+          results.push(
+            hasTruncatedAbsence
+              ? fail(
+                  `evidence unavailable: one or more tool results are display-truncated (no assertText) — cannot rule out a forbidden regex match`,
+                )
+              : ok(),
+          );
+        }
+      }
+    }
+  }
   // Fuzzy content for stochastic prose. All regex-building assertions are try/catch-wrapped —
   // `evaluate()` is a bare `.map(check)` with no error boundary, so a malformed pattern must be a
   // clean assertion failure, not an uncaught throw. Case-insensitive ("i").
@@ -788,6 +1007,11 @@ function check(
         }
       }
     }
+  }
+  if (a.no_lost_write_back !== undefined) {
+    // Static Tier A analyzer over the files this run authored — see checkNoLostWriteBack. Live/verify-run
+    // only (LIVE_ONLY_KEYS: stripped on replay, so it never reaches here on the replay lane).
+    results.push(checkNoLostWriteBack(ctx));
   }
   if (a.tool_called !== undefined) {
     warnIfRegexish("tool_called", a.tool_called);
@@ -1272,7 +1496,7 @@ function check(
     } else if (ctx.preRunPaths === undefined) {
       results.push(
         fail(
-          "evidence unavailable: no pre-run manifest for this run/cassette (predates 0.24 or tier cannot capture — microvm) — cannot compute created files; re-run/re-record on container/hostloop",
+          "evidence unavailable: no pre-run manifest for this run/cassette (a --resume run, or a run/cassette predating 0.24) — cannot compute created files; re-run without --resume, or re-record",
         ),
       );
     } else {
@@ -1319,7 +1543,7 @@ function check(
     } else if (ctx.preRunHashes === undefined) {
       results.push(
         fail(
-          "evidence unavailable: no pre-run hash manifest for this run/cassette (predates the fingerprinted manifest, or a tier that cannot capture — microvm) — cannot compare content; re-run/re-record on container/hostloop",
+          "evidence unavailable: no pre-run hash manifest for this run/cassette (a --resume run, or a run/cassette predating the fingerprinted manifest) — cannot compare content; re-run without --resume, or re-record",
         ),
       );
     } else {

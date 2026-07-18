@@ -235,6 +235,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `tool_not_called` | agent never invoked it |
 | `tool_result_contains` | literal substring in a tool result |
 | `tool_result_not_contains` | literal absent from all tool results |
+| `tool_result_matches` | case-insensitive regex matches a tool result — the regex sibling of `tool_result_contains`, for an error-signature family rather than one literal string |
+| `tool_result_not_matches` | regex does not match any tool result — the regex sibling of `tool_result_not_contains` |
 | `subagent_tool_used` | a sub-agent used the tool |
 | `subagent_tool_absent` | no sub-agent used the tool |
 | `no_vm_path_file_op` | **`fidelity: hostloop` only** — no gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, re-derived from the frozen `tool_use` stream; any other tier FAILS "cannot verify" (`/sessions/...` is valid there) |
@@ -291,8 +293,8 @@ could vacuously pass `no_hook_blocked`/`no_path_denied` even if a custom hook or
 `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
 `no_unexpected_files`, and `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only
 when the cassette carries an artifacts manifest (`no_unexpected_files` also requires `preRunPaths`,
-recorded since 0.24 on container/hostloop; `input_unmodified` requires `preRunHashes`, the per-path
-sha256 baseline recorded alongside it — microvm cannot capture either baseline).
+recorded since 0.24 on every live sandbox tier including microvm; `input_unmodified` requires `preRunHashes`,
+the per-path sha256 baseline recorded alongside it).
 
 ### Filesystem assertions — replay-checkable WITH an artifact manifest
 
@@ -348,7 +350,10 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
 stream, so `RunResult.mcpErrors` is absent on replay), `max_peak_rss_bytes` (replay never spawns a sandbox
 to sample, so `RunResult.resources` is absent on replay), `semantic_matches` (an LLM judge call — never
-evaluable from a frozen cassette)
+evaluable from a frozen cassette), `no_lost_write_back` (needs the run's authored-file set, which the replay
+`AssertContext` has no `authoredFiles` for — a manifest-keyed classification would hard-fail every embedding
+cassette's replay; re-deriving authorship from the cassette manifest is a deferred follow-up capped by the
+64 KiB body cap)
 (and `expect_denied` — a **scenario-level shorthand** that expands to `egress_denied` assertions, not an
 assertion key in its own right).
 
@@ -600,12 +605,16 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
   bare-`domain` + `path` + `machine-inventory`) runs over the **whole cassette** — the deliverable (`outputs/`
   bodies + filenames), the author-written `prompt`/`answers`/`assert`, AND the agent's reasoning + tool I/O —
-  with **one structural exception**: the agent's **capability-manifest** messages (the `system/init` event and
-  the `initialize` registry `control_response`, `request_id:"init-1"`) get `email` + `path` +
-  `machine-inventory` only, not the full net. Those two carry the tool/skill catalog (slash-command
-  descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server names (`claude.ai Gmail`, …) —
-  environment boilerplate a regex can't tell apart from customer data, and the sole concentrated source of
-  false positives — so `currency`/`domain` are excluded **as a unit**, not by domain. `email`, `path`, and
+  with **one structural exception**: the agent's **capability-manifest** messages — the `system/init` event,
+  the `initialize` registry `control_response` (`request_id:"init-1"`), the MCP `initialize`
+  `control_request` (Claude Code's own client handshake, `clientInfo.websiteUrl` etc.), and the MCP
+  `initialize` `control_response` (the configured MCP server's own handshake reply, `serverInfo`) — get
+  `email` + `path` + `machine-inventory` only, not the full net. The first two carry the tool/skill catalog
+  (slash-command descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server names
+  (`claude.ai Gmail`, …); the MCP handshake pair carries the agent's own product identity
+  (`claude.com`) and the server's own name/version — environment boilerplate a regex can't tell apart from
+  customer data, and the sole concentrated source of false positives — so `currency`/`domain` are excluded
+  **as a unit**, not by domain. `email`, `path`, and
   `machine-inventory` still scan them: the registry's `account` field can carry the developer's own email,
   those same messages' own structural fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real
   local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives, and a

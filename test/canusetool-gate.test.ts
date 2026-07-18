@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { homedir } from "node:os";
 import { makeHostLoopCanUseToolGate, SDK_WORKING_DIR_DENY } from "../src/hostloop/canusetool-gate.js";
 import { ABSTAIN } from "../src/decide/decider.js";
 import type { Decision, RunContext } from "../src/decide/decider.js";
@@ -47,5 +48,67 @@ describe("hostloop canUseTool gate (xe ?? Qt ?? original, composed BEFORE the po
     expect(await gate.decide({ id: "q", kind: "question", questions: [] } as never, ctx)).toBe(ABSTAIN);
     expect(await gate.decide(perm({ tool: "mcp__workspace__bash", input: { command: "ls" } }), ctx)).toBe(ABSTAIN);
     expect(await gate.decide(perm({ input: {} }), ctx)).toBe(ABSTAIN); // gated tool, no path key
+  });
+});
+
+describe("hostloop canUseTool gate — request_cowork_directory protected-path refusal (Desktop 1.22209.0)", () => {
+  const FOLDER_GRANT_TOOL = "mcp__cowork__request_cowork_directory";
+  const DENIAL_MESSAGE =
+    "A requested folder can't be granted to this session. Ask the user to connect the folder they want using the folder picker on their device, or pick a different folder.";
+
+  it("denies a grant request targeting a protected directory under home (~/.ssh)", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/.ssh" } }), ctx);
+    expect(permResp(d).behavior).toBe("deny");
+    expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+  });
+
+  it("denies a grant request targeting a file inside a protected directory (~/.ssh/id_rsa)", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/.ssh/id_rsa" } }), ctx);
+    expect(permResp(d).behavior).toBe("deny");
+    expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+  });
+
+  it("denies a grant request targeting a protected dotfile directly (~/.zshrc)", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/.zshrc" } }), ctx);
+    expect(permResp(d).behavior).toBe("deny");
+    expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+  });
+
+  it("denies using an absolute (non-tilde) path form too", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: `${homedir()}/.netrc` } }), ctx);
+    expect(permResp(d).behavior).toBe("deny");
+    expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+  });
+
+  it("abstains for an unprotected folder request (~/Projects/my-app) — falls to the policy chain (default-parity auto-allow / strict deny), not a human prompt", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/Projects/my-app" } }), ctx);
+    expect(d).toBe(ABSTAIN);
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "denies a grant request targeting a darwin-specific protected path (~/Library/Keychains)",
+    async () => {
+      const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~/Library/Keychains" } }), ctx);
+      expect(permResp(d).behavior).toBe("deny");
+      expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+    },
+  );
+
+  it("denies a grant request for the home directory itself (ancestor-direction: exposes ~/.ssh)", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: { path: "~" } }), ctx);
+    expect(permResp(d).behavior).toBe("deny");
+    expect(permResp(d).message).toBe(DENIAL_MESSAGE);
+  });
+
+  it("abstains (does not crash) when path is missing — left to the policy chain", async () => {
+    const d = await gate.decide(perm({ tool: FOLDER_GRANT_TOOL, input: {} }), ctx);
+    expect(d).toBe(ABSTAIN);
+  });
+
+  it("does not affect unrelated tools (e.g. Write to an unrelated path is untouched by this check)", async () => {
+    const d = await gate.decide(perm({ tool: "Write", input: { file_path: "/some/host/path.txt" } }), ctx);
+    // Falls through to the existing Qt path-deny logic (no decisionReason, path present → protected-location wording),
+    // NOT the folder-grant denial message — confirms the two checks don't cross-contaminate.
+    expect(permResp(d).message).not.toBe(DENIAL_MESSAGE);
   });
 });

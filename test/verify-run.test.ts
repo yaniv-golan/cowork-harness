@@ -441,4 +441,68 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
     expect(code).toBe(2);
     expect(text).toContain("work dir not found");
   });
+
+  // no_lost_write_back: verify-run RECOMPUTES the authored-file set from the kept work dir (it isn't
+  // persisted in result.json), diffing against result.preRunHashes — so a live-passing run stays checkable
+  // without a re-record, and a lost artifact is caught after the fact.
+  function keptRunForWriteBack(html: string): string {
+    const root = mkdtempSync(join(tmpdir(), "cwh-vr-wb-"));
+    const workDir = join(root, "work", "session", "mnt");
+    mkdirSync(join(workDir, "outputs"), { recursive: true });
+    writeFileSync(join(workDir, "outputs", "app.html"), html);
+    const result = {
+      scenario: "smoke",
+      fidelity: "container",
+      baseline: "desktop-1.13576.1",
+      result: "success",
+      decisions: [],
+      toolCounts: {},
+      gateDeliveries: [],
+      egress: [],
+      assertions: [],
+      subagents: [],
+      outDir: root,
+      workDir,
+      durationMs: 1,
+      // Present-but-empty manifest: app.html has no prior entry → recompute treats it as newly authored.
+      preRunHashes: {},
+      preRunPaths: [],
+      userVisibleRoots: ["outputs", ".projects"],
+      readonlyFolderRoots: [],
+      scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
+    };
+    writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+    writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }));
+    writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [] }));
+    return root;
+  }
+
+  it("verify-run FAILS (exit 1) no_lost_write_back on a kept run whose authored artifact has a lost write-back", () => {
+    const run = keptRunForWriteBack(
+      `<!DOCTYPE html><html><body><form method="post" action="/submit"><button>Save</button></form></body></html>`,
+    );
+    const { code, text } = verifyRun(run, scenarioFile(run, "  - no_lost_write_back: true\n"));
+    expect(code).toBe(1);
+    expect(text).toMatch(/lost interactive-artifact write-back/i);
+    expect(text).toContain("outputs/app.html");
+  });
+
+  it("verify-run PASSES no_lost_write_back on a kept run whose authored artifact is clean", () => {
+    const run = keptRunForWriteBack(
+      `<!DOCTYPE html><html><body><script>fetch('https://api.example.com/x',{method:'POST'})</script></body></html>`,
+    );
+    const { code } = verifyRun(run, scenarioFile(run, "  - no_lost_write_back: true\n"));
+    expect(code).toBe(0);
+  });
+
+  it("refuses (exit 2) no_lost_write_back when the work dir is gone (cannot recompute the authored set)", () => {
+    const run = keptRunForWriteBack(`<!DOCTYPE html><html><body><form method="post" action="/x"></form></body></html>`);
+    const fs = require("node:fs");
+    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    result.workDir = join(run, "gone", "work");
+    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result));
+    const { code, text } = verifyRun(run, scenarioFile(run, "  - no_lost_write_back: true\n"));
+    expect(code).toBe(2);
+    expect(text).toContain("work dir not found");
+  });
 });
