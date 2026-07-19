@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-19
+
 ### Added
 
 - **`skill --allow-missing-capability`** — the open-ended-run equivalent of a scenario asserting
