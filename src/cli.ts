@@ -315,6 +315,9 @@ Output:
                                    flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
   --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
                                    removed, to check whether the agent "succeeds" even without them
+  --allow-missing-capability       don't fail the verdict when the (partial 'core') image omits a capability
+                                   the skill used but real Cowork ships — open-ended-run equivalent of a
+                                   scenario asserting allow_missing_capability: true
   --model <id>                     override the session model
   --dry-run                        preview scenarios, token and binary checks, without recording     NO_COLOR=1   disable ANSI
 
@@ -1706,6 +1709,7 @@ async function cmdSkill(rawArgs: string[]) {
   let intent: string | undefined;
   let deciderModel: string | undefined;
   let deciderLlm = false;
+  let allowMissingCapability = false; // --allow-missing-capability: open-ended-lane opt-out (merged into the synthesized assert)
   let resume = false;
   let dryRun = false;
   let keep = false;
@@ -1741,7 +1745,14 @@ async function cmdSkill(rawArgs: string[]) {
       return v;
     };
     // booleans reject an equals value, mirroring parseArgs.
-    if (eq > 0 && (name === "--resume" || name === "--decider-llm" || name === "--dry-run" || name === "--keep")) {
+    if (
+      eq > 0 &&
+      (name === "--resume" ||
+        name === "--decider-llm" ||
+        name === "--dry-run" ||
+        name === "--keep" ||
+        name === "--allow-missing-capability")
+    ) {
       fail("skill", "usage", `${name} takes no value`, undefined, isJson0);
     }
     if (name === "--fidelity") {
@@ -1759,6 +1770,7 @@ async function cmdSkill(rawArgs: string[]) {
     else if (name === "--session-id") sessionId = nextValStrict();
     else if (a === "--resume") resume = true;
     else if (a === "--decider-llm") deciderLlm = true;
+    else if (a === "--allow-missing-capability") allowMissingCapability = true;
     else if (name === "--intent") intent = nextValStrict();
     else if (name === "--decider-model") deciderModel = nextValStrict();
     else if (a === "--dry-run") dryRun = true;
@@ -1936,7 +1948,10 @@ async function cmdSkill(rawArgs: string[]) {
     prompt,
     ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
     answers,
-    assert: [{ result: "success" }],
+    // Open-ended lane has no authored assert: block, so --allow-missing-capability merges the modifier onto
+    // the synthesized success assertion — this suppresses BOTH capability fail sources (verdict.ts) AND the
+    // pre-flight abort (execute.ts) with no verdict.ts change, and persists in result.json for verify-run.
+    assert: [{ result: "success", ...(allowMissingCapability ? { allow_missing_capability: true as const } : {}) }],
   });
 
   const externalChannel = resolveExternal("skill", flags);

@@ -171,6 +171,13 @@ describe.skipIf(!can)("skill/common flags accept --flag=value identically to --f
     expect(r.out).toMatch(/takes no value/);
   });
 
+  it("--allow-missing-capability is a boolean: the equals form is a usage error, exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "g5-"));
+    const r = run(["skill", "./plugin", "hi", "--allow-missing-capability=1"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/takes no value/);
+  });
+
   it("an empty equals value (--model=) is rejected, exit 2", () => {
     const d = mkdtempSync(join(tmpdir(), "g5-"));
     const r = run(["skill", "./plugin", "hi", "--model=", "--dry-run"], d);

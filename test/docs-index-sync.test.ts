@@ -79,10 +79,10 @@ describe("verdict-signals docs ↔ code", () => {
     expect(scenarioMdText).not.toMatch(/`result\.signals/);
   });
 
-  it('the docs\' "only three warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  it('the docs\' "only four warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(3);
+    expect(warnCount).toBe(4);
   });
 });
 

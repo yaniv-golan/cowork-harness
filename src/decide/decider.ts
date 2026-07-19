@@ -506,6 +506,10 @@ export class LlmDecider implements Decider {
     if (req.kind !== "question") return ABSTAIN; // dialog/elicit → fail-closed terminal
     const answers: Record<string, string> = {};
     let resolvedModel = this.model; // overwritten below by whatever the transport actually reports
+    // true once ANY question in this gate was answered via a free-text path (the no-option passthrough or the
+    // OTHER: sentinel) rather than a label pick — surfaced in the rationale so a persisted decision record can
+    // distinguish a genuine option choice from a free-text answer without re-deriving it from the answers map.
+    let usedOther = false;
     for (const q of req.questions) {
       const text = q.question ?? q.header ?? "";
       const labels = q.options.map((o) => o.label);
@@ -527,6 +531,7 @@ export class LlmDecider implements Decider {
           );
         process.stderr.write(`[llm-decider] "${text}" → free-text${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
         answers[text] = free;
+        usedOther = true; // a no-option gate is inherently an "Other"/free-text gate
         continue;
       }
       const multi = q.multiSelect === true;
@@ -600,6 +605,7 @@ export class LlmDecider implements Decider {
             );
           process.stderr.write(`[llm-decider] "${text}" → free-text (Other)${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
           answers[text] = free;
+          usedOther = true;
           continue;
         }
       }
@@ -620,7 +626,12 @@ export class LlmDecider implements Decider {
       process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
       answers[text] = pick;
     }
-    return { response: { kind: "question", answers }, by: "llm", rationale: this.intent ?? "LLM judgment", model: resolvedModel };
+    return {
+      response: { kind: "question", answers },
+      by: "llm",
+      rationale: (this.intent ?? "LLM judgment") + (usedOther ? " [via Other free-text]" : ""),
+      model: resolvedModel,
+    };
   }
 
   /** Prompt for a web_fetch approval gate (domain + url + the grant options). */

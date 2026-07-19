@@ -1,5 +1,6 @@
 import { warn } from "../io.js";
 import type { RunResult } from "../types.js";
+import { VERDICT_MODIFIER_KEYS } from "../types.js";
 
 export interface VerdictSignal {
   code:
@@ -16,7 +17,8 @@ export interface VerdictSignal {
     | "infra_error"
     | "stalled"
     | "prompt_asset_missing"
-    | "scan_unavailable";
+    | "scan_unavailable"
+    | "ended_with_question";
   severity: "fail" | "warn";
   message: string;
 }
@@ -199,6 +201,31 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           `the agent image omits capabilit(ies) the skill used: ${result.missingCapabilityUse.join(", ")} — ` +
           "likely a FALSE NEGATIVE (real Cowork ships them). Rebuild full parity (--build-arg COWORK_FULL_PARITY=1); " +
           "or assert allow_missing_capability: true if the fallback is equivalent.",
+      });
+
+    // (live, heuristic) the agent's final answer contains a question and the run produced no deliverable — a
+    // likely conversational dead-end that still exited result:"success". WARN, never fail. Strictly weaker
+    // sibling of `stalled` (run.ts's strict trailing-`?`/no-tools detector); mutually exclusive by construction.
+    const openEnded = !result.assertions.some((a) =>
+      Object.entries(a.assertion).some(
+        ([k, v]) => v !== undefined && k !== "result" && !(VERDICT_MODIFIER_KEYS as readonly string[]).includes(k),
+      ),
+    );
+    if (
+      result.result === "success" &&
+      !result.stalledOnQuestion &&
+      !result.assertions.some((a) => a.assertion.allow_stall === true) &&
+      openEnded &&
+      result.workspaceFiles !== undefined && // evidence observed (not the #52 rootAbsent/undefined case)
+      !result.workspaceFiles.some((f) => f.class === "output") && // no DELIVERABLE under mnt/outputs
+      /\?(?![\w=&/#])/.test(result.finalMessage ?? "") // a '?' not followed by a URL-query/path char
+    )
+      signals.push({
+        code: "ended_with_question",
+        severity: "warn",
+        message:
+          "the final answer contains a question and the run wrote no deliverable to outputs/ — the agent may have ended on a request for input instead of a deliverable. " +
+          "Script the answer (answer:/--answer/a decider) or steer --decider-llm --intent; assert allow_stall: true if ending on a question is intended.",
       });
 
     // absent scan evidence means host-path/outputs-delete did NOT run — a silent ✓ there would be its own

@@ -180,6 +180,21 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(computeVerdict(optIn, "live").pass).toBe(true);
   });
 
+  it("`skill --allow-missing-capability` shape: the modifier MERGED onto {result:success} suppresses both sources", () => {
+    // Feature A merges allow_missing_capability onto the synthesized success assertion (one object, two keys).
+    const useOptOut = rr({ missingCapabilityUse: ["ocr"], assertions: [assn({ result: "success", allow_missing_capability: true })] });
+    expect(computeVerdict(useOptOut, "live").pass).toBe(true);
+    expect(computeVerdict(useOptOut, "live").signals.some((s) => s.code === "missing_capability")).toBe(false);
+    const declOptOut = rr({
+      requiresCapabilityUnmet: { caps: ["office_convert"], reason: "omitted" },
+      assertions: [assn({ result: "success", allow_missing_capability: true })],
+    });
+    expect(computeVerdict(declOptOut, "live").pass).toBe(true);
+    // negative: the same combined assertion WITHOUT the modifier still fails (no accidental blanket suppress)
+    const noMod = rr({ missingCapabilityUse: ["ocr"], assertions: [assn({ result: "success" })] });
+    expect(computeVerdict(noMod, "live").pass).toBe(false);
+  });
+
   it("missing-capability is live-only (a cassette can't probe the image → zeroed on replay)", () => {
     const r = rr({ missingCapabilityUse: ["ml_extract"] });
     expect(computeVerdict(r, "live").pass).toBe(false);
@@ -207,6 +222,103 @@ describe("computeVerdict (the single verdict source)", () => {
     const v = computeVerdict(rr({ scan: undefined }), "live");
     expect(v.signals).toContainEqual(expect.objectContaining({ code: "scan_unavailable", severity: "warn" }));
     expect(v.pass).toBe(true); // warn, not fail
+  });
+
+  it("ended_with_question: warns (never fails) when the final answer contains a question and no deliverable was written to outputs/", () => {
+    const fires = rr({
+      result: "success",
+      finalMessage: "I reviewed the deck. Which round is this? Let me know.",
+      workspaceFiles: [{ path: "x", bytes: 1, class: "mount" }],
+      assertions: [assn({ result: "success" })],
+    });
+    const v = computeVerdict(fires, "live");
+    expect(v.signals.some((s) => s.code === "ended_with_question")).toBe(true);
+    expect(v.pass).toBe(true); // warn never fails
+
+    // the motivating shape: ONLY mount/input-class files present (e.g. a connected-folder input), no
+    // output-class file — the warn must still fire.
+    const mountOnly = rr({
+      result: "success",
+      finalMessage: "I reviewed the deck. Which round is this? Let me know.",
+      workspaceFiles: [{ path: "input.pdf", bytes: 1, class: "input" }],
+      assertions: [assn({ result: "success" })],
+    });
+    expect(computeVerdict(mountOnly, "live").signals.some((s) => s.code === "ended_with_question")).toBe(true);
+
+    // suppressed by an output deliverable
+    const withOutput = rr({
+      ...fires,
+      workspaceFiles: [{ path: "outputs/report.md", bytes: 9, class: "output" }],
+    });
+    expect(computeVerdict(withOutput, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+
+    // suppressed when workspaceFiles is undefined (no evidence observed)
+    const noEvidence = rr({
+      result: "success",
+      finalMessage: "I reviewed the deck. Which round is this? Let me know.",
+      assertions: [assn({ result: "success" })],
+    });
+    expect(computeVerdict(noEvidence, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+
+    // suppressed by stalledOnQuestion (the strict sibling owns it instead)
+    const stalled = rr({
+      ...fires,
+      stalledOnQuestion: true,
+    });
+    const stalledVerdict = computeVerdict(stalled, "live");
+    expect(stalledVerdict.signals.some((s) => s.code === "ended_with_question")).toBe(false);
+    expect(stalledVerdict.signals.some((s) => s.code === "stalled")).toBe(true);
+
+    // suppressed by allow_stall
+    const allowStall = rr({
+      ...fires,
+      assertions: [assn({ result: "success" }), assn({ allow_stall: true })],
+    });
+    expect(computeVerdict(allowStall, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+
+    // suppressed by an authored content assertion (not open-ended)
+    const authoredContent = rr({
+      ...fires,
+      assertions: [assn({ file_exists: "outputs/x.md" }, true)],
+    });
+    expect(computeVerdict(authoredContent, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+
+    // suppressed on the replay lane (live-only heuristic)
+    expect(computeVerdict(fires, "replay").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+
+    // a '?' that's URL-shaped (query string) does not count as an open question
+    const urlShaped = rr({
+      ...fires,
+      finalMessage: "see https://example.test/a?b=1",
+    });
+    expect(computeVerdict(urlShaped, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+
+    // trailing question wrapped in quotes/bold still counts
+    const quoted = rr({ ...fires, finalMessage: 'Ready to proceed?"' });
+    expect(computeVerdict(quoted, "live").signals.some((s) => s.code === "ended_with_question")).toBe(true);
+    const bolded = rr({ ...fires, finalMessage: "Which sector?**" });
+    expect(computeVerdict(bolded, "live").signals.some((s) => s.code === "ended_with_question")).toBe(true);
+
+    // finalMessage undefined (omitted) → absent
+    const noMessage = rr({
+      result: "success",
+      workspaceFiles: [{ path: "x", bytes: 1, class: "mount" }],
+      assertions: [assn({ result: "success" })],
+    });
+    expect(computeVerdict(noMessage, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+  });
+
+  it("ended_with_question stays open-ended through a `skill --allow-missing-capability` assert (A↔B seam)", () => {
+    // A `skill --allow-missing-capability` run synthesizes `{result:"success", allow_missing_capability:true}`.
+    // The modifier key must NOT count as an authored CONTENT assertion (which would flip `openEnded` off and
+    // silently stop `ended_with_question` from ever firing on those runs). Pins that exemption.
+    const r = rr({
+      result: "success",
+      finalMessage: "I reviewed it. Which sector should I assume? Let me know.",
+      workspaceFiles: [{ path: "deck.pdf", bytes: 1, class: "mount" }], // connected-folder input only, no output
+      assertions: [assn({ result: "success", allow_missing_capability: true })],
+    });
+    expect(computeVerdict(r, "live").signals.some((s) => s.code === "ended_with_question")).toBe(true);
   });
 });
 
