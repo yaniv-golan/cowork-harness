@@ -120,6 +120,40 @@ A green run is not automatically a correct run.
 
 ---
 
+## Iterating a skill across fixes — the verification loop
+
+Hardening a skill is a loop: run it, read what it did, fix, run again. Two disciplines keep the loop
+honest — **verify before you trust**, and **don't cross-pair generations**. This is a Reflexion-style
+verification loop stacked on the agent loop; the harness gives you the substrate, you own the grader.
+
+**Verify — ground a finding before trusting it.** A green run is not a correct run, and a skill's
+self-reported finding (a self-critique appendix, "I extracted X") is not real until its cited evidence is
+found in the run's own output. The harness emits everything a grader needs; the grader itself lives
+*outside* the harness (it's your check, not a Cowork-runtime behavior):
+
+- `result.json` → **`finalMessage`** (the skill's own answer/critique) and **`toolResults[]`** (tool
+  outputs, capped).
+- `cowork-harness trace <run-dir> --output-format json` → the tool-call stream. Add **`--full-results`**
+  so a *successful* call's full input + result are captured (the default view slices them to ~100/120
+  chars; full capture was error-only before). This is what lets an external grader confirm "the skill
+  claims it read X and derived Y" against the actual call.
+- `cowork-harness inspect <run-dir>` → what the run produced (artifacts + previews), plus the run's
+  `label` and `skillHash` at the harvest moment.
+- **In-run alternative:** dispatch a checker **sub-agent** (maker/checker split) whose result folds into
+  the verdict — see [subagents.md](./subagents.md).
+
+**Don't cross-pair generations.** When you run the same skill across fixes, a harvest step must not pair
+a *pre-fix* `result.json` with a *post-fix* critique. The authoritative key is
+**`fingerprint.skillHash`** — content-exact, recorded on every live run, and it changes on any tracked
+edit (an un-`git add`-ed new file changes neither the hash nor the mounted skill). Group and pair on it;
+`inspect` and the run-index row surface a short prefix so you needn't open each `result.json`.
+`--label <tag>` adds a human-readable, orderable generation name on top (skillHash is the correctness
+key; the label is ergonomics). And `verify-run <run-dir> <scenario.yaml>` is the native staleness guard:
+it **warns** when a kept run predates the current skill, and for a scenario with scripted `answers`
+**hard-fails** rather than vouch for a stale gate snapshot.
+
+---
+
 See also: [boundary.md](./boundary.md) (is the sandbox even enforcing what you think?) and
 [fidelity-gaps.md](./fidelity-gaps.md) (the known deltas vs. real Cowork — sometimes the "bug" is a
 deliberate gap).

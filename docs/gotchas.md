@@ -33,6 +33,15 @@
   hooks-config JSON, and `Bash(...)` directives only — host-side prose and `Read`/`Grep` directives are
   left alone, so false negatives on unfenced snippets are expected).
 
+- **Iterating a skill across fixes? Don't cross-pair generations.** When you run the same skill before
+  and after a fix and later harvest the runs (pairing each `result.json` with a critique), it is easy to
+  pair a *pre-fix* result with a *post-fix* critique and draw a conclusion against the wrong run. The
+  guard is already in every run: `fingerprint.skillHash` is content-exact and changes on any tracked
+  edit, so **group/pair on it** (a short prefix is on the run-index row and in `cowork-harness inspect`).
+  Add `--label <tag>` for a human-readable generation name, and timestamp/keep run dirs so a harvest step
+  can order them. `verify-run` warns when a kept run predates the current skill. Full recipe:
+  [debugging.md → Iterating a skill across fixes](./debugging.md#iterating-a-skill-across-fixes--the-verification-loop).
+
 For the false-green ("✓ passed ≠ correct") landmine catalog, see
 [SKILL.md → Gotchas](../.claude/skills/cowork-harness/SKILL.md#gotchas--the--passed--correct-landmines) or
 [debugging.md](./debugging.md#the-run-was-green-but-you-dont-trust-it--hunt-the-false-green).

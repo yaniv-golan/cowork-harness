@@ -396,6 +396,44 @@ pass/fail):
 
 See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 
+##### False negatives — signals that are tier/image artifacts, not skill defects
+
+Several fail-severity signals read like a skill gap but are really a property of the reduced test image
+or the fidelity tier. Recognize these before "fixing" a non-bug:
+
+- **`missing_capability`** — the lean `core` agent image is a deliberate partial mirror of real Cowork's
+  rootfs. A skill that used a capability the `core` image omits (but real Cowork **ships**) trips this;
+  the message says so ("likely a FALSE NEGATIVE (real Cowork ships them)"). **Fix:** rebuild full parity
+  (`--build-arg COWORK_FULL_PARITY=1`, point `COWORK_AGENT_IMAGE` at the result), or assert
+  `allow_missing_capability: true` when the skill's fallback is genuinely equivalent. Two sources feed
+  it: a skill *observed using* an omitted family (live lane), or a declared `requires_capabilities` the
+  tier can't verify/provide (both lanes — an **unknown** family name hard-fails rather than passing
+  silently). The parity-gated families and how a false negative shows up:
+
+  <!-- capability-families:begin (guarded against CAPABILITY_FAMILIES by test/capability-families-doc-sync.test.ts) -->
+
+  | Family | Probe tool (present in full parity) | A false negative looks like |
+  |---|---|---|
+  | `office_convert` | `soffice` (LibreOffice) | doc/xlsx→pdf conversion "not found" on `core` |
+  | `ocr` | `tesseract` | scanned-PDF/image text extraction unavailable |
+  | `ml_extract` | `markitdown` / `magika` / `onnxruntime` | rich document→markdown extraction missing |
+  | `cv` | `cv2` (OpenCV) | `import cv2` / `libGL.so` failure |
+  | `pdf_tables` | `camelot` / `tabula` | PDF table extraction module absent |
+  | `magick` | `wand` (ImageMagick) | image transform `MagickWand` not present |
+
+  <!-- capability-families:end -->
+
+- **`host_path_leak`** — **skipped at `hostloop` and `protocol`** fidelity (the agent runs on real host
+  paths there, so a host path in model-visible text is expected, not a leak). It is *armed* at
+  `container`/`microvm` but only *fires* on an actual scanned leak with no authored
+  `transcript_no_host_path`. At `fidelity: cowork` the skip follows the **resolved** tier — a `cowork`
+  run that lands on `container` is armed. Author `transcript_no_host_path` to enforce cleanliness where
+  it is valid (the assertion is incompatible-by-design with `hostloop`/`protocol`).
+
+- **`scan_unavailable`** (**warn**, live lane only) — `events.jsonl` was missing/corrupt, so
+  `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run**. Neither a pass
+  nor a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it.
+
 #### `artifact_json` — assert structured JSON in YAML
 
 For a skill that emits structured JSON, assert its contents in the scenario lane (no Python needed). A

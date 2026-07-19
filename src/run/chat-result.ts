@@ -140,6 +140,8 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     missingCapabilityUse: undefined,
     capabilityProbe: undefined,
     requiresCapabilityUnmet: undefined,
+    runLabel: undefined, // chat is interactive exploration, not the iterate/harvest loop — no --label, no skillHash
+    skillCommit: undefined,
     fingerprint: undefined,
     preRunPaths: undefined,
     preRunLinkAware: undefined,

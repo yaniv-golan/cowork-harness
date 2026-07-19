@@ -13,6 +13,7 @@ import {
   writeSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
 import {
@@ -451,6 +452,31 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
   });
   // session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
   return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore };
+}
+
+/** Best-effort git commit provenance for the skill dirs a session mounts — the human-readable "which
+ *  commit" correlate for the iterate-across-fixes loop. SECONDARY to the content-exact
+ *  `fingerprint.skillHash` (which is the authoritative version key). Resolves over the SAME dir set that
+ *  feeds skillHash (`skillSourceDirs`), so it covers plugin-mounted skills too. Returns the single `HEAD`
+ *  shared by all those dirs, or `null` when they span more than one repo, any dir is not a git work tree
+ *  (or has an unborn HEAD), git is absent, or the session mounts no skill dirs. Never throws. */
+export function skillCommit(sessionPath: string): string | null {
+  const { dirs } = skillSourceDirs(sessionPath);
+  if (dirs.length === 0) return null;
+  const commits = new Set<string>();
+  for (const d of dirs) {
+    try {
+      const sha = execFileSync("git", ["-C", d, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (!sha) return null;
+      commits.add(sha);
+    } catch {
+      return null; // non-git dir, unborn HEAD, or git not on PATH
+    }
+  }
+  return commits.size === 1 ? [...commits][0] : null;
 }
 
 // Takes the RESOLVED baseline OBJECT (never re-resolves by appVersion — that could hash a different
@@ -2596,6 +2622,8 @@ function replayErrorResult(file: string): RunResult {
     command: "replay", // #48
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
     ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
+    runLabel: undefined, // run-identity metadata is a LIVE-run property; a replay has no record-time label
+    skillCommit: undefined,
     scenario: file,
     fidelity: "replay",
     baseline: "",
@@ -4455,6 +4483,8 @@ export async function replayCassette(
       command: "replay", // #48
       referencesRead: rec.filesRead.length ? rec.filesRead : undefined, // re-derived from the frozen Read events on the replay re-drive, same as toolCounts
       ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
+      runLabel: undefined, // run-identity metadata is a LIVE-run property; a replay has no record-time label
+      skillCommit: undefined,
       scenario: cassette.scenario.name,
       mode: "run",
       // Pass through the frozen recording-time provenance — an older cassette that predates
