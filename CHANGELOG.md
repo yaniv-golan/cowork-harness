@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`skill --allow-missing-capability`** — the open-ended-run equivalent of a scenario asserting
+  `allow_missing_capability: true`. An open-ended `skill` run has no `assert:` block to carry the opt-out,
+  so a self-flagged capability FALSE-NEGATIVE on the lean `core` image would hard-fail with no escape
+  hatch; the flag merges the modifier onto the synthesized success assertion, suppressing both the
+  post-run `missing_capability` fail and the pre-run capability abort.
+- **`ended_with_question` verdict signal (WARN)** — a heuristic run-level classifier: the agent's final
+  answer contains a question and the run wrote no deliverable to `outputs/` — a likely conversational
+  dead-end that still exited `result:"success"`. The lenient warn-severity sibling of the strict, fail
+  `stalled` (which already catches a trailing-`?` final turn with no post-gate tool work); this covers the
+  residual — a mid-message `?`, or tool work after the last gate that still ended asking. Never flips a
+  verdict; `verify-run` over historical results may surface it on matching old runs (benign).
+- **`--decider-llm` "Other" answers are marked in gate provenance** — a decision answered via the
+  `OTHER:` free-text path (or a no-option free-text gate) now carries `[via Other free-text]` in its
+  `rationale`, so a `result.json` consumer can distinguish it from an offered-option pick. (Multi-select
+  gates remain index-only — `OTHER:` is rejected there, now pinned by a test.)
+
 - **Run-identity metadata for the iterate-across-fixes loop.** `skill`/`run` accept `--label <tag>`, a
   human-readable generation tag surfaced in `result.json` (`runLabel`), the run-index row, `inspect`, and
   `status.json`. Each live run also records `skillCommit` — best-effort git `HEAD` of the session's skill

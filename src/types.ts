@@ -1122,7 +1122,8 @@ export interface RunResult {
         | "infra_error"
         | "stalled"
         | "prompt_asset_missing"
-        | "scan_unavailable";
+        | "scan_unavailable"
+        | "ended_with_question";
       severity: "fail" | "warn";
       message: string;
     }>;

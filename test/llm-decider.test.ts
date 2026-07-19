@@ -242,6 +242,35 @@ describe("LlmDecider", () => {
     await expect(new LlmDecider(complete).decide(req, ctx())).rejects.toThrow(UnansweredError);
   });
 
+  it("multi-select rejects OTHER: free text — index-only, no free-text escape hatch on this path", async () => {
+    // Pin the documented gap: unlike single-select, the multi-select branch (decider.ts:540-567) only accepts
+    // a comma-list of bare option numbers. An OTHER: reply is not a valid index list, so it must fail loud —
+    // this is a deliberate decision, not an oversight.
+    const complete: Complete = async () => reply("OTHER: custom value");
+    const req: DecisionRequest = {
+      id: "r",
+      kind: "question",
+      questions: [{ question: "Pick features?", options: [{ label: "A" }, { label: "B" }], multiSelect: true }],
+    };
+    await expect(new LlmDecider(complete).decide(req, ctx())).rejects.toThrow(UnansweredError);
+  });
+
+  it("rationale is marked '[via Other free-text]' when an OTHER: answer was used, and NOT marked on a plain label pick", async () => {
+    const req: DecisionRequest = {
+      id: "r",
+      kind: "question",
+      questions: [{ question: "Name it?", options: [{ label: "Project Alpha" }, { label: "Project Beta" }] }],
+    };
+    const other: Complete = async () => reply("OTHER: Acme Robotics");
+    const dOther = await new LlmDecider(other, "name it after the customer").decide(req, ctx());
+    expect((dOther as any).rationale).toContain("[via Other free-text]");
+
+    const labelPick: Complete = async () => reply("2"); // index protocol → "Project Beta"
+    const dLabel = await new LlmDecider(labelPick, "name it after the customer").decide(req, ctx());
+    expect((dLabel as any).response.answers).toEqual({ "Name it?": "Project Beta" });
+    expect((dLabel as any).rationale).not.toContain("[via Other free-text]");
+  });
+
   it("answers each question of a multi-question request independently (one call per question)", async () => {
     let calls = 0;
     const complete: Complete = async () => (calls++, reply(calls === 1 ? "Markdown" : "Deep"));

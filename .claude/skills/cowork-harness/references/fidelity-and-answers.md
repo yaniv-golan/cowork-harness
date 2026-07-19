@@ -164,10 +164,13 @@ Caveat: `decide` only builds a **single-select** sample (set choices with `--opt
 multiSelect flag), so its printed request shows `options[].label` but never `multiSelect:true` — to
 exercise the array reply path, run a real multiSelect gate or unit-test the helper directly.
 
-LLM-decider free-text goes via `OTHER: <value>` on an **options-bearing** gate; a bare out-of-set
-answer (no matching label, no `OTHER:`) fails loud (`UnansweredError` → exit 2) — it never stalls or
-guesses an option. Open-ended (no-option) gates need no `OTHER:` prefix: free text is delivered
-verbatim. (Scripted scenarios use the separate `answer:` escape hatch.)
+LLM-decider free-text goes via `OTHER: <value>` on an **options-bearing single-select** gate; a bare
+out-of-set answer (no matching label, no `OTHER:`) fails loud (`UnansweredError` → exit 2) — it never
+stalls or guesses an option. A **multi-select** gate is **index-only**: it accepts comma-separated option
+numbers, and `OTHER:` fails loud there (no free-text escape on that path). Open-ended (no-option) gates
+need no `OTHER:` prefix: free text is delivered verbatim. A decision answered via any free-text path is
+marked `[via Other free-text]` in its `gateProvenance` rationale, so a `result.json` consumer can tell it
+from an offered-option pick. (Scripted scenarios use the separate `answer:` escape hatch.)
 
 A gate that fails loud (`on_unanswered: fail`, the default) still **salvages a PARTIAL run**: the harness
 writes a `result.json` (marked `partial: true`) with the artifacts the agent produced before the whiff, so

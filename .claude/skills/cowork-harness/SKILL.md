@@ -387,7 +387,16 @@ Recognize these before "fixing" a non-bug:
   `COWORK_AGENT_IMAGE` at it), or — if the skill's fallback is genuinely equivalent — assert
   `allow_missing_capability: true`. (Two sources: a skill *observed using* an omitted family, live lane;
   or a declared `requires_capabilities` the tier can't provide, both lanes — an unknown family name
-  hard-fails rather than silently passing.)
+  hard-fails rather than silently passing.) **On an open-ended `skill` run** (no `assert:` block to carry
+  the modifier), pass **`--allow-missing-capability`** — the CLI equivalent of the assertion.
+- **`ended_with_question`** (`WARN`, live lane) — a heuristic: the agent's final answer contains a
+  question and the run wrote **no deliverable to `outputs/`** — it may have ended on a request for input
+  instead of finishing. Warn-only; the fix is scripting/steering the answer (`answer:` / `--answer` / a
+  decider, or `--decider-llm --intent`), not editing the skill's prose. The strict, fail-severity sibling
+  `stalled` already catches a *trailing*-`?` final turn that did no tool work after the last gate; this
+  covers the residual (a mid-message `?`, or tool work after the last gate that still ended asking). Read
+  the final message before acting — a legitimate question-posing answer that wrote a file never fires.
+  Assert `allow_stall: true` if ending on a question is the intended terminal state.
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
@@ -657,9 +666,11 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     - `on_unanswered` governs **unanswered** `AskUserQuestion` gates; the `stalled` signal covers
       stalling *after* one is answered — two different failure modes.
     - **Free-text aside:** a "type-it-in-notes" option has **no scripted deterministic answer** today
-      (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`; on an
-      options-bearing gate a bare out-of-set LLM answer fails loud (exit 2) — see the LLM-decider
-      free-text note in `references/fidelity-and-answers.md`).
+      (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`, and only on
+      **single-select** gates — a **multi-select** gate is index-only, so `OTHER:` fails loud there; on an
+      options-bearing single-select gate a bare out-of-set LLM answer also fails loud (exit 2) — see the
+      LLM-decider free-text note in `references/fidelity-and-answers.md`). An LLM decision answered via
+      `OTHER:` is marked `[via Other free-text]` in its `gateProvenance` rationale.
 14. **A positional `choose` (`first` / index) is order-dependent.** `choose: "2"` survives label drift
     but NOT option *re-ordering* — if the gate presents its options in a different order run-to-run, the
     index lands on a different option (a silent re-record flake). Prefer an exact label when order is

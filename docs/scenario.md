@@ -383,7 +383,7 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only three codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only four codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
@@ -393,6 +393,12 @@ pass/fail):
 - `scan_unavailable` (**warn**) — post-run scan evidence unavailable (`RunResult.scan` undefined); the
   host-path and outputs-delete guards did not run this run (assert `no_delete_in_outputs` /
   `transcript_no_host_path` to hard-fail on this instead).
+- `ended_with_question` (**warn**, live lane) — the agent's final answer contains a question and the run
+  wrote no deliverable to `outputs/` — a likely dead-end that still exited `result:"success"`. The lenient
+  sibling of the strict, fail-severity `stalled` (which catches a *trailing*-`?` final turn with no
+  post-gate tool work); this covers the residual (mid-message `?`, or tool work after the last gate that
+  still ended asking). Heuristic — read the final message before acting; a question-posing answer that
+  wrote a file never fires. Fix by scripting/steering the answer; assert `allow_stall: true` if intended.
 
 See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 
@@ -405,10 +411,11 @@ or the fidelity tier. Recognize these before "fixing" a non-bug:
   rootfs. A skill that used a capability the `core` image omits (but real Cowork **ships**) trips this;
   the message says so ("likely a FALSE NEGATIVE (real Cowork ships them)"). **Fix:** rebuild full parity
   (`--build-arg COWORK_FULL_PARITY=1`, point `COWORK_AGENT_IMAGE` at the result), or assert
-  `allow_missing_capability: true` when the skill's fallback is genuinely equivalent. Two sources feed
-  it: a skill *observed using* an omitted family (live lane), or a declared `requires_capabilities` the
-  tier can't verify/provide (both lanes — an **unknown** family name hard-fails rather than passing
-  silently). The parity-gated families and how a false negative shows up:
+  `allow_missing_capability: true` when the skill's fallback is genuinely equivalent — **on an open-ended
+  `skill` run** (no `assert:` block), the CLI equivalent is **`skill --allow-missing-capability`**. Two
+  sources feed it: a skill *observed using* an omitted family (live lane), or a declared
+  `requires_capabilities` the tier can't verify/provide (both lanes — an **unknown** family name hard-fails
+  rather than passing silently). The parity-gated families and how a false negative shows up:
 
   <!-- capability-families:begin (guarded against CAPABILITY_FAMILIES by test/capability-families-doc-sync.test.ts) -->
 

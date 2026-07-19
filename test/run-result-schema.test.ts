@@ -85,7 +85,10 @@ const full: RunResult = {
   verdict: {
     pass: false,
     exitCode: 1,
-    signals: [{ code: "assertion", severity: "fail", message: "expected result to be success" }],
+    signals: [
+      { code: "assertion", severity: "fail", message: "expected result to be success" },
+      { code: "ended_with_question", severity: "warn", message: "x" },
+    ],
     guards: [{ name: "capability-use", status: "na" }],
     failures: [{ assertion: "result", message: "expected result to be success" }],
   },
