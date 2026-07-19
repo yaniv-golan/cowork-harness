@@ -16,6 +16,8 @@ const MASKS: { re: RegExp; token: string }[] = [
   { re: /\blocal_[a-z0-9]+/gi, token: "<SESSION>" },
   { re: /\bsess-[A-Za-z0-9-]+/g, token: "<SESSION>" },
   { re: /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\b/g, token: "<TIMESTAMP>" },
+  // coworkWebFetchDedup marker's "…{N}s ago…" — a live-run age that varies run-to-run (advisory diff view only).
+  { re: /\b\d+s ago\b/g, token: "<AGE>" },
 ];
 
 /** Replaces every volatile-but-not-meaningful span (tool-use ids, UUIDs, session-dir markers,

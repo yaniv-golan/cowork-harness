@@ -41,7 +41,8 @@ import {
 } from "../runtime/image-capabilities.js";
 import { instanceName, VM_WORK_HOST } from "../runtime/lima.js";
 import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
-import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
+import { decideLoopFromBaseline, readGateFlag, readGateNumber } from "../loop-decision.js";
+import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
@@ -529,6 +530,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
   const provenanceRef: { current?: WebFetchProvenance } = {};
+  // coworkWebFetchDedup (host-API path only): a per-session negative-work cache. Built only when the gate is
+  // on (an older baseline that lacks it ⇒ undefined ⇒ no behavior change); 100/900000 come from the baseline.
+  const dedup =
+    viaApiOn && readGateFlag(baseline, "1978029737", "coworkWebFetchDedup")
+      ? makeWebFetchDedupCache({
+          ttlMs: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupTtlMs") ?? 900000,
+          maxEntries: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupMaxEntries") ?? 100,
+        })
+      : undefined;
 
   // Pre-flight: if the skill DECLARES required capabilities and the image provably omits one, FAIL FAST here
   // — before any paid agent run — instead of burning ~12 min to reach a verdict the post-run guard already
@@ -641,6 +651,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           dockerNetwork: sidecar?.network,
           provenanceRef,
           webFetchViaApi: viaApiOn,
+          dedup,
         });
         child = hl.child;
         sdkMcp = hl.sdkMcp;

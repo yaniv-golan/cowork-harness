@@ -17,6 +17,7 @@ import { generateHostLoopShellSection } from "./hostloop-prompt.js";
  */
 const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
+import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
@@ -115,6 +116,8 @@ export function spawnHostLoop(
     // can_use_tool (production shape: bash pre-approved, web_fetch is not) instead of pre-approved
     // alongside bash (the allowlist-fallback shape, gate off).
     webFetchViaApi?: boolean;
+    /** coworkWebFetchDedup per-session cache (execute.ts/chat.ts build it only when the gate is on). */
+    dedup?: WebFetchDedupCache;
   } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
@@ -295,6 +298,7 @@ export function spawnHostLoop(
     onEgress: (e) => hostEgress.push(e),
     onInfraError: logInfra,
     provenanceRef: opts.provenanceRef,
+    dedup: opts.dedup,
     execCwd,
   });
   const sdkMcp: { servers: string[]; handle: McpHandler } = { servers: ["workspace"], handle: workspaceHandle };
