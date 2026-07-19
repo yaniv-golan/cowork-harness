@@ -67,8 +67,8 @@ export interface TraceRow {
   toolUseId?: string; // for pairing a tool row with its result
   resultStatus?: "ok" | "error"; // the tool's outcome (was invisible before)
   resultText?: string; // first line of the result/error (120-char cap) — what the default/tools view shows
-  resultTextFull?: string; // error rows only: the FULL multi-line result, capped at TOOL_ERROR_TEXT_CAP —
-  detailFull?: string; // error rows only: the FULL (uncapped-to-cap) input/command — powers `--view tool-errors`
+  resultTextFull?: string; // error rows always, all rows under --full-results: the FULL multi-line result, capped at TOOL_ERROR_TEXT_CAP
+  detailFull?: string; // error rows always, all rows under --full-results: the FULL (capped) input/command — powers `--view tool-errors` + grounding
 }
 
 /** Cap for the fuller error captures (`resultTextFull`/`detailFull`). Bounds a runaway stderr / huge
@@ -276,6 +276,11 @@ function eventsOf(file: string): AgentEvent[] {
 export interface BuildTraceOptions {
   tools?: boolean;
   translate?: (text: string) => string;
+  /** `--full-results`: also capture `resultTextFull`/`detailFull` (full multi-line result + full input,
+   *  each capped at TOOL_ERROR_TEXT_CAP) for SUCCESSFUL calls, not just errored ones — so an external
+   *  grader grounding a self-critique finding can see the content of the call it cites. Off by default:
+   *  the default/tools view keeps its 100/120-char slices, so existing JSON consumers are unaffected. */
+  fullResults?: boolean;
 }
 
 /** Core trace-row building over an already-parsed event array — the part of `buildTrace` that doesn't
@@ -295,10 +300,12 @@ function buildTraceFromEvents(events: AgentEvent[], opts: BuildTraceOptions = {}
         row.resultStatus = r.isError ? "error" : "ok";
         // translate the first line BEFORE slicing (same ordering rule as summarize/rowFor above).
         row.resultText = translate(r.text.split("\n")[0]).slice(0, 120);
-        if (r.isError) {
-          // Fuller capture for the `tool-errors` drill-down: the WHOLE multi-line stderr (not just
-          // line 1) and the full input/command, each capped. The default/tools view still reads the
-          // 120-char first-line `resultText` above, so those rows are unchanged.
+        if (r.isError || opts.fullResults) {
+          // Fuller capture: the WHOLE multi-line result (not just line 1) and the full input/command, each
+          // capped. Always on for the `tool-errors` drill-down; also on for SUCCESSFUL calls under
+          // `--full-results` (opts.fullResults) so an external grader can ground a finding against the call
+          // it cites. The default/tools view still reads the 120-char first-line `resultText` above, so
+          // those rows are unchanged unless the caller opts in.
           row.resultTextFull = translate(r.text).slice(0, TOOL_ERROR_TEXT_CAP);
           if (ev.type === "tool_use") row.detailFull = translate(JSON.stringify(ev.input)).slice(0, TOOL_ERROR_TEXT_CAP);
         }

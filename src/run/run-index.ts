@@ -21,6 +21,12 @@ export interface RunIndexRow {
   baseline: string;
   result: "success" | "error";
   pass: boolean;
+  // Run-identity (iterate-across-fixes loop): the human --label tag + a short prefix of the AUTHORITATIVE
+  // content-exact skill-version key (fingerprint.skillHash) — so a harvest/group-by step reads both off
+  // the index without opening each result.json. Additive-optional (no `v` bump). Re-derived honestly by
+  // reindexFromRunsTree from result.json (unlike `git`).
+  runLabel?: string;
+  skillHash?: string;
   signals: string[]; // VerdictSignal["code"][]
   costUsd?: number;
   tokens?: number;
@@ -92,6 +98,8 @@ export function indexRowFromResult(
     baseline: result.baseline,
     result: result.result,
     pass: verdict.pass,
+    runLabel: result.runLabel,
+    skillHash: result.fingerprint?.skillHash?.slice(0, 12), // short prefix — the full hash lives in result.json
     signals: verdict.signals.map((s) => s.code),
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,

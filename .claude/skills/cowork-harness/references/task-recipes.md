@@ -163,3 +163,30 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
 **Lane note:** `semantic_matches` is **live-only** (the judge is a live model call), so these scenarios
 run on the `run` lane, never token-free `replay` — the linter's "all assertions live-only" warning is
 expected and correct here.
+
+## Recipe 6 — Iterate a skill across fixes (ground findings, don't cross-pair generations)
+
+Hardening a skill is a loop: run → read what it did → fix → run again. Two disciplines keep it honest.
+
+1. **Verify before you trust.** A green run is not a correct run, and a skill's self-reported finding (a
+   self-critique appendix, "I extracted X") is not real until its cited evidence is found in the run's own
+   output. The harness emits the substrate; the grader is yours (it lives outside the harness):
+   - `result.json` → `finalMessage` (the skill's own answer/critique) + `toolResults[]` (tool outputs).
+   - `cowork-harness trace <run-dir> --output-format json` → the tool-call stream. Add `--full-results` so
+     a **successful** call's full input + result are captured (the default view slices them to ~100/120
+     chars) — this is what lets your grader confirm "the skill claims it read X and derived Y" against the
+     actual call.
+   - `cowork-harness inspect <run-dir>` → what the run produced, plus the run's `label` and `skillHash`.
+   - In-run alternative: dispatch a checker **sub-agent** (maker/checker) whose result folds into the
+     verdict.
+2. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
+   `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
+   content-exact, on every live run, changes on any tracked edit. **Group/pair on it** (`inspect` and the
+   run-index row surface a short prefix). Add `--label <tag>` for a human-readable generation name
+   (skillHash is the correctness key; the label is ergonomics). `cowork-harness verify-run <run-dir>
+   <scenario.yaml>` is the native staleness guard: it **warns** when a kept run predates the current
+   skill, and with scripted `answers` **hard-fails** rather than vouch for a stale gate snapshot.
+
+**Lane note:** the exploratory driver is `skill <dir> --decider-llm --intent "<what this run tests>"`,
+which is flagged non-deterministic (a green here is exploration, not a scripted pass) — pin the
+load-bearing gates with `--answer` once you know which fire.

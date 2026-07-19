@@ -1008,6 +1008,14 @@
       "type": "string",
       "description": "The fidelity tier actually used (differs from fidelity when fidelity:'cowork')"
     },
+    "runLabel": {
+      "type": "string",
+      "description": "User --label generation tag (iterate-across-fixes loop); ergonomics only, authoritative version key is fingerprint.skillHash"
+    },
+    "skillCommit": {
+      "type": ["string", "null"],
+      "description": "Best-effort git HEAD shared by the session's skill source dirs — commit provenance, not a grouping key; null if dirs span >1 repo / non-git / unresolved"
+    },
     "fidelityWarnings": {
       "type": "array",
       "items": {

@@ -14,7 +14,7 @@ import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statu
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
 // the cycle is intrinsic — kept runtime-only rather than refactored.
-import { buildFingerprint } from "./cassette.js";
+import { buildFingerprint, skillCommit } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadBaseline } from "../baseline.js";
 import {
@@ -112,6 +112,9 @@ export interface ExecuteOptions {
    *  discovery is stripped so nothing mounts and the agent answers from its own priors; the result is
    *  stamped `ablated:true` so a consumer never reads it as a real run. */
   ablateSkill?: boolean;
+  /** `--label` generation tag for the iterate-across-fixes loop (skill/run lanes). Surfaced in RunResult +
+   *  the run-index row + `inspect`; undefined when not passed. Ergonomics only — see RunResult.runLabel. */
+  runLabel?: string;
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
@@ -353,6 +356,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     fidelity: scenario.fidelity,
     sessionId,
     startedAt: Date.now(),
+    runLabel: opts.runLabel, // --label generation tag, surfaced in status.json for `status` watchers
   };
   writeRunningStatus(outDir, runStatusMeta);
   // Raw absolute path by machine-capture contract, but suppressed under --compact/--demo so the
@@ -893,6 +897,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const partialResult = buildPartialResult({
         turn,
         ablated: opts.ablateSkill,
+        runLabel: opts.runLabel, // run-identity: a salvaged partial is still a labeled generation
+        skillCommit: skillCommit(scenario.session),
         scenarioName: scenario.name,
         prompt: scenario.prompt,
         fidelity: scenario.fidelity,
@@ -1222,6 +1228,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       generator: "cowork-harness",
       mode: "run",
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
+      runLabel: opts.runLabel, // run-identity: user --label tag (undefined if not passed)
+      skillCommit: skillCommit(scenario.session), // best-effort git HEAD of the skill dirs (same set as fingerprint.skillHash)
       turn,
       ablated: opts.ablateSkill || undefined,
       referencesRead: record.filesRead.length ? record.filesRead : undefined,
@@ -1557,6 +1565,10 @@ export function buildPartialResult(args: {
   durationMs: number;
   unanswered: { message: string; hint?: string };
   fingerprint?: RunResult["fingerprint"];
+  /** Run-identity metadata — threaded from `executeScenario` so a salvaged PARTIAL run is still a labeled,
+   *  identifiable generation (same basis as the success path). See RunResult.runLabel/skillCommit. */
+  runLabel?: string;
+  skillCommit?: string | null;
   /** Same three signals the success-path result derives `nonDeterministic`/`nonDeterministicTerminal`
    *  from (see the `assembleRunResult` call below in `executeScenario`). Optional so pre-existing
    *  callers that don't pass them (e.g. tests) still compile — they just get the decisions-only
@@ -1600,6 +1612,8 @@ export function buildPartialResult(args: {
     generator: "cowork-harness",
     mode: "run",
     command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
+    runLabel: args.runLabel, // run-identity: threaded through so a salvaged partial keeps its generation label
+    skillCommit: args.skillCommit,
     turn: args.turn,
     ablated: args.ablated || undefined,
     referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,

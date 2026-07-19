@@ -100,4 +100,20 @@ describe.skipIf(!can)("verify-run answer-coverage currency", () => {
     expect(r.code).toBe(0); // matching answer still greens
     expect(r.text).toMatch(/no skill fingerprint/);
   });
+
+  it("answer-LESS scenario + drifted skill ⇒ WARN, exit 0 (re-asserting a frozen run is legitimate)", () => {
+    const f = fixture({ withFingerprint: true });
+    // Rewrite the scenario to drop `answers:` — the exploratory/harvest lane, where a hard-fail would be wrong.
+    writeFileSync(
+      f.scenario,
+      `name: smoke\nprompt: do the thing\nfidelity: container\nsession: ${join(f.dir, "session.yaml")}\nskills: [cap-table]\n` +
+        `assert:\n  - result: success\n`,
+    );
+    writeFileSync(f.pluginSkillMd, "# cap-table v2 — skill changed after the run\n"); // drift
+    const r = verifyRun(join(f.dir, "run"), f.scenario);
+    expect(r.code).toBe(0); // WARN, not the answers-path hard-fail (exit 2)
+    expect(r.text).toMatch(/::warning::/);
+    expect(r.text).toMatch(/predates the current skill/);
+    expect(r.text).toMatch(/older skill version/);
+  });
 });

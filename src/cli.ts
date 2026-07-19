@@ -187,7 +187,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                fidelity: hostloop) and prints ONE Task dispatch's {resolvedAgentType,
                                pathDenials, delivered} — a thin wrapper over 'skill' (see 'probe-dispatch --help')
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
-      [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths]   focus on one view (default: all); see 'trace --help'
+      [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--full-results]   focus on one view (default: all); see 'trace --help'
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
@@ -447,7 +447,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
     "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --view tool-errors     one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars\n       --view files           workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)\n       --view usage           per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--full-results] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --view tool-errors     one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars\n       --view files           workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)\n       --view usage           per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       --full-results     capture the FULL input + result of every (incl. successful) tool call — resultTextFull/detailFull, capped at 4KB — so an external grader can ground a self-critique finding against the call it cites (default view keeps its 100/120-char slices)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -776,6 +776,7 @@ interface CommonFlags {
   ablateSkill?: boolean; // --ablate-skill: run the same prompt with the skill(s)-under-test removed (negative control)
   deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
   deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
+  label?: string; // --label: generation tag for the iterate-across-fixes loop (surfaced in RunResult/index/inspect)
 }
 /** Validate `--output-format` is text|json for the ad-hoc commands (trace/decide/gates) the way the
  *  common parser already does for run/skill — an invalid value is a usage error, not a silent text degrade. */
@@ -928,6 +929,14 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
       if (eqVal === undefined && v.startsWith("-"))
         fail(commandName, "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
       flags.deciderDir = v;
+    } else if (name === "--label") {
+      const v = readVal();
+      // A generation tag, not free text: reject newlines and cap length so it stays a clean, index-scannable key.
+      if (v.includes("\n") || v.includes("\r"))
+        fail(commandName, "usage", "--label must be a single line (no newlines)", undefined, flags.output === "json");
+      if (v.length > 200)
+        fail(commandName, "usage", `--label is too long (${v.length} chars; max 200)`, undefined, flags.output === "json");
+      flags.label = v;
     } else rest.push(a);
   }
   return { rest, flags };
@@ -1117,6 +1126,7 @@ async function runOneScenario(p: {
       hooks: renderer ? [renderer] : [],
       compact: !!(flags.compact || flags.demo), // --demo implies --compact
       ablateSkill: flags.ablateSkill,
+      runLabel: flags.label, // --label generation tag (iterate-across-fixes loop)
       translateRef,
     });
   } catch (e) {
@@ -3716,34 +3726,34 @@ async function cmdVerifyRun(args: string[]) {
   // run fired? This is invisible to the assert-only path, so a fragile answer (label/question drift) only
   // surfaced on a paid record. PRECONDITION: gated on `scenario.answers.length` — an answer-less scenario
   // behaves EXACTLY as before (assert-only; events.jsonl irrelevant; no refusal), preserving existing runs.
+  // CURRENCY: has the skill changed since this run was kept? Computed for BOTH lanes so the answer-less
+  // iterate/harvest loop isn't left blind. `recFp.baseline` (a STRING) is what's in scope — the trailing
+  // buildFingerprint arg is omitted (never re-resolved by appVersion); this compares skillHash only.
+  const recFp = result.fingerprint;
+  const skillDrift =
+    recFp !== undefined && recFp.skillHash !== undefined
+      ? fingerprintSkillDrift(recFp, buildFingerprint(scenario.session, recFp.baseline, undefined, scenario.skills))
+      : null;
+
   let answerCoverage: { matched: number; total: number } | undefined;
   if (scenario.answers.length > 0) {
-    // CURRENCY: answer-coverage validates against the kept run's gate SNAPSHOT (its events.jsonl). If the skill
-    // changed since the run was kept, those gates are stale and a green here is false confidence — the real
-    // gates moved. Refuse rather than vouch (can't verify ⇒ not green). Every run as of this version persists a
-    // fingerprint; an older run without one → warn (can't check). A run with no skill dirs → nothing to drift.
-    const recFp = result.fingerprint;
+    // Answer-coverage validates against the kept run's gate SNAPSHOT (its events.jsonl). If the skill changed,
+    // those gates are stale and a green here is false confidence — refuse rather than vouch (can't verify ⇒ not
+    // green). An older run without a fingerprint → warn (can't check answer-coverage currency).
     if (recFp === undefined) {
       log(
         `verify-run: ::warning:: this kept run carries no skill fingerprint (recorded by an older harness) — ` +
           `cannot confirm it is current vs the skill; re-keep a fresh run to be sure answer-coverage is against live gates.`,
       );
-    } else if (recFp.skillHash !== undefined) {
-      // Only `recFp.baseline` (a STRING) is in scope here, not a resolved baseline object — the trailing
-      // `buildFingerprint` arg is omitted (never re-resolved by appVersion; see hashBaselinePromptAssets).
-      // This compares skillHash only (fingerprintSkillDrift), so the missing promptAssetsHash is moot.
-      const liveFp = buildFingerprint(scenario.session, recFp.baseline, undefined, scenario.skills);
-      const drift = fingerprintSkillDrift(recFp, liveFp);
-      if (drift) {
-        return fail(
-          "verify-run",
-          "runtime",
-          `verify-run: the kept run predates the current skill — ${drift}. Its gate snapshot is stale, so ` +
-            `answer-coverage can't be trusted; re-keep a fresh run (or re-record). (can't verify ⇒ not green)`,
-          undefined,
-          isJsonOutput(args),
-        );
-      }
+    } else if (skillDrift) {
+      return fail(
+        "verify-run",
+        "runtime",
+        `verify-run: the kept run predates the current skill — ${skillDrift}. Its gate snapshot is stale, so ` +
+          `answer-coverage can't be trusted; re-keep a fresh run (or re-record). (can't verify ⇒ not green)`,
+        undefined,
+        isJsonOutput(args),
+      );
     }
     const parsed = parseGatesFromEvents(join(runDir, "events.jsonl"));
     if (parsed === null) {
@@ -3815,6 +3825,14 @@ async function cmdVerifyRun(args: string[]) {
       }
     }
     answerCoverage = { matched, total: gates.length };
+  } else if (skillDrift) {
+    // Answer-less lane: re-asserting a NEW assert: block against a FROZEN run dir is legitimate — drift
+    // doesn't invalidate that computation, so this is a WARN, not a hard fail. It matters for the
+    // iterate/harvest loop: any findings harvested from this run describe an OLDER skill version.
+    log(
+      `verify-run: ::warning:: the kept run predates the current skill — ${skillDrift}. Findings harvested ` +
+        `from it describe an older skill version; re-run against the current skill before trusting them.`,
+    );
   }
 
   // Verdict via the SAME path as a live record (the run dir is a live run, so the "live" lane honors the
@@ -3885,7 +3903,6 @@ function cmdTrace(args: string[]) {
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
-    return;
   }
 
   const view = viewArg as View | undefined;
@@ -3894,12 +3911,16 @@ function cmdTrace(args: string[]) {
   // `--output-format json` stays the raw machine record (see cli.ts's gating below and
   // vm-path-ctx-file.ts's module header for the full rationale).
   const translatePaths = args.includes("--translate-paths");
+  // --full-results: capture the FULL input + result of every (incl. successful) tool call, so an external
+  // grader grounding a self-critique finding can see the content of the call it cites (default view keeps
+  // its 100/120-char slices). Affects the default/tools JSON rows only.
+  const fullResults = args.includes("--full-results");
 
   // reject unknown flags (typos like --ouput-format silently fell through before).
   rejectUnknownFlags(
     "trace",
     args,
-    ["--view", "--output-format", "--output-format=json", "--output-format=text", "--translate-paths"],
+    ["--view", "--output-format", "--output-format=json", "--output-format=text", "--translate-paths", "--full-results"],
     json,
   );
 
@@ -3919,7 +3940,7 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--output-format json]",
+      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--full-results] [--output-format json]",
       undefined,
       json,
     );
@@ -3982,7 +4003,7 @@ function cmdTrace(args: string[]) {
       translate = makeDisplayTranslator({ ctx: loaded.ctx, effectiveFidelity: loaded.effectiveFidelity, shareable: false });
     }
   }
-  const rows = buildTrace(file, { tools: view === "tools", translate });
+  const rows = buildTrace(file, { tools: view === "tools", translate, fullResults });
   if (json) out(jsonPayloadEnvelope("trace", true, { file, rows }));
   else {
     // cache-read-ratio footer: best-effort read of the sibling result.json, same

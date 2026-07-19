@@ -153,6 +153,8 @@ const full: RunResult = {
   permissiveAutoAllow: ["Bash"],
   scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
   effectiveFidelity: "container",
+  runLabel: "gen-3",
+  skillCommit: "0123456789abcdef0123456789abcdef01234567",
   fidelityWarnings: ["referenced asset not found"],
   l0PluginDivergence: false,
   missingCapabilityUse: ["office_convert"],

@@ -20,6 +20,11 @@ interface InspectDigest {
   scenario: string;
   fidelity: string;
   result: string;
+  // Run-identity for the iterate-across-fixes loop, surfaced at the harvest moment: the human --label tag,
+  // and a short prefix of the AUTHORITATIVE content-exact version key (fingerprint.skillHash) — a critique
+  // is only valid against a run whose skillHash matches the skill it critiqued.
+  runLabel?: string;
+  skillHash?: string;
   partial?: boolean;
   unansweredGate?: { message: string; hint?: string };
   durationMs?: number;
@@ -73,6 +78,8 @@ function digestFor(runDir: string): InspectDigest {
     scenario: result.scenario,
     fidelity: result.fidelity,
     result: result.result,
+    ...(result.runLabel ? { runLabel: result.runLabel } : {}),
+    ...(result.fingerprint?.skillHash ? { skillHash: result.fingerprint.skillHash.slice(0, 12) } : {}),
     ...(result.partial ? { partial: true } : {}),
     ...(result.unansweredGate ? { unansweredGate: result.unansweredGate } : {}),
     durationMs: result.durationMs,
@@ -92,6 +99,12 @@ export function buildInspectView(runDir: string, opts: { json?: boolean } = {}):
 
   const lines: string[] = [];
   lines.push(`run: ${d.scenario}  (${d.fidelity})  result: ${d.result}  ${humanMs(d.durationMs)}`);
+  if (d.runLabel || d.skillHash) {
+    const parts: string[] = [];
+    if (d.runLabel) parts.push(`label: ${d.runLabel}`);
+    if (d.skillHash) parts.push(`skillHash: ${d.skillHash}`);
+    lines.push(`  ${parts.join("  ")}   (pair a critique only against a matching skillHash)`);
+  }
   if (d.partial) {
     lines.push(`⚠ PARTIAL — this run did NOT complete (exited on an unanswered gate); artifacts below are pre-failure.`);
     if (d.unansweredGate) lines.push(`  gate: ${d.unansweredGate.message.split("\n")[0]}`);

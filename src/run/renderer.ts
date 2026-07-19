@@ -270,6 +270,17 @@ export function renderFooter(
   // an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
   const nd = r.nonDeterministic ? " " + red(plan, "⚠ non-deterministic (LLM-decided)") : "";
   const meta = `[${r.fidelity}] · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}`;
+  // Iterate-across-fixes discoverability hook: fires on exploratory (skill-lane, `scaffoldTip`) runs that
+  // are non-deterministic — the exact signature of a `--decider-llm --intent` loop run — in BOTH the pass
+  // AND fail branches (a failing/partial run is arguably the more useful moment to harvest). Points at the
+  // grounding + pairing primitives so a user reaches the loop without having to already know it exists.
+  const iterateTip = (): void => {
+    if (opts.scaffoldTip && r.nonDeterministic && opts.lane !== "replay" && r.outDir) {
+      write(
+        `   ${dim(plan, "Tip: iterating across fixes? Ground findings in this run's own evidence (trace/inspect " + tildeify(r.outDir) + "), pair critiques by fingerprint.skillHash — see docs/debugging.md")}\n`,
+      );
+    }
+  };
   if (passed) {
     write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + tildeify(r.outDir) : ""}\n`);
     if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + tildeify(r.outputsDir))}\n`);
@@ -282,6 +293,7 @@ export function renderFooter(
     if (opts.scaffoldTip && opts.lane !== "replay" && r.outDir) {
       write(`   ${dim(plan, "Tip: scaffold " + tildeify(r.outDir) + " → turn this run into a starter scenario YAML")}\n`);
     }
+    iterateTip();
     return;
   }
   // a tail-end transport drop renders distinctly from a generic error/FAIL, so a flaky-connection
@@ -323,6 +335,7 @@ export function renderFooter(
     if (r.outputsDir) write(`   ${dim(plan, "→ outputs:  " + tildeify(r.outputsDir))}\n`);
   }
   if (opts.lane !== "replay" && r.outDir) write(`   ${dim(plan, "→ result: " + tildeify(r.outDir) + "/result.json")}\n`);
+  iterateTip();
 }
 
 /**

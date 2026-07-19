@@ -838,6 +838,7 @@ export interface RunStatus {
   scenario: string;
   fidelity: string;
   sessionId: string;
+  runLabel?: string; // --label generation tag (iterate-across-fixes loop); absent when not passed
   startedAt: string; // ISO-8601
   updatedAt: string; // ISO-8601 — bumped on every write, incl. terminal
   elapsedMs: number;
@@ -1278,6 +1279,14 @@ export interface RunResult {
   scan?: { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean };
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;
+  /** Run-identity metadata for the iterate-across-fixes loop. `runLabel`: the user's `--label` generation
+   *  tag (human-readable, orderable — surfaced in the run-index row + `inspect`; absent if not passed).
+   *  Ergonomics only; the AUTHORITATIVE skill-version key is `fingerprint.skillHash` (content-exact).
+   *  `skillCommit`: best-effort git HEAD shared by the session's skill source dirs — human/commit
+   *  provenance ("which commit"), NOT a grouping key; `null` when the dirs span >1 repo, any is non-git,
+   *  or none resolve. Both are properties of a LIVE run; a replay carries `undefined`. */
+  runLabel?: string;
+  skillCommit?: string | null;
   /** structured fidelity warnings (prompt asset gaps, version mismatches) — visible to JSON callers,
    *  not just stderr. Populated when a non-fatal prompt warning is emitted during a run. */
   fidelityWarnings?: string[];

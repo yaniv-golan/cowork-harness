@@ -14,6 +14,7 @@ export interface RunStatusMeta {
   fidelity: string;
   sessionId: string;
   startedAt: number; // epoch ms
+  runLabel?: string; // --label generation tag — lets `status` show which iterate-loop generation is running
 }
 
 // NOTE: `elapsedMs` is always derived from THIS module's own `meta.startedAt` (set at outDir creation,
@@ -45,6 +46,7 @@ function buildStatus(
     scenario: meta.scenario,
     fidelity: meta.fidelity,
     sessionId: meta.sessionId,
+    ...(meta.runLabel ? { runLabel: meta.runLabel } : {}), // dropped from JSON when unset
     startedAt: new Date(meta.startedAt).toISOString(),
     updatedAt: new Date(now).toISOString(),
     elapsedMs: now - meta.startedAt,

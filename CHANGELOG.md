@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Run-identity metadata for the iterate-across-fixes loop.** `skill`/`run` accept `--label <tag>`, a
+  human-readable generation tag surfaced in `result.json` (`runLabel`), the run-index row, `inspect`, and
+  `status.json`. Each live run also records `skillCommit` — best-effort git `HEAD` of the session's skill
+  source dirs (commit provenance; `null` when the dirs span >1 repo or aren't a git work tree). These are
+  ergonomics on top of the **authoritative** content-exact version key `fingerprint.skillHash` (already
+  recorded on every run): a harvest step should group/pair a critique against a matching `skillHash`.
+  `inspect` and the run-index row now surface a short `skillHash` prefix so a pairing check needs no
+  `result.json` open. (Chat runs carry no `skillHash` and take no `--label`.)
+- **`trace --full-results`** captures the FULL input + result of every tool call — successful ones too,
+  not just errors (`resultTextFull`/`detailFull`, 4 KB cap) — so an external grader can ground a
+  self-critique finding against the call it cites. The default view keeps its 100/120-char slices, so
+  existing JSON consumers are unaffected.
+- **`verify-run` now warns on skill drift for answer-less scenarios.** Previously the skillHash-drift
+  check ran only when a scenario declared scripted `answers` (a hard fail). An answer-less `verify-run`
+  now emits a `::warning::` ("the kept run predates the current skill … findings describe an older skill
+  version") instead of staying silent — a WARN, not a fail, since re-asserting a new `assert:` block
+  against a frozen run dir is legitimate.
+
 ### Fixed
 
 - **Filesystem-evidence assertions no longer pass on incomplete evidence.** `input_unmodified` now fails

@@ -1,6 +1,6 @@
 ---
 name: cowork-harness
-description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
+description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
   version: 1.2.0
@@ -356,6 +356,15 @@ cassette — has its own recipe:
    unless the scenario asserts `allow_missing_capability: true`, which downgrades it to a notice and
    proceeds. Rebuild with `--build-arg COWORK_FULL_PARITY=1` and point `COWORK_AGENT_IMAGE` at it for those
    skills.
+6. **Iterate across fixes — verify before you trust, and don't cross-pair generations.** A green run is
+   not a correct run, and a skill's self-reported finding is not real until its cited evidence is found in
+   the run's own output. Ground each finding against `result.json` (`finalMessage` = the skill's own
+   answer/critique; `toolResults` = tool outputs) and the tool-call stream via
+   `cowork-harness trace <run-dir> --output-format json` — add `--full-results` so a successful call's full
+   input + result are captured, not just errored ones. When iterating, tag generations with `--label` and
+   pair a critique only with a `result.json` whose `fingerprint.skillHash` **matches** the skill that
+   produced it (`inspect`/the run-index row surface a short `skillHash` prefix; `verify-run` warns when a
+   kept run predates the current skill). See `docs/debugging.md` (repo-only) for the full loop.
 
 #### Interpreting verdict signals
 
@@ -365,6 +374,33 @@ The run verdict may include `WARN`-severity signals in addition to pass/fail. On
   not found. The model ran against an incomplete prompt. This is a `WARN`, not a hard failure, so
   the run can still green. If you see it, fix the asset path — a green with a missing asset is
   not a valid pass.
+
+**False negatives — signals that are tier/image artifacts, not skill defects.** Some fail-severity
+signals read like a skill gap but are really a property of the reduced test image or the fidelity tier.
+Recognize these before "fixing" a non-bug:
+
+- **`missing_capability`** — the lean `core` agent image is a deliberate partial mirror of real Cowork's
+  rootfs, so a skill that used `soffice`/LibreOffice (`office_convert`), `tesseract` (`ocr`),
+  `markitdown`/`magika` (`ml_extract`), `cv2` (`cv`), `camelot`/`tabula` (`pdf_tables`), or `wand`
+  (`magick`) can trip this even though real Cowork **ships** those. The message says so ("likely a FALSE
+  NEGATIVE (real Cowork ships them)"). Fix: rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`, point
+  `COWORK_AGENT_IMAGE` at it), or — if the skill's fallback is genuinely equivalent — assert
+  `allow_missing_capability: true`. (Two sources: a skill *observed using* an omitted family, live lane;
+  or a declared `requires_capabilities` the tier can't provide, both lanes — an unknown family name
+  hard-fails rather than silently passing.)
+- **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
+  paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
+  `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
+  `transcript_no_host_path`. At `fidelity: cowork` the skip follows the **resolved** tier, so a `cowork`
+  run that lands on `container` is armed. Author `transcript_no_host_path` to enforce cleanliness where
+  it's valid.
+- **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so
+  `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
+  pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
+
+The full 14-code signal table (severity + per-signal opt-out) is in
+[`references/scenario-schema.md`](./references/scenario-schema.md); `docs/scenario.md` (repo-only) carries
+the fuller narrative.
 
 ### Checking whether a background run is alive
 
