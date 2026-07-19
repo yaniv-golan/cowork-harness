@@ -6,6 +6,8 @@ import http from "node:http";
 import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { compile } from "../egress/proxy.js";
+import { normalizeUrl } from "./provenance.js";
+import type { WebFetchDedupCache } from "./webfetch-dedup.js";
 
 const pexec = promisify(execFile);
 const MAX_REDIRECTS = 5; // Cowork's RZe redirect cap (Path B re-checks U1t per hop)
@@ -282,6 +284,9 @@ export interface WorkspaceHandlerOptions {
   onInfraError?: (message: string) => void;
   /** Run fills this before the stream starts. */
   provenanceRef?: { current?: WebFetchProvenance };
+  /** `coworkWebFetchDedup` per-session cache (host-API path only). Present ⇒ dedup is enacted; absent ⇒
+   *  the gate is off (older baseline / non-viaApi) and every repeat fetch hits the network as before. */
+  dedup?: WebFetchDedupCache;
   /** Per-hop fetch (redirect:manual) for BOTH web_fetch paths; injectable for tests. */
   rawFetch?: RawFetch;
   /** Per-hop DNS resolution for the SSRF backstop; injectable for tests. */
@@ -301,6 +306,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
     onEgress,
     onInfraError,
     provenanceRef,
+    dedup,
     rawFetch = defaultRawFetch,
     resolve = defaultResolver,
     execCwd = vmMnt,
@@ -340,7 +346,16 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
         };
       if (name === "web_fetch")
         return {
-          result: await fetchViaHost(String(a.url ?? ""), webFetchAllow, onEgress, provenanceRef?.current, provWarned, rawFetch, resolve),
+          result: await fetchViaHost(
+            String(a.url ?? ""),
+            webFetchAllow,
+            onEgress,
+            provenanceRef?.current,
+            provWarned,
+            rawFetch,
+            resolve,
+            dedup,
+          ),
         };
       return { error: { code: -32602, message: `unknown tool: ${name}` } };
     }
@@ -352,6 +367,16 @@ function textResult(text: string, isError = false) {
   const r: { content: { type: string; text: string }[]; isError?: boolean } = { content: [{ type: "text", text }] };
   if (isError) r.isError = true;
   return r;
+}
+
+/** The `coworkWebFetchDedup` HIT marker — verbatim port of Claude Desktop 1.22209.3 (asar chunk
+ *  `index.chunk-CYQPQGee.js`). `url` is the raw model-sent argument; `ageS`/`ttlS` are already Math.round-ed. */
+function dedupMarker(url: string, ageS: number, ttlS: number): string {
+  return (
+    `Already fetched ${url} ${ageS}s ago in this session. Re-use the content from that earlier web_fetch ` +
+    `result instead of re-reading it. Fetch again only if the page is likely to have changed ` +
+    `(deduplicated for up to ${ttlS}s).`
+  );
 }
 
 // Clamp a model-requested bash timeout into a sane range. Guards NaN/negative/missing → the
@@ -453,6 +478,10 @@ async function followWithRedirects(
   gate: (u: URL) => string | null,
   resolve: Resolver,
   onEgress?: (entry: EgressEntry) => void,
+  // coworkWebFetchDedup record hook — called ONLY on a terminal HTTP-2xx, trimmed-nonempty response, with
+  // the post-redirect terminal URL (`cur.href` = destination_url) + the untrimmed emitted-text length. Not
+  // called on errors, non-2xx bodies, empty/whitespace bodies, or redirect hops (so those are never cached).
+  onSuccess?: (terminalUrl: string, size: number) => void,
 ): Promise<ReturnType<typeof textResult>> {
   let cur: URL;
   try {
@@ -522,11 +551,14 @@ async function followWithRedirects(
       }
       const decoder = new TextDecoder();
       const text = chunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
+      // dedup record: 2xx + trimmed-nonempty only; untrimmed emitted length (pre-`[truncated]` suffix).
+      if (resp.status >= 200 && resp.status < 300 && text.trim().length > 0) onSuccess?.(cur.href, text.length);
       return textResult(truncated ? text + "\n[truncated]" : text);
     }
     const raw = await resp.text();
     const sliced = raw.slice(0, LIMIT);
     const wasTruncated = resp.truncated || sliced.length < raw.length;
+    if (resp.status >= 200 && resp.status < 300 && sliced.trim().length > 0) onSuccess?.(cur.href, sliced.length);
     return textResult(wasTruncated ? sliced + "\n[truncated]" : sliced);
   }
   return textResult(`web_fetch failed: too many redirects (> ${MAX_REDIRECTS}).`, true);
@@ -540,6 +572,7 @@ async function fetchViaHost(
   warned?: { value: boolean },
   rawFetch: RawFetch = defaultRawFetch,
   resolve: Resolver = defaultResolver,
+  dedup?: WebFetchDedupCache,
 ) {
   if (!url) return textResult("error: missing 'url'", true);
   let host: string;
@@ -575,6 +608,25 @@ async function fetchViaHost(
     // Provenance satisfied. Cowork fetches server-side (host API); the hostname allowlist does NOT apply
     // here (decoupled from egress). But scheme + private-address ARE enforced per
     // hop: follow redirects manually instead of `curl -L`, blocking file:// / SSRF targets.
+    //
+    // coworkWebFetchDedup (host-API path only): AFTER the provenance gate, a repeat of the same normalized
+    // URL within the TTL returns a marker with NO network request and NO egress event — matching
+    // production's zero-network dedup. On a miss, record the request key + the terminal destination_url on
+    // a 2xx, non-empty success (the guards live in followWithRedirects's onSuccess call).
+    if (dedup) {
+      const key = normalizeUrl(url);
+      if (key) {
+        const cache = dedup;
+        const hit = cache.lookup(key, Date.now());
+        if (hit) return textResult(dedupMarker(url, hit.ageS, cache.ttlSeconds()), false);
+        const onSuccess = (terminalUrl: string, size: number): void => {
+          cache.record(key, size, Date.now());
+          const dk = normalizeUrl(terminalUrl); // terminal destination_url key
+          if (dk && dk !== key) cache.record(dk, size, Date.now());
+        };
+        return followWithRedirects(url, rawFetch, schemePrivateGate, resolve, onEgress, onSuccess);
+      }
+    }
     return followWithRedirects(url, rawFetch, schemePrivateGate, resolve, onEgress);
   }
   // PATH B (provenance not enforced — coworkWebFetchViaApi off). Faithful port of U1t re-checked on EVERY

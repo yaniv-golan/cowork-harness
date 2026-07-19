@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-07-19
+
+### Added
+
+- **`coworkWebFetchDedup` enacted (hostloop `web_fetch`).** Real Cowork keeps a per-session negative-work
+  cache: a repeat `web_fetch` of the same normalized URL within a TTL (default 15 min; cap 100; FIFO
+  eviction; a hit does not refresh recency) makes **no network request** and returns a marker telling the
+  model to re-use the earlier result. The harness now reproduces this on the host-API (`coworkWebFetchViaApi`)
+  path — **baseline-gated** (only when the resolved baseline's `coworkWebFetchDedup` gate is on, i.e. Desktop
+  ≥ 1.22209.3), keyed under both the request URL and the terminal `destination_url`, never caching errors /
+  empty / non-2xx responses, and emitting **no egress event** on a hit (matching production's zero-network
+  dedup). A hit is observable via the marker text (`tool_result_contains: "Already fetched"`).
+
+### Changed
+
+- **Platform baseline synced to Desktop 1.22209.3** (agent `2.1.215`). No prompt / spawn-env / egress-allowlist
+  drift vs 1.21459.0; the sync captured the new `coworkWebFetchDedup` runtime config (enacted above) plus a
+  few new (off) GrowthBook gates. The skill/README/reference version floors and agent-binary pins track the
+  new baseline.
+
 ## [1.3.0] — 2026-07-19
 
 ### Added

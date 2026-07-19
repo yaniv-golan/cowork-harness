@@ -50,6 +50,36 @@ export function readGateFlag(baseline: PlatformBaseline, id: string, flag: strin
   return false;
 }
 
+/**
+ * Numeric sibling of `readGateFlag` (e.g. `coworkWebFetchDedupTtlMs`). Same prefixed-then-bare key lookup;
+ * reads the number from the structured `value[flag]` (or the bare-entry `[flag]`), else parses `flag=<n>`
+ * from the committed prose-string shape. Returns `undefined` when absent — the caller supplies the default
+ * (so an older baseline that carries the flag without the numbers still gets the binary default).
+ */
+export function readGateNumber(baseline: PlatformBaseline, id: string, flag: string): number | undefined {
+  const gates = (baseline as unknown as { provenance?: { gates?: Record<string, unknown> } }).provenance?.gates ?? {};
+  let entry: unknown = gates[id];
+  if (entry === undefined) {
+    for (const k of Object.keys(gates)) {
+      if (k.endsWith(":" + id)) {
+        entry = gates[k];
+        break;
+      }
+    }
+  }
+  if (entry == null) return undefined;
+  if (typeof entry === "string") {
+    const m = new RegExp(`\\b${flag}=(\\d+)\\b`).exec(entry);
+    return m ? Number(m[1]) : undefined;
+  }
+  if (typeof entry === "object") {
+    const v = (entry as { value?: unknown }).value;
+    const raw = v && typeof v === "object" ? (v as Record<string, unknown>)[flag] : (entry as Record<string, unknown>)[flag];
+    return typeof raw === "number" ? raw : undefined;
+  }
+  return undefined;
+}
+
 export function decideLoop(inputs: LoopInputs): Loop {
   if (inputs.requireFullVmSandbox === true) return "vm"; // HeA()
   if (inputs.devForceHostLoop === true) return "host"; // dev override

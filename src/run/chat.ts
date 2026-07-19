@@ -23,7 +23,8 @@ import { writeTrace, scrubRawRunLogs } from "./execute.js";
 import { appendIndexRow, indexRowFromResult } from "./run-index.js";
 import { scrub, collectSecrets } from "../secrets.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
-import { readGateFlag } from "../loop-decision.js";
+import { readGateFlag, readGateNumber } from "../loop-decision.js";
+import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
@@ -288,6 +289,14 @@ export async function cmdChat(args: string[]) {
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
   const provenanceRef: { current?: WebFetchProvenance } = {};
+  // coworkWebFetchDedup — per-session cache; kept for the chat REPL's lifetime (= one Cowork session).
+  const dedup =
+    viaApiOn && readGateFlag(baseline, "1978029737", "coworkWebFetchDedup")
+      ? makeWebFetchDedupCache({
+          ttlMs: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupTtlMs") ?? 900000,
+          maxEntries: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupMaxEntries") ?? 100,
+        })
+      : undefined;
   // ONE readline interface on process.stdin, shared by the turn reader (ttyTurns) and the gate
   // prompter (PromptDecider). Two interfaces would race for the same stdin → undefined input routing.
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
@@ -333,6 +342,7 @@ export async function cmdChat(args: string[]) {
         dockerNetwork: sidecar!.network,
         provenanceRef,
         webFetchViaApi: viaApiOn,
+        dedup,
       });
       child = hl.child;
       containerName = hl.containerName;
