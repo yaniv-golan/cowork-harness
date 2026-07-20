@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fingerprint.skillHash` and `skillCommit` are now recorded on the `skill` and `probe-dispatch` lanes.**
+  Both resolved their skill dirs by re-reading the session *file*, so the lanes that mount via an in-memory
+  session — and pass the `"(inline)"` sentinel as the session path — emitted no `skillHash` and a null
+  `skillCommit`, even though the mounts were already in scope at the call site. The resolved session object
+  is now threaded through instead. Consequences, all previously broken on those lanes: `result.json` carries
+  the content-exact generation key, the run-index `skillHash` column populates (so a harvest step can group
+  runs by generation), and the run's own "pair critiques by `fingerprint.skillHash`" tip — which is printed
+  *only* on the `skill` lane — is no longer advertising a field that lane could not emit. Scoped to the
+  sentinel branch: the file-based path is untouched, so recorded cassettes and the
+  staleness / `verify-run` recomputes are unaffected. A session that mounts nothing still yields no hash —
+  there is nothing to hash.
+
+### Changed
+
+- **Reflective skill-critique prompt v2** (`REFLECTION_PROMPT_VERSION` 1 → 2; maintainer instrument, not a
+  shipped surface). Adds a sub-agent question (were any dispatched, and was the skill clear about when to
+  dispatch, what context to hand them, and what to expect back); replaces the "change ONE thing" cap with
+  exhaustive solicitation, since a separate evaluator already triages and drops ungrounded findings, so
+  capping at the source loses signal for no quality gain; drops a "fidelity tier" example that is
+  cowork-harness vocabulary a third-party skill's agent never encountered; and bounds the pass-2 self-report
+  now that the prompt invites longer replies.
+
 ## [1.4.0] — 2026-07-19
 
 ### Added
