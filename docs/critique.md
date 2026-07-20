@@ -22,6 +22,41 @@ Three mechanisms, all code rather than prompt instructions:
 3. **Mechanical citation checking.** Every claim must quote the evidence verbatim. Anything that does not
    resolve is dropped into a clearly-labelled section rather than reported as a finding.
 
+## If you came from "loop engineering"
+
+This command is the **Evaluator-Optimizer** pattern (Data Science Dojo's catalog) / the **verification
+loop** (LangChain's stacked-loop framing) — with two things those descriptions do not specify: the grader
+is *structurally blind* to what it is grading, and every claim is mechanically checked against evidence.
+
+It is also the mechanized form of the problem Osmani names and leaves to human diligence:
+
+> "'done' is a claim and not a proof" · "the model that wrote the code is way too nice grading its own homework"
+
+Where your vocabulary lands here:
+
+| Loop-engineering term | Here |
+|---|---|
+| Agent loop (ReAct) | The skill's own run — `critique` grades it, it does not replace it |
+| Verification loop / grader / rubric | `critique`, plus `verdict` + assertions for the deterministic half |
+| **Evaluator-Optimizer** | `critique` — blinded evaluator, citation-checked |
+| **Reflection loop** | The second turn. But note: reflection alone is what this tool exists to *distrust* |
+| Maker/checker split | Enforced by construction — pass 1 never receives the self-report |
+| Ralph loop (run until an external validator passes) | `run`/`skill` are that validator; `verdict.pass`/exit code is the signal. **Not `critique`** — findings never gate |
+| Stopping condition | Exit codes ([SPEC.md](../SPEC.md)); `verdict.pass` |
+| Bounded execution | `--timeout` (both lanes); `--max-budget-usd` on `run`/`skill --repeat` |
+| Circuit breaker / stagnation detection | Consumer-side. We supply the per-iteration signals — `verdict.signals`, `fingerprint.skillHash`, the run index (see [stats.md](./stats.md)'s generation-pairing recipes) |
+| Trace | `trace`, `trace --full-results` |
+| **Hill-climbing loop** | **Deliberately not provided.** See below |
+
+**What we do not do, stated plainly.** There is no convergence orchestrator: nothing here re-runs a skill,
+scores it, and re-runs until it "improves". `critique` never edits a skill and never gates. That is a
+design boundary, not a gap — a tool that closes its own loop starts optimizing for its own metric, which
+manufactures exactly the false-greens this project exists to prevent. You own the loop; we make the
+evidence going into it trustworthy.
+
+**One naming collision to know about:** `hostloop` in this repo is a **fidelity tier** — where the agent
+process runs. It has nothing to do with loop engineering's "loops".
+
 ## Cost and prerequisites
 
 - **Four model workloads per critique**: two container runs (task + reflection) and two evaluator passes.

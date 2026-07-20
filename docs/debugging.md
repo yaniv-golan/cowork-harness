@@ -124,7 +124,9 @@ A green run is not automatically a correct run.
 
 Hardening a skill is a loop: run it, read what it did, fix, run again. Two disciplines keep the loop
 honest — **verify before you trust**, and **don't cross-pair generations**. This is a Reflexion-style
-verification loop stacked on the agent loop; the harness gives you the substrate, you own the grader.
+verification loop stacked on the agent loop; the harness gives you the substrate, and now ships a grader too
+(`critique` — see [critique.md](./critique.md), which maps loop-engineering vocabulary onto this repo's terms
+and states plainly which loops we deliberately do not provide).
 
 **Verify — ground a finding before trusting it.** A green run is not a correct run, and a skill's
 self-reported finding (a self-critique appendix, "I extracted X") is not real until its cited evidence is
