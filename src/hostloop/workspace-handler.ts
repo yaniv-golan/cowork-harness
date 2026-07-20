@@ -387,6 +387,23 @@ export function clampTimeout(ms: unknown): number {
   return Math.min(Math.max(Number(ms) || 120000, 1000), 600000);
 }
 
+/** A model-requested `timeout_ms` expiry, as Node's `execFile` reports it: `killed` with a NULL `code`.
+ *  Every other kill carries a string code (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`, `ENOENT`, …), so this
+ *  discriminates the deliberate budget expiry from a genuine infrastructure kill. */
+function isExecTimeout(e: { code?: unknown; killed?: boolean }): boolean {
+  return e.killed === true && e.code == null;
+}
+
+/** Duration rendering ported from the agent binary's own formatter, so the timeout text the model sees
+ *  matches production: under a minute is whole seconds (`120s`), at or above a minute is a composite
+ *  `<m>m <s>s` (seconds omitted when zero). */
+export function formatExecDuration(ms: number): string {
+  if (ms < 60000) return `${Math.floor(ms / 1000)}s`;
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.round((ms % 60000) / 1000);
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
 /**
  * Tell a `docker exec` INFRASTRUCTURE failure apart from an ordinary bash non-zero exit.
  *
@@ -402,7 +419,13 @@ export function clampTimeout(ms: unknown): number {
  */
 export function isExecInfraError(e: { code?: unknown; killed?: boolean; stdout?: string; stderr?: string }): boolean {
   if (typeof e.code === "string") return true; // spawn failure — e.g. ENOENT, EACCES (also covers ETIMEDOUT)
-  if (e.code === "ETIMEDOUT" || e.killed) return true; // timeout / SIGKILL
+  // A model-requested timeout_ms expiry is the COMMAND's outcome, not the container's failure: the agent
+  // asked for a budget and the budget ran out, so it must reach the model as a tool result it can react to
+  // (binary-verified: real Cowork resolves the command's own result and merges "Command timed out after X"
+  // into stderr — it does not abort the turn). Node signals exactly this case as killed + a NULL code;
+  // every other kill (maxBuffer, spawn failure) carries a STRING code and is caught by the check above.
+  if (isExecTimeout(e)) return false;
+  if (e.code === "ETIMEDOUT" || e.killed) return true; // unrequested kill / SIGKILL
   if (!e.code && !e.stdout && !e.stderr) return true; // spawn failure (no exec at all)
   const stderr = (e.stderr ?? "").toLowerCase();
   if (stderr.includes("error response from daemon")) return true; // daemon rejected the exec
@@ -439,6 +462,17 @@ async function execInContainer(
     // classifier missed. Infra detail is recorded for the run log and a GENERIC error is returned to the
     // model: leaking `[exit 125]\n<docker daemon text>` would both expose the harness and mislabel a
     // harness failure as the model's command exiting non-zero.
+    // The agent's own timeout_ms ran out. Production merges its notice into stderr AHEAD of whatever the
+    // command already wrote and returns the command's own output, so the model can react to a partial
+    // result rather than seeing an opaque harness error. Mirror that shape.
+    // Divergence worth knowing: Node's timeout kills the `docker exec` CLIENT — the command itself keeps
+    // running inside the container, whereas real Cowork kills the process in the guest.
+    if (isExecTimeout(e)) {
+      const notice = `Command timed out after ${formatExecDuration(timeoutMs)}`;
+      const priorStderr = (e.stderr ?? "").trim();
+      const merged = priorStderr ? `${notice} ${priorStderr}` : notice;
+      return textResult(`${e.stdout ?? ""}${merged}`, true);
+    }
     if (isExecInfraError(e)) {
       // Raw detail (incl. the docker stderr) goes to onInfraError → events.jsonl, NOT to the model.
       const detail = [e.message, (e.stderr ?? "").trim()].filter(Boolean).join(": ") || String(e);
