@@ -20,7 +20,7 @@ import { snapshotTurnBoundary } from "./lib/critique/evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./lib/critique/evaluator.js";
 import type { CritiqueItem } from "./lib/critique/evidence.js";
 
-const REFLECTION_PROMPT_VERSION = 1;
+const REFLECTION_PROMPT_VERSION = 2;
 
 /** The fixed, versioned reflection-turn prompt. Asks for the agent's SUBJECTIVE experience (unreliable but
  *  valuable — the whole point of this loop) plus concrete improvement ideas, framed so it names specifics
@@ -34,12 +34,20 @@ you while you worked:
 
 1. Was anything in the skill's guidance UNCLEAR, MISSING, or MISLEADING? Be specific — name the file or
    section if you can, and describe exactly what confused you or what you looked for and could not find.
-2. Did you have to GUESS at anything (a fidelity tier, a file path, a format, an ordering) because the
+2. Did you have to GUESS at anything (a file path, a format, a parameter value, an ordering) because the
    guidance didn't say? What did you guess, and what would have told you the right answer instead?
 3. Did you read something (a reference, a script) and then find it didn't actually help, or find the
    guidance elsewhere contradicted it?
-4. If you could change ONE thing about this skill to make your job easier next time, what would it be, and
-   why?
+4. Did you dispatch any sub-agents during the task? If you did: was the skill's guidance clear about WHEN
+   to dispatch one, WHAT instructions and context to hand it, and what to expect back — or did you have to
+   improvise the dispatch prompt, or leave out context the sub-agent turned out to need? Name the specific
+   dispatch and exactly what was unclear or under-specified about it. If you dispatched none, say so, and
+   note whether the skill left you unsure about whether you should have.
+5. List EVERY change to this skill that would have made your job easier this time — do not stop at one.
+   Be exhaustive, but keep each entry concrete: name the file or section it belongs in, state the change in
+   a sentence or two, and point to the specific moment in THIS run where it would have helped. Order the
+   list most impactful first. Leave off anything you cannot tie to something that actually happened in
+   this run.
 
 Answer plainly, in prose. Do not restate the task's final answer.`;
 

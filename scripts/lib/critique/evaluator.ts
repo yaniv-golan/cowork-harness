@@ -202,8 +202,19 @@ const SELF_REPORT_FENCE = "⟦COWORK-HARNESS-SELF-REPORT-DATA-9f21⟧";
  *  even though such an occurrence would stay safely inside the JSON-quoted string (never actually closing
  *  the real fence), a reader skimming raw text for the marker rather than parsing JSON could be misled into
  *  treating it as a third boundary. */
+/** Upper bound on the self-report interpolated into pass 2. The reflection prompt (v2) solicits an
+ *  EXHAUSTIVE change list rather than a single item, so replies can be long; the evidence package is
+ *  already capped (MAX_PACKAGE_BYTES) and this is the matching bound on the other untrusted input.
+ *  Truncation is marked in-band so the evaluator can see the account was cut rather than silently
+ *  grading a partial one. */
+export const SELF_REPORT_MAX_CHARS = 24_000;
+
 function sanitizeSelfReportForPrompt(selfReport: string): string {
-  const withoutEmbeddedFence = selfReport.split(SELF_REPORT_FENCE).join("[fence-marker-redacted]");
+  const bounded =
+    selfReport.length > SELF_REPORT_MAX_CHARS
+      ? selfReport.slice(0, SELF_REPORT_MAX_CHARS) + "\n[self-report truncated \u2014 exceeded the pass-2 input bound]"
+      : selfReport;
+  const withoutEmbeddedFence = bounded.split(SELF_REPORT_FENCE).join("[fence-marker-redacted]");
   return JSON.stringify(withoutEmbeddedFence)
     .replace(/\u2028/g, "\\u2028")
     .replace(/\u2029/g, "\\u2029");
