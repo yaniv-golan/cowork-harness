@@ -1,7 +1,7 @@
 // The reflective skill-critique loop's command: task run -> resume for a self-report -> evaluate the
 // self-report against turn-1-only evidence -> print a triaged, human-adjudicated report.
 //
-//   tsx scripts/skill-critique.ts <skill-folder> --prompt "<probe>" [--dotenv <path>]
+//   cowork-harness critique <skill-folder> --prompt "<probe>" [--dotenv <path>]
 //                                 [--fidelity container] [--evaluator-model <id>] [--output-format json|text]
 //
 // This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. It always
@@ -12,6 +12,7 @@
 // so the tier is pinned rather than left to the caller.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename } from "node:path";
@@ -82,8 +83,10 @@ COST AND PREREQUISITES — read before running:
     that is not what you want.
   * Requires the container tier (Docker/Lima) and an authenticated \`claude\` CLI on PATH.
 
-EXIT CODES: findings NEVER gate — any classification exits 0. Usage errors and infra/protocol
-  failures exit non-zero, because a broken instrument is not a discovery outcome.
+EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself errored — that is a
+  finding about the skill, not a broken instrument). 2 = usage error, or an instrument failure (turn
+  killed, reflection protocol broke, evaluator never invoked) — no critique was produced. Findings
+  NEVER gate.
 
 KNOWN LIMITATIONS: container tier only; SKILL.md is capped at 16KB (a larger one degrades toward
   "not adjudicable"); prompts are English-only. On a third-party skill, note that fencing separates
@@ -252,8 +255,15 @@ function runSkillTurn(args: string[], timeoutMs = TURN_TIMEOUT_MS, maxBytes = TU
   // Self-spawn the INSTALLED cli next to this module rather than `npx tsx src/cli.ts` from cwd: the old
   // form only worked from a repo checkout (src/ is not published, and the path resolved against cwd), so
   // from an npm install the task turn failed while the always-exit-0 contract made it look like success.
-  const cli = fileURLToPath(new URL("./cli.js", import.meta.url).href.replace("/critique/cli.js", "/cli.js"));
-  return boundedSpawn(process.execPath, [cli, ...args], timeoutMs, maxBytes);
+  // Resolve the sibling CLI relative to THIS module — `../cli.js` from src/critique/ or dist/critique/.
+  // (A string .replace() on the href was fragile: first-occurrence, and it mangles any install path that
+  // happens to contain "/critique/cli.js".)
+  const self = fileURLToPath(new URL("../cli.js", import.meta.url));
+  // Under tsx, import.meta.url is the .ts SOURCE, so the sibling is src/cli.ts and no built cli.js exists
+  // — spawn the source through the same loader instead of a nonexistent .js.
+  return existsSync(self)
+    ? boundedSpawn(process.execPath, [self, ...args], timeoutMs, maxBytes)
+    : boundedSpawn("npx", ["tsx", fileURLToPath(new URL("../cli.ts", import.meta.url)), ...args], timeoutMs, maxBytes);
 }
 
 interface SkillEnvelope {
@@ -551,6 +561,11 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
   return { ...base, evaluatorModel, items };
 }
 
+/** Instrument failure: the critique could not be produced (turn killed, protocol break, evaluator never
+ *  invoked, unexpected throw). Distinct from FINDINGS, which never gate. Matches SPEC's exit 2
+ *  (usage/runtime) rather than inventing a new code. */
+const EXIT_INSTRUMENT_FAILURE = 2;
+
 async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
     writeSync(1, usage() + "\n");
@@ -595,7 +610,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         `skill-critique: could not determine the task run's directory (no envelope outDir and no [status] line)${diag ? ` [${diag}]` : ""}.\n` +
           `--- task stdout ---\n${task.stdout}\n--- task stderr (tail) ---\n${task.stderr.slice(-4000)}\n`,
       );
-      process.exit(0);
+      process.exit(EXIT_INSTRUMENT_FAILURE);
       return;
     }
 
@@ -619,7 +634,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       };
       if (opts.outputFormat === "json") writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
       else printTextReport(state);
-      process.exit(0);
+      // The INSTRUMENT failed (the turn was killed, or the reflection protocol broke) — no critique was
+      // produced. Findings never gate, but this is not a finding.
+      process.exit(EXIT_INSTRUMENT_FAILURE);
       return;
     }
     // NOTE: `taskResult` ("success" | "error") is a GRADEABLE outcome of the task itself — a task that ended
@@ -732,8 +749,11 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     }
   } catch (e) {
     process.stderr.write(`skill-critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
+    process.exit(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
   }
-  process.exit(0); // ALWAYS 0 — this is a discovery instrument, never a gate; the caller owns this exit code
+  // FINDINGS never gate: any classification — including a task run that ERRORED, which is itself a
+  // legitimate discovery outcome about the skill — exits 0. Only instrument failures above exit non-zero.
+  process.exit(0);
 }
 
 /** CLI entry for `cowork-harness critique`. Exported so src/cli.ts can dispatch to it — the direct-exec

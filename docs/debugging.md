@@ -137,6 +137,10 @@ found in the run's own output. The harness emits everything a grader needs; the 
   so a *successful* call's full input + result are captured (the default view slices them to ~100/120
   chars; full capture was error-only before). This is what lets an external grader confirm "the skill
   claims it read X and derived Y" against the actual call.
+- **`cowork-harness critique <skill-folder> --prompt "<probe>"`** → the shipped version of this discipline:
+  runs the skill, asks the agent what confused it, and grades that self-report against a frozen record of
+  the run (blinded evaluator + mechanical citation checking). See [critique.md](./critique.md) for cost
+  and limits. EXPERIMENTAL.
 - `cowork-harness inspect <run-dir>` → what the run produced (artifacts + previews), plus the run's
   `label` and `skillHash` at the harvest moment.
 - **In-run alternative:** dispatch a checker **sub-agent** (maker/checker split) whose result folds into

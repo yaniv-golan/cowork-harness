@@ -13,8 +13,9 @@ All notable changes to this project are documented here. The format is based on
   a byte-boundary evidence snapshot taken *before* the reflection turn, a first evaluator pass that is
   structurally blind to the self-report (the text is never put in its prompt, not merely ignored), and
   mechanical citation checking that drops any claim not quoting the evidence verbatim. **A discovery
-  instrument, never a gate:** findings of any classification exit 0; only usage and infra/protocol failures
-  exit non-zero. Previously a maintainer-only script that could not run from an installed package at all.
+  instrument, never a gate:** findings of any classification exit 0 (including a task run that itself
+  errored — that is a finding about the skill); exit 2 is reserved for a usage error or an instrument
+  failure, where no critique was produced. Previously a maintainer-only script that could not run from an installed package at all.
   Costs four model workloads per critique — see [docs/critique.md](./docs/critique.md).
 - **Evidence-package armoring.** The self-report was already fenced, but the evidence package — which
   carries a third-party SKILL.md verbatim into both evaluator prompts — was not, so hostile skill content

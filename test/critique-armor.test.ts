@@ -73,3 +73,24 @@ describe("armor preserves the citation corpus", () => {
     expect(citationResolves(text, "this sentence appears nowhere in the package")).toBe(false);
   });
 });
+
+describe("armor seam: the citation case the acceptance deferred", () => {
+  it("DOCUMENTS a known limitation — a heading-spanning quote that OMITS the marker line no longer resolves", () => {
+    // Pre-armor the corpus was `## <title>\n<body>`, contiguous under norm()'s whitespace collapse, so a
+    // model quoting "title + first body line" resolved. Armor inserts a marker line at that seam, so the
+    // same quote now fails and the finding is DROPPED. Quotes wholly inside one body — the overwhelming
+    // majority — cross no seam and are unaffected. Pinned so the trade-off is visible rather than
+    // discovered later; if this ever becomes a real DROPPED-rate problem, the fix is to strip marker/tag
+    // lines from BOTH corpus and citation inside norm(), symmetrically.
+    const { text } = armorEvidence(SECTIONS, N);
+    const spanningWithoutMarker = "SKILL.md (verbatim skill source) # my-skill";
+    expect(citationResolves(text, spanningWithoutMarker)).toBe(false);
+  });
+
+  it("body-internal quotes — the common case — are unaffected by the seams", () => {
+    const { text } = armorEvidence(SECTIONS, N);
+    for (const q of ["Read the rows and summarise them.", "the agent read the rows, then wrote a summary"]) {
+      expect(citationResolves(text, q)).toBe(true);
+    }
+  });
+});

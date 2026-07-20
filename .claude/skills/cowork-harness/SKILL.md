@@ -88,7 +88,7 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 lint-skill · analyze-skill · probe-dispatch ·
-verify-run · trace · inspect · diff · stats · decide · gates · answer · scaffold · assertions --list · sync ·
+verify-run · trace · inspect · diff · critique · stats · decide · gates · answer · scaffold · assertions --list · sync ·
 list · boundary-check · status · vm <init|status|delete|prune> · doctor · init-redact`. Always check `cowork-harness <cmd> --help`.
 
 **Two different `scaffold` tools — don't confuse them.** The native `cowork-harness scaffold <run-id>`

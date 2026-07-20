@@ -33,8 +33,8 @@ Three mechanisms, all code rather than prompt instructions:
 
 | Code | Meaning |
 |---|---|
-| 0 | The critique ran. **Any** findings, of any classification. |
-| non-zero | Usage error, or an infra/protocol failure — a broken instrument is not a discovery outcome. |
+| `0` | The critique ran. **Any** findings, of any classification — including a task run that itself errored, which is a legitimate finding about the skill. |
+| `2` | Usage error, **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked. No critique was produced. A broken instrument is not a discovery outcome. |
 
 Never gate CI on findings; that is the whole design.
 
@@ -68,3 +68,8 @@ Changing the evaluator model invalidates that verification.
 - **SKILL.md is capped at 16KB**; a larger one degrades toward "not adjudicable".
 - **English-only prompts.**
 - The evidence package is not persisted; the report is written to stdout.
+- **Citation seams.** Armor inserts a marker line between each section heading and its body. A quote that
+  spans that seam *without* including the marker no longer resolves and is DROPPED. Quotes wholly inside
+  one section — the overwhelming majority — are unaffected. The rate this costs in practice has not been
+  measured across a corpus of real runs; DROPPED items are always shown, so the effect is visible rather
+  than silent.
