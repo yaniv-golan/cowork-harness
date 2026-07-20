@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { CRITIQUE_LIMITATIONS, renderKnownLimitations, provenanceDetail } from "../src/critique/limitations.js";
+import { CRITIQUE_LIMITATIONS, provenanceDetail } from "../src/critique/limitations.js";
 
 // `provenance` exists to answer "should I architect around this forever, or is it pending work?" — a
 // consumer read "container tier only" as permanent, concluded critique could never see their
@@ -14,9 +15,15 @@ const DOCS = readFileSync(resolve("docs/critique.md"), "utf8");
 
 /** docs/critique.md's "Known limitations" section, whitespace-normalized.
  *
- *  Normalizing is not tidiness: markdown prose WRAPS, and a line-oriented match against a wrapped
- *  sentence comes back clean while the text is plainly present. That false clean happened for real in
- *  this repo — a grep for a comment reported zero hits because the sentence spanned two lines. */
+ *  Normalizing is needed because markdown prose WRAPS and one anchor genuinely spans a line break. Be
+ *  precise about which way it cuts, though: in a PRESENCE-asserting guard a line-oriented match on
+ *  wrapped text produces a false RED, not a false clean — normalization prevents a nuisance failure, it
+ *  does not add rigor. (An earlier version of this comment claimed the opposite, dressing a
+ *  looseness-INCREASING choice as care.)
+ *
+ *  The real residual risk runs the other way: `docsAnchor` is a substring, so a bullet rewritten to
+ *  assert the OPPOSITE ("attached content is now always excluded") can still contain the anchor and pass.
+ *  The tag-agreement and bidirectional guards below bound that; the anchors themselves do not. */
 function docsLimitationsSection(): string {
   const start = DOCS.indexOf("## Known limitations");
   expect(start, "docs/critique.md has no '## Known limitations' section — the guard is blind, fix the marker").toBeGreaterThan(-1);
@@ -43,6 +50,47 @@ describe("critique limitations ↔ docs parity", () => {
     });
   }
 
+  it("the docs bullet's [tag] MATCHES the list's provenance — not merely present", () => {
+    // Presence-only checking let the two disagree: retagging `english-only` in the list while docs still
+    // read [not-built] passed 12/12. docs/critique.md claims "generated from one source ... so the two
+    // cannot disagree"; that claim now has something behind it.
+    for (const l of CRITIQUE_LIMITATIONS) {
+      const idx = SECTION.indexOf(norm(l.docsAnchor));
+      // Look backwards from the anchor to the bullet it belongs to, and read that bullet's tag.
+      const before = SECTION.slice(0, idx);
+      const tag = [...before.matchAll(/\[(structural|unverified|deliberate|not-built)\]/g)].pop()?.[1];
+      expect(tag, `no [tag] precedes "${l.docsAnchor}" in docs/critique.md`).toBeDefined();
+      expect(tag, `docs tags \`${l.id}\` as [${tag}] but the list says [${l.provenance.kind}]`).toBe(l.provenance.kind);
+    }
+  });
+
+  it("the docs section declares NO limitation the list does not know about (bidirectional)", () => {
+    // limitations.ts claimed a limitation "cannot be added here and forgotten there (or vice versa)" —
+    // the vice versa was unimplemented, so docs could accumulate invented limitations with fabricated
+    // tags. Count tagged bullets instead of trusting the prose.
+    const tagged = [...SECTION.matchAll(/\[(structural|unverified|deliberate|not-built)\]/g)].length;
+    expect(
+      tagged,
+      `docs/critique.md's Known limitations has ${tagged} tagged bullets but the list declares ${CRITIQUE_LIMITATIONS.length} — a docs-only limitation is undocumented drift in the other direction`,
+    ).toBe(CRITIQUE_LIMITATIONS.length);
+  });
+
+  it("pins the exact limitation id set, so a silent DELETION reds", () => {
+    // A `length > 4` floor absorbed two deletions from the current seven: removing a limitation dropped
+    // it from --help and orphaned its docs bullet, all green. Deleting one should be a deliberate act.
+    expect([...CRITIQUE_LIMITATIONS.map((l) => l.id)].sort()).toEqual(
+      [
+        "attached-content-may-enter-evidence",
+        "citation-seams",
+        "container-tier-only",
+        "english-only",
+        "evidence-not-persisted",
+        "report-stdout-only",
+        "skill-md-16kb-cap",
+      ].sort(),
+    );
+  });
+
   it("every limitation carries a provenance with a non-empty, actionable detail", () => {
     for (const l of CRITIQUE_LIMITATIONS) {
       expect(l.provenance.kind, `${l.id}`).toMatch(/^(structural|unverified|deliberate|not-built)$/);
@@ -60,13 +108,21 @@ describe("critique limitations ↔ docs parity", () => {
     }
   });
 
-  it("--help is DERIVED from the list, so the tags cannot drift from the text", () => {
-    // The whole anti-decoration mechanism: if a limitation is added to the list, it appears in --help
-    // automatically; if the renderer stopped consuming the list, this fails.
-    const help = renderKnownLimitations();
+  it("the SHIPPED `critique --help` renders every limitation from the list", () => {
+    // Tests the ASSEMBLY, not the renderer. The first version of this test called
+    // renderKnownLimitations() and asserted its output contained the list — i.e. that the renderer
+    // renders its own input, which is near-tautological and passes even when `usage()` ignores the
+    // renderer entirely. An adversarial review proved it: replacing the `${renderKnownLimitations()}`
+    // interpolation in usage() with hard-coded text left all 12 tests GREEN.
+    //
+    // This repo has shipped that exact bug before (the integrity canary: field, renderer, local and
+    // callback all present, never assembled into the state literal, unit tests green because they handed
+    // the builder a state directly). Assert against the real binary's real output.
+    const help = execFileSync(process.execPath, [resolve("dist/cli.js"), "critique", "--help"], { encoding: "utf8" });
     for (const l of CRITIQUE_LIMITATIONS) {
-      expect(help, `${l.id} missing from rendered --help`).toContain(l.summary);
-      expect(help, `${l.id}'s provenance class missing from rendered --help`).toContain(`[${l.provenance.kind}]`);
+      expect(help, `${l.id} is in the list but absent from the SHIPPED --help`).toContain(l.summary);
+      expect(help, `${l.id}'s provenance class is absent from the SHIPPED --help`).toContain(`[${l.provenance.kind}]`);
+      expect(help, `${l.id}'s provenance DETAIL is absent from the SHIPPED --help`).toContain(provenanceDetail(l.provenance));
     }
   });
 

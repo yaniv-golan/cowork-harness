@@ -43,6 +43,12 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
   What the ≥ 1.6.0 floor gates, by release:
 
+  - **UNRELEASED (limitation provenance):** every `critique` limitation in `critique --help` and
+    docs/critique.md is tagged with WHY it exists — `[structural]` (permanent), `[unverified]` (unproven,
+    **not** known-impossible), `[deliberate]`, `[not-built]`. **Read the tag before telling a user to
+    design around a limitation.** In particular `critique`'s container-tier pin is `[unverified]`, not
+    permanent: do not advise building a second hostloop test lane on the assumption it can never lift.
+
   - **1.6.0 (`critique`'s skill-flag parity):** `critique` accepts most `skill` flags under the same names,
     which is what makes a document-analysis skill (cap table, deck, financial model, transcript)
     critiquable at all: `--upload`/`--folder`/`--plugin`/`--marketplace`/`--enable`/`--model`/

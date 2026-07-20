@@ -107,7 +107,7 @@ ignored.
 |---|---|
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
-| `--fidelity container` | container tier only |
+| `--fidelity container` | container tier only — **`[unverified]`, not permanent**; see [Known limitations](#known-limitations) before designing around it |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
 | `--run-dir <path>` | **global, unlike `--dotenv`** — must still PRECEDE the subcommand; a trailing `critique … --run-dir` is rejected |
@@ -152,6 +152,7 @@ It does **not** record their contents — see Known limitations.
 | Code | Meaning |
 |---|---|
 | `0` | The critique ran. **Any** findings, of any classification — including a task run that itself errored, which is a legitimate finding about the skill. |
+| `1` | **Operator interrupt only** (SIGINT/SIGTERM — e.g. Ctrl-C). Not part of the findings taxonomy, but reachable: a sweep wrapper treating `1` as impossible will misread a cancelled run as a crash. |
 | `2` | Usage error, **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw*. No critique was produced. A broken instrument is not a discovery outcome. |
 
 Never gate CI on findings; that is the whole design.
@@ -200,7 +201,10 @@ the two cannot disagree.
   (`test/live-resume-continuity.test.ts`) was run against the container tier's Linux ELF; hostloop runs a
   *different* agent binary (the native one), and conversation state lives in that binary's own session
   store — so the proof does not transfer. Nothing indicates hostloop would fail; nobody has run it.
-  **Lifts with:** a live resume-continuity proof at hostloop against its native agent binary.
+  **Lifting it needs BOTH:** (1) a live resume-continuity proof at hostloop against its native agent
+  binary, and (2) the work that proof unblocks — unpinning three hard-coded container sites, stamping the
+  tier on the session manifest so a cross-tier resume fails loud, and plumbing host-write consent. Evidence
+  alone is necessary, not sufficient.
   *If you are deciding whether to build a permanent second test lane for hostloop-only findings, this is
   the sentence to weigh — the pin may lift.*
 - **`[deliberate]` SKILL.md is capped at 16KB** in the evidence; a larger one degrades toward "not
@@ -208,10 +212,12 @@ the two cannot disagree.
   Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —
   only an unreadable SKILL.md forces one.
 - **`[not-built]` English-only prompts.** No localization has been attempted; nothing blocks it.
-- **`[not-built]` The evidence package is not persisted**, and the report is **written to stdout** only
-  (capture it with shell redirection; `--output-format` changes the format, never the destination). The
-  underlying run dirs *are* kept — but after the resume, `result.json` is the **reflection** turn's;
-  the graded turn is archived as **`result.turn-1.json`**.
+- **`[not-built]` The evidence package is not persisted.** A disputed finding cannot be re-checked
+  against the record it was graded on.
+- **`[not-built]` The report is written to stdout** only — capture it with shell redirection;
+  `--output-format` changes the format, never the destination. The underlying run dirs *are* kept, but
+  after the resume `result.json` is the **reflection** turn's; the graded turn is archived as
+  **`result.turn-1.json`**.
 - **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a
   guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
   source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived

@@ -14,16 +14,27 @@
 // run/skill-flag-surface.ts for the same lesson about flags). So:
 //   1. `renderKnownLimitations()` GENERATES critique's `--help` block from this list — the help text
 //      cannot drift from the tags because it is derived from them.
-//   2. `test/critique-limitations-sync.test.ts` asserts docs/critique.md documents the same set, so a
-//      limitation cannot be added here and forgotten there (or vice versa).
+//   2. `test/critique-limitations-sync.test.ts` asserts, against the SHIPPED binary and the real docs:
+//      every limitation reaches `critique --help`; every one is documented; the docs bullet's [tag]
+//      MATCHES this list's class; the docs declare no limitation this list lacks; and the id set is
+//      pinned so a deletion is deliberate.
+//      An earlier version claimed the "or vice versa" direction while implementing only one of these —
+//      a completeness claim nothing enforced, which is the exact shape this module exists to prevent.
+//      Each guard above was mutation-tested: break it and the suite reds.
 
 /** Why a limitation exists — and therefore whether a consumer should design around it permanently. */
 export type LimitationProvenance =
   /** Physics of the design. It will not lift; architect around it. */
   | { kind: "structural"; why: string }
   /** It may well work — nobody has PROVEN it. Not a statement about difficulty, only about evidence.
-   *  `liftedBy` names the specific proof that would remove the limitation, so the path is never folklore. */
-  | { kind: "unverified"; liftedBy: string }
+   *  `liftedBy` names the specific proof that would remove the limitation, so the path is never folklore.
+   *
+   *  `thenRequires` exists because the first version of this type could not express its OWN flagship case.
+   *  The container pin needs a proof AND work afterwards (unpin three hard-coded sites, stamp the tier on
+   *  the session manifest, plumb host-write consent); saying only "lifts with: a proof" told the reader
+   *  evidence alone was enough — a half-truth aimed at the very consumer this feature exists to inform.
+   *  Omit it when the proof genuinely is sufficient. */
+  | { kind: "unverified"; liftedBy: string; thenRequires?: string }
   /** A deliberate choice with a rationale. Could be revisited, but not by accident. */
   | { kind: "deliberate"; rationale: string }
   /** Simply not built yet. No obstacle beyond the work. */
@@ -56,6 +67,8 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
       // conversation state lives in the agent's own session store — so the container proof does not
       // transfer. Nothing indicates it would fail; nobody has run it.
       liftedBy: "a live resume-continuity proof at hostloop (its NATIVE agent binary, not the container ELF)",
+      thenRequires:
+        "unpinning three hard-coded container sites, a tier stamp on the session manifest so a cross-tier resume fails loud, and host-write consent plumbed for skill/critique",
     },
     docsAnchor: "Container tier only",
   },
@@ -123,7 +136,7 @@ export function provenanceDetail(p: LimitationProvenance): string {
     case "structural":
       return p.why;
     case "unverified":
-      return `lifts with: ${p.liftedBy}`;
+      return p.thenRequires ? `needs BOTH — proof: ${p.liftedBy}; then work: ${p.thenRequires}` : `lifts with: ${p.liftedBy}`;
     case "deliberate":
       return p.rationale;
     case "not-built":
