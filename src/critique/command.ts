@@ -143,11 +143,13 @@ function flagVal(argv: string[], i: number, flag: string): { value: string; adv:
   const a = argv[i]!;
   if (a.startsWith(`${flag}=`)) {
     const value = a.slice(flag.length + 1);
-    if (value === "") throw new Error(`${flag} requires a non-empty value\n${usage()}`);
+    if (value.trim() === "") throw new Error(`${flag} requires a non-empty value\n${usage()}`);
     return { value, adv: 0, equalsForm: true };
   }
   const value = argv[i + 1];
-  if (value === undefined || value === "") throw new Error(`${flag} requires a value\n${usage()}`);
+  // trim(), matching the child's own value checks — otherwise `--label " "` passes here and dies
+  // one layer later, which is the failure shape this check exists to prevent.
+  if (value === undefined || value.trim() === "") throw new Error(`${flag} requires a value\n${usage()}`);
   return { value, adv: 1, equalsForm: false };
 }
 
@@ -188,7 +190,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       const { value: v, adv } = flagVal(argv, i, "--prompt-file");
       promptFile = v;
       i += adv;
-    } else if (a === "--keep") {
+    } else if (a === "--keep" || a.startsWith("--keep=")) {
+      // Match the equals form too so it errors as "takes no value" rather than falling through to the
+      // owned-flag branch's "unknown flag: --keep=x", which misdescribes the mistake.
+      if (a.includes("=")) throw new Error(`--keep takes no value (got "${a}")\n${usage()}`);
       // accepted no-op: critique always keeps its runs, so the flag's promise already holds. Erroring on
       // an already-satisfied request is hostile; silently ignoring an UNsatisfied one is this repo's
       // anti-pattern — this is the former.

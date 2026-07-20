@@ -56,49 +56,13 @@ function skillHelpFlags(): Set<string> {
 const SPEC_NAMES = new Set(SKILL_FLAG_SURFACE.map((s) => s.flag));
 const KNOWN = new Set([...SPEC_NAMES, ...CRITIQUE_ONLY_FLAGS]);
 
-// Flags that belong to OTHER commands or are global — the whole-file scan legitimately picks these up.
-// Listed explicitly so an unexpected new name still fails rather than being swallowed by a broad pattern.
+// Names the surviving scans legitimately surface that are NOT skill-lane flags needing a disposition.
+// Deliberately MINIMAL and measured, not aspirational: an earlier version carried 40 entries sized for a
+// whole-file scan that no longer exists, of which 39 were unreachable — each a latent excusal that would
+// have silently subtracted a future skill flag of that name from the parity check. Only add an entry after
+// confirming a scan actually produces it.
 const NOT_SKILL_LANE = new Set([
-  "--changelog",
-  "--view",
-  "--no-normalize",
-  "--reindex",
-  "--metric",
-  "--since",
-  "--branch",
-  "--last",
-  "--scenario",
-  "--matrix",
-  "--max-cells",
-  "--concurrency",
-  "--allow-truncated-matrix",
-  "--assert-from",
-  "--reassert",
-  "--write",
-  "--explain",
-  "--full-results",
-  "--allow-path",
-  "--diff",
-  "--dotenv",
-  "--run-dir",
-  "--help",
-  "-h",
-  "--version",
-  "-v",
-  "--json",
-  "--skill",
-  "--strict",
-  "--fix",
-  "--ablate",
-  "--list",
-  "--force",
-  "--yes",
-  "--dry",
-  "--tier",
-  "--id",
-  "--name",
-  "--from",
-  "--to",
+  "--run-dir", // global, advertised in SKILL_HELP; has no per-command meaning anywhere
 ]);
 
 describe("skill flag surface ↔ critique disposition parity", () => {
