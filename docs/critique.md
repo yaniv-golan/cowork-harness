@@ -84,14 +84,19 @@ ignored.
 | `--folder <dir>` | connect a folder at `mnt/<name>` (repeatable) |
 | `--plugin <dir>`, `--marketplace <dir>` + `--enable <name@mkt>` | extra skill sources |
 
-**Graded-run tuning** — shapes the run being graded, not the reflection turn.
+**Session shape** — both turns must agree on these, so they reach the reflection turn too.
 
 | Flag | |
 |---|---|
 | `--model <id>` | session model for the agent doing the work *and* reflecting |
+| `--allow-missing-capability` | don't fail either turn when the lean image omits a capability |
+
+**Graded-run tuning** — the task turn only; the reflection turn stays pinned deterministic.
+
+| Flag | |
+|---|---|
 | `--timeout <ms>` | wall-clock budget for the task turn (critique's own kill-switch stretches to fit) |
 | `--label <tag>` | generation tag in the run index, for pairing critiques across fixes |
-| `--allow-missing-capability` | don't fail the graded run when the lean image omits a capability |
 | `--answer "<q-regex>=<choice>"`, `--answer-policy <yaml>` | pre-answer the skill's gates — **this is what makes gated skills critiquable at all** |
 | `--on-unanswered fail\|first` | unscripted-gate policy (`prompt` is refused — there is no TTY inside) |
 | `--decider-llm` / `--intent` / `--decider-model` / `--decider-cmd` / `--decider-dir` | answer live gates in the graded run |
@@ -104,7 +109,8 @@ ignored.
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--fidelity container` | container tier only |
 | `--keep` | accepted as a no-op; runs are always kept |
-| `--dotenv <path>` | credentials |
+| `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
+| `--run-dir <path>` | **global, unlike `--dotenv`** — must still PRECEDE the subcommand; a trailing `critique … --run-dir` is rejected |
 
 **Refused, and why**
 
@@ -113,7 +119,7 @@ ignored.
 | `--session-id` / `--resume` | critique mints and manages its own session — the reflection turn *is* a resume of it |
 | `--repeat` + companions | fixed two-turn protocol; loop `critique` itself and pair by `fingerprint.skillHash` |
 | `--ablate-skill` | grading a skill you removed is incoherent |
-| `--quiet` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report |
+| `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report |
 
 ### Skills that need an attached file
 
@@ -175,6 +181,13 @@ Changing the evaluator model invalidates that verification.
 - **SKILL.md is capped at 16KB**; a larger one degrades toward "not adjudicable".
 - **English-only prompts.**
 - The evidence package is not persisted; the report is written to stdout.
+- **Attached-file content usually stays out of the evidence — but that is the common case, not a
+  guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
+  source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived
+  transcript is missing, and that stream carries full tool results — so if the agent read the attached
+  file, its content can enter the Transcript section (bounded, still armor-fenced) and a content-level
+  citation would resolve. Claims about a document's *contents* are therefore usually NOT ADJUDICABLE, not
+  always.
 - **Citation seams.** Armor inserts a marker line between each section heading and its body. A quote that
   spans that seam *without* including the marker does not resolve and is DROPPED. Quotes wholly inside one
   section are unaffected. **Measured:** on a benign package, 9 findings across 5 live pass-1 runs produced

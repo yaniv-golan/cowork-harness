@@ -122,6 +122,7 @@ hands `fn` exactly this dict.
 
 - On `skill`: `fail | prompt | first`.
 - On `run`: `fail | first` (`prompt` rejected — it would break determinism).
+- On `critique` (UNRELEASED): `fail | first` (`prompt` rejected — there is no TTY inside the spawned turn).
 - **`llm` is NOT an `--on-unanswered` value.** The bare flag `--on-unanswered llm` is rejected; use
   `--decider-llm` (CLI) or `on_unanswered: llm` (YAML).
 - `agent` is **retired** — `on_unanswered: agent` is rejected by the schema. The enum is

@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`critique` now accepts the `skill` flags a graded run needs — starting with uploads.** A skill whose
+  whole job is "here is a document, analyze it" (cap table, pitch deck, financial model, transcript) could
+  not be critiqued at all: there was no way to attach the file, so the agent was asked to analyze a
+  document that was never there and then asked what confused it — you harvested a finding about the test
+  rig. `--upload` (repeatable), `--folder`, `--plugin`, `--marketplace`/`--enable`, `--model` and
+  `--allow-missing-capability` now reach **both** spawned turns; that is forced, not stylistic, because
+  those paths are part of the session-origin key the reflection turn's `--resume` recomputes. `--label`,
+  `--timeout`, `--answer`/`--answer-policy`, `--on-unanswered` and the decider flags reach the graded turn
+  only. `--answer`/`--answer-policy` make **gated** skills critiquable for the first time — the inner spawn
+  has no TTY, so an unscripted gate previously killed the task turn before anything could be graded.
+  Anything that cannot work is refused **with its reason** rather than silently ignored:
+  `--session-id`/`--resume`, the `--repeat` family, `--ablate-skill`, and the rendering/preview flags.
+- **`critique --prompt-file <path>`** — read the probe verbatim from a file, so a probe containing quotes,
+  `$` or newlines does not have to survive shell parsing.
+- **"Attached inputs" evidence section** — upload filenames and sizes, plus connected-folder mount names,
+  never content. Without it the evaluator could not tell "the agent said there was no file, and correctly
+  so" from a confabulation.
+- **One source of truth for the `skill` flag surface** (`src/run/skill-flag-surface.ts`), where each flag's
+  critique disposition is a **required** field, plus a parity guard that fails CI when a new `skill` flag
+  arrives without one. The old hand-rolled subset drifted silently — this repo's recurring bug shape.
+
+### Fixed
+
+- **`critique --dotenv <path>` was documented but unreachable** (shipped that way in 1.5.0). The
+  misplaced-global guard rejected the token after any subcommand, and the `--dotenv=x` form that slipped
+  past it then hit critique's exact-match parser as "unknown flag". `critique` is now exempt from the guard
+  (`--run-dir` still has no per-command meaning and stays rejected everywhere), and a missing file fails
+  fast with critique's own error instead of surfacing later as an instrument-failure diagnostic.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added

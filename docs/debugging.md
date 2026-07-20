@@ -135,6 +135,9 @@ built on top of the harness before any of it shipped — the commands now replac
 
 ```bash
 SKILL=./my-skill
+# Skill needs an attached input (cap table, deck, transcript)? Add `--upload <path>` / `--folder <dir>`
+# to BOTH step 1 and step 3 — critique forwards them to its own two turns, and step 3 must reproduce
+# with the same inputs the harvest used. See critique.md → "Skills that need an attached file".
 
 # 1. HARVEST — run the skill against a real input and grade what confused the agent.
 #    `critique` runs the task, asks the agent what was unclear, then verifies every claim against a
