@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { REFLECTION_PROMPT, REFLECTION_PROMPT_VERSION } from "../scripts/skill-critique.js";
 import { buildPass2Prompt, SELF_REPORT_MAX_CHARS } from "../scripts/lib/critique/evaluator.js";
+import { armorEvidence } from "../scripts/lib/critique/armor.js";
 
 describe("reflection prompt v2", () => {
   it("is versioned 2", () => {
@@ -28,14 +29,26 @@ describe("reflection prompt v2", () => {
 describe("pass 2 self-report bounding", () => {
   it("truncates an oversized self-report and marks the truncation", () => {
     const huge = "x".repeat(SELF_REPORT_MAX_CHARS + 5_000);
-    const prompt = buildPass2Prompt("evidence pkg", [], huge, false, false);
+    const prompt = buildPass2Prompt(
+      armorEvidence([{ title: "Evidence", body: "evidence pkg" }], "0123456789abcdef"),
+      [],
+      huge,
+      false,
+      false,
+    );
     expect(prompt.length).toBeLessThan(huge.length);
     expect(prompt).toMatch(/self-report truncated/i);
   });
 
   it("leaves a normal-sized self-report intact", () => {
     const normal = "The skill was unclear about output formatting.";
-    const prompt = buildPass2Prompt("evidence pkg", [], normal, false, false);
+    const prompt = buildPass2Prompt(
+      armorEvidence([{ title: "Evidence", body: "evidence pkg" }], "0123456789abcdef"),
+      [],
+      normal,
+      false,
+      false,
+    );
     expect(prompt).toContain("output formatting");
     expect(prompt).not.toMatch(/self-report truncated/i);
   });

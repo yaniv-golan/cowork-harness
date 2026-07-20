@@ -426,20 +426,29 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  run dir: ${outDir}`);
   out.push(`  task run result: ${taskResult ?? "unknown (envelope unavailable)"}`);
   if (evaluatorModel) out.push(`  evaluator model (resolved): ${evaluatorModel}`);
-  else if (infraFailure || evaluatorError) out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
+  else if (infraFailure || evaluatorError)
+    out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
   if (taskResult === "error")
     out.push(`  NOTE: the task run ended in error — recommendations below reflect whatever happened before the failure.`);
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
-    out.push(`  NOTE: no self-report was captured — pass 2 (self-report verification) was skipped; findings below are pass 1 (independent) only.`);
+    out.push(
+      `  NOTE: no self-report was captured — pass 2 (self-report verification) was skipped; findings below are pass 1 (independent) only.`,
+    );
   // F28/F30/F31 (D): the typed degradation flags packageEvidence produces, surfaced as machine-readable
   // report state — not just the inline "[DEGRADED: ...]" prose already embedded in the evidence package.
   if (turn1ResultDegraded)
-    out.push(`  turn-1 result: DEGRADED (corrupted, or a validated resume's result.turn-1.json archive was never written — see the evidence package)`);
+    out.push(
+      `  turn-1 result: DEGRADED (corrupted, or a validated resume's result.turn-1.json archive was never written — see the evidence package)`,
+    );
   if (turn1SliceDegraded)
-    out.push(`  turn-1 transcript slice: DEGRADED (boundary never established, or the append-only prefix it depends on changed/truncated under it)`);
+    out.push(
+      `  turn-1 transcript slice: DEGRADED (boundary never established, or the append-only prefix it depends on changed/truncated under it)`,
+    );
   if (skillMdStatus && skillMdStatus !== "readable")
-    out.push(`  SKILL.md: ${skillMdStatus} — presence/coverage classification was REFUSED (see the "already-covered" downgrade in the evaluator)`);
+    out.push(
+      `  SKILL.md: ${skillMdStatus} — presence/coverage classification was REFUSED (see the "already-covered" downgrade in the evaluator)`,
+    );
   out.push("");
 
   if (infraFailure) {
@@ -634,17 +643,19 @@ async function main(): Promise<void> {
       // only ever here after `validateReflectionTurn` confirmed a genuine, continuity-checked resume, so a
       // missing `result.turn-1.json` archive must be treated as degraded, never silently backfilled from the
       // turn-2 `result.json`.
-      const { pkg, truncated, turn1ResultDegraded: trd, turn1SliceDegraded: tsd, skillMdStatus: sms } = packageEvidence(
-        outDir,
-        boundary,
-        opts.skillFolder,
-        true,
-      );
+      const {
+        pkg,
+        sections,
+        truncated,
+        turn1ResultDegraded: trd,
+        turn1SliceDegraded: tsd,
+        skillMdStatus: sms,
+      } = packageEvidence(outDir, boundary, opts.skillFolder, true);
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
       try {
-        items = await runCritique(pkg, selfReport, {
+        items = await runCritique(sections, selfReport, {
           model: requestedModel,
           packageTruncated: truncated,
           // F31: SKILL.md not confirmed readable → refuse presence/coverage classification (both a soft
