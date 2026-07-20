@@ -160,8 +160,20 @@ describe("forwarded-flag value validation (parity with the child's own parser)",
 });
 
 describe("`repeatable` in the spec is enforced, not decoration", () => {
-  it("rejects a non-repeatable flag given twice (the child would silently keep only the last)", () => {
+  it("rejects a non-repeatable FORWARDED flag given twice", () => {
     expect(() => parseArgs(["./s", "--prompt", "p", "--model", "a", "--model", "b"])).toThrow(/not repeatable/);
+  });
+
+  it("rejects a duplicated critique-OWNED flag too — the first version guarded only the forwarded branch", () => {
+    // `--prompt a --prompt b` silently dropped a probe the user typed. The rationale for rejecting
+    // duplicates applies verbatim to critique's own flags; guarding one branch was N-1 of N.
+    expect(() => parseArgs(["./s", "--prompt", "a", "--prompt", "b"])).toThrow(/--prompt given more than once/);
+    expect(() => parseArgs(["./s", "--prompt", "p", "--evaluator-model", "m1", "--evaluator-model", "m2"])).toThrow(/not repeatable/);
+    expect(() => parseArgs(["./s", "--prompt-file", "a", "--prompt-file", "b"])).toThrow(/not repeatable/);
+  });
+
+  it("exempts arity-0 flags — there is no value to lose and the child takes them idempotently", () => {
+    expect(() => parseArgs(["./s", "--prompt", "p", "--decider-llm", "--decider-llm"])).not.toThrow();
   });
 
   it("still allows genuinely repeatable flags", () => {

@@ -164,30 +164,45 @@ function parseArgs(argv: string[]): ParsedArgs {
   let taskTimeoutMs: number | undefined;
   const forwardBoth: string[] = [];
   const forwardTask: string[] = [];
-  const seenForwarded = new Set<string>();
+  const seen = new Set<string>();
+  /** A repeat of a non-repeatable flag silently discards the earlier value — the exact no-op this
+   *  command's refusal design exists to prevent. Applied to critique's OWN flags too: an earlier version
+   *  guarded only the forwarded branch, so `--prompt a --prompt b` quietly dropped a probe the user typed.
+   *  Arity-0 flags are exempt: there is no value to lose, and the child accepts them idempotently. */
+  const once = (flag: string, arity: 0 | 1 = 1) => {
+    if (arity === 0) return;
+    if (seen.has(flag)) throw new Error(`${flag} given more than once (it is not repeatable)\n${usage()}`);
+    seen.add(flag);
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--prompt" || a.startsWith("--prompt=")) {
+      once("--prompt");
       const { value: v, adv } = flagVal(argv, i, "--prompt");
       prompt = v;
       i += adv;
     } else if (a === "--dotenv" || a.startsWith("--dotenv=")) {
+      once("--dotenv");
       const { value: v, adv } = flagVal(argv, i, "--dotenv");
       dotenv = v;
       i += adv;
     } else if (a === "--fidelity" || a.startsWith("--fidelity=")) {
+      once("--fidelity");
       const { value: v, adv } = flagVal(argv, i, "--fidelity");
       fidelity = v;
       i += adv;
     } else if (a === "--evaluator-model" || a.startsWith("--evaluator-model=")) {
+      once("--evaluator-model");
       const { value: v, adv } = flagVal(argv, i, "--evaluator-model");
       evaluatorModel = v;
       i += adv;
     } else if (a === "--output-format" || a.startsWith("--output-format=")) {
+      once("--output-format");
       const { value: v, adv } = flagVal(argv, i, "--output-format");
       outputFormat = v as "json" | "text";
       i += adv;
     } else if (a === "--prompt-file" || a.startsWith("--prompt-file=")) {
+      once("--prompt-file");
       const { value: v, adv } = flagVal(argv, i, "--prompt-file");
       promptFile = v;
       i += adv;
@@ -204,11 +219,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
       const spec = lookupSkillFlag(name);
       if (!spec) throw new Error(`unknown flag: ${a}\n${usage()}`);
-      // `repeatable` is enforced, not decorative: passing a non-repeatable flag twice silently drops the
-      // first value (the child is last-wins), which is the silent no-op this command's refusal design
-      // exists to prevent. Say so instead.
-      if (!spec.repeatable && seenForwarded.has(name)) throw new Error(`${name} given more than once (it is not repeatable)\n${usage()}`);
-      seenForwarded.add(name);
+      // `repeatable` is enforced, not decorative — see `once()`.
+      if (!spec.repeatable) once(name, spec.arity);
       if (spec.critique.kind === "reject") throw new Error(`${name} is not accepted by critique: ${spec.critique.reason}\n${usage()}`);
       if (spec.critique.kind === "owned") throw new Error(`unknown flag: ${a}\n${usage()}`); // owned => handled above
       let value: string | undefined;
