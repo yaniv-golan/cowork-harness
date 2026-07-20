@@ -1,6 +1,6 @@
-import { claudeCliComplete } from "../../../src/decide/llm-transport.js";
-import type { Complete } from "../../../src/decide/decider.js";
-import { extractAllJsonObjects } from "../../../src/decide/semantic-judge.js";
+import { claudeCliComplete } from "../decide/llm-transport.js";
+import type { Complete } from "../decide/decider.js";
+import { extractAllJsonObjects } from "../decide/semantic-judge.js";
 import { validateCitations, type CritiqueItem } from "./evidence.js";
 import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEvidence, type EvidenceSection } from "./armor.js";
 
@@ -9,7 +9,7 @@ import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEviden
 // would bypass the very allowlist the harness enforces; `claude -p` is egress-consistent). Unlike the
 // judge, this evaluator's output isn't a fixed indexed rubric — it's an open-ended set of findings — so
 // "independence" and "grounding" can't rest on an index-keyed parse the way the judge's does. Two design
-// properties carry that weight instead (see the reflective-critique plan §R D-grounding):
+// properties carry that weight instead (see the reflective-critique plan evidence-grounding):
 //
 //  1. INDEPENDENCE BY ORDERING. Pass 1 runs and its `complete()` call resolves BEFORE pass 2's prompt is
 //     even built — the self-report string is never interpolated into pass 1's prompt at all. This isn't a

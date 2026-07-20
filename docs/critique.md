@@ -1,0 +1,70 @@
+# `critique` — grounded skill self-critique (EXPERIMENTAL)
+
+> **Experimental surface.** Shape and output may change. It is a **discovery instrument, never a gate**:
+> findings of any classification exit 0.
+
+`cowork-harness critique` runs a skill, asks the agent what confused it — and then **does not believe the
+answer**. Agent self-reports confabulate routinely ("there was no documentation about X" when the logs show
+it read the docs). This grades every claim against a frozen record of what actually happened.
+
+```bash
+cowork-harness critique ./my-skill --prompt "<a task that exercises the skill>"
+```
+
+## How it resists confabulation
+
+Three mechanisms, all code rather than prompt instructions:
+
+1. **A frozen evidence record.** A byte-boundary snapshot is taken *before* the agent reflects, so the
+   reflection turn's own output can never leak into the evidence it is graded against.
+2. **A structurally blind first pass.** The evaluator's independent pass is never sent the self-report —
+   not "told to ignore it". It cannot see text that was never put in its prompt.
+3. **Mechanical citation checking.** Every claim must quote the evidence verbatim. Anything that does not
+   resolve is dropped into a clearly-labelled section rather than reported as a finding.
+
+## Cost and prerequisites
+
+- **Four model workloads per critique**: two container runs (task + reflection) and two evaluator passes.
+- The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
+  **`COWORK_HARNESS_EVALUATOR_MODEL`**.
+- Requires the **container tier** (Docker/Lima) and an authenticated `claude` CLI on PATH.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | The critique ran. **Any** findings, of any classification. |
+| non-zero | Usage error, or an infra/protocol failure — a broken instrument is not a discovery outcome. |
+
+Never gate CI on findings; that is the whole design.
+
+## Reading the report
+
+| Section | Meaning |
+|---|---|
+| `ACTIONABLE` | Grounded in the evidence and worth doing |
+| `OTHER CLASSIFIED FINDINGS` | Grounded but low value, already covered by the skill, or contradicted by the evidence |
+| `NOT ADJUDICABLE` | The evidence cannot decide — a human judgement call |
+| `DROPPED` | The citation did not resolve. **Not validated** — shown for transparency only |
+
+## Running it on a skill you did not write
+
+The evidence package carries the skill's own text into the evaluator, so a hostile skill can try to steer
+the grader. The package is **armored**: untrusted content sits inside per-run nonce markers, and only
+nonce-tagged headings outside those markers count as instructions. A skill cannot pre-author the nonce.
+
+**What that does and does not buy you.** It defeats *structural* attacks — counterfeit headings, fake output
+contracts, forged boundaries — verified by a red-team probe across three models. It does **not** stop
+content that merely *argues* (prose asserting the skill already documents everything). Fencing separates
+planes; it cannot make a reader immune to persuasion. Treat critique output on an untrusted skill as a lead,
+which is how you should treat it anyway.
+
+Resistance is also **per-model and perishable**: it is verified for the shipped default evaluator model.
+Changing the evaluator model invalidates that verification.
+
+## Known limitations
+
+- **Container tier only** — the resume continuity this depends on is verified there and nowhere else.
+- **SKILL.md is capped at 16KB**; a larger one degrades toward "not adjudicable".
+- **English-only prompts.**
+- The evidence package is not persisted; the report is written to stdout.

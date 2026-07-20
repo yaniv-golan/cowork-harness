@@ -1,13 +1,6 @@
 import { describe, it, expect } from "vitest";
-import {
-  armorEvidence,
-  neutralizeMarkerLookalikes,
-  headTag,
-  evidenceOpen,
-  evidenceClose,
-  newNonce,
-} from "../scripts/lib/critique/armor.js";
-import { citationResolves } from "../scripts/lib/critique/evidence.js";
+import { armorEvidence, neutralizeMarkerLookalikes, headTag, evidenceOpen, evidenceClose, newNonce } from "../src/critique/armor.js";
+import { citationResolves } from "../src/critique/evidence.js";
 
 // The evidence package carries a third-party SKILL.md verbatim into BOTH evaluator prompts. A red-team
 // probe (scripts/critique-injection-probe.ts) showed all three models tested could be steered through it,
