@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSyn
 import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
+import { Scenario, AnswerRule, Assertion, FIDELITY_TIERS, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, newestStagedSibling } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, expandUserPath } from "./session.js";
 import {
@@ -1696,7 +1696,7 @@ async function cmdSkill(rawArgs: string[]) {
   const uploads: string[] = [];
   const folders: string[] = [];
   const envFidelity = process.env.COWORK_HARNESS_FIDELITY;
-  const FID_VALUES = ["protocol", "container", "microvm", "hostloop", "cowork"];
+  const FID_VALUES: readonly string[] = FIDELITY_TIERS;
   if (envFidelity && !FID_VALUES.includes(envFidelity))
     fail(
       "skill",
@@ -1765,7 +1765,7 @@ async function cmdSkill(rawArgs: string[]) {
       // validate at parse time → category `usage`. Previously an invalid value was only rejected
       // later by Scenario.parse (a Zod throw), which the top-level catch mapped to `internal` — a user
       // mistake masquerading as a harness bug.
-      const FID = ["protocol", "container", "microvm", "hostloop", "cowork"];
+      const FID: readonly string[] = FIDELITY_TIERS;
       if (!FID.includes(fidelity))
         fail("skill", "usage", `--fidelity must be one of ${FID.join("|")} (got "${fidelity}")`, undefined, isJson0);
     } else if (name === "--model") model = nextValStrict();
@@ -2201,10 +2201,6 @@ async function cmdProbeDispatch(rawArgs: string[]) {
   else out(formatDispatchProbe(projection));
   process.exit(projection.verdict.pass ? 0 : 1);
 }
-
-/** All fidelity tiers the harness understands (the canonical Scenario `fidelity:` enum), surfaced so a
- *  JSON caller of `vm status` sees the same set the CLI validates. `container` is the default tier. */
-const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "cowork"] as const;
 
 /** Resolve the on-disk file a named baseline loads from (mirrors loadBaseline's resolution) so the JSON
  *  envelope can report it. `latest` resolves to its concrete file; an absolute name is itself. */
