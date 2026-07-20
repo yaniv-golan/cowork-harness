@@ -12,7 +12,8 @@
 // so the tier is pinned rather than left to the caller.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { lookupSkillFlag } from "../run/skill-flag-surface.js";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename } from "node:path";
@@ -60,21 +61,53 @@ interface ParsedArgs {
   fidelity: string;
   evaluatorModel?: string;
   outputFormat: "json" | "text";
+  /** argv fragments for BOTH spawned turns — session SOURCES, which must match or the resume throws. */
+  forwardBoth: string[];
+  /** argv fragments for the GRADED turn only. */
+  forwardTask: string[];
+  /** Parsed from a forwarded --timeout so critique's own spawn kill-switch can stretch past it. */
+  taskTimeoutMs?: number;
 }
 
 function usage(): string {
-  return `cowork-harness critique <skill-folder> --prompt "<probe>"
+  return `cowork-harness critique <skill-folder> --prompt "<probe>" | --prompt-file <path>
 
   EXPERIMENTAL. Runs the skill, asks the agent what confused it, then does NOT believe the answer:
   a blinded evaluator grades the self-report against a frozen record of what actually happened, and
   drops any claim whose citation is not verbatim in that evidence. Discovery instrument, not a gate.
 
-  --prompt "<probe>"        the task to run the skill against (required)
-  --evaluator-model <id>    override the evaluator model (env: COWORK_HARNESS_EVALUATOR_MODEL)
-  --dotenv <path>           load credentials from a dotenv file
-  --fidelity container      container tier only — the resume-continuity this loop depends on is
-                            verified there and nowhere else
-  --output-format json|text
+Probe (one required):
+  --prompt "<probe>"        the task to run the skill against
+  --prompt-file <path>      read the probe verbatim from a file (no shell parsing)
+
+Files and sources (forwarded to the graded run — REQUIRED for "analyze this document" skills):
+  --upload <path>           mount a file at mnt/uploads/<name> (repeatable)
+  --folder <dir>            connect a folder at mnt/<name> (repeatable)
+  --plugin <dir> | --marketplace <dir> --enable <name@mkt>   extra skill sources
+
+Graded-run tuning (shapes the run being graded):
+  --model <id>              session model for the agent doing the work AND reflecting
+  --timeout <ms>            wall-clock budget for the task turn
+  --label <tag>             generation tag in the run index (pair critiques across fixes)
+  --allow-missing-capability   don't fail the graded run on a lean-image capability gap
+  --answer "<q-regex>=<choice>" | --answer-policy <yaml>   pre-answer the skill's gates (repeatable)
+  --on-unanswered fail|first   unscripted-gate policy ('prompt' is refused: no TTY inside the spawn)
+  --decider-llm [--intent "<line>"] [--decider-model <id>] | --decider-cmd '<helper>' | --decider-dir <dir>
+                            answer LIVE gates in the graded run (see 'skill --help')
+
+Critique's own:
+  --evaluator-model <id>    the grading model (env: COWORK_HARNESS_EVALUATOR_MODEL)
+  --output-format json|text critique's REPORT format (inner turns always speak json internally)
+  --fidelity container      container tier only
+  --keep                    accepted as a no-op — runs are always kept
+  --dotenv <path>           credentials
+  Global --run-dir <path>   must PRECEDE the subcommand
+
+Not accepted (each errors with its reason rather than being silently ignored):
+  --session-id / --resume   critique mints and manages its own session internally
+  --repeat + companions     fixed two-turn protocol — loop critique itself; pair by fingerprint.skillHash
+  --ablate-skill            grading a skill you removed is incoherent
+  --quiet/--verbose/--compact/--demo/--dry-run   inner-turn rendering or preview — no effect on the report
 
 COST AND PREREQUISITES — read before running:
   * Each critique is FOUR model workloads: two container runs (task + reflection) and two evaluator
@@ -94,6 +127,18 @@ KNOWN LIMITATIONS: container tier only; SKILL.md is capped at 16KB (a larger one
   docs/critique.md.`;
 }
 
+/** Reads a value-flag that may appear as EITHER `--flag value` (space form) OR `--flag=value` (equals
+ *  form). critique's argv parsing runs in a separate process from cli.ts's `flagValue`/`flagValueEitherForm`
+ *  helpers (a process-boundary-separated CLI — see the plan's Option (c) rejection), so it gets its own
+ *  small copy rather than importing those private helpers. Returns `[value, extraTokensConsumed]` — 0 for
+ *  the equals form (the value is inline in `a`), 1 for the space form (the value is the NEXT token) — so
+ *  the caller's `i += extraTokensConsumed` advances the loop exactly like the old `argv[++i]` did. */
+function flagVal(argv: string[], i: number, flag: string): [string, number] {
+  const a = argv[i];
+  if (a.startsWith(`${flag}=`)) return [a.slice(flag.length + 1), 0];
+  return [argv[i + 1], 1];
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   let prompt: string | undefined;
@@ -101,25 +146,92 @@ function parseArgs(argv: string[]): ParsedArgs {
   let fidelity = "container";
   let evaluatorModel: string | undefined;
   let outputFormat: "json" | "text" = "text";
+  let promptFile: string | undefined;
+  let taskTimeoutMs: number | undefined;
+  const forwardBoth: string[] = [];
+  const forwardTask: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--prompt") prompt = argv[++i];
-    else if (a === "--dotenv") dotenv = argv[++i];
-    else if (a === "--fidelity") fidelity = argv[++i];
-    else if (a === "--evaluator-model") evaluatorModel = argv[++i];
-    else if (a === "--output-format") outputFormat = argv[++i] as "json" | "text";
-    else if (a.startsWith("-")) throw new Error(`unknown flag: ${a}\n${usage()}`);
-    else positional.push(a);
+    if (a === "--prompt" || a.startsWith("--prompt=")) {
+      const [v, adv] = flagVal(argv, i, "--prompt");
+      prompt = v;
+      i += adv;
+    } else if (a === "--dotenv" || a.startsWith("--dotenv=")) {
+      const [v, adv] = flagVal(argv, i, "--dotenv");
+      dotenv = v;
+      i += adv;
+    } else if (a === "--fidelity" || a.startsWith("--fidelity=")) {
+      const [v, adv] = flagVal(argv, i, "--fidelity");
+      fidelity = v;
+      i += adv;
+    } else if (a === "--evaluator-model" || a.startsWith("--evaluator-model=")) {
+      const [v, adv] = flagVal(argv, i, "--evaluator-model");
+      evaluatorModel = v;
+      i += adv;
+    } else if (a === "--output-format" || a.startsWith("--output-format=")) {
+      const [v, adv] = flagVal(argv, i, "--output-format");
+      outputFormat = v as "json" | "text";
+      i += adv;
+    } else if (a === "--prompt-file" || a.startsWith("--prompt-file=")) {
+      const [v, adv] = flagVal(argv, i, "--prompt-file");
+      promptFile = v;
+      i += adv;
+    } else if (a === "--keep") {
+      // accepted no-op: critique always keeps its runs, so the flag's promise already holds. Erroring on
+      // an already-satisfied request is hostile; silently ignoring an UNsatisfied one is this repo's
+      // anti-pattern — this is the former.
+    } else if (a.startsWith("-")) {
+      // Not critique-owned: consult THE shared spec rather than a hand-mirrored list here. A skill flag
+      // with no disposition is impossible — the parity test makes that red CI.
+      const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+      const spec = lookupSkillFlag(name);
+      if (!spec) throw new Error(`unknown flag: ${a}\n${usage()}`);
+      if (spec.critique.kind === "reject") throw new Error(`${name} is not accepted by critique: ${spec.critique.reason}\n${usage()}`);
+      if (spec.critique.kind === "owned") throw new Error(`unknown flag: ${a}\n${usage()}`); // owned => handled above
+      let value: string | undefined;
+      if (spec.arity === 1) {
+        const [v, adv] = flagVal(argv, i, name);
+        value = v;
+        i += adv;
+      }
+      // --on-unanswered prompt would resolve differently than the caller expects: there is no TTY inside
+      // the spawn, so it cannot actually prompt anyone.
+      if (name === "--on-unanswered" && value !== "fail" && value !== "first")
+        throw new Error(
+          `--on-unanswered must be "fail" or "first" for critique (got "${value}") — there is no TTY inside the spawned turn\n${usage()}`,
+        );
+      if (name === "--timeout") {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n <= 0) throw new Error(`--timeout requires a positive integer (ms), got "${value}"`);
+        taskTimeoutMs = n;
+      }
+      const fragment = spec.arity === 1 ? [name, value!] : [name];
+      // EXCLUSIVE buckets. `buildTaskTurnArgs` spreads BOTH arrays, so a "both" flag pushed into both
+      // would be emitted TWICE on the task turn — which is not a no-op for repeatable flags like
+      // --upload (it mounts the file twice). Sources go to forwardBoth ONLY; the task builder picks
+      // them up from there.
+      if (spec.critique.turns === "both") forwardBoth.push(...fragment);
+      else forwardTask.push(...fragment);
+    } else positional.push(a);
   }
   if (positional.length !== 1) throw new Error(usage());
-  if (!prompt || !prompt.trim()) throw new Error(`--prompt "<probe>" is required\n${usage()}`);
+  if (prompt !== undefined && promptFile !== undefined) throw new Error(`--prompt and --prompt-file are mutually exclusive\n${usage()}`);
+  if (promptFile !== undefined) {
+    if (!existsSync(promptFile)) throw new Error(`--prompt-file not found: ${promptFile}`);
+    prompt = readFileSync(promptFile, "utf8");
+  }
+  if (!prompt || !prompt.trim()) throw new Error(`--prompt "<probe>" or --prompt-file <path> is required\n${usage()}`);
   if (fidelity !== "container")
     throw new Error(
       `skill-critique is container-tier only (the resume-continuity behavior it relies on is only verified there); got --fidelity ${fidelity}`,
     );
   if (outputFormat !== "json" && outputFormat !== "text")
     throw new Error(`--output-format must be "text" or "json" (got "${outputFormat}")`);
-  return { skillFolder: positional[0], prompt, dotenv, fidelity, evaluatorModel, outputFormat };
+  // Fail fast with critique's OWN clear error (mirroring cli.ts's global --dotenv existence check,
+  // ~line 627) rather than letting an absent file surface later as a generic instrument-failure
+  // diagnostic from the child `skill` invocation's own (differently-worded) rejection.
+  if (dotenv !== undefined && !existsSync(dotenv)) throw new Error(`--dotenv file not found: ${dotenv}\n${usage()}`);
+  return { skillFolder: positional[0], prompt, dotenv, fidelity, evaluatorModel, outputFormat, forwardBoth, forwardTask, taskTimeoutMs };
 }
 
 interface TurnOutcome {
@@ -593,6 +705,55 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
  *  (usage/runtime) rather than inventing a new code. */
 const EXIT_INSTRUMENT_FAILURE = 2;
 
+/** Argv for the GRADED turn. Forwarded fragments come BEFORE critique's pinned flags so a pinned value
+ *  always wins (value flags are last-wins in the skill lane's parser). Exported for unit tests — the
+ *  forwarding invariants are the kind that fail every run when wrong, so they are worth testing without
+ *  paying for a spawn. */
+export function buildTaskTurnArgs(opts: ParsedArgs, sessionId: string): string[] {
+  const dotenvArgs = opts.dotenv ? ["--dotenv", opts.dotenv] : [];
+  return [
+    ...dotenvArgs,
+    "skill",
+    opts.skillFolder,
+    opts.prompt,
+    ...opts.forwardBoth,
+    ...opts.forwardTask,
+    "--fidelity",
+    "container",
+    "--session-id",
+    sessionId,
+    "--keep",
+    "--output-format",
+    "json",
+  ];
+}
+
+/** Argv for the REFLECTION turn — a resume of the same session.
+ *
+ *  Only `forwardBoth` is replayed here, and it MUST be: session sources are part of the origin key, so a
+ *  reflection turn that omits them computes a different identity and the resume throws fail-closed.
+ *  `forwardTask` is deliberately absent — `--decider-dir` in particular requires a fresh empty dir per run
+ *  and would break on turn 2, and gates belong to the graded run, not to critique's own protocol turn. */
+export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): string[] {
+  const dotenvArgs = opts.dotenv ? ["--dotenv", opts.dotenv] : [];
+  return [
+    ...dotenvArgs,
+    "skill",
+    opts.skillFolder,
+    REFLECTION_PROMPT,
+    ...opts.forwardBoth,
+    "--session-id",
+    sessionId,
+    "--resume",
+    "--fidelity",
+    "container",
+    "--on-unanswered",
+    "first",
+    "--output-format",
+    "json",
+  ];
+}
+
 async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
     writeSync(1, usage() + "\n");
@@ -609,24 +770,17 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     return;
   }
 
-  const dotenvArgs = opts.dotenv ? ["--dotenv", opts.dotenv] : [];
   const sessionId = `crit-${randomUUID()}`;
 
   try {
     // 1. Task turn.
-    const task = await runSkillTurn([
-      ...dotenvArgs,
-      "skill",
-      opts.skillFolder,
-      opts.prompt,
-      "--fidelity",
-      "container",
-      "--session-id",
-      sessionId,
-      "--keep",
-      "--output-format",
-      "json",
-    ]);
+    // Stretch critique's own kill-switch past a forwarded --timeout: otherwise a longer budget would be
+    // killed by the INSTRUMENT and misreported as an infra failure rather than a gradeable timeout. The
+    // +60s covers staging and container start — not principled, and a cold image pull can exceed it.
+    const task = await runSkillTurn(
+      buildTaskTurnArgs(opts, sessionId),
+      opts.taskTimeoutMs ? Math.max(TURN_TIMEOUT_MS, opts.taskTimeoutMs + 60_000) : TURN_TIMEOUT_MS,
+    );
     const outDir = extractOutDir(task);
     if (!outDir) {
       // F36: surface WHY there's no envelope/status line when it was the bounded spawn itself that gave up.
@@ -677,21 +831,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const boundary = snapshotTurnBoundary(outDir);
 
     // 3. Reflection turn: resume the SAME session.
-    const reflect = await runSkillTurn([
-      ...dotenvArgs,
-      "skill",
-      opts.skillFolder,
-      REFLECTION_PROMPT,
-      "--session-id",
-      sessionId,
-      "--resume",
-      "--fidelity",
-      "container",
-      "--on-unanswered",
-      "first",
-      "--output-format",
-      "json",
-    ]);
+    const reflect = await runSkillTurn(buildReflectionTurnArgs(opts, sessionId));
 
     // F37: validate the reflection turn at the PROTOCOL level — exit code, envelope shape, and
     // session/turn continuity (turn>1 AND outDir/sessionId match the task turn's) — BEFORE trusting its

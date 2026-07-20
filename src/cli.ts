@@ -708,7 +708,11 @@ async function main() {
   // more specific "<flag> requires a value" error; both exit 2, and the input is rare (value omitted AND
   // literally equal to the token).
   if (!hasHelp(rest) && COMMANDS.includes(cmd)) {
-    const misplacedGlobal = rest.find((t) => t === "--dotenv" || t === "--run-dir");
+    // `critique` is exempt from the `--dotenv` half: it is a legitimate PER-COMMAND flag there (forwarded
+    // to the inner `skill` turns and, since the fix below, validated by critique's own parseArgs), not a
+    // misplaced global. `--run-dir` stays rejected for every command, `critique` included — nothing reads
+    // a per-command `--run-dir`.
+    const misplacedGlobal = rest.find((t) => (t === "--dotenv" && cmd !== "critique") || t === "--run-dir");
     if (misplacedGlobal)
       fail(
         cmd,
