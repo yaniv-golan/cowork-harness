@@ -144,8 +144,10 @@ found in the run's own output. The harness emits everything a grader needs; the 
 
 **Don't cross-pair generations.** When you run the same skill across fixes, a harvest step must not pair
 a *pre-fix* `result.json` with a *post-fix* critique. The authoritative key is
-**`fingerprint.skillHash`** — content-exact, recorded on every live run, and it changes on any tracked
-edit (an un-`git add`-ed new file changes neither the hash nor the mounted skill). Group and pair on it;
+**`fingerprint.skillHash`** — content-exact, recorded on every live `run`/`skill` run that mounts a skill
+or plugin, and it changes on any tracked edit (an un-`git add`-ed new file changes neither the hash nor the
+mounted skill). A run that mounts nothing has nothing to hash and records no `skillHash`; the `chat` lane
+records no fingerprint at all. Group and pair on it;
 `inspect` and the run-index row surface a short prefix so you needn't open each `result.json`.
 `--label <tag>` adds a human-readable, orderable generation name on top (skillHash is the correctness
 key; the label is ergonomics). And `verify-run <run-dir> <scenario.yaml>` is the native staleness guard:

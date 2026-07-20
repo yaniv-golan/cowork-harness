@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`skill --repeat <N>`** (2–100), with `--min-pass-rate` / `--stop-on-diverge` / `--max-budget-usd` /
+  `--allow-budget-stop`. The variance rollup already existed but was `run`-only, because the flags were
+  parsed inline in the `run` command — the exploratory lane, where an iterate-across-fixes loop actually
+  lives, rejected them as unknown. Both lanes now share one parse (`run/repeat-flags.ts`) and one batch
+  engine, so rollup shape, JSON envelope, and batch verdict match. `skill --repeat` additionally rejects
+  `--session-id`/`--resume` (both pin a single run dir, so iterations would overwrite each other rather
+  than produce N independent samples) and `--decider-dir`/`--decider-cmd` (the reproducibility invariant
+  `run` already enforced).
+- **`result.json` `outcome`** — a one-field rollup of the `result` × `verdict.pass` × exit-code matrix:
+  `errored` / `no_deliverable` / `delivered_with_verdict_fail` / `delivered_clean`. Those three signals
+  legitimately disagree (a fail-severity signal flips the verdict while `result` stays `"success"`), and a
+  consumer driving a loop had to reconstruct "did this iteration deliver something usable?" from all
+  three. A pure function of fields the run already carries, so it cannot disagree with them; the granular
+  fields stay authoritative. Absent whenever `verdict` is absent. Note `delivered_*` means "no
+  stall/question signal fired", not positive evidence a deliverable exists — check `artifacts`.
+- **Generation-pairing `jq` recipes** in [docs/stats.md](./docs/stats.md) — pass-rate/cost per generation,
+  a per-generation verdict-signal histogram, and the before/after of a single fix, grouped on
+  `skillHash`/`runLabel` over `index.jsonl`.
+
+### Changed
+
+- **`diff`'s exit code now honors its own documented contract.** `--help` has always said "transcript is
+  advisory … tools/artifacts/meta are the gateable signal", but `identical` conjoined all four views, so
+  two live runs of the SAME skill exited 1 and the signal could not separate "behaviour changed" from
+  model stochasticity. `identical` now means the gateable views agree; transcript drift is reported
+  separately (`transcriptDiffers` in JSON, rendered in text when you ask for that view) so it stays
+  visible. `diff` also carries `skillHash` in the meta view now — a diff across a fix could not previously
+  name which two generations it compared.
+
 ### Fixed
 
 - **`fingerprint.skillHash` and `skillCommit` are now recorded on the `skill` and `probe-dispatch` lanes.**

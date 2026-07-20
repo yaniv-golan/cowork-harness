@@ -28,7 +28,9 @@
     },
     "referencesRead": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Skill reference/script files the agent Read (skill-relative: references/foo.md, scripts/bar.py), deduped in first-seen order. A progressive-disclosure signal for skill-quality measurement. Main-agent Reads only (sub-agent reads not attributed); references/ and scripts/ under a mounted plugin root, not assets/, never SKILL.md (delivered whole). Present on both live and replay."
     },
     "ablated": {
@@ -45,34 +47,65 @@
     },
     "contextEvents": {
       "type": "array",
-      "items": { "type": "object" },
+      "items": {
+        "type": "object"
+      },
       "description": "Context lifecycle events incl. compaction boundaries ({subtype, ts?, data?})."
     },
     "mcpErrors": {
       "type": "array",
-      "items": { "type": "object" },
+      "items": {
+        "type": "object"
+      },
       "description": "Failed MCP round-trips ({server, code?, message}). Live lane only."
     },
     "hookEvents": {
       "type": "array",
-      "items": { "type": "object" },
+      "items": {
+        "type": "object"
+      },
       "description": "PreToolUse hook block/allow decisions ({callbackId, decision, reason?, tool?})."
     },
     "fileToolAttempts": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["tool", "paths", "origin"],
+        "required": [
+          "tool",
+          "paths",
+          "origin"
+        ],
         "properties": {
-          "tool": { "type": "string" },
+          "tool": {
+            "type": "string"
+          },
           "paths": {
             "type": "object",
-            "properties": { "file_path": { "type": "string" }, "path": { "type": "string" } }
+            "properties": {
+              "file_path": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
           },
-          "gatePath": { "type": "string" },
-          "origin": { "enum": ["main", "subagent", "unknown"] },
-          "parentToolUseId": { "type": "string" },
-          "toolUseId": { "type": "string" }
+          "gatePath": {
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "main",
+              "subagent",
+              "unknown"
+            ]
+          },
+          "parentToolUseId": {
+            "type": "string"
+          },
+          "toolUseId": {
+            "type": "string"
+          }
         }
       },
       "description": "Attempt-level gated-file-tool telemetry (raw paths as sent, per Read/Write/Edit/Glob/Grep/MultiEdit tool_use). Undefined = evidence unavailable; [] = captured, no gated attempts."
@@ -81,24 +114,54 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["source", "tool", "decision"],
+        "required": [
+          "source",
+          "tool",
+          "decision"
+        ],
         "properties": {
-          "source": { "enum": ["pretooluse", "can_use_tool", "permission_denied"] },
-          "tool": { "type": "string" },
-          "path": { "type": "string" },
-          "callbackId": { "type": "string" },
-          "decisionReasonType": { "type": "string" },
-          "agentId": { "type": "string" },
-          "decision": { "enum": ["deny"] },
-          "reason": { "type": "string" },
-          "toolUseId": { "type": "string" }
+          "source": {
+            "enum": [
+              "pretooluse",
+              "can_use_tool",
+              "permission_denied"
+            ]
+          },
+          "tool": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "callbackId": {
+            "type": "string"
+          },
+          "decisionReasonType": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "deny"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "toolUseId": {
+            "type": "string"
+          }
         }
       },
       "description": "Decision-level path-denial telemetry from three filtered producers: the PreToolUse path gate's own callback, a denied can_use_tool ask on a gated file tool with a path, and a pre-ask permission_denied correlated to a recorded gated attempt. Undefined = evidence unavailable (older result, or replay without controlOut); [] = captured, no path denials."
     },
     "presentedFiles": {
       "type": "array",
-      "items": { "type": "object" },
+      "items": {
+        "type": "object"
+      },
       "description": "present_files promotions ({from, to, promoted, leaked}) — scratch→outputs deliverable surfacing (container tier)."
     },
     "mode": {
@@ -107,7 +170,7 @@
         "run",
         "chat"
       ],
-      "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed \u2014 treat absent as 'run'."
+      "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed — treat absent as 'run'."
     },
     "command": {
       "type": "string",
@@ -118,7 +181,7 @@
         "chat",
         "replay"
       ],
-      "description": "The CLI command that produced this result \u2014 finer than 'mode' (skill/record both have mode:'run'). The run index prefers it during a reindex so a skill/record row isn't relabeled 'run' (#48). Absent on pre-field results."
+      "description": "The CLI command that produced this result — finer than 'mode' (skill/record both have mode:'run'). The run index prefers it during a reindex so a skill/record row isn't relabeled 'run' (#48). Absent on pre-field results."
     },
     "scenario": {
       "type": "string"
@@ -185,19 +248,19 @@
         "no_result",
         "timeout"
       ],
-      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
+      "description": "How the run terminated in error — the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
     },
     "resultSubtype": {
       "type": "string",
-      "description": "The SDK result message's subtype verbatim (e.g. error_max_turns, error_during_execution, success) \u2014 a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution error without the harness inventing a taxonomy."
+      "description": "The SDK result message's subtype verbatim (e.g. error_max_turns, error_during_execution, success) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution error without the harness inventing a taxonomy."
     },
     "stderrLogPath": {
       "type": "string",
-      "description": "Absolute path to the agent's full stderr log (<outDir>/agent.stderr.log), surfaced so an OOM/crash debugger knows where to look. Live path only \u2014 absent on replay."
+      "description": "Absolute path to the agent's full stderr log (<outDir>/agent.stderr.log), surfaced so an OOM/crash debugger knows where to look. Live path only — absent on replay."
     },
     "stalledOnQuestion": {
       "type": "boolean",
-      "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped \u2014 incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
+      "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
     },
     "capabilityProbe": {
       "type": "string",
@@ -206,7 +269,7 @@
         "unverified",
         "skipped"
       ],
-      "description": "Fix 6h: capability-probe outcome \u2014 definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
+      "description": "Fix 6h: capability-probe outcome — definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
     },
     "requiresCapabilityUnmet": {
       "type": "object",
@@ -462,7 +525,7 @@
     },
     "modelUsage": {
       "type": "object",
-      "description": "Per-model cost/token breakdown, denormalized from the SDK result message's own modelUsage field (\u00a74.7, M3) \u2014 cumulative for the whole run. Field names match the real observed SDK payload.",
+      "description": "Per-model cost/token breakdown, denormalized from the SDK result message's own modelUsage field (§4.7, M3) — cumulative for the whole run. Field names match the real observed SDK payload.",
       "additionalProperties": {
         "type": "object",
         "properties": {
@@ -563,6 +626,16 @@
     "assertions": {
       "type": "array"
     },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "errored",
+        "no_deliverable",
+        "delivered_with_verdict_fail",
+        "delivered_clean"
+      ],
+      "description": "One-field rollup of the result x verdict.pass x exit-code matrix, for consumers driving an iterative loop. A pure function of `result` and `verdict` (see deriveOutcome, src/run/outcome.ts) - adds no judgement and cannot disagree with them. `errored` dominates; then the no-deliverable signals (stalled/ended_with_question); then the verdict. ABSENT whenever `verdict` is absent (chat, or a pre-existing kept run) - treat absence as unknown, never as a pass. NOTE: 'delivered_*' means no stall/question signal fired, NOT positive evidence a deliverable exists - check artifacts/workspaceFiles for that. `no_deliverable` is reachable only on open-ended scenarios on the live lane, and is warn-severity, so it can coexist with verdict.pass true and exit 0 - do not infer the exit code from this field."
+    },
     "verdict": {
       "type": "object",
       "description": "The overall run/asserted-lane verdict: computeVerdict's full return value, persisted VERBATIM (the same shape the --output-format json stdout envelope attaches to every result, since envelope.ts calls computeVerdict too) so the persisted and streamed channels can never diverge. pass/exitCode are the SAME values every verdict site (the run/skill exit, the footer, the JSON envelope ok) routes through computeVerdict for. signals[]/guards[] are the raw verdict inputs; failures[] collapses signals into a flat, jq-friendly list — names the failing assertion key when a failure traces to one, else carries just a hard-verdict guard reason (infra error, unanswered gate, scan-based host-path leak, etc.); empty on a pass. Run/asserted lane ONLY — absent (undefined) on a chat result, and on a result.json written before this field existed.",
@@ -572,14 +645,21 @@
         },
         "exitCode": {
           "type": "integer",
-          "enum": [0, 1]
+          "enum": [
+            0,
+            1
+          ]
         },
         "signals": {
           "type": "array",
           "description": "the raw verdict signals computeVerdict evaluated (assertion failures + guard-fired reasons + warn-only signals like non_determinism); [] on a clean pass.",
           "items": {
             "type": "object",
-            "required": ["code", "severity", "message"],
+            "required": [
+              "code",
+              "severity",
+              "message"
+            ],
             "properties": {
               "code": {
                 "type": "string",
@@ -603,7 +683,10 @@
               },
               "severity": {
                 "type": "string",
-                "enum": ["fail", "warn"]
+                "enum": [
+                  "fail",
+                  "warn"
+                ]
               },
               "message": {
                 "type": "string"
@@ -616,14 +699,22 @@
           "description": "the \"guards active this run\" roster — one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
           "items": {
             "type": "object",
-            "required": ["name", "status"],
+            "required": [
+              "name",
+              "status"
+            ],
             "properties": {
               "name": {
                 "type": "string"
               },
               "status": {
                 "type": "string",
-                "enum": ["ok", "fired", "na", "unverified"]
+                "enum": [
+                  "ok",
+                  "fired",
+                  "na",
+                  "unverified"
+                ]
               }
             }
           }
@@ -632,7 +723,9 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["message"],
+            "required": [
+              "message"
+            ],
             "properties": {
               "assertion": {
                 "type": "string",
@@ -645,7 +738,13 @@
           }
         }
       },
-      "required": ["pass", "exitCode", "signals", "guards", "failures"]
+      "required": [
+        "pass",
+        "exitCode",
+        "signals",
+        "guards",
+        "failures"
+      ]
     },
     "subagents": {
       "type": "array",
@@ -663,19 +762,19 @@
           },
           "parentToolUseId": {
             "type": "string",
-            "description": "the dispatching parent's toolUseId \u2014 reconstructs the nested dispatch tree (#16)"
+            "description": "the dispatching parent's toolUseId — reconstructs the nested dispatch tree (#16)"
           },
           "dispatchAgentType": {
             "type": "string",
-            "description": "the DISPATCH-INPUT type (\"unknown\" when the input omitted subagent_type) \u2014 unchanged meaning, renamed from the ambiguous agentType now that a resolved type lands beside it"
+            "description": "the DISPATCH-INPUT type (\"unknown\" when the input omitted subagent_type) — unchanged meaning, renamed from the ambiguous agentType now that a resolved type lands beside it"
           },
           "resolvedAgentType": {
             "type": "string",
-            "description": "the BINARY-resolved child type from task_started (incl. the general-purpose fallback) \u2014 strictly better evidence than dispatchAgentType for a type-less dispatch"
+            "description": "the BINARY-resolved child type from task_started (incl. the general-purpose fallback) — strictly better evidence than dispatchAgentType for a type-less dispatch"
           },
           "dispatchTypeOmitted": {
             "type": "boolean",
-            "description": "the dispatch input carried no subagent_type at all (proven by the full input parse) \u2014 the wildcard-fallback trap fired"
+            "description": "the dispatch input carried no subagent_type at all (proven by the full input parse) — the wildcard-fallback trap fired"
           },
           "declaredTools": {
             "type": "array",
@@ -853,7 +952,7 @@
             "git",
             "raw"
           ],
-          "description": "the file-set boundary used for skillHash \u2014 \"git\" (git-tracked set \u2014 the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
+          "description": "the file-set boundary used for skillHash — \"git\" (git-tracked set — the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
         },
         "agentScope": {
           "type": "string",
@@ -881,14 +980,14 @@
       "items": {
         "type": "string"
       },
-      "description": "The user-visible mount roots (relative to mnt/) for this run \u2014 `outputs` plus each connected work folder's resolved mount name. Plugins are not included (read-only inputs, never artifact roots)."
+      "description": "The user-visible mount roots (relative to mnt/) for this run — `outputs` plus each connected work folder's resolved mount name. Plugins are not included (read-only inputs, never artifact roots)."
     },
     "readonlyFolderRoots": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts \u2014 inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
+      "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts — inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
     },
     "artifacts": {
       "type": "array",
@@ -910,7 +1009,7 @@
     },
     "workspaceFiles": {
       "type": "array",
-      "description": "Working folder panel's canonical file model (\u00a76.3, M6) \u2014 every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it).",
+      "description": "Working folder panel's canonical file model (§6.3, M6) — every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it).",
       "items": {
         "type": "object",
         "required": [
@@ -947,11 +1046,11 @@
       "items": {
         "type": "string"
       },
-      "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) \u2014 the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
+      "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) — the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
     },
     "preRunLinkAware": {
       "type": "boolean",
-      "description": "true iff preRunPaths was captured with the link-aware walk (manifest v2+); absent/false \u21d2 a pre-#38 baseline, no_unexpected_files then excludes link entries from the post walk. Live/verify-run only."
+      "description": "true iff preRunPaths was captured with the link-aware walk (manifest v2+); absent/false ⇒ a pre-#38 baseline, no_unexpected_files then excludes link entries from the post walk. Live/verify-run only."
     },
     "preRunHashes": {
       "type": "object",
@@ -965,7 +1064,11 @@
     },
     "preRunOrigin": {
       "type": "string",
-      "enum": ["local-walk", "remote-unavailable", "local-unreadable"],
+      "enum": [
+        "local-walk",
+        "remote-unavailable",
+        "local-unreadable"
+      ],
       "description": "Provenance of the pre-run baseline. local-walk = complete local walk; local-unreadable = a connected-folder source could not be walked so the baseline is partial (no_unexpected_files / input_unmodified then fail evidence-unavailable); remote-unavailable is reserved for a future cloud producer. Absent on an older run predating the field."
     },
     "partial": {
@@ -1014,7 +1117,10 @@
       "description": "User --label generation tag (iterate-across-fixes loop); ergonomics only, authoritative version key is fingerprint.skillHash"
     },
     "skillCommit": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Best-effort git HEAD shared by the session's skill source dirs — commit provenance, not a grouping key; null if dirs span >1 repo / non-git / unresolved"
     },
     "fidelityWarnings": {
@@ -1033,7 +1139,7 @@
       "items": {
         "type": "string"
       },
-      "description": "capability families the agent image omits but the skill used (live built-image tiers) \u2014 computeVerdict fails unless allow_missing_capability"
+      "description": "capability families the agent image omits but the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability"
     },
     "gateProvenance": {
       "type": "object",
@@ -1084,11 +1190,11 @@
     },
     "skillToolAvailable": {
       "type": "boolean",
-      "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" \u2014 false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
+      "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" — false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
     },
     "staleness": {
       "type": "array",
-      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics.",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC §11 for per-class semantics.",
       "items": {
         "type": "object",
         "required": [
@@ -1160,7 +1266,7 @@
     },
     "tasks": {
       "type": "array",
-      "description": "Progress panel (\u00a76.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum \u2014 this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
+      "description": "Progress panel (§6.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum — this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
       "items": {
         "type": "object",
         "required": [
@@ -1190,7 +1296,7 @@
     },
     "context": {
       "type": "object",
-      "description": "Context/Connectors panel (\u00a76.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
+      "description": "Context/Connectors panel (§6.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
       "properties": {
         "tools": {
           "type": "array",

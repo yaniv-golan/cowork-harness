@@ -3,6 +3,7 @@ import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
 import { rollupPasses, type RepeatRollup } from "./repeat.js";
 import type { MatrixRollup, MatrixRepeatRollup } from "./matrix.js";
+import { deriveOutcome } from "./outcome.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts). writeSync flushes before process.exit on a pipe.
 const out = (s: string) => writeSync(1, s + "\n");
@@ -85,7 +86,10 @@ export interface JsonEnvelopeOpts {
 function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): Record<string, unknown> {
   const { rollups, minPassRate, allowBudgetStop, matrix, matrixRepeat, extra } = opts;
   const lane = command === "replay" ? "replay" : "live";
-  const withVerdict = results.map((r) => ({ ...r, verdict: computeVerdict(r, lane) }));
+  const withVerdict = results.map((r) => {
+    const withV = { ...r, verdict: computeVerdict(r, lane) };
+    return { ...withV, outcome: deriveOutcome(withV) };
+  });
   const ok = matrixRepeat
     ? !matrixRepeat.anyFail
     : matrix

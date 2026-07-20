@@ -181,7 +181,9 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
      verdict.
 2. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
-   content-exact, on every live run, changes on any tracked edit. **Group/pair on it** (`inspect` and the
+   content-exact, on every live `run`/`skill` run that mounts a skill or plugin (a run that mounts nothing
+   records none; the `chat` lane records no fingerprint), changes on any tracked edit. **Group/pair on it**
+   (`inspect` and the
    run-index row surface a short prefix). Add `--label <tag>` for a human-readable generation name
    (skillHash is the correctness key; the label is ergonomics). `cowork-harness verify-run <run-dir>
    <scenario.yaml>` is the native staleness guard: it **warns** when a kept run predates the current

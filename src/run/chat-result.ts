@@ -151,6 +151,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     unansweredGate: undefined,
     staleness: undefined,
     skippedAssertions: undefined,
+    outcome: undefined, // rollup of `verdict`; chat has none, so this is absent too
     verdict: undefined, // chat carries NO verdict (no assertions were evaluated) — left absent, never a vacuous {pass:true,...}
   });
 }
