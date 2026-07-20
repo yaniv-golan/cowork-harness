@@ -89,6 +89,7 @@ import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonPayloadEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput } from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
+import { parseRepeatFlags, RepeatFlagError } from "./run/repeat-flags.js";
 import {
   MatrixFile,
   expandMatrix,
@@ -313,6 +314,14 @@ Output:
   --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
   --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
+  --repeat <N>                     run the SAME skill+prompt N times (2-100) and aggregate a variance
+                                   rollup instead of a single pass/fail — "did this finding reproduce, or
+                                   did it pass once?". Every run is still kept and indexed.
+  --min-pass-rate <0..1>           batch verdict threshold (default 1.0 = every run must pass). Needs --repeat.
+  --stop-on-diverge                stop the batch as soon as one run passes and another fails. Needs --repeat.
+  --max-budget-usd <x>             stop the batch once cumulative cost reaches x (degrades LOUDLY if a run
+                                   reports no cost telemetry). Needs --repeat.
+  --allow-budget-stop              treat a budget-stopped batch as a pass rather than incomplete. Needs --repeat.
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
@@ -1684,6 +1693,16 @@ async function cmdRun(rawArgs: string[]) {
 }
 
 async function cmdSkill(rawArgs: string[]) {
+  // --repeat family: parsed via the SHARED seam so `skill` and `run` cannot drift. Consumed here (and
+  // removed from argv) before the common-flag parse, which would otherwise reject them as unknown.
+  let repeatFlags;
+  try {
+    repeatFlags = parseRepeatFlags(rawArgs, "skill");
+  } catch (e) {
+    if (e instanceof RepeatFlagError) return void fail("skill", "usage", e.message, undefined, isJsonOutput(rawArgs));
+    throw e;
+  }
+  rawArgs = repeatFlags.rest;
   if (hasHelp(rawArgs)) return void log(SKILL_HELP);
   const { rest: args, flags } = takeCommonFlags(rawArgs, "skill");
   const positional: string[] = [];
@@ -1962,17 +1981,18 @@ async function cmdSkill(rawArgs: string[]) {
   const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
   const o = resolveOutput("skill", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
-  let result: RunResult;
-  try {
-    result = await runOneScenario({
+  const { repeatN, minPassRate, stopOnDiverge, maxBudgetUsd, allowBudgetStop } = repeatFlags;
+  const runSkillOnce = (label: string, rethrowUnanswered = false) =>
+    runOneScenario({
       command: "skill",
       scenario,
-      label: scenario.name,
+      label,
       flags,
       policy,
       externalChannel,
       o,
       keep,
+      rethrowUnanswered,
       extra: {
         session,
         sessionId,
@@ -1982,13 +2002,34 @@ async function cmdSkill(rawArgs: string[]) {
         nonDeterministicHint: flags.deciderDir != null || flags.deciderCmd != null, // driving agent / helper answers → not reproducible
       },
     });
+
+  const results: RunResult[] = [];
+  let rollup: RepeatRollup | undefined;
+  try {
+    if (repeatN === undefined) {
+      results.push(await runSkillOnce(scenario.name));
+    } else {
+      // Same batch engine `run` uses — flakiness on the exploratory lane is the same measurement, and
+      // "did this finding reproduce?" is exactly the question an iterate-across-fixes loop asks here.
+      ({ rollup } = await runRepeatBatch({
+        scenarioName: scenario.name,
+        repeatN,
+        stopOnDiverge,
+        maxBudgetUsd,
+        makeLabel: (n) => `${scenario.name} (repeat ${n + 1}/${repeatN})`,
+        runOnce: (label) => runSkillOnce(label, true),
+        onResult: (r) => results.push(r),
+      }));
+    }
   } finally {
     externalChannel?.close?.();
   }
   // All channels keep stdout free → the json envelope is the only stdout (footer goes to stderr, and is
   // mutually exclusive with --output-format json). The footer itself is emitted inside runOneScenario.
-  if (o.json) out(jsonEnvelope("skill", [result]));
-  process.exit(computeVerdict(result, "live").pass ? 0 : 1);
+  if (o.json) out(jsonEnvelope("skill", results, rollup ? { rollups: [rollup], minPassRate, allowBudgetStop } : {}));
+  else if (rollup) log(formatRepeatRollup(rollup, minPassRate, allowBudgetStop));
+  const ok = rollup ? rollupPasses(rollup, minPassRate, allowBudgetStop) : results.every((r) => computeVerdict(r, "live").pass);
+  process.exit(ok ? 0 : 1);
 }
 
 const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
