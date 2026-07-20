@@ -351,8 +351,13 @@ export function validateReflectionTurn(
         `reflection turn's outDir (${r0.outDir}) does not match the task turn's outDir (${expectedOutDir}) — ` +
         `this shows turn>1 but looks like a resume of a DIFFERENT session, not session ${expectedSessionId}`,
     };
+  // A session-pinned run dir is named `sess-<id>` (execute.ts's `local_<hrtime> | sess-<id>` convention),
+  // so the basename carries a prefix the caller's `--session-id` value does not. Accept EITHER form
+  // rather than stripping: a blind strip would corrupt a session id that itself begins with "sess-".
+  // Without this, every reflection turn read as a resume of a DIFFERENT session and the evaluator was
+  // never invoked — a live smoke of `cowork-harness critique` failed on exactly that.
   const reflectedSessionId = basename(r0.outDir);
-  if (reflectedSessionId !== expectedSessionId)
+  if (reflectedSessionId !== expectedSessionId && reflectedSessionId !== `sess-${expectedSessionId}`)
     return {
       ok: false,
       reason: `reflection turn's outDir implies session id "${reflectedSessionId}", expected "${expectedSessionId}"`,
