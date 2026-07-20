@@ -191,7 +191,9 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
      verdict.
 2. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
-   content-exact, on every live `run`/`skill` run that mounts a skill or plugin (a run that mounts nothing
+   content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but the `skill` lane emits it
+   only from source; on published 1.4.0 that lane emits no `skillHash` at all, so verify the field is present
+   before pairing on it rather than assuming** (a run that mounts nothing
    records none; the `chat` lane records no fingerprint), changes on any tracked edit. **Group/pair on it**
    (`inspect` and the
    run-index row surface a short prefix). Add `--label <tag>` for a human-readable generation name

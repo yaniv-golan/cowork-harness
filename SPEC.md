@@ -603,7 +603,7 @@ unused — reserving it now keeps a later addition additive rather than a renumb
 `0`/`1`/`2`/`3` space. Exit-code space is **per-command**, not global (`status` uses `0`/`1`/`2`/`3`
 with its own meanings); this reservation applies only to the `run`/`skill` family.
 
-**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
+**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
 `2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
 shape, unsupported version, unrecognized assertion key) or any per-file throw, plus the batch loop's
 own source-resolution failures (`--assert-from`/`--reassert` drift, scenario-parse errors, `--write`

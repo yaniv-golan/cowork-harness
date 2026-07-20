@@ -44,7 +44,10 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   What the ≥ 1.4.0 floor gates, by release:
 
   - **UNRELEASED (not in any published version yet — `critique`, `skill --repeat`, `RunResult.outcome`,
-    `diff`'s gateable-signal exit code):** these ship from source only. `npm i -g "cowork-harness@>=1.4.0"`
+    `diff`'s gateable-signal exit code, and — easy to miss because it fails SOFTLY — the `skill`/`probe-dispatch`
+    lanes emitting `fingerprint.skillHash`/`skillCommit` AT ALL. On published 1.4.0 those lanes emit NEITHER
+    (the pairing tip fires there while the field cannot exist), so a generation-pairing step over `skill`-lane
+    runs silently groups on an absent key instead of erroring):** these ship from source only. `npm i -g "cowork-harness@>=1.4.0"`
     installs a CLI WITHOUT them, and they fail as "unknown command"/"unknown flag". Check
     `cowork-harness critique --help` before recommending the loop workflow; if it errors, the user is on a
     published build and needs to run from a source checkout.
