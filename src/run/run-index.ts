@@ -336,6 +336,8 @@ export function reindexFromRunsTree(runsRoot: string): {
   for (const r of priorRows) priorByIdentity.set(rowIdentity(r), r);
 
   const walkedIdentities = new Set<string>();
+  /** outDirs that yielded a row from the ROOT `result.json` (not an archive) — see the supersede clause. */
+  const rootWalkedOutDirs = new Set<string>();
   const walked: RunIndexRow[] = [];
   let skipped = 0;
   let skippedReplay = 0;
@@ -389,6 +391,7 @@ export function reindexFromRunsTree(runsRoot: string): {
         if (rootOutcome.kind === "row") {
           walked.push(rootOutcome.row);
           walkedIdentities.add(rowIdentity(rootOutcome.row));
+          rootWalkedOutDirs.add(rootOutcome.row.outDir);
         }
 
         // Archived turns: `result.turn-<N>.json` files left behind when a resume/reflection overwrote the
@@ -396,7 +399,19 @@ export function reindexFromRunsTree(runsRoot: string): {
         // also carries `result.graded.json`, a byte-identical COPY of turn 1 (critique/command.ts), not an
         // archive. A looser glob (`result*.json` / `result.*.json`) would match it too and double-count
         // the graded turn on every reindex.
-        for (const entry of readdirSync(outDir)) {
+        // Guarded: this scan now runs even when the root read FAILED, so it is reachable for dirs that
+        // are unreadable outright (EACCES on a root-owned or permission-mangled run dir). Unguarded, one
+        // such dir threw out of the whole walk and took every healthy sibling with it — violating this
+        // function's own contract that "a partial/crashed run dir shouldn't block indexing everything
+        // else". Before this scan moved past the root's `continue`s, the throw was simply unreachable.
+        let entries: string[];
+        try {
+          entries = readdirSync(outDir);
+        } catch {
+          skipped++;
+          continue;
+        }
+        for (const entry of entries) {
           if (!/^result\.turn-\d+\.json$/.test(entry)) continue;
           const turnOutcome = readResultFileForWalk(runsRoot, outDir, join(outDir, entry), priorByOutDir);
           if (turnOutcome.kind === "missing") continue; // vanished between readdir and lstat — an ordinary race
@@ -426,7 +441,13 @@ export function reindexFromRunsTree(runsRoot: string): {
   // self-heal). Note `priorByIdentity` has already collapsed all turn-less rows for one outDir into a
   // single entry, so at most one such row per outDir is dropped here: the most recent turn — which is
   // exactly the completion the current result.json (and thus the walked row) represents.
-  const walkedOutDirs = new Set(walked.map((r) => r.outDir));
+  // ROOT rows only. The clause below supersedes a legacy turn-less prior row on the grounds that the
+  // walked row "is exactly the completion the current result.json represents" — which is true only of a
+  // row read from the ROOT file. Once archive-only walks became possible (a damaged/absent root with
+  // `result.turn-N.json` beside it), keying on any walked row silently DELETED the legacy row and
+  // replaced it with an older archived turn: unrecoverable loss on the index that is supposed to be the
+  // durable history, during the operation whose job is to heal it.
+  const walkedOutDirs = rootWalkedOutDirs;
   const preserved = [...priorByIdentity.values()].filter(
     (r) => !walkedIdentities.has(rowIdentity(r)) && !(r.turn === undefined && walkedOutDirs.has(r.outDir)),
   );

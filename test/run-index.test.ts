@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -924,5 +924,68 @@ describe("reindexFromRunsTree — walks archived turns (result.turn-<N>.json), n
     const forOutDir = rows.filter((r) => r.outDir === outDir);
     expect(forOutDir, "an archived turn with no root result.json was dropped").toHaveLength(1);
     expect(forOutDir[0]!.turn).toBe(1);
+  });
+
+  it("does NOT abort the whole reindex when one run dir is unreadable", () => {
+    // The archive scan now runs even when the ROOT read failed, which made an unguarded readdirSync
+    // reachable for a dir that cannot be listed at all (EACCES). Unguarded, one such dir threw out of the
+    // walk and took every healthy sibling with it — violating this function's contract that a
+    // partial/crashed run dir must not block indexing everything else.
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-eacces-"));
+    const ok = join(runsRoot, "s", "ok");
+    mkdirSync(ok, { recursive: true });
+    writeFileSync(join(ok, "result.json"), resultJson({ turn: 1, outDir: ok }));
+    const locked = join(runsRoot, "s", "locked");
+    mkdirSync(locked, { recursive: true });
+    chmodSync(locked, 0o000);
+    try {
+      const { rows } = reindexFromRunsTree(runsRoot);
+      expect(
+        rows.filter((r) => r.outDir === ok),
+        "a healthy sibling was lost to an unreadable dir",
+      ).toHaveLength(1);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  it("preserves a legacy turn-less prior row when the dir walks ONLY archives", () => {
+    // The turn-less-supersede clause drops a legacy row on the grounds that the walked row "is exactly
+    // the completion the current result.json represents" — true only of a row read from the ROOT. Once
+    // archive-only walks became possible (damaged/absent root beside result.turn-N.json), keying on ANY
+    // walked row deleted the legacy row and replaced it with an OLDER archived turn: silent, permanent
+    // loss on the index that is meant to be the durable history, during the operation that heals it.
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-legacy-"));
+    const outDir = join(runsRoot, "s", "sess-legacy");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
+
+    const legacy = indexRowFromResult(JSON.parse(resultJson({ outDir, cost: { usd: 42 } })), { command: "skill", partial: false });
+    delete (legacy as { turn?: number }).turn; // pre-`turn`-era row
+    // reindexFromRunsTree derives the index path from runsRoot — it takes no second argument.
+    writeFileSync(join(runsRoot, "index.jsonl"), JSON.stringify(legacy) + "\n");
+
+    const { rows } = reindexFromRunsTree(runsRoot);
+    expect(
+      rows.some((r) => r.costUsd === 42),
+      "the legacy turn-less row was silently deleted by an archive-only walk",
+    ).toBe(true);
+  });
+
+  it("indexes archived turns when the root is CORRUPT, and still counts it skipped", () => {
+    // Coverage gap the missing-root test alone left open: re-adding the `corrupt` continue would have
+    // passed the whole suite. Each archived file is containment-checked independently, so a corrupt root
+    // says nothing about them.
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-corrupt-"));
+    const outDir = join(runsRoot, "s", "sess-corrupt");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "result.json"), "{not json");
+    writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir }));
+    const { rows, skipped } = reindexFromRunsTree(runsRoot);
+    expect(
+      rows.filter((r) => r.outDir === outDir),
+      "archives were dropped because the ROOT was corrupt",
+    ).toHaveLength(1);
+    expect(skipped, "the corrupt root should still be reported").toBeGreaterThan(0);
   });
 });
