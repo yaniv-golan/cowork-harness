@@ -3,6 +3,8 @@ import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { writeTextAtomic } from "../io.js";
+import type { InfraErrorSource } from "../types.js";
 import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
@@ -268,6 +270,11 @@ export async function cmdChat(args: string[]) {
   let containerName: string | undefined;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined;
   let record: import("./run.js").RunRecord | undefined;
+  // hostloop's live sidecar-crash sink (see spawnHostLoop/watchHostLoopSidecar) — folded into
+  // record.infraErrors once the session ends, and marked BEFORE this session's own teardown removes
+  // the sidecar container so that forced exit isn't misreported as a mid-run infra failure.
+  let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined;
+  let hostloopMarkTearingDown: (() => void) | undefined;
   // Sampled for the container/hostloop branches only (mirrors execute.ts) — protocol runs the host
   // binary directly with no container/process id to probe, so it legitimately never gets one.
   let resourceSampler: ResourceSampler | undefined;
@@ -281,6 +288,7 @@ export async function cmdChat(args: string[]) {
           } catch {
             /* already gone */
           }
+          hostloopMarkTearingDown?.();
           if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
         },
       })
@@ -346,6 +354,8 @@ export async function cmdChat(args: string[]) {
       });
       child = hl.child;
       containerName = hl.containerName;
+      hostloopInfraErrors = hl.infraErrors;
+      hostloopMarkTearingDown = hl.markTearingDown;
       // Same ResourceSampler lifecycle execute.ts uses for hostloop: sample the native agent process by
       // pid on an interval so buildChatResult's foldResources() call (chat-result.ts) has something to
       // fold — previously no sampler was ever started here, so a hostloop chat's resources.jsonl never
@@ -449,6 +459,10 @@ export async function cmdChat(args: string[]) {
     } catch {
       /* already gone */
     }
+    // mark BEFORE the forced removal below — this session's own `docker rm -f` makes the hostloop
+    // sidecar exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra
+    // failure (see watchHostLoopSidecar's doc comment).
+    hostloopMarkTearingDown?.();
     if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
     sidecar?.teardown();
     rl.close(); // the one shared stdin interface — closed once, here
@@ -463,6 +477,10 @@ export async function cmdChat(args: string[]) {
   // write. Otherwise write the same result.json/trace/index-row shape `run` and `skill` write, so a
   // chat session shows up in `stats`/`trace`/`scaffold` — previously chat discarded `record` entirely.
   if (record) {
+    // Fold the hostloop VM sidecar's own crash into infraErrors the SAME way execute.ts does — a live
+    // drive never re-reads the out-of-band `infra_error` row spawnHostLoop appends to events.jsonl (only
+    // cassette replay does), so this fold is the only path a sidecar crash reaches result.json through.
+    if (hostloopInfraErrors?.length) record.infraErrors.push(...hostloopInfraErrors);
     // workRoot is tier-conditional (mirrors execute.ts): protocol runs the host binary directly with
     // no container sandbox, so it has no `work/session/mnt` — only container/hostloop do.
     const workRoot = fidelity === "protocol" ? join(resolve(outDir), "work") : join(resolve(outDir), "work", "session", "mnt");
@@ -479,7 +497,8 @@ export async function cmdChat(args: string[]) {
       durationMs: Date.now() - start,
     });
     const secrets = collectSecrets();
-    writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(chatResult, null, 2), secrets));
+    // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
+    writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(chatResult, null, 2), secrets));
     appendIndexRow(runsWriteRoot(), indexRowFromResult(chatResult, { command: "chat", partial: false }));
     writeTrace(outDir, record, chatResult.egress, secrets, chatResult.durationMs);
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -163,6 +163,44 @@ describe("appendIndexRow / readIndex — the on-disk round trip", () => {
       expect(lines.join("")).toMatch(/::warning::.*corrupt line/);
     },
   );
+
+  it("quarantines a valid-JSON line whose shape is NOT a RunIndexRow (missing `git`) instead of casting it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
+    writeFileSync(join(dir, "index.jsonl"), JSON.stringify(good) + "\n" + JSON.stringify({ v: 1, scenario: "wrong-shape" }) + "\n");
+    const lines = muteStderr();
+    const rows = readIndex(dir);
+    // the malformed row never reaches the caller — no r.git.branch to throw on downstream in buildStats
+    expect(rows).toHaveLength(1);
+    expect(rows[0].scenario).toBe("a");
+    expect(lines.join("")).toMatch(/::warning::.*quarantining invalid-shape row/);
+  });
+
+  it("quarantines a row with an incompatible/missing schema version (`v` !== 1) even though every other field looks right", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
+    const wrongVersion = { ...indexRowFromResult(rr({ scenario: "b" }), { command: "run", partial: false }), v: 2 };
+    writeFileSync(join(dir, "index.jsonl"), JSON.stringify(good) + "\n" + JSON.stringify(wrongVersion) + "\n");
+    const rows = muteStderr() && readIndex(dir);
+    expect(rows.map((r) => r.scenario)).toEqual(["a"]);
+  });
+
+  it("quarantines a row whose `git` field is present but the wrong shape (e.g. a bare string, not {branch,sha})", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
+    const badGit = { ...indexRowFromResult(rr({ scenario: "b" }), { command: "run", partial: false }), git: "main" };
+    writeFileSync(join(dir, "index.jsonl"), JSON.stringify(good) + "\n" + JSON.stringify(badGit) + "\n");
+    const rows = muteStderr() && readIndex(dir);
+    expect(rows.map((r) => r.scenario)).toEqual(["a"]);
+  });
+
+  it("a quarantined row never reaches buildStats — no 'Cannot read properties of undefined (reading branch)' crash", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
+    writeFileSync(join(dir, "index.jsonl"), JSON.stringify(good) + "\n" + JSON.stringify({ v: 1, notARow: true }) + "\n");
+    muteStderr();
+    expect(() => buildStats(readIndex(dir), {})).not.toThrow();
+  });
 });
 
 function row(over: Partial<RunIndexRow>): RunIndexRow {
@@ -311,6 +349,65 @@ describe("resolveRunsFromIndex — mirrors resolveEventsFile's exact-then-fragme
 });
 
 describe("reindexFromRunsTree — one-time migration from result.json files", () => {
+  it(
+    "does not duplicate a row written before rows carried a turn: the walked row SUPERSEDES the " +
+      "turn-less prior for the same outDir, rather than being preserved alongside it",
+    () => {
+      const runsRoot = mkdtempSync(join(tmpdir(), "run-index-legacy-"));
+      const runDir = join(runsRoot, "s", "local_legacy");
+      mkdirSync(runDir, { recursive: true });
+      const result = {
+        scenario: "s",
+        fidelity: "container",
+        baseline: "x",
+        result: "success" as const,
+        turn: 1,
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: runDir,
+      };
+      writeFileSync(join(runDir, "result.json"), JSON.stringify(result));
+      // Exactly what this run's index row looked like before the turn field existed.
+      const legacy = indexRowFromResult(result as never, { command: "run", partial: false });
+      delete (legacy as { turn?: number }).turn;
+      appendIndexRow(runsRoot, legacy);
+      expect(readIndex(runsRoot)).toHaveLength(1);
+
+      reindexFromRunsTree(runsRoot);
+      const after = readIndex(runsRoot);
+      expect(after).toHaveLength(1);
+      expect(after[0].turn).toBe(1);
+
+      // and it converges — a second reindex must not re-add anything either
+      reindexFromRunsTree(runsRoot);
+      expect(readIndex(runsRoot)).toHaveLength(1);
+    },
+  );
+
+  it("still preserves a turn-less prior row when the walk finds no result.json for its outDir", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-legacy-keep-"));
+    const gone = join(runsRoot, "s", "local_archived");
+    const legacy = indexRowFromResult(
+      {
+        scenario: "s",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: gone,
+      } as never,
+      { command: "run", partial: false },
+    );
+    delete (legacy as { turn?: number }).turn;
+    appendIndexRow(runsRoot, legacy);
+
+    reindexFromRunsTree(runsRoot);
+    expect(readIndex(runsRoot)).toHaveLength(1);
+  });
+
   it("rebuilds index rows by walking <runsRoot>/<slug>/<runId>/result.json", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
     const runDir = join(runsRoot, "my-scenario", "local_999");
@@ -585,4 +682,151 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       expect(rows[0].command).toBe("skill");
     },
   );
+
+  it(
+    "does NOT collapse multiple prior rows that legitimately share one outDir (resumed turns): a stale " +
+      "turn-1 row (archived off disk, so unwalkable) survives alongside the freshly re-derived turn-2 row",
+    () => {
+      const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+      const outDir = join(runsRoot, "s", "sess-1");
+      mkdirSync(outDir, { recursive: true });
+      // turn 1 completed and was indexed live; its result.json was since archived to result.turn-1.json by
+      // the resume (execute.ts's archivePriorTurnFiles) — nothing on disk at outDir/result.json represents
+      // it anymore, so it can ONLY survive via the prior index, never via a fresh walk.
+      appendIndexRow(
+        runsRoot,
+        indexRowFromResult(rr({ scenario: "s", outDir, turn: 1, cost: { usd: 1 } }), { command: "run", partial: false }),
+      );
+      // turn 2 also completed and was indexed live...
+      appendIndexRow(
+        runsRoot,
+        indexRowFromResult(rr({ scenario: "s", outDir, turn: 2, cost: { usd: 2 } }), { command: "run", partial: false }),
+      );
+      // ...and turn 2's result.json is what's actually on disk now (the latest turn).
+      writeFileSync(
+        join(outDir, "result.json"),
+        JSON.stringify({
+          scenario: "s",
+          fidelity: "container",
+          baseline: "x",
+          result: "success",
+          turn: 2,
+          cost: { usd: 2 },
+          decisions: [],
+          egress: [],
+          assertions: [],
+          outDir,
+        }),
+      );
+      const { rows } = reindexFromRunsTree(runsRoot);
+      const forOutDir = rows.filter((r) => r.outDir === outDir);
+      expect(forOutDir).toHaveLength(2); // NOT collapsed to 1
+      expect(forOutDir.find((r) => r.turn === 1)?.costUsd).toBe(1);
+      expect(forOutDir.find((r) => r.turn === 2)?.costUsd).toBe(2);
+      // idempotent: re-running with no filesystem changes keeps exactly the same 2 rows, not 1 and not 4
+      const again = reindexFromRunsTree(runsRoot).rows.filter((r) => r.outDir === outDir);
+      expect(again).toHaveLength(2);
+    },
+  );
+
+  it("still REFRESHES (not duplicates) a prior row whose turn matches the freshly walked row for the same outDir", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const outDir = join(runsRoot, "s", "sess-2");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "result.json"),
+      JSON.stringify({
+        scenario: "s",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        turn: 1,
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir,
+      }),
+    );
+    // a stale prior row for the SAME turn claims a different (wrong) result — the fresh walk must win.
+    appendIndexRow(
+      runsRoot,
+      indexRowFromResult(rr({ scenario: "s", outDir, turn: 1, result: "error" }), { command: "run", partial: false }),
+    );
+    const { rows } = reindexFromRunsTree(runsRoot);
+    const forOutDir = rows.filter((r) => r.outDir === outDir);
+    expect(forOutDir).toHaveLength(1); // same turn identity — refreshed in place, not duplicated
+    expect(forOutDir[0].result).toBe("success"); // re-derived from the real result.json, not the stale prior
+  });
+
+  it("rejects a symlinked run directory under the runs root — its result.json is not indexed even though it parses fine", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "run-index-outside-"));
+    writeFileSync(
+      join(outsideDir, "result.json"),
+      JSON.stringify({
+        scenario: "exfiltrated",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: outsideDir,
+      }),
+    );
+    const slugDir = join(runsRoot, "s");
+    mkdirSync(slugDir, { recursive: true });
+    symlinkSync(outsideDir, join(slugDir, "evil-link"));
+    const { rows, skippedUnsafe } = reindexFromRunsTree(runsRoot);
+    expect(rows.find((r) => r.scenario === "exfiltrated")).toBeUndefined();
+    expect(skippedUnsafe).toBeGreaterThan(0);
+  });
+
+  it("rejects a symlinked result.json planted directly inside an otherwise-real run directory", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const outsideFile = join(mkdtempSync(join(tmpdir(), "run-index-outside-")), "result.json");
+    writeFileSync(
+      outsideFile,
+      JSON.stringify({
+        scenario: "exfiltrated-file",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: "/nope",
+      }),
+    );
+    const outDir = join(runsRoot, "s", "local_1");
+    mkdirSync(outDir, { recursive: true });
+    symlinkSync(outsideFile, join(outDir, "result.json"));
+    const { rows, skippedUnsafe } = reindexFromRunsTree(runsRoot);
+    expect(rows.find((r) => r.scenario === "exfiltrated-file")).toBeUndefined();
+    expect(skippedUnsafe).toBeGreaterThan(0);
+  });
+
+  it("writes index.jsonl atomically — no leftover temp file after a reindex, and the final content is intact", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const runDir = join(runsRoot, "s", "local_1");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "result.json"),
+      JSON.stringify({
+        scenario: "s",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: runDir,
+      }),
+    );
+    reindexFromRunsTree(runsRoot);
+    const entries = readdirSync(runsRoot);
+    expect(entries).toContain("index.jsonl");
+    expect(entries.some((f) => f.includes(".tmp."))).toBe(false); // rename left no debris behind
+    expect(readIndex(runsRoot)).toHaveLength(1);
+  });
 });

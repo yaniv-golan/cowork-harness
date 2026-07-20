@@ -1165,6 +1165,7 @@
       },
       ".infraErrors[].source": {
         "type": "string",
+        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar"],
         "required": true
       },
       ".l0PluginDivergence": {
@@ -1761,6 +1762,7 @@
           "l0_plugin_divergence",
           "missing_capability",
           "infra_error",
+          "exec_infra_error",
           "stalled",
           "prompt_asset_missing",
           "scan_unavailable",

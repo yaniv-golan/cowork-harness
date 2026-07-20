@@ -233,10 +233,12 @@ function readWorkspaceScript(workRoot: string, rel: string): string {
 }
 
 /**
- * Scan a run's events.jsonl for USE of any OMITTED capability family. Returns the subset of `omitted` the
- * skill was observed using. Usage = a command-signature match in a Bash/python tool_use command, OR a
- * failure-signature match in an `isError` tool_result (the secondary corroborator). Mirrors scanEvents'
- * block parsing; covers subagent tool calls (no parentToolUseId filter).
+ * Scan a run's events.jsonl for USE of any OMITTED capability family. Returns `used` (the subset of
+ * `omitted` the skill was observed using) alongside `health`, so an unreadable/missing/partially-corrupt
+ * input is never indistinguishable from "scanned and found nothing" (see `CapabilityUseResult`). Usage = a
+ * command-signature match in a Bash/python tool_use command, OR a failure-signature match in an `isError`
+ * tool_result (the secondary corroborator). Mirrors scanEvents' block parsing; covers subagent tool calls
+ * (no parentToolUseId filter).
  *
  * When `workRoot` is given, a command that EXECUTES a workspace script (`python script.py`) also has that
  * script's contents scanned for command signatures — so a missing-module import hidden inside a script file
@@ -273,24 +275,41 @@ export function capabilityPreflightDecision(
   return { abort: message !== null && !allowMissing, message };
 }
 
-export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamily[], workRoot?: string): CapabilityFamily[] {
-  if (!omitted.length) return [];
+export interface CapabilityUseResult {
+  /** The subset of `omitted` families the scan actually observed being used. */
+  used: CapabilityFamily[];
+  /** `complete` = the file was read and every line parsed; `missing` = `eventsFile` could not be read at
+   *  all (ENOENT or otherwise); `degraded` = the file was read but one or more lines failed `JSON.parse`.
+   *  An empty `used` is only trustworthy as "scanned and found nothing" when `health === "complete"` —
+   *  `missing`/`degraded` mean the scan could not rule out use of the remaining omitted families, and the
+   *  caller must not treat that as a clean pass. */
+  health: "complete" | "missing" | "degraded";
+  /** Count of lines that failed to parse (0 unless `health === "degraded"`). */
+  malformedLines: number;
+}
+
+export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamily[], workRoot?: string): CapabilityUseResult {
+  if (!omitted.length) return { used: [], health: "complete", malformedLines: 0 };
   let lines: string[];
   try {
-    lines = readFileSync(eventsFile, "utf8").trim().split("\n");
+    // filter(Boolean): drop blank lines (e.g. a freshly-created empty file trims to "") so they aren't
+    // miscounted as malformed JSON below — an empty scan is a genuinely complete "found nothing", not degraded.
+    lines = readFileSync(eventsFile, "utf8").trim().split("\n").filter(Boolean);
   } catch {
-    return [];
+    return { used: [], health: "missing", malformedLines: 0 };
   }
   const used = new Set<CapabilityFamily>();
   const scannedScripts = new Set<string>(); // de-dupe + bound disk reads across the whole run
   const matchText = (text: string) => {
     for (const f of omitted) if (CAPABILITY_FAMILIES[f].commandSignatures.some((re) => re.test(text))) used.add(f);
   };
+  let malformedLines = 0;
   for (const l of lines) {
     let msg: any;
     try {
       msg = JSON.parse(l);
     } catch {
+      malformedLines++;
       continue;
     }
     if (msg.type !== "assistant" && msg.type !== "user") continue;
@@ -318,5 +337,9 @@ export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamil
       }
     }
   }
-  return omitted.filter((f) => used.has(f));
+  return {
+    used: omitted.filter((f) => used.has(f)),
+    health: malformedLines > 0 ? "degraded" : "complete",
+    malformedLines,
+  };
 }

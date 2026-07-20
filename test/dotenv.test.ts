@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadDotenv } from "../src/dotenv.js";
+import { loadDotenv, DotenvReadError } from "../src/dotenv.js";
 
 const KEYS = [
   "CC_TEST_A",
@@ -69,5 +69,59 @@ describe("loadDotenv", () => {
 
   it("returns [] for a missing file", () => {
     expect(loadDotenv("/nonexistent/.env")).toEqual([]);
+  });
+
+  describe("strict mode ({ strict: true }, used for an explicitly-requested --dotenv path)", () => {
+    it("happy path: loads normally, same as non-strict", () => {
+      const f = envFile("CC_TEST_A=plain\n");
+      const loaded = loadDotenv(f, { strict: true });
+      expect(process.env.CC_TEST_A).toBe("plain");
+      expect(loaded).toEqual(["CC_TEST_A"]);
+    });
+
+    it("throws DotenvReadError (not a silent []) for a missing file", () => {
+      expect(() => loadDotenv("/nonexistent/.env", { strict: true })).toThrow(DotenvReadError);
+      try {
+        loadDotenv("/nonexistent/.env", { strict: true });
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DotenvReadError);
+        expect((err as DotenvReadError).path).toBe("/nonexistent/.env");
+        expect((err as Error).message).toMatch(/--dotenv file could not be read: \/nonexistent\/\.env/);
+      }
+    });
+
+    it("throws DotenvReadError for a directory (EISDIR), instead of silently returning []", () => {
+      const dir = mkdtempSync(join(tmpdir(), "cc-env-dir-"));
+      expect(() => loadDotenv(dir, { strict: true })).toThrow(DotenvReadError);
+      try {
+        loadDotenv(dir, { strict: true });
+        expect.unreachable();
+      } catch (err) {
+        expect((err as DotenvReadError).path).toBe(dir);
+        expect((err as Error).message).toMatch(
+          new RegExp(`--dotenv file could not be read: ${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+        );
+      }
+      // non-strict mode swallows the same EISDIR and stays silent — the pre-existing, intentional
+      // best-effort behavior for the automatic (non-explicit) source locations.
+      expect(loadDotenv(dir)).toEqual([]);
+    });
+
+    // Permission faults only manifest for a non-root process — running as root (common in CI
+    // containers) bypasses the mode bits entirely, so this guards against a false failure there.
+    const isRoot = process.getuid?.() === 0;
+    it.skipIf(isRoot)("throws DotenvReadError for an unreadable file (EACCES/EPERM), instead of silently returning []", () => {
+      const f = envFile("CC_TEST_A=plain\n");
+      chmodSync(f, 0o000);
+      try {
+        expect(() => loadDotenv(f, { strict: true })).toThrow(DotenvReadError);
+        expect(process.env.CC_TEST_A).toBeUndefined();
+        // non-strict mode swallows the same failure and stays silent (best-effort auto-load).
+        expect(loadDotenv(f)).toEqual([]);
+      } finally {
+        chmodSync(f, 0o644); // restore so the temp-dir cleanup can remove it
+      }
+    });
   });
 });

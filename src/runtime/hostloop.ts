@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PlatformBaseline, Scenario } from "../types.js";
+import type { PlatformBaseline, Scenario, InfraErrorSource } from "../types.js";
 import type { LaunchPlan, Mount } from "../session.js";
 import { SCRUBBED_AGENT_ENV_KEYS } from "../session.js";
 import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
@@ -266,20 +266,17 @@ export function spawnHostLoop(
     extraBinds: resolveHostLoopBindMounts(plan, sessionRoot),
   });
   const sidecarChild = spawn(runner, sidecarArgs, { stdio: ["ignore", "ignore", "pipe"] });
-  let sidecarStderrTail = "";
-  sidecarChild.stderr?.on("data", (d) => {
-    sidecarStderrTail = (sidecarStderrTail + d.toString()).slice(-4000);
-  });
-  const logInfra = (message: string) => {
-    try {
-      appendFileSync(join(outDir, "events.jsonl"), JSON.stringify({ type: "infra_error", ts: new Date().toISOString(), message }) + "\n");
-    } catch {}
-  };
-  sidecarChild.on("error", (e) => logInfra(`hostloop VM sidecar failed to spawn: ${String(e)}`));
-  sidecarChild.on("exit", (code, signal) => {
-    if (code !== 0 && code !== null)
-      logInfra(`hostloop VM sidecar exited unexpectedly (code=${code} signal=${signal}): ${sidecarStderrTail}`);
-  });
+  // Two emitters, not one: this sidecar DYING and a single `docker exec` FAILING are different events with
+  // different blast radii, and collapsing them into one sink made every failed exec contaminate the whole
+  // run. Both still append the out-of-band `infra_error` row to events.jsonl (so a cassette recorded from
+  // this run carries it — parseMessage's "infra_error" case re-derives it on replay), but a LIVE drive
+  // never re-reads that file — `AgentSession` only yields events parsed from the agent's own stdout, which
+  // can never carry a harness-appended row. `infraErrors` is the second half: the shared sink
+  // executeScenario/chat fold into the live RunRecord after teardown, mirroring the egress sidecar's own
+  // `fatalError` pattern (src/egress/sidecar.ts) so a genuine sidecar crash still hard-fails the verdict.
+  const infraErrors: { source: InfraErrorSource; message: string }[] = [];
+  const { logSidecarInfra, logExecInfra } = makeInfraEmitters(outDir, infraErrors);
+  const { markTearingDown } = watchHostLoopSidecar(sidecarChild, logSidecarInfra);
 
   // Production's vmCwd is the first non-network-drive connected folder's mount name, falling back to
   // outputs — never the bare session root or bare mnt/. The harness has no network-drive detection; an
@@ -296,13 +293,72 @@ export function spawnHostLoop(
     runner,
     webFetchAllow: plan.egressAllow,
     onEgress: (e) => hostEgress.push(e),
-    onInfraError: logInfra,
+    onInfraError: logExecInfra,
     provenanceRef: opts.provenanceRef,
     dedup: opts.dedup,
     execCwd,
   });
   const sdkMcp: { servers: string[]; handle: McpHandler } = { servers: ["workspace"], handle: workspaceHandle };
-  return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress };
+  return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress, infraErrors, markTearingDown };
+}
+
+/** The two infra-error emitters a host-loop run needs, sharing one sink and one events.jsonl writer.
+ *  Every row carries its `source` so the verdict can tell a dead supervisor apart from a failed command,
+ *  and so the replay re-drive can reconstruct the same distinction from the frozen events. */
+export function makeInfraEmitters(outDir: string, sink: Array<{ source: InfraErrorSource; message: string }>) {
+  const emit = (source: InfraErrorSource) => (message: string) => {
+    try {
+      appendFileSync(
+        join(outDir, "events.jsonl"),
+        JSON.stringify({ type: "infra_error", ts: new Date().toISOString(), source, message }) + "\n",
+      );
+    } catch {}
+    sink.push({ source, message });
+  };
+  return { logSidecarInfra: emit("hostloop-sidecar"), logExecInfra: emit("hostloop-exec") };
+}
+
+/** Minimal child-process shape {@link watchHostLoopSidecar} needs (a subset of node:child_process's
+ *  `ChildProcess`) — parameterized so tests can drive it with a plain `EventEmitter`-backed fake instead
+ *  of a real spawn. */
+export interface SidecarWatchTarget {
+  stderr?: { on(event: "data", listener: (chunk: Buffer) => void): unknown } | null;
+  on(event: "error", listener: (err: unknown) => void): unknown;
+  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
+/**
+ * Watches the host-loop VM sidecar's child process (the foreground `docker run` for the `sleep infinity`
+ * keep-alive container — see `dockerRunArgv`) and routes any infrastructure failure through `logInfra`.
+ * The container is a keep-alive: it never exits on its own, so for the DURATION OF A RUN any exit —
+ * whatever the code, whatever the signal — is a genuine crash (this is what fixes the prior blind spot:
+ * a signal-killed child reports `code === null` exactly like a clean-looking exit, so code alone can't
+ * tell an OOM kill from nothing happening).
+ *
+ * The one exit this function must NOT report is this harness's OWN teardown: `execute.ts`'s/`chat.ts`'s
+ * finally block force-removes the sidecar container (`docker rm -f`) on every run, success or failure,
+ * which makes this same child exit too. Call the returned `markTearingDown()` immediately before that
+ * removal (both the normal finally path and the Ctrl-C cleanup path) so the resulting exit is recognized
+ * as intentional shutdown rather than reported as a mid-run infra error — a naive fix that skips this
+ * would red every hostloop run.
+ */
+export function watchHostLoopSidecar(
+  sidecarChild: SidecarWatchTarget,
+  logInfra: (message: string) => void,
+): { markTearingDown: () => void } {
+  let tearingDown = false;
+  let stderrTail = "";
+  sidecarChild.stderr?.on("data", (d: Buffer) => {
+    stderrTail = (stderrTail + d.toString()).slice(-4000);
+  });
+  sidecarChild.on("error", (e) => {
+    if (!tearingDown) logInfra(`hostloop VM sidecar failed to spawn: ${String(e)}`);
+  });
+  sidecarChild.on("exit", (code, signal) => {
+    if (tearingDown) return;
+    logInfra(`hostloop VM sidecar exited unexpectedly (code=${code} signal=${signal}): ${stderrTail}`);
+  });
+  return { markTearingDown: () => (tearingDown = true) };
 }
 
 /** The staged plugin copy's host path (production-analog `installPath`): the SAME directory the
