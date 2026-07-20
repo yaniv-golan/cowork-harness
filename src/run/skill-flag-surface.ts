@@ -35,8 +35,9 @@ export interface SkillFlagSpec {
   flag: string;
   /** 0 = boolean, 1 = takes a value. Both `--flag value` and `--flag=value` spellings are accepted. */
   arity: 0 | 1;
-  /** Enforced: a non-repeatable flag given twice is rejected, because the child would silently keep only
-   *  the last value. */
+  /** Enforced for arity-1 flags: given twice, the child keeps only the last value, so the earlier one is
+   *  silently discarded — `critique` rejects instead. Arity-0 flags are exempt: there is no value to lose
+   *  and the child takes them idempotently, so `repeatable` is meaningless on them. */
   repeatable?: boolean;
   /** REQUIRED — totality by construction. */
   critique: CritiqueDisposition;

@@ -121,6 +121,11 @@ ignored.
 | `--ablate-skill` | grading a skill you removed is incoherent |
 | `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report |
 
+**Repeating a flag.** `--upload`, `--folder`, `--plugin`, `--marketplace`, `--enable` and `--answer` accumulate,
+so repeating them is how you pass several. Every other value-taking flag is single-valued and repeating it is
+a **usage error** (exit `2`) rather than a silent last-wins — `--prompt a --prompt b` would otherwise discard
+a probe you typed. Boolean flags may be repeated harmlessly.
+
 ### Skills that need an attached file
 
 ```bash

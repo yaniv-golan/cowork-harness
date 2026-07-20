@@ -102,6 +102,15 @@ describe("skill flag surface ↔ critique disposition parity", () => {
     }
   });
 
+  it("no arity-0 flag declares `repeatable` (it would be meaningless there)", () => {
+    // `repeatable` only means anything for value-taking flags: a repeated boolean loses nothing and the
+    // child accepts it idempotently, so the parser exempts arity 0. A `repeatable: true` on a boolean would
+    // therefore read as a deliberate exemption from a rule that never applied — decoration of exactly the
+    // kind this module exists to prevent.
+    const bogus = SKILL_FLAG_SURFACE.filter((s) => s.arity === 0 && s.repeatable !== undefined).map((s) => s.flag);
+    expect(bogus, `\`repeatable\` is meaningless on arity-0 flags: ${bogus.join(", ")}`).toEqual([]);
+  });
+
   it("every SOURCE-declaring flag forwards to BOTH turns", () => {
     // The origin-key invariant: uploads/folders/plugins/marketplaces are part of sessionOriginSources, so
     // task-only forwarding makes the reflection `--resume` throw. This is the one rule that, if broken,
