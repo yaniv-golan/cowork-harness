@@ -884,6 +884,11 @@ interface ModelUsageEntry {
   webSearchRequests?: number;
 }
 
+/** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
+ *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
+ *  differently instead of collapsing both into one fatal class. */
+export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar";
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -970,9 +975,11 @@ export interface RunResult {
    *  call's Links array failed to parse — the two are indistinguishable here by design; cross-reference
    *  `toolCounts.WebSearch` (the truthful call count) if that distinction ever matters to a consumer. */
   webSearches?: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
-  /** Infrastructure errors (VM/egress sidecar crashes). A non-empty list is a hard verdict fail on BOTH
-   *  lanes and is NOT author-suppressible — the run's evidence is contaminated. */
-  infraErrors?: Array<{ source: string; message: string }>;
+  /** Infrastructure errors, tagged by ORIGIN — origin drives severity. `hostloop-sidecar`/`egress-sidecar`
+   *  mean a SUPERVISING PROCESS died, so the run's evidence is contaminated: a hard verdict fail on BOTH
+   *  lanes, not author-suppressible. `hostloop-exec` is a single failed `docker exec` — the tool call
+   *  failed, the run did not — so it warns, because one bad command must not red an otherwise sound run. */
+  infraErrors?: Array<{ source: InfraErrorSource; message: string }>;
   /** Companion counters for malformed/dropped telemetry streams. A >0 count makes the dependent assertion
    *  fail "malformed" rather than silently dropping the bad entries (`taskTracking` → task assertions,
    *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` and `egressParse` are observability-only
@@ -1132,6 +1139,7 @@ export interface RunResult {
         | "l0_plugin_divergence"
         | "missing_capability"
         | "infra_error"
+        | "exec_infra_error"
         | "stalled"
         | "prompt_asset_missing"
         | "scan_unavailable"

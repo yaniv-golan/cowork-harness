@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`exec_infra_error` verdict signal (`WARN`)** — a container `exec` that failed for infrastructure
+  reasons, as distinct from the fail-severity `infra_error` (a supervising process died). One failed
+  command no longer contaminates a whole run's evidence.
+- **`RunResult.infraErrors[].source` is now an enum** — `hostloop-sidecar` / `hostloop-exec` /
+  `egress-sidecar`. The origin is what drives severity, and it is carried through the frozen cassette so
+  replay reaches the same verdict as the live run.
+- **Capability use-scan health** — an unreadable or partially unparseable `events.jsonl` is now reported
+  as a degraded scan instead of being indistinguishable from a complete scan that found nothing.
+
 - **Every `critique` limitation is now tagged with WHY it exists**, not just what it is — `structural`
   (permanent, architect around it), `unverified` (unproven, **not** known-impossible), `deliberate` (a
   design choice), `not-built` (simply absent). The distinction a reader needs is rarely "what can't it
@@ -19,8 +28,43 @@ All notable changes to this project are documented here. The format is based on
 - **`critique --help`'s KNOWN LIMITATIONS block is generated** from that source, and CI asserts the
   shipped binary's output, the docs bullets, and their tags all agree.
 
+### Changed
+
+- **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
+  a run that previously exited `1` because one `docker exec` failed will now exit `0`. A dead sidecar
+  still hard-fails. Known residual, documented in `docs/scenario.md`: if *every* exec failed the agent ran
+  nothing and the run still only warns — inspect `result.infraErrors` when a run looks suspiciously empty.
+- **A model-requested bash `timeout_ms` expiry is no longer classified as an infrastructure failure.**
+  The model now receives its command's own partial output with `Command timed out after <duration>`
+  merged into stderr — matching real Cowork, verified against the staged agent binary — instead of an
+  opaque `[infrastructure error: see run log for details]`.
+- **An explicitly requested `--dotenv` file now fails loud.** ⚠️ **Upgrade note:** an unreadable file, or
+  a path that is a directory, previously fell through to lower-precedence `.env` sources *while still
+  printing a success line* — so a typo'd path silently ran against the wrong credentials. It is now a
+  usage error. Automatic `.env` discovery is unchanged (still best-effort).
+- **`diff` no longer reports `identical` when only one side has an artifact manifest.** ⚠️ **Upgrade
+  note:** such a comparison previously exited `0`; it now exits `1`, because unavailable evidence is not
+  evidence of equality. Both-sides-missing still does not veto identity. The `--output-format json`
+  envelope gained an `artifactsAvailability` key.
+- **`stats --reindex` merges rows by per-completion identity** (`outDir` + a new `turn` field) rather than
+  by `outDir` alone, and reports rejected symlinked run directories.
+
 ### Fixed
 
+- **`stats --reindex` destroyed multi-turn history.** Every `--resume` turn — and `critique`'s task +
+  reflection pair — writes to one `outDir`, so keying by directory collapsed N completions into one,
+  silently changing run counts, pass rates and costs.
+- **Host-loop sidecar failures never reached the verdict.** They were appended straight to `events.jsonl`,
+  which no live drive re-reads, so a dying sidecar left the run green; a signal-only termination (OOM,
+  `SIGKILL`) was recorded nowhere at all.
+- **`result.json` was written non-atomically** at all three producers, so an interrupted write could leave
+  the canonical record truncated.
+- **Corrupt index rows were blind-cast**, letting one malformed row crash `stats` or fabricate a
+  pass/cost value; `reindex` also followed symlinks out of the runs root.
+- **`scaffold` turned unavailable artifact evidence into "no artifacts"**, permanently encoding a false
+  "this run produced nothing" claim into a generated scenario.
+- **`critique` treated a vanished turn-1 evidence file as genuinely empty evidence** rather than an
+  integrity failure. A stream that was legitimately zero bytes at capture is still reported clean.
 - **`critique`'s exit-code table omitted `1`.** Exit `1` is reachable on operator interrupt
   (SIGINT/SIGTERM); a sweep wrapper treating it as impossible misreads a cancelled run as a crash.
 - Documented that after critique's resume, `result.json` is the **reflection** turn's result — the graded

@@ -383,7 +383,7 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only four codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only five codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
@@ -393,6 +393,12 @@ pass/fail):
 - `scan_unavailable` (**warn**) — post-run scan evidence unavailable (`RunResult.scan` undefined); the
   host-path and outputs-delete guards did not run this run (assert `no_delete_in_outputs` /
   `transcript_no_host_path` to hard-fail on this instead).
+- `exec_infra_error` (**warn**, host-loop) — one or more container `exec` calls failed for infrastructure
+  reasons (daemon/container-level), so those tool calls returned an error to the agent. The run's other
+  evidence is intact, which is why this warns rather than fails — unlike a `hostloop-sidecar` /
+  `egress-sidecar` crash, which is fail-severity `infra_error` because a dead supervisor contaminates the
+  whole run. Note the residual gap: if *every* exec failed, the agent ran nothing and this still only
+  warns — inspect `result.infraErrors` when a run looks suspiciously empty.
 - `ended_with_question` (**warn**, live lane) — the agent's final answer contains a question and the run
   wrote no deliverable to `outputs/` — a likely dead-end that still exited `result:"success"`. The lenient
   sibling of the strict, fail-severity `stalled` (which catches a *trailing*-`?` final turn with no

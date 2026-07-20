@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 
@@ -144,5 +144,23 @@ describe.skipIf(!can)("cli: stats (E4)", () => {
     seedRun(root2, "s", "local_1");
     run(["stats", "--reindex"], root2);
     expect(run(["stats", "--output-format", "json"], root2).out).toContain('"runs":1');
+  });
+
+  it("--reindex reports a symlinked run dir as skipped, not silently dropped", () => {
+    const root = runsRoot();
+    seedRun(root, "s", "local_1"); // one legitimate run, so `written` isn't zero either
+    // A symlinked `<runId>` dir must be rejected outright — never followed — per reindexFromRunsTree's
+    // containment guard (src/run/run-index.ts). Point it at a real, unrelated result.json elsewhere so a
+    // regression that DID follow the symlink would silently index it instead of erroring loudly.
+    const elsewhere = mkdtempSync(join(tmpdir(), "cli-stats-elsewhere-"));
+    seedRun(elsewhere, "elsewhere-scenario", "real_run");
+    mkdirSync(join(root, "s"), { recursive: true });
+    symlinkSync(join(elsewhere, "elsewhere-scenario", "real_run"), join(root, "s", "local_symlinked"));
+
+    const r = run(["stats", "--reindex"], root);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/reindexed 1 run/);
+    expect(r.out).toContain("skipped — symlinked run dir/result.json rejected");
+    expect(r.out).not.toContain("elsewhere-scenario"); // the symlinked target was never indexed
   });
 });

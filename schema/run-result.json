@@ -376,7 +376,7 @@
     },
     "infraErrors": {
       "type": "array",
-      "description": "Infrastructure errors (VM/egress sidecar crashes). A non-empty list is a hard verdict fail on BOTH lanes and is NOT author-suppressible — the run's evidence is contaminated.",
+      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died — a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'hostloop-exec' is a single failed container exec: the tool call failed, the run did not, so it only warns.",
       "items": {
         "type": "object",
         "required": [
@@ -385,7 +385,12 @@
         ],
         "properties": {
           "source": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "hostloop-sidecar",
+              "hostloop-exec",
+              "egress-sidecar"
+            ]
           },
           "message": {
             "type": "string"
@@ -675,6 +680,7 @@
                   "l0_plugin_divergence",
                   "missing_capability",
                   "infra_error",
+                  "exec_infra_error",
                   "stalled",
                   "prompt_asset_missing",
                   "scan_unavailable",

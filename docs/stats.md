@@ -16,12 +16,23 @@ reads it back.
   `stats`/`trace`/`scaffold` too — see [README → Commands at a glance](../README.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
-runLabel?, skillHash?, signals, costUsd?, tokens?, turns?, cacheReadTokens?, modelCostUsd?, durationMs?,
-partial, nonDeterministic, outDir, git:{branch, sha}}`.
+runLabel?, skillHash?, turn?, signals, costUsd?, tokens?, turns?, cacheReadTokens?, modelCostUsd?,
+durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
 `pass`/`signals` come from the same `computeVerdict` every other verdict-facing surface (the footer, the
 JSON envelope, `--repeat`'s rollup) uses — a row's `pass` can never read differently than the run's own
 exit code did. `git` is best-effort (`git rev-parse` in the invoking cwd) — `null` outside a repo, which
-is what makes "compare this branch's cost/pass-rate to main's" answerable via `--branch`.
+is what makes "compare this branch's cost/pass-rate to main's" answerable via `--branch`. `turn` is the
+1-based turn number within a resumed (`--session-id`+`--resume`) session (straight from `RunResult.turn`,
+set on essentially every `run`/`skill`/`record` completion — a fresh single-shot run gets `turn:1`);
+absent on the `chat` lane and on rows written before this field existed. It is the per-completion identity
+`reindexFromRunsTree` merges rows by — a resumed session's turns (and `critique`'s task+reflection turns)
+legitimately share one `outDir`, so `outDir` alone can't distinguish them.
+
+`readIndex` never blindly trusts a parsed line: a line that's valid JSON but the wrong `RunIndexRow` shape
+(or an incompatible future `v`) is **quarantined** — skipped, with a `::warning::`, rather than cast
+through and handed to `buildStats`, which would otherwise dereference fields like `git.branch`
+unconditionally on a malformed row. A quarantined row is not indexed and not counted in any stats output;
+re-run `--reindex` to rebuild from `result.json` if you see this warning.
 
 ## `cowork-harness stats [<scenario>]`
 
@@ -106,8 +117,17 @@ are carried over from the prior index, so pruned-run history survives a reindex 
 skipped, not fatal — one bad run dir never blocks indexing everything else. A stray `command:"replay"`
 `result.json` is also skipped — a replay is a re-check against a frozen recording, not new evidence (the
 not-indexed rule above), so reindex leaves it out rather than relabeling it `"run"`; any prior index row
-for that run dir is preserved as-is. The report line counts the two skip classes distinctly: `N skipped —
-missing/corrupt result.json` vs `N skipped — replay re-check, not evidence`.
+for that run dir is preserved as-is. The report line counts the skip classes distinctly: `N skipped —
+missing/corrupt result.json`, `N skipped — replay re-check, not evidence`, and `N skipped — symlinked run
+dir/result.json rejected`.
+
+A `<slug>` directory, a `<runId>` directory, or a `result.json` itself that is a **symlink** is rejected
+outright and never followed — a symlinked entry under `runsRoot` must never cause an arbitrary external
+file to be read and indexed as harness evidence. Its realpath is additionally required to resolve inside
+`runsRoot` before it is opened, as defense-in-depth against a non-symlink escape (e.g. a TOCTOU swap of an
+ancestor path component). All of this is counted in the `skippedUnsafe` skip class above, surfaced by
+`cowork-harness stats --reindex`'s summary line — a rejected symlink is never silently dropped from the
+report.
 
 `result.json` now persists a `command` field (`run`/`skill`/`record`/`chat`), and `--reindex` prefers it:
 `result.command` first, falling back to the prior index row's `command` (for results written before that

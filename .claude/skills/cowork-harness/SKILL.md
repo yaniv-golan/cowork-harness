@@ -441,6 +441,14 @@ Recognize these before "fixing" a non-bug:
   `transcript_no_host_path`. At `fidelity: cowork` the skip follows the **resolved** tier, so a `cowork`
   run that lands on `container` is armed. Author `transcript_no_host_path` to enforce cleanliness where
   it's valid.
+- **`exec_infra_error`** (`WARN`, host-loop) — one or more container `exec` calls failed for
+  infrastructure reasons (daemon/container-level), so those tool calls returned an error to the agent
+  rather than the command's own output. Warn-severity because the run's other evidence is intact — unlike
+  the fail-severity `infra_error`, where a **supervising process** died and contaminated everything. Note
+  a model-requested `timeout_ms` expiry is *not* this: it returns the command's partial output with
+  `Command timed out after <duration>` in stderr, matching production. Known gap: if **every** exec
+  failed, the agent ran nothing yet the run still only warns — read `result.infraErrors` when a run looks
+  suspiciously empty.
 - **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so
   `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.

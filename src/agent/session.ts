@@ -114,7 +114,7 @@ export type AgentEvent =
   // a bad user block is degraded evidence, not a crash. Run bumps `evidenceErrors.protocolMalformed` so the
   // incompleteness is visible (delivery/pairing verification can't silently read as complete).
   | { type: "protocol_evidence_error"; reason: string }
-  | { type: "infra_error"; message: string } // an infrastructure frame (e.g. VM/egress sidecar crash) appended to events.jsonl outside the SDK stream
+  | { type: "infra_error"; message: string; source?: string } // an infrastructure frame (e.g. VM/egress sidecar crash) appended to events.jsonl outside the SDK stream; `source` distinguishes a dead supervisor from a single failed exec (absent on rows recorded before it existed)
   | { type: "raw"; line: string }
   | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
   | { type: "mcp_error"; server: string; code?: number; message: string } // an MCP round-trip the harness answered with a JSON-RPC error
@@ -985,9 +985,15 @@ export function parseMessage(msg: any): AgentEvent[] {
   const ev: AgentEvent[] = [];
   switch (msg.type) {
     case "infra_error":
-      // An infrastructure frame (VM/egress sidecar crash) appended to events.jsonl by the runtime, outside
-      // the SDK stdout stream. Preserved in the frozen cassette, so the replay re-drive re-derives it too.
-      ev.push({ type: "infra_error", message: typeof msg.message === "string" ? msg.message : "infrastructure error" });
+      // An infrastructure frame (VM/egress sidecar crash, or a failed container exec) appended to
+      // events.jsonl by the runtime, outside the SDK stdout stream. Preserved in the frozen cassette, so
+      // the replay re-drive re-derives it too — `source` is carried through so replay reaches the SAME
+      // verdict as the live run instead of re-collapsing every row into one severity.
+      ev.push({
+        type: "infra_error",
+        message: typeof msg.message === "string" ? msg.message : "infrastructure error",
+        ...(typeof msg.source === "string" ? { source: msg.source } : {}),
+      });
       break;
     case "system":
       if (msg.subtype === "init")
