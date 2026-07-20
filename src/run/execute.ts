@@ -16,6 +16,7 @@ import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statu
 // the cycle is intrinsic — kept runtime-only rather than refactored.
 import { buildFingerprint, skillCommit } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
+import { deriveOutcome } from "./outcome.js";
 import { loadBaseline } from "../baseline.js";
 import {
   loadSession,
@@ -1349,6 +1350,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       unansweredGate: undefined,
       staleness: undefined,
       skippedAssertions: undefined,
+      outcome: undefined, // stamped alongside the verdict just below (derived from it)
       verdict: undefined, // computed just below (after assertions are evaluated / the object is fully assembled) and stored — see the comment there
     });
 
@@ -1367,6 +1369,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // `--output-format json` stdout envelope attaches (envelope.ts calls `computeVerdict` too), so the two
     // channels can never diverge in shape or value.
     result.verdict = computeVerdict(result, "live");
+    result.outcome = deriveOutcome(result);
 
     // Non-null: see the matching comment at the partial-result finalize call above.
     runCrashSafety.finalize(record, result.result, result.durationMs!);
@@ -1719,6 +1722,7 @@ export function buildPartialResult(args: {
     missingCapabilityUse: undefined,
     staleness: undefined,
     skippedAssertions: undefined,
+    outcome: undefined, // stamped alongside the verdict just below (derived from it)
     verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there
   });
   // Same sub-agent reasoning capture the success path runs (see resolveSubagentConfigRoot's doc
@@ -1736,6 +1740,7 @@ export function buildPartialResult(args: {
   // assertion (there are none to evaluate here). Compute it from the just-assembled object (computeVerdict
   // reads result.assertions/unansweredGate/etc. off it) and store the result, same as the success path above.
   built.verdict = computeVerdict(built, "live");
+  built.outcome = deriveOutcome(built);
   return built;
 }
 

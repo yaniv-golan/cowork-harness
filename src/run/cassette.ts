@@ -2718,6 +2718,7 @@ function replayErrorResult(file: string): RunResult {
     tasks: undefined,
     context: undefined,
     resources: undefined,
+    outcome: undefined, // derived from `verdict`; absent for the same reason it is
     verdict: undefined, // synthetic early-bail error result for an unreadable cassette — no assertions were evaluated to derive one from; the JSON envelope's own live-computed Verdict (envelope.ts) covers this on stdout
   });
 }
@@ -4627,6 +4628,7 @@ export async function replayCassette(
       // replay never writes a result.json (there is no on-disk persist point for this lane to populate
       // at) — cmdReplay's own JSON envelope (envelope.ts) independently attaches its own live-computed
       // Verdict to every emitted result, incl. a replay's, for stdout consumers.
+      outcome: undefined, // derived from `verdict`; absent for the same reason it is
       verdict: undefined,
     });
   } finally {

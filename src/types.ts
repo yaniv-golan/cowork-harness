@@ -1104,6 +1104,14 @@ export interface RunResult {
    *  (undefined), never a vacuous `{pass:true,...}`; a consumer must not read a chat result as pass/fail.
    *  Also absent on a result.json written before this field existed (pre-existing kept runs) — treat
    *  absence as "unknown", never as a pass. */
+  /** One-field rollup of the `result` × `verdict.pass` × exit-code matrix, for consumers driving an
+   *  iterative loop who must answer "did this iteration deliver something usable?" every turn. A PURE
+   *  FUNCTION of the fields below (see `deriveOutcome`, run/outcome.ts) — it adds no judgement and can
+   *  never disagree with them; the granular fields stay authoritative. `errored` dominates; then the
+   *  existing no-deliverable signals (`stalled`/`ended_with_question`); then the verdict.
+   *  ABSENT whenever `verdict` is absent (chat, or a pre-existing kept run) — treat absence as
+   *  "unknown", never as a pass. */
+  outcome?: "errored" | "no_deliverable" | "delivered_with_verdict_fail" | "delivered_clean";
   verdict?: {
     pass: boolean;
     exitCode: 0 | 1;
