@@ -48,6 +48,10 @@ fields to a server-side narrowing it didn't ask for.
 
 ## Grouping by generation (the iterate-across-fixes loop)
 
+> These recipes are step 5 of the loop in [debugging.md](./debugging.md#the-whole-loop-end-to-end) — the
+> comparison step. What you pair is usually a [`critique`](./critique.md) finding set against the runs
+> that produced it.
+
 `stats` aggregates **by scenario**, and its filters are `--scenario`/`--since`/`--baseline`/`--branch`/
 `--last`. There is no built-in group-by for the run-identity fields, so pair generations with `jq` over
 `index.jsonl` directly — the index is the queryable source of truth, and both fields are on the row:

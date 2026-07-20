@@ -22,6 +22,10 @@ Three mechanisms, all code rather than prompt instructions:
 3. **Mechanical citation checking.** Every claim must quote the evidence verbatim. Anything that does not
    resolve is dropped into a clearly-labelled section rather than reported as a finding.
 
+> **Building an improvement loop?** This is the harvest step. The end-to-end assembly — harvest,
+> reproduce, fix, prove the re-run used the fixed body, compare generations — is in
+> [debugging.md](./debugging.md#the-whole-loop-end-to-end).
+
 ## If you came from "loop engineering"
 
 This command is the **Evaluator-Optimizer** pattern (Data Science Dojo's catalog) / the **verification

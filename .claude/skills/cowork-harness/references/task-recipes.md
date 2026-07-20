@@ -170,7 +170,8 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
 
 1. **Verify before you trust.** A green run is not a correct run, and a skill's self-reported finding (a
    self-critique appendix, "I extracted X") is not real until its cited evidence is found in the run's own
-   output. The harness now SHIPS a grader — `cowork-harness critique <skill-folder> --prompt "<probe>"` runs the
+   output. The full loop (harvest -> reproduce -> fix -> prove freshness -> compare) is written out end-to-end in
+   docs/debugging.md under "The whole loop, end to end". The harness now SHIPS a grader — `cowork-harness critique <skill-folder> --prompt "<probe>"` runs the
    skill, asks the agent what confused it, and grades that self-report against a frozen record of the run
    (blinded evaluator + mechanical citation checking). See docs/critique.md for cost and limits. If you
    prefer to build your own grader, the substrate is still here:

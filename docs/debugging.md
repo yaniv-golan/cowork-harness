@@ -128,6 +128,50 @@ verification loop stacked on the agent loop; the harness gives you the substrate
 (`critique` — see [critique.md](./critique.md), which maps loop-engineering vocabulary onto this repo's terms
 and states plainly which loops we deliberately do not provide).
 
+### The whole loop, end to end
+
+The pieces below are documented separately; this is how they assemble. This is the loop a real consumer
+built on top of the harness before any of it shipped — the commands now replace the rig they hand-rolled.
+
+```bash
+SKILL=./my-skill
+
+# 1. HARVEST — run the skill against a real input and grade what confused the agent.
+#    `critique` runs the task, asks the agent what was unclear, then verifies every claim against a
+#    frozen record of the run. Findings never gate; exit 2 only if no critique was produced.
+cowork-harness critique "$SKILL" --prompt "<a real task for this skill>" --output-format json > gen-1.json
+
+# 2. TRIAGE — act only on ACTIONABLE. DROPPED items failed their citation check: the agent made them up.
+#    NOT ADJUDICABLE means the evidence can't decide — your judgement, not the tool's.
+
+# 3. REPRODUCE — before acting on a finding, check it isn't a one-run fluke.
+cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-1
+
+# 4. FIX the skill. Then re-run — and PROVE the re-run used the fixed body:
+cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-2
+#    `fingerprint.skillHash` changes on any tracked edit. If it didn't change, you tested the old skill.
+
+# 5. COMPARE generations — pass rate, cost, and which verdict signals fired per generation:
+#    (recipes in stats.md; they group on skillHash, the content-exact generation key)
+jq -s 'map(select(.skillHash)) | group_by(.skillHash) | map({gen: .[0].runLabel, runs: length,
+       passRate: ((map(select(.pass)) | length) / length)})' ~/.cowork-harness/runs/index.jsonl
+
+# 6. Repeat from 1. Stop when critique stops producing ACTIONABLE findings you agree with.
+```
+
+**What each piece is for**, so you can swap any of them:
+
+| Step | Command | Why it's needed |
+|---|---|---|
+| Harvest | [`critique`](./critique.md) | Agent self-reports confabulate. This is the part you cannot safely hand-roll |
+| Reproduce | `--repeat` (both `run` and `skill`) | A single green run proves it passed *once* |
+| Generation identity | `fingerprint.skillHash` | Proves the re-run used the fixed body, not a cached one |
+| Compare | [`stats.md`](./stats.md) recipes, [`diff`](../README.md) | Pass rate, signals, and cost per generation |
+| Branch on outcome | `result.json` `outcome` | One field instead of reconciling `result` × `verdict.pass` × exit code |
+
+**The loop itself is yours.** Nothing here re-runs a skill until it "improves" — step 4's fix and step 6's
+stopping decision are human calls, deliberately. See [critique.md](./critique.md) for why.
+
 **Verify — ground a finding before trusting it.** A green run is not a correct run, and a skill's
 self-reported finding (a self-critique appendix, "I extracted X") is not real until its cited evidence is
 found in the run's own output. The harness emits everything a grader needs; the grader itself lives
