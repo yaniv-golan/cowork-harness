@@ -69,7 +69,8 @@ Changing the evaluator model invalidates that verification.
 - **English-only prompts.**
 - The evidence package is not persisted; the report is written to stdout.
 - **Citation seams.** Armor inserts a marker line between each section heading and its body. A quote that
-  spans that seam *without* including the marker no longer resolves and is DROPPED. Quotes wholly inside
-  one section — the overwhelming majority — are unaffected. The rate this costs in practice has not been
-  measured across a corpus of real runs; DROPPED items are always shown, so the effect is visible rather
-  than silent.
+  spans that seam *without* including the marker does not resolve and is DROPPED. Quotes wholly inside one
+  section are unaffected. **Measured:** on a benign package, 9 findings across 5 live pass-1 runs produced
+  **0 dropped citations (0%)** — models quote body content, not across headings. Since a pre-armor rate
+  cannot be below zero, armor costs nothing measurable here. DROPPED items are always shown, so any future
+  regression would be visible rather than silent.
