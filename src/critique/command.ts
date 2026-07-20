@@ -747,6 +747,11 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     } else {
       printTextReport(state);
     }
+    // A reflection-protocol break or an evaluator failure reaches HERE, not the early returns above —
+    // the report is still printed (it carries the diagnosis), but no critique was produced, so this is an
+    // instrument failure, not a finding. Missing this path is what made the documented exit contract
+    // false in practice even after the other three were routed.
+    if (state.infraFailure || state.evaluatorError) process.exit(EXIT_INSTRUMENT_FAILURE);
   } catch (e) {
     process.stderr.write(`skill-critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
     process.exit(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
