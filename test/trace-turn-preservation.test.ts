@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { archivePriorTurnFiles, currentTurn } from "../src/run/execute.js";
+import { writeGradedAliases } from "../src/critique/command.js";
 
 // `trace.json` is REBUILT from the current turn's record and overwritten on every completion
 // (`writeTrace`). Unlike `result.json`/`run.jsonl` it was not archived — so a second turn did not rename
@@ -59,22 +60,40 @@ describe("a resumed turn preserves the prior turn's trace", () => {
   });
 });
 
-describe("critique's graded trace uses a ROLE-stable name", () => {
-  const SRC = readFileSync(join(process.cwd(), "src/critique/command.ts"), "utf8");
-
-  it("copies trace.json -> trace.graded.json beside the graded result", () => {
-    // Deliberately NOT left to `trace.turn-1.json`: that name only exists once a reflection turn has run,
-    // so it depends on the future exactly as `result.turn-1.json` does — the defect this contract exists
-    // to remove. A `*.graded.json` name is true the moment it is written, and survives a reflection turn
-    // that never completes.
-    expect(SRC).toContain('copyFileSync(liveTrace, join(outDir, "trace.graded.json"))');
+describe("critique's graded aliases are written, not just referenced in source", () => {
+  // The first version of this block was TWO SOURCE-TEXT GREPS. An adversarial review broke it in one
+  // edit: pointing the copy at a nonexistent filename left all 6 tests GREEN while `trace.graded.json`
+  // could never be produced. Grepping for a call proves the call is written, never that it works — the
+  // exact vacuous-guard pattern this repo keeps shipping. These drive the real function.
+  it("copies BOTH the graded result and the graded trace", () => {
+    writeFileSync(join(dir, "result.json"), '{"turn":1}');
+    writeFileSync(join(dir, "trace.json"), '{"trace":1}');
+    writeGradedAliases(dir);
+    expect(readFileSync(join(dir, "result.graded.json"), "utf8")).toBe('{"turn":1}');
+    expect(readFileSync(join(dir, "trace.graded.json"), "utf8")).toBe('{"trace":1}');
   });
 
-  it("writes it BEFORE the reflection turn can overwrite trace.json", () => {
-    const copyIdx = SRC.indexOf('trace.graded.json"');
+  it("copies the trace even when there is no result (and vice versa)", () => {
+    // Independent best-effort copies: one missing source must not suppress the other.
+    writeFileSync(join(dir, "trace.json"), '{"trace":1}');
+    writeGradedAliases(dir);
+    expect(existsSync(join(dir, "trace.graded.json"))).toBe(true);
+    expect(existsSync(join(dir, "result.graded.json"))).toBe(false);
+  });
+
+  it("never throws when neither source exists", () => {
+    // A task turn killed before either file was written must not fail the critique on a convenience copy.
+    expect(() => writeGradedAliases(dir)).not.toThrow();
+  });
+
+  it("is ordered BEFORE the reflection turn can overwrite the sources", () => {
+    // Kept as a source-position check because ordering is not observable from the function alone — but it
+    // now supplements behavioral tests instead of standing in for them.
+    const SRC = readFileSync(join(process.cwd(), "src/critique/command.ts"), "utf8");
+    const callIdx = SRC.indexOf("writeGradedAliases(outDir)");
     const reflectIdx = SRC.indexOf("const reflect = await runSkillTurn(buildReflectionTurnArgs");
-    expect(copyIdx).toBeGreaterThan(-1);
+    expect(callIdx).toBeGreaterThan(-1);
     expect(reflectIdx, "the reflection spawn moved — re-anchor this guard").toBeGreaterThan(-1);
-    expect(copyIdx, "the graded trace copy must precede the reflection turn").toBeLessThan(reflectIdx);
+    expect(callIdx, "the graded aliases must be written before the reflection turn").toBeLessThan(reflectIdx);
   });
 });

@@ -788,6 +788,31 @@ const EXIT_INSTRUMENT_FAILURE = 2;
  *  always wins (value flags are last-wins in the skill lane's parser). Exported for unit tests — the
  *  forwarding invariants are the kind that fail every run when wrong, so they are worth testing without
  *  paying for a spawn. */
+/** Role-stable copies of the GRADED turn's artifacts, taken while `result.json`/`trace.json` are STILL
+ *  turn 1's — before the reflection turn's resume renames the result and overwrites the trace.
+ *
+ *  Why `*.graded.json` and not the `*.turn-1.*` archives: an archive name only exists once a LATER turn
+ *  has run, so it depends on the future. These names are true the moment they are written and survive a
+ *  reflection turn that never completes.
+ *
+ *  Extracted so it can be tested BEHAVIORALLY. The first version of this lived inline and was "guarded"
+ *  by source-text greps, which passed 6/6 against a tree where the copy could never produce a file.
+ *
+ *  Best-effort by design: a missing or unreadable source must never fail a critique that otherwise ran. */
+export function writeGradedAliases(outDir: string): void {
+  for (const [from, to] of [
+    ["result.json", "result.graded.json"],
+    ["trace.json", "trace.graded.json"],
+  ] as const) {
+    try {
+      const src = join(outDir, from);
+      if (existsSync(src)) copyFileSync(src, join(outDir, to));
+    } catch {
+      /* best-effort convenience copy — never fail the run for it */
+    }
+  }
+}
+
 export function buildTaskTurnArgs(opts: ParsedArgs, sessionId: string): string[] {
   const dotenvArgs = opts.dotenv ? ["--dotenv", opts.dotenv] : [];
   return [
@@ -914,19 +939,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // (rather than copying the archived file afterwards) also means it survives a reflection turn that
     // never completes. Best-effort: a missing/unreadable result must never fail a critique that otherwise
     // ran, so this is deliberately swallowed.
-    try {
-      const live = join(outDir, "result.json");
-      if (existsSync(live)) copyFileSync(live, join(outDir, "result.graded.json"));
-      // The graded turn's TRACE, by the same role-stable name. Deliberately NOT left to the per-turn
-      // archive (`trace.turn-1.json`): that name only appears once a reflection turn has run, so it
-      // depends on the future exactly like `result.turn-1.json` does — the defect this whole contract
-      // exists to remove. A `*.graded.json` name is true the moment it is written and survives a
-      // reflection turn that never completes.
-      const liveTrace = join(outDir, "trace.json");
-      if (existsSync(liveTrace)) copyFileSync(liveTrace, join(outDir, "trace.graded.json"));
-    } catch {
-      /* best-effort convenience copies — never fail the run for them */
-    }
+    writeGradedAliases(outDir);
 
     // 2. Snapshot the turn-1/turn-2 boundary BEFORE the reflection turn touches anything.
     const boundary = snapshotTurnBoundary(outDir);

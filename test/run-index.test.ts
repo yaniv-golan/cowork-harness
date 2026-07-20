@@ -909,4 +909,20 @@ describe("reindexFromRunsTree — walks archived turns (result.turn-<N>.json), n
     expect(forOutDir[0].turn).toBe(2);
     expect(out!.skipped).toBeGreaterThan(0); // the corrupt archived turn counted, same as a corrupt root would
   });
+
+  it("indexes archived turns even when the ROOT result.json is MISSING", () => {
+    // The crash window execute.ts documents: `archivePriorTurnFiles` renames result.json ->
+    // result.turn-N.json, then ~150 lines run before the new root is written. A crash in between leaves
+    // archives-present/root-absent. The first version of this fix `continue`d on a missing root, so
+    // --reindex silently dropped completed prior turns on exactly the shape it exists to heal.
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-noroot-"));
+    const outDir = join(runsRoot, "s", "sess-crash");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
+
+    const { rows } = reindexFromRunsTree(runsRoot);
+    const forOutDir = rows.filter((r) => r.outDir === outDir);
+    expect(forOutDir, "an archived turn with no root result.json was dropped").toHaveLength(1);
+    expect(forOutDir[0]!.turn).toBe(1);
+  });
 });

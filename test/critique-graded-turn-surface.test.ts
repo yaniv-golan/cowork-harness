@@ -62,15 +62,19 @@ describe("the stable-named graded result is written before the resume can rename
     // Ordering is the whole point: at this moment `result.json` IS turn 1. Copying the ARCHIVED
     // `result.turn-1.json` after the reflection would also lose the file whenever the reflection turn
     // never completes. Pin the source of the copy so a later refactor cannot quietly invert it.
-    const copyIdx = SRC.indexOf('copyFileSync(live, join(outDir, "result.graded.json"))');
+    // Anchored on the extracted writer (the copies moved into `writeGradedAliases` so they could be
+    // tested BEHAVIORALLY — see trace-turn-preservation.test.ts; the previous inline version was guarded
+    // only by source greps that passed against a tree where the copy could never produce a file).
+    const copyIdx = SRC.indexOf("writeGradedAliases(outDir)");
     const reflectIdx = SRC.indexOf("const reflect = await runSkillTurn(buildReflectionTurnArgs");
-    expect(copyIdx, "the result.graded.json copy is gone").toBeGreaterThan(-1);
+    expect(copyIdx, "the graded-alias write is gone").toBeGreaterThan(-1);
     expect(reflectIdx, "the reflection-turn spawn moved — re-anchor this guard").toBeGreaterThan(-1);
     expect(copyIdx, "result.graded.json must be written BEFORE the reflection turn renames result.json").toBeLessThan(reflectIdx);
   });
 
   it("the copy is best-effort and cannot fail a critique that otherwise ran", () => {
-    const around = SRC.slice(SRC.indexOf("result.graded.json") - 400, SRC.indexOf("result.graded.json") + 400);
-    expect(around, "the convenience copy must be wrapped in try/catch").toMatch(/try\s*\{/);
+    // Behaviorally covered too ("never throws when neither source exists"); this pins the guard itself.
+    const fn = SRC.slice(SRC.indexOf("export function writeGradedAliases"));
+    expect(fn.slice(0, fn.indexOf("\n}")), "the convenience copies must be wrapped in try/catch").toMatch(/try\s*\{/);
   });
 });

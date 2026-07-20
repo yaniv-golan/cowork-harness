@@ -369,15 +369,16 @@ export function reindexFromRunsTree(runsRoot: string): {
         if (!outDirLstat.isDirectory()) continue;
         const resultPath = join(outDir, "result.json");
         const rootOutcome = readResultFileForWalk(runsRoot, outDir, resultPath, priorByOutDir);
-        if (rootOutcome.kind === "missing") continue; // no result.json here — nothing to index for this outDir
-        if (rootOutcome.kind === "unsafe") {
-          skippedUnsafe++;
-          continue;
-        }
-        if (rootOutcome.kind === "corrupt") {
-          skipped++;
-          continue;
-        }
+        // NOTE the archived-turn scan below runs even when the ROOT is missing/corrupt/unsafe. An earlier
+        // version `continue`d on each of those and so indexed archives only when the root was a clean row —
+        // which silently failed on exactly the shape `--reindex` exists to heal. `archivePriorTurnFiles`
+        // renames `result.json` -> `result.turn-N.json` and the new root is not written until ~150 lines
+        // later (execute.ts, and its own comment flags that window), so a crash in between leaves
+        // archives-present/root-absent. Dropping completed prior turns there defeats the command's purpose.
+        // Each archived file is independently containment-checked, so an unsafe/corrupt ROOT says nothing
+        // about them.
+        if (rootOutcome.kind === "unsafe") skippedUnsafe++;
+        if (rootOutcome.kind === "corrupt") skipped++;
         if (rootOutcome.kind === "replay") {
           // `continue` leaves this outDir's rows out of walkedIdentities, so any PRIOR index row(s) for it
           // are PRESERVED as-is by the merge below — the one intentional exception to "every on-disk run
@@ -385,8 +386,10 @@ export function reindexFromRunsTree(runsRoot: string): {
           skippedReplay++;
           continue;
         }
-        walked.push(rootOutcome.row);
-        walkedIdentities.add(rowIdentity(rootOutcome.row));
+        if (rootOutcome.kind === "row") {
+          walked.push(rootOutcome.row);
+          walkedIdentities.add(rowIdentity(rootOutcome.row));
+        }
 
         // Archived turns: `result.turn-<N>.json` files left behind when a resume/reflection overwrote the
         // root (see the function doc comment above). The match is STRICT on purpose — a `critique` dir
