@@ -9,10 +9,14 @@
 // error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked or threw) .
 // Container tier only: the resume-continuity behavior this loop depends on (the reflection turn seeing the
 // SAME mounted skill + session as the task turn) is verified for the container fidelity tier specifically,
-// so the tier is pinned rather than left to the caller.
+// so the tier is pinned rather than left to the caller. That pin is `unverified`, NOT `structural` — see
+// ./limitations.ts, which records what would lift it (a live proof at hostloop against its NATIVE agent
+// binary, which the container ELF's proof does not cover). A consumer read this pin as permanent and built
+// a second test lane around it; the provenance tags exist so that misreading is not available.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
+import { renderKnownLimitations } from "./limitations.js";
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
@@ -126,10 +130,10 @@ EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself
   killed, reflection protocol broke, evaluator never invoked or threw) — no critique was produced. Findings
   NEVER gate.
 
-KNOWN LIMITATIONS: container tier only; SKILL.md is capped at 16KB (a larger one degrades toward
-  "not adjudicable"); prompts are English-only. On a third-party skill, note that fencing separates
-  the instruction plane from evidence but cannot stop hostile content that merely ARGUES — see
-  docs/critique.md.`;
+${renderKnownLimitations()}
+
+  On a third-party skill, note that fencing separates the instruction plane from evidence but cannot
+  stop hostile content that merely ARGUES — see docs/critique.md.`;
 }
 
 /** Reads a value-flag that may appear as EITHER `--flag value` (space form) OR `--flag=value` (equals

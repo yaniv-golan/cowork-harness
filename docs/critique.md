@@ -182,18 +182,44 @@ Changing the evaluator model invalidates that verification.
 
 ## Known limitations
 
-- **Container tier only** — the resume continuity this depends on is verified there and nowhere else.
-- **SKILL.md is capped at 16KB**; a larger one degrades toward "not adjudicable".
-- **English-only prompts.**
-- The evidence package is not persisted; the report is written to stdout.
-- **Attached-file content usually stays out of the evidence — but that is the common case, not a
+Each limitation is tagged with **why** it exists, because that — not the limitation itself — is what tells
+you whether to design around it permanently:
+
+| Tag | Meaning |
+|---|---|
+| `structural` | Permanent. Architect around it. |
+| `unverified` | Works or doesn't — **nobody has proven it**. Not known-impossible; may lift. |
+| `deliberate` | A design choice with a rationale. |
+| `not-built` | Simply absent. No obstacle but the work. |
+
+The same tags appear in `critique --help`, generated from one source (`src/critique/limitations.ts`), so
+the two cannot disagree.
+
+- **`[unverified]` Container tier only** — `--fidelity hostloop|cowork|microvm|protocol` is refused.
+  **This is a statement about evidence, not about physics.** The resume-continuity proof
+  (`test/live-resume-continuity.test.ts`) was run against the container tier's Linux ELF; hostloop runs a
+  *different* agent binary (the native one), and conversation state lives in that binary's own session
+  store — so the proof does not transfer. Nothing indicates hostloop would fail; nobody has run it.
+  **Lifts with:** a live resume-continuity proof at hostloop against its native agent binary.
+  *If you are deciding whether to build a permanent second test lane for hostloop-only findings, this is
+  the sentence to weigh — the pin may lift.*
+- **`[deliberate]` SKILL.md is capped at 16KB** in the evidence; a larger one degrades toward "not
+  adjudicable". The package is bounded so the evaluator sees a whole record rather than a truncated tail.
+  Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —
+  only an unreadable SKILL.md forces one.
+- **`[not-built]` English-only prompts.** No localization has been attempted; nothing blocks it.
+- **`[not-built]` The evidence package is not persisted**, and the report is **written to stdout** only
+  (capture it with shell redirection; `--output-format` changes the format, never the destination). The
+  underlying run dirs *are* kept — but after the resume, `result.json` is the **reflection** turn's;
+  the graded turn is archived as **`result.turn-1.json`**.
+- **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a
   guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
   source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived
   transcript is missing, and that stream carries full tool results — so if the agent read the attached
   file, its content can enter the Transcript section (bounded, still armor-fenced) and a content-level
   citation would resolve. Claims about a document's *contents* are therefore usually NOT ADJUDICABLE, not
   always.
-- **Citation seams.** Armor inserts a marker line between each section heading and its body. A quote that
+- **`[structural]` Citation seams.** Armor inserts a marker line between each section heading and its body. A quote that
   spans that seam *without* including the marker does not resolve and is DROPPED. Quotes wholly inside one
   section are unaffected. **Measured:** on a benign package, 9 findings across 5 live pass-1 runs produced
   **0 dropped citations (0%)** — models quote body content, not across headings. Since a pre-armor rate
