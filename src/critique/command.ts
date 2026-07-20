@@ -109,6 +109,11 @@ Not accepted (each errors with its reason rather than being silently ignored):
   --ablate-skill            grading a skill you removed is incoherent
   --quiet/--verbose/--compact/--demo/--dry-run   inner-turn rendering or preview — no effect on the report
 
+Repeating a flag: --upload/--folder/--plugin/--marketplace/--enable/--answer accumulate (that is how you
+  pass several). Every other value-taking flag is single-valued and repeating it is a USAGE ERROR rather
+  than a silent last-wins — '--prompt a --prompt b' would otherwise discard a probe you typed. Boolean
+  flags may be repeated harmlessly.
+
 COST AND PREREQUISITES — read before running:
   * Each critique is FOUR model workloads: two container runs (task + reflection) and two evaluator
     passes over an evidence package of up to 48KB.

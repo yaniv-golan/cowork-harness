@@ -6,13 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-07-20
+
 ### Added
 
 - **`critique` now accepts the `skill` flags a graded run needs — starting with uploads.** A skill whose
   whole job is "here is a document, analyze it" (cap table, pitch deck, financial model, transcript) could
   not be critiqued at all: there was no way to attach the file, so the agent was asked to analyze a
   document that was never there and then asked what confused it — you harvested a finding about the test
-  rig. `--upload` (repeatable), `--folder`, `--plugin`, `--marketplace`/`--enable`, `--model` and
+  rig. `--upload`, `--folder`, `--plugin`, `--marketplace`/`--enable` (all repeatable), `--model` and
   `--allow-missing-capability` now reach **both** spawned turns; that is forced, not stylistic, because
   those paths are part of the session-origin key the reflection turn's `--resume` recomputes. `--label`,
   `--timeout`, `--answer`/`--answer-policy`, `--on-unanswered` and the decider flags reach the graded turn
@@ -28,6 +30,15 @@ All notable changes to this project are documented here. The format is based on
 - **One source of truth for the `skill` flag surface** (`src/run/skill-flag-surface.ts`), where each flag's
   critique disposition is a **required** field, plus a parity guard that fails CI when a new `skill` flag
   arrives without one. The old hand-rolled subset drifted silently — this repo's recurring bug shape.
+
+### Changed
+
+- **Repeating a single-valued `critique` flag is now a usage error (exit `2`) instead of silent
+  last-wins.** `--upload`, `--folder`, `--plugin`, `--marketplace`, `--enable` and `--answer` accumulate —
+  repeating them is how you pass several. Everything else is single-valued, and `--prompt a --prompt b`
+  silently discarding a probe you typed is the class of no-op this command refuses on principle. Boolean
+  flags may still be repeated harmlessly. Documented in `critique --help` and
+  [docs/critique.md](./docs/critique.md).
 
 ### Fixed
 
