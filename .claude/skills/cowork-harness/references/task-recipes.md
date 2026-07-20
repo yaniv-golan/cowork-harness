@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way. Facts track the harness version in SKILL.md's
-front-matter (currently 1.4.0; note `critique` and `skill --repeat` are UNRELEASED — source-only, see SKILL.md's floor list). Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+front-matter (currently 1.5.0). Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -191,9 +191,8 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
      verdict.
 2. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
-   content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but the `skill` lane emits it
-   only from source; on published 1.4.0 that lane emits no `skillHash` at all, so verify the field is present
-   before pairing on it rather than assuming** (a run that mounts nothing
+   content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but only on ≥ 1.5.0; earlier CLIs emit
+   no `skillHash` on the `skill` lane at all, so verify the field is present before pairing on it** (a run that mounts nothing
    records none; the `chat` lane records no fingerprint), changes on any tracked edit. **Group/pair on it**
    (`inspect` and the
    run-index row surface a short prefix). Add `--label <tag>` for a human-readable generation name

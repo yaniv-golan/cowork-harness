@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-07-20
+
 ### Added
 
 - **`cowork-harness critique <skill-folder> --prompt "<probe>"` (EXPERIMENTAL).** Runs a skill, asks the
