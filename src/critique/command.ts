@@ -6,7 +6,7 @@
 //
 // This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. FINDINGS never gate — any classification exits 0, including when the graded task
 // run itself errored (that is a finding about the skill). Exit 2 means NO CRITIQUE WAS PRODUCED: a usage
-// error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked) .
+// error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked or threw) .
 // Container tier only: the resume-continuity behavior this loop depends on (the reflection turn seeing the
 // SAME mounted skill + session as the task turn) is verified for the container fidelity tier specifically,
 // so the tier is pinned rather than left to the caller.

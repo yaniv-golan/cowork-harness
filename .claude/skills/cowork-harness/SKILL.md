@@ -375,7 +375,10 @@ cassette — has its own recipe:
    input + result are captured, not just errored ones. When iterating, tag generations with `--label` and
    pair a critique only with a `result.json` whose `fingerprint.skillHash` **matches** the skill that
    produced it (`inspect`/the run-index row surface a short `skillHash` prefix; `verify-run` warns when a
-   kept run predates the current skill). See `docs/debugging.md` (repo-only) for the full loop.
+   kept run predates the current skill). **Check `fingerprint.skillHash` is actually present before pairing
+   on it:** on published 1.4.0 the `skill` lane emits none (see the UNRELEASED entry in the floor list), so a
+   pairing step there silently groups on an absent key instead of erroring. See `docs/debugging.md`
+   (repo-only) for the full loop.
 
 #### Interpreting verdict signals
 

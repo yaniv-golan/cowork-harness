@@ -34,6 +34,10 @@ things those descriptions do not specify: the grader is *structurally blind* to 
 every claim is mechanically checked against evidence. The **optimizer** half — fix, re-run, accept —
 stays yours, deliberately.
 
+It is also the mechanized form of the problem Osmani names and leaves to human diligence:
+
+> "'done' is a claim and not a proof" · "the model that wrote the code is way too nice grading its own homework"
+
 Where your vocabulary lands here:
 
 | Loop-engineering term | Here |
@@ -71,7 +75,7 @@ process runs. It has nothing to do with loop engineering's "loops".
 | Code | Meaning |
 |---|---|
 | `0` | The critique ran. **Any** findings, of any classification — including a task run that itself errored, which is a legitimate finding about the skill. |
-| `2` | Usage error, **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked. No critique was produced. A broken instrument is not a discovery outcome. |
+| `2` | Usage error, **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw*. No critique was produced. A broken instrument is not a discovery outcome. |
 
 Never gate CI on findings; that is the whole design.
 
