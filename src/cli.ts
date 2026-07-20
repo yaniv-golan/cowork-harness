@@ -80,6 +80,9 @@ import {
   type ToolDiffOp,
   type TranscriptDiffLine,
   type MetaDiffEntry,
+  compareDiffSides,
+  type DiffSide,
+  type DiffViewResult,
 } from "./run/diff.js";
 import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
@@ -4086,17 +4089,6 @@ function detectDiffKind(arg: string): DiffKind {
   return "baseline"; // validated for real by loadBaseline() at load time; unresolvable throws there
 }
 
-interface DiffSide {
-  tools: NormalizedToolRow[];
-  transcript: string;
-  artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
-  meta: Partial<DiffMetaSummary>;
-  // Identity metadata, NOT diffed content: used only for the cross-scenario warning ("allow + warn" —
-  // comparing two different scenarios is legitimate for skill-variant comparison, but must be flagged,
-  // since the meta view doesn't surface scenario identity).
-  scenarioName?: string;
-}
-
 /** Top-level (non-sub-agent, non-synthetic) tool_use events, canonicalized — the same shape both a run
  *  dir's events.jsonl and a cassette's events[] reduce to. */
 function topLevelToolRows(lines: string[], source: string, normalize: boolean): NormalizedToolRow[] {
@@ -4123,6 +4115,10 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
       effectiveFidelity: result.effectiveFidelity,
       baseline: result.baseline,
       assertionsPassed: (result.assertions ?? []).every((a) => a.pass),
+      // Short prefix, matching the run-index convention — enough to NAME the two generations a diff
+      // compared (a diff across a skill fix was otherwise anonymous). Absent on runs that mounted no
+      // skill, and on pre-fix runs recorded before the skill lane emitted a fingerprint.
+      skillHash: result.fingerprint?.skillHash?.slice(0, 12),
     };
     // Hash on-disk if the workDir is still there (fresh/kept run); degrade to a size-based pseudo-hash,
     // clearly distinguishable ("size:N"), when it's torn down — never silently claim byte-verified
@@ -4173,26 +4169,8 @@ function loadDiffSide(kind: DiffKind, arg: string, normalize: boolean): DiffSide
   return kind === "cassette" ? loadCassetteSide(arg, normalize) : loadRunSide(arg, normalize);
 }
 
-interface DiffViewResult {
-  tools: ToolDiffOp[];
-  transcript: TranscriptDiffLine[];
-  artifacts?: import("./run/cassette.js").FileSigDiff;
-  meta: MetaDiffEntry[];
-  identical: boolean;
-}
-
-function compareDiffSides(a: DiffSide, b: DiffSide, normalize: boolean): DiffViewResult {
-  const tools = diffToolSequence(a.tools, b.tools);
-  const transcript = diffTranscript(a.transcript, b.transcript, normalize);
-  const artifacts = a.artifacts && b.artifacts ? diffArtifacts(a.artifacts, b.artifacts) : undefined;
-  const meta = diffMeta(a.meta, b.meta);
-  const identical =
-    tools.every((o) => o.op === "same") &&
-    transcript.every((o) => o.op === "same") &&
-    (!artifacts || (artifacts.added.length === 0 && artifacts.removed.length === 0 && artifacts.changed.length === 0)) &&
-    meta.length === 0;
-  return { tools, transcript, artifacts, meta, identical };
-}
+// DiffSide / DiffViewResult / compareDiffSides live in ./run/diff.js alongside the rest of the diff
+// engine (diffToolSequence/diffTranscript/diffArtifacts/diffMeta) — comparison logic, not CLI plumbing.
 
 function renderDiffText(r: DiffViewResult, view: string): string[] {
   const lines: string[] = [];
@@ -4310,13 +4288,18 @@ function cmdDiff(args: string[]) {
         a: aName,
         b: bName,
         identical: result.identical,
+        transcriptDiffers: result.transcriptDiffers,
         views: { tools: result.tools, transcript: result.transcript, artifacts: result.artifacts, meta: result.meta },
       }),
     );
   } else if (result.identical) {
-    out("identical");
+    // `identical` is the GATEABLE verdict (tools/artifacts/meta) — exactly what --help promises. Prose
+    // drift is advisory and must stay VISIBLE rather than be swallowed by the looser gate, so say so
+    // explicitly instead of printing a bare "identical" that would read as "nothing changed at all".
+    out(result.transcriptDiffers ? "identical (gateable views); transcript differs — advisory, see --view transcript" : "identical");
   } else {
     for (const line of renderDiffText(result, view)) out(line);
+    if (result.transcriptDiffers && view === "all") out("(transcript also differs — advisory, not part of the exit code)");
   }
   process.exit(result.identical ? 0 : 1);
 }
