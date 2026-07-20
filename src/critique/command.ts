@@ -4,9 +4,9 @@
 //   cowork-harness critique <skill-folder> --prompt "<probe>" [--dotenv <path>]
 //                                 [--fidelity container] [--evaluator-model <id>] [--output-format json|text]
 //
-// This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. It always
-// exits 0 — including when the task run itself errors — because the point is to surface improvement ideas
-// for a human to read, not to render a pass/fail verdict .
+// This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. FINDINGS never gate — any classification exits 0, including when the graded task
+// run itself errored (that is a finding about the skill). Exit 2 means NO CRITIQUE WAS PRODUCED: a usage
+// error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked) .
 // Container tier only: the resume-continuity behavior this loop depends on (the reflection turn seeing the
 // SAME mounted skill + session as the task turn) is verified for the container fidelity tier specifically,
 // so the tier is pinned rather than left to the caller.
@@ -461,6 +461,7 @@ export function buildTextReport(state: ReportState): string {
     requestedModel,
     evaluatorError,
     infraFailure,
+    evaluatorIntegrity,
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
@@ -497,7 +498,8 @@ export function buildTextReport(state: ReportState): string {
 
   const integ = state.evaluatorIntegrity;
   if (integ && (integ.pass1Canary === false || integ.pass2Canary === false)) {
-    const which = integ.pass1Canary === false ? "pass 1" : "pass 2";
+    const missing = [integ.pass1Canary === false ? "pass 1" : null, integ.pass2Canary === false ? "pass 2" : null].filter(Boolean);
+    const which = missing.join(" and ");
     out.push(
       `  evaluator integrity: CANARY MISSING (${which}) — the evaluator ignored a trusted instruction. ` +
         `An empty or short critique in this state may be adversarial silencing by the skill under review, NOT a clean skill.`,
@@ -552,6 +554,8 @@ function printTextReport(state: ReportState): void {
 export function buildJsonReport(state: ReportState): Record<string, unknown> {
   const {
     skillFolder,
+    prompt,
+    evaluatorIntegrity,
     sessionId,
     outDir,
     taskResult,
@@ -566,7 +570,20 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
   } = state;
   // F28/F30/F31 (D): threaded into `base` (not appended per-branch) so every return path below — infra
   // failure, evaluator error, or a normal critique — carries the same machine-readable degradation state.
-  const base = { skillFolder, sessionId, outDir, taskResult, selfReportStatus, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus };
+  // evaluatorIntegrity rides on EVERY branch: a silenced pass is exactly the case where the other fields
+  // look clean, so omitting it from the infra/error branches would hide it when it matters most.
+  const base = {
+    skillFolder,
+    prompt,
+    sessionId,
+    outDir,
+    taskResult,
+    selfReportStatus,
+    evaluatorIntegrity,
+    turn1ResultDegraded,
+    turn1SliceDegraded,
+    skillMdStatus,
+  };
   if (infraFailure) return { ...base, infraFailure, items: [] };
   if (evaluatorError) return { ...base, evaluatorError, items: [] };
   return { ...base, evaluatorModel, items };
@@ -752,6 +769,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       requestedModel,
       evaluatorError,
       infraFailure,
+      evaluatorIntegrity,
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,

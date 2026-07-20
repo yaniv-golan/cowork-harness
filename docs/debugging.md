@@ -152,12 +152,18 @@ cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-2
 #    `fingerprint.skillHash` changes on any tracked edit. If it didn't change, you tested the old skill.
 
 # 5. COMPARE generations — pass rate, cost, and which verdict signals fired per generation:
-#    (recipes in stats.md; they group on skillHash, the content-exact generation key)
+#    (recipes in stats.md; they group on skillHash — the index stores a 12-CHAR PREFIX of it, which is
+#     enough to pair within one project; the full hash is in each run's result.json)
 jq -s 'map(select(.skillHash)) | group_by(.skillHash) | map({gen: .[0].runLabel, runs: length,
        passRate: ((map(select(.pass)) | length) / length)})' ~/.cowork-harness/runs/index.jsonl
 
 # 6. Repeat from 1. Stop when critique stops producing ACTIONABLE findings you agree with.
 ```
+
+> **Reading the comparison honestly:** step 1's `critique` is itself two indexed `skill` invocations (the
+> task turn and the reflection resume). They carry the SAME `skillHash` as that generation's `--repeat`
+> batch but no `--label`, so a gen-1 group is ~7 rows, `runLabel` can come back `null`, and the reflection
+> turn's row dilutes `passRate`. Filter on `runLabel` if you want the batch alone.
 
 **What each piece is for**, so you can swap any of them:
 

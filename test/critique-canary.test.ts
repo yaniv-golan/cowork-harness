@@ -74,3 +74,42 @@ describe("integrity canary", () => {
     expect(seen?.pass1Canary).toBe(true); // ...but the evaluator was still following instructions
   });
 });
+
+// The canary shipped INERT: the interface field, the renderer, the local and the callback all existed,
+// but `evaluatorIntegrity` was never put into the ReportState literal, so the warning could not print in
+// either output format. These drive the REPORT BUILDERS — the assembly — rather than the callback.
+describe("canary reaches the report (the assembly, not just the parts)", () => {
+  const base = {
+    skillFolder: "/s",
+    prompt: "p",
+    sessionId: "sess-1",
+    outDir: "/out",
+    items: [],
+    requestedModel: "m",
+    selfReportStatus: "captured" as const,
+  };
+
+  it("text report warns when the canary is missing", async () => {
+    const { buildTextReport } = await import("../src/critique/command.js");
+    const out = buildTextReport({ ...base, evaluatorIntegrity: { pass1Canary: false } } as never);
+    expect(out).toMatch(/CANARY MISSING/);
+    expect(out).toMatch(/adversarial silencing/i);
+  });
+
+  it("text report stays quiet when the canary came back", async () => {
+    const { buildTextReport } = await import("../src/critique/command.js");
+    expect(buildTextReport({ ...base, evaluatorIntegrity: { pass1Canary: true } } as never)).not.toMatch(/CANARY MISSING/);
+  });
+
+  it("JSON report carries the integrity signal — the loop walkthrough archives this format", async () => {
+    const { buildJsonReport } = await import("../src/critique/command.js");
+    const json = buildJsonReport({ ...base, evaluatorIntegrity: { pass1Canary: false } } as never);
+    expect(json.evaluatorIntegrity).toEqual({ pass1Canary: false });
+  });
+
+  it("names pass 2 when only pass 2's canary is missing", async () => {
+    const { buildTextReport } = await import("../src/critique/command.js");
+    const out = buildTextReport({ ...base, evaluatorIntegrity: { pass1Canary: true, pass2Canary: false } } as never);
+    expect(out).toMatch(/CANARY MISSING \(pass 2\)/);
+  });
+});

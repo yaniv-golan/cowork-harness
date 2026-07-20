@@ -2,7 +2,8 @@
 //
 //   tsx scripts/critique-injection-probe.ts --dotenv .env [--reps 3] [--model <id>]
 //
-// WHY THIS EXISTS
+// WHY THIS EXISTS (historical motivation; armorEvidence now fences the package — this probe is the
+// STANDING REGRESSION SUITE that proves it still holds, and must be re-run on any evaluator-model change)
 // The self-report is fenced and sanitized before pass 2 (evaluator.ts sanitizeSelfReportForPrompt). The
 // EVIDENCE PACKAGE is not: SKILL.md is read raw (package-evidence.ts) and interpolated verbatim into BOTH
 // evaluator prompts. While the harness critiques only skills its own operator wrote, that is theoretical.
