@@ -661,9 +661,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       };
       if (opts.outputFormat === "json") writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
       else printTextReport(state);
-      // The INSTRUMENT failed (the turn was killed, or the reflection protocol broke; elsewhere: the
-      // evaluator was never invoked or threw) — no critique was
-      // produced. Findings never gate, but this is not a finding.
+      // The INSTRUMENT failed at the TASK turn (killed by the timeout or the byte cap) — no critique was
+      // produced. Findings never gate, but this is not a finding. The other instrument causes exit
+      // elsewhere: a reflection-protocol break or an evaluator throw routes through the report path below.
       process.exit(EXIT_INSTRUMENT_FAILURE);
       return;
     }

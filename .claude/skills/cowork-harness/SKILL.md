@@ -95,6 +95,11 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
   TTY, **not** an asserted test — see *Debugging with `chat`* in **Part III — Debug**).
 
+> **"repo-only" in this skill means "not bundled with the installed SKILL"** — not "unavailable". An
+> **npm** install ships `docs/`, `README.md` and `SPEC.md` in the tarball, so try
+> `node_modules/cowork-harness/docs/<name>.md` before assuming a pointer dangles. A **plugin**
+> install loads a trimmed source-only cache where those pointers genuinely do dangle.
+
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 lint-skill · analyze-skill · probe-dispatch ·
 verify-run · trace · inspect · diff · critique · stats · decide · gates · answer · scaffold · assertions --list · sync ·
