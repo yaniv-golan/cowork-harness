@@ -164,6 +164,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let taskTimeoutMs: number | undefined;
   const forwardBoth: string[] = [];
   const forwardTask: string[] = [];
+  const seenForwarded = new Set<string>();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--prompt" || a.startsWith("--prompt=")) {
@@ -203,6 +204,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
       const spec = lookupSkillFlag(name);
       if (!spec) throw new Error(`unknown flag: ${a}\n${usage()}`);
+      // `repeatable` is enforced, not decorative: passing a non-repeatable flag twice silently drops the
+      // first value (the child is last-wins), which is the silent no-op this command's refusal design
+      // exists to prevent. Say so instead.
+      if (!spec.repeatable && seenForwarded.has(name)) throw new Error(`${name} given more than once (it is not repeatable)\n${usage()}`);
+      seenForwarded.add(name);
       if (spec.critique.kind === "reject") throw new Error(`${name} is not accepted by critique: ${spec.critique.reason}\n${usage()}`);
       if (spec.critique.kind === "owned") throw new Error(`unknown flag: ${a}\n${usage()}`); // owned => handled above
       let value: string | undefined;

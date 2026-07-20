@@ -27,13 +27,16 @@ export type CritiqueDisposition =
   /** Refuse with `reason`. Never silently accept a flag that cannot work — a silent no-op is this repo's
    *  documented anti-pattern. */
   | { kind: "reject"; reason: string }
-  /** `critique` implements or pins this itself; never forwarded verbatim. */
+  /** `critique` implements or pins this itself; never forwarded verbatim. `note` is DESCRIPTIVE — unlike
+   *  `reject.reason` (which is surfaced in the error), nothing reads it. Kept as colocated documentation. */
   | { kind: "owned"; note: string };
 
 export interface SkillFlagSpec {
   flag: string;
   /** 0 = boolean, 1 = takes a value. Both `--flag value` and `--flag=value` spellings are accepted. */
   arity: 0 | 1;
+  /** Enforced: a non-repeatable flag given twice is rejected, because the child would silently keep only
+   *  the last value. */
   repeatable?: boolean;
   /** REQUIRED — totality by construction. */
   critique: CritiqueDisposition;

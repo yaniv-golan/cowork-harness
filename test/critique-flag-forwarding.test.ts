@@ -158,3 +158,13 @@ describe("forwarded-flag value validation (parity with the child's own parser)",
     }
   });
 });
+
+describe("`repeatable` in the spec is enforced, not decoration", () => {
+  it("rejects a non-repeatable flag given twice (the child would silently keep only the last)", () => {
+    expect(() => parseArgs(["./s", "--prompt", "p", "--model", "a", "--model", "b"])).toThrow(/not repeatable/);
+  });
+
+  it("still allows genuinely repeatable flags", () => {
+    expect(parseArgs(["./s", "--prompt", "p", "--upload", "a", "--upload", "b"]).forwardBoth).toEqual(["--upload", "a", "--upload", "b"]);
+  });
+});
