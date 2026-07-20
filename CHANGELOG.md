@@ -60,6 +60,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A resumed turn destroyed the prior turn's `trace.json`.** Unlike `result.json`/`run.jsonl` it was not
+  archived — and because it is rebuilt and overwritten on every completion, the earlier turn's trace was
+  deleted rather than renamed. A `critique` therefore lost the graded turn's trace entirely. It is now
+  archived as `trace.turn-<N>.json`, and `critique` additionally writes **`trace.graded.json`** beside
+  `result.graded.json`.
+- **`stats --reindex` dropped every non-latest turn when rebuilding from the runs tree.** It read only the
+  root `result.json` per run directory, so a resumed session's earlier turns vanished — and on a
+  `critique` directory the root file is the *reflection* turn, so it was the **graded** rows that were
+  lost. Archived turns are now indexed too, matched strictly (`result.turn-<N>.json`) so
+  `result.graded.json` — a byte-identical copy of turn 1 — cannot double-count.
+
 - **`stats --reindex` destroyed multi-turn history.** Every `--resume` turn — and `critique`'s task +
   reflection pair — writes to one `outDir`, so keying by directory collapsed N completions into one,
   silently changing run counts, pass rates and costs.

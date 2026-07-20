@@ -227,7 +227,11 @@ number, the opposite of every other multi-run convention. Rather than expect you
   `gradedSkillHash` in `--output-format json`, and in the text header) — a harvester never needs a turn
   file; and
 - the graded result is also written under the stable name **`result.graded.json`**, alongside the
-  archived `result.turn-1.json`.
+  archived `result.turn-1.json`; the graded turn's trace is likewise **`trace.graded.json`**.
+
+Both `*.graded.json` names are written at the moment the graded turn completes, so they are correct
+immediately and survive a reflection turn that never finishes. Prefer them to the `*.turn-<N>` archives,
+whose names only appear once a later turn has run.
 
 Prefer either of those to `result.json`, which will silently hand you the reflection turn's numbers.
 - **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a

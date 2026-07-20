@@ -917,8 +917,15 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     try {
       const live = join(outDir, "result.json");
       if (existsSync(live)) copyFileSync(live, join(outDir, "result.graded.json"));
+      // The graded turn's TRACE, by the same role-stable name. Deliberately NOT left to the per-turn
+      // archive (`trace.turn-1.json`): that name only appears once a reflection turn has run, so it
+      // depends on the future exactly like `result.turn-1.json` does — the defect this whole contract
+      // exists to remove. A `*.graded.json` name is true the moment it is written and survives a
+      // reflection turn that never completes.
+      const liveTrace = join(outDir, "trace.json");
+      if (existsSync(liveTrace)) copyFileSync(liveTrace, join(outDir, "trace.graded.json"));
     } catch {
-      /* best-effort convenience copy — never fail the run for it */
+      /* best-effort convenience copies — never fail the run for them */
     }
 
     // 2. Snapshot the turn-1/turn-2 boundary BEFORE the reflection turn touches anything.

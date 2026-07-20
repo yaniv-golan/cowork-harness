@@ -830,3 +830,83 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     expect(readIndex(runsRoot)).toHaveLength(1);
   });
 });
+
+describe("reindexFromRunsTree — walks archived turns (result.turn-<N>.json), not just the root", () => {
+  function resultJson(over: Record<string, unknown>) {
+    return JSON.stringify({
+      scenario: "s",
+      fidelity: "container",
+      baseline: "x",
+      result: "success",
+      decisions: [],
+      egress: [],
+      assertions: [],
+      ...over,
+    });
+  }
+
+  it("a two-turn dir (root result.json is turn 2, result.turn-1.json is the archived turn 1) yields rows for BOTH turns", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
+    const outDir = join(runsRoot, "s", "sess-1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
+    writeFileSync(join(outDir, "result.json"), resultJson({ turn: 2, outDir, cost: { usd: 2 } }));
+
+    const { rows, written } = reindexFromRunsTree(runsRoot);
+    const forOutDir = rows.filter((r) => r.outDir === outDir);
+    expect(forOutDir).toHaveLength(2);
+    expect(written).toBe(2);
+    expect(forOutDir.find((r) => r.turn === 1)?.costUsd).toBe(1);
+    expect(forOutDir.find((r) => r.turn === 2)?.costUsd).toBe(2);
+  });
+
+  it(
+    "does NOT pick up result.graded.json — a critique dir's byte-identical copy of the turn-1 (graded) " +
+      "result — which would otherwise double-count the graded turn on every reindex",
+    () => {
+      const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
+      const outDir = join(runsRoot, "s", "sess-critique");
+      mkdirSync(outDir, { recursive: true });
+      // Mirrors a real critique dir: result.turn-1.json is the archived GRADED turn, result.graded.json is
+      // critique/command.ts's byte-identical stable-named copy of that same turn 1, and result.json is the
+      // REFLECTION turn (turn 2) that overwrote the live file.
+      const gradedTurn = resultJson({ turn: 1, outDir, cost: { usd: 1 } });
+      writeFileSync(join(outDir, "result.turn-1.json"), gradedTurn);
+      writeFileSync(join(outDir, "result.graded.json"), gradedTurn); // byte-identical copy — must be ignored
+      writeFileSync(join(outDir, "result.json"), resultJson({ turn: 2, outDir, cost: { usd: 2 } }));
+
+      const { rows, written } = reindexFromRunsTree(runsRoot);
+      const forOutDir = rows.filter((r) => r.outDir === outDir);
+      expect(forOutDir).toHaveLength(2); // turn 1 (graded) + turn 2 (reflection) — NOT 3
+      expect(written).toBe(2);
+      expect(forOutDir.filter((r) => r.turn === 1)).toHaveLength(1); // graded turn counted exactly once
+    },
+  );
+
+  it("a single-turn dir (no archived result.turn-<N>.json present) is unchanged: exactly one row", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
+    const outDir = join(runsRoot, "s", "local_1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "result.json"), resultJson({ turn: 1, outDir }));
+
+    const { rows, written } = reindexFromRunsTree(runsRoot);
+    const forOutDir = rows.filter((r) => r.outDir === outDir);
+    expect(forOutDir).toHaveLength(1);
+    expect(written).toBe(1);
+  });
+
+  it("a corrupt archived turn file is skipped, not fatal — the good root row is still indexed and the walk doesn't throw", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
+    const outDir = join(runsRoot, "s", "sess-corrupt");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "result.turn-1.json"), "{ not valid json");
+    writeFileSync(join(outDir, "result.json"), resultJson({ turn: 2, outDir }));
+
+    let out: ReturnType<typeof reindexFromRunsTree>;
+    expect(() => (out = reindexFromRunsTree(runsRoot))).not.toThrow();
+    const forOutDir = out!.rows.filter((r) => r.outDir === outDir);
+    expect(forOutDir).toHaveLength(1); // only the good root (turn 2) row
+    expect(forOutDir[0].turn).toBe(2);
+    expect(out!.skipped).toBeGreaterThan(0); // the corrupt archived turn counted, same as a corrupt root would
+  });
+});

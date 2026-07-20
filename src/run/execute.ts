@@ -1571,6 +1571,16 @@ export function archivePriorTurnFiles(outDir: string): number {
     if (existsSync(runPath)) renameSync(runPath, join(outDir, `run.turn-${prior}.jsonl`));
     const resPath = join(outDir, "result.json");
     if (existsSync(resPath)) renameSync(resPath, join(outDir, `result.turn-${prior}.json`));
+    // `trace.json` is REBUILT from the current turn's record and overwritten on every completion
+    // (`writeTrace`), so without this the prior turn's trace was not renamed — it was DESTROYED. A
+    // critique lost the graded turn's trace entirely, which is worse than the result-file rename that
+    // prompted this fix: a rename hides data, an overwrite deletes it.
+    //
+    // Safe here because archiving runs at the START of turn N (callers at ~:927/:1292) while `writeTrace`
+    // runs at the END (~:962/:1442), so the file being archived is always the PRIOR turn's.
+    // NOTE: `currentTurn` counts `run.turn-<N>.jsonl` only — adding this does not perturb turn detection.
+    const tracePath = join(outDir, "trace.json");
+    if (existsSync(tracePath)) renameSync(tracePath, join(outDir, `trace.turn-${prior}.json`));
   }
   return turn;
 }
