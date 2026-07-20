@@ -1279,15 +1279,21 @@ async function cmdRun(rawArgs: string[]) {
   // --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
   // flags, pre-extracted here exactly like --decider-model.
   let deciderModel: string | undefined;
-  let repeatN: number | undefined;
-  let maxBudgetUsd: number | undefined;
-  let stopOnDiverge = false;
-  let minPassRate = 1.0;
+  // The --repeat family is parsed by the SHARED seam both lanes use (run/repeat-flags.ts) — one
+  // implementation, so `run` and `skill` cannot drift apart on validation or on what counts as a value.
+  let repeatFlags;
+  try {
+    repeatFlags = parseRepeatFlags(rawArgs, "run");
+  } catch (e) {
+    if (e instanceof RepeatFlagError) return void fail("run", "usage", e.message, undefined, isJsonOutput(rawArgs));
+    throw e;
+  }
+  rawArgs = repeatFlags.rest;
+  const { repeatN, maxBudgetUsd, stopOnDiverge, minPassRate, allowBudgetStop } = repeatFlags;
   let matrixFile: string | undefined;
   let maxCells = 16;
   let matrixConcurrency = 1;
   let allowTruncatedMatrix = false;
-  let allowBudgetStop = false;
   const preArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
@@ -1301,44 +1307,6 @@ async function cmdRun(rawArgs: string[]) {
     } else if (a.startsWith("--decider-model=")) {
       deciderModel = a.slice("--decider-model=".length);
       if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, jsonOut);
-    } else if (a === "--repeat" || a.startsWith("--repeat=")) {
-      const v = a === "--repeat" ? rawArgs[++i] : a.slice("--repeat=".length);
-      const n = v === undefined ? NaN : Number(v);
-      if (!Number.isInteger(n) || n < 2 || n > 100)
-        fail(
-          "run",
-          "usage",
-          `--repeat requires an integer between 2 and 100 (got ${v === undefined ? "nothing" : `"${v}"`})`,
-          undefined,
-          jsonOut,
-        );
-      repeatN = n;
-    } else if (a === "--max-budget-usd" || a.startsWith("--max-budget-usd=")) {
-      const v = a === "--max-budget-usd" ? rawArgs[++i] : a.slice("--max-budget-usd=".length);
-      const n = v === undefined ? NaN : Number(v);
-      if (!Number.isFinite(n) || n <= 0)
-        fail(
-          "run",
-          "usage",
-          `--max-budget-usd requires a positive number (got ${v === undefined ? "nothing" : `"${v}"`})`,
-          undefined,
-          jsonOut,
-        );
-      maxBudgetUsd = n;
-    } else if (a === "--stop-on-diverge") {
-      stopOnDiverge = true;
-    } else if (a === "--min-pass-rate" || a.startsWith("--min-pass-rate=")) {
-      const v = a === "--min-pass-rate" ? rawArgs[++i] : a.slice("--min-pass-rate=".length);
-      const n = v === undefined ? NaN : Number(v);
-      if (!Number.isFinite(n) || n < 0 || n > 1)
-        fail(
-          "run",
-          "usage",
-          `--min-pass-rate requires a number between 0 and 1 (got ${v === undefined ? "nothing" : `"${v}"`})`,
-          undefined,
-          jsonOut,
-        );
-      minPassRate = n;
     } else if (a === "--matrix" || a.startsWith("--matrix=")) {
       const v = a === "--matrix" ? rawArgs[++i] : a.slice("--matrix=".length);
       if (v === undefined || v === "" || v.startsWith("-"))
@@ -1364,22 +1332,13 @@ async function cmdRun(rawArgs: string[]) {
       matrixConcurrency = n;
     } else if (a === "--allow-truncated-matrix") {
       allowTruncatedMatrix = true;
-    } else if (a === "--allow-budget-stop") {
-      allowBudgetStop = true;
     } else preArgs.push(a);
   }
-  if (maxBudgetUsd !== undefined && repeatN === undefined)
-    fail("run", "usage", "--max-budget-usd requires --repeat", undefined, isJsonOutput(rawArgs));
-  if (stopOnDiverge && repeatN === undefined) fail("run", "usage", "--stop-on-diverge requires --repeat", undefined, isJsonOutput(rawArgs));
-  if (minPassRate !== 1.0 && repeatN === undefined)
-    fail("run", "usage", "--min-pass-rate requires --repeat", undefined, isJsonOutput(rawArgs));
   if (maxCells !== 16 && matrixFile === undefined) fail("run", "usage", "--max-cells requires --matrix", undefined, isJsonOutput(rawArgs));
   if (matrixConcurrency !== 1 && matrixFile === undefined)
     fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
   if (allowTruncatedMatrix && matrixFile === undefined)
     fail("run", "usage", "--allow-truncated-matrix requires --matrix", undefined, isJsonOutput(rawArgs));
-  if (allowBudgetStop && repeatN === undefined)
-    fail("run", "usage", "--allow-budget-stop requires --repeat", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
   // An interactive driving agent × N runs is not a measurement — --decider-dir/--decider-cmd both answer
   // gates LIVE (this codebase's own "LIVE questions: --decider-llm / --decider-cmd / --decider-dir"
@@ -1693,8 +1652,9 @@ async function cmdRun(rawArgs: string[]) {
 }
 
 async function cmdSkill(rawArgs: string[]) {
-  // --repeat family: parsed via the SHARED seam so `skill` and `run` cannot drift. Consumed here (and
-  // removed from argv) before the common-flag parse, which would otherwise reject them as unknown.
+  if (hasHelp(rawArgs)) return void log(SKILL_HELP); // BEFORE the repeat parse — `--stop-on-diverge --help` must print help, not "requires --repeat"
+  // --repeat family: parsed via the SHARED seam (`run` uses the same one) so the lanes cannot drift.
+  // Consumed here (and removed from argv) before the common-flag parse, which would reject them as unknown.
   let repeatFlags;
   try {
     repeatFlags = parseRepeatFlags(rawArgs, "skill");
@@ -1703,7 +1663,6 @@ async function cmdSkill(rawArgs: string[]) {
     throw e;
   }
   rawArgs = repeatFlags.rest;
-  if (hasHelp(rawArgs)) return void log(SKILL_HELP);
   const { rest: args, flags } = takeCommonFlags(rawArgs, "skill");
   const positional: string[] = [];
   const answers: AnswerRule[] = [];
@@ -1982,6 +1941,28 @@ async function cmdSkill(rawArgs: string[]) {
   const o = resolveOutput("skill", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   const { repeatN, minPassRate, stopOnDiverge, maxBudgetUsd, allowBudgetStop } = repeatFlags;
+  // Preconditions `run` never needed. `--session-id`/`--resume` are skill-only, and both pin ONE run dir:
+  // every repeat iteration would resolve the same `sess-<id>` outDir and the same-origin freshness wipe
+  // (execute.ts) would delete the previous iteration — N runs, one survivor, while the help text promises
+  // every run is kept. `--resume` additionally chains one session instead of sampling N independent runs.
+  if (repeatN !== undefined && (sessionId || resume))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --session-id/--resume (both pin a single run dir, so each iteration would overwrite the last instead of producing N independent samples)",
+      undefined,
+      o.json,
+    );
+  // Same invariant the run lane enforces and docs/scenario.md states: an interactive driving agent x N
+  // runs is not a reproducible measurement.
+  if (repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
+      undefined,
+      o.json,
+    );
   const runSkillOnce = (label: string, rethrowUnanswered = false) =>
     runOneScenario({
       command: "skill",
@@ -4198,6 +4179,10 @@ function loadCassetteSide(file: string, normalize: boolean): DiffSide {
     result: lastResult ? (lastResult.isError ? "error" : "success") : undefined,
     effectiveFidelity: cassette.effectiveFidelity,
     baseline: cassette.scenario?.baseline,
+    // The cassette froze the generation key at record time — carry it so a cassette-vs-cassette diff can
+    // NAME the two generations, and so a run-vs-cassette diff doesn't read as generation drift purely
+    // because one side omitted the field. Same 12-char prefix convention as the run side and run-index.
+    skillHash: cassette.fingerprint?.skillHash?.slice(0, 12),
     // assertionsPassed intentionally omitted: comparing frozen-vs-frozen assertion pass/fail needs a real
     // replay (staleness/controlOut-aware), out of scope for a structural diff — diffMeta skips a field
     // when BOTH sides omit it, so this degrades cleanly rather than comparing undefined to a run's real value.
@@ -4337,7 +4322,15 @@ function cmdDiff(args: string[]) {
     // `identical` is the GATEABLE verdict (tools/artifacts/meta) — exactly what --help promises. Prose
     // drift is advisory and must stay VISIBLE rather than be swallowed by the looser gate, so say so
     // explicitly instead of printing a bare "identical" that would read as "nothing changed at all".
-    out(result.transcriptDiffers ? "identical (gateable views); transcript differs — advisory, see --view transcript" : "identical");
+    if (result.transcriptDiffers && (view === "transcript" || view === "all")) {
+      // The advisory view is the ONLY difference. Printing just the one-liner here would tell a user who
+      // already ran `--view transcript` to run `--view transcript` — and would hide the drift the commit
+      // that loosened the gate promised to keep visible. Render it, then say it is advisory.
+      for (const line of renderDiffText(result, "transcript")) out(line);
+      out("(gateable views identical; the transcript drift above is advisory and not part of the exit code)");
+    } else {
+      out(result.transcriptDiffers ? "identical (gateable views); transcript differs — advisory, see --view transcript" : "identical");
+    }
   } else {
     for (const line of renderDiffText(result, view)) out(line);
     if (result.transcriptDiffers && view === "all") out("(transcript also differs — advisory, not part of the exit code)");

@@ -634,7 +634,7 @@
         "delivered_with_verdict_fail",
         "delivered_clean"
       ],
-      "description": "One-field rollup of the result x verdict.pass x exit-code matrix, for consumers driving an iterative loop. A pure function of `result` and `verdict` (see deriveOutcome, src/run/outcome.ts) — adds no judgement and cannot disagree with them. `errored` dominates; then the no-deliverable signals (stalled/ended_with_question); then the verdict. ABSENT whenever `verdict` is absent (chat, or a pre-existing kept run) — treat absence as unknown, never as a pass."
+      "description": "One-field rollup of the result x verdict.pass x exit-code matrix, for consumers driving an iterative loop. A pure function of `result` and `verdict` (see deriveOutcome, src/run/outcome.ts) - adds no judgement and cannot disagree with them. `errored` dominates; then the no-deliverable signals (stalled/ended_with_question); then the verdict. ABSENT whenever `verdict` is absent (chat, or a pre-existing kept run) - treat absence as unknown, never as a pass. NOTE: 'delivered_*' means no stall/question signal fired, NOT positive evidence a deliverable exists - check artifacts/workspaceFiles for that. `no_deliverable` is reachable only on open-ended scenarios on the live lane, and is warn-severity, so it can coexist with verdict.pass true and exit 0 - do not infer the exit code from this field."
     },
     "verdict": {
       "type": "object",

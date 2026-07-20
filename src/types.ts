@@ -1110,7 +1110,11 @@ export interface RunResult {
    *  never disagree with them; the granular fields stay authoritative. `errored` dominates; then the
    *  existing no-deliverable signals (`stalled`/`ended_with_question`); then the verdict.
    *  ABSENT whenever `verdict` is absent (chat, or a pre-existing kept run) — treat absence as
-   *  "unknown", never as a pass. */
+   *  "unknown", never as a pass.
+   *  **"delivered_*" means "no stall/question signal fired", NOT positive evidence a deliverable exists**
+   *  — check `artifacts`/`workspaceFiles` for that. `no_deliverable` is reachable only on open-ended
+   *  scenarios on the live lane (`ended_with_question`'s own scope), and being warn-severity it can
+   *  coexist with `verdict.pass: true` and exit 0 — so do NOT infer the exit code from this field. */
   outcome?: "errored" | "no_deliverable" | "delivered_with_verdict_fail" | "delivered_clean";
   verdict?: {
     pass: boolean;

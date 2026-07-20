@@ -12,14 +12,18 @@ export type RunOutcome =
   /** The agent or the infrastructure failed. Dominates everything else — an errored run whose verdict
    *  happens to pass is still errored. */
   | "errored"
-  /** Finished, but the run itself reports it produced nothing to act on. Derived from the EXISTING
-   *  no-deliverable signals (`stalled`, `ended_with_question`) rather than inventing a second notion of
-   *  "delivered" that could drift from them. */
+  /** A no-deliverable signal fired — `stalled`, or `ended_with_question`. **Scope limits worth knowing:**
+   *  `ended_with_question` only fires on OPEN-ENDED scenarios (no substantive assertions authored) and
+   *  only on the live lane, so (a) a scenario with real assertions can never reach this value however
+   *  little it produced, and (b) the same run can classify differently live vs. replay. It is also
+   *  warn-severity, so this value legitimately coexists with `verdict.pass: true` and exit 0. */
   | "no_deliverable"
-  /** Produced a usable deliverable, but tripped a policy assert or guard. The case that most needed a
-   *  name: `result: "success"` + `verdict.pass: false` + exit 1 all at once. */
+  /** No no-deliverable signal fired, but the verdict failed — e.g. a policy assert or guard tripped. The
+   *  case that most needed a name: `result: "success"` + `verdict.pass: false` + exit 1 at once. NOTE:
+   *  "delivered" here means "the run reported no stall/question signal", NOT positive evidence that a
+   *  deliverable exists — a run failing `file_exists` because nothing was written lands here. */
   | "delivered_with_verdict_fail"
-  /** Finished and satisfied the verdict. */
+  /** No no-deliverable signal fired and the verdict passed. Same caveat on "delivered" as above. */
   | "delivered_clean";
 
 /** Signals whose meaning already IS "no deliverable was written". Kept as a set so adding a future

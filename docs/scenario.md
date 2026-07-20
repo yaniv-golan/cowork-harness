@@ -698,7 +698,7 @@ run (`--keep`, or a `--session-id` run) into a starter scenario YAML — auto-fi
 match. Prints to stdout by default; add `--out <file.yaml>` to write it straight to `scenarios/`. Review
 and tighten the generated `when_question` regexes before committing.
 
-### Measuring flakiness (`run --repeat`)
+### Measuring flakiness (`run --repeat`, `skill --repeat`)
 
 A single green run proves the scenario passed *once*. `--repeat <N>` (2–100) runs each resolved scenario N
 times and aggregates a **variance rollup** — pass rate, per-assertion pass/fail attribution, a
@@ -720,7 +720,8 @@ cowork-harness run examples/scenarios/csv-metrics.yaml --repeat 10 --min-pass-ra
   stop. Pass `--allow-budget-stop` to opt back into judging the batch on its own completed-runs pass rate
   instead. If a run reports no cost telemetry, the cap degrades LOUDLY (one warning) instead of silently
   running all N as if the cap didn't exist.
-- `--repeat` rejects `--decider-dir`/`--decider-cmd` — an interactive driving agent or an external helper
+- **Available on `skill` too.** `skill <folder> "<prompt>" --repeat N` runs the same skill+prompt N times and prints the same rollup — "did this finding reproduce, or did it pass once?" is the question an iterate-across-fixes loop asks on the exploratory lane. `skill --repeat` additionally rejects `--session-id`/`--resume`: both pin ONE run dir, so each iteration would overwrite the previous one instead of producing N independent samples.
+- `--repeat` (on **both** `run` and `skill`) rejects `--decider-dir`/`--decider-cmd` — an interactive driving agent or an external helper
   answering gates live × N runs isn't a reproducible measurement. `--decider-llm`/`on_unanswered: llm` are
   allowed, but a decided gate makes
   `RunResult.nonDeterministic: true`, and the rollup's `nonDeterministicRuns` count flags this: flakiness
