@@ -1,9 +1,10 @@
+import type { EvidenceSection } from "./armor.js";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
 
 // Assembles the TURN-1-ONLY evidence document a tool-less, one-shot evaluator model is graded against.
-// This packager is a from-scratch, load-bearing build (§R of the reflective-critique plan): a tool-less
+// This packager is a from-scratch, load-bearing build (this instrument's design): a tool-less
 // evaluator can't grep the logs itself, so its recall is bounded by exactly what this function decides to
 // include. Every source read here is scoped to turn 1 (via `readTurn1Result`/`readTurn1Slice`, both of
 // which already guarantee the reflection turn's own reads never leak in) — this module adds no new
@@ -51,14 +52,29 @@ function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: st
 /** Byte-bound a text section, appending a loud (never silent) truncation marker so the evaluator knows the
  *  section was cut rather than reading a suspiciously short document as "that's everything." Cuts on a
  *  UTF-8-safe boundary (Buffer, not string length, so a truncated multi-byte char can't corrupt the tail). */
+/** The packager's OWN truncation marker. A copy of this string inside an untrusted body is a forgery: it
+ *  would let hostile skill content fake truncation and weaponize the evaluator's truncation caveat, which
+ *  routes claims to `not-adjudicable`. Redacted before the genuine marker can ever be appended. */
+export const TRUNCATION_MARKER = "[truncated — exceeded the packager's per-section byte budget]";
+
+function neutralizeForgedTruncationMarkers(s: string): string {
+  return s.split(TRUNCATION_MARKER).join("[truncation-marker-lookalike redacted]");
+}
+
 function boundText(s: string, maxBytes: number): string {
   const buf = Buffer.from(s, "utf8");
   if (buf.length <= maxBytes) return s;
-  return buf.subarray(0, maxBytes).toString("utf8") + "\n…[truncated — exceeded the packager's per-section byte budget]";
+  return buf.subarray(0, maxBytes).toString("utf8") + "\n…" + TRUNCATION_MARKER;
 }
 
-function section(title: string, body: string): string {
-  return `## ${title}\n${body.trim().length ? body.trim() : "(none)"}\n`;
+function sec(title: string, body: string): EvidenceSection {
+  return { title, body: body.trim().length ? body.trim() : "(none)" };
+}
+
+/** The ONE flat rendering of typed sections — used for `pkg` (logging/back-compat) and for the
+ *  section-aware overall cap, so the two can never disagree. */
+export function renderSections(sections: EvidenceSection[]): string {
+  return sections.map((s) => `## ${s.title}\n${s.body}\n`).join("\n");
 }
 
 function safeJson(value: unknown): string {
@@ -92,7 +108,12 @@ const MAX_PACKAGE_BYTES = 48 * 1024;
 export type SkillMdStatus = "readable" | "missing" | "unreadable";
 
 export interface PackageEvidenceResult {
+  /** Flat rendering of `sections`. Kept for logging/back-compat — it is NO LONGER the citation corpus
+   *  (armorEvidence's output is; see armor.ts). */
   pkg: string;
+  /** Typed sections, trusted title separated from untrusted body, for the evaluator to armor. Never
+   *  re-flatten these before armoring — the whole point is that the distinction survives assembly. */
+  sections: EvidenceSection[];
   /** True if ANY section (or the overall document) hit its byte budget and was cut. The evaluator MUST be
    *  told this: a claim about something that fell outside a truncated window is `not-adjudicable`, NOT
    *  `confabulated` — absence from a truncated package is not proof the thing didn't happen. */
@@ -134,8 +155,9 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
   // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
   let truncated = false;
   const bound = (s: string, maxBytes: number): string => {
-    const out = boundText(s, maxBytes);
-    if (out !== s) truncated = true;
+    const clean = neutralizeForgedTruncationMarkers(s);
+    const out = boundText(clean, maxBytes);
+    if (out !== clean) truncated = true;
     return out;
   };
 
@@ -213,30 +235,24 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
         ? `(SKILL.md exists at ${skillMdPath} but could not be read)`
         : `(no SKILL.md found at ${skillMdPath})`;
 
-  const sections = [
-    section("Final answer (turn 1)" + turn1ResultDegradedNote, bound(finalMessage, FINAL_MESSAGE_CAP)),
-    section("Turn-1 outcome" + turn1ResultDegradedNote, bound(safeJson({ result: outcome, resultSubtype }), STRUCTURED_CAP)),
-    section("toolCounts (turn 1, top-level tool calls)" + turn1ResultDegradedNote, bound(safeJson(toolCounts), STRUCTURED_CAP)),
-    section(
-      "skillActivity (turn 1, per-invocation window rollups)" + turn1ResultDegradedNote,
-      bound(safeJson(skillActivity), STRUCTURED_CAP),
-    ),
-    section(
-      "Sub-agents dispatched (turn 1; agentType/description only)" + turn1ResultDegradedNote,
-      bound(safeJson(subagents), STRUCTURED_CAP),
-    ),
-    section(
+  const sections: EvidenceSection[] = [
+    sec("Final answer (turn 1)" + turn1ResultDegradedNote, bound(finalMessage, FINAL_MESSAGE_CAP)),
+    sec("Turn-1 outcome" + turn1ResultDegradedNote, bound(safeJson({ result: outcome, resultSubtype }), STRUCTURED_CAP)),
+    sec("toolCounts (turn 1, top-level tool calls)" + turn1ResultDegradedNote, bound(safeJson(toolCounts), STRUCTURED_CAP)),
+    sec("skillActivity (turn 1, per-invocation window rollups)" + turn1ResultDegradedNote, bound(safeJson(skillActivity), STRUCTURED_CAP)),
+    sec("Sub-agents dispatched (turn 1; agentType/description only)" + turn1ResultDegradedNote, bound(safeJson(subagents), STRUCTURED_CAP)),
+    sec(
       "referencesRead (turn 1, main-agent Reads only, references/+scripts/ under the mounted skill — " +
         "NEVER includes SKILL.md itself, which is delivered whole and never Read as a file)" +
         turn1ResultDegradedNote,
       bound(referencesRead.length ? referencesRead.join("\n") : "(none)", REFERENCES_READ_CAP),
     ),
-    section(skillMdSectionTitle, bound(skillMdSectionBody, SKILL_MD_CAP)),
-    section(
+    sec(skillMdSectionTitle, bound(skillMdSectionBody, SKILL_MD_CAP)),
+    sec(
       "references/ available (filenames only, NOT content — presence, not coverage)",
       bound(referenceFiles.length ? referenceFiles.join("\n") : "(none)", REFERENCE_LIST_CAP),
     ),
-    section(
+    sec(
       "Transcript (turn 1 only — the reflection turn's own reads/output are excluded by construction)" +
         (turn1SliceDegraded
           ? " [DEGRADED: the turn-1/turn-2 boundary for this fallback slice could not be verified — treat gaps as unknown, not as evidence of absence]"
@@ -245,7 +261,16 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     ),
   ];
 
-  let pkg = sections.join("\n");
-  pkg = bound(pkg, MAX_PACKAGE_BYTES); // belt-and-suspenders: the whole document, even if every section individually fit
-  return { pkg, truncated, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus };
+  // Section-aware overall cap. The previous belt-and-suspenders trim cut the FLAT string; with typed
+  // sections that would leave the rendered document and the typed sections disagreeing. Shave from the
+  // LAST section backwards, re-rendering each time, so they can never diverge.
+  let pkg = renderSections(sections);
+  for (let i = sections.length - 1; i >= 0 && Buffer.byteLength(pkg, "utf8") > MAX_PACKAGE_BYTES; i--) {
+    const overflow = Buffer.byteLength(pkg, "utf8") - MAX_PACKAGE_BYTES;
+    const bodyBytes = Buffer.byteLength(sections[i]!.body, "utf8");
+    sections[i]!.body = boundText(sections[i]!.body, Math.max(0, bodyBytes - overflow));
+    truncated = true;
+    pkg = renderSections(sections);
+  }
+  return { pkg, sections, truncated, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus };
 }

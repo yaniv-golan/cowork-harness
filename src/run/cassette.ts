@@ -28,7 +28,7 @@ import {
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { loadSession, resolveSessionPaths, agentEnvOverrides } from "../session.js";
+import { loadSession, resolveSessionPaths, agentEnvOverrides, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
@@ -429,10 +429,34 @@ export function materializeManifest(
 /** The local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
  *  Returns ABSOLUTE dirs (for hashing/reading) plus `baseDir`, the session-file dir the relative
  *  `skillSources` are stored against (so the committed fingerprint carries no absolute host path). */
-function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: string[]; baseDir: string; hashIgnore: string[] } {
+/** The declared-dir set a session contributes to the fingerprint, filtered to what exists on disk.
+ *  Shared by the file-based and inline paths so both cover the SAME mount kinds. */
+function declaredSkillDirs(cfg: SessionConfig): string[] {
+  const allDeclared = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces];
+  return allDeclared.filter((d) => {
+    if (existsSync(d)) return true;
+    process.stderr.write(`cowork-harness: skill source dir declared in session does not exist: ${d} — skipping from fingerprint\n`);
+    return false;
+  });
+}
+
+function skillSourceDirs(
+  sessionPath: string,
+  cassetteDir?: string,
+  inlineSession?: SessionConfig,
+): { dirs: string[]; baseDir: string; hashIgnore: string[] } {
   const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
   const baseDir = dirname(resolved);
-  if (sessionPath === "(inline)" || !existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [] };
+  // The `skill`/`probe-dispatch` lanes mount via an in-memory session and pass the "(inline)" sentinel as
+  // the path — there is no file to read, but the resolved session object carries the same mounts a session
+  // FILE would. Use it when supplied; without it the sentinel still yields no dirs (unchanged behaviour).
+  // Its paths are already absolute (resolveSessionPaths at the call site), so `skillSources` is stored
+  // relative to cwd — the base those paths were resolved against — to avoid leaking an absolute host path.
+  if (sessionPath === "(inline)") {
+    if (!inlineSession) return { dirs: [], baseDir, hashIgnore: [] };
+    return { dirs: declaredSkillDirs(inlineSession), baseDir: process.cwd(), hashIgnore: inlineSession.staleness.hash_ignore };
+  }
+  if (!existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [] };
   let cfg;
   try {
     // Mirror loadSessionFromFile (execute.ts): parse the YAML, then RESOLVE its relative skill/plugin
@@ -444,14 +468,8 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
   } catch {
     return { dirs: [], baseDir, hashIgnore: [] };
   }
-  const allDeclared = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces];
-  const dirs = allDeclared.filter((d) => {
-    if (existsSync(d)) return true;
-    process.stderr.write(`cowork-harness: skill source dir declared in session does not exist: ${d} — skipping from fingerprint\n`);
-    return false;
-  });
   // session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
-  return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore };
+  return { dirs: declaredSkillDirs(cfg), baseDir, hashIgnore: cfg.staleness.hash_ignore };
 }
 
 /** Best-effort git commit provenance for the skill dirs a session mounts — the human-readable "which
@@ -460,8 +478,8 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
  *  feeds skillHash (`skillSourceDirs`), so it covers plugin-mounted skills too. Returns the single `HEAD`
  *  shared by all those dirs, or `null` when they span more than one repo, any dir is not a git work tree
  *  (or has an unborn HEAD), git is absent, or the session mounts no skill dirs. Never throws. */
-export function skillCommit(sessionPath: string): string | null {
-  const { dirs } = skillSourceDirs(sessionPath);
+export function skillCommit(sessionPath: string, inlineSession?: SessionConfig): string | null {
+  const { dirs } = skillSourceDirs(sessionPath, undefined, inlineSession);
   if (dirs.length === 0) return null;
   const commits = new Set<string>();
   for (const d of dirs) {
@@ -510,9 +528,10 @@ export function buildFingerprint(
   cassetteDir?: string,
   scopeSkills?: string[],
   baseline?: PlatformBaseline,
+  inlineSession?: SessionConfig,
 ): Fingerprint {
   const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
-  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession);
   if (dirs.length === 0) return { baseline: baselineAppVersion, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. When
@@ -2699,6 +2718,7 @@ function replayErrorResult(file: string): RunResult {
     tasks: undefined,
     context: undefined,
     resources: undefined,
+    outcome: undefined, // derived from `verdict`; absent for the same reason it is
     verdict: undefined, // synthetic early-bail error result for an unreadable cassette — no assertions were evaluated to derive one from; the JSON envelope's own live-computed Verdict (envelope.ts) covers this on stdout
   });
 }
@@ -4608,6 +4628,7 @@ export async function replayCassette(
       // replay never writes a result.json (there is no on-disk persist point for this lane to populate
       // at) — cmdReplay's own JSON envelope (envelope.ts) independently attaches its own live-computed
       // Verdict to every emitted result, incl. a replay's, for stdout consumers.
+      outcome: undefined, // derived from `verdict`; absent for the same reason it is
       verdict: undefined,
     });
   } finally {

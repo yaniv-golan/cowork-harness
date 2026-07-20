@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { runCritique, buildPass1Prompt, buildPass2Prompt, DEFAULT_EVALUATOR_MODEL } from "../scripts/lib/critique/evaluator";
+import { runCritique, buildPass1Prompt, buildPass2Prompt, DEFAULT_EVALUATOR_MODEL } from "../src/critique/evaluator";
+import { armorEvidence } from "../src/critique/armor";
 import type { Complete } from "../src/decide/decider";
 
 const PKG = `## Final answer (turn 1)
@@ -13,6 +14,13 @@ Use the container fidelity tier for anything that touches the filesystem.
 
 ## Transcript (turn 1 only — the reflection turn's own reads/output are excluded by construction)
 The agent read references/tiers.md and then chose the container fidelity tier.`;
+
+// Armor takes TYPED sections (trusted title / untrusted body) rather than a flat string — the whole point
+// is that the distinction survives assembly. These fixtures wrap the legacy flat PKG as one section, and
+// pin a fixed nonce so prompt assertions are deterministic.
+const NONCE = "0123456789abcdef";
+const SECTIONS = [{ title: "Evidence", body: PKG }];
+const ARMORED = armorEvidence(SECTIONS, NONCE);
 
 const SELF_REPORT_MARKER = "I never found the tier table anywhere, I had to guess the fidelity tier.";
 
@@ -72,7 +80,7 @@ function makeStubComplete(): { complete: Complete; calls: { prompt: string; mode
 describe("runCritique (two-pass evaluator, stubbed transport)", () => {
   it("runs pass 1 BEFORE pass 2, and pass 1 never sees the self-report", async () => {
     const { complete, calls } = makeStubComplete();
-    await runCritique(PKG, SELF_REPORT_MARKER, { complete });
+    await runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete });
 
     expect(calls).toHaveLength(2);
     // Pass 1's prompt is built from the evidence package alone — the self-report string must not appear
@@ -87,7 +95,7 @@ describe("runCritique (two-pass evaluator, stubbed transport)", () => {
 
   it("combines both passes' items, tagging source by pass regardless of what the model claims", async () => {
     const { complete } = makeStubComplete();
-    const items = await runCritique(PKG, SELF_REPORT_MARKER, { complete });
+    const items = await runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete });
 
     expect(items).toHaveLength(4); // 1 from pass 1 + 3 from pass 2
     expect(items[0].source).toBe("evaluator");
@@ -96,7 +104,7 @@ describe("runCritique (two-pass evaluator, stubbed transport)", () => {
 
   it("validates citations: a real excerpt resolves, a hallucinated one is flagged citationResolved:false", async () => {
     const { complete } = makeStubComplete();
-    const items = await runCritique(PKG, SELF_REPORT_MARKER, { complete });
+    const items = await runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete });
 
     const confabulated = items.find((it) => it.classification === "confabulated");
     expect(confabulated?.citationResolved).toBe(true); // its cited excerpt IS verbatim in the package
@@ -110,21 +118,21 @@ describe("runCritique (two-pass evaluator, stubbed transport)", () => {
 
   it("defaults to the pinned evaluator model when opts.model is omitted", async () => {
     const { complete, calls } = makeStubComplete();
-    await runCritique(PKG, SELF_REPORT_MARKER, { complete });
+    await runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete });
     expect(calls[0].model).toBe(DEFAULT_EVALUATOR_MODEL);
     expect(calls[1].model).toBe(DEFAULT_EVALUATOR_MODEL);
   });
 
   it("honors an explicit model override for both passes", async () => {
     const { complete, calls } = makeStubComplete();
-    await runCritique(PKG, SELF_REPORT_MARKER, { complete, model: "claude-sonnet-4-8" });
+    await runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete, model: "claude-sonnet-4-8" });
     expect(calls[0].model).toBe("claude-sonnet-4-8");
     expect(calls[1].model).toBe("claude-sonnet-4-8");
   });
 
   it("fails loud (throws) on a malformed pass-1 reply instead of silently dropping it", async () => {
     const complete: Complete = vi.fn(async () => ({ text: "not json at all, sorry", model: "x" }));
-    await expect(runCritique(PKG, SELF_REPORT_MARKER, { complete })).rejects.toThrow(/pass 1/i);
+    await expect(runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete })).rejects.toThrow(/pass 1/i);
   });
 
   it("fails loud on a malformed pass-2 reply even when pass 1 was fine", async () => {
@@ -133,25 +141,25 @@ describe("runCritique (two-pass evaluator, stubbed transport)", () => {
       call++;
       return { text: call === 1 ? pass1Reply() : "prose with no JSON object at all", model: "x" };
     });
-    await expect(runCritique(PKG, SELF_REPORT_MARKER, { complete })).rejects.toThrow(/pass 2/i);
+    await expect(runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete })).rejects.toThrow(/pass 2/i);
   });
 
   it('accepts an empty {"items":[]} reply as a legitimate zero-findings result, not a parse failure', async () => {
     const complete: Complete = vi.fn(async () => ({ text: JSON.stringify({ items: [] }), model: "x" }));
-    const items = await runCritique(PKG, SELF_REPORT_MARKER, { complete });
+    const items = await runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete });
     expect(items).toEqual([]);
   });
 });
 
 describe("prompt builders", () => {
   it("buildPass1Prompt embeds the evidence package and forbids source:self-report content", () => {
-    const p = buildPass1Prompt(PKG);
+    const p = buildPass1Prompt(ARMORED);
     expect(p).toContain(PKG);
     expect(p).not.toContain(SELF_REPORT_MARKER);
   });
 
   it("buildPass2Prompt embeds the evidence package, pass-1 context, and the labeled self-report", () => {
-    const p = buildPass2Prompt(PKG, [], SELF_REPORT_MARKER);
+    const p = buildPass2Prompt(ARMORED, [], SELF_REPORT_MARKER);
     expect(p).toContain(PKG);
     expect(p).toContain(SELF_REPORT_MARKER);
     expect(p).toMatch(/UNVERIFIED/);
@@ -159,11 +167,11 @@ describe("prompt builders", () => {
 
   it("injects the truncation caveat into BOTH prompts only when the package was truncated", () => {
     // Not truncated (default): no caveat, so absence-based classifications proceed normally.
-    expect(buildPass1Prompt(PKG)).not.toContain("TRUNCATED");
-    expect(buildPass2Prompt(PKG, [], SELF_REPORT_MARKER)).not.toContain("TRUNCATED");
+    expect(buildPass1Prompt(ARMORED)).not.toContain("TRUNCATED");
+    expect(buildPass2Prompt(ARMORED, [], SELF_REPORT_MARKER)).not.toContain("TRUNCATED");
     // Truncated: both passes are warned that absence is uninformative → prefer not-adjudicable.
-    expect(buildPass1Prompt(PKG, true)).toContain("this evidence package was TRUNCATED");
-    const p2 = buildPass2Prompt(PKG, [], SELF_REPORT_MARKER, true);
+    expect(buildPass1Prompt(ARMORED, true)).toContain("this evidence package was TRUNCATED");
+    const p2 = buildPass2Prompt(ARMORED, [], SELF_REPORT_MARKER, true);
     expect(p2).toContain("this evidence package was TRUNCATED");
     expect(p2).toMatch(/do NOT classify it "confabulated"/);
   });
@@ -172,7 +180,7 @@ describe("prompt builders", () => {
 describe("runCritique — truncation awareness", () => {
   it("threads packageTruncated into both passes so a truncated package can't yield a false confabulation", async () => {
     const { complete, calls } = makeStubComplete();
-    await runCritique(PKG, SELF_REPORT_MARKER, { complete, packageTruncated: true });
+    await runCritique(SECTIONS, SELF_REPORT_MARKER, { nonce: NONCE, complete, packageTruncated: true });
     expect(calls[0].prompt).toContain("this evidence package was TRUNCATED");
     expect(calls[1].prompt).toContain("this evidence package was TRUNCATED");
   });

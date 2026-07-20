@@ -177,6 +177,9 @@ export interface DiffMetaSummary {
   effectiveFidelity?: string;
   baseline: string;
   assertionsPassed: boolean;
+  /** Short `fingerprint.skillHash` prefix — the content-exact generation key. Diffed so a comparison can
+   *  NAME which two generations it compared; without it a diff of a skill across a fix is anonymous. */
+  skillHash?: string;
 }
 
 export type MetaDiffEntry = { field: string; from: unknown; to: unknown };
@@ -185,7 +188,7 @@ export type MetaDiffEntry = { field: string; from: unknown; to: unknown };
  *  set (not a recursive object diff like the baseline differ; these are named,
  *  known fields with a fixed comparison, not an open-ended structure). */
 export function diffMeta(a: Partial<DiffMetaSummary>, b: Partial<DiffMetaSummary>): MetaDiffEntry[] {
-  const fields: (keyof DiffMetaSummary)[] = ["result", "effectiveFidelity", "baseline", "assertionsPassed"];
+  const fields: (keyof DiffMetaSummary)[] = ["result", "effectiveFidelity", "baseline", "assertionsPassed", "skillHash"];
   const out: MetaDiffEntry[] = [];
   for (const f of fields) {
     if (a[f] === undefined && b[f] === undefined) continue;
@@ -200,4 +203,44 @@ export function diffMeta(a: Partial<DiffMetaSummary>, b: Partial<DiffMetaSummary
  *  ManifestEntry[], or live on-disk hashes for a run dir whose workDir still exists). */
 export function diffArtifacts(a: Array<[string, string]>, b: Array<[string, string]>): FileSigDiff {
   return diffFileSigsPaths(a, b);
+}
+
+/** One side of a run/cassette comparison, reduced to the four diffable views plus identity metadata. */
+export interface DiffSide {
+  tools: NormalizedToolRow[];
+  transcript: string;
+  artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
+  meta: Partial<DiffMetaSummary>;
+  // Identity metadata, NOT diffed content: used only for the cross-scenario warning ("allow + warn" —
+  // comparing two different scenarios is legitimate for skill-variant comparison, but must be flagged,
+  // since the meta view doesn't surface scenario identity).
+  scenarioName?: string;
+}
+
+export interface DiffViewResult {
+  tools: ToolDiffOp[];
+  transcript: TranscriptDiffLine[];
+  artifacts?: FileSigDiff;
+  meta: MetaDiffEntry[];
+  /** GATEABLE identity: tools + artifacts + meta agree. Deliberately EXCLUDES the transcript, which is
+   *  advisory — model-stochastic prose differs across live re-records no matter what, so folding it in
+   *  made two runs of the SAME skill compare non-identical and the signal could not separate "behaviour
+   *  changed" from "the model breathed". This is the value `diff --help` has always promised
+   *  ("tools/artifacts/meta are the gateable signal") and the one the exit code uses. */
+  identical: boolean;
+  /** Advisory: the transcript differed. Surfaced separately so prose drift stays VISIBLE without
+   *  contaminating the gate. */
+  transcriptDiffers: boolean;
+}
+
+export function compareDiffSides(a: DiffSide, b: DiffSide, normalize: boolean): DiffViewResult {
+  const tools = diffToolSequence(a.tools, b.tools);
+  const transcript = diffTranscript(a.transcript, b.transcript, normalize);
+  const artifacts = a.artifacts && b.artifacts ? diffArtifacts(a.artifacts, b.artifacts) : undefined;
+  const meta = diffMeta(a.meta, b.meta);
+  const identical =
+    tools.every((o) => o.op === "same") &&
+    (!artifacts || (artifacts.added.length === 0 && artifacts.removed.length === 0 && artifacts.changed.length === 0)) &&
+    meta.length === 0;
+  return { tools, transcript, artifacts, meta, identical, transcriptDiffers: transcript.some((o) => o.op !== "same") };
 }

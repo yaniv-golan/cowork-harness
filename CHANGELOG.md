@@ -6,6 +6,79 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-07-20
+
+### Added
+
+- **`cowork-harness critique <skill-folder> --prompt "<probe>"` (EXPERIMENTAL).** Runs a skill, asks the
+  agent what confused it, then grades that self-report against a frozen record of what actually happened —
+  a byte-boundary evidence snapshot taken *before* the reflection turn, a first evaluator pass that is
+  structurally blind to the self-report (the text is never put in its prompt, not merely ignored), and
+  mechanical citation checking that drops any claim not quoting the evidence verbatim. **A discovery
+  instrument, never a gate:** findings of any classification exit 0 (including a task run that itself
+  errored — that is a finding about the skill); exit 2 is reserved for a usage error or an instrument
+  failure, where no critique was produced. Previously a maintainer-only script that could not run from an installed package at all.
+  Costs four model workloads per critique — see [docs/critique.md](./docs/critique.md).
+- **Evidence-package armoring.** The self-report was already fenced, but the evidence package — which
+  carries a third-party SKILL.md verbatim into both evaluator prompts — was not, so hostile skill content
+  could steer the grader directly. Untrusted content now sits inside per-run nonce markers and only
+  nonce-tagged headings outside them count as instructions; a skill cannot pre-author the nonce. Verified
+  by a red-team probe across three models: the structural-forgery payload that steered all three now
+  matches control. Content that merely *argues* is a documented residual — fencing separates planes, it
+  cannot stop persuasion.
+- **`skill --repeat <N>`** (2–100), with `--min-pass-rate` / `--stop-on-diverge` / `--max-budget-usd` /
+  `--allow-budget-stop`. The variance rollup already existed but was `run`-only, because the flags were
+  parsed inline in the `run` command — the exploratory lane, where an iterate-across-fixes loop actually
+  lives, rejected them as unknown. Both lanes now share one parse (`run/repeat-flags.ts`) and one batch
+  engine, so rollup shape, JSON envelope, and batch verdict match. `skill --repeat` additionally rejects
+  `--session-id`/`--resume` (both pin a single run dir, so iterations would overwrite each other rather
+  than produce N independent samples) and `--decider-dir`/`--decider-cmd` (the reproducibility invariant
+  `run` already enforced).
+- **`result.json` `outcome`** — a one-field rollup of the `result` × `verdict.pass` × exit-code matrix:
+  `errored` / `no_deliverable` / `delivered_with_verdict_fail` / `delivered_clean`. Those three signals
+  legitimately disagree (a fail-severity signal flips the verdict while `result` stays `"success"`), and a
+  consumer driving a loop had to reconstruct "did this iteration deliver something usable?" from all
+  three. A pure function of fields the run already carries, so it cannot disagree with them; the granular
+  fields stay authoritative. Absent whenever `verdict` is absent. Note `delivered_*` means "no
+  stall/question signal fired", not positive evidence a deliverable exists — check `artifacts`.
+- **Generation-pairing `jq` recipes** in [docs/stats.md](./docs/stats.md) — pass-rate/cost per generation,
+  a per-generation verdict-signal histogram, and the before/after of a single fix, grouped on
+  `skillHash`/`runLabel` over `index.jsonl`.
+
+### Changed
+
+- **`diff`'s exit code now honors its own documented contract.** `--help` has always said "transcript is
+  advisory … tools/artifacts/meta are the gateable signal", but `identical` conjoined all four views, so
+  two live runs of the SAME skill exited 1 and the signal could not separate "behaviour changed" from
+  model stochasticity. `identical` now means the gateable views agree; transcript drift is reported
+  separately (`transcriptDiffers` in JSON, rendered in text when you ask for that view) so it stays
+  visible. `diff` also carries `skillHash` in the meta view now — a diff across a fix could not previously
+  name which two generations it compared.
+
+### Fixed
+
+- **`fingerprint.skillHash` and `skillCommit` are now recorded on the `skill` and `probe-dispatch` lanes.**
+  Both resolved their skill dirs by re-reading the session *file*, so the lanes that mount via an in-memory
+  session — and pass the `"(inline)"` sentinel as the session path — emitted no `skillHash` and a null
+  `skillCommit`, even though the mounts were already in scope at the call site. The resolved session object
+  is now threaded through instead. Consequences, all previously broken on those lanes: `result.json` carries
+  the content-exact generation key, the run-index `skillHash` column populates (so a harvest step can group
+  runs by generation), and the run's own "pair critiques by `fingerprint.skillHash`" tip — which is printed
+  *only* on the `skill` lane — is no longer advertising a field that lane could not emit. Scoped to the
+  sentinel branch: the file-based path is untouched, so recorded cassettes and the
+  staleness / `verify-run` recomputes are unaffected. A session that mounts nothing still yields no hash —
+  there is nothing to hash.
+
+### Changed
+
+- **Reflective skill-critique prompt v2** (`REFLECTION_PROMPT_VERSION` 1 → 2; maintainer instrument, not a
+  shipped surface). Adds a sub-agent question (were any dispatched, and was the skill clear about when to
+  dispatch, what context to hand them, and what to expect back); replaces the "change ONE thing" cap with
+  exhaustive solicitation, since a separate evaluator already triages and drops ungrounded findings, so
+  capping at the source loses signal for no quality gain; drops a "fidelity tier" example that is
+  cowork-harness vocabulary a third-party skill's agent never encountered; and bounds the pass-2 self-report
+  now that the prompt invites longer replies.
+
 ## [1.4.0] — 2026-07-19
 
 ### Added

@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way. Facts track the harness version in SKILL.md's
-front-matter (currently 0.32.0). Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+front-matter (currently 1.5.0). Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -170,7 +170,17 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
 
 1. **Verify before you trust.** A green run is not a correct run, and a skill's self-reported finding (a
    self-critique appendix, "I extracted X") is not real until its cited evidence is found in the run's own
-   output. The harness emits the substrate; the grader is yours (it lives outside the harness):
+   output. **Reproduce before acting on a finding:** `cowork-harness skill <folder> "<prompt>" --repeat 5 --label gen-1`
+   runs the same skill+prompt N times (2-100) and prints a variance rollup instead of a single pass/fail —
+   `--repeat` works on the `skill` lane, not just `run`. A single green run proves it passed *once*.
+   Companions: `--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd`, `--allow-budget-stop`. It rejects `--session-id`/
+   `--resume` (both pin one run dir) and `--decider-cmd`/`--decider-dir` (a driving agent x N is not a
+   measurement).
+   The full loop (harvest -> reproduce -> fix -> prove freshness -> compare) is written out end-to-end in
+   docs/debugging.md under "The whole loop, end to end". The harness now SHIPS a grader — `cowork-harness critique <skill-folder> --prompt "<probe>"` runs the
+   skill, asks the agent what confused it, and grades that self-report against a frozen record of the run
+   (blinded evaluator + mechanical citation checking). See docs/critique.md for cost and limits. If you
+   prefer to build your own grader, the substrate is still here:
    - `result.json` → `finalMessage` (the skill's own answer/critique) + `toolResults[]` (tool outputs).
    - `cowork-harness trace <run-dir> --output-format json` → the tool-call stream. Add `--full-results` so
      a **successful** call's full input + result are captured (the default view slices them to ~100/120
@@ -181,7 +191,10 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
      verdict.
 2. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
-   content-exact, on every live run, changes on any tracked edit. **Group/pair on it** (`inspect` and the
+   content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but only on ≥ 1.5.0; earlier CLIs emit
+   no `skillHash` on the `skill` lane at all, so verify the field is present before pairing on it** (a run that mounts nothing
+   records none; the `chat` lane records no fingerprint), changes on any tracked edit. **Group/pair on it**
+   (`inspect` and the
    run-index row surface a short prefix). Add `--label <tag>` for a human-readable generation name
    (skillHash is the correctness key; the label is ergonomics). `cowork-harness verify-run <run-dir>
    <scenario.yaml>` is the native staleness guard: it **warns** when a kept run predates the current

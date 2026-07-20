@@ -13,7 +13,7 @@ Docker, no re-record.
 | Situation | Symptom | Reach for (in order) |
 |---|---|---|
 | **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools, gates, sub-agent tree)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
-| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
+| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
 agent stderr) — read those before re-running; a re-record rarely tells you more than the captured stderr
@@ -124,7 +124,59 @@ A green run is not automatically a correct run.
 
 Hardening a skill is a loop: run it, read what it did, fix, run again. Two disciplines keep the loop
 honest — **verify before you trust**, and **don't cross-pair generations**. This is a Reflexion-style
-verification loop stacked on the agent loop; the harness gives you the substrate, you own the grader.
+verification loop stacked on the agent loop; the harness gives you the substrate, and now ships a grader too
+(`critique` — see [critique.md](./critique.md), which maps loop-engineering vocabulary onto this repo's terms
+and states plainly which loops we deliberately do not provide).
+
+### The whole loop, end to end
+
+The pieces below are documented separately; this is how they assemble. This is the loop a real consumer
+built on top of the harness before any of it shipped — the commands now replace the rig they hand-rolled.
+
+```bash
+SKILL=./my-skill
+
+# 1. HARVEST — run the skill against a real input and grade what confused the agent.
+#    `critique` runs the task, asks the agent what was unclear, then verifies every claim against a
+#    frozen record of the run. Findings never gate; exit 2 only if no critique was produced.
+cowork-harness critique "$SKILL" --prompt "<a real task for this skill>" --output-format json > gen-1.json
+
+# 2. TRIAGE — act only on ACTIONABLE. DROPPED items failed their citation check: the agent made them up.
+#    NOT ADJUDICABLE means the evidence can't decide — your judgement, not the tool's.
+
+# 3. REPRODUCE — before acting on a finding, check it isn't a one-run fluke.
+cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-1
+
+# 4. FIX the skill. Then re-run — and PROVE the re-run used the fixed body:
+cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-2
+#    `fingerprint.skillHash` changes on any tracked edit. If it didn't change, you tested the old skill.
+
+# 5. COMPARE generations — pass rate, cost, and which verdict signals fired per generation:
+#    (recipes in stats.md; they group on skillHash — the index stores a 12-CHAR PREFIX of it, which is
+#     enough to pair within one project; the full hash is in each run's result.json)
+jq -s 'map(select(.skillHash)) | group_by(.skillHash) | map({gen: .[0].runLabel, runs: length,
+       passRate: ((map(select(.pass)) | length) / length)})' ~/.cowork-harness/runs/index.jsonl
+
+# 6. Repeat from 1. Stop when critique stops producing ACTIONABLE findings you agree with.
+```
+
+> **Reading the comparison honestly:** step 1's `critique` is itself two indexed `skill` invocations (the
+> task turn and the reflection resume). They carry the SAME `skillHash` as that generation's `--repeat`
+> batch but no `--label`, so a gen-1 group is ~7 rows, `runLabel` can come back `null`, and the reflection
+> turn's row dilutes `passRate`. Filter on `runLabel` if you want the batch alone.
+
+**What each piece is for**, so you can swap any of them:
+
+| Step | Command | Why it's needed |
+|---|---|---|
+| Harvest | [`critique`](./critique.md) | Agent self-reports confabulate. This is the part you cannot safely hand-roll |
+| Reproduce | `--repeat` (both `run` and `skill`) | A single green run proves it passed *once* |
+| Generation identity | `fingerprint.skillHash` | Proves the re-run used the fixed body, not a cached one |
+| Compare | [`stats.md`](./stats.md) recipes, [`diff`](../README.md) | Pass rate, signals, and cost per generation |
+| Branch on outcome | `result.json` `outcome` | One field instead of reconciling `result` × `verdict.pass` × exit code |
+
+**The loop itself is yours.** Nothing here re-runs a skill until it "improves" — step 4's fix and step 6's
+stopping decision are human calls, deliberately. See [critique.md](./critique.md) for why.
 
 **Verify — ground a finding before trusting it.** A green run is not a correct run, and a skill's
 self-reported finding (a self-critique appendix, "I extracted X") is not real until its cited evidence is
@@ -137,6 +189,10 @@ found in the run's own output. The harness emits everything a grader needs; the 
   so a *successful* call's full input + result are captured (the default view slices them to ~100/120
   chars; full capture was error-only before). This is what lets an external grader confirm "the skill
   claims it read X and derived Y" against the actual call.
+- **`cowork-harness critique <skill-folder> --prompt "<probe>"`** → the shipped version of this discipline:
+  runs the skill, asks the agent what confused it, and grades that self-report against a frozen record of
+  the run (blinded evaluator + mechanical citation checking). See [critique.md](./critique.md) for cost
+  and limits. EXPERIMENTAL.
 - `cowork-harness inspect <run-dir>` → what the run produced (artifacts + previews), plus the run's
   `label` and `skillHash` at the harvest moment.
 - **In-run alternative:** dispatch a checker **sub-agent** (maker/checker split) whose result folds into
@@ -144,8 +200,10 @@ found in the run's own output. The harness emits everything a grader needs; the 
 
 **Don't cross-pair generations.** When you run the same skill across fixes, a harvest step must not pair
 a *pre-fix* `result.json` with a *post-fix* critique. The authoritative key is
-**`fingerprint.skillHash`** — content-exact, recorded on every live run, and it changes on any tracked
-edit (an un-`git add`-ed new file changes neither the hash nor the mounted skill). Group and pair on it;
+**`fingerprint.skillHash`** — content-exact, recorded on every live `run`/`skill` run that mounts a skill
+or plugin, and it changes on any tracked edit (an un-`git add`-ed new file changes neither the hash nor the
+mounted skill). A run that mounts nothing has nothing to hash and records no `skillHash`; the `chat` lane
+records no fingerprint at all. Group and pair on it;
 `inspect` and the run-index row surface a short prefix so you needn't open each `result.json`.
 `--label <tag>` adds a human-readable, orderable generation name on top (skillHash is the correctness
 key; the label is ergonomics). And `verify-run <run-dir> <scenario.yaml>` is the native staleness guard:

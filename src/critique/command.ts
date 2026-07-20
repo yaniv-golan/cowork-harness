@@ -1,26 +1,28 @@
 // The reflective skill-critique loop's command: task run -> resume for a self-report -> evaluate the
 // self-report against turn-1-only evidence -> print a triaged, human-adjudicated report.
 //
-//   tsx scripts/skill-critique.ts <skill-folder> --prompt "<probe>" [--dotenv <path>]
+//   cowork-harness critique <skill-folder> --prompt "<probe>" [--dotenv <path>]
 //                                 [--fidelity container] [--evaluator-model <id>] [--output-format json|text]
 //
-// This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. It always
-// exits 0 — including when the task run itself errors — because the point is to surface improvement ideas
-// for a human to read, not to render a pass/fail verdict (see docs/internal's reflective-critique plan).
+// This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. FINDINGS never gate — any classification exits 0, including when the graded task
+// run itself errored (that is a finding about the skill). Exit 2 means NO CRITIQUE WAS PRODUCED: a usage
+// error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked or threw) .
 // Container tier only: the resume-continuity behavior this loop depends on (the reflection turn seeing the
 // SAME mounted skill + session as the task turn) is verified for the container fidelity tier specifically,
 // so the tier is pinned rather than left to the caller.
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename } from "node:path";
-import { packageEvidence } from "./lib/critique/package-evidence.js";
-import type { SkillMdStatus } from "./lib/critique/package-evidence.js";
-import { snapshotTurnBoundary } from "./lib/critique/evidence.js";
-import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./lib/critique/evaluator.js";
-import type { CritiqueItem } from "./lib/critique/evidence.js";
+import { packageEvidence } from "./package-evidence.js";
+import type { SkillMdStatus } from "./package-evidence.js";
+import { snapshotTurnBoundary } from "./evidence.js";
+import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
+import type { CritiqueItem } from "./evidence.js";
 
-const REFLECTION_PROMPT_VERSION = 1;
+const REFLECTION_PROMPT_VERSION = 2;
 
 /** The fixed, versioned reflection-turn prompt. Asks for the agent's SUBJECTIVE experience (unreliable but
  *  valuable — the whole point of this loop) plus concrete improvement ideas, framed so it names specifics
@@ -34,12 +36,20 @@ you while you worked:
 
 1. Was anything in the skill's guidance UNCLEAR, MISSING, or MISLEADING? Be specific — name the file or
    section if you can, and describe exactly what confused you or what you looked for and could not find.
-2. Did you have to GUESS at anything (a fidelity tier, a file path, a format, an ordering) because the
+2. Did you have to GUESS at anything (a file path, a format, a parameter value, an ordering) because the
    guidance didn't say? What did you guess, and what would have told you the right answer instead?
 3. Did you read something (a reference, a script) and then find it didn't actually help, or find the
    guidance elsewhere contradicted it?
-4. If you could change ONE thing about this skill to make your job easier next time, what would it be, and
-   why?
+4. Did you dispatch any sub-agents during the task? If you did: was the skill's guidance clear about WHEN
+   to dispatch one, WHAT instructions and context to hand it, and what to expect back — or did you have to
+   improvise the dispatch prompt, or leave out context the sub-agent turned out to need? Name the specific
+   dispatch and exactly what was unclear or under-specified about it. If you dispatched none, say so, and
+   note whether the skill left you unsure about whether you should have.
+5. List EVERY change to this skill that would have made your job easier this time — do not stop at one.
+   Be exhaustive, but keep each entry concrete: name the file or section it belongs in, state the change in
+   a sentence or two, and point to the specific moment in THIS run where it would have helped. Order the
+   list most impactful first. Leave off anything you cannot tie to something that actually happened in
+   this run.
 
 Answer plainly, in prose. Do not restate the task's final answer.`;
 
@@ -53,10 +63,35 @@ interface ParsedArgs {
 }
 
 function usage(): string {
-  return (
-    'usage: tsx scripts/skill-critique.ts <skill-folder> --prompt "<probe>" [--dotenv <path>] ' +
-    "[--fidelity container] [--evaluator-model <id>] [--output-format json|text]"
-  );
+  return `cowork-harness critique <skill-folder> --prompt "<probe>"
+
+  EXPERIMENTAL. Runs the skill, asks the agent what confused it, then does NOT believe the answer:
+  a blinded evaluator grades the self-report against a frozen record of what actually happened, and
+  drops any claim whose citation is not verbatim in that evidence. Discovery instrument, not a gate.
+
+  --prompt "<probe>"        the task to run the skill against (required)
+  --evaluator-model <id>    override the evaluator model (env: COWORK_HARNESS_EVALUATOR_MODEL)
+  --dotenv <path>           load credentials from a dotenv file
+  --fidelity container      container tier only — the resume-continuity this loop depends on is
+                            verified there and nowhere else
+  --output-format json|text
+
+COST AND PREREQUISITES — read before running:
+  * Each critique is FOUR model workloads: two container runs (task + reflection) and two evaluator
+    passes over an evidence package of up to 48KB.
+  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier. Override it if
+    that is not what you want.
+  * Requires the container tier (Docker/Lima) and an authenticated \`claude\` CLI on PATH.
+
+EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself errored — that is a
+  finding about the skill, not a broken instrument). 2 = usage error, or an instrument failure (turn
+  killed, reflection protocol broke, evaluator never invoked or threw) — no critique was produced. Findings
+  NEVER gate.
+
+KNOWN LIMITATIONS: container tier only; SKILL.md is capped at 16KB (a larger one degrades toward
+  "not adjudicable"); prompts are English-only. On a third-party skill, note that fencing separates
+  the instruction plane from evidence but cannot stop hostile content that merely ARGUES — see
+  docs/critique.md.`;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -217,7 +252,18 @@ export function boundedSpawn(cmd: string, args: string[], timeoutMs: number, max
 
 /** One `npx tsx src/cli.ts skill ...` spawn — this script's actual use of `boundedSpawn` above. */
 function runSkillTurn(args: string[], timeoutMs = TURN_TIMEOUT_MS, maxBytes = TURN_MAX_BYTES): Promise<TurnOutcome> {
-  return boundedSpawn("npx", ["tsx", "src/cli.ts", ...args], timeoutMs, maxBytes);
+  // Self-spawn the INSTALLED cli next to this module rather than `npx tsx src/cli.ts` from cwd: the old
+  // form only worked from a repo checkout (src/ is not published, and the path resolved against cwd), so
+  // from an npm install the task turn failed while the always-exit-0 contract made it look like success.
+  // Resolve the sibling CLI relative to THIS module — `../cli.js` from src/critique/ or dist/critique/.
+  // (A string .replace() on the href was fragile: first-occurrence, and it mangles any install path that
+  // happens to contain "/critique/cli.js".)
+  const self = fileURLToPath(new URL("../cli.js", import.meta.url));
+  // Under tsx, import.meta.url is the .ts SOURCE, so the sibling is src/cli.ts and no built cli.js exists
+  // — spawn the source through the same loader instead of a nonexistent .js.
+  return existsSync(self)
+    ? boundedSpawn(process.execPath, [self, ...args], timeoutMs, maxBytes)
+    : boundedSpawn("npx", ["tsx", fileURLToPath(new URL("../cli.ts", import.meta.url)), ...args], timeoutMs, maxBytes);
 }
 
 interface SkillEnvelope {
@@ -315,8 +361,13 @@ export function validateReflectionTurn(
         `reflection turn's outDir (${r0.outDir}) does not match the task turn's outDir (${expectedOutDir}) — ` +
         `this shows turn>1 but looks like a resume of a DIFFERENT session, not session ${expectedSessionId}`,
     };
+  // A session-pinned run dir is named `sess-<id>` (execute.ts's `local_<hrtime> | sess-<id>` convention),
+  // so the basename carries a prefix the caller's `--session-id` value does not. Accept EITHER form
+  // rather than stripping: a blind strip would corrupt a session id that itself begins with "sess-".
+  // Without this, every reflection turn read as a resume of a DIFFERENT session and the evaluator was
+  // never invoked — a live smoke of `cowork-harness critique` failed on exactly that.
   const reflectedSessionId = basename(r0.outDir);
-  if (reflectedSessionId !== expectedSessionId)
+  if (reflectedSessionId !== expectedSessionId && reflectedSessionId !== `sess-${expectedSessionId}`)
     return {
       ok: false,
       reason: `reflection turn's outDir implies session id "${reflectedSessionId}", expected "${expectedSessionId}"`,
@@ -378,6 +429,9 @@ interface ReportState {
    *  or broken session/turn continuity) — the evaluator was never invoked at all, distinct from a gradeable
    *  task failure or an evaluator-side parse error. */
   infraFailure?: string;
+  /** Mechanical integrity signal from the evaluator's trusted canary — false means that pass stopped
+   *  following trusted instructions, so an empty critique may be adversarial silencing, not a clean skill. */
+  evaluatorIntegrity?: { pass1Canary: boolean; pass2Canary?: boolean };
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
    *  when packaging never ran (an infra failure short-circuited before it). */
@@ -418,22 +472,38 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  run dir: ${outDir}`);
   out.push(`  task run result: ${taskResult ?? "unknown (envelope unavailable)"}`);
   if (evaluatorModel) out.push(`  evaluator model (resolved): ${evaluatorModel}`);
-  else if (infraFailure || evaluatorError) out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
+  else if (infraFailure || evaluatorError)
+    out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
   if (taskResult === "error")
     out.push(`  NOTE: the task run ended in error — recommendations below reflect whatever happened before the failure.`);
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
-    out.push(`  NOTE: no self-report was captured — pass 2 (self-report verification) was skipped; findings below are pass 1 (independent) only.`);
+    out.push(
+      `  NOTE: no self-report was captured — pass 2 (self-report verification) was skipped; findings below are pass 1 (independent) only.`,
+    );
   // F28/F30/F31 (D): the typed degradation flags packageEvidence produces, surfaced as machine-readable
   // report state — not just the inline "[DEGRADED: ...]" prose already embedded in the evidence package.
   if (turn1ResultDegraded)
-    out.push(`  turn-1 result: DEGRADED (corrupted, or a validated resume's result.turn-1.json archive was never written — see the evidence package)`);
+    out.push(
+      `  turn-1 result: DEGRADED (corrupted, or a validated resume's result.turn-1.json archive was never written — see the evidence package)`,
+    );
   if (turn1SliceDegraded)
-    out.push(`  turn-1 transcript slice: DEGRADED (boundary never established, or the append-only prefix it depends on changed/truncated under it)`);
+    out.push(
+      `  turn-1 transcript slice: DEGRADED (boundary never established, or the append-only prefix it depends on changed/truncated under it)`,
+    );
   if (skillMdStatus && skillMdStatus !== "readable")
-    out.push(`  SKILL.md: ${skillMdStatus} — presence/coverage classification was REFUSED (see the "already-covered" downgrade in the evaluator)`);
+    out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
   out.push("");
 
+  const integ = state.evaluatorIntegrity;
+  if (integ && (integ.pass1Canary === false || integ.pass2Canary === false)) {
+    const missing = [integ.pass1Canary === false ? "pass 1" : null, integ.pass2Canary === false ? "pass 2" : null].filter(Boolean);
+    const which = missing.join(" and ");
+    out.push(
+      `  evaluator integrity: CANARY MISSING (${which}) — the evaluator ignored a trusted instruction. ` +
+        `An empty or short critique in this state may be adversarial silencing by the skill under review, NOT a clean skill.`,
+    );
+  }
   if (infraFailure) {
     out.push(`INFRASTRUCTURE/PROTOCOL FAILURE (reflection turn): ${infraFailure}`);
     out.push(`The evaluator was NOT invoked — this is a broken discovery run, not a critique. Re-run, or inspect ${outDir} directly.`);
@@ -483,6 +553,8 @@ function printTextReport(state: ReportState): void {
 export function buildJsonReport(state: ReportState): Record<string, unknown> {
   const {
     skillFolder,
+    prompt,
+    evaluatorIntegrity,
     sessionId,
     outDir,
     taskResult,
@@ -497,19 +569,43 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
   } = state;
   // F28/F30/F31 (D): threaded into `base` (not appended per-branch) so every return path below — infra
   // failure, evaluator error, or a normal critique — carries the same machine-readable degradation state.
-  const base = { skillFolder, sessionId, outDir, taskResult, selfReportStatus, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus };
+  // evaluatorIntegrity rides on EVERY branch: a silenced pass is exactly the case where the other fields
+  // look clean, so omitting it from the infra/error branches would hide it when it matters most.
+  const base = {
+    skillFolder,
+    prompt,
+    sessionId,
+    outDir,
+    taskResult,
+    selfReportStatus,
+    evaluatorIntegrity,
+    turn1ResultDegraded,
+    turn1SliceDegraded,
+    skillMdStatus,
+  };
   if (infraFailure) return { ...base, infraFailure, items: [] };
   if (evaluatorError) return { ...base, evaluatorError, items: [] };
   return { ...base, evaluatorModel, items };
 }
 
-async function main(): Promise<void> {
+/** Instrument failure: the critique could not be produced (turn killed, protocol break, evaluator never
+ *  invoked, unexpected throw). Distinct from FINDINGS, which never gate. Matches SPEC's exit 2
+ *  (usage/runtime) rather than inventing a new code. */
+const EXIT_INSTRUMENT_FAILURE = 2;
+
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    writeSync(1, usage() + "\n");
+    return;
+  }
   let opts: ParsedArgs;
   try {
-    opts = parseArgs(process.argv.slice(2));
+    opts = parseArgs(argv);
   } catch (e) {
     process.stderr.write(`${(e as Error).message}\n`);
-    process.exit(0); // this command owns exit 0 — even a usage mistake must not fail a caller's pipeline
+    // Exit taxonomy: FINDINGS never gate (always 0), but a usage error or an infra/protocol failure is
+    // not a discovery outcome — exiting 0 there made a broken run look like a clean one.
+    process.exit(2);
     return;
   }
 
@@ -541,7 +637,7 @@ async function main(): Promise<void> {
         `skill-critique: could not determine the task run's directory (no envelope outDir and no [status] line)${diag ? ` [${diag}]` : ""}.\n` +
           `--- task stdout ---\n${task.stdout}\n--- task stderr (tail) ---\n${task.stderr.slice(-4000)}\n`,
       );
-      process.exit(0);
+      process.exit(EXIT_INSTRUMENT_FAILURE);
       return;
     }
 
@@ -565,7 +661,10 @@ async function main(): Promise<void> {
       };
       if (opts.outputFormat === "json") writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
       else printTextReport(state);
-      process.exit(0);
+      // The INSTRUMENT failed at the TASK turn (killed by the timeout or the byte cap) — no critique was
+      // produced. Findings never gate, but this is not a finding. The other instrument causes exit
+      // elsewhere: a reflection-protocol break or an evaluator throw routes through the report path below.
+      process.exit(EXIT_INSTRUMENT_FAILURE);
       return;
     }
     // NOTE: `taskResult` ("success" | "error") is a GRADEABLE outcome of the task itself — a task that ended
@@ -603,6 +702,7 @@ async function main(): Promise<void> {
 
     const requestedModel = opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL;
     let items: CritiqueItem[] = [];
+    let evaluatorIntegrity: { pass1Canary: boolean; pass2Canary?: boolean } | undefined;
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
     let evaluatorModel: string | undefined;
@@ -614,7 +714,7 @@ async function main(): Promise<void> {
     if (!reflectionValidation.ok) {
       infraFailure = reflectionValidation.reason;
       // Per this tool's contract (a discovery instrument, never a gate) the defect is REPORTED, not thrown —
-      // the process still exits 0 at the bottom of main(). The evaluator is deliberately never invoked.
+      // main() then exits 2 (no critique was produced). The evaluator is deliberately never invoked.
     } else {
       // F38: `selfReport` is `undefined` (never a placeholder string) when the reflection turn produced no
       // finalMessage — `runCritique` skips pass 2 entirely in that case; the typed `selfReportStatus` below
@@ -626,17 +726,22 @@ async function main(): Promise<void> {
       // only ever here after `validateReflectionTurn` confirmed a genuine, continuity-checked resume, so a
       // missing `result.turn-1.json` archive must be treated as degraded, never silently backfilled from the
       // turn-2 `result.json`.
-      const { pkg, truncated, turn1ResultDegraded: trd, turn1SliceDegraded: tsd, skillMdStatus: sms } = packageEvidence(
-        outDir,
-        boundary,
-        opts.skillFolder,
-        true,
-      );
+      const {
+        pkg,
+        sections,
+        truncated,
+        turn1ResultDegraded: trd,
+        turn1SliceDegraded: tsd,
+        skillMdStatus: sms,
+      } = packageEvidence(outDir, boundary, opts.skillFolder, true);
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
       try {
-        items = await runCritique(pkg, selfReport, {
+        items = await runCritique(sections, selfReport, {
+          onEvaluatorIntegrity: (i) => {
+            evaluatorIntegrity = i;
+          },
           model: requestedModel,
           packageTruncated: truncated,
           // F31: SKILL.md not confirmed readable → refuse presence/coverage classification (both a soft
@@ -664,6 +769,7 @@ async function main(): Promise<void> {
       requestedModel,
       evaluatorError,
       infraFailure,
+      evaluatorIntegrity,
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,
@@ -674,15 +780,30 @@ async function main(): Promise<void> {
     } else {
       printTextReport(state);
     }
+    // A reflection-protocol break or an evaluator failure reaches HERE, not the early returns above —
+    // the report is still printed (it carries the diagnosis), but no critique was produced, so this is an
+    // instrument failure, not a finding. Missing this path is what made the documented exit contract
+    // false in practice even after the other three were routed.
+    if (state.infraFailure || state.evaluatorError) process.exit(EXIT_INSTRUMENT_FAILURE);
   } catch (e) {
     process.stderr.write(`skill-critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
+    process.exit(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
   }
-  process.exit(0); // ALWAYS 0 — this is a discovery instrument, never a gate; the caller owns this exit code
+  // FINDINGS never gate: any classification — including a task run that ERRORED, which is itself a
+  // legitimate discovery outcome about the skill — exits 0. Only instrument failures above exit non-zero.
+  process.exit(0);
+}
+
+/** CLI entry for `cowork-harness critique`. Exported so src/cli.ts can dispatch to it — the direct-exec
+ *  guard below stays for `tsx src/critique/command.ts` during development. */
+export async function cmdCritique(argv: string[]): Promise<void> {
+  installOrphanCleanupHandlers(); // a Ctrl-C must kill any outstanding bounded-spawn child group
+  await main(argv);
 }
 
 import { pathToFileURL } from "node:url";
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  installOrphanCleanupHandlers(); // F23/F36 residual: a Ctrl-C must kill any outstanding bounded-spawn child group
+  installOrphanCleanupHandlers();
   void main();
 }
 

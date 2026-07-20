@@ -89,6 +89,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     context: undefined,
     resources: undefined,
     verdict: undefined,
+    outcome: undefined,
     runLabel: undefined,
     skillCommit: undefined,
   };

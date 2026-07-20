@@ -16,7 +16,8 @@ reads it back.
   `stats`/`trace`/`scaffold` too — see [README → Commands at a glance](../README.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
-signals, costUsd?, tokens?, turns?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
+runLabel?, skillHash?, signals, costUsd?, tokens?, turns?, cacheReadTokens?, modelCostUsd?, durationMs?,
+partial, nonDeterministic, outDir, git:{branch, sha}}`.
 `pass`/`signals` come from the same `computeVerdict` every other verdict-facing surface (the footer, the
 JSON envelope, `--repeat`'s rollup) uses — a row's `pass` can never read differently than the run's own
 exit code did. `git` is best-effort (`git rev-parse` in the invoking cwd) — `null` outside a repo, which
@@ -44,6 +45,47 @@ scenario regardless of `--metric`, the same convention `--quiet`/`--verbose` alr
 this CLI (machine output stays fully populated; only the human-readable render narrows). A JSON consumer
 that only wants cost data filters client-side (`jq '.stats[].p50CostUsd'`) rather than losing the other
 fields to a server-side narrowing it didn't ask for.
+
+## Grouping by generation (the iterate-across-fixes loop)
+
+> These recipes are step 5 of the loop in [debugging.md](./debugging.md#the-whole-loop-end-to-end) — the
+> comparison step. What you pair is usually a [`critique`](./critique.md) finding set against the runs
+> that produced it.
+
+`stats` aggregates **by scenario**, and its filters are `--scenario`/`--since`/`--baseline`/`--branch`/
+`--last`. There is no built-in group-by for the run-identity fields, so pair generations with `jq` over
+`index.jsonl` directly — the index is the queryable source of truth, and both fields are on the row:
+
+- **`skillHash`** — the correctness key. Content-exact; changes on any tracked edit. **Stored as a 12-char
+  prefix** on the index row (the full hash is in each run's `result.json`), so a recipe groups on the
+  prefix — fine for pairing within one project, but use `result.json` if you need the full value.
+- **`runLabel`** — the `--label <tag>` you passed. Human-readable and orderable; ergonomics, not identity.
+
+```bash
+IDX=~/.cowork-harness/runs/index.jsonl
+
+# pass-rate and cost per generation, newest first
+jq -s 'map(select(.skillHash)) | group_by(.skillHash) | map({
+    skillHash: .[0].skillHash, label: .[0].runLabel, runs: length,
+    passRate: ((map(select(.pass)) | length) / length),
+    costUsd: (map(.costUsd // 0) | add), latest: (map(.ts) | max)
+  }) | sort_by(.latest) | reverse' "$IDX"
+
+# which verdict signals fired per generation — the input a stagnation check needs
+jq -s 'map(select(.skillHash)) | group_by(.skillHash) | map({
+    skillHash: .[0].skillHash, label: .[0].runLabel,
+    signals: (map(.signals) | flatten | group_by(.) | map({(.[0]): length}) | add)
+  })' "$IDX"
+
+# one scenario only, most recent two generations — the before/after of a single fix
+jq -s --arg s "skill-my-skill" 'map(select(.scenario == $s and .skillHash))
+  | group_by(.skillHash) | sort_by(map(.ts) | max) | .[-2:]' "$IDX"
+```
+
+**Rows without `skillHash` are excluded by the `select` above** — that is deliberate. A run that mounted no
+skill or plugin has nothing to hash, and `chat` rows carry no fingerprint; silently folding them into a
+generation bucket would misattribute them. If a run you expected is missing from the output, check whether
+it mounted a skill at all rather than assuming the grouping dropped it.
 
 ## `--reindex`: the migration path
 

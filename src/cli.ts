@@ -80,12 +80,17 @@ import {
   type ToolDiffOp,
   type TranscriptDiffLine,
   type MetaDiffEntry,
+  compareDiffSides,
+  type DiffSide,
+  type DiffViewResult,
 } from "./run/diff.js";
 import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonPayloadEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput } from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
+import { parseRepeatFlags, RepeatFlagError } from "./run/repeat-flags.js";
+import { cmdCritique } from "./critique/command.js";
 import {
   MatrixFile,
   expandMatrix,
@@ -194,6 +199,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
+  critique <skill-folder>      EXPERIMENTAL — run a skill, ask the agent what confused it, then grade that
+                               self-report against a frozen record of the run (see 'critique --help' for cost)
       [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
       [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
       [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage
@@ -310,6 +317,14 @@ Output:
   --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
   --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
+  --repeat <N>                     run the SAME skill+prompt N times (2-100) and aggregate a variance
+                                   rollup instead of a single pass/fail — "did this finding reproduce, or
+                                   did it pass once?". Every run is still kept and indexed.
+  --min-pass-rate <0..1>           batch verdict threshold (default 1.0 = every run must pass). Needs --repeat.
+  --stop-on-diverge                stop the batch as soon as one run passes and another fails. Needs --repeat.
+  --max-budget-usd <x>             stop the batch once cumulative cost reaches x (degrades LOUDLY if a run
+                                   reports no cost telemetry). Needs --repeat.
+  --allow-budget-stop              treat a budget-stopped batch as a pass rather than incomplete. Needs --repeat.
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
@@ -525,6 +540,7 @@ const COMMANDS = [
   "trace",
   "inspect",
   "diff",
+  "critique",
   "assertions",
   "scaffold",
   "status",
@@ -745,6 +761,8 @@ async function main() {
       return cmdInspect(rest);
     case "diff":
       return cmdDiff(rest);
+    case "critique":
+      return void (await cmdCritique(rest));
     case "assertions":
       return cmdAssert(rest);
     case "scaffold":
@@ -1267,15 +1285,21 @@ async function cmdRun(rawArgs: string[]) {
   // --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
   // flags, pre-extracted here exactly like --decider-model.
   let deciderModel: string | undefined;
-  let repeatN: number | undefined;
-  let maxBudgetUsd: number | undefined;
-  let stopOnDiverge = false;
-  let minPassRate = 1.0;
+  // The --repeat family is parsed by the SHARED seam both lanes use (run/repeat-flags.ts) — one
+  // implementation, so `run` and `skill` cannot drift apart on validation or on what counts as a value.
+  let repeatFlags;
+  try {
+    repeatFlags = parseRepeatFlags(rawArgs, "run");
+  } catch (e) {
+    if (e instanceof RepeatFlagError) return void fail("run", "usage", e.message, undefined, isJsonOutput(rawArgs));
+    throw e;
+  }
+  rawArgs = repeatFlags.rest;
+  const { repeatN, maxBudgetUsd, stopOnDiverge, minPassRate, allowBudgetStop } = repeatFlags;
   let matrixFile: string | undefined;
   let maxCells = 16;
   let matrixConcurrency = 1;
   let allowTruncatedMatrix = false;
-  let allowBudgetStop = false;
   const preArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
@@ -1289,44 +1313,6 @@ async function cmdRun(rawArgs: string[]) {
     } else if (a.startsWith("--decider-model=")) {
       deciderModel = a.slice("--decider-model=".length);
       if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, jsonOut);
-    } else if (a === "--repeat" || a.startsWith("--repeat=")) {
-      const v = a === "--repeat" ? rawArgs[++i] : a.slice("--repeat=".length);
-      const n = v === undefined ? NaN : Number(v);
-      if (!Number.isInteger(n) || n < 2 || n > 100)
-        fail(
-          "run",
-          "usage",
-          `--repeat requires an integer between 2 and 100 (got ${v === undefined ? "nothing" : `"${v}"`})`,
-          undefined,
-          jsonOut,
-        );
-      repeatN = n;
-    } else if (a === "--max-budget-usd" || a.startsWith("--max-budget-usd=")) {
-      const v = a === "--max-budget-usd" ? rawArgs[++i] : a.slice("--max-budget-usd=".length);
-      const n = v === undefined ? NaN : Number(v);
-      if (!Number.isFinite(n) || n <= 0)
-        fail(
-          "run",
-          "usage",
-          `--max-budget-usd requires a positive number (got ${v === undefined ? "nothing" : `"${v}"`})`,
-          undefined,
-          jsonOut,
-        );
-      maxBudgetUsd = n;
-    } else if (a === "--stop-on-diverge") {
-      stopOnDiverge = true;
-    } else if (a === "--min-pass-rate" || a.startsWith("--min-pass-rate=")) {
-      const v = a === "--min-pass-rate" ? rawArgs[++i] : a.slice("--min-pass-rate=".length);
-      const n = v === undefined ? NaN : Number(v);
-      if (!Number.isFinite(n) || n < 0 || n > 1)
-        fail(
-          "run",
-          "usage",
-          `--min-pass-rate requires a number between 0 and 1 (got ${v === undefined ? "nothing" : `"${v}"`})`,
-          undefined,
-          jsonOut,
-        );
-      minPassRate = n;
     } else if (a === "--matrix" || a.startsWith("--matrix=")) {
       const v = a === "--matrix" ? rawArgs[++i] : a.slice("--matrix=".length);
       if (v === undefined || v === "" || v.startsWith("-"))
@@ -1352,22 +1338,13 @@ async function cmdRun(rawArgs: string[]) {
       matrixConcurrency = n;
     } else if (a === "--allow-truncated-matrix") {
       allowTruncatedMatrix = true;
-    } else if (a === "--allow-budget-stop") {
-      allowBudgetStop = true;
     } else preArgs.push(a);
   }
-  if (maxBudgetUsd !== undefined && repeatN === undefined)
-    fail("run", "usage", "--max-budget-usd requires --repeat", undefined, isJsonOutput(rawArgs));
-  if (stopOnDiverge && repeatN === undefined) fail("run", "usage", "--stop-on-diverge requires --repeat", undefined, isJsonOutput(rawArgs));
-  if (minPassRate !== 1.0 && repeatN === undefined)
-    fail("run", "usage", "--min-pass-rate requires --repeat", undefined, isJsonOutput(rawArgs));
   if (maxCells !== 16 && matrixFile === undefined) fail("run", "usage", "--max-cells requires --matrix", undefined, isJsonOutput(rawArgs));
   if (matrixConcurrency !== 1 && matrixFile === undefined)
     fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
   if (allowTruncatedMatrix && matrixFile === undefined)
     fail("run", "usage", "--allow-truncated-matrix requires --matrix", undefined, isJsonOutput(rawArgs));
-  if (allowBudgetStop && repeatN === undefined)
-    fail("run", "usage", "--allow-budget-stop requires --repeat", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
   // An interactive driving agent × N runs is not a measurement — --decider-dir/--decider-cmd both answer
   // gates LIVE (this codebase's own "LIVE questions: --decider-llm / --decider-cmd / --decider-dir"
@@ -1681,7 +1658,17 @@ async function cmdRun(rawArgs: string[]) {
 }
 
 async function cmdSkill(rawArgs: string[]) {
-  if (hasHelp(rawArgs)) return void log(SKILL_HELP);
+  if (hasHelp(rawArgs)) return void log(SKILL_HELP); // BEFORE the repeat parse — `--stop-on-diverge --help` must print help, not "requires --repeat"
+  // --repeat family: parsed via the SHARED seam (`run` uses the same one) so the lanes cannot drift.
+  // Consumed here (and removed from argv) before the common-flag parse, which would reject them as unknown.
+  let repeatFlags;
+  try {
+    repeatFlags = parseRepeatFlags(rawArgs, "skill");
+  } catch (e) {
+    if (e instanceof RepeatFlagError) return void fail("skill", "usage", e.message, undefined, isJsonOutput(rawArgs));
+    throw e;
+  }
+  rawArgs = repeatFlags.rest;
   const { rest: args, flags } = takeCommonFlags(rawArgs, "skill");
   const positional: string[] = [];
   const answers: AnswerRule[] = [];
@@ -1959,17 +1946,40 @@ async function cmdSkill(rawArgs: string[]) {
   const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
   const o = resolveOutput("skill", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
-  let result: RunResult;
-  try {
-    result = await runOneScenario({
+  const { repeatN, minPassRate, stopOnDiverge, maxBudgetUsd, allowBudgetStop } = repeatFlags;
+  // Preconditions `run` never needed. `--session-id`/`--resume` are skill-only, and both pin ONE run dir:
+  // every repeat iteration would resolve the same `sess-<id>` outDir and the same-origin freshness wipe
+  // (execute.ts) would delete the previous iteration — N runs, one survivor, while the help text promises
+  // every run is kept. `--resume` additionally chains one session instead of sampling N independent runs.
+  if (repeatN !== undefined && (sessionId || resume))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --session-id/--resume (both pin a single run dir, so each iteration would overwrite the last instead of producing N independent samples)",
+      undefined,
+      o.json,
+    );
+  // Same invariant the run lane enforces and docs/scenario.md states: an interactive driving agent x N
+  // runs is not a reproducible measurement.
+  if (repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
+      undefined,
+      o.json,
+    );
+  const runSkillOnce = (label: string, rethrowUnanswered = false) =>
+    runOneScenario({
       command: "skill",
       scenario,
-      label: scenario.name,
+      label,
       flags,
       policy,
       externalChannel,
       o,
       keep,
+      rethrowUnanswered,
       extra: {
         session,
         sessionId,
@@ -1979,13 +1989,34 @@ async function cmdSkill(rawArgs: string[]) {
         nonDeterministicHint: flags.deciderDir != null || flags.deciderCmd != null, // driving agent / helper answers → not reproducible
       },
     });
+
+  const results: RunResult[] = [];
+  let rollup: RepeatRollup | undefined;
+  try {
+    if (repeatN === undefined) {
+      results.push(await runSkillOnce(scenario.name));
+    } else {
+      // Same batch engine `run` uses — flakiness on the exploratory lane is the same measurement, and
+      // "did this finding reproduce?" is exactly the question an iterate-across-fixes loop asks here.
+      ({ rollup } = await runRepeatBatch({
+        scenarioName: scenario.name,
+        repeatN,
+        stopOnDiverge,
+        maxBudgetUsd,
+        makeLabel: (n) => `${scenario.name} (repeat ${n + 1}/${repeatN})`,
+        runOnce: (label) => runSkillOnce(label, true),
+        onResult: (r) => results.push(r),
+      }));
+    }
   } finally {
     externalChannel?.close?.();
   }
   // All channels keep stdout free → the json envelope is the only stdout (footer goes to stderr, and is
   // mutually exclusive with --output-format json). The footer itself is emitted inside runOneScenario.
-  if (o.json) out(jsonEnvelope("skill", [result]));
-  process.exit(computeVerdict(result, "live").pass ? 0 : 1);
+  if (o.json) out(jsonEnvelope("skill", results, rollup ? { rollups: [rollup], minPassRate, allowBudgetStop } : {}));
+  else if (rollup) log(formatRepeatRollup(rollup, minPassRate, allowBudgetStop));
+  const ok = rollup ? rollupPasses(rollup, minPassRate, allowBudgetStop) : results.every((r) => computeVerdict(r, "live").pass);
+  process.exit(ok ? 0 : 1);
 }
 
 const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
@@ -4086,17 +4117,6 @@ function detectDiffKind(arg: string): DiffKind {
   return "baseline"; // validated for real by loadBaseline() at load time; unresolvable throws there
 }
 
-interface DiffSide {
-  tools: NormalizedToolRow[];
-  transcript: string;
-  artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
-  meta: Partial<DiffMetaSummary>;
-  // Identity metadata, NOT diffed content: used only for the cross-scenario warning ("allow + warn" —
-  // comparing two different scenarios is legitimate for skill-variant comparison, but must be flagged,
-  // since the meta view doesn't surface scenario identity).
-  scenarioName?: string;
-}
-
 /** Top-level (non-sub-agent, non-synthetic) tool_use events, canonicalized — the same shape both a run
  *  dir's events.jsonl and a cassette's events[] reduce to. */
 function topLevelToolRows(lines: string[], source: string, normalize: boolean): NormalizedToolRow[] {
@@ -4123,6 +4143,10 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
       effectiveFidelity: result.effectiveFidelity,
       baseline: result.baseline,
       assertionsPassed: (result.assertions ?? []).every((a) => a.pass),
+      // Short prefix, matching the run-index convention — enough to NAME the two generations a diff
+      // compared (a diff across a skill fix was otherwise anonymous). Absent on runs that mounted no
+      // skill, and on pre-fix runs recorded before the skill lane emitted a fingerprint.
+      skillHash: result.fingerprint?.skillHash?.slice(0, 12),
     };
     // Hash on-disk if the workDir is still there (fresh/kept run); degrade to a size-based pseudo-hash,
     // clearly distinguishable ("size:N"), when it's torn down — never silently claim byte-verified
@@ -4161,6 +4185,10 @@ function loadCassetteSide(file: string, normalize: boolean): DiffSide {
     result: lastResult ? (lastResult.isError ? "error" : "success") : undefined,
     effectiveFidelity: cassette.effectiveFidelity,
     baseline: cassette.scenario?.baseline,
+    // The cassette froze the generation key at record time — carry it so a cassette-vs-cassette diff can
+    // NAME the two generations, and so a run-vs-cassette diff doesn't read as generation drift purely
+    // because one side omitted the field. Same 12-char prefix convention as the run side and run-index.
+    skillHash: cassette.fingerprint?.skillHash?.slice(0, 12),
     // assertionsPassed intentionally omitted: comparing frozen-vs-frozen assertion pass/fail needs a real
     // replay (staleness/controlOut-aware), out of scope for a structural diff — diffMeta skips a field
     // when BOTH sides omit it, so this degrades cleanly rather than comparing undefined to a run's real value.
@@ -4173,26 +4201,8 @@ function loadDiffSide(kind: DiffKind, arg: string, normalize: boolean): DiffSide
   return kind === "cassette" ? loadCassetteSide(arg, normalize) : loadRunSide(arg, normalize);
 }
 
-interface DiffViewResult {
-  tools: ToolDiffOp[];
-  transcript: TranscriptDiffLine[];
-  artifacts?: import("./run/cassette.js").FileSigDiff;
-  meta: MetaDiffEntry[];
-  identical: boolean;
-}
-
-function compareDiffSides(a: DiffSide, b: DiffSide, normalize: boolean): DiffViewResult {
-  const tools = diffToolSequence(a.tools, b.tools);
-  const transcript = diffTranscript(a.transcript, b.transcript, normalize);
-  const artifacts = a.artifacts && b.artifacts ? diffArtifacts(a.artifacts, b.artifacts) : undefined;
-  const meta = diffMeta(a.meta, b.meta);
-  const identical =
-    tools.every((o) => o.op === "same") &&
-    transcript.every((o) => o.op === "same") &&
-    (!artifacts || (artifacts.added.length === 0 && artifacts.removed.length === 0 && artifacts.changed.length === 0)) &&
-    meta.length === 0;
-  return { tools, transcript, artifacts, meta, identical };
-}
+// DiffSide / DiffViewResult / compareDiffSides live in ./run/diff.js alongside the rest of the diff
+// engine (diffToolSequence/diffTranscript/diffArtifacts/diffMeta) — comparison logic, not CLI plumbing.
 
 function renderDiffText(r: DiffViewResult, view: string): string[] {
   const lines: string[] = [];
@@ -4310,13 +4320,26 @@ function cmdDiff(args: string[]) {
         a: aName,
         b: bName,
         identical: result.identical,
+        transcriptDiffers: result.transcriptDiffers,
         views: { tools: result.tools, transcript: result.transcript, artifacts: result.artifacts, meta: result.meta },
       }),
     );
   } else if (result.identical) {
-    out("identical");
+    // `identical` is the GATEABLE verdict (tools/artifacts/meta) — exactly what --help promises. Prose
+    // drift is advisory and must stay VISIBLE rather than be swallowed by the looser gate, so say so
+    // explicitly instead of printing a bare "identical" that would read as "nothing changed at all".
+    if (result.transcriptDiffers && (view === "transcript" || view === "all")) {
+      // The advisory view is the ONLY difference. Printing just the one-liner here would tell a user who
+      // already ran `--view transcript` to run `--view transcript` — and would hide the drift the commit
+      // that loosened the gate promised to keep visible. Render it, then say it is advisory.
+      for (const line of renderDiffText(result, "transcript")) out(line);
+      out("(gateable views identical; the transcript drift above is advisory and not part of the exit code)");
+    } else {
+      out(result.transcriptDiffers ? "identical (gateable views); transcript differs — advisory, see --view transcript" : "identical");
+    }
   } else {
     for (const line of renderDiffText(result, view)) out(line);
+    if (result.transcriptDiffers && view === "all") out("(transcript also differs — advisory, not part of the exit code)");
   }
   process.exit(result.identical ? 0 : 1);
 }
