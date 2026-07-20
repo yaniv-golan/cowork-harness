@@ -133,10 +133,22 @@ KNOWN LIMITATIONS: container tier only; SKILL.md is capped at 16KB (a larger one
  *  small copy rather than importing those private helpers. Returns `[value, extraTokensConsumed]` — 0 for
  *  the equals form (the value is inline in `a`), 1 for the space form (the value is the NEXT token) — so
  *  the caller's `i += extraTokensConsumed` advances the loop exactly like the old `argv[++i]` did. */
-function flagVal(argv: string[], i: number, flag: string): [string, number] {
-  const a = argv[i];
-  if (a.startsWith(`${flag}=`)) return [a.slice(flag.length + 1), 0];
-  return [argv[i + 1], 1];
+/** Returns [value, indexAdvance] and whether the EQUALS form was used (the child's escape hatch for a
+ *  value starting with `-`, which its spaced-form parser rejects).
+ *
+ *  The empty/missing check lives HERE, not at the call sites: it was previously applied only in the
+ *  spec-forwarding branch, so `critique … --dotenv` with a forgotten path was ACCEPTED and ran a full
+ *  four-workload critique without loading env — a silent no-op on the flag this branch made reachable. */
+function flagVal(argv: string[], i: number, flag: string): { value: string; adv: number; equalsForm: boolean } {
+  const a = argv[i]!;
+  if (a.startsWith(`${flag}=`)) {
+    const value = a.slice(flag.length + 1);
+    if (value === "") throw new Error(`${flag} requires a non-empty value\n${usage()}`);
+    return { value, adv: 0, equalsForm: true };
+  }
+  const value = argv[i + 1];
+  if (value === undefined || value === "") throw new Error(`${flag} requires a value\n${usage()}`);
+  return { value, adv: 1, equalsForm: false };
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -153,27 +165,27 @@ function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--prompt" || a.startsWith("--prompt=")) {
-      const [v, adv] = flagVal(argv, i, "--prompt");
+      const { value: v, adv } = flagVal(argv, i, "--prompt");
       prompt = v;
       i += adv;
     } else if (a === "--dotenv" || a.startsWith("--dotenv=")) {
-      const [v, adv] = flagVal(argv, i, "--dotenv");
+      const { value: v, adv } = flagVal(argv, i, "--dotenv");
       dotenv = v;
       i += adv;
     } else if (a === "--fidelity" || a.startsWith("--fidelity=")) {
-      const [v, adv] = flagVal(argv, i, "--fidelity");
+      const { value: v, adv } = flagVal(argv, i, "--fidelity");
       fidelity = v;
       i += adv;
     } else if (a === "--evaluator-model" || a.startsWith("--evaluator-model=")) {
-      const [v, adv] = flagVal(argv, i, "--evaluator-model");
+      const { value: v, adv } = flagVal(argv, i, "--evaluator-model");
       evaluatorModel = v;
       i += adv;
     } else if (a === "--output-format" || a.startsWith("--output-format=")) {
-      const [v, adv] = flagVal(argv, i, "--output-format");
+      const { value: v, adv } = flagVal(argv, i, "--output-format");
       outputFormat = v as "json" | "text";
       i += adv;
     } else if (a === "--prompt-file" || a.startsWith("--prompt-file=")) {
-      const [v, adv] = flagVal(argv, i, "--prompt-file");
+      const { value: v, adv } = flagVal(argv, i, "--prompt-file");
       promptFile = v;
       i += adv;
     } else if (a === "--keep") {
@@ -189,12 +201,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (spec.critique.kind === "reject") throw new Error(`${name} is not accepted by critique: ${spec.critique.reason}\n${usage()}`);
       if (spec.critique.kind === "owned") throw new Error(`unknown flag: ${a}\n${usage()}`); // owned => handled above
       let value: string | undefined;
+      let eq = false;
       if (spec.arity === 1) {
-        const [v, adv] = flagVal(argv, i, name);
-        // Forwarded flags were the only ones NOT value-checked: a missing value was passed through as
-        // `undefined` and died in spawn() as an "unexpected failure" stack trace. The child's own parser
-        // says "<flag> requires a value"; say the same thing here rather than one layer later.
-        if (v === undefined || v === "") throw new Error(`${name} requires a value\n${usage()}`);
+        const { value: v, adv, equalsForm } = flagVal(argv, i, name);
+        eq = equalsForm;
         value = v;
         i += adv;
       } else if (a.includes("=")) {
@@ -213,7 +223,10 @@ function parseArgs(argv: string[]): ParsedArgs {
         if (!Number.isInteger(n) || n <= 0) throw new Error(`--timeout requires a positive integer (ms), got "${value}"`);
         taskTimeoutMs = n;
       }
-      const fragment = spec.arity === 1 ? [name, value!] : [name];
+      // Preserve the EQUALS form when that is how it arrived: the child's spaced-form parser rejects a
+      // value starting with `-`, so normalising `--intent=-terse` to two argv entries would kill a valid
+      // input one layer later with a wrong diagnosis.
+      const fragment = spec.arity === 1 ? (eq ? [`${name}=${value!}`] : [name, value!]) : [name];
       // EXCLUSIVE buckets. `buildTaskTurnArgs` spreads BOTH arrays, so a "both" flag pushed into both
       // would be emitted TWICE on the task turn — which is not a no-op for repeatable flags like
       // --upload (it mounts the file twice). Sources go to forwardBoth ONLY; the task builder picks

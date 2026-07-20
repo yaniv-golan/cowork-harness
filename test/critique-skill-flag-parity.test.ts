@@ -8,12 +8,6 @@ import { SKILL_FLAG_SURFACE, CRITIQUE_ONLY_FLAGS } from "../src/run/skill-flag-s
 // `critique` field gives totality only over entries ALREADY in the array; THIS test is what makes a new
 // skill flag red CI rather than a silent gap.
 //
-// Scan breadth is deliberate. Two earlier guards in this repo were porous because they matched a narrow
-// region; and `run/repeat-flags.ts` exists precisely because a flag family MOVED into a new module, which a
-// region-scoped scan would have missed. So scan whole files: over-matching is cheap (an extra name just
-// has to appear in the spec), under-matching is the failure mode.
-const SOURCES = ["src/cli.ts", "src/run/repeat-flags.ts"].map((p) => readFileSync(resolve(p), "utf8"));
-
 /** Flags the SKILL LANE itself parses. Scanned from the regions that define that lane — `cmdSkill`'s
  *  argv loop, `takeCommonFlags`, and the extracted repeat-flag family — rather than whole-file, because a
  *  whole-file scan sweeps in every other command's flags and then needs a hand-maintained allowlist to
@@ -87,7 +81,6 @@ const NOT_SKILL_LANE = new Set([
   "--diff",
   "--dotenv",
   "--run-dir",
-  "--output-format",
   "--help",
   "-h",
   "--version",
@@ -117,7 +110,7 @@ describe("skill flag surface ↔ critique disposition parity", () => {
 
   it("every flag the SKILL LANE parses has a critique disposition", () => {
     // The primary check. An earlier version filtered only `skill --help`'s 2-space lines, which missed
-    // six real flags (--verbose --label --fidelity --intent --enable --expect-write) — so a new flag
+    // five real flags (--verbose --label --fidelity --intent --enable) — so a new flag
     // documented inline, or added with no help line at all, would never have turned CI red. That is the
     // exact silent gap the spec module exists to close.
     const missing = [...skillLaneFlags()].filter((f) => !KNOWN.has(f) && !NOT_SKILL_LANE.has(f));

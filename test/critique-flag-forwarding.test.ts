@@ -138,7 +138,23 @@ describe("forwarded-flag value validation (parity with the child's own parser)",
     expect(() => parseArgs(["./s", "--prompt", "p", "--decider-llm=x"])).toThrow(/takes no value/);
   });
 
-  it("still accepts the legitimate equals form for arity-1 flags", () => {
-    expect(parseArgs(["./s", "--prompt", "p", "--upload=./a.pdf"]).forwardBoth).toEqual(["--upload", "./a.pdf"]);
+  it("PRESERVES the equals form when that is how the value arrived", () => {
+    // Not cosmetic: the child's spaced-form parser rejects a value starting with `-`, so normalising
+    // `--intent=-terse` into two argv entries would kill a valid input one layer later with a wrong
+    // diagnosis. The equals form is the child's own escape hatch — forward it intact.
+    expect(parseArgs(["./s", "--prompt", "p", "--upload=./a.pdf"]).forwardBoth).toEqual(["--upload=./a.pdf"]);
+    expect(parseArgs(["./s", "--prompt", "p", "--intent=-terse"]).forwardTask).toEqual(["--intent=-terse"]);
+  });
+
+  it("still uses the spaced form when the value arrived spaced", () => {
+    expect(parseArgs(["./s", "--prompt", "p", "--upload", "./a.pdf"]).forwardBoth).toEqual(["--upload", "./a.pdf"]);
+  });
+
+  it("owned flags reject a missing value too — not just forwarded ones", () => {
+    // The check lives in flagVal, so every caller gets it. Previously only the spec-forwarding branch
+    // checked, so `critique … --dotenv` with a forgotten path silently ran a full critique without env.
+    for (const flag of ["--dotenv", "--evaluator-model", "--prompt-file"]) {
+      expect(() => parseArgs(["./s", "--prompt", "p", flag]), flag).toThrow(/requires a value/);
+    }
   });
 });
