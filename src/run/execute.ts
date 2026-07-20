@@ -909,7 +909,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         turn,
         ablated: opts.ablateSkill,
         runLabel: opts.runLabel, // run-identity: a salvaged partial is still a labeled generation
-        skillCommit: skillCommit(scenario.session),
+        skillCommit: skillCommit(scenario.session, loadedSession),
         scenarioName: scenario.name,
         prompt: scenario.prompt,
         fidelity: scenario.fidelity,
@@ -926,7 +926,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         egress,
         durationMs: Date.now() - startedAt,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
-        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline),
+        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
         onUnanswered,
         nonDeterministicHint: opts.nonDeterministicHint,
         externalChannel: !!opts.externalChannel,
@@ -1240,7 +1240,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       mode: "run",
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
       runLabel: opts.runLabel, // run-identity: user --label tag (undefined if not passed)
-      skillCommit: skillCommit(scenario.session), // best-effort git HEAD of the skill dirs (same set as fingerprint.skillHash)
+      skillCommit: skillCommit(scenario.session, loadedSession), // best-effort git HEAD of the skill dirs (same set as fingerprint.skillHash)
       turn,
       ablated: opts.ablateSkill || undefined,
       referencesRead: record.filesRead.length ? record.filesRead : undefined,
@@ -1340,7 +1340,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
       // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
       // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
-      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline),
+      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
       resources, // same single fold as the evaluate() ctx above — not re-read
       // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
       // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
