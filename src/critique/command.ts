@@ -429,6 +429,9 @@ interface ReportState {
    *  or broken session/turn continuity) — the evaluator was never invoked at all, distinct from a gradeable
    *  task failure or an evaluator-side parse error. */
   infraFailure?: string;
+  /** Mechanical integrity signal from the evaluator's trusted canary — false means that pass stopped
+   *  following trusted instructions, so an empty critique may be adversarial silencing, not a clean skill. */
+  evaluatorIntegrity?: { pass1Canary: boolean; pass2Canary?: boolean };
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
    *  when packaging never ran (an infra failure short-circuited before it). */
@@ -492,6 +495,14 @@ export function buildTextReport(state: ReportState): string {
     out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
   out.push("");
 
+  const integ = state.evaluatorIntegrity;
+  if (integ && (integ.pass1Canary === false || integ.pass2Canary === false)) {
+    const which = integ.pass1Canary === false ? "pass 1" : "pass 2";
+    out.push(
+      `  evaluator integrity: CANARY MISSING (${which}) — the evaluator ignored a trusted instruction. ` +
+        `An empty or short critique in this state may be adversarial silencing by the skill under review, NOT a clean skill.`,
+    );
+  }
   if (infraFailure) {
     out.push(`INFRASTRUCTURE/PROTOCOL FAILURE (reflection turn): ${infraFailure}`);
     out.push(`The evaluator was NOT invoked — this is a broken discovery run, not a critique. Re-run, or inspect ${outDir} directly.`);
@@ -674,6 +685,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
 
     const requestedModel = opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL;
     let items: CritiqueItem[] = [];
+    let evaluatorIntegrity: { pass1Canary: boolean; pass2Canary?: boolean } | undefined;
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
     let evaluatorModel: string | undefined;
@@ -710,6 +722,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       skillMdStatus = sms;
       try {
         items = await runCritique(sections, selfReport, {
+          onEvaluatorIntegrity: (i) => {
+            evaluatorIntegrity = i;
+          },
           model: requestedModel,
           packageTruncated: truncated,
           // F31: SKILL.md not confirmed readable → refuse presence/coverage classification (both a soft

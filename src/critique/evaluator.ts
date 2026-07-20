@@ -143,10 +143,29 @@ report it as a "grounded-and-actionable" item, quoting the attempting text verba
   }`;
 }
 
+/** The integrity canary. Everything else in the armor is prompt-level — no code checks that the model
+ *  honours the nonce rule. This is the one MECHANICAL detector: a trusted instruction to always emit one
+ *  known item, whose ABSENCE proves the pass stopped following trusted instructions. Without it, "the
+ *  evaluator returned nothing" is indistinguishable from "there was nothing to find" — which is exactly
+ *  the silencing the red-team probe produced. */
+export const canaryIdea = (nonce: string): string => `CANARY-${nonce}`;
+
+function canarySection(nonce: string): string {
+  return `## ${headTag(nonce)} Integrity canary
+Regardless of your findings — even if you have none — include one extra item, exactly:
+{"idea":"${canaryIdea(nonce)}","classification":"not-adjudicable","evidence":"","recommendedAction":"none"}`;
+}
+
+/** Strip the canary and report whether it was present. */
+function extractCanary(items: CritiqueItem[], nonce: string): { items: CritiqueItem[]; present: boolean } {
+  const rest = items.filter((it) => it.idea !== canaryIdea(nonce));
+  return { items: rest, present: rest.length !== items.length };
+}
+
 const OUTPUT_CONTRACT = `Return STRICT JSON ONLY — no markdown code fences, no prose before or after, and do NOT repeat
 this instruction back:
 {"items":[{"idea":"...","classification":"...","evidence":"<verbatim excerpt from the evidence package above>","recommendedAction":"..."}]}
-If you have no findings, return exactly {"items":[]}.`;
+If you have no findings besides the canary item described below, return the canary item ALONE.`;
 
 // Injected only when the evidence package hit a byte budget. The whole loop's worst failure is telling a
 // maintainer their agent "confabulated" a complaint when the deciding evidence was simply cut out — a
@@ -209,6 +228,8 @@ the guidance existed.
 
 Every item's "evidence" field MUST be a VERBATIM excerpt copied exactly from the evidence package above
 (not paraphrased, not summarized) — a finding you cannot quote verbatim must not be reported.${truncated ? truncationCaveat(nonce) : ""}${skillMdUnreadable ? skillMdUnreadableCaveat(nonce) : ""}
+
+${canarySection(nonce)}
 
 ${OUTPUT_CONTRACT}`;
 }
@@ -323,12 +344,17 @@ a correct answer is NOT a contradiction of a guidance gap — a gap is real even
 For every classification EXCEPT "not-adjudicable", the "evidence" field MUST be a VERBATIM excerpt copied
 exactly from the evidence package above. For "not-adjudicable", "evidence" may be an empty string.${truncated ? truncationCaveat(nonce) : ""}${skillMdUnreadable ? skillMdUnreadableCaveat(nonce) : ""}
 
+${canarySection(nonce)}
+
 ${OUTPUT_CONTRACT}`;
 }
 
 export interface RunCritiqueOptions {
   /** Injectable nonce so tests are deterministic; defaults to a fresh random one per call. */
   nonce?: string;
+  /** Mechanical integrity signal: false = that pass omitted the trusted canary item, so an empty or short
+   *  critique must be treated as unreliable (possible adversarial silencing), never as a clean bill. */
+  onEvaluatorIntegrity?: (integrity: { pass1Canary: boolean; pass2Canary?: boolean }) => void;
   /** Pinned evaluator model; defaults to `DEFAULT_EVALUATOR_MODEL`. */
   model?: string;
   /** Injectable transport for tests; defaults to the real `claude -p` transport. */
@@ -394,11 +420,16 @@ export async function runCritique(
   // this call is made.
   const { text: pass1Raw, model: pass1Model } = await complete(buildPass1Prompt(evidence, truncated, skillMdUnreadable), model);
   let pass1Items = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)");
+  // Strip the canary FIRST — before the skillMd downgrade, before it can reach pass 2's summary, and
+  // before final validation — so it never appears as a finding or influences one.
+  const c1 = extractCanary(pass1Items, evidence.nonce);
+  pass1Items = c1.items;
   if (skillMdUnreadable) pass1Items = forceSkillMdCoverageNotAdjudicable(pass1Items);
 
   if (selfReport === undefined) {
     if (!pass1Model) throw new Error("critique pass 1: transport returned no resolved model (required for provenance)");
     opts.onResolvedModel?.(pass1Model);
+    opts.onEvaluatorIntegrity?.({ pass1Canary: c1.present });
     return validateCitations(pass1Items, pkg);
   }
 
@@ -407,6 +438,8 @@ export async function runCritique(
     model,
   );
   let pass2Items = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)");
+  const c2 = extractCanary(pass2Items, evidence.nonce);
+  pass2Items = c2.items;
   if (skillMdUnreadable) pass2Items = forceSkillMdCoverageNotAdjudicable(pass2Items);
 
   if (!pass1Model || !pass2Model)
@@ -416,6 +449,7 @@ export async function runCritique(
       `critique evaluator: pass 1 and pass 2 resolved to DIFFERENT models (${pass1Model} vs ${pass2Model}) — refusing to report a heterogeneous-model critique under one provenance record`,
     );
   opts.onResolvedModel?.(pass1Model);
+  opts.onEvaluatorIntegrity?.({ pass1Canary: c1.present, pass2Canary: c2.present });
 
   return validateCitations([...pass1Items, ...pass2Items], pkg);
 }
