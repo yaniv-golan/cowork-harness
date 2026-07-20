@@ -23,13 +23,24 @@ describe("critique exit contract is stated consistently everywhere", () => {
     }
   });
 
-  it("SPEC.md and docs/critique.md enumerate the SAME instrument-failure causes", () => {
-    // "…never invoked or threw" is the full set; a surface naming a strict subset is the round-9 desync.
-    for (const [name, text] of [
-      ["SPEC.md", SPEC],
-      ["docs/critique.md", DOC],
-    ] as const) {
-      expect(/never invoked \*?or threw\*?/.test(text), `${name} omits the "evaluator threw" instrument-failure cause`).toBe(true);
+  // Every ENUMERATION of the instrument-failure causes must be complete. Presence-matching a good phrase
+  // anywhere in a file is not enough — that is how `usage()` sat desynced inside the very file this guard
+  // reads: the corrected phrase existed at the top of command.ts while line 88 still named a subset.
+  // So: anchor on the enumeration's own opening ("reflection protocol broke") and require "or threw"
+  // to follow it, at EVERY site, in every surface.
+  const SURFACES = [
+    ["command.ts", SRC],
+    ["SPEC.md", SPEC],
+    ["docs/critique.md", DOC],
+  ] as const;
+
+  it("EVERY instrument-failure enumeration names the evaluator-threw cause", () => {
+    for (const [name, text] of SURFACES) {
+      const sites = [...text.matchAll(/reflection protocol broke[\s\S]{0,100}/g)].map((m) => m[0]);
+      expect(sites.length, `${name} has no instrument-failure enumeration to check`).toBeGreaterThan(0);
+      for (const site of sites) {
+        expect(/or threw/.test(site), `${name}: an enumeration omits "or threw" -> ${site.replace(/\s+/g, " ").slice(0, 110)}`).toBe(true);
+      }
     }
   });
 

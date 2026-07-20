@@ -85,7 +85,7 @@ COST AND PREREQUISITES — read before running:
 
 EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself errored — that is a
   finding about the skill, not a broken instrument). 2 = usage error, or an instrument failure (turn
-  killed, reflection protocol broke, evaluator never invoked) — no critique was produced. Findings
+  killed, reflection protocol broke, evaluator never invoked or threw) — no critique was produced. Findings
   NEVER gate.
 
 KNOWN LIMITATIONS: container tier only; SKILL.md is capped at 16KB (a larger one degrades toward
@@ -661,7 +661,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       };
       if (opts.outputFormat === "json") writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
       else printTextReport(state);
-      // The INSTRUMENT failed (the turn was killed, or the reflection protocol broke) — no critique was
+      // The INSTRUMENT failed (the turn was killed, or the reflection protocol broke; elsewhere: the
+      // evaluator was never invoked or threw) — no critique was
       // produced. Findings never gate, but this is not a finding.
       process.exit(EXIT_INSTRUMENT_FAILURE);
       return;
