@@ -63,6 +63,83 @@ evidence going into it trustworthy.
 **One naming collision to know about:** `hostloop` in this repo is a **fidelity tier** — where the agent
 process runs. It has nothing to do with loop engineering's "loops".
 
+## Flags
+
+`critique` accepts the `skill` flags that make sense for a graded run, under the **same names** — what you
+know from `skill` transfers. Anything that cannot work is refused with a reason rather than silently
+ignored.
+
+**Probe** (one required)
+
+| Flag | |
+|---|---|
+| `--prompt "<text>"` | the task to run the skill against |
+| `--prompt-file <path>` | read the probe verbatim from a file — for probes containing quotes, `$`, or newlines |
+
+**Files and sources** — forwarded to the graded run. **Required for "analyze this document" skills.**
+
+| Flag | |
+|---|---|
+| `--upload <path>` | mount a file at `mnt/uploads/<name>` (repeatable) |
+| `--folder <dir>` | connect a folder at `mnt/<name>` (repeatable) |
+| `--plugin <dir>`, `--marketplace <dir>` + `--enable <name@mkt>` | extra skill sources |
+
+**Session shape** — both turns must agree on these, so they reach the reflection turn too.
+
+| Flag | |
+|---|---|
+| `--model <id>` | session model for the agent doing the work *and* reflecting |
+| `--allow-missing-capability` | don't fail either turn when the lean image omits a capability |
+
+**Graded-run tuning** — the task turn only; the reflection turn stays pinned deterministic.
+
+| Flag | |
+|---|---|
+| `--timeout <ms>` | wall-clock budget for the task turn (critique's own kill-switch stretches to fit) |
+| `--label <tag>` | generation tag in the run index, for pairing critiques across fixes |
+| `--answer "<q-regex>=<choice>"`, `--answer-policy <yaml>` | pre-answer the skill's gates — **this is what makes gated skills critiquable at all** |
+| `--on-unanswered fail\|first` | unscripted-gate policy (`prompt` is refused — there is no TTY inside) |
+| `--decider-llm` / `--intent` / `--decider-model` / `--decider-cmd` / `--decider-dir` | answer live gates in the graded run |
+
+**Critique's own**
+
+| Flag | |
+|---|---|
+| `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
+| `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
+| `--fidelity container` | container tier only |
+| `--keep` | accepted as a no-op; runs are always kept |
+| `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
+| `--run-dir <path>` | **global, unlike `--dotenv`** — must still PRECEDE the subcommand; a trailing `critique … --run-dir` is rejected |
+
+**Refused, and why**
+
+| Flag | Reason |
+|---|---|
+| `--session-id` / `--resume` | critique mints and manages its own session — the reflection turn *is* a resume of it |
+| `--repeat` + companions | fixed two-turn protocol; loop `critique` itself and pair by `fingerprint.skillHash` |
+| `--ablate-skill` | grading a skill you removed is incoherent |
+| `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report |
+
+**Repeating a flag.** `--upload`, `--folder`, `--plugin`, `--marketplace`, `--enable` and `--answer` accumulate,
+so repeating them is how you pass several. Every other value-taking flag is single-valued and repeating it is
+a **usage error** (exit `2`) rather than a silent last-wins — `--prompt a --prompt b` would otherwise discard
+a probe you typed. Boolean flags may be repeated harmlessly.
+
+### Skills that need an attached file
+
+```bash
+cowork-harness critique ./captable-skill \
+  --prompt "Analyze this cap table and flag anything unusual" \
+  --upload ./acme-captable.xlsx
+```
+
+Both internal turns receive the source flags — they have to, or the reflection turn's resume computes a
+different session identity and fails. The evidence package records **which files were attached** (names and
+sizes), so the evaluator can tell "the agent said there was no file, and correctly so" from a confabulation.
+
+It does **not** record their contents — see Known limitations.
+
 ## Cost and prerequisites
 
 - **Four model workloads per critique**: two container runs (task + reflection) and two evaluator passes.
@@ -109,6 +186,13 @@ Changing the evaluator model invalidates that verification.
 - **SKILL.md is capped at 16KB**; a larger one degrades toward "not adjudicable".
 - **English-only prompts.**
 - The evidence package is not persisted; the report is written to stdout.
+- **Attached-file content usually stays out of the evidence — but that is the common case, not a
+  guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
+  source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived
+  transcript is missing, and that stream carries full tool results — so if the agent read the attached
+  file, its content can enter the Transcript section (bounded, still armor-fenced) and a content-level
+  citation would resolve. Claims about a document's *contents* are therefore usually NOT ADJUDICABLE, not
+  always.
 - **Citation seams.** Armor inserts a marker line between each section heading and its body. A quote that
   spans that seam *without* including the marker does not resolve and is DROPPED. Quotes wholly inside one
   section are unaffected. **Measured:** on a benign package, 9 findings across 5 live pass-1 runs produced

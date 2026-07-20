@@ -1,7 +1,8 @@
 import type { EvidenceSection } from "./armor.js";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
+import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
 
 // Assembles the TURN-1-ONLY evidence document a tool-less, one-shot evaluator model is graded against.
 // This packager is a from-scratch, load-bearing build (this instrument's design): a tool-less
@@ -49,6 +50,48 @@ function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: st
   }
 }
 
+/** List of what was ATTACHED to this run — upload filenames + byte sizes, and connected-folder mount names.
+ *  NEVER file content: the evaluator needs to be able to tell "the agent said there was no file, and
+ *  correctly so" apart from "the agent confabulated that", but packaging the bytes themselves would blow
+ *  the package's byte budget and widen the prompt-injection surface the armor exists to contain (see this
+ *  module's header and `armor.ts`'s header) — names and sizes are enough to answer "was anything attached."
+ *
+ *  Source of truth, with fallbacks, in order:
+ *   1. `loadVmPathContext(runDir)` (`run/vm-path-ctx-file.ts`) — the recorded `uploadsHostDir` and
+ *      `folders` map for THIS run. Already never throws (absent/corrupt `mounts.json` -> `null`).
+ *   2. The fixed container layout `<runDir>/work/session/mnt/uploads` (mirrors the derivation in
+ *      `run/display-translate.ts`'s `vmPathContextFromPlan`) — covers runs where `mounts.json` wasn't
+ *      written or couldn't be parsed.
+ *   3. `(none)` — via `sec()`'s empty-body fallback below. Every filesystem read here is try/catch-guarded
+ *      so a missing/unreadable uploads dir degrades gracefully rather than throwing and sinking packaging. */
+function listAttachedInputs(runDir: string): string {
+  const loaded = loadVmPathContext(runDir);
+  const uploadsDir = loaded?.ctx.uploadsHostDir ?? join(runDir, "work", "session", "mnt", "uploads");
+  const folderNames = loaded ? Array.from(loaded.ctx.folders.keys()).sort() : [];
+
+  const lines: string[] = [];
+  try {
+    const uploadNames = readdirSync(uploadsDir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name)
+      .sort();
+    for (const name of uploadNames) {
+      let sizeNote: string;
+      try {
+        sizeNote = `${statSync(join(uploadsDir, name)).size} bytes`;
+      } catch {
+        sizeNote = "size unknown";
+      }
+      lines.push(`${name} (${sizeNote})`);
+    }
+  } catch {
+    /* uploads dir absent/unreadable — no uploads to list, not an error */
+  }
+  for (const name of folderNames) lines.push(`${name} (connected folder)`);
+
+  return lines.join("\n");
+}
+
 /** Byte-bound a text section, appending a loud (never silent) truncation marker so the evaluator knows the
  *  section was cut rather than reading a suspiciously short document as "that's everything." Cuts on a
  *  UTF-8-safe boundary (Buffer, not string length, so a truncated multi-byte char can't corrupt the tail). */
@@ -94,6 +137,7 @@ const REFERENCES_READ_CAP = 1 * 1024;
 const SKILL_MD_CAP = 16 * 1024;
 const REFERENCE_LIST_CAP = 1 * 1024;
 const TRANSCRIPT_CAP = 16 * 1024;
+const ATTACHED_INPUTS_CAP = 1 * 1024;
 
 /** The overall package hard cap — the whole assembled document is trimmed to this even if every
  *  per-section budget above was individually respected (their sum is deliberately a bit under this, but a
@@ -251,6 +295,10 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     sec(
       "references/ available (filenames only, NOT content — presence, not coverage)",
       bound(referenceFiles.length ? referenceFiles.join("\n") : "(none)", REFERENCE_LIST_CAP),
+    ),
+    sec(
+      "Attached inputs (mnt/uploads filenames + sizes, and connected-folder mount names — NOT content)",
+      bound(listAttachedInputs(runDir), ATTACHED_INPUTS_CAP),
     ),
     sec(
       "Transcript (turn 1 only — the reflection turn's own reads/output are excluded by construction)" +

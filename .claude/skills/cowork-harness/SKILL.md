@@ -1,10 +1,10 @@
 ---
 name: cowork-harness
-description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
+description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.5.0
-  tracks-harness: cowork-harness 1.5.0 (baseline desktop-1.22209.3)
+  version: 1.6.0
+  tracks-harness: cowork-harness 1.6.0 (baseline desktop-1.22209.3)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.5.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.6.0` (baseline
 > `desktop-1.22209.3`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,9 +39,21 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.5.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.5.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.5.0"`. **Pin `@>=1.5.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.6.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.6.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.6.0"`. **Pin `@>=1.6.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 1.5.0 floor gates, by release:
+  What the ≥ 1.6.0 floor gates, by release:
+
+  - **1.6.0 (`critique`'s skill-flag parity):** `critique` accepts most `skill` flags under the same names,
+    which is what makes a document-analysis skill (cap table, deck, financial model, transcript)
+    critiquable at all: `--upload`/`--folder`/`--plugin`/`--marketplace`/`--enable`/`--model`/
+    `--allow-missing-capability` reach BOTH spawned turns; `--label`/`--timeout`/`--answer`/
+    `--answer-policy`/`--on-unanswered`/the decider flags reach the graded turn only; `--prompt-file` is
+    new. Anything that can't work is REFUSED with a reason rather than silently ignored.
+    **Repeating a flag:** `--upload`/`--folder`/`--plugin`/`--marketplace`/`--enable`/`--answer`
+    accumulate; every other value-taking flag is single-valued and repeating it is a usage error (exit `2`)
+    rather than a silent last-wins — do not assume the CLI-conventional "last one wins". Booleans repeat
+    harmlessly. On `1.5.0` these flags do not exist: `critique --upload x.xlsx` fails as "unknown flag", so
+    if a user hits that, they are below the floor.
 
   - **1.5.0:** `critique <skill-folder> --prompt "<probe>"` (EXPERIMENTAL) — runs a skill, asks the agent
     what confused it, then grades that self-report against a frozen record of the run: a blinded evaluator
@@ -69,7 +81,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred), or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
-- **`--dotenv` is a GLOBAL flag — put it BEFORE the subcommand.** `cowork-harness --dotenv .env record …`, never `cowork-harness record … --dotenv .env`. Every *other* flag is subcommand-level, so muscle memory fights this one; the harness rejects the misplaced form with an exact-fix error, but placing it first avoids the round-trip.
+- **`--dotenv` is a GLOBAL flag — put it BEFORE the subcommand.** `cowork-harness --dotenv .env record …`, never `cowork-harness record … --dotenv .env`. Every *other* flag is subcommand-level, so muscle memory fights this one; the harness rejects the misplaced form with an exact-fix error, but placing it first avoids the round-trip. **One exception: `critique` also accepts `--dotenv` per-command** (`critique <folder> --prompt "…" --dotenv <path>`) — UNRELEASED, see the floor list; `--run-dir` stays global-only everywhere.
 
 ## Orient — the three loops
 
