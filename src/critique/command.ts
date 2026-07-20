@@ -461,7 +461,6 @@ export function buildTextReport(state: ReportState): string {
     requestedModel,
     evaluatorError,
     infraFailure,
-    evaluatorIntegrity,
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
@@ -714,7 +713,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     if (!reflectionValidation.ok) {
       infraFailure = reflectionValidation.reason;
       // Per this tool's contract (a discovery instrument, never a gate) the defect is REPORTED, not thrown —
-      // the process still exits 0 at the bottom of main(). The evaluator is deliberately never invoked.
+      // main() then exits 2 (no critique was produced). The evaluator is deliberately never invoked.
     } else {
       // F38: `selfReport` is `undefined` (never a placeholder string) when the reflection turn produced no
       // finalMessage — `runCritique` skips pass 2 entirely in that case; the typed `selfReportStatus` below

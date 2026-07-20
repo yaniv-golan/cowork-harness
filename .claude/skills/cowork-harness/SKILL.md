@@ -43,6 +43,12 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
   What the ≥ 1.4.0 floor gates, by release:
 
+  - **UNRELEASED (not in any published version yet — `critique`, `skill --repeat`, `RunResult.outcome`,
+    `diff`'s gateable-signal exit code):** these ship from source only. `npm i -g "cowork-harness@>=1.4.0"`
+    installs a CLI WITHOUT them, and they fail as "unknown command"/"unknown flag". Check
+    `cowork-harness critique --help` before recommending the loop workflow; if it errors, the user is on a
+    published build and needs to run from a source checkout.
+
   - **core set (pre-0.21.0 vintage, or mixed):** `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator (passes when the resolved value deep-equals one of the listed members — value ∈ your list, not the reverse), `verify-cassettes` incl. the `--allow-domain`/`--allow-email`/`--allow-patterns-file` allows (`--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.
   - **0.21.0:** `verify-cassettes --allow-path` (`path` — local absolute filesystem paths — is the scanner's 4th class), and `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field.
   - **0.22.0:** `computer_links_resolve`.
@@ -462,7 +468,7 @@ Docker, no re-record.
 | Situation | Symptom | Reach for (in order) |
 |---|---|---|
 | **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools, gates, sub-agent tree)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
-| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
+| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
 agent stderr) — read those before re-running; a re-record rarely tells you more than the captured stderr
