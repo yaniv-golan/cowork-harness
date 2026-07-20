@@ -165,6 +165,83 @@ describe("F29 residual — truncation BELOW the captured boundary is detected, n
   });
 });
 
+describe("a captured non-empty boundary whose file later vanishes is an integrity failure, not a silent empty slice", () => {
+  it("readTurn1Slice throws when a positive captured boundary's file is deleted before packaging", () => {
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n');
+    const boundary = snapshotTurnBoundary(dir);
+    expect(boundary.events.size).toBeGreaterThan(0);
+    rmSync(path); // deleted between the boundary snapshot and packaging
+    expect(() => readTurn1Slice(dir, "events.jsonl", boundary)).toThrow(/missing/);
+  });
+
+  it("readTurn1Slice throws when a positive captured boundary's file becomes unreadable before packaging", () => {
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n');
+    const boundary = snapshotTurnBoundary(dir);
+    armed.readFileThrow.add(path); // still exists, but the read itself fails (e.g. permission error)
+    expect(() => readTurn1Slice(dir, "events.jsonl", boundary)).toThrow();
+  });
+
+  it("verifyBoundaryIntegrity reports a distinct value (not bare 'unavailable', not 'mismatch') for a positive boundary whose file vanished", () => {
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n');
+    const boundary = snapshotTurnBoundary(dir);
+    rmSync(path);
+    const integrity = verifyBoundaryIntegrity(dir, "events.jsonl", boundary);
+    expect(integrity).not.toBe("unavailable");
+    expect(integrity).not.toBe("mismatch");
+    expect(integrity).not.toBe("ok");
+  });
+
+  it("packageEvidence surfaces turn1SliceDegraded (not a falsely-clean empty transcript) when the events.jsonl boundary was positive but the file is now gone", () => {
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n');
+    const boundary = snapshotTurnBoundary(dir);
+    rmSync(path); // deleted before packaging — no run.turn-1.jsonl archive, so packageEvidence falls back
+    // to the events.jsonl slice, which must now be flagged degraded rather than silently reporting "(none)".
+    const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
+    const result = packageEvidence(dir, boundary, skillDir);
+    expect(result.turn1SliceDegraded).toBe(true);
+    expect(result.pkg).toMatch(/DEGRADED/);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it("a stream that was genuinely 0 bytes AT CAPTURE stays non-degraded even if the file is later removed (regression guard: do not blanket-degrade every non-'ok' integrity result)", () => {
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, ""); // 0 bytes at the moment of capture
+    const boundary = snapshotTurnBoundary(dir);
+    expect(boundary.events.size).toBe(0);
+    expect(readTurn1Slice(dir, "events.jsonl", boundary)).toBe(""); // slice is empty regardless of what happens next
+    rmSync(path); // file disappears entirely before packaging — must NOT be treated as an integrity failure
+    expect(readTurn1Slice(dir, "events.jsonl", boundary)).toBe(""); // still just returns the (definitionally empty) slice
+    expect(verifyBoundaryIntegrity(dir, "events.jsonl", boundary)).toBe("unavailable"); // benign: nothing was ever captured to compare against
+
+    const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
+    const result = packageEvidence(dir, boundary, skillDir);
+    expect(result.turn1SliceDegraded).toBe(false);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it("happy path: a positive captured boundary whose file is intact reads back the exact slice, non-degraded", () => {
+    const turn1 = '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n';
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, turn1);
+    const boundary = snapshotTurnBoundary(dir);
+    writeFileSync(path, turn1 + '{"t":"read","path":"references/answers.md"}\n'); // reflection turn appends
+    expect(readTurn1Slice(dir, "events.jsonl", boundary)).toBe(turn1);
+    expect(verifyBoundaryIntegrity(dir, "events.jsonl", boundary)).toBe("ok");
+
+    const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
+    const result = packageEvidence(dir, boundary, skillDir);
+    expect(result.turn1SliceDegraded).toBe(false);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+});
+
 describe("F30 — a corrupt canonical turn-1 result surfaces a typed degradation flag (never a silent turn-2 substitution)", () => {
   it("readTurn1ResultWithStatus reports 'corrupted' for a malformed result.turn-1.json and does NOT fall back to result.json", () => {
     writeFileSync(join(dir, "result.turn-1.json"), "{ this is not valid json");

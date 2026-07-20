@@ -43,9 +43,15 @@ function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: st
   try {
     const text = readTurn1Slice(runDir, "events.jsonl", boundary);
     const integrity = verifyBoundaryIntegrity(runDir, "events.jsonl", boundary);
-    return { text, degraded: integrity === "mismatch" };
+    // "unavailable" is benign (no boundary, or genuinely empty at capture) and must NOT degrade; "mismatch"
+    // and "unreadable" both mean a positive captured boundary can no longer be trusted (tampered vs.
+    // vanished/unreadable, respectively) and must both degrade. In practice `readTurn1Slice` above already
+    // throws for the "unreadable" case (landing in the catch below), but this keeps the mapping correct on
+    // its own terms rather than relying on that ordering.
+    return { text, degraded: integrity === "mismatch" || integrity === "unreadable" };
   } catch {
-    // F28: the boundary for events.jsonl was never established — an error, not a valid empty slice.
+    // F28/F28-residual: the boundary for events.jsonl was never established, OR a positive captured boundary's
+    // file is now missing/unreadable/short — none of these is a valid empty slice.
     return { text: "", degraded: true };
   }
 }

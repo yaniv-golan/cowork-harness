@@ -661,12 +661,26 @@ async function main() {
   }
 
   const packageRootEnv = fileURLToPath(new URL("../.env", import.meta.url)); // dist/cli.js → <install>/.env
-  const sources = [...(explicitEnvFile ? [explicitEnvFile] : []), resolve(process.cwd(), ".env"), packageRootEnv];
   const loadedEnv: string[] = [];
   const seenSources = new Set<string>();
-  for (const f of sources) {
+  // The explicit file is loaded STRICTLY and first: `existsSync` above only proves the path exists,
+  // not that it's a readable regular file (a directory passes existsSync and then throws EISDIR from
+  // readFileSync). Non-strict loadDotenv swallows any read failure and returns [], which would let
+  // this silently fall through to the lower-precedence sources below — running against the wrong
+  // credentials with the `[env] loaded …` line still printing from THOSE, a false confirmation. Fail
+  // loud instead, naming the path and the underlying cause, before any fallback source is touched.
+  if (explicitEnvFile) {
+    seenSources.add(resolve(explicitEnvFile));
+    try {
+      loadedEnv.push(...loadDotenv(explicitEnvFile, { strict: true }));
+    } catch (err) {
+      fail("cowork-harness", "usage", (err as Error).message, undefined, isJsonOutput(argv));
+    }
+  }
+  const autoSources = [resolve(process.cwd(), ".env"), packageRootEnv];
+  for (const f of autoSources) {
     const key = resolve(f);
-    if (seenSources.has(key)) continue; // don't double-load when cwd === install dir
+    if (seenSources.has(key)) continue; // don't double-load when cwd (or --dotenv) === install dir
     seenSources.add(key);
     loadedEnv.push(...loadDotenv(f));
   }
@@ -2880,10 +2894,11 @@ function cmdStats(args: string[]) {
 
   const root = runsRoot();
   if (reindex) {
-    const { written, skipped, skippedReplay } = reindexFromRunsTree(root);
+    const { written, skipped, skippedReplay, skippedUnsafe } = reindexFromRunsTree(root);
     const notes = [
       skipped ? `${skipped} skipped — missing/corrupt result.json` : "",
       skippedReplay ? `${skippedReplay} skipped — replay re-check, not evidence` : "",
+      skippedUnsafe ? `${skippedUnsafe} skipped — symlinked run dir/result.json rejected` : "",
     ].filter(Boolean);
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
@@ -4231,7 +4246,13 @@ function renderDiffText(r: DiffViewResult, view: string): string[] {
     }
   }
   if (view === "artifacts" || view === "all") {
-    if (!r.artifacts) lines.push("artifacts: no manifest on one or both sides — not compared");
+    if (r.artifactsAvailability === "both-unavailable")
+      lines.push("artifacts: no manifest on either side — not compared (does not affect the identical verdict)");
+    else if (r.artifactsAvailability === "a-unavailable" || r.artifactsAvailability === "b-unavailable")
+      lines.push(
+        `artifacts: no manifest on side ${r.artifactsAvailability === "a-unavailable" ? "a" : "b"} — not compared (this alone makes the comparison non-identical)`,
+      );
+    else if (!r.artifacts) lines.push("artifacts: no manifest on one or both sides — not compared");
     else if (r.artifacts.added.length === 0 && r.artifacts.removed.length === 0 && r.artifacts.changed.length === 0)
       lines.push("artifacts: identical");
     else {
@@ -4325,6 +4346,7 @@ function cmdDiff(args: string[]) {
         b: bName,
         identical: result.identical,
         transcriptDiffers: result.transcriptDiffers,
+        artifactsAvailability: result.artifactsAvailability,
         views: { tools: result.tools, transcript: result.transcript, artifacts: result.artifacts, meta: result.meta },
       }),
     );
@@ -4344,6 +4366,17 @@ function cmdDiff(args: string[]) {
   } else {
     for (const line of renderDiffText(result, view)) out(line);
     if (result.transcriptDiffers && view === "all") out("(transcript also differs — advisory, not part of the exit code)");
+    // A one-sided artifactsAvailability (a-unavailable/b-unavailable) forces non-identical on its own — see
+    // compareDiffSides. Views other than "artifacts"/"all" never render that field, so a `--view tools` or
+    // `--view meta` run can print an all-"identical" view yet still exit 1 with no visible explanation.
+    if (
+      view !== "all" &&
+      view !== "artifacts" &&
+      (result.artifactsAvailability === "a-unavailable" || result.artifactsAvailability === "b-unavailable")
+    )
+      out(
+        `(also: no artifact manifest on side ${result.artifactsAvailability === "a-unavailable" ? "a" : "b"} — this alone makes the comparison non-identical; see --view artifacts)`,
+      );
   }
   process.exit(result.identical ? 0 : 1);
 }

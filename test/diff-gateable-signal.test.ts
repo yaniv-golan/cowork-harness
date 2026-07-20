@@ -35,6 +35,42 @@ describe("diff gateable signal", () => {
   });
 });
 
+describe("diff artifacts availability — missing evidence must not read as verified-equal", () => {
+  it("a-side missing a manifest is NOT gateable-identical, even though tools/meta agree", () => {
+    const r = compareDiffSides(side({ artifacts: undefined }), side(), true);
+    expect(r.identical).toBe(false);
+    expect(r.artifactsAvailability).toBe("a-unavailable");
+    expect(r.artifacts).toBeUndefined();
+  });
+
+  it("b-side missing a manifest is NOT gateable-identical, even though tools/meta agree", () => {
+    const r = compareDiffSides(side(), side({ artifacts: undefined }), true);
+    expect(r.identical).toBe(false);
+    expect(r.artifactsAvailability).toBe("b-unavailable");
+    expect(r.artifacts).toBeUndefined();
+  });
+
+  it("both sides missing a manifest does not veto identity — nothing to contradict on either side, and this must not turn every legacy manifest-less cassette-vs-cassette diff permanently red", () => {
+    const r = compareDiffSides(side({ artifacts: undefined }), side({ artifacts: undefined }), true);
+    expect(r.identical).toBe(true);
+    expect(r.artifactsAvailability).toBe("both-unavailable");
+    expect(r.artifacts).toBeUndefined();
+  });
+
+  it("both sides available with equal artifacts stays gateable-identical", () => {
+    const r = compareDiffSides(side(), side(), true);
+    expect(r.identical).toBe(true);
+    expect(r.artifactsAvailability).toBe("both-available");
+  });
+
+  it("both sides available but artifact content differs is NOT gateable-identical", () => {
+    const r = compareDiffSides(side(), side({ artifacts: [["outputs/x.md", "a-different-hash"]] }), true);
+    expect(r.identical).toBe(false);
+    expect(r.artifactsAvailability).toBe("both-available");
+    expect(r.artifacts?.changed).toEqual(["outputs/x.md"]);
+  });
+});
+
 describe("diff meta carries generation identity", () => {
   it("diffs skillHash so a diff can name which generations it compared", () => {
     const a: Partial<DiffMetaSummary> = { result: "success", baseline: "1.0.0", skillHash: "aaaaaaaaaaaa" };

@@ -1,4 +1,4 @@
-import { warn } from "../io.js";
+import { warn, writeTextAtomic } from "../io.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
-import type { RunResult } from "../types.js";
+import type { RunResult, InfraErrorSource } from "../types.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
@@ -523,6 +523,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
   let hostloopHooks: HookBundle | undefined; // hostloop's PreToolUse path-gate bundle
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
+  let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
+  let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
   let l0PluginDivergence = false; // set when protocol mode runs with plugins (failing fidelity signal)
   let promptFidelityWarnings: string[] | undefined; // structured prompt warnings collected by renderPrompts
   // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
@@ -601,6 +603,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             } catch {
               /* already gone */
             }
+            // mark BEFORE the forced removal below — a Ctrl-C reap kills the hostloop sidecar exactly
+            // like the normal-path teardown does, and that forced exit must not be misreported as a
+            // mid-run infra failure (see watchHostLoopSidecar's doc comment).
+            hostloopMarkTearingDown?.();
             if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
           },
         });
@@ -660,6 +666,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         hostEgress = hl.hostEgress;
         hostloopHooks = hl.hooks;
         hostloopPathGateFired = hl.pathGateFired;
+        hostloopInfraErrors = hl.infraErrors;
+        hostloopMarkTearingDown = hl.markTearingDown;
         logHostWriteNotice(
           plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
           warn,
@@ -773,6 +781,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       } catch {
         /* already gone */
       }
+      // mark BEFORE the forced removal below — this run's own `docker rm -f` makes the hostloop sidecar
+      // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
+      // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
+      hostloopMarkTearingDown?.();
       if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
       if (sidecar) {
         const eg = sidecar.collect();
@@ -786,9 +798,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
 
     // A post-listen egress-sidecar crash (container topology) surfaces as `fatalError` after teardown —
-    // fold it into infraErrors so computeVerdict hard-fails the run (evidence contaminated). The live
-    // in-VM/hostloop sidecar surfaces its own crash as an `infra_error` event already collected above.
+    // fold it into infraErrors so computeVerdict hard-fails the run (evidence contaminated).
     if (sidecar?.fatalError) record.infraErrors.push({ source: "egress-sidecar", message: sidecar.fatalError });
+    // The hostloop VM sidecar's own crash is folded the SAME way, via `hostloopInfraErrors`
+    // (spawnHostLoop's live sink — populated by watchHostLoopSidecar as errors happen). This is NOT
+    // redundant with `case "infra_error"` in run.ts's event loop: that case exists to re-derive an
+    // `infra_error` row on CASSETTE REPLAY (where events.jsonl IS the transcript source), but a LIVE
+    // drive only ever sees events parsed from the agent's own stdout — it never re-reads the
+    // out-of-band row spawnHostLoop appends to events.jsonl. Without this fold, a live sidecar crash
+    // would reach the raw log but never `result.json`'s infraErrors, leaving the verdict green.
+    if (hostloopInfraErrors?.length) record.infraErrors.push(...hostloopInfraErrors);
 
     // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
     // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
@@ -937,7 +956,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       runCrashSafety.finalize(record, "error", partialResult.durationMs!);
       // run.jsonl before result.json — see the ordering rationale on the success path below.
       writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
-      writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
+      // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
+      writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
       appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
       writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
       // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
@@ -1127,6 +1147,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     let missingCapabilityUse: string[] | undefined;
     let capabilityProbe: RunResult["capabilityProbe"] = "skipped"; // default — probe didn't run this tier/lane
     let omittedFamilies: string[] | null = null; // the probe's omitted-set (null = not run / unverified)
+    // Hoisted above the probe block (not declared at its original use site below) so the events-scan health
+    // check can also populate it for UNDECLARED omitted-capability use — `scenario.requires_capabilities`
+    // covers only the declared half; an unreadable/degraded events.jsonl threatens the undeclared half too.
+    let requiresCapabilityUnmet: RunResult["requiresCapabilityUnmet"];
     if (
       (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
       process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
@@ -1157,17 +1181,38 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
           );
         // The probe + hard-fail safety net runs regardless of --compact (only the informational notice above is gated).
-        const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
-        if (used.length) {
-          missingCapabilityUse = used;
+        const scanned = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
+        if (scanned.used.length) {
+          missingCapabilityUse = scanned.used;
           warn(
-            `::warning:: [capability] (FAILED THIS RUN) the skill USED omitted capabilit(ies) [${used.join(", ")}] — likely a FALSE NEGATIVE, ` +
+            `::warning:: [capability] (FAILED THIS RUN) the skill USED omitted capabilit(ies) [${scanned.used.join(", ")}] — likely a FALSE NEGATIVE, ` +
               `not a skill bug. Rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.\n`,
           );
-        } else {
+        }
+        if (scanned.health !== "complete") {
+          // The scan itself is health-blind evidence: an unreadable/degraded events.jsonl means an empty
+          // `used` is NOT "scanned clean" — it's "couldn't verify". Downgrade the probe outcome (guard
+          // roster stops reading it as a false "ok") and hard-fail via the SAME evidence-unavailable path
+          // `requires_capabilities` already uses, for whichever omitted families this scan couldn't confirm
+          // clean — closing the false-green even when the skill declared no requires_capabilities at all.
+          capabilityProbe = "unverified";
+          const unresolved = omitted.filter((f) => !scanned.used.includes(f));
+          if (unresolved.length)
+            requiresCapabilityUnmet = {
+              caps: [...new Set([...(requiresCapabilityUnmet?.caps ?? []), ...unresolved])],
+              reason: "unverifiable",
+            };
+          const reasonDetail =
+            scanned.health === "missing" ? "events.jsonl unreadable" : `${scanned.malformedLines} malformed line(s) in events.jsonl`;
+          warn(
+            `::warning:: [capability] (FAILED THIS RUN) capability-use scan could not complete (${reasonDetail}) — cannot verify ` +
+              `whether omitted capabilit(ies) [${unresolved.length ? unresolved.join(", ") : omitted.join(", ")}] were used; ` +
+              `treating as evidence-unavailable rather than a silent pass. Assert allow_missing_capability: true if intended.\n`,
+          );
+        } else if (!scanned.used.length) {
           // close the loop — the bare omits-notice + a green run reads as a false-green RISK unless we say
-          // the guard ran and found nothing. Emit ONLY here (probe ran, families omitted), never in the
-          // omitted===null unverified branch (which has no basis to claim "not used").
+          // the guard ran and found nothing. Emit ONLY here (probe ran clean, families omitted), never in the
+          // omitted===null unverified branch (which has no basis to claim "not used") nor when health degraded.
           if (!opts.compact)
             warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
         }
@@ -1178,7 +1223,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // (clause a) or can't verify them — protocol/replay/skip (clause b) — the run hard-fails (computeVerdict),
     // closing the false-green for extraction-heavy skills. Computed at run time so verify-run/replay honor the
     // recorded outcome (a clean full-parity run records nothing → no false-fail on later verify-run).
-    let requiresCapabilityUnmet: RunResult["requiresCapabilityUnmet"];
+    // (`requiresCapabilityUnmet` itself is declared above, before the probe block — the events-scan health
+    // check may already have populated it for the UNDECLARED-capability half.)
     const requiredCaps = scenario.requires_capabilities ?? [];
     if (requiredCaps.length) {
       const known = new Set(Object.keys(CAPABILITY_FAMILIES));
@@ -1190,19 +1236,29 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       if (unknown.length) {
         // An unknown family (typo) can NEVER appear in omittedFamilies (which lists only real families), so
         // the definitive-lane `missing` filter below would silently drop it → false-green. Fold it into the
-        // unmet set so it hard-fails as an authoring error regardless of lane.
-        requiresCapabilityUnmet = { caps: unknown, reason: "unknown" };
+        // unmet set so it hard-fails as an authoring error regardless of lane. MERGE (not overwrite) with
+        // any caps the events-scan health check already recorded, so that signal isn't silently dropped.
+        requiresCapabilityUnmet = {
+          caps: [...new Set([...(requiresCapabilityUnmet?.caps ?? []), ...unknown])],
+          reason: "unknown",
+        };
       }
       if (capabilityProbe === "definitive") {
         const missing = requiredCaps.filter((c) => known.has(c) && omittedFamilies?.includes(c));
         if (missing.length)
           requiresCapabilityUnmet = {
-            caps: [...(requiresCapabilityUnmet?.caps ?? []), ...missing],
+            caps: [...new Set([...(requiresCapabilityUnmet?.caps ?? []), ...missing])],
             reason: unknown.length ? "unknown" : "omitted",
           };
       } else if (!unknown.length) {
-        // skipped (protocol/replay/skip-env) or unverified — cannot confirm the declared caps are present.
-        requiresCapabilityUnmet = { caps: requiredCaps, reason: "unverifiable" };
+        // skipped/unverified (protocol/replay/skip-env, OR the events-scan health check above downgraded a
+        // definitive probe to unverified) — cannot confirm the declared caps are present. MERGE with any
+        // caps already recorded rather than overwrite, so an undeclared-capability scan-health finding
+        // survives alongside the declared one.
+        requiresCapabilityUnmet = {
+          caps: [...new Set([...(requiresCapabilityUnmet?.caps ?? []), ...requiredCaps])],
+          reason: "unverifiable",
+        };
         warn(
           `::warning:: [capability] (FAILED THIS RUN) skill declares requires_capabilities [${requiredCaps.join(", ")}] but this tier ` +
             `cannot verify them (${capabilityProbe}) — run on a live built-image tier, or assert allow_missing_capability: true.\n`,
@@ -1380,7 +1436,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // present with run.jsonl absent (which would recompute the SAME turn N and overwrite the already-archived
     // result.turn-<N-1>.json). Order matters — do not swap.
     writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
-    writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
+    // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
+    writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
     appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
     writeTrace(outDir, record, egress, secrets, result.durationMs);
     return result;

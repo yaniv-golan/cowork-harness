@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { VERDICT_MODIFIER_KEYS } from "../src/types.js";
@@ -144,6 +144,55 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     const r = run(["--dotenv", "/no/such/file.env", "list"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--dotenv file not found/);
+  });
+
+  it("--dotenv pointing at a DIRECTORY fails loud naming the path and cause, instead of silently falling through to cwd/.env", () => {
+    // A directory passes the earlier `existsSync` guard (that only rejects a genuinely missing path),
+    // so this exercises the deeper strict-read failure: readFileSync throws EISDIR, which must NOT be
+    // swallowed and fall through to a lower-precedence .env.
+    const cwd = mkdtempSync(join(tmpdir(), "cc-cli-"));
+    writeIn(cwd, ".env", "CLAUDE_CODE_OAUTH_TOKEN=from-cwd-fallback\n");
+    const dirAsDotenv = mkdtempSync(join(tmpdir(), "cc-dotenv-dir-"));
+    const r = spawnSync("node", [CLI, "--dotenv", dirAsDotenv, "list"], { encoding: "utf8", cwd });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/--dotenv file could not be read/);
+    expect(r.stderr).toContain(dirAsDotenv);
+    // Must fail BEFORE loading (or confirming) any fallback source — no false "[env] loaded" line.
+    expect(r.stdout + r.stderr).not.toMatch(/\[env\] loaded/);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "--dotenv pointing at an unreadable file (chmod 000) fails loud, instead of silently falling through",
+    () => {
+      const cwd = mkdtempSync(join(tmpdir(), "cc-cli-"));
+      writeIn(cwd, ".env", "CLAUDE_CODE_OAUTH_TOKEN=from-cwd-fallback\n");
+      const unreadable = join(cwd, "locked.env");
+      writeFileSync(unreadable, "CLAUDE_CODE_OAUTH_TOKEN=from-locked-file\n");
+      chmodSync(unreadable, 0o000);
+      try {
+        const r = spawnSync("node", [CLI, "--dotenv", unreadable, "list"], { encoding: "utf8", cwd });
+        expect(r.status).toBe(2);
+        expect(r.stderr).toMatch(/--dotenv file could not be read/);
+        expect(r.stderr).toContain(unreadable);
+        expect(r.stdout + r.stderr).not.toMatch(/\[env\] loaded/);
+      } finally {
+        chmodSync(unreadable, 0o644);
+      }
+    },
+  );
+
+  it("--dotenv happy path: a valid explicit file loads cleanly, with its var named in the confirmation and no dotenv-failure text", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-cli-"));
+    const explicit = join(cwd, "explicit.env");
+    writeFileSync(explicit, "CC_EXPLICIT_TEST_VAR=from-explicit-file\n");
+    const r = spawnSync("node", [CLI, "--dotenv", explicit, "list"], { encoding: "utf8", cwd });
+    const combined = r.stdout + r.stderr;
+    // Not asserting an exact "loaded N var(s)" count: the package-root .env fallback is this actual
+    // repo's real .env (e.g. a live-lane CLAUDE_CODE_OAUTH_TOKEN), which legitimately also loads and
+    // would make an exact count fragile/environment-dependent.
+    expect(combined).toMatch(/\[env\] loaded [^\n]*CC_EXPLICIT_TEST_VAR/);
+    expect(combined).not.toMatch(/--dotenv file could not be read/);
+    expect(combined).not.toMatch(/--dotenv file not found/);
   });
 
   it("--on-unanswered llm (the LLM decider's CLI flag is --decider-llm) → usage error redirecting to --decider-llm, exit 2", () => {

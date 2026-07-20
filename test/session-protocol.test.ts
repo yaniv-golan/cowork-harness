@@ -59,6 +59,19 @@ afterEach(() => {
   process.stderr.write = origWrite;
 });
 
+describe("parseMessage — infra_error origin survives the replay boundary", () => {
+  it("carries `source` through so replay can reach the same verdict as the live run", () => {
+    const ev = parseMessage({ type: "infra_error", message: "exec failed", source: "hostloop-exec" });
+    expect(ev[0]).toMatchObject({ type: "infra_error", message: "exec failed", source: "hostloop-exec" });
+  });
+
+  it("omits `source` for a row recorded before the origin tag existed", () => {
+    const ev = parseMessage({ type: "infra_error", message: "boom" });
+    expect(ev[0]).toMatchObject({ type: "infra_error", message: "boom" });
+    expect((ev[0] as { source?: string }).source).toBeUndefined();
+  });
+});
+
 describe("parseMessage — init event skills capture (§6.2, O1 fix)", () => {
   it("a system/init message carrying a skills array maps onto the init AgentEvent's skills field verbatim (bare + <plugin>:<skill> ids)", () => {
     const ev = parseMessage({ type: "system", subtype: "init", tools: ["Skill"], mcp_servers: [], skills: ["a", "b:c"], cwd: "/tmp" });

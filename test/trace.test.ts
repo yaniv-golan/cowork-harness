@@ -578,6 +578,72 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
     expect((parsed.assert ?? []).some((a: any) => a.result)).toBe(false);
   });
 
+  it("warns ARTIFACTS UNAVAILABLE and skips file_exists when a completed run's artifacts is undefined", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-artifacts-unavail-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        prompt: "make a report",
+        fidelity: "container",
+        result: "success",
+        // no `artifacts` key at all — this codebase's UNAVAILABLE sentinel (replay, or a run whose
+        // workspace root was missing at collection), never a false "wrote nothing".
+        subagents: [],
+      }),
+    );
+    const out = buildScaffold(eventsFilePath);
+    expect(out).toMatch(/ARTIFACTS UNAVAILABLE/);
+    expect(out).toMatch(/NOT a run that produced nothing/);
+    const parsed = parseYaml(out);
+    // No file_exists asserts were fabricated from unobserved evidence...
+    expect((parsed.assert ?? []).some((a: any) => a.file_exists)).toBe(false);
+    // ...but the result verdict (which IS known) still gets scaffolded.
+    expect(parsed.assert.some((a: any) => a.result === "success")).toBe(true);
+  });
+
+  it("does NOT warn when artifacts is a verified-empty array (the run genuinely wrote nothing)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-artifacts-empty-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        prompt: "make a report",
+        fidelity: "container",
+        result: "success",
+        artifacts: [], // verified empty — capture ran and observed zero deliverables
+        subagents: [],
+      }),
+    );
+    const out = buildScaffold(eventsFilePath);
+    expect(out).not.toMatch(/ARTIFACTS UNAVAILABLE/);
+    const parsed = parseYaml(out);
+    expect((parsed.assert ?? []).some((a: any) => a.file_exists)).toBe(false);
+    expect(parsed.assert.some((a: any) => a.result === "success")).toBe(true);
+  });
+
+  it("does NOT warn when artifacts is populated (the ordinary, already-covered case)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-artifacts-populated-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        prompt: "make a report",
+        fidelity: "container",
+        result: "success",
+        artifacts: [{ path: "outputs/report.pdf", bytes: 10 }],
+        subagents: [],
+      }),
+    );
+    const out = buildScaffold(eventsFilePath);
+    expect(out).not.toMatch(/ARTIFACTS UNAVAILABLE/);
+    const parsed = parseYaml(out);
+    expect(parsed.assert.some((a: any) => a.file_exists === "outputs/report.pdf")).toBe(true);
+  });
+
   it("scaffolds a scenario from a chat result.json (mode:chat, assertions:[] don't choke it)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-chat-"));
     const eventsFilePath = join(dir, "events.jsonl");

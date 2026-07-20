@@ -217,16 +217,45 @@ export interface DiffSide {
   scenarioName?: string;
 }
 
+/** Per-side artifact-manifest availability for a comparison. "both-available" is the only state a real
+ *  diffArtifacts() runs for; the other three describe why it didn't. Distinguished from a boolean because
+ *  the two missing-one-side states ("a-unavailable"/"b-unavailable") gate identity differently than the
+ *  missing-both state ("both-unavailable") — see compareDiffSides. */
+export type ArtifactsAvailability = "both-available" | "a-unavailable" | "b-unavailable" | "both-unavailable";
+
+function artifactsAvailability(a: DiffSide, b: DiffSide): ArtifactsAvailability {
+  const aOk = a.artifacts !== undefined;
+  const bOk = b.artifacts !== undefined;
+  if (aOk && bOk) return "both-available";
+  if (aOk) return "b-unavailable";
+  if (bOk) return "a-unavailable";
+  return "both-unavailable";
+}
+
 export interface DiffViewResult {
   tools: ToolDiffOp[];
   transcript: TranscriptDiffLine[];
   artifacts?: FileSigDiff;
   meta: MetaDiffEntry[];
+  /** Why `artifacts` is (or isn't) populated — see ArtifactsAvailability. Exists so a caller can render
+   *  "not compared, evidence missing" distinctly from "compared, no differences found", including on the
+   *  `identical:true` path where renderDiffText's own artifacts-view caveat never runs (that view is only
+   *  reached from the non-identical branch). */
+  artifactsAvailability: ArtifactsAvailability;
   /** GATEABLE identity: tools + artifacts + meta agree. Deliberately EXCLUDES the transcript, which is
    *  advisory — model-stochastic prose differs across live re-records no matter what, so folding it in
    *  made two runs of the SAME skill compare non-identical and the signal could not separate "behaviour
    *  changed" from "the model breathed". This is the value `diff --help` has always promised
-   *  ("tools/artifacts/meta are the gateable signal") and the one the exit code uses. */
+   *  ("tools/artifacts/meta are the gateable signal") and the one the exit code uses.
+   *
+   *  Artifact evidence that exists on only ONE side is the canonical "could not verify" case and must NOT
+   *  read as "nothing changed" — an absent manifest is not proof of equality, so a-unavailable/b-unavailable
+   *  force `identical:false` regardless of what tools/meta say. both-unavailable is different: neither side
+   *  offers artifact evidence, so there is no asymmetric loss to distrust and no comparison being silently
+   *  skipped in favor of a stronger one — it degrades to the tools/meta verdict, same as always. Treating
+   *  both-unavailable as a hard fail instead would turn every diff between two artifact-manifest-less
+   *  cassettes (a real, common case — see cli-diff/diff-gateable-signal fixtures) permanently red with no
+   *  way to pass, for a dimension neither side ever claimed to evidence. */
   identical: boolean;
   /** Advisory: the transcript differed. Surfaced separately so prose drift stays VISIBLE without
    *  contaminating the gate. */
@@ -236,11 +265,21 @@ export interface DiffViewResult {
 export function compareDiffSides(a: DiffSide, b: DiffSide, normalize: boolean): DiffViewResult {
   const tools = diffToolSequence(a.tools, b.tools);
   const transcript = diffTranscript(a.transcript, b.transcript, normalize);
-  const artifacts = a.artifacts && b.artifacts ? diffArtifacts(a.artifacts, b.artifacts) : undefined;
+  const availability = artifactsAvailability(a, b);
+  const artifacts = availability === "both-available" ? diffArtifacts(a.artifacts!, b.artifacts!) : undefined;
   const meta = diffMeta(a.meta, b.meta);
-  const identical =
-    tools.every((o) => o.op === "same") &&
-    (!artifacts || (artifacts.added.length === 0 && artifacts.removed.length === 0 && artifacts.changed.length === 0)) &&
-    meta.length === 0;
-  return { tools, transcript, artifacts, meta, identical, transcriptDiffers: transcript.some((o) => o.op !== "same") };
+  const artifactsIdentical =
+    availability === "both-available"
+      ? artifacts!.added.length === 0 && artifacts!.removed.length === 0 && artifacts!.changed.length === 0
+      : availability === "both-unavailable";
+  const identical = tools.every((o) => o.op === "same") && artifactsIdentical && meta.length === 0;
+  return {
+    tools,
+    transcript,
+    artifacts,
+    meta,
+    artifactsAvailability: availability,
+    identical,
+    transcriptDiffers: transcript.some((o) => o.op !== "same"),
+  };
 }

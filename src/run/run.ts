@@ -2,7 +2,13 @@ import { warn } from "../io.js";
 import { isUsageLimit } from "../usage-limit.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
-import type { UsageInfo, CostInfo, RunResult } from "../types.js";
+import type { UsageInfo, CostInfo, RunResult, InfraErrorSource } from "../types.js";
+
+/** A frozen cassette row's `source` is untrusted text — narrow it before it reaches the typed record,
+ *  so an unrecognized value falls back to the fatal class rather than silently minting a new severity. */
+function isInfraErrorSource(s: unknown): s is InfraErrorSource {
+  return s === "hostloop-sidecar" || s === "hostloop-exec" || s === "egress-sidecar";
+}
 import { questionKey, questionLabel, canon } from "../agent/session.js";
 import {
   ABSTAIN,
@@ -317,7 +323,7 @@ export interface RunRecord {
   /** Infrastructure errors (VM/egress sidecar crashes) — a non-empty list is a both-lane hard verdict fail
    *  (not author-suppressible), the evidence is contaminated. Populated from `infra_error` events (live +
    *  replay re-drive) and the sidecar's post-run `fatalError`. */
-  infraErrors: Array<{ source: string; message: string }>;
+  infraErrors: Array<{ source: InfraErrorSource; message: string }>;
   /** Companion counters for malformed/dropped telemetry — a >0 count means the relevant evidence stream
    *  was partially unparseable, so the dependent assertion fails "malformed" rather than silently dropping
    *  the bad entries. (resource malformed lines live on `resources.malformedLines`; hash errors on
@@ -884,10 +890,14 @@ export class Run {
             }
             break;
           case "infra_error":
-            // An infrastructure crash contaminates the run's evidence — collect it as a both-lane hard
-            // fail (computeVerdict), not author-suppressible. Re-derived on the replay drive from the frozen
-            // events, so a recorded crash fails replay too.
-            this.rec.infraErrors.push({ source: "sidecar", message: ev.message });
+            // A dead supervisor contaminates the run's evidence — collected as a both-lane hard fail
+            // (computeVerdict), not author-suppressible. Re-derived on the replay drive from the frozen
+            // events, so a recorded crash fails replay too. A row with no `source` predates the origin tag:
+            // default it to the FATAL class, so an old recording of a genuine crash keeps failing replay.
+            this.rec.infraErrors.push({
+              source: isInfraErrorSource(ev.source) ? ev.source : "hostloop-sidecar",
+              message: ev.message,
+            });
             break;
           case "mcp_error":
             this.rec.mcpErrors.push({ server: ev.server, code: ev.code, message: ev.message });
