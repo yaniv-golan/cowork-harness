@@ -17,10 +17,10 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { renderKnownLimitations } from "./limitations.js";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { packageEvidence } from "./package-evidence.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { snapshotTurnBoundary } from "./evidence.js";
@@ -443,6 +443,9 @@ interface SkillEnvelope {
      *  1 for a fresh/single-shot run; >1 only for a genuine resume. F37 uses this as the mechanical proof
      *  that the reflection turn actually continued the SAME session rather than silently starting fresh. */
     turn?: number;
+    /** Surfaced in the report so a harvester never has to open a turn file. See `gradedOutcome`. */
+    outcome?: string;
+    fingerprint?: { skillHash?: string; skillCommit?: string | null };
   }>;
 }
 
@@ -580,6 +583,17 @@ interface ReportState {
   sessionId: string;
   outDir: string;
   taskResult: "success" | "error" | undefined;
+  /** The GRADED (task) turn's `outcome` and `skillHash`, lifted into the report so a consumer never opens
+   *  a turn file to get them.
+   *
+   *  WHY THIS EXISTS. critique runs two turns into ONE outDir. After the resume, `result.json` is the
+   *  REFLECTION turn's; the graded turn is archived as `result.turn-1.json`. So the correct file to read
+   *  is the LOWER-numbered one — the opposite of every other multi-run convention — and a harvester that
+   *  reads `result.json` silently ingests the reflection turn's outcome: a valid-looking wrong number with
+   *  nothing to signal it. Documenting that only helps someone who already knows to look, in a tool whose
+   *  whole purpose is killing silent wrong answers. Surfacing it here removes the need to know. */
+  gradedOutcome?: string;
+  gradedSkillHash?: string;
   selfReportStatus: SelfReportStatus;
   items: CritiqueItem[];
   /** F35: the TRANSPORT-RESOLVED evaluator model, present only when the evaluator actually completed and
@@ -620,6 +634,8 @@ export function buildTextReport(state: ReportState): string {
     sessionId,
     outDir,
     taskResult,
+    gradedOutcome,
+    gradedSkillHash,
     selfReportStatus,
     items,
     evaluatorModel,
@@ -636,6 +652,10 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  session: ${sessionId}`);
   out.push(`  run dir: ${outDir}`);
   out.push(`  task run result: ${taskResult ?? "unknown (envelope unavailable)"}`);
+  // The GRADED turn's facts, so a consumer never opens result.turn-1.json (and never mistakes the
+  // reflection turn's result.json for them).
+  if (gradedOutcome) out.push(`  graded outcome: ${gradedOutcome}`);
+  if (gradedSkillHash) out.push(`  graded skillHash: ${gradedSkillHash.slice(0, 12)}`);
   if (evaluatorModel) out.push(`  evaluator model (resolved): ${evaluatorModel}`);
   else if (infraFailure || evaluatorError)
     out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
@@ -723,6 +743,8 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     sessionId,
     outDir,
     taskResult,
+    gradedOutcome,
+    gradedSkillHash,
     selfReportStatus,
     items,
     evaluatorModel,
@@ -742,6 +764,10 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     sessionId,
     outDir,
     taskResult,
+    // On `base`, not a branch: a harvester reads these on EVERY outcome, including the infra-failure
+    // paths where knowing which skill generation was graded matters most.
+    gradedOutcome,
+    gradedSkillHash,
     selfReportStatus,
     evaluatorIntegrity,
     turn1ResultDegraded,
@@ -879,6 +905,21 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // failure); it is deliberately NOT treated as an infrastructure failure the way a broken reflection is
     // below (F37).
     const taskResult = extractResult(task);
+    const taskRow = parseEnvelope(task.stdout)?.results?.[0];
+    const gradedOutcome = taskRow?.outcome;
+    const gradedSkillHash = taskRow?.fingerprint?.skillHash;
+
+    // Stable-named copy of the GRADED turn's result, written HERE — while `result.json` is still turn 1
+    // and before the reflection turn's resume renames it to `result.turn-1.json`. Writing it at this point
+    // (rather than copying the archived file afterwards) also means it survives a reflection turn that
+    // never completes. Best-effort: a missing/unreadable result must never fail a critique that otherwise
+    // ran, so this is deliberately swallowed.
+    try {
+      const live = join(outDir, "result.json");
+      if (existsSync(live)) copyFileSync(live, join(outDir, "result.graded.json"));
+    } catch {
+      /* best-effort convenience copy — never fail the run for it */
+    }
 
     // 2. Snapshot the turn-1/turn-2 boundary BEFORE the reflection turn touches anything.
     const boundary = snapshotTurnBoundary(outDir);
@@ -956,6 +997,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       sessionId,
       outDir,
       taskResult,
+      gradedOutcome,
+      gradedSkillHash,
       selfReportStatus,
       items,
       evaluatorModel,

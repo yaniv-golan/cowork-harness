@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`critique` surfaces the GRADED turn's `outcome` and `skillHash` in its own report**
+  (`gradedOutcome` / `gradedSkillHash` in JSON, and in the text header), and writes the graded result
+  under the stable name **`result.graded.json`**. `critique` runs two turns into one run directory, so
+  after the resume `result.json` is the *reflection* turn's and the graded turn is archived as
+  `result.turn-1.json` — the correct file to read was the *lower* number, the opposite of every other
+  multi-run convention. A harvester reading `result.json` silently ingested the reflection turn's numbers:
+  valid-looking, wrong, and unsignalled. Reported by a consumer building exactly that harvester; a
+  documentation-only fix would have helped only readers who already knew to look.
+
 - **`exec_infra_error` verdict signal (`WARN`)** — a container `exec` that failed for infrastructure
   reasons, as distinct from the fail-severity `infra_error` (a supervising process died). One failed
   command no longer contaminates a whole run's evidence.
