@@ -48,3 +48,46 @@ describe("critique exit contract is stated consistently everywhere", () => {
     expect(SRC).toMatch(/state\.infraFailure \|\| state\.evaluatorError\) process\.exit\(EXIT_INSTRUMENT_FAILURE\)/);
   });
 });
+
+// REACHABILITY — the direction the guards above structurally cannot cover.
+//
+// Everything above checks that the prose surfaces agree WITH EACH OTHER. They did agree, and all of them
+// were incomplete: `process.exit(1)` on operator interrupt was reachable and documented nowhere, so a
+// consumer wrote a sweep wrapper treating exit 1 as impossible. Cross-checking prose against prose can
+// never catch that — only checking prose against the CODE can.
+describe("every exit code reachable in src/critique is documented", () => {
+  /** Literal `process.exit(N)` calls in the critique sources.
+   *
+   *  COVERAGE IS PARTIAL BY CONSTRUCTION and that is stated rather than implied: repo-wide, only ~30 of
+   *  ~68 exit sites use a literal digit; the rest pass a variable. This scan sees the literals. It is a
+   *  floor on what must be documented, not proof that nothing else is reachable — claiming otherwise
+   *  would be the totality claim this repo keeps having to retract. */
+  function literalExitCodes(): Set<number> {
+    const out = new Set<number>();
+    for (const file of ["src/critique/command.ts", "src/critique/evaluator.ts", "src/critique/package-evidence.ts"]) {
+      let text: string;
+      try {
+        text = readFileSync(resolve(file), "utf8");
+      } catch {
+        continue;
+      }
+      for (const m of text.matchAll(/process\.exit\(\s*(\d+)\s*\)/g)) out.add(Number(m[1]));
+    }
+    return out;
+  }
+
+  it("the scan finds exit sites at all (never go green over an empty scan)", () => {
+    expect(literalExitCodes().size).toBeGreaterThan(1);
+  });
+
+  for (const code of [...literalExitCodes()].sort()) {
+    it(`exit ${code} is reachable in the source and appears in docs/critique.md's exit table`, () => {
+      // The table renders each code as a leading `| \`N\` |` cell.
+      const inTable = new RegExp("\\|\\s*`" + code + "`\\s*\\|").test(DOC);
+      expect(
+        inTable,
+        `process.exit(${code}) is reachable in src/critique but docs/critique.md's exit-code table does not list it — that is how "critique never exits 1" became a documented-looking fact`,
+      ).toBe(true);
+    });
+  }
+});
