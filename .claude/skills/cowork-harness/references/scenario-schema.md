@@ -348,16 +348,17 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `host_path_leak` | fail | A host path leaked into model-visible text (opt out: author `transcript_no_host_path`) |
 | `l0_plugin_divergence` | fail | L0/protocol plugin loading diverged from Cowork (opt out: `allow_l0_plugin_divergence`) |
 | `missing_capability` | fail | A `requires_capabilities` need was unmet, or the skill used a capability the image omits (opt out: `allow_missing_capability`, or `skill --allow-missing-capability` on an open-ended run) |
-| `infra_error` | fail | A VM/egress sidecar crashed mid-run — not author-suppressible |
+| `infra_error` | fail | A supervising process died mid-run (VM/egress sidecar) — the run's evidence is contaminated, not author-suppressible |
 | `stalled` | fail | The run ended on an unanswered question, or on a trailing-`?` final turn with no tool work after the last gate (opt out: `allow_stall`) |
 | `non_deterministic` | warn | The run was LLM/external/human-decided — not reproducible |
 | `prompt_asset_missing` | warn | The run proceeded with a missing prompt asset (`COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded |
 | `scan_unavailable` | warn | Post-run scan evidence unavailable (`RunResult.scan` undefined) — the host-path and outputs-delete guards did not run this run |
 | `ended_with_question` | warn | Live-lane heuristic: the final answer contains a question and the run wrote no deliverable to `outputs/` — the lenient sibling of `stalled` (covers a mid-message `?`, or tool work after the last gate that still ended asking). Opt out: `allow_stall` |
+| `exec_infra_error` | warn | Host-loop: one or more container `exec` calls failed for infrastructure reasons, so those tool calls returned an error to the agent. Warns rather than fails because the run's other evidence is intact — unlike `infra_error`, where a dead supervisor contaminates everything. Caveat: if *every* exec failed, the agent ran nothing and this still only warns — check `result.infraErrors` |
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.verdict.signals[].severity` or the run's exit code. Only the four **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the five **warn** codes are truly benign.
 
 ## Replay class
 
