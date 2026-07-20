@@ -17,6 +17,17 @@ All notable changes to this project are documented here. The format is based on
 - **Capability use-scan health** — an unreadable or partially unparseable `events.jsonl` is now reported
   as a degraded scan instead of being indistinguishable from a complete scan that found nothing.
 
+- **Every `critique` limitation is now tagged with WHY it exists**, not just what it is — `structural`
+  (permanent, architect around it), `unverified` (unproven, **not** known-impossible), `deliberate` (a
+  design choice), `not-built` (simply absent). The distinction a reader needs is rarely "what can't it
+  do" but "should I design around this forever, or wait for it?" **Container-tier-only is `unverified`**:
+  the resume-continuity proof was run against the container tier's Linux ELF, and hostloop runs a
+  different (native) agent binary, so the proof does not transfer — nothing suggests hostloop would fail,
+  nobody has run it. A consumer read that pin as permanent and built a second test lane around it. The
+  tags appear in `critique --help` and [docs/critique.md](./docs/critique.md), generated from one source.
+- **`critique --help`'s KNOWN LIMITATIONS block is generated** from that source, and CI asserts the
+  shipped binary's output, the docs bullets, and their tags all agree.
+
 ### Changed
 
 - **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
@@ -54,6 +65,10 @@ All notable changes to this project are documented here. The format is based on
   "this run produced nothing" claim into a generated scenario.
 - **`critique` treated a vanished turn-1 evidence file as genuinely empty evidence** rather than an
   integrity failure. A stream that was legitimately zero bytes at capture is still reported clean.
+- **`critique`'s exit-code table omitted `1`.** Exit `1` is reachable on operator interrupt
+  (SIGINT/SIGTERM); a sweep wrapper treating it as impossible misreads a cancelled run as a crash.
+- Documented that after critique's resume, `result.json` is the **reflection** turn's result — the graded
+  turn is archived as `result.turn-1.json`. Reading the wrong one yields a valid-looking wrong number.
 
 ## [1.6.0] — 2026-07-20
 
