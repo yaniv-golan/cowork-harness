@@ -21,8 +21,8 @@ import { spawn } from "node:child_process";
 import { existsSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { loadDotenv } from "../src/dotenv.js";
-import { runCritique } from "./lib/critique/evaluator.js";
-import type { CritiqueItem } from "./lib/critique/evidence.js";
+import { runCritique } from "../src/critique/evaluator.js";
+import type { CritiqueItem } from "../src/critique/evidence.js";
 
 const SEEDED_PKG = `## Final answer (turn 1)
 Created outputs/scenario.yaml with three assertions and selected the container fidelity tier for the run.

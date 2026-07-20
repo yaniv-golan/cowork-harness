@@ -1,7 +1,7 @@
 {
   "name": "cowork-harness",
   "version": "1.4.0",
-  "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios — same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
+  "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios \u2014 same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -44,9 +44,8 @@
     "!python/**/*.egg-info",
     "scripts",
     "!scripts/eval-gate.ts",
-    "!scripts/skill-critique.ts",
     "!scripts/skill-critique-acceptance.ts",
-    "!scripts/lib/critique",
+    "!scripts/critique-injection-probe.ts",
     ".claude/skills/cowork-harness/scripts/scenario.py",
     ".claude/skills/cowork-harness/scripts/assertion-keys.json",
     ".claude/skills/cowork-harness/scripts/_vendor",

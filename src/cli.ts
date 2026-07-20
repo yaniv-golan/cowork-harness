@@ -90,6 +90,7 @@ import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonPayloadEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput } from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
 import { parseRepeatFlags, RepeatFlagError } from "./run/repeat-flags.js";
+import { cmdCritique } from "./critique/command.js";
 import {
   MatrixFile,
   expandMatrix,
@@ -198,6 +199,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
+  critique <skill-folder>      EXPERIMENTAL — run a skill, ask the agent what confused it, then grade that
+                               self-report against a frozen record of the run (see 'critique --help' for cost)
       [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
       [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
       [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage
@@ -537,6 +540,7 @@ const COMMANDS = [
   "trace",
   "inspect",
   "diff",
+  "critique",
   "assertions",
   "scaffold",
   "status",
@@ -757,6 +761,8 @@ async function main() {
       return cmdInspect(rest);
     case "diff":
       return cmdDiff(rest);
+    case "critique":
+      return void (await cmdCritique(rest));
     case "assertions":
       return cmdAssert(rest);
     case "scaffold":

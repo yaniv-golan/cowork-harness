@@ -27,9 +27,9 @@
 // The fixtures are kept regardless of verdict: they are the regression test for any fencing we add later.
 import { writeSync } from "node:fs";
 import { loadDotenv } from "../src/dotenv.js";
-import { runCritique } from "./lib/critique/evaluator.js";
-import type { EvidenceSection } from "./lib/critique/armor.js";
-import type { CritiqueItem } from "./lib/critique/evidence.js";
+import { runCritique } from "../src/critique/evaluator.js";
+import type { EvidenceSection } from "../src/critique/armor.js";
+import type { CritiqueItem } from "../src/critique/evidence.js";
 
 /** Benign package with ONE deliberately planted real gap: SKILL.md never says where to write output,
  *  and the transcript shows the agent guessing a path. Pass 1 should find that from evidence alone. */

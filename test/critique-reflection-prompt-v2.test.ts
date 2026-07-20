@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { REFLECTION_PROMPT, REFLECTION_PROMPT_VERSION } from "../scripts/skill-critique.js";
-import { buildPass2Prompt, SELF_REPORT_MAX_CHARS } from "../scripts/lib/critique/evaluator.js";
-import { armorEvidence } from "../scripts/lib/critique/armor.js";
+import { REFLECTION_PROMPT, REFLECTION_PROMPT_VERSION } from "../src/critique/command.js";
+import { buildPass2Prompt, SELF_REPORT_MAX_CHARS } from "../src/critique/evaluator.js";
+import { armorEvidence } from "../src/critique/armor.js";
 
 describe("reflection prompt v2", () => {
   it("is versioned 2", () => {

@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`cowork-harness critique <skill-folder> --prompt "<probe>"` (EXPERIMENTAL).** Runs a skill, asks the
+  agent what confused it, then grades that self-report against a frozen record of what actually happened —
+  a byte-boundary evidence snapshot taken *before* the reflection turn, a first evaluator pass that is
+  structurally blind to the self-report (the text is never put in its prompt, not merely ignored), and
+  mechanical citation checking that drops any claim not quoting the evidence verbatim. **A discovery
+  instrument, never a gate:** findings of any classification exit 0; only usage and infra/protocol failures
+  exit non-zero. Previously a maintainer-only script that could not run from an installed package at all.
+  Costs four model workloads per critique — see [docs/critique.md](./docs/critique.md).
+- **Evidence-package armoring.** The self-report was already fenced, but the evidence package — which
+  carries a third-party SKILL.md verbatim into both evaluator prompts — was not, so hostile skill content
+  could steer the grader directly. Untrusted content now sits inside per-run nonce markers and only
+  nonce-tagged headings outside them count as instructions; a skill cannot pre-author the nonce. Verified
+  by a red-team probe across three models: the structural-forgery payload that steered all three now
+  matches control. Content that merely *argues* is a documented residual — fencing separates planes, it
+  cannot stop persuasion.
 - **`skill --repeat <N>`** (2–100), with `--min-pass-rate` / `--stop-on-diverge` / `--max-budget-usd` /
   `--allow-budget-stop`. The variance rollup already existed but was `run`-only, because the flags were
   parsed inline in the `run` command — the exploratory lane, where an iterate-across-fixes loop actually

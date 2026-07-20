@@ -9,7 +9,7 @@ import {
   citationResolves,
   validateCitations,
   type CritiqueItem,
-} from "../scripts/lib/critique/evidence";
+} from "../src/critique/evidence";
 
 describe("turn-1 evidence slicing (uncontaminated ground truth)", () => {
   let dir: string;

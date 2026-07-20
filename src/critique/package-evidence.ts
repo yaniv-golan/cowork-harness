@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
 
 // Assembles the TURN-1-ONLY evidence document a tool-less, one-shot evaluator model is graded against.
-// This packager is a from-scratch, load-bearing build (§R of the reflective-critique plan): a tool-less
+// This packager is a from-scratch, load-bearing build (this instrument's design): a tool-less
 // evaluator can't grep the logs itself, so its recall is bounded by exactly what this function decides to
 // include. Every source read here is scoped to turn 1 (via `readTurn1Result`/`readTurn1Slice`, both of
 // which already guarantee the reflection turn's own reads never leak in) — this module adds no new

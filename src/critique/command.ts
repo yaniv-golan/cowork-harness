@@ -6,19 +6,20 @@
 //
 // This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. It always
 // exits 0 — including when the task run itself errors — because the point is to surface improvement ideas
-// for a human to read, not to render a pass/fail verdict (see docs/internal's reflective-critique plan).
+// for a human to read, not to render a pass/fail verdict .
 // Container tier only: the resume-continuity behavior this loop depends on (the reflection turn seeing the
 // SAME mounted skill + session as the task turn) is verified for the container fidelity tier specifically,
 // so the tier is pinned rather than left to the caller.
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename } from "node:path";
-import { packageEvidence } from "./lib/critique/package-evidence.js";
-import type { SkillMdStatus } from "./lib/critique/package-evidence.js";
-import { snapshotTurnBoundary } from "./lib/critique/evidence.js";
-import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./lib/critique/evaluator.js";
-import type { CritiqueItem } from "./lib/critique/evidence.js";
+import { packageEvidence } from "./package-evidence.js";
+import type { SkillMdStatus } from "./package-evidence.js";
+import { snapshotTurnBoundary } from "./evidence.js";
+import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
+import type { CritiqueItem } from "./evidence.js";
 
 const REFLECTION_PROMPT_VERSION = 2;
 
@@ -61,10 +62,33 @@ interface ParsedArgs {
 }
 
 function usage(): string {
-  return (
-    'usage: tsx scripts/skill-critique.ts <skill-folder> --prompt "<probe>" [--dotenv <path>] ' +
-    "[--fidelity container] [--evaluator-model <id>] [--output-format json|text]"
-  );
+  return `cowork-harness critique <skill-folder> --prompt "<probe>"
+
+  EXPERIMENTAL. Runs the skill, asks the agent what confused it, then does NOT believe the answer:
+  a blinded evaluator grades the self-report against a frozen record of what actually happened, and
+  drops any claim whose citation is not verbatim in that evidence. Discovery instrument, not a gate.
+
+  --prompt "<probe>"        the task to run the skill against (required)
+  --evaluator-model <id>    override the evaluator model (env: COWORK_HARNESS_EVALUATOR_MODEL)
+  --dotenv <path>           load credentials from a dotenv file
+  --fidelity container      container tier only — the resume-continuity this loop depends on is
+                            verified there and nowhere else
+  --output-format json|text
+
+COST AND PREREQUISITES — read before running:
+  * Each critique is FOUR model workloads: two container runs (task + reflection) and two evaluator
+    passes over an evidence package of up to 48KB.
+  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier. Override it if
+    that is not what you want.
+  * Requires the container tier (Docker/Lima) and an authenticated \`claude\` CLI on PATH.
+
+EXIT CODES: findings NEVER gate — any classification exits 0. Usage errors and infra/protocol
+  failures exit non-zero, because a broken instrument is not a discovery outcome.
+
+KNOWN LIMITATIONS: container tier only; SKILL.md is capped at 16KB (a larger one degrades toward
+  "not adjudicable"); prompts are English-only. On a third-party skill, note that fencing separates
+  the instruction plane from evidence but cannot stop hostile content that merely ARGUES — see
+  docs/critique.md.`;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -225,7 +249,11 @@ export function boundedSpawn(cmd: string, args: string[], timeoutMs: number, max
 
 /** One `npx tsx src/cli.ts skill ...` spawn — this script's actual use of `boundedSpawn` above. */
 function runSkillTurn(args: string[], timeoutMs = TURN_TIMEOUT_MS, maxBytes = TURN_MAX_BYTES): Promise<TurnOutcome> {
-  return boundedSpawn("npx", ["tsx", "src/cli.ts", ...args], timeoutMs, maxBytes);
+  // Self-spawn the INSTALLED cli next to this module rather than `npx tsx src/cli.ts` from cwd: the old
+  // form only worked from a repo checkout (src/ is not published, and the path resolved against cwd), so
+  // from an npm install the task turn failed while the always-exit-0 contract made it look like success.
+  const cli = fileURLToPath(new URL("./cli.js", import.meta.url).href.replace("/critique/cli.js", "/cli.js"));
+  return boundedSpawn(process.execPath, [cli, ...args], timeoutMs, maxBytes);
 }
 
 interface SkillEnvelope {
@@ -446,9 +474,7 @@ export function buildTextReport(state: ReportState): string {
       `  turn-1 transcript slice: DEGRADED (boundary never established, or the append-only prefix it depends on changed/truncated under it)`,
     );
   if (skillMdStatus && skillMdStatus !== "readable")
-    out.push(
-      `  SKILL.md: ${skillMdStatus} — presence/coverage classification was REFUSED (see the "already-covered" downgrade in the evaluator)`,
-    );
+    out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
   out.push("");
 
   if (infraFailure) {
@@ -520,13 +546,19 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
   return { ...base, evaluatorModel, items };
 }
 
-async function main(): Promise<void> {
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    writeSync(1, usage() + "\n");
+    return;
+  }
   let opts: ParsedArgs;
   try {
-    opts = parseArgs(process.argv.slice(2));
+    opts = parseArgs(argv);
   } catch (e) {
     process.stderr.write(`${(e as Error).message}\n`);
-    process.exit(0); // this command owns exit 0 — even a usage mistake must not fail a caller's pipeline
+    // Exit taxonomy: FINDINGS never gate (always 0), but a usage error or an infra/protocol failure is
+    // not a discovery outcome — exiting 0 there made a broken run look like a clean one.
+    process.exit(2);
     return;
   }
 
@@ -699,9 +731,16 @@ async function main(): Promise<void> {
   process.exit(0); // ALWAYS 0 — this is a discovery instrument, never a gate; the caller owns this exit code
 }
 
+/** CLI entry for `cowork-harness critique`. Exported so src/cli.ts can dispatch to it — the direct-exec
+ *  guard below stays for `tsx src/critique/command.ts` during development. */
+export async function cmdCritique(argv: string[]): Promise<void> {
+  installOrphanCleanupHandlers(); // a Ctrl-C must kill any outstanding bounded-spawn child group
+  await main(argv);
+}
+
 import { pathToFileURL } from "node:url";
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  installOrphanCleanupHandlers(); // F23/F36 residual: a Ctrl-C must kill any outstanding bounded-spawn child group
+  installOrphanCleanupHandlers();
   void main();
 }
 
