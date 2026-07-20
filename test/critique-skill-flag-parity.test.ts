@@ -14,18 +14,44 @@ import { SKILL_FLAG_SURFACE, CRITIQUE_ONLY_FLAGS } from "../src/run/skill-flag-s
 // has to appear in the spec), under-matching is the failure mode.
 const SOURCES = ["src/cli.ts", "src/run/repeat-flags.ts"].map((p) => readFileSync(resolve(p), "utf8"));
 
-/** Flag literals the skill lane actually compares against: `name === "--x"`, `a === "--x"`,
- *  `a.startsWith("--x=")`, and `--x` inside SKILL_HELP prose. */
-function declaredFlagLiterals(): Set<string> {
+/** Flags the SKILL LANE itself parses. Scanned from the regions that define that lane — `cmdSkill`'s
+ *  argv loop, `takeCommonFlags`, and the extracted repeat-flag family — rather than whole-file, because a
+ *  whole-file scan sweeps in every other command's flags and then needs a hand-maintained allowlist to
+ *  subtract them, which is its own drift surface.
+ *
+ *  The risk of region-scoping is that a refactor moves the region and the scan silently matches nothing —
+ *  that is exactly how `repeat-flags.ts` came to exist. `regionTripwire` below fails loudly in that case
+ *  instead of going green over an empty set. */
+function skillLaneRegions(): string[] {
+  const cli = readFileSync(resolve("src/cli.ts"), "utf8");
+  const out: string[] = [];
+  for (const [open, close] of [
+    ["async function cmdSkill(", "\n}"],
+    ["function takeCommonFlags(", "\n}"],
+  ] as const) {
+    const i = cli.indexOf(open);
+    if (i !== -1) out.push(cli.slice(i, cli.indexOf(close, i)));
+  }
+  out.push(readFileSync(resolve("src/run/repeat-flags.ts"), "utf8"));
+  return out;
+}
+
+function skillLaneFlags(): Set<string> {
   const out = new Set<string>();
-  for (const src of SOURCES) {
-    for (const m of src.matchAll(/(?:name|a|flag)\s*===\s*"(--?[a-z][a-z0-9-]*)"/g)) out.add(m[1]!);
-    for (const m of src.matchAll(/\.startsWith\("(--?[a-z][a-z0-9-]*)="\)/g)) out.add(m[1]!);
+  for (const raw of skillLaneRegions()) {
+    // Strip comments first: the regions contain prose like `a === "--flag"` explaining the parser, which
+    // is not a flag the lane accepts. Scanning it produced a false positive on the first run.
+    const region = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const m of region.matchAll(/(?:name|a|flag)\s*===\s*"(--?[a-z][a-z0-9-]*)"/g)) out.add(m[1]!);
+    for (const m of region.matchAll(/\.startsWith\("(--?[a-z][a-z0-9-]*)="\)/g)) out.add(m[1]!);
   }
   return out;
 }
 
-/** Flags advertised in `skill --help`, which is the surface a user (or an agent) reads. */
+/** Flags advertised in `skill --help` — the surface a user or agent reads. NOTE this scan only sees
+ *  2-space-indented lines, so it MISSES inline-documented flags (`--enable name@mkt`). It is therefore a
+ *  supplement to `skillLaneFlags()`, never the primary check: relying on it alone let six real flags go
+ *  unchecked. */
 function skillHelpFlags(): Set<string> {
   const cli = readFileSync(resolve("src/cli.ts"), "utf8");
   const start = cli.indexOf("const SKILL_HELP");
@@ -83,23 +109,32 @@ const NOT_SKILL_LANE = new Set([
 ]);
 
 describe("skill flag surface ↔ critique disposition parity", () => {
-  it("finds flag literals to check (guards against the scan silently matching nothing)", () => {
-    expect(declaredFlagLiterals().size).toBeGreaterThan(20);
-    expect(skillHelpFlags().size).toBeGreaterThan(5);
+  it("regionTripwire: the scan still finds the skill lane (never go green over an empty set)", () => {
+    const regions = skillLaneRegions();
+    expect(regions.length, "a cmdSkill/takeCommonFlags region moved — the scan is blind, fix the markers").toBe(3);
+    expect(skillLaneFlags().size).toBeGreaterThan(20);
   });
 
-  it("every flag advertised in `skill --help` has a critique disposition", () => {
-    const missing = [...skillHelpFlags()].filter((f) => !KNOWN.has(f) && !NOT_SKILL_LANE.has(f));
+  it("every flag the SKILL LANE parses has a critique disposition", () => {
+    // The primary check. An earlier version filtered only `skill --help`'s 2-space lines, which missed
+    // six real flags (--verbose --label --fidelity --intent --enable --expect-write) — so a new flag
+    // documented inline, or added with no help line at all, would never have turned CI red. That is the
+    // exact silent gap the spec module exists to close.
+    const missing = [...skillLaneFlags()].filter((f) => !KNOWN.has(f) && !NOT_SKILL_LANE.has(f));
     expect(
       missing,
-      `these appear in SKILL_HELP but have no entry in SKILL_FLAG_SURFACE — add one (the required \`critique\` field forces you to decide): ${missing.join(", ")}`,
+      `these are parsed by the skill lane but have no entry in SKILL_FLAG_SURFACE — add one (the required \`critique\` field forces you to decide): ${missing.join(", ")}`,
     ).toEqual([]);
   });
 
+  it("every flag advertised in `skill --help` has a disposition too", () => {
+    const missing = [...skillHelpFlags()].filter((f) => !KNOWN.has(f) && !NOT_SKILL_LANE.has(f));
+    expect(missing, `advertised in SKILL_HELP but absent from the spec: ${missing.join(", ")}`).toEqual([]);
+  });
+
   it("every spec entry is a flag the skill lane actually knows (no phantom entries)", () => {
-    const declared = declaredFlagLiterals();
-    const help = skillHelpFlags();
-    const phantom = SKILL_FLAG_SURFACE.map((s) => s.flag).filter((f) => !declared.has(f) && !help.has(f));
+    const known = new Set([...skillLaneFlags(), ...skillHelpFlags()]);
+    const phantom = SKILL_FLAG_SURFACE.map((s) => s.flag).filter((f) => !known.has(f));
     expect(phantom, `spec names no longer accepted by the skill lane: ${phantom.join(", ")}`).toEqual([]);
   });
 

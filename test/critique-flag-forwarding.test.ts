@@ -126,3 +126,19 @@ describe("probe input", () => {
     expect(() => P("--keep")).not.toThrow();
   });
 });
+
+describe("forwarded-flag value validation (parity with the child's own parser)", () => {
+  it("a missing value errors here, not as a spawn stack trace one layer later", () => {
+    expect(() => parseArgs(["./s", "--prompt", "p", "--upload"])).toThrow(/--upload requires a value/);
+  });
+
+  it("an arity-0 flag rejects `=value` instead of silently inverting it", () => {
+    // `--allow-missing-capability=false` forwarded as a bare flag would ENABLE the thing it names.
+    expect(() => parseArgs(["./s", "--prompt", "p", "--allow-missing-capability=false"])).toThrow(/takes no value/);
+    expect(() => parseArgs(["./s", "--prompt", "p", "--decider-llm=x"])).toThrow(/takes no value/);
+  });
+
+  it("still accepts the legitimate equals form for arity-1 flags", () => {
+    expect(parseArgs(["./s", "--prompt", "p", "--upload=./a.pdf"]).forwardBoth).toEqual(["--upload", "./a.pdf"]);
+  });
+});

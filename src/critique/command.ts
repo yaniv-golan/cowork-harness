@@ -89,7 +89,7 @@ Graded-run tuning (shapes the run being graded):
   --model <id>              session model for the agent doing the work AND reflecting
   --timeout <ms>            wall-clock budget for the task turn
   --label <tag>             generation tag in the run index (pair critiques across fixes)
-  --allow-missing-capability   don't fail the graded run on a lean-image capability gap
+  --allow-missing-capability   don't fail EITHER turn on a lean-image capability gap (both turns)
   --answer "<q-regex>=<choice>" | --answer-policy <yaml>   pre-answer the skill's gates (repeatable)
   --on-unanswered fail|first   unscripted-gate policy ('prompt' is refused: no TTY inside the spawn)
   --decider-llm [--intent "<line>"] [--decider-model <id>] | --decider-cmd '<helper>' | --decider-dir <dir>
@@ -191,8 +191,16 @@ function parseArgs(argv: string[]): ParsedArgs {
       let value: string | undefined;
       if (spec.arity === 1) {
         const [v, adv] = flagVal(argv, i, name);
+        // Forwarded flags were the only ones NOT value-checked: a missing value was passed through as
+        // `undefined` and died in spawn() as an "unexpected failure" stack trace. The child's own parser
+        // says "<flag> requires a value"; say the same thing here rather than one layer later.
+        if (v === undefined || v === "") throw new Error(`${name} requires a value\n${usage()}`);
         value = v;
         i += adv;
+      } else if (a.includes("=")) {
+        // The child rejects `--boolean=x` outright ("takes no value"). Accepting it here and forwarding a
+        // BARE flag would silently invert intent — `--allow-missing-capability=false` would enable it.
+        throw new Error(`${name} takes no value (got "${a}")\n${usage()}`);
       }
       // --on-unanswered prompt would resolve differently than the caller expects: there is no TTY inside
       // the spawn, so it cannot actually prompt anyone.
