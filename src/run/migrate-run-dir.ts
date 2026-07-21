@@ -172,6 +172,8 @@ function planResources(
   from: string,
   owningTurn: number,
   rootResultIsTurn?: number,
+  /** True when `from` is an ARCHIVE (`resources.turn-<N>.jsonl`), whose NAME states its turn. */
+  isArchiveNamed = false,
 ): { kind: "op"; op: MigrationOp } | { kind: "refuse"; reason: string } {
   const rel = from.slice(outDir.length + 1);
   const boundaryMs = completionMtimeOf(outDir, owningTurn, rootResultIsTurn);
@@ -201,9 +203,15 @@ function planResources(
     return { kind: "op", op: { kind: "split", from, boundaryMs, toLow: lowDest, toHigh: highDest } };
   }
 
-  // Wholly one side (or empty): a plain move, but to the turn the CONTENT indicates — not automatically
-  // the latest. An empty file has nothing to attribute, so it follows the ordinary root-artifact rule.
-  const dest = spread === "before" ? lowDest : highDest;
+  // Wholly one side: a plain move, but to the turn the CONTENT indicates — not automatically the latest.
+  //
+  // An EMPTY file has no content to attribute, so it falls back to what its POSITION says. For a root
+  // file that is the later turn (root artifacts are the latest turn's); for an ARCHIVE the name already
+  // states the turn, and folding both into the after-boundary arm sent an empty `resources.turn-1.jsonl`
+  // into turn 2 — handing a turn that never had telemetry a file carrying turn 1's mtime, which this
+  // branch treats as data, and colliding with a genuine turn-2 file when one existed.
+  const emptyDest = isArchiveNamed ? lowDest : highDest;
+  const dest = spread === "empty" ? emptyDest : spread === "before" ? lowDest : highDest;
   if (existsSync(dest) && !sameBytes(from, dest))
     return { kind: "refuse", reason: `${rel} would overwrite the existing ${dest.slice(outDir.length + 1)}` };
   return existsSync(dest) ? { kind: "op", op: { kind: "delete", path: from } } : { kind: "op", op: { kind: "move", from, to: dest } };
@@ -280,7 +288,7 @@ export function assessRunDir(outDir: string): Assessment {
     // renaming a spanning root `resources.jsonl` to `resources.turn-<prior>.jsonl`. Trusting the name
     // would carry turn-N and turn-N+1 samples into one slot. CONTENT decides; the filename is a hint.
     if (a.stem === "resources" && a.retry === undefined) {
-      const r = planResources(outDir, from, a.turn, rootArtifactTurn);
+      const r = planResources(outDir, from, a.turn, rootArtifactTurn, true);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
@@ -334,12 +342,20 @@ export function assessRunDir(outDir: string): Assessment {
     // `turns/` exists: the 3-branch rule governs, ALWAYS. (The N+1 mapping applies only when `turns/`
     // is absent — otherwise both claim the same file and one reading renames onto an occupied slot.)
     const selfLabeling = artifact === "result.json" || artifact === "run.jsonl";
-    // Byte-identity means "already stored", for ANY artifact. Restricting the drop to self-labeling ones
-    // made a root trace.json identical to turns/1's refuse with "neither a duplicate of any turn nor
-    // placeable" — denying a duplicate this line had just found. (The P2-6 caveat is about which SLOT an
-    // identical file proves; it never argued the copy was worth keeping.)
+    // BYTE-IDENTITY PROVES "ALREADY STORED" ONLY FOR THE SLOT THIS ARTIFACT RESOLVES TO.
+    //
+    // Dropping on a match against ANY turn destroyed data on this branch's own canonical shape: two
+    // tool-less turns produce identical minimal traces, so a root trace.json (turn 1's) matched
+    // turns/2/trace.json and was DELETED — on a success path, leaving turns/1 without one. The same held
+    // for an empty transcript, manufacturing the "result without a run.jsonl" state that
+    // `currentTurnFromDirs` defines as not-a-turn.
+    //
+    // Matching a DIFFERENT turn means the opposite of duplication: this copy is the only instance of its
+    // own turn's artifact. So compare against the resolved slot only, and let everything else fall through
+    // to placement. (That restriction was originally scoped to non-self-labeling artifacts; the shape
+    // above shows an empty run.jsonl has the same problem, so it applies to all four.)
     const identicalTo = turns.find((n) => sameBytes(from, turnArtifactPath(outDir, n, artifact)));
-    if (identicalTo !== undefined) {
+    if (identicalTo !== undefined && identicalTo === rootArtifactTurn) {
       ops.push({ kind: "delete", path: from });
       continue;
     }

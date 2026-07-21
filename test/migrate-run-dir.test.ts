@@ -590,3 +590,82 @@ describe("assessRunDir — a byte-identical root copy of a NON-self-labeling art
     expect(a.plan.ops.filter((o) => o.kind === "delete").length, "the identical root copies were not dropped").toBe(3);
   });
 });
+
+describe("assessRunDir — byte-identity is only proof of duplication FOR THE SLOT IT RESOLVES TO", () => {
+  it("MOVES a root trace identical to a DIFFERENT turn's, instead of deleting turn 1's only copy", () => {
+    // The regression this pins was self-inflicted: universal byte-identity dedupe was introduced to stop a
+    // misleading refusal, and it silently DESTROYED data on the branch's own canonical shape. Two
+    // tool-less turns produce identical minimal traces, so root trace.json (turn 1's) matched
+    // turns/2/trace.json and was deleted — on a success path, with turns/1/trace.json then absent.
+    //
+    // Identity proves "already stored" only when the match is in the slot this artifact resolves to.
+    // Matching some OTHER turn means the copy is that turn's only instance.
+    const d = runDir();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"one"}`);
+    write(d, "trace.json", "{}");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"two"}`);
+    write(d, "turns/2/trace.json", "{}"); // identical bytes, different turn
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "delete" && o.path.endsWith("trace.json")),
+      "turn 1's trace was DELETED because turn 2's happened to be byte-identical",
+    ).toBe(false);
+    expect(
+      a.plan.ops.some((o) => o.kind === "move" && o.to.endsWith("/turns/1/trace.json")),
+      "turn 1's trace was not placed in its own turn",
+    ).toBe(true);
+  });
+
+  it("still drops a root copy identical to the slot it would occupy", () => {
+    // The legitimate case the dedupe exists for: the compat copy a mid-branch writer left beside turns/1.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/trace.json", "{}");
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "trace.json", "{}");
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(a.plan.ops.filter((o) => o.kind === "delete").length, "the true compat copies were not dropped").toBe(3);
+  });
+});
+
+describe("assessRunDir — an EMPTY archive-named resources file belongs to its OWN turn", () => {
+  it("places resources.turn-1.jsonl in turns/1, not turns/2", () => {
+    // `"empty"` was folded into the after-boundary arm, which is right for a ROOT file (it belongs to the
+    // latest turn) but wrong for an ARCHIVE-named one, whose name states its turn. The empty archive
+    // landed in turn 2 — giving a turn that never had telemetry a file carrying turn 1's mtime, which
+    // this branch treats as data — and when a genuine turn-2 resources file also existed, the collision
+    // refused an otherwise valid directory.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-1.jsonl", ""); // empty
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const mv = a.plan.ops.find((o) => o.kind === "move" && o.from.endsWith("resources.turn-1.jsonl"));
+    expect(mv?.kind === "move" ? mv.to.slice(d.length) : undefined).toBe("/turns/1/resources.jsonl");
+  });
+
+  it("does not refuse a valid dir because the empty archive collided with a real turn-2 file", () => {
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-1.jsonl", "");
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "resources.jsonl", `{"ts":9999999999999,"rss":1}\n`); // genuinely turn 2's
+    expect(assessRunDir(d).kind).toBe("plan");
+  });
+});

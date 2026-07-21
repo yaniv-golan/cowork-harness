@@ -50,9 +50,15 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 > ```
 >
 > It renames rather than copies, so the file timestamps `stats` and `status --latest-for` rank by survive
-> untouched. Back up the runs root first, read the dry-run report — anything it cannot resolve
-> unambiguously is **refused and named**, never guessed at — and rebuild the index afterwards with
+> untouched. Back up the runs root first, read the dry-run report, and rebuild the index afterwards with
 > `stats --reindex`. Staging one scenario, checking it, then doing the rest is the safer order.
+>
+> **What it refuses vs. infers.** A directory it cannot resolve is **refused and named** — an artifact
+> that is neither a duplicate of its slot nor placeable, a turn stamp that disagrees with its destination,
+> two operations targeting one path, telemetry whose turn boundary cannot be dated, a directory it cannot
+> read. It never attributes telemetry by guess. The one inference it does make is positional: an **empty**
+> file carries no content to attribute, so it follows its position — a root file to the latest turn, an
+> archive to the turn its name states.
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your

@@ -6,7 +6,7 @@ import { findLatestRunForScenario } from "../src/run/latest-run.js";
 import { indexRowFromResult, reindexFromRunsTree } from "../src/run/run-index.js";
 import { buildInspectView } from "../src/run/inspect-view.js";
 import { packageEvidence } from "../src/critique/package-evidence.js";
-import { buildGateTrace, buildFilesView, buildUsageView } from "../src/run/trace-view.js";
+import { buildFilesView, buildUsageView } from "../src/run/trace-view.js";
 import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 
 // LAYER 2 OF THE SINGLE-SOURCE GUARD: assert RESOLVED BEHAVIOUR, not source shape.
@@ -46,7 +46,12 @@ function poisonedDir(scenario = "scn", id = "sess-1"): string {
   const realResult = JSON.stringify({ scenario, result: "success", turn: 1, verdict: { pass: true } });
   writeFileSync(join(d, "turns", "1", "result.json"), realResult);
   writeFileSync(join(d, "turns", "1", "run.jsonl"), `{"t":"transcript","text":"real turn content"}`);
-  writeFileSync(join(d, "events.jsonl"), "");
+  // A real gate event, so `buildGateTrace` has a row to annotate. With an empty stream there are no rows,
+  // the provenance pairing has nothing to attach to, and that probe cannot fail however wrong the reader is.
+  writeFileSync(
+    join(d, "events.jsonl"),
+    JSON.stringify({ _emu: "gate", kind: "question", requestId: "req-decoy", question: "q?", options: ["a", "b"] }) + "\n",
+  );
   writeFileSync(join(d, "status.json"), JSON.stringify({ startedAt: "2026-07-20T10:00:00.000Z" }));
 
   // The decoys: every shape a pre-layout dir could present at the root.
@@ -72,8 +77,10 @@ function poisonedDir(scenario = "scn", id = "sess-1"): string {
     finalMessage: SENTINEL,
     referencesRead: [SENTINEL],
     toolCounts: { [SENTINEL]: 1 },
-    decisions: [{ kind: "question", by: SENTINEL, question: SENTINEL }],
-    modelUsage: [{ model: SENTINEL, cacheReadInputTokens: 1, inputTokens: 1, outputTokens: 1 }],
+    decisions: [{ kind: "question", decision: "answered", requestId: "req-decoy", by: SENTINEL, question: SENTINEL, answer: SENTINEL }],
+    // A Record, not an array: `buildUsageView` renders Object.entries KEYS, so an array puts "0" in the
+    // output and the sentinel — sitting in a value — becomes structurally unrenderable.
+    modelUsage: { [SENTINEL]: { costUSD: 1, inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 1, cacheCreationInputTokens: 0 } },
     workspaceFiles: [{ path: SENTINEL, bytes: 1 }],
     turn: 1,
   });
@@ -164,12 +171,18 @@ describe("no reader falls back to the run-dir root", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
+  // NOT PROBED, DELIBERATELY: `buildGateTrace`'s provenance pairing. Its rows come from `decision`
+  // protocol frames, which this fixture cannot synthesise, so a probe here would assert "sentinel absent"
+  // against an empty row set — blind, and claiming coverage it does not have. That is the exact defect
+  // this file has now shipped three times, so it is recorded as a gap rather than papered over. The path
+  // is covered positively by trace.test.ts's gate-provenance tests; what is missing is the
+  // prefer-turn-fall-back-to-root regression, which those cannot see.
+  //
   // `trace`'s readers are UNGATED by design — trace must keep working on a pre-layout dir, which is why
   // every other refusal points at it. That makes them the same risk profile as packageEvidence: no
   // refusal fires first to mask a root read. Each site's own comment records that a pre-seam root read
   // here was "guard-invisible".
   for (const [name, build] of [
-    ["buildGateTrace (answeredBy provenance)", buildGateTrace],
     ["buildFilesView (--view files)", buildFilesView],
     ["buildUsageView (--view usage)", buildUsageView],
   ] as const) {
@@ -185,15 +198,57 @@ describe("no reader falls back to the run-dir root", () => {
     });
   }
 
-  it("the decoy payload SURVIVES a real reader — the check that would have caught two dead probes", () => {
-    // Twice now a probe here has passed while observing nothing: once with the sentinel in a field the
-    // reader never renders, once with a payload that THREW inside the reader (missing `assertions`) and
-    // was swallowed as "corrupt". Asserting the bytes are on disk cannot catch either. So assert the
-    // payload actually round-trips through a reader: if a root read happened, the sentinel COULD surface.
-    const d = poisonedDir();
-    const raw = JSON.parse(readFileSync(join(d, "result.json"), "utf8")) as Parameters<typeof indexRowFromResult>[0];
-    const row = indexRowFromResult(raw, { command: "run", partial: false });
-    expect(JSON.stringify(row), "the decoy cannot produce a row — every probe in this file is unobservable").toContain(SENTINEL);
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // THE META-GUARD. Every probe above asserts "the sentinel does NOT appear". That assertion is
+  // satisfied just as well by a probe that can never see the sentinel at all — and three separate
+  // probes here have shipped in exactly that state: one with the sentinel in a field the reader never
+  // renders, one whose payload THREW inside the reader (swallowed as "corrupt"), and one whose
+  // `modelUsage` was an array where the reader renders Record KEYS.
+  //
+  // Asserting the bytes are on disk cannot catch any of those. So prove OBSERVABILITY directly: plant the
+  // decoy where each reader LEGITIMATELY looks, and require the sentinel to come back out. If it does,
+  // that reader can surface decoy content — so the probe above genuinely tests something.
+  describe("every probe can actually observe (else its not-found assertion is vacuous)", () => {
+    /** The decoy content, planted at the turn location each reader is supposed to read. */
+    function legitimatelyPlanted(): string {
+      const d = poisonedDir();
+      // Overwrite the REAL turn artifact with decoy content: a correct reader must now surface it.
+      writeFileSync(join(d, "turns", "1", "result.json"), readFileSync(join(d, "result.json"), "utf8"));
+      return d;
+    }
+
+    it("indexRowFromResult renders it", () => {
+      const d = legitimatelyPlanted();
+      const raw = JSON.parse(readFileSync(join(d, "turns", "1", "result.json"), "utf8")) as Parameters<typeof indexRowFromResult>[0];
+      expect(JSON.stringify(indexRowFromResult(raw, { command: "run", partial: false }))).toContain(SENTINEL);
+    });
+
+    it("packageEvidence renders it", () => {
+      const d = legitimatelyPlanted();
+      const skillDir = mkdtempSync(join(tmpdir(), "decoy-skill-obs-"));
+      writeFileSync(join(skillDir, "SKILL.md"), "---\nname: d\ndescription: d\n---\nbody\n");
+      expect(JSON.stringify(packageEvidence(d, snapshotTurnBoundary(d), skillDir, true))).toContain(SENTINEL);
+      rmSync(skillDir, { recursive: true, force: true });
+    });
+
+    it("buildFilesView renders it", () => {
+      const d = legitimatelyPlanted();
+      expect(JSON.stringify(buildFilesView(join(d, "events.jsonl")))).toContain(SENTINEL);
+    });
+
+    it("buildUsageView renders it", () => {
+      const d = legitimatelyPlanted();
+      expect(JSON.stringify(buildUsageView(join(d, "events.jsonl"))), "modelUsage shape is unrenderable — this probe is blind").toContain(
+        SENTINEL,
+      );
+    });
+
+    it("findLatestRunForScenario renders it", () => {
+      const d = legitimatelyPlanted();
+      // Remove the root markers so the dir is `turns`-shaped and the refusal does not pre-empt the read.
+      for (const f of ["result.json", "run.jsonl", "result.turn-1.json", "run.turn-1.jsonl"]) rmSync(join(d, f), { force: true });
+      expect(JSON.stringify(findLatestRunForScenario(root, "scn") ?? {})).toContain(SENTINEL);
+    });
   });
 
   it("the decoys are actually readable — otherwise this whole file passes vacuously", () => {
