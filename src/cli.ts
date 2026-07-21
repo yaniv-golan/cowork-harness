@@ -44,7 +44,7 @@ import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
 import { resolveStatusTarget } from "./run/status-target.js";
-import { latestTurn, turnArtifactPath, requireTurns, hasTurnDirs } from "./run/turn-layout.js";
+import { classifyRunDir, hasTurnDirs, latestTurn, preLayoutMessage, requireTurns, turnArtifactPath } from "./run/turn-layout.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -4227,12 +4227,20 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const runDir = dirname(eventsFile);
   const lines = readFileSync(eventsFile, "utf8").split("\n");
   const tools = topLevelToolRows(lines, eventsFile, normalize);
-  // REFUSE A PRE-LAYOUT DIR. `latestTurn` returns undefined on one, `?? 1` resolved to a `turns/1/` that
-  // does not exist, and BOTH transcript and meta came back empty — so `diff` printed "identical" and
-  // exited 0 for two genuinely different runs. Verified against the pre-layout build, which reported both
-  // deltas and exited 1: the silent version is strictly worse than what it replaced, and `diff` is the
-  // regression gate, so a false green here is this command's worst possible failure.
-  requireTurns(runDir, "diff");
+  // REFUSE A PRE-LAYOUT DIR — but ONLY a pre-layout one. `latestTurn` returns undefined on one, `?? 1`
+  // resolved to a `turns/1/` that does not exist, and BOTH transcript and meta came back empty, so `diff`
+  // printed "identical" and exited 0 for two genuinely different runs. That is this command's worst
+  // failure: it is the regression gate.
+  //
+  // A blanket `requireTurns` was too broad and BROKE a flow main supported: diffing two bare
+  // `events.jsonl` streams (a `none` shape — no run dir at all). Tool rows come from events.jsonl, which
+  // never moves, so that comparison is still perfectly sound; it is only transcript/meta that need a turn.
+  // The dangerous case is specifically `legacy`/`mixed`, where a root result.json EXISTS and would
+  // silently be ignored — a `none` shape has no meta to miss, so degrading is honest there and refusing
+  // is not. `trace` draws the same line for the same reason.
+  const diffShape = classifyRunDir(runDir);
+  if (diffShape.kind === "legacy" || diffShape.kind === "mixed")
+    throw new LegacyRunDirError(`diff: ${preLayoutMessage(diffShape, runDir)}`);
   // Same seam, same turn, same reason for both: a root read here silently produced an EMPTY transcript
   // (transcriptDiffers:false regardless of real drift) and, for meta, a guard-invisible root read of
   // `result.json` (`join(runDir, …)` — no PER_TURN_ARTIFACTS literal on the line) that silently emptied

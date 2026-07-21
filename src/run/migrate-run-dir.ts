@@ -275,6 +275,28 @@ export function assessRunDir(outDir: string): Assessment {
   }
 
   const turns = listTurns(outDir);
+
+  // ONE TURN FOR ALL ROOT ARTIFACTS. They were written by a single turn, and only `result.json` carries a
+  // `.turn` stamp — a transcript or trace has no way to identify itself. Deciding per-artifact meant a
+  // stamped result landed in `turns/1` while its own run.jsonl refused for having no stamp, on exactly the
+  // mixed shape every refusal message routes to this command.
+  //
+  // The stamp may fill a GAP in the existing sequence, including a turn dir that does not exist yet, but
+  // never invent a slot BEYOND the highest turn on disk: `turns/2` beside a root result stamped turn 1 is
+  // a real pre-layout resume, whereas a result stamped turn 9 beside `turns/1` is not evidence that turns
+  // 2-9 happened, and materialising `turns/9` would fabricate history from one field.
+  let rootArtifactTurn = rootTurn;
+  if (turns.length > 0) {
+    const highestOnDisk = Math.max(...turns);
+    const stamp = existsSync(join(outDir, "result.json")) ? stampedTurn(join(outDir, "result.json")) : undefined;
+    const firstGap = [...Array(highestOnDisk).keys()].map((i) => i + 1).find((n) => !turns.includes(n));
+    if (stamp !== undefined && stamp <= highestOnDisk && !turns.includes(stamp)) rootArtifactTurn = stamp;
+    else if (stamp !== undefined && stamp <= highestOnDisk)
+      rootArtifactTurn = stamp; // an existing turn: per-artifact rules below decide
+    else if (firstGap !== undefined) rootArtifactTurn = firstGap;
+    else rootArtifactTurn = highestOnDisk;
+  }
+
   for (const artifact of rootArtifacts) {
     const from = join(outDir, artifact);
 
@@ -310,17 +332,23 @@ export function assessRunDir(outDir: string): Assessment {
       ops.push({ kind: "delete", path: from });
       continue;
     }
-    // Lowest slot lacking this artifact. For non-self-labeling artifacts (trace/resources) byte-identity
-    // is not proof of duplication — an empty file matches any other empty file — so they only ever move.
-    const slot = turns.find((n) => !existsSync(turnArtifactPath(outDir, n, artifact)));
+    // WHERE DOES IT GO? The artifact's own `.turn` stamp decides when it has one — including into a slot
+    // that does not exist yet. Searching only EXISTING turn dirs meant the canonical mixed shape (root
+    // turn-1 artifacts beside `turns/2/`, i.e. a pre-layout dir resumed under current code) was refused
+    // with "every turn already has one" while `turns/1` did not exist at all. Six commands route users
+    // here with "Convert it in place"; refusing that shape closed the loop the branch's whole UX rests on.
+    const free = (n: number): boolean => !existsSync(turnArtifactPath(outDir, n, artifact));
+    const slot = free(rootArtifactTurn) ? rootArtifactTurn : turns.find(free);
     if (slot === undefined)
       return {
         kind: "refuse",
-        reason: `root ${artifact} is neither a duplicate of any turn nor placeable — every turn already has one`,
+        reason: `root ${artifact} is neither a duplicate of any turn nor placeable — every existing turn already has one`,
       };
-    const stamp = selfLabeling ? stampedTurn(from) : undefined;
-    if (stamp !== undefined && stamp !== slot)
-      return { kind: "refuse", reason: `root ${artifact} is stamped turn ${stamp} but the only free slot is turn ${slot}` };
+    // A stamp that disagrees with the chosen slot means the file is not what the layout says it is;
+    // placing it anyway would fabricate a turn. Refuse rather than guess.
+    const ownStamp = selfLabeling ? stampedTurn(from) : undefined;
+    if (ownStamp !== undefined && ownStamp !== slot)
+      return { kind: "refuse", reason: `root ${artifact} is stamped turn ${ownStamp} but it would be placed in turn ${slot}` };
     ops.push({ kind: "move", from, to: turnArtifactPath(outDir, slot, artifact) });
   }
 

@@ -181,3 +181,26 @@ describe.skipIf(!can)("prune refuses to rank a scenario with a migration in flig
     expect(existsSync(kept), "with no journal, --keep-last 1 should have pruned this").toBe(false);
   });
 });
+
+describe.skipIf(!can)("prune does not demote an unmigrated legacy run to junk", () => {
+  it("keeps a pre-layout run ahead of an empty scaffold for a keep slot", () => {
+    // `isRealRun` moved from "has result.json OR events.jsonl" to "hasTurnDirs OR events.jsonl". That
+    // reasons about CURRENT writers — but prune's population is history, including exactly the pre-layout
+    // dirs `migrate-run-dir` exists to preserve. A legacy dir without events.jsonl silently dropped into
+    // the junk tier and was deleted ahead of an empty scaffold. Silent deletion of real history is the
+    // failure this file's own journal guard calls the most expensive outcome in the feature.
+    const root = mkdtempSync(join(tmpdir(), "prune-legacy-"));
+    const legacy = join(root, "scn", "local_legacy");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "result.json"), JSON.stringify({ scenario: "scn", result: "success" }));
+    writeFileSync(join(legacy, "run.jsonl"), `{"t":"transcript"}`);
+    const scaffold = join(root, "scn", "local_scaffold");
+    mkdirSync(scaffold, { recursive: true }); // never started: nothing to lose
+
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", root], { encoding: "utf8" });
+    expect(r.status, `prune failed: ${r.stderr}`).toBe(0);
+    expect(existsSync(legacy), "prune deleted an unmigrated legacy run — the history the migrator exists to save").toBe(true);
+    expect(existsSync(scaffold), "the empty scaffold should have been pruned first").toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+});

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
-import { hasTurnDirs } from "./turn-layout.js";
+import { classifyRunDir, hasTurnDirs } from "./turn-layout.js";
 import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
 
 const log = (s: string) => process.stderr.write(s + "\n");
@@ -36,7 +36,16 @@ function parseRetentionMs(s: string): number | undefined {
  *  DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session dir has neither → it
  *  is what GC should drop first. `events.jsonl` exists from session start, so an in-flight run is
  *  protected without a wall-clock guard. */
-const isRealRun = (dir: string) => hasTurnDirs(dir) || existsSync(join(dir, "events.jsonl"));
+const isRealRun = (dir: string) => {
+  if (hasTurnDirs(dir) || existsSync(join(dir, "events.jsonl"))) return true;
+  // A PRE-LAYOUT dir is still a real run. This predicate reasons about the RANKING population, which is
+  // history — not about what current writers produce. Keying it on `hasTurnDirs` alone demoted an
+  // unmigrated legacy dir (root result.json, no events.jsonl) into the junk tier, so prune deleted it
+  // ahead of an empty scaffold: silent destruction of exactly the history `migrate-run-dir` exists to
+  // preserve, in the same file whose journal guard calls that the most expensive outcome in this feature.
+  const shape = classifyRunDir(dir);
+  return shape.kind === "legacy" || shape.kind === "mixed";
+};
 
 /** `cowork-harness prune [--keep-last <n>] [--dry-run] [<runs-dir>]`
  *

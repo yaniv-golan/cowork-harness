@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { findLatestRunForScenario } from "../src/run/latest-run.js";
 import { reindexFromRunsTree } from "../src/run/run-index.js";
 import { buildInspectView } from "../src/run/inspect-view.js";
+import { packageEvidence } from "../src/critique/package-evidence.js";
+import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 
 // LAYER 2 OF THE SINGLE-SOURCE GUARD: assert RESOLVED BEHAVIOUR, not source shape.
 //
@@ -47,7 +49,17 @@ function poisonedDir(scenario = "scn", id = "sess-1"): string {
   writeFileSync(join(d, "status.json"), JSON.stringify({ startedAt: "2026-07-20T10:00:00.000Z" }));
 
   // The decoys: every shape a pre-layout dir could present at the root.
-  const decoy = JSON.stringify({ scenario: SENTINEL, result: "failure", verdict: { pass: false } });
+  // The sentinel is placed in several fields on purpose: each reader surfaces a different slice, and a
+  // probe whose sentinel sits in a field that reader never renders passes while observing nothing —
+  // which is exactly how the critique probe below first passed against a reintroduced escape.
+  const decoy = JSON.stringify({
+    scenario: SENTINEL,
+    result: "failure",
+    verdict: { pass: false },
+    finalMessage: SENTINEL,
+    referencesRead: [SENTINEL],
+    toolCounts: { [SENTINEL]: 1 },
+  });
   writeFileSync(join(d, "result.json"), decoy);
   writeFileSync(join(d, "run.jsonl"), `{"t":"transcript","text":"${SENTINEL}"}`);
   writeFileSync(join(d, "result.turn-1.json"), decoy);
@@ -87,6 +99,21 @@ describe("no reader falls back to the run-dir root", () => {
       rendered = (e as Error).message;
     }
     expect(rendered, "a root file surfaced through inspect").not.toContain(SENTINEL);
+  });
+
+  it("packageEvidence reads the TURN, never the root decoy — the reader a real escape lived in", () => {
+    // THE MOST IMPORTANT PROBE IN THIS FILE. One of the two real historic escapes was in
+    // critique/evidence.ts: `["result.turn-1.json", "result.json"]` on one line, `join(outDir, f)` on the
+    // next. Reintroducing it verbatim was invisible to BOTH guard layers and to all 212 critique tests —
+    // the static scan cannot see a split-line probe, and this file previously drove only three readers,
+    // none of them critique's. `packageEvidence` is also UNGATED (critique must keep working), so unlike
+    // diff/inspect no refusal fires first to mask a root read.
+    const d = poisonedDir();
+    const skillDir = mkdtempSync(join(tmpdir(), "decoy-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: d\ndescription: d\n---\nbody\n");
+    const pkg = packageEvidence(d, snapshotTurnBoundary(d), skillDir, true);
+    expect(JSON.stringify(pkg), "a root/archived file surfaced through critique's evidence package").not.toContain(SENTINEL);
+    rmSync(skillDir, { recursive: true, force: true });
   });
 
   it("the decoys are actually readable — otherwise this whole file passes vacuously", () => {

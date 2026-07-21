@@ -509,3 +509,43 @@ describe("assessRunDir — critique's graded aliases (the plan's last open quest
     expect(assessRunDir(d).kind, "a normal critique dir was not recognised as already current").toBe("noop");
   });
 });
+
+describe("assessRunDir — the canonical MIXED shape every refusal routes here", () => {
+  it("places a stamped root artifact into its OWN turn slot, even when that slot does not exist yet", () => {
+    // Six commands refuse this shape with "Convert it in place: cowork-harness migrate-run-dir" — and the
+    // migrator refused it too, saying "every turn already has one" when turns/1 did not exist at all. The
+    // slot search only scanned EXISTING turn dirs, so a root artifact belonging to a turn with no
+    // directory had nowhere to go. That closed the loop the whole UX depends on: refuse -> migrate ->
+    // refuse. Fail-closed, but a dead end.
+    const d = runDir();
+    write(d, "result.json", RESULT(1)); // stamped turn 1
+    // Distinct transcripts per turn — identical ones would (correctly) resolve as a compat duplicate and
+    // never exercise the placement path this test is about.
+    write(d, "run.jsonl", `{"t":"transcript","text":"turn one"}`);
+    write(d, "trace.json", "{}");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"turn two"}`);
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const moves = Object.fromEntries(
+      a.plan.ops.filter((o) => o.kind === "move").map((o) => [o.from.slice(d.length), o.to.slice(d.length)]),
+    );
+    expect(moves["/result.json"], "the stamped turn-1 result did not land in turns/1").toBe("/turns/1/result.json");
+    expect(moves["/run.jsonl"]).toBe("/turns/1/run.jsonl");
+  });
+
+  it("still REFUSES when the stamp disagrees with every free slot", () => {
+    // The placement must be driven by the artifact's own stamp, not by "any gap will do".
+    const d = runDir();
+    write(d, "result.json", RESULT(7)); // claims turn 7
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    const a = assessRunDir(d);
+    expect(a.kind, "a mis-stamped artifact was placed anyway").toBe("refuse");
+  });
+});
