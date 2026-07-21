@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeScenario, parseScenarioFile, beginTurn } from "../src/run/execute.js";
 import { ResourceSampler, foldResources } from "../src/runtime/resource-sampler.js";
+import { turnArtifactPath } from "../src/run/turn-layout.js";
 
 // THE GAP THIS CLOSES.
 //
@@ -39,8 +40,8 @@ function protocolScenario(name: string) {
 }
 
 /** Same idea, but the session mounts a real folder — `--session-id`/`--resume`'s cross-project guard
- *  (execute.ts) treats an inline (sourceless) session as UNCONFIRMABLE and refuses to resume it at all
- *  (fail closed), so a resume test needs a session the guard can actually confirm. */
+ *  treats an inline (sourceless) session as UNCONFIRMABLE and refuses to resume it at all (fail closed),
+ *  so a resume test needs a session the guard can actually confirm. */
 function sourcedProtocolScenario(name: string) {
   const src = mkdtempSync(join(tmpdir(), "layout-resume-src-"));
   writeFileSync(join(src, "f.txt"), "x");
@@ -162,4 +163,51 @@ describe("the sampler can actually WRITE where beginTurn puts it", () => {
     );
     rmSync(outDir, { recursive: true, force: true });
   });
+});
+
+describe("resuming a PRE-LAYOUT dir does not destroy the prior turn", () => {
+  // The shape every published-1.6.0 run dir has on disk: the four artifacts at the root, no `turns/`.
+  // A user upgrading to the per-turn layout and resuming an existing session hits exactly this path.
+  //
+  // The prior turn used to be DESTROYED here: `archivePriorTurnFiles` exists to prevent it and could
+  // never fire (it runs POST-run, by which point `beginTurn` has created `turns/<N>` and its
+  // `!hasTurnDirs` gate is permanently false), so the turn-2 compat write overwrote turn 1's root
+  // `result.json`. That is fixed on the base branch by relocating into `turns/<prior>/` at turn start.
+  //
+  // ON THIS BRANCH the contract is different and STRONGER: the resume is REFUSED outright, before any
+  // spawn and before `beginTurn` runs, so the relocation is unreachable here by construction. What must
+  // be proven is therefore not "turn 1 survives relocation" but "the dir is not touched AT ALL" —
+  // refusing is what makes the pre-layout population safe until `migrate-run-dir` converts it.
+  function deShapeToLegacy(outDir: string): void {
+    for (const a of ["result.json", "run.jsonl", "trace.json", "resources.jsonl"]) {
+      const from = join(outDir, "turns", "1", a);
+      if (existsSync(from)) renameSync(from, join(outDir, a));
+    }
+    rmSync(join(outDir, "turns"), { recursive: true, force: true });
+  }
+
+  it("refuses the resume and leaves every byte of the prior turn untouched", async () => {
+    const scn = sourcedProtocolScenario("e2e-prelayout-resume");
+    const first = await executeScenario(scn, { sessionId: "prelayout-1" });
+    const outDir = first.outDir;
+
+    deShapeToLegacy(outDir);
+    expect(existsSync(join(outDir, "turns")), "fixture is not the pre-layout shape").toBe(false);
+    const artifacts = ["result.json", "run.jsonl", "trace.json"];
+    const before: Record<string, string> = {};
+    for (const a of artifacts) before[a] = readFileSync(join(outDir, a), "utf8");
+    const rootBefore = readdirSync(outDir).sort();
+
+    await expect(
+      executeScenario(scn, { sessionId: "prelayout-1", resume: true }),
+      "a pre-layout dir must be refused, not silently resumed into a mixed shape",
+    ).rejects.toThrow(/pre-layout|legacy|migrate/i);
+
+    // Zero writes: same entries, same bytes, and no turns/ minted by a partially-started turn.
+    expect(readdirSync(outDir).sort(), "the refused resume still modified the run dir").toEqual(rootBefore);
+    expect(existsSync(join(outDir, "turns")), "the refused resume created a turn dir").toBe(false);
+    for (const a of artifacts) {
+      expect(readFileSync(join(outDir, a), "utf8"), `${a} was modified by a resume that was supposed to refuse`).toBe(before[a]);
+    }
+  }, 90_000);
 });
