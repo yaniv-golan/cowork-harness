@@ -34,11 +34,6 @@ const NOT_HISTORY: { file: string; needle: string; why: string }[] = [
   { file: "docs/cassette.md", needle: "no longer matches", why: "recording-vs-live drift, a runtime condition" },
   { file: "docs/cassette.md", needle: "no longer correspond", why: "recording-vs-live drift" },
   { file: "docs/cassette.md", needle: "no longer silently", why: "describes allow-matching semantics, not a change" },
-  {
-    file: "docs/cassette.md",
-    needle: "were previously",
-    why: "replay-vs-live field provenance: which fields a frozen recording can still carry",
-  },
   { file: "docs/gotchas.md", needle: "no longer matches", why: "recording-vs-live drift" },
   { file: "SPEC.md", needle: "previously-valid document", why: "semver semantics: valid under an older schema" },
   { file: "SPEC.md", needle: "no longer matches", why: "cassette-vs-live tier drift" },

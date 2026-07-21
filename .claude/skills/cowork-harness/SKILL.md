@@ -52,9 +52,11 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
     at `result.graded.json` / `trace.graded.json`, the role-stable aliases `critique` writes (the graded
     task turn, never the reflection one). `events.jsonl` / `timeline.jsonl` stay cumulative at the run-dir
     root, always. A dir written before this layout existed is refused LOUD, by name, naming the shape found
-    — never silently misread as if it were `turns/1/`; re-run or re-record it (its `events.jsonl` still
-    fully supports `trace`). `verify-run` now REFUSES a multi-turn dir rather than certifying the wrong
-    turn, and `trace` shows the latest turn with a `::notice::` when earlier turns exist.
+    — never silently misread as if it were `turns/1/`. **Convert it in place with
+    `cowork-harness migrate-run-dir` (dry-run by default); do NOT tell the user to re-run or re-record,
+    which throws away history the migrator recovers.** Its `events.jsonl` still fully supports `trace`,
+    which is why every refusal points there. `verify-run` REFUSES a multi-turn dir rather than certifying
+    the wrong turn, and `trace` shows the latest turn with a `::notice::` when earlier turns exist.
 
   - **UNRELEASED (limitation provenance):** every `critique` limitation in `critique --help` and
     docs/critique.md is tagged with WHY it exists — `[structural]` (permanent), `[unverified]` (unproven,

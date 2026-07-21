@@ -553,10 +553,12 @@ agent.stderr.log    the agent process's stderr (auth errors, flag rejects)
 
 A run dir written before this layout existed (or before 1.6.0 for `chat`) is a different, older shape —
 root `result.json`/`run.jsonl`, or a name-mangled `result.turn-<N>.json` archive, no `turns/`. The CLI
-detects this and REFUSES the commands that need a specific turn's result (`verify-run`, `inspect`,
-`scaffold`, a resumed `--session-id`), naming the shape found rather than silently misreading it — its
-`events.jsonl`/`egress.log` still fully support `trace`, which never refuses. Re-run or re-record to get
-a current-layout dir.
+detects this and REFUSES every command that needs a specific turn's result (`verify-run`, `inspect`,
+`scaffold`, `diff`, `status --latest-for`, and a resumed `--session-id`), naming the shape found rather
+than silently misreading it; `stats --reindex` counts such dirs as skipped instead of dropping them
+quietly. Its `events.jsonl`/`egress.log` still fully support `trace`, which never refuses — which is why
+every refusal points there. Convert one in place with `cowork-harness migrate-run-dir` (dry-run by
+default), which preserves the file timestamps `stats` and `status --latest-for` rank by.
 
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
 

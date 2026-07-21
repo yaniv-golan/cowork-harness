@@ -75,13 +75,17 @@ All notable changes to this project are documented here. The format is based on
   - a **mixed** run dir (a pre-layout dir resumed under CURRENT code before this release — `turns/` present
     *and* a stray root/archived file).
 
-  `verify-run`, `inspect`, `scaffold`, and a resumed `--session-id` all refuse these with a message naming
-  the shape found and pointing at `trace <dir>` — which still works fully, since every one of its views
-  derives from `events.jsonl`, which never moves. **Migration: re-run or re-record** a kept pre-layout run
-  dir to get a current-layout one; there is no automated in-place migrator in this release. `stats
-  --reindex` still indexes a genuinely pre-layout dir's completions off its root/archived files (a mixed
-  dir's `turns/`-only portion is indexed; its archived pre-layout turn currently is not — a known,
-  documented gap, not a silent one).
+  `verify-run`, `inspect`, `scaffold`, `diff`, `status --latest-for`, and a resumed `--session-id` all
+  refuse these with a message naming the shape found and pointing at `trace <dir>` — which still works
+  fully, since every one of its views derives from `events.jsonl`, which never moves. `stats --reindex`
+  counts them as skipped and names the remedy rather than dropping them from the index quietly.
+
+  **Migration: `cowork-harness migrate-run-dir`** converts a pre-layout dir in place (dry-run by default),
+  preserving the file timestamps `stats` and `status --latest-for` rank by. `diff` and
+  `status --latest-for` are called out because their pre-refusal behaviour was the dangerous kind: `diff`
+  reported two genuinely different runs as `identical` and exited 0, and `status --latest-for` could
+  select a *different* run than the newest and report its verdict — a CI script reading `.verdict.pass`
+  got a green light for a red run.
 
   Previously the latest turn lived at the root while earlier ones were name-mangled archives, so a file's
   name depended on whether a later turn ever happened; that shape produced a wrong-turn read, a destroyed
