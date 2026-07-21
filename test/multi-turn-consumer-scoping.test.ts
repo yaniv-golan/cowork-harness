@@ -62,11 +62,13 @@ describe("verify-run refuses a multi-turn dir", () => {
   const SRC = FULL.slice(FULL.indexOf("async function cmdVerifyRun"));
 
   it("has a turn>1 refusal at all", () => {
-    expect(SRC, "the multi-turn refusal is gone").toMatch(/result\.turn === "number" && result\.turn > 1/);
+    // The guard used to key off a `result.turn` field read off whichever turn happened to load — now it's
+    // checked on the ADDRESSABLE TURN COUNT, before any result.json is even read (see the next test).
+    expect(SRC, "the multi-turn refusal is gone").toMatch(/turns\.length > 1/);
   });
 
   it("refuses BEFORE evaluating anything (fail-closed, like the partial/replay/chat guards)", () => {
-    const guard = SRC.indexOf('result.turn === "number" && result.turn > 1');
+    const guard = SRC.indexOf("turns.length > 1");
     const gates = SRC.indexOf("parseGatesFromEvents");
     expect(guard).toBeGreaterThan(-1);
     expect(gates, "parseGatesFromEvents moved — re-anchor this guard").toBeGreaterThan(-1);
@@ -74,10 +76,7 @@ describe("verify-run refuses a multi-turn dir", () => {
   });
 
   it("names how to reach the graded turn, so the caller is not stuck", () => {
-    const slice = SRC.slice(
-      SRC.indexOf('result.turn === "number" && result.turn > 1'),
-      SRC.indexOf('result.turn === "number" && result.turn > 1') + 1200,
-    );
+    const slice = SRC.slice(SRC.indexOf("turns.length > 1"), SRC.indexOf("turns.length > 1") + 1200);
     expect(slice).toContain("result.graded.json");
   });
 });

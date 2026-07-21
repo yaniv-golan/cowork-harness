@@ -2,7 +2,14 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeScenario, parseScenarioFile, sessionOriginSources, sessionOriginKey, collectArtifacts } from "../src/run/execute.js";
+import {
+  executeScenario,
+  parseScenarioFile,
+  sessionOriginSources,
+  sessionOriginKey,
+  loadSessionFromFile,
+  collectArtifacts,
+} from "../src/run/execute.js";
 import { loadSession } from "../src/session.js";
 
 // the pinned-session (`sess-<id>`) cross-project overwrite guard. All collision cases throw at the
@@ -125,5 +132,49 @@ describe("execute — pinned-session cross-project guard", () => {
     writeFileSync(join(dir, "session.json"), JSON.stringify({ sessionId: "ci", agentSessionId: "u" }));
     const { scenario } = sourcedScenario("guard-c");
     await expect(executeScenario(scenario, { sessionId: "ci", resume: true })).rejects.toThrow(/belongs to another project/);
+  });
+
+  // The turn-layout removal's write-side gate: `--resume` onto a pre-layout (root-only, no `turns/`) or a
+  // MIXED (turns/ + stray root files) dir must refuse, or the resume mints `turns/<N>/` next to an
+  // unaddressable root/name-mangled turn — the exact "turn 1 invisible" defect the single shape exists to
+  // eliminate, reintroduced on a dir mutated AFTER the fix. Same-project (not foreign) on purpose: this
+  // proves the NEW gate fires even when the pre-existing cross-project guard above would let the resume
+  // through.
+  it("blocks --resume onto a SAME-project pre-layout (root-only) dir — not a foreign-project rejection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-guard-legacy-"));
+    process.env.COWORK_HARNESS_RUNS_DIR = root;
+    const { scenario } = sourcedScenario("guard-legacy");
+    const session = loadSessionFromFile(scenario.session);
+    const sources = sessionOriginSources(session, scenario.session);
+    const originKey = sessionOriginKey(sources, scenario.session);
+    const dir = join(root, "guard-legacy", "sess-lg1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".origin"), JSON.stringify({ originKey, sourceHint: sources[0], createdAt: new Date().toISOString() }));
+    writeFileSync(join(dir, "session.json"), JSON.stringify({ sessionId: "lg1", agentSessionId: "u" }));
+    // The pre-layout shape: root result.json/run.jsonl, no turns/ — what a run dir looked like before
+    // `turns/<N>/` existed at all.
+    writeFileSync(join(dir, "result.json"), JSON.stringify({ turn: 1, result: "success" }));
+    writeFileSync(join(dir, "run.jsonl"), "{}\n");
+    await expect(executeScenario(scenario, { sessionId: "lg1", resume: true })).rejects.toThrow(/pre-layout run dir/);
+    // A refused resume must not itself destroy the evidence it refused to touch.
+    expect(existsSync(join(dir, "result.json"))).toBe(true);
+  });
+
+  it("blocks --resume onto a MIXED dir (turns/ AND a stray root run.jsonl)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-guard-mixed-"));
+    process.env.COWORK_HARNESS_RUNS_DIR = root;
+    const { scenario } = sourcedScenario("guard-mixed");
+    const session = loadSessionFromFile(scenario.session);
+    const sources = sessionOriginSources(session, scenario.session);
+    const originKey = sessionOriginKey(sources, scenario.session);
+    const dir = join(root, "guard-mixed", "sess-mx1");
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(join(dir, "turns", "1", "result.json"), JSON.stringify({ turn: 1, result: "success" }));
+    writeFileSync(join(dir, "turns", "1", "run.jsonl"), "{}\n");
+    // A stray root run.jsonl next to turns/ — no current writer ever leaves one there once turns/ exists.
+    writeFileSync(join(dir, "run.jsonl"), "{}\n");
+    writeFileSync(join(dir, ".origin"), JSON.stringify({ originKey, sourceHint: sources[0], createdAt: new Date().toISOString() }));
+    writeFileSync(join(dir, "session.json"), JSON.stringify({ sessionId: "mx1", agentSessionId: "u" }));
+    await expect(executeScenario(scenario, { sessionId: "mx1", resume: true })).rejects.toThrow(/MIXED run dir/);
   });
 });

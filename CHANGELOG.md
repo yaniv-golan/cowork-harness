@@ -39,19 +39,38 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- ⚠️ **Per-turn run-directory layout.** A run directory that holds several turns (any `--resume`, and every
-  `critique`) now writes each turn's `result.json`, `run.jsonl`, `trace.json` and `resources.jsonl` into
-  **`turns/<N>/`**, once, under its final name — nothing is renamed or overwritten as later turns arrive.
+- ⚠️ **BREAKING: per-turn run-directory layout, single shape — the root-level `result.json` compatibility
+  copy is REMOVED.** A run directory that holds several turns (any `--resume`, and every `critique`) writes
+  each turn's `result.json`, `run.jsonl`, `trace.json` and `resources.jsonl` into **`turns/<N>/`**, once,
+  under its final name — nothing is renamed or overwritten as later turns arrive. `chat` now goes through
+  the same layout too (always `turns/1/` — a `chat` session mints a fresh dir per invocation and never
+  resumes). **`<outDir>/result.json` no longer exists — there is no root compat copy of any per-turn
+  artifact, on ANY run dir.** Read `turns/<N>/result.json` directly (`turns/1/` for a single-turn run), or
+  — for `critique` — the unchanged `result.graded.json` / `trace.graded.json` role aliases. Cumulative
+  streams (`events.jsonl`, `timeline.jsonl`) and session state are unchanged, so `critique`'s byte-offset
+  turn-isolation proof and cassette capture are unaffected.
+
+  **Two prior shapes are now REFUSED, loudly, by name, instead of being silently misread:**
+  - a **pre-layout** run dir (written before `turns/<N>/` existed: root `result.json`/`run.jsonl`, or a
+    name-mangled `result.turn-<N>.json` archive, no `turns/`);
+  - a **mixed** run dir (a pre-layout dir resumed under CURRENT code before this release — `turns/` present
+    *and* a stray root/archived file).
+
+  `verify-run`, `inspect`, `scaffold`, and a resumed `--session-id` all refuse these with a message naming
+  the shape found and pointing at `trace <dir>` — which still works fully, since every one of its views
+  derives from `events.jsonl`, which never moves. **Migration: re-run or re-record** a kept pre-layout run
+  dir to get a current-layout one; there is no automated in-place migrator in this release. `stats
+  --reindex` still indexes a genuinely pre-layout dir's completions off its root/archived files (a mixed
+  dir's `turns/`-only portion is indexed; its archived pre-layout turn currently is not — a known,
+  documented gap, not a silent one).
+
   Previously the latest turn lived at the root while earlier ones were name-mangled archives, so a file's
   name depended on whether a later turn ever happened; that shape produced a wrong-turn read, a destroyed
-  trace, and a dropped index row. Cumulative streams (`events.jsonl`, `timeline.jsonl`) and session state
-  are unchanged, so `critique`'s byte-offset turn-isolation proof and cassette capture are unaffected.
-  **`<outDir>/result.json` remains, as a documented compatibility copy of the latest turn** —
-  `turns/<N>/result.json` is the addressable truth. Single-turn and `chat` directories are unchanged.
-  `critique`'s `result.graded.json` / `trace.graded.json` aliases are unchanged and remain the recommended
-  way to address the graded turn. The Python SDK resolves the latest turn's transcript (previously it read
-  the run-dir root unconditionally, which would have made `assert_transcript_not_contains` pass vacuously
-  under the new layout).
+  trace, and a dropped index row — this release's read-side (`turnArtifactPath`/`listTurns`/`readTurnResult`
+  in `turn-layout.ts`) no longer has a legacy-resolving branch at all, so that class of bug is now
+  unrepresentable rather than merely fixed. The Python SDK's `_latest_run_jsonl` likewise now raises loudly
+  on a pre-layout dir instead of silently falling back to a root `run.jsonl` that (for any current-layout
+  dir) is a path to nowhere.
 
 - **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
   a run that previously exited `1` because one `docker exec` failed will now exit `0`. A dead sidecar

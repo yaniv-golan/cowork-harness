@@ -285,7 +285,7 @@ cowork-harness skill --help                                               # full
 cowork-harness chat ~/my-plugin                  # interactive multi-turn REPL (full harness: egress sandbox + control protocol)
 # chat --raw  → native interactive cowork mode via `docker run -it` (needs Docker + the arm64
 #               cowork-agent-base:2 image; the egress sandbox is NOT applied in --raw)
-# chat also writes a result.json (mode:"chat", no pass/fail verdict) — so a chat session now shows up in `stats`/`trace`/`scaffold` too
+# chat writes turns/1/result.json (mode:"chat", no pass/fail verdict), so chat sessions appear in `stats`/`trace`/`scaffold`
 ```
 
 **Input policy — no silent false-greens.** When an AskUserQuestion arrives with no scripted
@@ -533,31 +533,34 @@ control-out.jsonl   driver→child control_responses (the other cassette half)
 turns/<N>/          ONE DIRECTORY PER TURN — written once, never renamed or overwritten as later
                     turns arrive. A run dir holds several turns whenever you use
                     --session-id + --resume, and always for `critique` (task turn + reflection
-                    turn). Each turn dir holds that turn's:
+                    turn), and — as of 1.6.0 — for `chat` too (always turns/1/, since chat mints
+                    a fresh session per invocation and never resumes). Each turn dir holds that
+                    turn's:
                       result.json     the turn's own result (see the fields below)
                       run.jsonl       harness-observability log: decisions (+who decided), sub-agent
                                       dispatch tree, egress, transcript, cost, `turn` number
                       trace.json      structured run trace: steps, questions, sub-agents, egress
                       resources.jsonl per-sample resource telemetry
-                    A single-turn run has just turns/1/. Prefer these paths: they mean the same
-                    thing forever, whereas the root result.json below tracks whichever turn ran last.
-trace.json          (legacy/chat run dirs only — see turns/<N>/trace.json above)
+                    A single-turn run has just turns/1/. There is NO root compat copy of any of
+                    these — `<run-dir>/result.json` does not exist. Prefer turns/<N>/ paths (or,
+                    for `critique`, the `*.graded.json` aliases below): they mean the same thing
+                    forever, unlike a "latest turn" pointer that would shift under you.
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)
-result.json         COMPATIBILITY COPY of the LATEST turn (turns/<N>/result.json is the addressable
-                    truth). Kept so existing tooling keeps working; on a multi-turn dir it is
-                    whichever turn finished last — for a `critique` dir that is the REFLECTION
-                    turn, not the graded one. Contents:
-                    assertion results + decisions + sub-agents + cost/usage + exit status +
-                    gate provenance + tool/model timing & errors + skill/task/context panels +
-                    workspace file inventory + egress & resource telemetry (see "Observability
-                    fields" below)
 agent.stderr.log    the agent process's stderr (auth errors, flag rejects)
 ```
 
+A run dir written before this layout existed (or before 1.6.0 for `chat`) is a different, older shape —
+root `result.json`/`run.jsonl`, or a name-mangled `result.turn-<N>.json` archive, no `turns/`. The CLI
+detects this and REFUSES the commands that need a specific turn's result (`verify-run`, `inspect`,
+`scaffold`, a resumed `--session-id`), naming the shape found rather than silently misreading it — its
+`events.jsonl`/`egress.log` still fully support `trace`, which never refuses. Re-run or re-record to get
+a current-layout dir.
+
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
 
-**Observability fields** — `result.json` carries a lot more than the basics above:
+**Observability fields** — `result.json` (i.e. **the turn's own** `turns/<N>/result.json`, or a
+`critique` dir's `result.graded.json`) carries a lot more than the basics above:
 
 - **Timing & model:** `toolDurations` (per-tool call count / total / max ms), `models` (distinct model ids seen) — `trace <id> --view tool-durations` renders these as a table.
 - **Tool health:** `toolErrors` (per-tool call/error counts), `redundantToolCalls` (wasted repeated `{name,args}` calls), `thinking` (reasoning blocks, capped at the last 50 — on newer models like Opus 4.8/Sonnet 5 the API omits thinking text by default, so blocks arrive as `{text:"", redacted:true}`; read that as "reasoned, text omitted by request", not "no reasoning"), `modelUsage` (per-model tokens/cost/cache, denormalized from the SDK's own field). Don't conflate the three per-tool rollups: `toolCounts` is a flat `{tool: number}` call-count map, `toolErrors` is `{tool: {calls, errors}}`, and `toolDurations` is `{tool: {calls, totalMs, maxMs}}`. `trace <id> --view tool-errors` renders one row per errored tool call with the full multi-line stderr (capped 4KB), vs. the 120-char preview `--view tools` shows.
@@ -577,7 +580,7 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
 ```
 ✓ success [container] · 4 tools · 12.3s ⚠ non-deterministic (LLM-decided)
    gates: 3 · 2 decided(llm), 1 scripted
-   → result: ~/.cowork-harness/runs/my-scenario/s1/result.json
+   → result: ~/.cowork-harness/runs/my-scenario/s1/turns/1/result.json
 ```
 
 It is informational — it never changes the verdict. The block is a live/`partial`-lane surface (absent on the replay lane, which reports reproducibility via `nonDeterministic: false`). The `→ result:` pointer itself prints on every kept run (success or failure) since the run directory is always retained on disk — it's suppressed only on the replay lane, which never writes a `result.json`.
@@ -843,4 +846,4 @@ inputs/outputs. Human-readable terminal text is explicitly **not** part of the c
 The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is
 **`desktop-1.22209.3`**. Release-by-release verification notes (what was re-verified against
 which live agent/asar) are recorded in [CHANGELOG.md](./CHANGELOG.md); the feature catalogue
-this section used to duplicate lives in the sections above.
+this section would otherwise duplicate lives in the sections above.

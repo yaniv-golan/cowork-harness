@@ -389,20 +389,19 @@ export function reindexFromRunsTree(runsRoot: string): {
           skippedReplay++;
           continue;
         }
-        // Under the per-turn layout the root `result.json` is a COMPAT COPY of the latest turn, which the
-        // turns/ enumeration below already indexes. Pushing it too would write two rows with the SAME
-        // identity for ONE completion — the double-count this scan's strict archive regex already guards
-        // against for `result.graded.json`. (Caught by the cross-layout parity test, which produced
-        // turns [2,1,2] on its first run.)
+        // No writer produces a root `result.json` compat copy anymore, so for a current-layout dir
+        // `rootOutcome` is always `"missing"` here — this branch only ever fires for a genuinely LEGACY dir
+        // (no `turns/`, root `result.json` is its only copy). Kept, not deleted: it's still how a kept
+        // pre-layout dir gets indexed at all. `!hasTurnDirs(outDir)` is the guard against the two shapes
+        // ever double-indexing the SAME completion, back from when a root copy existed alongside `turns/`.
         if (rootOutcome.kind === "row" && !hasTurnDirs(outDir)) {
           walked.push(rootOutcome.row);
           walkedIdentities.add(rowIdentity(rootOutcome.row));
           rootWalkedOutDirs.add(rootOutcome.row.outDir);
         }
 
-        // NEW LAYOUT: enumerate turns/<N>/result.json. The root file is then a COMPAT COPY of the latest
-        // turn — indexing both would write two rows with the SAME identity for one completion, the exact
-        // double-count this scan's strict archive regex already guards against for `result.graded.json`.
+        // NEW LAYOUT: enumerate turns/<N>/result.json — the only place a current-layout dir's results live
+        // (no root compat copy to double-index against).
         if (hasTurnDirs(outDir)) {
           for (const n of listTurns(outDir)) {
             const p = turnArtifactPath(outDir, n, "result.json");
@@ -416,7 +415,7 @@ export function reindexFromRunsTree(runsRoot: string): {
               rootWalkedOutDirs.add(o.row.outDir);
             }
           }
-          continue; // root result.json is the compat alias of a turn already indexed above
+          continue; // this dir's completions are fully indexed above — nothing left at the root to read
         }
 
         // Archived turns: `result.turn-<N>.json` files left behind when a resume/reflection overwrote the

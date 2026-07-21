@@ -1,9 +1,9 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { BoundaryError, UsageError } from "../errors.js";
+import { BoundaryError, UsageError, LegacyRunDirError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
-import { hasTurnDirs, currentTurnFromDirs, turnWriteDir } from "./turn-layout.js";
+import { hasTurnDirs, currentTurnFromDirs, turnWriteDir, classifyRunDir, preLayoutMessage } from "./turn-layout.js";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -322,6 +322,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
                 : `can't be confirmed as this project's (the session mounts no source to identify it)`) +
               ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir`,
           );
+        // Refuse to resume onto a pre-layout/mixed shape. `turnArtifactPath` addresses ONLY `turns/<N>/`
+        // (no legacy fallback), so resuming one of these writes `turns/<currentTurn>/` next to a root/
+        // name-mangled turn 1 that becomes permanently unaddressable the moment this returns — reintroducing
+        // the exact "turn 1 invisible on a mixed dir" defect this layout removal exists to eliminate, on a
+        // dir mutated AFTER the fix. Gated here (dir-open time), not inside `beginTurn`, so it fires before
+        // any turn-start bookkeeping touches the dir. classifyRunDir is a DETECTOR, never a resolver — see
+        // turn-layout.ts's module doc comment.
+        const resumeShape = classifyRunDir(outDir);
+        if (resumeShape.kind === "legacy" || resumeShape.kind === "mixed")
+          throw new LegacyRunDirError(`--resume: ${preLayoutMessage(resumeShape, outDir)}`);
       } else if (sameOrigin) {
         // a same-project non-resume run must be FRESH — the prior staged tree (uploads, plugins,
         // mnt/.claude agent state, outputs) would otherwise leak in via cpSync's merge semantics, and a
@@ -967,7 +977,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
       const partialText = scrub(JSON.stringify(partialResult, null, 2), secrets);
       writeTextAtomic(join(tDirPartial, "result.json"), partialText);
-      writeTextAtomic(join(outDir, "result.json"), partialText); // compat copy — see the success path
 
       appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
       writeTrace(tDirPartial, record, egress, secrets, partialResult.durationMs);
@@ -1451,11 +1460,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
     const resultText = scrub(JSON.stringify(result, null, 2), secrets);
     writeTextAtomic(join(tDir, "result.json"), resultText);
-    // COMPAT COPY at the run-dir root: every existing reader (verify-run, diff, stats, latest-run, the
-    // python SDK, external consumers) addresses `<outDir>/result.json`. Written AFTER the authoritative
-    // per-turn file, so a crash between them leaves the turn recorded and the alias stale rather than the
-    // reverse. Documented as "the latest turn"; `turns/<N>/result.json` is the addressable truth.
-    writeTextAtomic(join(outDir, "result.json"), resultText);
     appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
     writeTrace(tDir, record, egress, secrets, result.durationMs);
     return result;
@@ -1600,8 +1604,9 @@ export function beginTurn(outDir: string): number {
     }
     // The resources rename below applies to LEGACY dirs only. Under the per-turn layout each turn writes
     // its own `turns/<N>/resources.jsonl`, so there is nothing to rename — the scoping is structural.
-    // Legacy dirs (including every `chat` dir, which never participates in turn bookkeeping) still share
-    // one root file and need it.
+    // Legacy dirs still share one root file and need it. `chat` now goes through this same `beginTurn` too,
+    // but its turn is always 1 (fresh sessionId, fresh dir, never resumed — see chat.ts), so it never
+    // reaches this `turn > 1` branch at all.
     if (legacy) {
       try {
         const res = join(outDir, "resources.jsonl");
@@ -1624,8 +1629,8 @@ export function beginTurn(outDir: string): number {
 
 export function currentTurn(outDir: string): number {
   // New layout: one past the highest turn that has a `run.jsonl` (see currentTurnFromDirs for why the key
-  // is the transcript and not the result). Legacy dirs — including every `chat` dir, which never
-  // participates in turn bookkeeping — keep the original archive-counting rule.
+  // is the transcript and not the result). A dir written before turn bookkeeping existed at all — or one
+  // that predates `chat`'s own conversion — keeps the original archive-counting rule.
   // MAX of both rules, never a switch between them. A legacy dir resumed under the new code is MIXED:
   // turn 1 is a root archive (or a live root run.jsonl) while turn 2 is a turn dir. Switching on
   // `hasTurnDirs` made each rule blind to the other's turns, so the number went BACKWARDS (2 -> 1) on the
@@ -2411,4 +2416,4 @@ export function readSessionManifest(path: string, sessionId: string): string {
   return id;
 }
 
-export { UnansweredError, BoundaryError, UsageError };
+export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError };

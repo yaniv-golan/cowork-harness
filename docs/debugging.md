@@ -29,10 +29,13 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 
 > **Multi-turn run dirs.** `--session-id` + `--resume`, and every `critique` (task turn + reflection
 > turn), write several turns into one directory. Each turn's artifacts live in its own `turns/<N>/` and
-> are never renamed or overwritten. The root `result.json` is a **compatibility copy of the latest turn**
-> — on a `critique` dir that is the *reflection* turn, so read `turns/1/result.json` (or
-> `result.graded.json`) when you want the graded one. `events.jsonl` and `timeline.jsonl` stay cumulative
-> across turns; the harness scopes its own reads of them to the current turn.
+> are never renamed or overwritten — there is **no root compat copy**; on a `critique` dir, read
+> `turns/1/result.json` (or `result.graded.json`) for the graded turn, `turns/2/` for the reflection one.
+> `events.jsonl` and `timeline.jsonl` stay cumulative across turns; the harness scopes its own reads of
+> them to the current turn. A run dir written before this layout existed — root `result.json`/`run.jsonl`,
+> no `turns/` — is a different shape: `verify-run`/`inspect`/`scaffold` refuse it by name rather than
+> silently misreading it, though `trace` still reads it fine (its views come from `events.jsonl`, which
+> never moves).
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your
@@ -103,7 +106,7 @@ A green run is not automatically a correct run.
   Read it before trusting a green you didn't expect.
 - **Gate provenance** — a green run whose premise came from a *decided* (LLM/external) gate is the classic
   false-green. `result.json`'s `gateProvenance` block, the footer `gates: N · …` line, and
-  `trace <run-dir> --view questions` (which now shows each gate's `by`/`model`) tell you exactly which
+  `trace <run-dir> --view questions` (which shows each gate's `by`/`model`) tell you exactly which
   gates were decided vs scripted — so you can spot a semantic assertion resting on a non-reproducible
   answer. Pin those gates with `--answer`. (Informational; live/`partial` lane only — see
   [fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md).)

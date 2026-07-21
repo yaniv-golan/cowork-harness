@@ -13,6 +13,7 @@ import {
   UnansweredError,
   BoundaryError,
   UsageError,
+  LegacyRunDirError,
   type ExecuteOptions,
 } from "./run/execute.js";
 import {
@@ -43,7 +44,7 @@ import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
 import { resolveStatusTarget } from "./run/status-target.js";
-import { latestTurn, turnArtifactPath } from "./run/turn-layout.js";
+import { latestTurn, turnArtifactPath, requireTurns, hasTurnDirs } from "./run/turn-layout.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -3422,7 +3423,15 @@ function cmdScaffold(args: string[]) {
   } catch (e) {
     return void fail("scaffold", "usage", String((e as Error).message), undefined, json);
   }
-  const yaml = buildScaffold(file);
+  let yaml: string;
+  try {
+    yaml = buildScaffold(file);
+  } catch (e) {
+    // LegacyRunDirError → a well-formed target that predates the layout: `runtime`, matching every other
+    // refusing command's category. Anything else (e.g. an unparseable result.json) also degrades cleanly
+    // here rather than falling through to main().catch's stack-trace branch.
+    return void fail("scaffold", "runtime", String((e as Error).message), undefined, json);
+  }
   if (outPath !== undefined) {
     try {
       mkdirSync(dirname(outPath), { recursive: true });
@@ -3550,12 +3559,49 @@ async function cmdVerifyRun(args: string[]) {
       isJsonOutput(args),
     );
   }
-  const resultPath = join(runDir, "result.json");
+  // Shape-gate FIRST, before loading anything: a legacy/mixed/pre-completion dir gets a message naming
+  // what it IS (see turn-layout.ts's preLayoutMessage), not a generic "no result.json" that reads as
+  // corruption when the file is sitting right there at the root.
+  let turns: number[];
+  try {
+    turns = requireTurns(runDir, "verify-run");
+  } catch (e) {
+    return fail("verify-run", "runtime", (e as Error).message, undefined, isJsonOutput(args));
+  }
+  // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
+  // caller's scenario describes. Checked on the TURN COUNT (before loading any result), not a `result.turn`
+  // field read off whichever turn we'd otherwise load — RunResult.turn is documented absent on some lanes,
+  // so a field-based check silently passed a multi-turn dir whose latest result happened to omit it.
+  //
+  // This command reads TURN 1. For a `critique` dir that is the GRADED task turn, not the reflection one —
+  // so on a genuinely single-turn dir (the only case that survives this refusal) turn 1 IS the run's only
+  // completion, and there is no ambiguity left to resolve. Today's cumulative gate scan at least fails
+  // LOUDLY on the other turn's unmatched gates; scoping this command to "whichever turn is latest" instead
+  // would have turned that into a silent PASS against a transcript the scenario never described. Refusing
+  // is the fail-closed reading: an ambiguous target is not a verified one.
+  //
+  // Deliberately no turn selector yet — that is a new CLI surface (flag disposition, docs, tests) and this
+  // guard is worth having before it. The message names the addressable files so the caller is not stuck.
+  if (turns.length > 1) {
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: ${runDir} holds ${turns.length} turns (a --resume session, or a \`critique\` task+reflection pair). ` +
+        `This command reads turn 1 only — for a critique dir that is the graded task turn, not the reflection one, ` +
+        `so it cannot tell which turn your scenario describes when there is more than one. Verify a single-turn ` +
+        `run dir instead; the graded turn is addressable as result.graded.json or turns/1/result.json for inspection. ` +
+        `(can't verify ⇒ not green)`,
+      undefined,
+      isJsonOutput(args),
+    );
+  }
+  const resultPath = turnArtifactPath(runDir, turns[0], "result.json");
   if (!existsSync(resultPath)) {
     return fail(
       "verify-run",
       "runtime",
-      `verify-run: no result.json under ${runDir} (is this a kept run dir? e.g. runs/<scenario>/<sessionId>/)`,
+      `verify-run: no result.json under ${resultPath} (turn ${turns[0]} directory exists with no completed ` +
+        `result — a crash between run.jsonl and result.json, or a run still in flight)`,
       undefined,
       isJsonOutput(args),
     );
@@ -3590,30 +3636,6 @@ async function cmdVerifyRun(args: string[]) {
       "runtime",
       `verify-run: ${runDir} is a PARTIAL run — it did not complete (exited on an unanswered gate). ` +
         `Re-run to completion before verifying. (can't verify ⇒ not green)`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-  // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
-  // caller's scenario describes.
-  //
-  // Root `result.json` is the LATEST turn. For a `critique` dir that is the REFLECTION turn, while the
-  // scenario describes the GRADED (task) turn — so certifying the root file would vouch for the wrong
-  // turn. Today's cumulative gate scan at least fails LOUDLY on the other turn's unmatched gates; scoping
-  // this command to "the latest turn" instead would have turned that into a silent PASS against a
-  // transcript the scenario never described. Refusing is the fail-closed reading: an ambiguous target is
-  // not a verified one.
-  //
-  // Deliberately no turn selector yet — that is a new CLI surface (flag disposition, docs, tests) and this
-  // guard is worth having before it. The message names the addressable files so the caller is not stuck.
-  if (typeof result.turn === "number" && result.turn > 1) {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: ${runDir} holds ${result.turn} turns (a --resume session, or a \`critique\` task+reflection pair). ` +
-        `Root result.json is the LATEST turn (${result.turn}) — for a critique dir that is the reflection turn, not the graded one, ` +
-        `so this command cannot tell which turn your scenario describes. Verify a single-turn run dir instead; ` +
-        `the graded turn is addressable as result.graded.json or turns/1/result.json for inspection. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );
@@ -3687,10 +3709,9 @@ async function cmdVerifyRun(args: string[]) {
     );
   }
 
-  // Through the seam: under the per-turn layout these live in `turns/<N>/`, and only `result.json` gets a
-  // root compat copy — so reading the root here made EVERY transcript/question assertion report
-  // "evidence unavailable" on any run produced after the layout change.
-  const vrTurn = latestTurn(runDir) ?? 1;
+  // Through the seam, same turn the result above was read from (turns[0] — the guard above already
+  // refused anything with more than one).
+  const vrTurn = turns[0];
   const sidecarTranscript = readTranscriptSidecar(turnArtifactPath(runDir, vrTurn, "run.jsonl"));
   const sidecarQuestions = readQuestionsSidecar(turnArtifactPath(runDir, vrTurn, "trace.json"));
 
@@ -4101,11 +4122,15 @@ function cmdTrace(args: string[]) {
   if (json) out(jsonPayloadEnvelope("trace", true, { file, rows, ...(multiTurn ? { note: multiTurn } : {}) }));
   else {
     if (multiTurn) process.stderr.write(`::notice:: [trace] ${multiTurn}\n`);
-    // cache-read-ratio footer: best-effort read of the sibling result.json, same
-    // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance.
+    // cache-read-ratio footer: best-effort read of the LATEST turn's sibling result.json, same
+    // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance. Through the
+    // seam — a root read here was guard-invisible (no PER_TURN_ARTIFACTS literal on the line) and
+    // silently omitted the footer on every current-layout run.
     let modelUsage: RunResult["modelUsage"] | undefined;
-    const resultPath = join(dirname(file), "result.json");
-    if (existsSync(resultPath)) {
+    const footerRunDir = dirname(file);
+    const footerTurn = latestTurn(footerRunDir);
+    const resultPath = footerTurn !== undefined ? turnArtifactPath(footerRunDir, footerTurn, "result.json") : undefined;
+    if (resultPath && existsSync(resultPath)) {
       try {
         modelUsage = (JSON.parse(readFileSync(resultPath, "utf8")) as RunResult).modelUsage;
       } catch (e) {
@@ -4179,13 +4204,16 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const runDir = dirname(eventsFile);
   const lines = readFileSync(eventsFile, "utf8").split("\n");
   const tools = topLevelToolRows(lines, eventsFile, normalize);
-  // Same seam, same reason: a root read here silently produced an EMPTY transcript for a new-layout dir,
-  // so `diff` reported transcriptDiffers:false regardless of real drift.
-  const transcript = readTranscriptSidecar(turnArtifactPath(runDir, latestTurn(runDir) ?? 1, "run.jsonl")) ?? "";
+  // Same seam, same turn, same reason for both: a root read here silently produced an EMPTY transcript
+  // (transcriptDiffers:false regardless of real drift) and, for meta, a guard-invisible root read of
+  // `result.json` (`join(runDir, …)` — no PER_TURN_ARTIFACTS literal on the line) that silently emptied
+  // `meta` on every current-layout dir.
+  const diffTurn = latestTurn(runDir) ?? 1;
+  const transcript = readTranscriptSidecar(turnArtifactPath(runDir, diffTurn, "run.jsonl")) ?? "";
   let meta: Partial<DiffMetaSummary> = {};
   let artifacts: Array<[string, string]> | undefined;
   let scenarioName: string | undefined;
-  const resultPath = join(runDir, "result.json");
+  const resultPath = turnArtifactPath(runDir, diffTurn, "result.json");
   if (existsSync(resultPath)) {
     const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
     scenarioName = result.scenario;
@@ -4420,14 +4448,24 @@ function cmdInspect(args: string[]) {
   rejectUnknownFlags("inspect", args, ["--output-format", "--output-format=json", "--output-format=text"], json);
   const allPositionals = positionals(args, ["--output-format"]);
   if (allPositionals.length !== 1) return void fail("inspect", "usage", SUBCOMMAND_USAGE.inspect, undefined, json);
-  // Resolve a run-id or run-dir to its dir. A run dir already holding result.json is used directly; otherwise
-  // reuse trace's resolver (run-id → events.jsonl) and take the parent.
+  // Resolve a run-id or run-dir to its dir. `hasTurnDirs` is a SHAPE PREDICATE ("does turns/ exist here"),
+  // not a turn read, so a run dir already in the per-turn layout is used directly; otherwise reuse trace's
+  // resolver (run-id → events.jsonl) and take the parent.
   const target = allPositionals[0];
   let runDir: string;
   try {
-    runDir = existsSync(join(target, "result.json")) ? target : dirname(resolveEventsFile(target));
+    runDir = hasTurnDirs(target) ? target : dirname(resolveEventsFile(target));
   } catch (e) {
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
+  }
+  // A legacy/mixed/pre-completion dir is refused HERE, before buildInspectView ever tries to load a
+  // result.json. The invocation itself is well-formed (a real dir/run-id was resolved above) — the dir
+  // simply predates the layout — so this is a `runtime` refusal, not `usage` (unlike the resolver throw
+  // above, which fires on a target that couldn't be resolved to a run dir at all).
+  try {
+    requireTurns(runDir, "inspect");
+  } catch (e) {
+    return void fail("inspect", "runtime", (e as Error).message, undefined, json);
   }
   try {
     out(buildInspectView(runDir, { json }));
@@ -4442,6 +4480,11 @@ main().catch((e) => {
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
   if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
   if (e instanceof UsageError) fail(command, "usage", e.message, undefined, json);
+  // A refused legacy/mixed/pre-completion run dir (e.g. `--resume` onto one, see execute.ts) is a legible,
+  // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
+  // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a
+  // stack trace for what is actually the expected "this dir predates the layout" message.
+  if (e instanceof LegacyRunDirError) fail(command, "runtime", e.message, undefined, json);
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
   if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
   else log(String(e?.stack ?? e));

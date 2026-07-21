@@ -55,6 +55,7 @@ describe("buildChatResult", () => {
       readonlyFolderRoots: [],
       egress: [],
       durationMs: 5,
+      turn: 1,
     });
     expect(r.mode).toBe("chat");
     expect(r.assertions).toEqual([]);
@@ -87,6 +88,7 @@ describe("buildChatResult", () => {
       readonlyFolderRoots: [],
       egress: [],
       durationMs: 5,
+      turn: 1,
     });
     expect(r.thinkingElided).toBe(5);
   });
@@ -103,6 +105,7 @@ describe("buildChatResult", () => {
       readonlyFolderRoots: [],
       egress: [],
       durationMs: 5,
+      turn: 1,
     });
     expect(r.thinkingElided).toBe(0);
   });
@@ -122,6 +125,7 @@ describe("buildChatResult", () => {
       readonlyFolderRoots: [],
       egress: [],
       durationMs: 5,
+      turn: 1,
     });
     expect(r.webSearches).toBeUndefined();
   });
@@ -140,6 +144,7 @@ describe("buildChatResult", () => {
       readonlyFolderRoots: [],
       egress: [],
       durationMs: 5,
+      turn: 1,
     });
     expect(r.tasks).toEqual([]);
   });
@@ -160,6 +165,7 @@ describe("buildChatResult", () => {
       readonlyFolderRoots: [],
       egress: [],
       durationMs: 5,
+      turn: 1,
     });
     expect(r.webSearches).toEqual([
       { toolUseId: "toolu_1", query: "market size", results: [{ title: "Report", url: "https://example.com" }] },

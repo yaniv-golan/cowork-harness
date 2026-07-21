@@ -43,16 +43,18 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
   What the ≥ 1.6.0 floor gates, by release:
 
-  - **UNRELEASED (per-turn run-directory layout):** a run dir that holds several turns — any
-    `--session-id` + `--resume`, and **every `critique`** (task turn + reflection turn) — now writes each
-    turn's `result.json` / `run.jsonl` / `trace.json` / `resources.jsonl` into **`turns/<N>/`**, written
-    once and never renamed. **When a user asks about a multi-turn run, do NOT send them to
-    `<run-dir>/result.json`**: that is a compatibility copy of the LATEST turn, which on a `critique` dir
-    is the *reflection* turn, not the graded one. Point them at `turns/1/result.json` — or better, at
-    `result.graded.json` / `trace.graded.json`, the role-stable aliases `critique` writes. Single-turn and
-    `chat` dirs are unchanged (no `turns/`), and `events.jsonl` / `timeline.jsonl` stay cumulative at the
-    root. `verify-run` now REFUSES a multi-turn dir rather than certifying the wrong turn, and `trace`
-    shows the latest turn with a `::notice::` when earlier turns exist.
+  - **UNRELEASED (per-turn run-directory layout, single shape):** every run dir — `run`/`skill`/`chat`,
+    single-turn or multi-turn (any `--session-id` + `--resume`, and **every `critique`**: task turn +
+    reflection turn) — writes each turn's `result.json` / `run.jsonl` / `trace.json` / `resources.jsonl`
+    into **`turns/<N>/`**, written once and never renamed. **There is no root compat copy of anything —
+    `<run-dir>/result.json` does not exist.** **When a user asks about a run, point them at
+    `turns/1/result.json`** (the only completion on a single-turn dir) — or on a `critique` dir, better yet
+    at `result.graded.json` / `trace.graded.json`, the role-stable aliases `critique` writes (the graded
+    task turn, never the reflection one). `events.jsonl` / `timeline.jsonl` stay cumulative at the run-dir
+    root, always. A dir written before this layout existed is refused LOUD, by name, naming the shape found
+    — never silently misread as if it were `turns/1/`; re-run or re-record it (its `events.jsonl` still
+    fully supports `trace`). `verify-run` now REFUSES a multi-turn dir rather than certifying the wrong
+    turn, and `trace` shows the latest turn with a `::notice::` when earlier turns exist.
 
   - **UNRELEASED (limitation provenance):** every `critique` limitation in `critique --help` and
     docs/critique.md is tagged with WHY it exists — `[structural]` (permanent), `[unverified]` (unproven,
@@ -172,7 +174,7 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 > is your **working tree**, so an uncommitted edit to an already-tracked file *is* tested — you needn't
 > commit to iterate. Only brand-new (untracked) files must be `git add`-ed to appear. Commit before you
 > record the **locking cassette**, though: real Cowork ships the *committed* tree, so a green on
-> uncommitted edits isn't yet a green on what installs. An **all-untracked** skill folder used to mount *empty* and the agent reported "the skill isn't
+> uncommitted edits isn't yet a green on what installs. An **all-untracked** skill folder mounts *empty* and the agent reports "the skill isn't
 > installed" then did the work itself — a green-looking run where the skill never loaded. That now
 > **hard-fails** (`BoundaryError`, exit 3) naming the dir, and a partially-tracked folder emits a loud
 > `::notice:: [stage]` listing the excluded files. Fix: `git add` the skill, or `COWORK_HARNESS_GITSET=0`
@@ -389,7 +391,7 @@ cassette — has its own recipe:
    "<q>=Israeli company"` binds whichever option starts with `Israeli company`. It is uniqueness-guarded and
    **fails loud** if the anchor ever matches two options (the documented trade: drift-tolerance, not strict
    CI reproducibility — for that, pin a full exact label or a free-text `answer:`).
-3. **Budget ~1 re-run per file.** If a gate whiffs, the run no longer vanishes — it exits non-zero but
+3. **Budget ~1 re-run per file.** If a gate whiffs, the run does not vanish — it exits non-zero but
    **salvages a PARTIAL run** (the extraction the agent already did is written to disk). So the cost of a
    missed gate is one re-run with a better `--intent` or a scripted answer, not a lost paid run.
 4. **Inspect the outputs to judge correctness.** `cowork-harness inspect <run-dir>` shows what the run
@@ -752,7 +754,7 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 
 17. **Editing `scenarios/*.yaml` `assert:` does NOT change a plain `replay`.** *Why:* `replay` evaluates the
     assertions **frozen in the cassette** by default — it is byte-deterministic and ignores the working tree (so
-    a committed cassette can't silently re-interpret against an uncommitted YAML). This used to be a *silent*
+    a committed cassette can't silently re-interpret against an uncommitted YAML). This is *loud* rather than a *silent*
     no-op; now plain `replay` prints a `::notice::` when a sibling's `assert:` differs and points you at the fix.
     *Fix:* to re-check token-free against the edited block, `replay --assert-from <scenario.yaml>` (or
     `--reassert`). That opt-in path is safe by construction for the authored fields — it **hard-fails** if

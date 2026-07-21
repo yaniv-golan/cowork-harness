@@ -24,7 +24,11 @@ function seedRun(
     writeFileSync(join(dir, ".origin"), JSON.stringify({ originKey: "k", sourceHint: "h", createdAt: opts.originCreatedAt }));
   }
   if (opts.resultJson) {
-    writeFileSync(join(dir, "result.json"), JSON.stringify(opts.resultJson));
+    // Under turns/1/ — the only place a current-layout dir's result.json lives (no root compat copy) —
+    // so `resultJsonMtime`/`readResultJson` (latest-run.ts), which go through the seam, actually find it.
+    const turn1 = join(dir, "turns", "1");
+    mkdirSync(turn1, { recursive: true });
+    writeFileSync(join(turn1, "result.json"), JSON.stringify(opts.resultJson));
   }
   if (opts.statusStartedAt) {
     writeFileSync(join(dir, "status.json"), JSON.stringify({ schemaVersion: 1, state: "done", startedAt: opts.statusStartedAt }));
@@ -61,7 +65,7 @@ describe("findLatestRunForScenario", () => {
     const dir1 = seedRun(root, "s", "local_1", { resultJson: { scenario: "s" } });
     // ensure a distinguishable mtime ordering between the two result.json writes
     const past = new Date(Date.now() - 60_000);
-    utimesSync(join(dir1, "result.json"), past, past);
+    utimesSync(join(dir1, "turns", "1", "result.json"), past, past);
     const dir2 = seedRun(root, "s", "local_2", { resultJson: { scenario: "s" } });
 
     const result = findLatestRunForScenario(root, "s");

@@ -116,7 +116,7 @@ staleness:
 | `**/tests` | explicit any-depth (same as bare `tests`) |
 | `**/*.md` | any `.md` at any depth |
 
-The cassette-staleness hash skips ignored paths, so editing them no longer re-stales cassettes. The
+The cassette-staleness hash skips ignored paths, so editing them does not re-stale cassettes. The
 harness also **hard-excludes** universally-non-runtime paths: VCS/caches/cassettes, the `plugin.json`
 `version` field, and (v5+) OS-junk (`.DS_Store` / `Thumbs.db` / `desktop.ini`) — so a Finder touch can't
 re-stale a cassette. A plugin's own runtime boundary (and any run-generated files a skill writes into its

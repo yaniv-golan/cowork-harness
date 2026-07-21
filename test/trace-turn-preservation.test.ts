@@ -66,8 +66,11 @@ describe("critique's graded aliases are written, not just referenced in source",
   // could never be produced. Grepping for a call proves the call is written, never that it works — the
   // exact vacuous-guard pattern this repo keeps shipping. These drive the real function.
   it("copies BOTH the graded result and the graded trace", () => {
-    writeFileSync(join(dir, "result.json"), '{"turn":1}');
-    writeFileSync(join(dir, "trace.json"), '{"trace":1}');
+    // writeGradedAliases resolves turn 1 THROUGH the seam (turnArtifactPath) — under the current
+    // single-shape layout that is turns/1/, not the run-dir root.
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(join(dir, "turns", "1", "result.json"), '{"turn":1}');
+    writeFileSync(join(dir, "turns", "1", "trace.json"), '{"trace":1}');
     writeGradedAliases(dir);
     expect(readFileSync(join(dir, "result.graded.json"), "utf8")).toBe('{"turn":1}');
     expect(readFileSync(join(dir, "trace.graded.json"), "utf8")).toBe('{"trace":1}');
@@ -75,7 +78,8 @@ describe("critique's graded aliases are written, not just referenced in source",
 
   it("copies the trace even when there is no result (and vice versa)", () => {
     // Independent best-effort copies: one missing source must not suppress the other.
-    writeFileSync(join(dir, "trace.json"), '{"trace":1}');
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(join(dir, "turns", "1", "trace.json"), '{"trace":1}');
     writeGradedAliases(dir);
     expect(existsSync(join(dir, "trace.graded.json"))).toBe(true);
     expect(existsSync(join(dir, "result.graded.json"))).toBe(false);

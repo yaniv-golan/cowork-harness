@@ -418,7 +418,7 @@ skill-source drift; every replay result also reports it class-tagged in `stalene
 **Mixed assertions on replay:** before evaluating, `replay` strips each assertion to its replay-checkable
 keys and drops any left empty. So `{result, egress_denied}` evaluates on replay as `{result}` alone — its
 `egress_denied` half is removed (not AND-ed against an unreadable value); with a manifest, `file_exists`/
-`artifact_json` are no longer stripped. The harness is **loud in two classes**: a *full skip* (`::warning::`
+`artifact_json` are not stripped. The harness is **loud in two classes**: a *full skip* (`::warning::`
 with the count of pure live-only assertions not evaluated) and a *partial skip* (`::warning::` when a mixed
 assertion's live-only half was dropped).
 Two CI consequences: skipped assertions are **absent** from `results[].assertions[]` (not

@@ -2,31 +2,36 @@
 // `resources.jsonl`.
 //
 // A LEAF module (like `turn-events.ts`): imported by cli.ts, run/*, critique/*, runtime/*, so it must not
-// import back into any of them.
+// import back into any of them. (`errors.ts` is safe to import — it has no imports of its own.)
 //
 // WHY THIS EXISTS. A run directory can hold several turns (any `--resume`, and every `critique` = task
-// turn + reflection turn). Today a turn is addressed three different ways depending on which turn it is:
-// the LATEST lives at the root under its plain name, earlier ones are name-mangled archives
-// (`result.turn-1.json`), and `critique` writes role aliases (`result.graded.json`). Every reader
-// re-derived that mapping, and most of them got it wrong at least once — a wrong-turn read, a destroyed
-// trace, a dropped index row.
+// turn + reflection turn). This module is the ONE place that knows how a turn is addressed: every turn's
+// artifacts live under `turns/<N>/`, full stop — SINGLE SHAPE, no per-turn name-mangling and no
+// bidirectional legacy fallback. `critique` additionally writes role aliases (`result.graded.json`),
+// resolved by `resolveGraded` below.
 //
-// This module is the ONE place that knows the mapping. It is deliberately introduced BEFORE any layout
-// change, over today's on-disk shape, so the layout flip becomes a change to this file rather than a
-// change to twenty call sites.
+// A run dir written before this layout existed — or a `--resume` of one caught mid-migration, which
+// leaves `turns/` AND stray root files behind — is DETECTED by `classifyRunDir`, the ONLY place the
+// legacy/mixed shape is still named. It is never resolved as data by `turnArtifactPath` / `listTurns` /
+// `readTurnResult`: silently substituting a root or name-mangled file for an unaddressable turn is exactly
+// the defect class this single shape exists to make unrepresentable (turn 1 made invisible on a mixed dir,
+// a resumed session's turn number going BACKWARDS). A detector that refuses is safe; a resolver that
+// guesses is not.
 //
-// It must keep resolving the legacy shape PERMANENTLY, not transitionally: `chat` writes a root
-// `result.json` and never participates in turn bookkeeping, so freshly created chat run dirs are
-// legacy-shaped forever.
+// No writer produces a root compat copy of any per-turn artifact anymore (that was removed alongside
+// this), so `classifyRunDir` can treat ANY of the four `PER_TURN_ARTIFACTS` at the run-dir root as
+// contamination unconditionally — including `result.json` next to `turns/` — with no special-casing.
 
 import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { LegacyRunDirError } from "../errors.js";
 
 /** The four artifacts written once per turn. Anything else in a run dir is cumulative or session state. */
 export const PER_TURN_ARTIFACTS = ["result.json", "run.jsonl", "trace.json", "resources.jsonl"] as const;
 export type PerTurnArtifact = (typeof PER_TURN_ARTIFACTS)[number];
 
-/** `result.json` -> `result`, `run.jsonl` -> `run` — the stem used by the legacy archive names. */
+/** `result.json` -> `result`, `run.jsonl` -> `run` — the stem `resolveGraded` uses to build the
+ *  `*.graded.json` alias name. */
 function stemAndExt(artifact: PerTurnArtifact): { stem: string; ext: string } {
   const i = artifact.indexOf(".");
   return { stem: artifact.slice(0, i), ext: artifact.slice(i) };
@@ -47,34 +52,16 @@ function turnsDirNumbers(outDir: string): number[] {
   }
 }
 
-/** Legacy archive numbers, from `result.turn-<N>.json` at the run-dir root. */
-function legacyArchiveNumbers(outDir: string): number[] {
-  try {
-    return readdirSync(outDir)
-      .map((e) => /^result\.turn-(\d+)\.json$/.exec(e)?.[1])
-      .filter((n): n is string => n !== undefined)
-      .map(Number)
-      .sort((a, b) => a - b);
-  } catch {
-    return [];
-  }
-}
-
 /** Does this run dir use the per-turn directory layout? */
 export function hasTurnDirs(outDir: string): boolean {
   return turnsDirNumbers(outDir).length > 0;
 }
 
-/** Every turn number addressable in this run dir, ascending. A single-turn dir is `[1]`. */
+/** Every turn number addressable in this run dir, ascending. Single shape: this is exactly
+ *  `turns/<N>/` — a `legacy`/`mixed`/`none` dir (see `classifyRunDir`) addresses no turns at all, rather
+ *  than inventing one from a root or name-mangled file. */
 export function listTurns(outDir: string): number[] {
-  const dirs = turnsDirNumbers(outDir);
-  // A MIXED dir carries both, so union them — see turnArtifactPath. Sorted+deduped so a turn present in
-  // both shapes is listed once.
-  if (dirs.length) return [...new Set([...legacyArchiveNumbers(outDir), ...dirs])].sort((a, b) => a - b);
-  const legacy = legacyArchiveNumbers(outDir);
-  // The root file is the LATEST turn, so it is one past the highest archive (or turn 1 when there are none).
-  if (existsSync(join(outDir, "result.json"))) return [...legacy, (legacy[legacy.length - 1] ?? 0) + 1];
-  return legacy;
+  return turnsDirNumbers(outDir);
 }
 
 export function latestTurn(outDir: string): number | undefined {
@@ -84,41 +71,24 @@ export function latestTurn(outDir: string): number | undefined {
 
 /** Absolute path to one artifact of one turn — the accessor every reader should use.
  *
- *  Per-ARTIFACT rather than per-directory because the legacy shape has no per-turn directory: earlier
- *  turns are name-mangled at the root (`run.turn-1.jsonl`), so a `turnDir()`-only API could not address
- *  them at all. Returns a path whether or not the file exists; callers test existence as they do today. */
+ *  Single shape: always `turns/<turn>/<artifact>`, whether or not the file exists — callers test
+ *  existence as they do today. No root fallback and no name-mangled archive fallback: a `legacy`/`mixed`
+ *  dir is refused (see `classifyRunDir`/`requireTurns`), never silently resolved here. */
 export function turnArtifactPath(outDir: string, turn: number, artifact: PerTurnArtifact): string {
-  if (hasTurnDirs(outDir)) {
-    const inTurnDir = join(outDir, "turns", String(turn), artifact);
-    if (existsSync(inTurnDir)) return inTurnDir;
-    // MIXED dir: a legacy dir resumed under the new code has turn 1 as a root archive and turn 2 in
-    // `turns/`. Treating `hasTurnDirs` as all-or-nothing made the archived turn UNADDRESSABLE — and a
-    // scratch reindex then dropped its row, reintroducing the dropped-turn defect for the whole upgrade
-    // cohort. Fall back to the legacy name before giving up.
-    const { stem, ext } = stemAndExt(artifact);
-    const archived = join(outDir, `${stem}.turn-${turn}${ext}`);
-    if (existsSync(archived)) return archived;
-    return inTurnDir; // nothing on disk — return the canonical path so callers report the right miss
-  }
-  const latest = latestTurn(outDir);
-  if (turn === latest) return join(outDir, artifact); // the root file IS the latest turn
-  // A legacy dir with NO archives is single-turn by definition, so turn 1 is the root — even when
-  // `result.json` is absent and `latestTurn` therefore could not infer it. Without this, addressing
-  // `trace.json` in a run whose result assembly never completed silently resolved to a nonexistent
-  // `trace.turn-1.json`. Caught by an existing guard, not by inspection.
-  if (turn === 1 && legacyArchiveNumbers(outDir).length === 0) return join(outDir, artifact);
-  const { stem, ext } = stemAndExt(artifact);
-  return join(outDir, `${stem}.turn-${turn}${ext}`);
+  return join(outDir, "turns", String(turn), artifact);
 }
 
 /** A turn's parsed `result.json`, or undefined when absent/unreadable.
  *
- *  `strict` refuses to fall back to the root file. `critique`'s turn-1 isolation depends on reading the
- *  ARCHIVED turn-1 result specifically: when a resume is known to have happened, the root file is turn 2,
- *  and silently substituting it would contaminate turn-1-only evidence. */
+ *  `strict` originally refused to let a resumed dir's ROOT file (the latest turn) silently substitute for
+ *  an EARLIER turn's archived result — load-bearing for `critique`'s turn-1 isolation, which must read
+ *  turn 1 specifically and never the reflection turn's result. Under the single shape `turnArtifactPath`
+ *  never resolves a root file for any turn in the first place, so there is nothing left for `strict` to
+ *  refuse — its extra condition is presently unreachable in practice. Kept (not deleted) until its
+ *  callers are swept together in one pass rather than as a drive-by here. */
 export function readTurnResult(outDir: string, turn: number, opts: { strict?: boolean } = {}): unknown | undefined {
   const p = turnArtifactPath(outDir, turn, "result.json");
-  if (opts.strict && !hasTurnDirs(outDir) && turn === latestTurn(outDir) && legacyArchiveNumbers(outDir).length === 0) return undefined;
+  if (opts.strict && !hasTurnDirs(outDir) && turn === latestTurn(outDir)) return undefined;
   try {
     return JSON.parse(readFileSync(p, "utf8"));
   } catch {
@@ -142,7 +112,7 @@ export function resolveGraded(outDir: string, artifact: "result.json" | "trace.j
 /** The directory this turn's artifacts are WRITTEN to, created if needed.
  *
  *  Writers use this; readers use `turnArtifactPath`. Separate because a writer always knows its own turn
- *  number and always uses the new layout, while a reader must also resolve legacy dirs. */
+ *  number, while a reader may be addressing any turn of an already-written dir. */
 export function turnWriteDir(outDir: string, turn: number): string {
   const d = join(outDir, "turns", String(turn));
   mkdirSync(d, { recursive: true });
@@ -162,14 +132,83 @@ export function turnWriteDir(outDir: string, turn: number): string {
  *  two attempts' events into one verdict. An adversarial review caught it by prototype.
  *
  *  `mkdir` without a `run.jsonl` is therefore NOT a turn: a crash right after creating the directory
- *  leaves it reusable rather than inflating every later turn number. */
+ *  leaves it reusable rather than inflating every later turn number.
+ *
+ *  Single shape: this counts `turns/<N>/run.jsonl` only. `execute.ts`'s own `currentTurn` still ORs this
+ *  against an independent root-archive count for its write-side legacy handling (untouched here — see that
+ *  function); this seam function no longer needs to, since `turnArtifactPath` never resolves a root file
+ *  for this module's readers to disagree with. */
 export function currentTurnFromDirs(outDir: string): number {
   const withTranscript = turnsDirNumbers(outDir).filter((n) => existsSync(join(outDir, "turns", String(n), "run.jsonl")));
-  // MIXED dirs: a legacy dir resumed under the new code has turn 1 as a ROOT archive and turn 2 as a turn
-  // dir. Counting only turn dirs made the number go BACKWARDS (2 -> 1) on the next resume, because the
-  // archived turn is invisible to this rule — and a turn number that decreases would overwrite a
-  // completed turn. Take the highest turn either shape knows about.
-  const legacy = legacyArchiveNumbers(outDir);
-  const highest = Math.max(withTranscript[withTranscript.length - 1] ?? 0, legacy[legacy.length - 1] ?? 0);
-  return highest + 1;
+  return (withTranscript[withTranscript.length - 1] ?? 0) + 1;
+}
+
+/** Root-level names that indicate CONTAMINATION — a pre-layout marker, whether or not `turns/` also
+ *  exists. No writer produces a root compat copy of any `PER_TURN_ARTIFACT` anymore, and a name-mangled
+ *  `<stem>.turn-<N>.<ext>` archive is only ever produced by `execute.ts`'s `archivePriorTurnFiles` LEGACY
+ *  branch, which is itself gated `!hasTurnDirs`. So any of these can only mean a pre-layout dir (with
+ *  `turns/` present: one that was resumed under current code). Detection only, for `classifyRunDir`'s
+ *  message — never used to resolve a read. */
+function contaminationMarkers(outDir: string): string[] {
+  const markers: string[] = [];
+  for (const a of PER_TURN_ARTIFACTS) if (existsSync(join(outDir, a))) markers.push(a);
+  try {
+    for (const e of readdirSync(outDir)) {
+      if (/^(?:result|run|trace|resources)\.turn-\d+\.(?:json|jsonl)$/.test(e)) markers.push(e);
+    }
+  } catch {
+    /* outDir absent/unreadable — no markers */
+  }
+  return markers;
+}
+
+export type RunDirShape =
+  | { kind: "turns"; turns: number[] }
+  | { kind: "legacy"; markers: string[] }
+  | { kind: "mixed"; turns: number[]; markers: string[] }
+  | { kind: "none" };
+
+/** Classify a run dir's on-disk shape. The ONLY place the legacy/mixed shape is still named after the
+ *  removal above — as a DETECTOR feeding a refusal message, never as a resolver `turnArtifactPath` falls
+ *  back to. See `requireTurns`/`preLayoutMessage` for how a caller acts on this. */
+export function classifyRunDir(outDir: string): RunDirShape {
+  const turns = turnsDirNumbers(outDir);
+  const markers = contaminationMarkers(outDir);
+  if (turns.length) return markers.length ? { kind: "mixed", turns, markers } : { kind: "turns", turns };
+  return markers.length ? { kind: "legacy", markers } : { kind: "none" };
+}
+
+/** Refuse a `legacy` / `mixed` / `none` dir with a message naming the shape; return the addressable turn
+ *  list for a genuine current-layout (`turns`) dir. `command` is folded into the thrown message so a
+ *  caller need not repeat itself at every call site. */
+export function requireTurns(outDir: string, command: string): number[] {
+  const shape = classifyRunDir(outDir);
+  if (shape.kind === "turns") return shape.turns;
+  throw new LegacyRunDirError(`${command}: ${preLayoutMessage(shape, outDir)}`);
+}
+
+/** ONE shared message builder so every refusing command names the same shape/markers/remediation instead
+ *  of independently re-deriving (and drifting on) the wording. Names what the dir IS, never what's
+ *  "missing": on a legacy dir the file is right there at the root — the ambiguity is which SHAPE it's in,
+ *  not whether evidence exists. */
+export function preLayoutMessage(shape: RunDirShape, outDir: string): string {
+  if (shape.kind === "legacy")
+    return (
+      `${outDir} is a pre-layout run dir (written before the turns/<N>/ layout): ${shape.markers.join(", ")} ` +
+      `found at the run-dir root, no turns/ directory. \`trace ${outDir}\` still works (its views derive ` +
+      `from events.jsonl, which never moves) — re-run or re-record to get a current-layout dir.`
+    );
+  if (shape.kind === "mixed")
+    return (
+      `${outDir} is a MIXED run dir: turns/ (${shape.turns.join(", ")}) AND pre-layout markers at the root ` +
+      `(${shape.markers.join(", ")}) — almost certainly a pre-layout dir that was resumed under current code, ` +
+      `which leaves its earliest turn unaddressable. \`trace ${outDir}\` still works. Re-run or re-record to ` +
+      `get a clean dir.`
+    );
+  if (shape.kind === "none")
+    return (
+      `${outDir} has neither a turns/<N>/ directory nor any pre-layout marker — this run never completed ` +
+      `(or ${outDir} is not a run dir at all).`
+    );
+  return `${outDir} is a current-layout run dir (turns: ${shape.turns.join(", ")}).`;
 }

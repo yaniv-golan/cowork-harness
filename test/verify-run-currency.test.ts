@@ -67,9 +67,13 @@ function fixture(opts: { withFingerprint: boolean }): { dir: string; scenario: s
     // The same call execute.ts makes at run time — over the unchanged tree.
     result.fingerprint = buildFingerprint(session, "1.14271.0", undefined, ["cap-table"]);
   }
-  writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
-  writeFileSync(join(run, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
-  writeFileSync(join(run, "trace.json"), JSON.stringify({ questions: [Q], steps: [] }));
+  // turns/1/{result.json,run.jsonl,trace.json} — the single addressable shape, no root compat copy.
+  // events.jsonl is the one cumulative stream that DOES stay at the run-dir root (it never moves).
+  const t1 = join(run, "turns", "1");
+  mkdirSync(t1, { recursive: true });
+  writeFileSync(join(t1, "result.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(t1, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
+  writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: [Q], steps: [] }));
   writeFileSync(join(run, "events.jsonl"), JSON.stringify(gateFrame(Q, ["Confirmed", "Different"])) + "\n");
   return { dir, scenario, pluginSkillMd };
 }

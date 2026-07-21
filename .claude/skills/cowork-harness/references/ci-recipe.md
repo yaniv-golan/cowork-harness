@@ -265,7 +265,7 @@ A run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` by default — outs
 set `COWORK_HARNESS_RUNS_DIR` (or pass `--run-dir`) to a workspace-relative path (e.g. `runs`) so an
 artifact-upload step can collect them. Each run dir holds `events.jsonl`, `control-out.jsonl` and
 `egress.log` at the root, plus each turn's `run.jsonl` / `trace.json` / `result.json` under `turns/<N>/`
-(a single-turn run has just `turns/1/`; the root `result.json` is a compatibility copy of the latest turn). Digest one with `cowork-harness trace <run-id | dir>`.
+(a single-turn run has just `turns/1/`; there is no root compat copy of any of these). Digest one with `cowork-harness trace <run-id | dir>`.
 Secrets are scrubbed from every persisted log by value.
 
 ## Don't assume a fixed assertion count across lanes
@@ -294,7 +294,7 @@ does **not** imply the recording is still valid. Each replay result carries `sta
 (A pre-`effectiveFidelity` cassette with an **explicit** tier is statically knowable — it passes the tier
 check with a non-failing informational note in the `verify-cassettes` envelope's per-file `notes[]`, a
 `·`-prefixed row in text output. On `verify-cassettes` every staleness *finding* above still fails the
-gate (`ok:false`) — but it's no longer class-blind on the EXIT CODE: a `baseline`/`skill`/`shared-root`/
+gate (`ok:false`) — but it is class-AWARE on the EXIT CODE: a `baseline`/`skill`/`shared-root`/
 `format`/`resolved-tier` class lands in the envelope's `staleness[]` (verified & failed — exit `1`),
 while an `unverifiable-*` class lands in `unverifiable[]` (could not verify — exit `3`). Notes never
 fail it either way.)

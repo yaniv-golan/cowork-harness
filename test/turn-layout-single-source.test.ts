@@ -10,6 +10,13 @@ import { PER_TURN_ARTIFACTS } from "../src/run/turn-layout.js";
 // compared an empty transcript.
 //
 // A promised guard that does not exist is worse than no promise: the plan counted it as coverage.
+//
+// This scan was originally written to PIN the root-compat-copy debt (a COMPAT_ROOT_READERS inventory of
+// sites deliberately still reading the run-dir root's `result.json`, tracked rather than allowlisted so
+// the debt couldn't grow silently). The compat copy is gone now — `execute.ts` no longer writes a root
+// `result.json` on any current-layout dir — and every one of those sites was repointed through the seam.
+// The scan now asserts the STRONGER claim its debt-pinning predecessor could only gesture at: ZERO root
+// reads of any per-turn artifact remain outside the seam/writers/a still-needed legacy-dir reader.
 
 function srcFiles(dir: string): string[] {
   const out: string[] = [];
@@ -29,25 +36,14 @@ function srcFiles(dir: string): string[] {
 const ALLOWED = new Map<string, string>([
   ["src/run/turn-layout.ts", "the seam itself"],
   ["src/run/execute.ts", "the WRITER — it owns the layout it writes, and holds the legacy archive path"],
-  ["src/run/chat.ts", "chat is legacy-shaped by contract: no turns, no resume"],
-  ["src/run/runs-gc.ts", "existence marker only — never reads content"],
+  ["src/run/chat.ts", "a WRITER of its own turn-1 artifacts (turnWriteDir/beginTurn), same as execute.ts — not a legacy exception"],
+  [
+    "src/run/run-index.ts",
+    "the legacy-dir indexer: a genuinely-legacy dir's root result.json is its ONLY copy (no compat copy " +
+      "exists anymore to confuse this with), so reading it here is deliberate, not debt — kept until the " +
+      "legacy branch itself is removed; turns/ dirs are enumerated separately and never hit this line",
+  ],
   ["src/runtime/resource-sampler.ts", "writer; takes an explicit turn and builds its own path"],
-]);
-
-/** Sites that deliberately read the run-dir root `result.json` — the documented COMPAT COPY of the latest
- *  turn. They are correct today, so this is not a defect list; it is the exact, enforced inventory of what
- *  a clean break (dropping the compat copy) would have to repoint, each with a turn-selection decision.
- *
- *  Tracked rather than allowlisted-and-forgotten: an allowlist would let the guard report "all clear"
- *  while this debt grew silently. The COUNT is pinned, so a new root reader fails CI and has to justify
- *  itself here. */
-const COMPAT_ROOT_READERS = new Map<string, string>([
-  ["src/cli.ts", "verify-run's result load + run-dir resolution — latest turn is correct for both"],
-  ["src/run/inspect-view.ts", "inspect shows the latest turn"],
-  ["src/run/latest-run.ts", "recency + verdict subset for listings"],
-  ["src/run/run-index.ts", "the legacy-dir branch; turn dirs are enumerated separately"],
-  ["src/run/scaffold.ts", "scaffolds from the latest turn"],
-  ["src/run/trace-view.ts", "the trace footer's sibling result"],
 ]);
 
 describe("per-turn artifact paths go through the seam", () => {
@@ -66,37 +62,24 @@ describe("per-turn artifact paths go through the seam", () => {
 
   it("the scan is not vacuous (it can see path constructions at all)", () => {
     // Guards the guard: a regex that matches nothing would make every assertion below pass silently.
-    const writer = readFileSync(resolve("src/run/execute.ts"), "utf8");
-    expect(/join\([^)]*outDir[^)]*,\s*"result\.json"\)/.test(writer), "the scan pattern no longer matches the writer").toBe(true);
+    // The writer itself moved off this pattern (it now writes ONLY through turnWriteDir), so anchor the
+    // liveness check on the still-allowlisted legacy-dir reader instead — the one production site left
+    // that genuinely matches the scan pattern.
+    const legacyReader = readFileSync(resolve("src/run/run-index.ts"), "utf8");
+    expect(/join\([^)]*outDir[^)]*,\s*"result\.json"\)/.test(legacyReader), "the scan pattern no longer matches anything").toBe(true);
     expect(srcFiles(resolve("src")).length).toBeGreaterThan(50);
   });
 
-  it("no UNTRACKED file builds a per-turn artifact path by hand", () => {
-    // A site that is neither the seam, a writer, nor a known compat-root reader will read the wrong turn
-    // — or a file that does not exist — on a multi-turn dir. That is how verify-run and diff shipped
-    // broken: both read root `run.jsonl`/`trace.json`, which the per-turn layout never creates.
-    const untracked = hits.filter((h) => !COMPAT_ROOT_READERS.has(h.file));
+  it("no reader outside the seam/writers/the legacy-dir indexer builds a per-turn artifact path by hand", () => {
+    // A site that is neither the seam, a writer, nor the one still-needed legacy-dir reader will read the
+    // wrong turn — or a file that does not exist — on a multi-turn dir. That is how verify-run and diff
+    // shipped broken: both read root `run.jsonl`/`trace.json`, which the per-turn layout never creates.
+    // Every COMPAT root reader that inventory once pinned (verify-run, inspect, latest-run, scaffold,
+    // trace-view) has been repointed through turnArtifactPath()/latestTurn() — this must now be empty.
     expect(
-      untracked.map((h) => `${h.file}: ${h.line}`),
-      "route these through turnArtifactPath()/resolveGraded()",
+      hits.map((h) => `${h.file}: ${h.line}`),
+      "route these through turnArtifactPath()/resolveGraded(), or add a justified ALLOWED entry",
     ).toEqual([]);
-  });
-
-  it("only result.json is read from the root — the sidecars have no compat copy", () => {
-    // `result.json` is the ONLY artifact with a root compat copy. A root read of run.jsonl / trace.json /
-    // resources.jsonl resolves to a file that does not exist under the per-turn layout, which is exactly
-    // the verify-run and diff defects.
-    const sidecarReads = hits.filter((h) => !h.line.includes('"result.json"'));
-    expect(
-      sidecarReads.map((h) => `${h.file}: ${h.line}`),
-      "no root compat copy exists for these",
-    ).toEqual([]);
-  });
-
-  it("pins the compat-copy debt: exactly these files depend on the root alias", () => {
-    // The clean-break inventory. If this count moves, either a new root reader appeared (justify it) or
-    // one was repointed (shrink the list) — both should be deliberate.
-    expect([...new Set(hits.map((h) => h.file))].sort()).toEqual([...COMPAT_ROOT_READERS.keys()].sort());
   });
 
   it("every allowlist entry is still a real file with a stated reason", () => {

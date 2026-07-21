@@ -103,10 +103,9 @@ it mounted a skill at all rather than assuming the grouping dropped it.
 `index.jsonl` only exists going forward from the version that introduced it. If you have an existing
 `~/.cowork-harness/runs/` full of pre-index runs (or the index file itself was ever lost or manually
 edited into an unrecoverable state — normal corrupt-trailing-line tolerance aside), `--reindex` rebuilds
-it by walking every run dir on disk — `<runsRoot>/<slug>/<runId>/turns/<N>/result.json` for each turn of a
-multi-turn dir, or the root `result.json` for a single-turn/legacy one (the root file of a turn-layout dir
-is a compatibility copy of the latest turn and is deliberately skipped, so a turn is never counted twice) —
-then merging in any rows
+it by walking every run dir on disk — `<runsRoot>/<slug>/<runId>/turns/<N>/result.json` for each turn (no
+root compat copy exists to double-count against), or the root `result.json` for a genuinely pre-layout
+dir written before the `turns/<N>/` layout existed — then merging in any rows
 the prior `index.jsonl` still held for run dirs no longer on disk (e.g. pruned ones):
 
 ```bash
@@ -134,7 +133,7 @@ report.
 
 `result.json` now persists a `command` field (`run`/`skill`/`record`/`chat`), and `--reindex` prefers it:
 `result.command` first, falling back to the prior index row's `command` (for results written before that
-field existed), then to deriving from `RunResult.mode`. Previously reindex derived `command` from `mode`
+field existed), then to deriving from `RunResult.mode`. Deriving `command` from `mode`
 alone, which has no `skill`/`record` value — so every rebuild silently relabeled a `skill`/`record` run as
 `run`. Preferring the persisted `command` (with the prior-index fallback for older results) keeps a
 `skill`/`record` run's history correctly labeled across repeated reindexes.

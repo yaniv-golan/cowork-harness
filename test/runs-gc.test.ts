@@ -10,8 +10,11 @@ const can = existsSync(CLI);
 
 function makeRunDir(runsRoot: string, scenario: string, runId: string): string {
   const dir = join(runsRoot, scenario, runId);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "result.json"), JSON.stringify({ result: "success" }));
+  // turns/1/result.json — the single addressable shape; `isRealRun` (runs-gc.ts) now checks `hasTurnDirs`
+  // instead of a root result.json, since no writer produces a root compat copy anymore.
+  const turn1 = join(dir, "turns", "1");
+  mkdirSync(turn1, { recursive: true });
+  writeFileSync(join(turn1, "result.json"), JSON.stringify({ result: "success" }));
   return dir;
 }
 

@@ -141,13 +141,17 @@ class Result:
         return self
 
     def _latest_run_jsonl(self) -> Path:
-        """run.jsonl for the LATEST turn.
+        """run.jsonl for the LATEST turn — always turns/<N>/run.jsonl; there is no root compat copy.
 
-        A run dir can hold several turns (any --resume; every `critique`). Under the per-turn layout each
-        turn's transcript lives in turns/<N>/run.jsonl; older/chat dirs keep it at the root. Resolving to
-        the root unconditionally made `assert_transcript_not_contains` pass VACUOUSLY on a turn-layout dir
-        — the file simply did not exist and the empty transcript satisfied every "not contains" assertion.
-        A false green, in the SDK, which no TypeScript source-scan guard can see.
+        A run dir can hold several turns (any --resume; every `critique`). Resolving to the root
+        unconditionally (the old behavior, for a dir with no addressable turn) made
+        `assert_transcript_not_contains` pass VACUOUSLY on a turn-layout dir — the file simply did not
+        exist and the empty transcript satisfied every "not contains" assertion. A false green, in the
+        SDK, which no TypeScript source-scan guard can see.
+
+        Raises FileNotFoundError, loudly, rather than silently falling back to a root `run.jsonl` that (for
+        any dir written by a current harness version) can only ever be a path to nowhere — same "never
+        silently resolve to nothing" rule the TypeScript-side seam (`turn-layout.ts`) enforces.
         """
         turns = Path(self.out_dir) / "turns"
         if turns.is_dir():
@@ -156,19 +160,21 @@ class Result:
                 p = turns / str(n) / "run.jsonl"
                 if p.exists():
                     return p
-        return Path(self.out_dir) / "run.jsonl"
+        raise FileNotFoundError(
+            f"no turns/<N>/run.jsonl under {self.out_dir} — this run dir predates the turns/<N>/ layout "
+            "(or never completed a turn); re-run or re-record to get a current-layout dir"
+        )
 
     def _transcript(self) -> str:
         # prefer run.jsonl's transcript line
         rj = self._latest_run_jsonl()
-        if rj.exists():
-            for line in rj.read_text().splitlines():
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                if obj.get("t") == "transcript":
-                    return obj.get("text", "")
+        for line in rj.read_text().splitlines():
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if obj.get("t") == "transcript":
+                return obj.get("text", "")
         return ""
 
 
@@ -297,8 +303,8 @@ class Skill:
         ``protocol`` has no durable session store. ``container`` is the tier whose cross-container
         continuity is covered by the integration test; the other sandboxed tiers use the same
         bind-mounted session store but aren't separately proven here. Each returned ``Result`` carries
-        its own ``.turn`` (1-based), and each turn's transcript/result is preserved on disk as
-        ``run.turn-<N>.jsonl`` / ``result.turn-<N>.json`` (the live one is the latest turn).
+        its own ``.turn`` (1-based), and each turn's transcript/result is preserved on disk under
+        ``turns/<N>/`` — ``turns/<N>/run.jsonl`` / ``turns/<N>/result.json``.
         """
         if fidelity == "protocol":
             raise ValueError("conversation() needs a sandboxed fidelity (container+); protocol has no durable session store")

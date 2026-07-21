@@ -536,7 +536,7 @@ drifted — `baseline`, `skill`/`shared-root`, `format`, `resolved-tier`, `promp
 on skill-source drift only, and every result reports it in `staleness[]` for a JSON gate). `prompt-assets`
 covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`subagentAppendHostLoop`)
 edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
-identity was previously keyed on `appVersion` only.
+identity keyed on `appVersion` alone cannot see it.
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
@@ -653,18 +653,19 @@ Each run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` (relocate with `
 events.jsonl      full stream-json (child→driver; also the cassette source)
 control-out.jsonl driver→child control_responses (the other cassette half)
 turns/<N>/        ONE DIRECTORY PER TURN, written once and never renamed. A run dir holds several
-                  turns with --session-id + --resume, and always for `critique` (task + reflection).
-                  Each holds that turn's:
+                  turns with --session-id + --resume, and always for `critique` (task + reflection),
+                  and always for `chat` too (always turns/1/ — chat never resumes). Each holds that
+                  turn's:
                     run.jsonl       harness log: decisions (+who), sub-agent dispatch tree, egress,
                                     transcript, cost
                     trace.json      structured trace: steps, questions, sub-agents, egress, cost
                     result.json     assertion results + decisions + sub-agents + usage + status
                                     (incl. workDir/outputsDir)
                     resources.jsonl per-sample resource telemetry
-                  A single-turn run has just turns/1/.
+                  A single-turn run has just turns/1/. There is NO root compat copy — a bare
+                  `<run-dir>/result.json` does not exist; a dir that has one instead predates this
+                  layout and is refused (naming the shape) by verify-run/inspect/scaffold/--resume.
 egress.log        allow/deny per outbound connection (L1/L2)
-result.json       COMPATIBILITY COPY of the LATEST turn (turns/<N>/result.json is the addressable
-                  truth) — on a `critique` dir that is the reflection turn, not the graded one
 session.json      session manifest (only when --session-id/--resume is used: id + the agent's session UUID)
 status.json       run status (phase, exit, timing) — see docs/run-status.md
 mounts.json       VM→host path map (feeds trace --translate-paths; hostloop runs)

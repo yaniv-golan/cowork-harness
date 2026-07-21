@@ -9,6 +9,7 @@ import { readIndex, resolveRunsExactFromIndex, resolveRunsFragmentFromIndex, typ
 import { readTimeline } from "../agent/timeline.js";
 import { currentTurnEventLines } from "./turn-events.js";
 import { foldToolDurations } from "./timeline-fold.js";
+import { latestTurn, turnArtifactPath, classifyRunDir, preLayoutMessage } from "./turn-layout.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -402,14 +403,21 @@ export function buildGateTrace(file: string): GateTraceRow[] {
       ...(tr?.isError ? { error: tr.text.split("\n")[0].slice(0, 160) } : {}),
     });
   }
-  // Provenance annotation (best-effort): pair each gate row with its recorded `by`/`model` from the
-  // sibling result.json. Preferred pairing is BY request_id — a persisted answered question decision now
+  // Provenance annotation (best-effort): pair each gate row with its recorded `by`/`model` from the LATEST
+  // turn's result.json. Preferred pairing is BY request_id — a persisted answered question decision now
   // carries `requestId` (#20), so a retried/duplicated gate event (an extra row with no matching decision)
   // can't shift every later row's label out of position, which the old positional pairing was prone to.
   // Records predating `requestId` fall back to the positional pairing (in ask order, against every
   // question-kind decision so denied/mismatched gates keep the index spaces aligned).
-  const resultPath = join(file, "..", "result.json");
-  if (existsSync(resultPath)) {
+  //
+  // Through the seam, same "if absent, just omit" tolerance as everywhere else in this file: a root read
+  // here was guard-invisible (`join(file, "..", …)`, no PER_TURN_ARTIFACTS literal on the line) and made
+  // EVERY `answeredBy`/`model` label silently vanish on a current-layout dir — rows here are already scoped
+  // to the LATEST turn (`eventsOf`), so pairing against another turn's `decisions[]` matched nothing.
+  const gtRunDir = dirname(file);
+  const gtTurn = latestTurn(gtRunDir);
+  const resultPath = gtTurn !== undefined ? turnArtifactPath(gtRunDir, gtTurn, "result.json") : undefined;
+  if (resultPath && existsSync(resultPath)) {
     try {
       const persisted = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
       const questionDecisions = (persisted.decisions ?? []).filter((d) => d.kind === "question");
@@ -584,11 +592,18 @@ function cacheReadRatio(
   return denom > 0 ? cacheRead / denom : undefined;
 }
 
-/** Best-effort read of the sibling `result.json` for a run dir, given its `events.jsonl` path. Returns
- *  `undefined` when there's no run dir (a bare `events.jsonl` was traced) or the file won't parse — the
- *  same "absent means degrade gracefully, don't crash" tolerance `buildGateTrace`'s provenance pass uses. */
+/** Best-effort read of the LATEST turn's `result.json` for a run dir, given its `events.jsonl` path.
+ *  Returns `undefined` when there's no run dir (a bare `events.jsonl` was traced), no addressable turn (a
+ *  `legacy`/`mixed`/`none` dir — see `resultUnavailableReason` for the honest reason in that case), or the
+ *  file won't parse — the same "absent means degrade gracefully, don't crash" tolerance `buildGateTrace`'s
+ *  provenance pass uses. A root read here (pre-seam) was guard-invisible (`dirname(file)`, no
+ *  PER_TURN_ARTIFACTS literal on the line) and made `--view files`/`--view usage` report "evidence
+ *  unavailable" on EVERY current-layout dir. */
 function readSiblingResult(file: string): RunResult | undefined {
-  const p = join(dirname(file), "result.json");
+  const runDir = dirname(file);
+  const turn = latestTurn(runDir);
+  if (turn === undefined) return undefined;
+  const p = turnArtifactPath(runDir, turn, "result.json");
   if (!existsSync(p)) return undefined;
   try {
     return JSON.parse(readFileSync(p, "utf8")) as RunResult;
@@ -596,6 +611,20 @@ function readSiblingResult(file: string): RunResult | undefined {
     warn(`::warning:: trace: skipping unparseable ${p}: ${String((e as Error).message)}\n`);
     return undefined;
   }
+}
+
+/** Why `readSiblingResult` came back empty — distinguishes a genuinely bare `events.jsonl` (no run dir at
+ *  all) from a `legacy`/`mixed` dir whose `result.json` sits at the root instead of `turns/<N>/`, so
+ *  `--view files`/`--view usage` don't lie with "no sibling result.json" when the file is right there,
+ *  just unaddressed by this layout. `trace` never REFUSES (its event-derived views stay fully readable —
+ *  see turn-layout.ts's module doc comment) — this only shapes the degrade message for the two
+ *  result-derived views. */
+function resultUnavailableReason(file: string, view: "files" | "usage"): string {
+  const runDir = dirname(file);
+  const shape = classifyRunDir(runDir);
+  if (shape.kind === "legacy" || shape.kind === "mixed")
+    return `${view} view needs a turn-addressed result.json — ${preLayoutMessage(shape, runDir)}`;
+  return `${view} view needs a run dir (no sibling result.json)`;
 }
 
 /**
@@ -663,7 +692,7 @@ export function buildFilesView(file: string): FilesView {
   if (!result)
     return {
       available: false,
-      reason: "files view needs a run dir (no sibling result.json)",
+      reason: resultUnavailableReason(file, "files"),
       workspaceFilesRecorded: false,
       diffAvailable: false,
       rows: [],
@@ -748,7 +777,7 @@ export interface UsageView {
 
 export function buildUsageView(file: string): UsageView {
   const result = readSiblingResult(file);
-  if (!result) return { rows: [], note: "usage view needs a run dir (no sibling result.json)" };
+  if (!result) return { rows: [], note: resultUnavailableReason(file, "usage") };
   const mu = result.modelUsage;
   if (!mu || Object.keys(mu).length === 0) return { rows: [], note: "no usage recorded" };
   const rows: UsageRow[] = Object.entries(mu).map(([model, u]) => ({

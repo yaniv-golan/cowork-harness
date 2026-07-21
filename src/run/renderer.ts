@@ -5,6 +5,7 @@ import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
 import { computeVerdict, type GuardReport, type GuardStatus } from "./verdict.js";
 import { formatGateProvenanceLine } from "./gate-provenance.js";
+import { turnArtifactPath } from "./turn-layout.js";
 
 /**
  * Shared output renderer. The seam is `RunHooks` (attached to `Run` via `executeScenario`): it
@@ -284,7 +285,12 @@ export function renderFooter(
   if (passed) {
     write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + tildeify(r.outDir) : ""}\n`);
     if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + tildeify(r.outputsDir))}\n`);
-    if (opts.lane !== "replay" && r.outDir) write(`   ${dim(plan, "→ result: " + tildeify(r.outDir) + "/result.json")}\n`);
+    // r.turn is already on the object (set at RunResult assembly time) — never recomputed here. Absent on
+    // some lanes (chat, replay — see RunResult.turn's doc comment); a chat run's turn is always 1 (fresh
+    // sessionId, never resumed — see chat.ts), and replay is already excluded by the lane check above, so
+    // the `?? 1` fallback below is never wrong for whatever reaches this line.
+    if (opts.lane !== "replay" && r.outDir)
+      write(`   ${dim(plan, "→ result: " + tildeify(turnArtifactPath(r.outDir, r.turn ?? 1, "result.json")))}\n`);
     renderGuards(verdict.guards, plan, write); // make the safety nets that ran an enumerable, visible fact
     renderGateProvenance(r, plan, write);
     renderAnswerHints(r, plan, write);
@@ -331,10 +337,14 @@ export function renderFooter(
         .map((l) => "   " + l)
         .join("\n") + "\n",
     );
-    write(`   ${dim(plan, "→ full run: " + tildeify(r.outDir) + "/run.jsonl")}\n`);
+    // Same seam, same reason as the result pointer below: run.jsonl has no root compat copy either (never
+    // did, even before the compat copy for result.json existed), so this printed a pointer to a file that
+    // does not exist under the per-turn layout.
+    write(`   ${dim(plan, "→ full run: " + tildeify(turnArtifactPath(r.outDir, r.turn ?? 1, "run.jsonl")))}\n`);
     if (r.outputsDir) write(`   ${dim(plan, "→ outputs:  " + tildeify(r.outputsDir))}\n`);
   }
-  if (opts.lane !== "replay" && r.outDir) write(`   ${dim(plan, "→ result: " + tildeify(r.outDir) + "/result.json")}\n`);
+  if (opts.lane !== "replay" && r.outDir)
+    write(`   ${dim(plan, "→ result: " + tildeify(turnArtifactPath(r.outDir, r.turn ?? 1, "result.json")))}\n`);
   iterateTip();
 }
 

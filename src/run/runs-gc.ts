@@ -2,6 +2,7 @@ import { existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
+import { hasTurnDirs } from "./turn-layout.js";
 
 const log = (s: string) => process.stderr.write(s + "\n");
 
@@ -19,12 +20,13 @@ function parseRetentionMs(s: string): number | undefined {
   return n * mult;
 }
 
-/** A "real run" — has a `result.json` (completed; success OR a recorded error) OR an `events.jsonl`
- *  (a session started, so the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail
- *  writes no result.json but DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session
- *  dir has neither → it is what GC should drop first. `events.jsonl` exists from session start, so an
- *  in-flight run is protected without a wall-clock guard. */
-const isRealRun = (dir: string) => existsSync(join(dir, "result.json")) || existsSync(join(dir, "events.jsonl"));
+/** A "real run" — has completed at least one turn (`turns/<N>/`, current layout — no writer produces a
+ *  root `result.json` compat copy to check for anymore) OR has an `events.jsonl` (a session started, so
+ *  the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail writes no turn dir but
+ *  DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session dir has neither → it
+ *  is what GC should drop first. `events.jsonl` exists from session start, so an in-flight run is
+ *  protected without a wall-clock guard. */
+const isRealRun = (dir: string) => hasTurnDirs(dir) || existsSync(join(dir, "events.jsonl"));
 
 /** `cowork-harness prune [--keep-last <n>] [--dry-run] [<runs-dir>]`
  *

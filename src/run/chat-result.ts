@@ -21,6 +21,13 @@ export interface ChatResultOpts {
   readonlyFolderRoots: string[];
   egress: RunResult["egress"];
   durationMs: number;
+  /** Which `turns/<N>/` chat's OWN artifacts (result.json/trace.json/resources.jsonl) live under, so
+   *  `foldResources` below reads the same file `chat.ts`'s sampler wrote into. Chat never resumes (a fresh
+   *  sessionId + a freshly mkdir'd outDir every invocation — see chat.ts), so this is always 1 in
+   *  practice; threaded explicitly rather than hardcoded so a future multi-turn chat can't silently read
+   *  the wrong turn's samples. Distinct from the `turn` FIELD on the assembled RunResult below, which
+   *  stays `undefined` by contract — see that field's comment. */
+  turn: number;
 }
 
 /**
@@ -54,13 +61,17 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
   const workspaceFiles = existsSync(opts.workRoot)
     ? classifyWorkspaceFiles(opts.workRoot, opts.userVisibleRoots, opts.readonlyFolderRoots)
     : undefined;
-  const resources = foldResources(opts.outDir, opts.fidelity, resolveIntervalMs());
+  const resources = foldResources(opts.outDir, opts.fidelity, resolveIntervalMs(), undefined, opts.turn);
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "chat",
     command: "chat", // #48
-    turn: undefined, // chat is its own multi-turn REPL; per-turn attribution isn't tracked here
+    // RunResult.turn documents "absent on replay/chat lanes" (types.ts) — kept undefined even though
+    // chat's own artifacts now live under turns/1/ (opts.turn above): that addressing is an internal
+    // write-path detail (where THIS session's files sit on disk), not the multi-SESSION resume-count this
+    // field describes, and chat's own REPL turns aren't individually numbered/tracked at all.
+    turn: undefined,
     ablated: undefined, // chat is exploratory, not an ablation control
     referencesRead: record.filesRead.length ? record.filesRead : undefined,
     finalMessage: record.resultText,

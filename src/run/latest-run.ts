@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { slugForPath } from "./execute.js";
+import { latestTurn, turnArtifactPath } from "./turn-layout.js";
 
 export interface LatestRunInfo {
   /** result.json's own `scenario` field when readable (the display name); falls back to the caller's
@@ -36,10 +37,16 @@ function originCreatedAt(dir: string): string | undefined {
   return undefined;
 }
 
-/** `result.json`'s own mtime, ISO-8601 — the same proxy `reindexFromRunsTree` (run-index.ts) uses for a
- *  historical row's `ts` when no better signal exists. */
+/** The LATEST turn's `result.json` mtime, ISO-8601 — the same proxy `reindexFromRunsTree` (run-index.ts)
+ *  uses for a historical row's `ts` when no better signal exists. A root read here (pre-seam) silently
+ *  found nothing on any current-layout dir, falling through to `status.json`'s startedAt — a run's START,
+ *  not its END — so a long resumed session could order BEHIND a shorter, later one with no error at all.
+ *  `undefined` on a `legacy`/`mixed`/`none` dir (`latestTurn` returns no addressable turn there) — the
+ *  caller falls through to `statusStartedAt`, same degrade as a genuinely missing file. */
 function resultJsonMtime(dir: string): string | undefined {
-  const p = join(dir, "result.json");
+  const turn = latestTurn(dir);
+  if (turn === undefined) return undefined;
+  const p = turnArtifactPath(dir, turn, "result.json");
   if (!existsSync(p)) return undefined;
   try {
     return statSync(p).mtime.toISOString();
@@ -63,11 +70,14 @@ function statusStartedAt(dir: string): string | undefined {
   return undefined;
 }
 
-/** Best-effort read of a run dir's `result.json` — used opportunistically for the display `scenario` name
- *  and the (optional) persisted `verdict`. Never throws; a missing/malformed file just means both stay at
- *  their fallback. */
+/** Best-effort read of a run dir's LATEST turn's `result.json` — used opportunistically for the display
+ *  `scenario` name and the (optional) persisted `verdict`. Never throws; a missing/malformed file (or a
+ *  `legacy`/`mixed`/`none` dir, where `latestTurn` has no addressable turn to read) just means both stay
+ *  at their fallback — a root read here silently dropped `scenario`/`verdict` on every current-layout dir. */
 function readResultJson(dir: string): { scenario?: string; verdict?: LatestRunInfo["verdict"] } {
-  const p = join(dir, "result.json");
+  const turn = latestTurn(dir);
+  if (turn === undefined) return {};
+  const p = turnArtifactPath(dir, turn, "result.json");
   if (!existsSync(p)) return {};
   try {
     const raw = JSON.parse(readFileSync(p, "utf8")) as { scenario?: unknown; verdict?: unknown };

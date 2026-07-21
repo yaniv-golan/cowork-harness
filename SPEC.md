@@ -482,8 +482,8 @@ Each emitted result carries a **`verdict`** — a non-mutating serialization-tim
 — so a consumer can read each result's pass/fail **and why** (the `signals[]`, e.g. an all-green-assertions run
 that is `pass:false` purely on a `stalled` signal, or `failures[]` for a flat jq-friendly reason list) without
 recomputing. As of 0.31.0, the same `verdict` is **also persisted on the on-disk `result.json`** for a kept run
-(`jq '.verdict' result.json`; on a multi-turn run dir that root file is a compatibility copy of the LATEST
-turn — each turn's own copy is `turns/<N>/result.json`) — computed once by `computeVerdict` so the streamed
+(`jq '.verdict' turns/<N>/result.json` — there is no root compat copy; a multi-turn run dir's turns each hold
+their own) — computed once by `computeVerdict` so the streamed
 and on-disk copies can't
 diverge; `chat` runs carry no `verdict` (field absent, not persisted). The top-level `ok` is derived from the
 same per-result verdicts, so it cannot diverge from them, the exit code, or the text footer.

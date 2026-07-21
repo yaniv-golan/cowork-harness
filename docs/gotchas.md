@@ -33,11 +33,11 @@
   hooks-config JSON, and `Bash(...)` directives only — host-side prose and `Read`/`Grep` directives are
   left alone, so false negatives on unfenced snippets are expected).
 
-- **Harvesting a `critique` run? Read the GRADED turn, not the run dir's root `result.json`.** A
-  `critique` writes two turns into one run dir, and the root `result.json` is a compatibility copy of the
-  **latest** turn — the *reflection* turn. Its `outcome`/`skillHash` describe the wrong run, and nothing
-  about the value looks wrong. Read `result.graded.json` (or `turns/1/result.json`), or take
-  `gradedOutcome`/`gradedSkillHash` straight from the critique report.
+- **Harvesting a `critique` run? Read the GRADED turn (`turns/1/`), not `turns/2/`.** A `critique` writes
+  two turns into one run dir — the task turn (`turns/1/`) and the reflection turn (`turns/2/`) — with no
+  root compat copy of either. Reading `turns/2/result.json` by habit (e.g. "the result.json") describes the
+  wrong run, and nothing about the value looks wrong. Read `result.graded.json` (or `turns/1/result.json`),
+  or take `gradedOutcome`/`gradedSkillHash` straight from the critique report.
 
 - **Iterating a skill across fixes? Don't cross-pair generations.** When you run the same skill before
   and after a fix and later harvest the runs (pairing each turn's `result.json` with a critique), it is easy to

@@ -806,11 +806,10 @@ export function writeGradedAliases(outDir: string): void {
     ["trace.json", "trace.graded.json"],
   ] as const) {
     try {
-      // Under the per-turn layout the graded turn's files live in `turns/1/`; the run-dir root holds only
-      // a compat copy of the LATEST turn (and, for trace.json, nothing at all). Resolving through the seam
-      // keeps this correct in both layouts — and landing it in the same change as the writer flip is
-      // deliberate: this copy swallows its errors, so a split would have silently stopped producing
-      // `trace.graded.json` for the one active consumer.
+      // The graded turn's files live in `turns/1/` — there is no root compat copy of either artifact
+      // anymore. Resolving through the seam keeps this correct regardless: this copy swallows its errors,
+      // so a stale root reference here would have silently stopped producing `result.graded.json`/
+      // `trace.graded.json` for the one active consumer, rather than failing loud.
       const src = turnArtifactPath(outDir, 1, from);
       if (existsSync(src)) copyFileSync(src, join(outDir, to));
     } catch {

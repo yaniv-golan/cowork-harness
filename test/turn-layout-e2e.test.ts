@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeScenario, parseScenarioFile, beginTurn } from "../src/run/execute.js";
@@ -38,8 +38,21 @@ function protocolScenario(name: string) {
   return parseScenarioFile(f);
 }
 
+/** Same idea, but the session mounts a real folder — `--session-id`/`--resume`'s cross-project guard
+ *  (execute.ts) treats an inline (sourceless) session as UNCONFIRMABLE and refuses to resume it at all
+ *  (fail closed), so a resume test needs a session the guard can actually confirm. */
+function sourcedProtocolScenario(name: string) {
+  const src = mkdtempSync(join(tmpdir(), "layout-resume-src-"));
+  writeFileSync(join(src, "f.txt"), "x");
+  const dir = mkdtempSync(join(tmpdir(), "layout-resume-scn-"));
+  writeFileSync(join(dir, "s.yaml"), `folders:\n  - from: ${src}\n`);
+  const f = join(dir, `${name}.yaml`);
+  writeFileSync(f, `name: ${name}\nbaseline: latest\nsession: ./s.yaml\nfidelity: protocol\nprompt: hi\n`);
+  return parseScenarioFile(f);
+}
+
 describe("a REAL run produces the per-turn layout on disk", () => {
-  it("writes turns/1/ with the per-turn artifacts, and a root compat copy", async () => {
+  it("writes turns/1/ with the per-turn artifacts, and NO root compat copy", async () => {
     const res = await executeScenario(protocolScenario("e2e-layout"), {});
     const outDir = res.outDir;
 
@@ -49,9 +62,10 @@ describe("a REAL run produces the per-turn layout on disk", () => {
       expect(existsSync(join(turn1, a)), `turns/1/${a} was not written by a real run`).toBe(true);
     }
 
-    // The documented compatibility alias, and it must agree with the turn it copies.
-    expect(existsSync(join(outDir, "result.json")), "the root compat copy is missing").toBe(true);
-    expect(readFileSync(join(outDir, "result.json"), "utf8")).toBe(readFileSync(join(turn1, "result.json"), "utf8"));
+    // The compat copy is gone: turns/1/result.json is the ONLY copy. A resurrected root write would make
+    // every reader that now goes through the seam silently start reading the wrong (root/stale) file again
+    // on the next turn.
+    expect(existsSync(join(outDir, "result.json")), "a root compat copy reappeared — it must not").toBe(false);
   }, 60_000);
 
   it("leaves the cumulative streams and session state at the ROOT, not inside turns/", async () => {
@@ -69,6 +83,49 @@ describe("a REAL run produces the per-turn layout on disk", () => {
     const res = await executeScenario(protocolScenario("e2e-single"), {});
     const outDir = res.outDir;
     expect(readdirSync(join(outDir, "turns")).sort()).toEqual(["1"]);
+  }, 60_000);
+});
+
+describe("a REAL two-turn resume — the actual path both shipped defects lived in", () => {
+  // Every other test in this suite (and every fabricated-dir test elsewhere) drives at most ONE turn.
+  // Both shipped defects — turn 1 unaddressable on a mixed dir, and `currentTurn` going BACKWARDS
+  // (2 -> 1) on a resume — are RESUME-path defects, so a single-turn e2e cannot catch either. This drives
+  // `executeScenario` twice against the SAME session dir, the only way to exercise beginTurn/currentTurn's
+  // resume arithmetic and the seam's addressing of more than one turn for real.
+  it("turns/1 and turns/2 both hold all four artifacts, turn numbers strictly increase, and turn 1's events.jsonl prefix is untouched", async () => {
+    const scenario = sourcedProtocolScenario("e2e-resume");
+
+    const first = await executeScenario(scenario, { sessionId: "e2e-resume-1" });
+    const outDir = first.outDir;
+    expect(first.turn, "a fresh single-shot run must be turn 1").toBe(1);
+
+    const eventsBeforeResume = readFileSync(join(outDir, "events.jsonl"), "utf8");
+
+    const second = await executeScenario(scenario, { sessionId: "e2e-resume-1", resume: true });
+    expect(second.outDir, "a resume must reuse the same run dir, not mint a new one").toBe(outDir);
+    expect(second.turn, "turn number went backwards or failed to advance on resume").toBe(2);
+
+    for (const turn of [1, 2]) {
+      for (const a of ["result.json", "run.jsonl", "trace.json"]) {
+        const p = join(outDir, "turns", String(turn), a);
+        expect(existsSync(p), `turns/${turn}/${a} missing after a real resume`).toBe(true);
+      }
+    }
+
+    // The critique turn-1 isolation proof (snapshotTurnBoundary/verifyBoundaryIntegrity) depends on this:
+    // turn 1's bytes must be a stable PREFIX of the cumulative events.jsonl after any later turn appends.
+    const eventsAfterResume = readFileSync(join(outDir, "events.jsonl"), "utf8");
+    expect(
+      eventsAfterResume.startsWith(eventsBeforeResume),
+      "turn 1's byte prefix in events.jsonl changed after a resume — this breaks critique's boundary proof",
+    ).toBe(true);
+    expect(eventsAfterResume.length, "a resume must only ever APPEND to events.jsonl").toBeGreaterThan(eventsBeforeResume.length);
+
+    // The defect this whole removal targets: a resumed dir minting a root compat copy (or any root
+    // artifact) alongside turns/ would make it MIXED — turn 1 unaddressable — right where the bug lived.
+    for (const a of ["result.json", "run.jsonl", "trace.json"]) {
+      expect(existsSync(join(outDir, a)), `a root ${a} reappeared after resume — the dir is now MIXED`).toBe(false);
+    }
   }, 60_000);
 });
 
