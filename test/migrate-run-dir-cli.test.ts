@@ -50,7 +50,10 @@ describe.skipIf(!can)("migrate-run-dir CLI", () => {
     expect(existsSync(join(d, "events.jsonl")), "events.jsonl must never move — trace depends on it").toBe(true);
 
     const second = run([root, "--write"]);
-    expect(`${second.stdout}${second.stderr}`, "a second pass should find nothing to migrate").toMatch(/0 to migrate/);
+    // Write mode reports past tense ("N migrated"); dry-run reports "N to migrate". Asserting on the count
+    // rather than the tense would have let a "1 migrated" second pass slip through.
+    expect(`${second.stdout}${second.stderr}`, "a second pass should find nothing to migrate").toMatch(/0 migrated/);
+    expect(`${second.stdout}${second.stderr}`, "the already-current dir was not recognised").toMatch(/1 already current/);
     rmSync(root, { recursive: true, force: true });
   });
 

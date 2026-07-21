@@ -705,7 +705,8 @@ export function migrateRunsRoot(
           if (opts.write) executeMigration(a.plan, { journalRoot });
           report.migrated++;
         }
-        opts.onDir?.(dir, a.kind);
+        // Report the OUTCOME, not the assessment kind: a dir that was migrated should not say "plan".
+        opts.onDir?.(dir, a.kind === "plan" ? (opts.write ? "migrated" : "to-migrate") : a.kind);
       } catch (e) {
         report.refused.push({ dir, reason: (e as Error).message });
         opts.onDir?.(dir, "refuse");
@@ -755,14 +756,19 @@ export function cmdMigrateRunDir(args: string[]): void {
   });
 
   const prefix = write ? "" : "(dry-run) ";
+  // Past tense once the work is done: "N to migrate" after migrating reads as if nothing happened.
+  const verb = write ? "migrated" : "to migrate";
   out(
-    `${prefix}migrate-run-dir: ${r.migrated} to migrate · ${r.recovered} recovered · ${r.orphaned} orphaned journal(s) swept · ${r.noop} already current · ` +
+    `${prefix}migrate-run-dir: ${r.migrated} ${verb} · ${r.recovered} recovered · ${r.orphaned} orphaned journal(s) swept · ${r.noop} already current · ` +
       `${r.skipped} skipped (no per-turn artifacts) · ${r.refused.length} refused`,
   );
   // Refusals are ENUMERATED, never just counted: each one is a directory a human has to look at, and a
   // bare count is indistinguishable from "nothing to do here".
   for (const { dir, reason } of r.refused) out(`  ✗ ${dir}\n      ${reason}`);
   if (!write && r.migrated > 0) out(`\nRe-run with --write to apply. Back up ${runsRoot} first.`);
+  // The index derives a row's timestamp from result.json's mtime, so it must be rebuilt from the moved
+  // files. Saying so here is the difference between a documented rollout step and one people actually do.
+  if (write && (r.migrated > 0 || r.recovered > 0)) out(`\nNow rebuild the index: cowork-harness stats --reindex`);
 
   // Non-zero when anything was refused: a refusal is unfinished work, and a CI caller must see it.
   return process.exit(r.refused.length > 0 ? 1 : 0);

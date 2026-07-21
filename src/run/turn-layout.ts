@@ -83,9 +83,15 @@ export function turnArtifactPath(outDir: string, turn: number, artifact: PerTurn
  *  Role, not number: a consumer asks "which turn was graded?", never "which number was it?". Prefers the
  *  stable `*.graded.json` alias `critique` writes, because it is correct the moment it is written and
  *  survives a reflection turn that never completed; falls back to turn 1. */
-export function resolveGraded(outDir: string, artifact: "result.json" | "trace.json"): string | undefined {
+/** The graded-alias PATH for an artifact — `result.json` -> `<outDir>/result.graded.json`. The seam owns
+ *  this naming so a writer and a reader cannot drift apart on it; `critique` used to hardcode the pairs. */
+export function gradedAliasPath(outDir: string, artifact: "result.json" | "trace.json"): string {
   const { stem, ext } = stemAndExt(artifact);
-  const alias = join(outDir, `${stem}.graded${ext}`);
+  return join(outDir, `${stem}.graded${ext}`);
+}
+
+export function resolveGraded(outDir: string, artifact: "result.json" | "trace.json"): string | undefined {
+  const alias = gradedAliasPath(outDir, artifact);
   if (existsSync(alias)) return alias;
   const byTurn = turnArtifactPath(outDir, 1, artifact);
   return existsSync(byTurn) ? byTurn : undefined;

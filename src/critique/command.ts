@@ -16,7 +16,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
-import { turnArtifactPath } from "../run/turn-layout.js";
+import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
 import { existsSync, readFileSync, copyFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -801,17 +801,14 @@ const EXIT_INSTRUMENT_FAILURE = 2;
  *
  *  Best-effort by design: a missing or unreadable source must never fail a critique that otherwise ran. */
 export function writeGradedAliases(outDir: string): void {
-  for (const [from, to] of [
-    ["result.json", "result.graded.json"],
-    ["trace.json", "trace.graded.json"],
-  ] as const) {
+  for (const artifact of ["result.json", "trace.json"] as const) {
     try {
       // The graded turn's files live in `turns/1/` — there is no root compat copy of either artifact
       // anymore. Resolving through the seam keeps this correct regardless: this copy swallows its errors,
       // so a stale root reference here would have silently stopped producing `result.graded.json`/
       // `trace.graded.json` for the one active consumer, rather than failing loud.
-      const src = turnArtifactPath(outDir, 1, from);
-      if (existsSync(src)) copyFileSync(src, join(outDir, to));
+      const src = turnArtifactPath(outDir, 1, artifact);
+      if (existsSync(src)) copyFileSync(src, gradedAliasPath(outDir, artifact));
     } catch {
       /* best-effort convenience copy — never fail the run for it */
     }

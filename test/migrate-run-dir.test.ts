@@ -472,3 +472,40 @@ describe("assessRunDir — the POST-CRASH shape, where the boundary lives in tur
     }
   });
 });
+
+describe("assessRunDir — critique's graded aliases (the plan's last open question)", () => {
+  it("leaves result.graded.json / trace.graded.json alone and does not treat them as contamination", () => {
+    // The plan left this OPEN: should the migrator re-point the graded aliases? Answering it here rather
+    // than shipping an unanswered question.
+    //
+    // No. They are root-level COPIES of the graded turn, not per-turn artifacts — critique writes them
+    // precisely so a consumer has a role-stable name that does not move. The migrator must neither move
+    // them (that would break the stable name) nor count them as pre-layout markers (that would make every
+    // migrated critique dir look mixed and get refused forever).
+    const d = runDir();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "result.graded.json", RESULT(1));
+    write(d, "trace.graded.json", "{}");
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const touched = a.plan.ops.map((o) => (o.kind === "delete" ? o.path : o.kind === "move" ? o.from : o.from));
+    expect(
+      touched.some((p) => p.includes("graded")),
+      "the migrator moved or deleted a graded alias",
+    ).toBe(false);
+  });
+
+  it("a MIGRATED critique dir is `turns`, not `mixed` — the aliases must not make it look contaminated", () => {
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "result.graded.json", RESULT(1));
+    write(d, "trace.graded.json", "{}");
+    expect(assessRunDir(d).kind, "a normal critique dir was not recognised as already current").toBe("noop");
+  });
+});
