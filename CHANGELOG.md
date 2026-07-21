@@ -51,6 +51,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **An ambient `GIT_DIR` silently computed the wrong skill file set.** Git hooks export `GIT_DIR` (and
+  `GIT_INDEX_FILE`) into every child process, and with `GIT_DIR` set but no `GIT_WORK_TREE` git stops
+  inferring the work tree from `cwd` and treats `cwd` as the repo root. `gitTrackedSet`'s
+  `rev-parse --show-toplevel` probe therefore still succeeded — so the not-a-repo raw-walk fallback never
+  fired — while `git ls-files -- .` returned the **entire repo index as root-relative paths** instead of
+  the directory-relative ones. Measured on this repo: 2 tracked files became 625 wrong ones. That set
+  feeds both `skillHash` and the mount-copy filter, so any run invoked from a git hook (or from CI that
+  exports `GIT_DIR`) got a wrong hash and a mount filter pointed at paths that do not exist under the
+  skill dir. The visible symptom was the repo's own pre-commit hook reporting committed example cassettes
+  as `[stale] skill files changed since record` on every parity sync. `skillCommit` had the same defect:
+  `git -C <dir>` is overridden by an ambient `GIT_DIR`, so every skill dir resolved to that foreign repo's
+  HEAD — recording a foreign commit as the skill's provenance and masking dirs that are genuinely in
+  different repos. Both call sites now spawn git with `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE`
+  stripped, via one shared helper so they cannot drift. `run-index`'s `gitInfo` and `doctor`'s worktree
+  probe deliberately keep inheriting — they are asking about the *ambient* repo.
 - **`stats --reindex` destroyed multi-turn history.** Every `--resume` turn — and `critique`'s task +
   reflection pair — writes to one `outDir`, so keying by directory collapsed N completions into one,
   silently changing run counts, pass rates and costs.

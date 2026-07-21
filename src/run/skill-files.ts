@@ -22,9 +22,27 @@ export function gitModeEnabled(): boolean {
   return process.env[GITSET_ENV] !== "0";
 }
 
+/**
+ * Repo-location env vars that must NOT leak in from the ambient process. A git hook exports GIT_DIR and
+ * GIT_INDEX_FILE into every child; with GIT_DIR set and no GIT_WORK_TREE, git stops inferring the work
+ * tree from `cwd` and treats `cwd` as the root — so `rev-parse --show-toplevel` still succeeds (the
+ * not-a-repo fallback never fires) while `ls-files -- .` returns the WHOLE index as root-relative paths.
+ * The tracked set then silently describes the wrong files. Every resolution here is intentionally
+ * derived from `cwd` alone.
+ */
+const AMBIENT_GIT_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] as const;
+
+/** `process.env` minus the repo-location overrides above — for any git call whose repo must be decided
+ *  by `cwd` / `-C` alone. Exported so every such call site shares one list and they cannot drift. */
+export function gitEnvWithoutAmbientRepo(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const k of AMBIENT_GIT_ENV) delete env[k];
+  return env;
+}
+
 function git(args: string[], cwd: string): { ok: boolean; stdout: string } {
   try {
-    const r = spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const r = spawnSync("git", args, { cwd, encoding: "utf8", env: gitEnvWithoutAmbientRepo(), maxBuffer: 64 * 1024 * 1024 });
     // Non-zero exit OR any spawn error (missing git, corrupt .git, perms) ⇒ not usable → caller falls to raw.
     if (r.status !== 0 || r.error) return { ok: false, stdout: "" };
     return { ok: true, stdout: r.stdout ?? "" };
