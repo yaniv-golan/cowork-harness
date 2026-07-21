@@ -175,7 +175,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                for hostloop/protocol recordings; review + tailor the patterns before recording)
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
                                prune accumulated run dirs, keeping N most recent per scenario (default: 5)
-  migrate-run-dir [<runs-dir>] [--write]
+  migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
                                convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
@@ -515,12 +515,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "migrate-run-dir":
-    "usage: migrate-run-dir [<runs-dir>] [--write] [--verbose]\n" +
+    "usage: migrate-run-dir [<runs-dir>] [--scenario <name>] [--write] [--verbose]\n" +
     "       convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place.\n" +
     "       DRY RUN BY DEFAULT — pass --write to apply. Back up the runs root first; this rewrites directories.\n" +
     "       Preserves file and directory mtimes (they are the recency signal `stats` and `--latest-for` read), recovers an\n" +
     "       interrupted run from its journal, and refuses any directory it cannot resolve rather than guessing.\n" +
-    "       exit: 0 nothing refused · 1 one or more directories refused (unfinished work) · 2 usage",
+    "       --scenario <name> scopes the run to one scenario dir — migrate a single scenario, verify it, then do the rest.\n" +
+    "       exit: 0 nothing refused · 1 one or more directories refused (unfinished work) · 2 usage (or unknown --scenario)",
 
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",

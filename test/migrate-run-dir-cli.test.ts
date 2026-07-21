@@ -123,3 +123,43 @@ describe.skipIf(!can)("orphaned journals and the dry-run guarantee", () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe.skipIf(!can)("--scenario scoping", () => {
+  function twoScenarios(): string {
+    const root = mkdtempSync(join(tmpdir(), "mig-scope-"));
+    for (const s of ["alpha", "beta"]) {
+      const d = join(root, s, "sess-1");
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, "result.json"), JSON.stringify({ scenario: s, turn: 1 }));
+      writeFileSync(join(d, "run.jsonl"), `{"t":"transcript"}`);
+    }
+    return root;
+  }
+
+  it("migrates ONLY the named scenario, leaving the others untouched", () => {
+    // Without this the tool cannot perform the staged rollout its own docs recommend: you either migrate
+    // one directory by hand or commit to all 1,630 at once.
+    const root = twoScenarios();
+    const r = spawnSync("node", [CLI, "migrate-run-dir", root, "--scenario", "alpha", "--write"], { encoding: "utf8" });
+    expect(r.status, `failed: ${r.stderr}`).toBe(0);
+    expect(existsSync(join(root, "alpha", "sess-1", "turns", "1", "result.json")), "the named scenario was not migrated").toBe(true);
+    expect(existsSync(join(root, "beta", "sess-1", "result.json")), "an unnamed scenario was migrated").toBe(true);
+    expect(existsSync(join(root, "beta", "sess-1", "turns")), "an unnamed scenario was migrated").toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reports counts for the named scenario only", () => {
+    const root = twoScenarios();
+    const r = spawnSync("node", [CLI, "migrate-run-dir", root, "--scenario", "alpha"], { encoding: "utf8" });
+    expect(`${r.stdout}${r.stderr}`, "counted dirs outside the named scenario").toMatch(/1 to migrate/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("exits 2 on an unknown scenario rather than silently doing nothing", () => {
+    const root = twoScenarios();
+    const r = spawnSync("node", [CLI, "migrate-run-dir", root, "--scenario", "nope"], { encoding: "utf8" });
+    expect(r.status, "an unknown scenario looked like a successful no-op").toBe(2);
+    expect(`${r.stdout}${r.stderr}`).toMatch(/nope/);
+    rmSync(root, { recursive: true, force: true });
+  });
+});

@@ -625,7 +625,7 @@ function sweepOrphanedJournals(runsRoot: string, write: boolean): number {
  *  the journal that records what was already done. */
 export function migrateRunsRoot(
   runsRoot: string,
-  opts: { write: boolean; onDir?: (dir: string, outcome: string) => void },
+  opts: { write: boolean; scenario?: string; onDir?: (dir: string, outcome: string) => void },
 ): MigrationReport {
   const report: MigrationReport = { migrated: 0, recovered: 0, noop: 0, skipped: 0, orphaned: 0, refused: [] };
   const journalRoot = journalRootFor(runsRoot);
@@ -634,6 +634,9 @@ export function migrateRunsRoot(
 
   for (const scenario of readdirSync(runsRoot).sort()) {
     if (scenario === MIGRATION_JOURNAL_DIR) continue;
+    // Scoping exists so a rollout can be staged one scenario at a time — migrating 1,630 directories in
+    // a single irreversible step is exactly the thing the dry-run/backup ritual is trying to avoid.
+    if (opts.scenario !== undefined && scenario !== opts.scenario) continue;
     const scenarioDir = join(runsRoot, scenario);
     let ids: string[];
     try {
@@ -692,7 +695,7 @@ export function cmdMigrateRunDir(args: string[]): void {
   const out = (s: string) => process.stderr.write(s + "\n");
   let p;
   try {
-    p = parseArgs(args, { booleans: ["--write", "--verbose"], values: [] });
+    p = parseArgs(args, { booleans: ["--write", "--verbose"], values: ["--scenario"] });
   } catch (e) {
     out((e as Error).message);
     return process.exit(2);
@@ -703,6 +706,7 @@ export function cmdMigrateRunDir(args: string[]): void {
   }
 
   const write = p.flags["--write"] ?? false;
+  const scenario = p.options["--scenario"];
   const verbose = p.flags["--verbose"] ?? false;
   const runsRoot = p.positionals[0] ?? runsWriteRoot();
   if (!existsSync(runsRoot)) {
@@ -710,8 +714,15 @@ export function cmdMigrateRunDir(args: string[]): void {
     return process.exit(0);
   }
 
+  // An unknown scenario must not look like a clean no-op: "0 to migrate" is what success also prints.
+  if (scenario !== undefined && !existsSync(join(runsRoot, scenario))) {
+    out(`migrate-run-dir: no scenario "${scenario}" under ${runsRoot}`);
+    return process.exit(2);
+  }
+
   const r = migrateRunsRoot(runsRoot, {
     write,
+    scenario,
     onDir: verbose ? (dir, outcome) => out(`  ${outcome.padEnd(9)} ${dir}`) : undefined,
   });
 

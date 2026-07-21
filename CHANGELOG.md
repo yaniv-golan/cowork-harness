@@ -14,7 +14,8 @@ All notable changes to this project are documented here. The format is based on
   `verify-run` / `diff` / `inspect` / `stats`; this command converts them so the history survives the
   change instead of having to be re-run.
 
-  **Dry-run by default** — `--write` applies. It renames rather than copies, so file mtimes (the recency
+  **Dry-run by default** — `--write` applies, and `--scenario <name>` scopes the run to a single
+  scenario so a rollout can be staged: migrate one, verify it, then do the rest. It renames rather than copies, so file mtimes (the recency
   signal `stats` and `status --latest-for` rank by) survive untouched, and it restores directory mtimes
   afterwards. An interrupted run records a journal outside the run dir and is finished by re-running the
   command. Anything it cannot resolve unambiguously — a root artifact that is neither a duplicate nor
