@@ -60,6 +60,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A resumed turn was judged on the PRIOR turn's evidence — three wrong-verdict paths.** `events.jsonl`
+  is append-only across turns with no per-turn marker, and three whole-file scanners decide a run's
+  outcome: `scanEvents` (outputs-delete / host-path-leak → fail signals, and an authored
+  `no_delete_in_outputs`), `findUngatedPathToolCalls` (→ a run-level `error` at hostloop), and
+  `detectCapabilityUse` (→ `missing_capability`, a fail signal, which fires on the default lean image).
+  So on any `--resume` — and every `critique` reflection turn — turn 1's delete, gated tool call, or
+  capability use FAILED turn 2. A turn-start marker now scopes all three to the current turn.
+  `resources.jsonl` had the same shape (turn 1's peak RSS judged against turn 2's `max_peak_rss_bytes`)
+  and is archived per turn. Single-turn runs write no marker, so their `events.jsonl` is byte-identical
+  and no cassette is affected. Missing marker ⇒ whole-file scan, i.e. fail-closed.
+
 - **A resumed turn's telemetry included the PRIOR turn's events, and could produce a false PASS.**
   `timeline.jsonl` is append-mode with a fresh header per turn, but `readTimeline` returned every line
   after the first as an event — so on any `--resume` (and every `critique` reflection turn) the current

@@ -1,7 +1,8 @@
 import { warn, writeTextAtomic } from "../io.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { ZodError } from "zod";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
+import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -410,6 +411,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // native agent process genuine, software-checked-only host filesystem access — no container sandbox.
   // Refuse LOUD, before any spawn, unless the scenario opts in via `allow_host_writes: true`.
   if (effectiveFidelity === "hostloop") checkHostLoopWriteConsent(session, scenario.allow_host_writes ?? false);
+
+  // Turn-start bookkeeping for the APPEND-THROUGH-THE-TURN streams, BEFORE anything can write to them:
+  // before the resource sampler opens resources.jsonl and before the agent session starts. Deliberately
+  // not in `archivePriorTurnFiles`, which runs post-run — after `foldResources` has already read.
+  beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
   if (agentSessionId) {
@@ -1552,6 +1558,37 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
 
 /** THIS write's 1-based turn number, derived from how many prior turns are already archived. Pure — no
  *  side effects, so it can be read before the result is assembled (to stamp `RunResult.turn`). */
+
+/** Turn-start bookkeeping for the two APPEND-THROUGH-THE-TURN streams. Must run BEFORE the resource
+ *  sampler opens its file and BEFORE the agent session starts.
+ *
+ *  Deliberately NOT folded into `archivePriorTurnFiles`: that runs POST-run (after `foldResources` has
+ *  already read), so an archive there fixes nothing and would mislabel a two-turn file as turn 1.
+ *
+ *  Nothing happens on turn 1, so a single-turn run's `events.jsonl` stays BYTE-IDENTICAL — which is what
+ *  keeps cassettes (whose `events` array is this file verbatim) unaffected. */
+export function beginTurn(outDir: string): number {
+  const turn = currentTurn(outDir);
+  if (turn > 1) {
+    // The harness is the sole writer of events.jsonl (agent stdout is persisted only inside the session
+    // read loop), so appending here cannot be preceded by any event of this turn.
+    try {
+      appendFileSync(join(outDir, "events.jsonl"), JSON.stringify({ _emu: "turn_start", turn }) + "\n");
+    } catch {
+      /* best-effort: a missing marker degrades to the fail-closed whole-file scan */
+    }
+    // resources.jsonl has no marker mechanism and nothing else reads it (never captured in cassettes,
+    // `resources: undefined` on replay), so a rename is the simpler scoping.
+    try {
+      const res = join(outDir, "resources.jsonl");
+      if (existsSync(res)) renameSync(res, join(outDir, `resources.turn-${turn - 1}.jsonl`));
+    } catch {
+      /* best-effort */
+    }
+  }
+  return turn;
+}
+
 export function currentTurn(outDir: string): number {
   const archived = readdirSync(outDir).filter((f) => /^run\.turn-\d+\.jsonl$/.test(f)).length;
   return archived + (existsSync(join(outDir, "run.jsonl")) ? 1 : 0) + 1;
@@ -2159,7 +2196,12 @@ export function scanEvents(file: string): {
   const out = { outputsDeletes: [] as string[], hostPathLeaked: false, selfHealRan: false, sidecarMissing: false, malformedLines: 0 };
   let lines: string[] = [];
   try {
-    lines = readFileSync(file, "utf8").trim().split("\n");
+    // CURRENT TURN ONLY. Whole-file scanning made a turn-1 delete fail turn 2's verdict on every
+    // `--resume`. An empty segment yields [] rather than [""] — the latter counted as one malformed line
+    // and read as evidence-unavailable, which FAILS an authored no_delete_in_outputs for a turn that
+    // simply produced no events yet.
+    const text = readFileSync(file, "utf8").trim();
+    lines = currentTurnEventLines(text ? text.split("\n") : []);
   } catch {
     out.sidecarMissing = true;
     return out;
@@ -2223,7 +2265,10 @@ export function findUngatedPathToolCalls(file: string, gateFired: Set<string>): 
   const toolResultIsError = new Map<string, boolean>();
   let lines: string[] = [];
   try {
-    lines = readFileSync(file, "utf8").trim().split("\n");
+    // Current turn only: turn 1's own successfully-gated tool calls were erroring turn 2, because the
+    // gate-fired set holds only THIS process's hook callbacks.
+    const text = readFileSync(file, "utf8").trim();
+    lines = currentTurnEventLines(text ? text.split("\n") : []);
   } catch {
     return [];
   }

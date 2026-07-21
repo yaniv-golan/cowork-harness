@@ -10,6 +10,7 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, statSync, existsSync } from "node:fs";
+import { currentTurnEventLines } from "../run/turn-events.js";
 import { isAbsolute, join, resolve } from "node:path";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { warn } from "../io.js";
@@ -294,7 +295,10 @@ export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamil
   try {
     // filter(Boolean): drop blank lines (e.g. a freshly-created empty file trims to "") so they aren't
     // miscounted as malformed JSON below — an empty scan is a genuinely complete "found nothing", not degraded.
-    lines = readFileSync(eventsFile, "utf8").trim().split("\n").filter(Boolean);
+    // Current turn only: `missingCapabilityUse` is a severity:"fail" verdict signal, so whole-file
+    // scanning re-judged turn 1's capability use against turn 2 on every resume (and every critique
+    // reflection turn, since the default lean image omits families).
+    lines = currentTurnEventLines(readFileSync(eventsFile, "utf8").trim().split("\n").filter(Boolean));
   } catch {
     return { used: [], health: "missing", malformedLines: 0 };
   }
