@@ -68,7 +68,9 @@ export function hasTurnDirs(outDir: string): boolean {
 /** Every turn number addressable in this run dir, ascending. A single-turn dir is `[1]`. */
 export function listTurns(outDir: string): number[] {
   const dirs = turnsDirNumbers(outDir);
-  if (dirs.length) return dirs;
+  // A MIXED dir carries both, so union them — see turnArtifactPath. Sorted+deduped so a turn present in
+  // both shapes is listed once.
+  if (dirs.length) return [...new Set([...legacyArchiveNumbers(outDir), ...dirs])].sort((a, b) => a - b);
   const legacy = legacyArchiveNumbers(outDir);
   // The root file is the LATEST turn, so it is one past the highest archive (or turn 1 when there are none).
   if (existsSync(join(outDir, "result.json"))) return [...legacy, (legacy[legacy.length - 1] ?? 0) + 1];
@@ -86,7 +88,18 @@ export function latestTurn(outDir: string): number | undefined {
  *  turns are name-mangled at the root (`run.turn-1.jsonl`), so a `turnDir()`-only API could not address
  *  them at all. Returns a path whether or not the file exists; callers test existence as they do today. */
 export function turnArtifactPath(outDir: string, turn: number, artifact: PerTurnArtifact): string {
-  if (hasTurnDirs(outDir)) return join(outDir, "turns", String(turn), artifact);
+  if (hasTurnDirs(outDir)) {
+    const inTurnDir = join(outDir, "turns", String(turn), artifact);
+    if (existsSync(inTurnDir)) return inTurnDir;
+    // MIXED dir: a legacy dir resumed under the new code has turn 1 as a root archive and turn 2 in
+    // `turns/`. Treating `hasTurnDirs` as all-or-nothing made the archived turn UNADDRESSABLE — and a
+    // scratch reindex then dropped its row, reintroducing the dropped-turn defect for the whole upgrade
+    // cohort. Fall back to the legacy name before giving up.
+    const { stem, ext } = stemAndExt(artifact);
+    const archived = join(outDir, `${stem}.turn-${turn}${ext}`);
+    if (existsSync(archived)) return archived;
+    return inTurnDir; // nothing on disk — return the canonical path so callers report the right miss
+  }
   const latest = latestTurn(outDir);
   if (turn === latest) return join(outDir, artifact); // the root file IS the latest turn
   // A legacy dir with NO archives is single-turn by definition, so turn 1 is the root — even when
@@ -152,5 +165,11 @@ export function turnWriteDir(outDir: string, turn: number): string {
  *  leaves it reusable rather than inflating every later turn number. */
 export function currentTurnFromDirs(outDir: string): number {
   const withTranscript = turnsDirNumbers(outDir).filter((n) => existsSync(join(outDir, "turns", String(n), "run.jsonl")));
-  return (withTranscript[withTranscript.length - 1] ?? 0) + 1;
+  // MIXED dirs: a legacy dir resumed under the new code has turn 1 as a ROOT archive and turn 2 as a turn
+  // dir. Counting only turn dirs made the number go BACKWARDS (2 -> 1) on the next resume, because the
+  // archived turn is invisible to this rule — and a turn number that decreases would overwrite a
+  // completed turn. Take the highest turn either shape knows about.
+  const legacy = legacyArchiveNumbers(outDir);
+  const highest = Math.max(withTranscript[withTranscript.length - 1] ?? 0, legacy[legacy.length - 1] ?? 0);
+  return highest + 1;
 }

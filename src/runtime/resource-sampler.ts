@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from "node:fs";
+import { writeFileSync, appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -62,6 +62,8 @@ export class ResourceSampler {
   private readonly path: string;
   private timer: NodeJS.Timeout | undefined;
   private inFlight = false;
+  /** First-sample-of-this-attempt flag — see the truncate in the sample loop. */
+  private wroteAny = false;
   private stopped = false;
   private probeFailureCount = 0;
   /** Latest in-flight (or just-completed) tick, so `stop()` can await it instead of racing it. */
@@ -100,7 +102,17 @@ export class ResourceSampler {
       try {
         const sample = await this.sampleOnce();
         if (sample === undefined && this.sampleOnce !== UNSUPPORTED_PROBE) this.probeFailureCount++;
-        if (sample && !this.stopped) appendFileSync(this.path, JSON.stringify(sample) + "\n");
+        if (sample && !this.stopped) {
+          // Truncate on the FIRST sample of this attempt. The sampler appends, and a retried turn reuses
+          // its own `turns/<N>/` — so without this a retry's samples fuse with the crashed attempt's and
+          // `foldResources` reports a peak that no single attempt reached. The legacy path solved this
+          // with retry-suffixed archives; per-turn dirs need this instead.
+          if (!this.wroteAny) {
+            writeFileSync(this.path, "");
+            this.wroteAny = true;
+          }
+          appendFileSync(this.path, JSON.stringify(sample) + "\n");
+        }
       } catch (e) {
         warn(`::warning:: [resources] sample failed (${this.tier}): ${String((e as Error)?.message ?? e)}\n`);
       } finally {

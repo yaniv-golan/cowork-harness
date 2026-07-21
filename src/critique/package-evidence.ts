@@ -1,6 +1,7 @@
 import type { EvidenceSection } from "./armor.js";
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { turnArtifactPath } from "../run/turn-layout.js";
 import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
 import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
 
@@ -22,7 +23,11 @@ import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
  *  boundary relies on changed between capture and packaging) and the returned text must NOT be treated as
  *  reliable ground truth by the evaluator. */
 function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: string; degraded: boolean } {
-  const archived = join(runDir, "run.turn-1.jsonl");
+  // Through the seam: the new layout writes turn 1's transcript to `turns/1/run.jsonl` and NEVER creates
+  // `run.turn-1.jsonl`. Probing only the legacy name made every new critique fall back to the raw
+  // events-slice transcript with `degraded: false` — i.e. the evaluator silently graded a rawer view,
+  // unflagged, which is exactly the kind of quiet degradation this pipeline exists to surface.
+  const archived = turnArtifactPath(runDir, 1, "run.jsonl");
   if (existsSync(archived)) {
     try {
       for (const line of readFileSync(archived, "utf8").split("\n")) {

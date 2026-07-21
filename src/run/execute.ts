@@ -1581,6 +1581,15 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
  *  keeps cassettes (whose `events` array is this file verbatim) unaffected. */
 export function beginTurn(outDir: string): number {
   const turn = currentTurn(outDir);
+  // Decide legacy-ness BEFORE creating the turn dir — creating it makes `hasTurnDirs` true, which would
+  // then skip the legacy rename below on every run. Caught by the existing resources tests.
+  const legacy = !hasTurnDirs(outDir);
+  // Create the turn dir HERE, at turn start. The resource sampler opens
+  // `turns/<N>/resources.jsonl` as soon as the run starts, but `turnWriteDir` only runs POST-run — so
+  // without this every sample throws ENOENT, swallowed into a per-tick "sample failed" warning, and
+  // `RunResult.resources` came back undefined on EVERY container/hostloop/microvm run. Turn-aware
+  // addressing without a directory to write into is structural and nonfunctional.
+  turnWriteDir(outDir, turn);
   if (turn > 1) {
     // The harness is the sole writer of events.jsonl (agent stdout is persisted only inside the session
     // read loop), so appending here cannot be preceded by any event of this turn.
@@ -1593,7 +1602,7 @@ export function beginTurn(outDir: string): number {
     // its own `turns/<N>/resources.jsonl`, so there is nothing to rename — the scoping is structural.
     // Legacy dirs (including every `chat` dir, which never participates in turn bookkeeping) still share
     // one root file and need it.
-    if (!hasTurnDirs(outDir)) {
+    if (legacy) {
       try {
         const res = join(outDir, "resources.jsonl");
         if (existsSync(res)) {
@@ -1617,9 +1626,13 @@ export function currentTurn(outDir: string): number {
   // New layout: one past the highest turn that has a `run.jsonl` (see currentTurnFromDirs for why the key
   // is the transcript and not the result). Legacy dirs — including every `chat` dir, which never
   // participates in turn bookkeeping — keep the original archive-counting rule.
-  if (hasTurnDirs(outDir)) return currentTurnFromDirs(outDir);
+  // MAX of both rules, never a switch between them. A legacy dir resumed under the new code is MIXED:
+  // turn 1 is a root archive (or a live root run.jsonl) while turn 2 is a turn dir. Switching on
+  // `hasTurnDirs` made each rule blind to the other's turns, so the number went BACKWARDS (2 -> 1) on the
+  // next resume — and a decreasing turn number overwrites a completed turn.
   const archived = readdirSync(outDir).filter((f) => /^run\.turn-\d+\.jsonl$/.test(f)).length;
-  return archived + (existsSync(join(outDir, "run.jsonl")) ? 1 : 0) + 1;
+  const legacyRule = archived + (existsSync(join(outDir, "run.jsonl")) ? 1 : 0) + 1;
+  return Math.max(legacyRule, currentTurnFromDirs(outDir));
 }
 
 /** Multi-turn preservation: before a resumed turn overwrites them, archive the prior turn's `run.jsonl`
@@ -1630,7 +1643,11 @@ export function currentTurn(outDir: string): number {
  *  `run.jsonl` here means a genuine resume. Call ONCE per turn, before writing the new result.json. */
 export function archivePriorTurnFiles(outDir: string): number {
   const turn = currentTurn(outDir);
-  if (turn > 1) {
+  // LEGACY DIRS ONLY. Under the per-turn layout each turn already owns its files, so there is nothing to
+  // archive — and renaming here would rename the ROOT COMPAT COPY into `result.turn-<N>.json`, planting
+  // legacy-named files inside a new-layout dir. That mixed shape is unaddressable: `hasTurnDirs` is
+  // all-or-nothing, so the archived turn 1 becomes invisible and a scratch reindex drops its row.
+  if (turn > 1 && !hasTurnDirs(outDir)) {
     const prior = turn - 1;
     const runPath = join(outDir, "run.jsonl");
     if (existsSync(runPath)) renameSync(runPath, join(outDir, `run.turn-${prior}.jsonl`));

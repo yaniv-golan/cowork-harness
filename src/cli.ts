@@ -43,6 +43,7 @@ import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
 import { resolveStatusTarget } from "./run/status-target.js";
+import { latestTurn, turnArtifactPath } from "./run/turn-layout.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -3686,8 +3687,12 @@ async function cmdVerifyRun(args: string[]) {
     );
   }
 
-  const sidecarTranscript = readTranscriptSidecar(join(runDir, "run.jsonl"));
-  const sidecarQuestions = readQuestionsSidecar(join(runDir, "trace.json"));
+  // Through the seam: under the per-turn layout these live in `turns/<N>/`, and only `result.json` gets a
+  // root compat copy — so reading the root here made EVERY transcript/question assertion report
+  // "evidence unavailable" on any run produced after the layout change.
+  const vrTurn = latestTurn(runDir) ?? 1;
+  const sidecarTranscript = readTranscriptSidecar(turnArtifactPath(runDir, vrTurn, "run.jsonl"));
+  const sidecarQuestions = readQuestionsSidecar(turnArtifactPath(runDir, vrTurn, "trace.json"));
 
   // no_lost_write_back needs the run's authored-file set. It isn't persisted in result.json, so recompute it
   // from the KEPT work dir (verify-run re-checks on the same machine, exactly as input_unmodified re-hashes
@@ -4174,7 +4179,9 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const runDir = dirname(eventsFile);
   const lines = readFileSync(eventsFile, "utf8").split("\n");
   const tools = topLevelToolRows(lines, eventsFile, normalize);
-  const transcript = readTranscriptSidecar(join(runDir, "run.jsonl")) ?? "";
+  // Same seam, same reason: a root read here silently produced an EMPTY transcript for a new-layout dir,
+  // so `diff` reported transcriptDiffers:false regardless of real drift.
+  const transcript = readTranscriptSidecar(turnArtifactPath(runDir, latestTurn(runDir) ?? 1, "run.jsonl")) ?? "";
   let meta: Partial<DiffMetaSummary> = {};
   let artifacts: Array<[string, string]> | undefined;
   let scenarioName: string | undefined;

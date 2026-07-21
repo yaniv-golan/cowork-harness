@@ -170,19 +170,20 @@ describe("beginTurn is actually WIRED at turn start", () => {
 });
 
 describe("regressions the implementation review found", () => {
-  it("a repeated turn number does NOT clobber the prior turn's resources archive", () => {
-    // A turn that faults hard never writes run.jsonl, so `currentTurn` returns the same N on the next
-    // resume. A plain rename then overwrote the real turn-1 samples with the crashed attempt's partial
-    // ones, mislabelled as turn 1 — silent forensic data loss.
-    writeFileSync(join(dir, "resources.jsonl"), "T1-SAMPLES\n");
+  it("a colliding archive name does NOT clobber the prior turn's resources", () => {
+    // Legacy dirs only (chat, and anything written before the per-turn layout): they share one root
+    // resources.jsonl, so a turn that repeats its number — a hard fault never writes run.jsonl — would
+    // rename its partial samples over the real prior turn's, mislabelled. Under the per-turn layout this
+    // cannot arise: each turn owns turns/<N>/resources.jsonl.
+    //
+    // Exercised by pre-creating the collision rather than by calling beginTurn twice: the first call
+    // migrates the dir to the turn layout, so a second call is correctly a no-op for the legacy branch.
+    writeFileSync(join(dir, "resources.jsonl"), "T2-CRASHED-PARTIAL\n");
+    writeFileSync(join(dir, "resources.turn-1.jsonl"), "T1-SAMPLES\n");
     asResumedTurn();
     beginTurn(dir);
-    expect(readFileSync(join(dir, "resources.turn-1.jsonl"), "utf8")).toBe("T1-SAMPLES\n");
-
-    writeFileSync(join(dir, "resources.jsonl"), "T2-CRASHED-PARTIAL\n"); // same turn number again
-    beginTurn(dir);
     expect(readFileSync(join(dir, "resources.turn-1.jsonl"), "utf8"), "turn 1's archive was overwritten").toBe("T1-SAMPLES\n");
-    expect(existsSync(join(dir, "resources.turn-1.retry-1.jsonl")), "the retry's samples were dropped").toBe(true);
+    expect(existsSync(join(dir, "resources.turn-1.retry-1.jsonl")), "the colliding samples were dropped").toBe(true);
   });
 
   it("an EMPTY completed events.jsonl still fails closed (single-turn behaviour is untouched)", () => {
