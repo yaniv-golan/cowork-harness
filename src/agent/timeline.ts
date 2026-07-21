@@ -256,6 +256,20 @@ function isHeaderLine(o: unknown): o is TimelineHeader {
   return typeof h.startedAtMono === "string" && typeof h.startedAtWall === "string";
 }
 
+/** Header-SHAPED but not a valid header — e.g. `startedAtMono` present as a number.
+ *
+ *  Without this the fail-safe was one-sided: a mid-file header corrupted in a way that still parses as
+ *  JSON silently failed `isHeaderLine`, got swallowed into the event array, and merged two turns with
+ *  `malformedLines: 0` — no evidence-unavailable signal, so the false-PASS this fix exists to close
+ *  survived that one shape. The FIRST line got a parses-but-not-a-header check; mid-file lines did not.
+ *  Counting these as malformed restores the guarantee in both positions. */
+function looksLikeBrokenHeader(o: unknown): boolean {
+  if (!o || typeof o !== "object") return false;
+  if (isHeaderLine(o)) return false;
+  const h = o as Record<string, unknown>;
+  return "startedAtMono" in h || "startedAtWall" in h;
+}
+
 export function readTimeline(outDir: string): TimelineReadResult | undefined {
   const lines = safeLines(join(outDir, "timeline.jsonl"));
   if (lines.length === 0) return undefined;
@@ -304,12 +318,23 @@ export function readTimeline(outDir: string): TimelineReadResult | undefined {
   // the derived skillActivity/toolDurations as evidence-unavailable rather than silently incomplete. #35
   let malformedLines = 0;
   for (const line of lines.slice(segmentStart + 1)) {
+    let parsed: unknown;
     try {
-      events.push(JSON.parse(line));
+      parsed = JSON.parse(line);
     } catch {
       malformedLines++;
       continue;
     }
+    // A line can be valid JSON and still not be an event. Pushing it anyway put `null`/`42`/a broken
+    // header into the event array with NO malformed count: `null` then crashed `foldSkillActivity` with a
+    // TypeError during result assembly (aborting the run instead of reporting evidence-unavailable), and
+    // a broken header silently merged two turns. Both are now counted, which routes callers to
+    // evidence-unavailable — the fail-safe direction.
+    if (!parsed || typeof parsed !== "object" || looksLikeBrokenHeader(parsed)) {
+      malformedLines++;
+      continue;
+    }
+    events.push(parsed as TimelineEvent);
   }
   return { header, events, malformedLines };
 }

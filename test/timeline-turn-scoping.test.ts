@@ -96,4 +96,26 @@ describe("readTimeline degrades safely on damaged files", () => {
     expect(r.malformedLines, "an earlier segment's corruption was charged to the current turn").toBe(0);
     expect(r.events).toHaveLength(1);
   });
+
+  it("a header-SHAPED but broken mid-file line is counted malformed, not swallowed", () => {
+    // The fail-safe was one-sided: a mid-file header whose startedAtMono parses as a NUMBER still parses
+    // as JSON, so it failed isHeaderLine, landed in the event array, and merged two turns with
+    // malformedLines: 0 — no evidence-unavailable signal, so the false-PASS survived that one shape.
+    const brokenHeader = JSON.stringify({ v: 1, startedAtWall: "b", startedAtMono: 999 });
+    write(header("a"), ev(0, "turn1"), brokenHeader, ev(0, "turn2"));
+    const r = readTimeline(dir)!;
+    expect(r.malformedLines, "a broken header was swallowed as an event with no malformed count").toBeGreaterThan(0);
+    expect(r.events.every((e) => typeof (e as { seq?: number }).seq === "number")).toBe(true);
+  });
+
+  it("JSON-valid non-objects are counted, not pushed as events", () => {
+    // `null` previously entered the event array and crashed foldSkillActivity with a TypeError during
+    // result assembly — aborting the run instead of reporting evidence-unavailable. `42`/`"x"` were
+    // carried silently.
+    write(header("a"), "null", "42", '"hello"', ev(0, "s"));
+    const r = readTimeline(dir)!;
+    expect(r.events).toHaveLength(1);
+    expect(r.malformedLines).toBe(3);
+    expect(r.events.every((e) => !!e && typeof e === "object")).toBe(true);
+  });
 });
