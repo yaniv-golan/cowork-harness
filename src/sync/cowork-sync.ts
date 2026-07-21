@@ -88,6 +88,15 @@ export const PINNED_GATES: Record<string, string> = {
   // modeled — this harness has no persistent per-tool "always allow" concept to model against (no
   // updatedPermissions analog anywhere in src/decide/ or src/session.ts). Pinned so a live flip from
   // off to on surfaces as a provenance.gates diff, which is the trigger to revisit modeling this.
+  //
+  // 4200321681 FIRED at Desktop 1.24012.0 (absent -> on, source=force) and was revisited: still NOT
+  // modeled, and deliberately so. Binary-verified in 1.24012.0, both call sites only override an
+  // ALREADY-EXISTING always-allow decision — `sessionRuleCacheAllows(tool, session.approvedToolNames)`
+  // (source "rule_cache") and `coworkScheduledTasks.shouldAutoApprovePermission` (source
+  // "scheduled_task"), each additionally gated on permissionMode + isDestructiveConnectorTool. The
+  // harness persists neither, so it already prompts where the gate makes Cowork prompt: ON moves real
+  // Cowork TOWARD harness behavior, and modeling it would be modeling the always-allow it overrides.
+  // Re-open only if the harness grows a persistent per-tool approval cache.
   "4200321681": "autoModeOverridesAlwaysAllow", // auto mode: force re-prompt (not silent-allow) for destructiveHint MCP tools
   "1447478638": "scheduledTaskToolsApprovableByAutoMode", // auto mode: scheduled-task tools auto-approvable (unless MDM workspace.autoModeEnabled=false)
 };

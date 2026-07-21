@@ -30,6 +30,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Platform baseline synced to Desktop 1.24012.0** (`baselines/desktop-1.24012.0.json`, now what
+  `baseline: latest` resolves to). Agent binary is **unchanged** at `2.1.215`, and there is no prompt,
+  spawn-env, or egress-allowlist drift vs 1.22209.3 — the 15-domain allowlist and `gvisor` mode carry over
+  untouched, and the `deriveSpawnEnv` / `checkSpawnContractFacts` oracles stay green against the live asar.
+  Three substantive deltas: `claude-sonnet-5` joins the per-model effort map
+  (`low|medium|high|xhigh|max`, recommended `medium`, modes `auto`); the `coworkRuntimeConfig` gate drops
+  its `pluginsFullSyncStalenessMs` key (never modeled here, inert); and the dormant
+  `autoModeOverridesAlwaysAllow` sentinel fired — see below. Skill/README version floors and the example
+  cassettes' `fingerprint.baseline` track the new baseline.
+- **The `autoModeOverridesAlwaysAllow` gate (`4200321681`) flipped absent → on** (`source: force`) and was
+  revisited as its pin intended. It stays **unmodeled, deliberately**: binary-verified in 1.24012.0, both
+  call sites only override an *already-existing* always-allow decision — the session rule cache
+  (`approvedToolNames`) and scheduled-task auto-approval — each further gated on `permissionMode` and
+  `isDestructiveConnectorTool`. The harness persists neither, so it already prompts wherever the gate makes
+  Cowork prompt; enabling it moves real Cowork *toward* harness behavior rather than away. Revisit only if
+  the harness gains a persistent per-tool approval cache.
 - **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
   a run that previously exited `1` because one `docker exec` failed will now exit `0`. A dead sidecar
   still hard-fails. Known residual, documented in `docs/scenario.md`: if *every* exec failed the agent ran
