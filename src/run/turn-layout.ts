@@ -13,7 +13,7 @@
 // A run dir written before this layout existed — or a `--resume` of one caught mid-migration, which
 // leaves `turns/` AND stray root files behind — is DETECTED by `classifyRunDir`, the ONLY place the
 // legacy/mixed shape is still named. It is never resolved as data by `turnArtifactPath` / `listTurns` /
-// `readTurnResult`: silently substituting a root or name-mangled file for an unaddressable turn is exactly
+// Silently substituting a root or name-mangled file for an unaddressable turn is exactly
 // the defect class this single shape exists to make unrepresentable (turn 1 made invisible on a mixed dir,
 // a resumed session's turn number going BACKWARDS). A detector that refuses is safe; a resolver that
 // guesses is not.
@@ -76,24 +76,6 @@ export function latestTurn(outDir: string): number | undefined {
  *  dir is refused (see `classifyRunDir`/`requireTurns`), never silently resolved here. */
 export function turnArtifactPath(outDir: string, turn: number, artifact: PerTurnArtifact): string {
   return join(outDir, "turns", String(turn), artifact);
-}
-
-/** A turn's parsed `result.json`, or undefined when absent/unreadable.
- *
- *  `strict` originally refused to let a resumed dir's ROOT file (the latest turn) silently substitute for
- *  an EARLIER turn's archived result — load-bearing for `critique`'s turn-1 isolation, which must read
- *  turn 1 specifically and never the reflection turn's result. Under the single shape `turnArtifactPath`
- *  never resolves a root file for any turn in the first place, so there is nothing left for `strict` to
- *  refuse — its extra condition is presently unreachable in practice. Kept (not deleted) until its
- *  callers are swept together in one pass rather than as a drive-by here. */
-export function readTurnResult(outDir: string, turn: number, opts: { strict?: boolean } = {}): unknown | undefined {
-  const p = turnArtifactPath(outDir, turn, "result.json");
-  if (opts.strict && !hasTurnDirs(outDir) && turn === latestTurn(outDir)) return undefined;
-  try {
-    return JSON.parse(readFileSync(p, "utf8"));
-  } catch {
-    return undefined;
-  }
 }
 
 /** The GRADED turn's artifact for a `critique` run dir.

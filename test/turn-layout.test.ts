@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   listTurns,
   latestTurn,
   turnArtifactPath,
-  readTurnResult,
   resolveGraded,
   hasTurnDirs,
   classifyRunDir,
@@ -14,6 +13,16 @@ import {
   preLayoutMessage,
 } from "../src/run/turn-layout.js";
 import { LegacyRunDirError } from "../src/errors.js";
+
+/** Read a turn's result, or undefined if absent/unparseable — what the deleted seam helper did, minus its
+ *  provably-unreachable `strict` option. These assertions were always about whether a turn RESOLVES. */
+function readTurn(outDir: string, turn: number): unknown | undefined {
+  try {
+    return JSON.parse(readFileSync(turnArtifactPath(outDir, turn, "result.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
 
 // The seam that addresses one turn's artifacts. SINGLE SHAPE: every turn lives under `turns/<N>/` — no
 // per-turn name-mangling, no bidirectional legacy fallback. A run dir written before this layout existed
@@ -45,13 +54,13 @@ describe("no turns/ directory: never invents a turn or resolves a root/archived 
     put("result.json", '{"turn":1}');
     expect(listTurns(dir)).toEqual([]);
     expect(turnArtifactPath(dir, 1, "result.json")).toBe(join(dir, "turns", "1", "result.json"));
-    expect(readTurnResult(dir, 1)).toBeUndefined();
+    expect(readTurn(dir, 1)).toBeUndefined();
   });
 
   it("a name-mangled archive alone is likewise not resolved", () => {
     put("result.turn-1.json", '{"turn":1}');
     expect(turnArtifactPath(dir, 1, "result.json")).toBe(join(dir, "turns", "1", "result.json"));
-    expect(readTurnResult(dir, 1)).toBeUndefined();
+    expect(readTurn(dir, 1)).toBeUndefined();
   });
 });
 
@@ -92,22 +101,13 @@ describe("reading a turn's result", () => {
   it("parses the addressed turn", () => {
     put("turns/1/result.json", '{"turn":1,"marker":"graded"}');
     put("turns/2/result.json", '{"turn":2}');
-    expect((readTurnResult(dir, 1) as { marker?: string })?.marker).toBe("graded");
+    expect((readTurn(dir, 1) as { marker?: string })?.marker).toBe("graded");
   });
 
   it("returns undefined rather than throwing on unreadable/absent", () => {
     put("turns/1/result.json", "{not json");
-    expect(readTurnResult(dir, 1)).toBeUndefined();
-    expect(readTurnResult(dir, 9)).toBeUndefined();
-  });
-
-  it("strict mode agrees with non-strict once the file genuinely exists in turns/", () => {
-    // `strict` used to refuse substituting the ROOT file for an archived turn. Under one shape there is no
-    // root fallback left to refuse — turnArtifactPath only ever names turns/<N>/<artifact> — so the two
-    // modes can no longer disagree; this pins that they don't silently start disagreeing some other way.
-    put("turns/1/result.json", '{"turn":1}');
-    expect(readTurnResult(dir, 1)).toBeDefined();
-    expect(readTurnResult(dir, 1, { strict: true })).toBeDefined();
+    expect(readTurn(dir, 1)).toBeUndefined();
+    expect(readTurn(dir, 9)).toBeUndefined();
   });
 });
 

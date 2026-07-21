@@ -1181,10 +1181,10 @@ export interface RunResult {
    *  **both live and replay**; absent when no such file was Read. */
   referencesRead?: string[];
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
-   *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
-   *  turns are archived as `result.turn-<N>.json` / `run.turn-<N>.jsonl`. Lets a multi-turn consumer
-   *  attribute a result to its turn instead of blending cumulative telemetry. Absent on replay/chat
-   *  lanes that don't track it. */
+   *  single-shot run, incrementing per resume. Each turn owns its artifacts under `turns/<N>/`
+   *  (`result.json`, `run.jsonl`, `trace.json`, `resources.jsonl`), so a multi-turn consumer attributes a
+   *  result to its turn instead of blending cumulative telemetry. Absent on replay/chat lanes that don't
+   *  track it. */
   turn?: number;
   subagents?: Array<{
     toolUseId: string;

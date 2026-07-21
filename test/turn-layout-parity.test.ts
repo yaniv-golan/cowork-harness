@@ -1,10 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listTurns, latestTurn, turnArtifactPath, readTurnResult, resolveGraded, classifyRunDir } from "../src/run/turn-layout.js";
+import { listTurns, latestTurn, turnArtifactPath, resolveGraded, classifyRunDir } from "../src/run/turn-layout.js";
 import { reindexFromRunsTree } from "../src/run/run-index.js";
 import { foldResources } from "../src/runtime/resource-sampler.js";
+
+/** Read a turn's result, or undefined if it is absent/unparseable.
+ *
+ *  Replaces the seam's `readTurnResult`, deleted for having zero production callers. Its `strict` option
+ *  was provably unreachable (it required no `turns/` dir AND `turn === latestTurn`, but with no turns dir
+ *  `latestTurn` is undefined), so nothing here loses coverage — these assertions were always about
+ *  WHETHER a turn resolves, which is what the path builder plus a read expresses directly. */
+function readTurn(outDir: string, turn: number): unknown | undefined {
+  try {
+    return JSON.parse(readFileSync(turnArtifactPath(outDir, turn, "result.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
 
 // This file used to drive the SAME assertions against both the legacy shape and the per-turn shape and
 // require the seam to answer identically — the mitigation for "the whole suite fabricates legacy-shaped
@@ -100,8 +114,8 @@ describe("the seam addresses the per-turn shape — the legacy shape is DETECTED
   });
 
   it("reads each turn's own result", () => {
-    expect((readTurnResult(outDir, 1) as { cost?: { usd: number } })?.cost?.usd).toBe(1);
-    expect((readTurnResult(outDir, 2) as { cost?: { usd: number } })?.cost?.usd).toBe(2);
+    expect((readTurn(outDir, 1) as { cost?: { usd: number } })?.cost?.usd).toBe(1);
+    expect((readTurn(outDir, 2) as { cost?: { usd: number } })?.cost?.usd).toBe(2);
   });
 
   it("addresses every per-turn artifact of turn 1 to a file that EXISTS", () => {
@@ -130,8 +144,8 @@ describe("a legacy-shaped dir is classified, never silently addressed as turns/1
     legacyDir(outDir);
     expect(classifyRunDir(outDir).kind).toBe("legacy");
     expect(listTurns(outDir)).toEqual([]);
-    expect(readTurnResult(outDir, 1)).toBeUndefined();
-    expect(readTurnResult(outDir, 2)).toBeUndefined();
+    expect(readTurn(outDir, 1)).toBeUndefined();
+    expect(readTurn(outDir, 2)).toBeUndefined();
   });
 });
 
@@ -148,8 +162,8 @@ describe("a MIXED dir (turns/ + a stray root archive) is classified, and turn 1 
       listTurns(outDir),
       "the seam never merges in the root archive — that union is exactly what shipped the turn-1-invisible defect",
     ).toEqual([2]);
-    expect(readTurnResult(outDir, 1), "turn 1's archived result must not be silently substituted").toBeUndefined();
-    expect((readTurnResult(outDir, 2) as { cost?: { usd: number } })?.cost?.usd).toBe(2);
+    expect(readTurn(outDir, 1), "turn 1's archived result must not be silently substituted").toBeUndefined();
+    expect((readTurn(outDir, 2) as { cost?: { usd: number } })?.cost?.usd).toBe(2);
   });
 });
 
