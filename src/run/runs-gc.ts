@@ -3,8 +3,18 @@ import { join } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { hasTurnDirs } from "./turn-layout.js";
+import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
 
 const log = (s: string) => process.stderr.write(s + "\n");
+
+/** How many interrupted migrations are recorded for this scenario. */
+function liveJournalsFor(runsRoot: string, scenarioSlug: string): number {
+  try {
+    return readdirSync(join(runsRoot, MIGRATION_JOURNAL_DIR, scenarioSlug)).filter((f) => f.endsWith(".json")).length;
+  } catch {
+    return 0; // no journal dir for this scenario — the ordinary case
+  }
+}
 
 const DEFAULT_KEEP_LAST = 5;
 
@@ -88,6 +98,7 @@ export function cmdRunsGc(args: string[]): void {
   let kept = 0;
 
   for (const scenarioSlug of readdirSync(runsRoot).sort()) {
+    if (scenarioSlug === MIGRATION_JOURNAL_DIR) continue; // the journal store is not a scenario
     const scenarioDir = join(runsRoot, scenarioSlug);
     let st: ReturnType<typeof statSync>;
     try {
@@ -96,6 +107,20 @@ export function cmdRunsGc(args: string[]): void {
       continue;
     }
     if (!st.isDirectory()) continue;
+
+    // A LIVE MIGRATION JOURNAL MAKES THIS SCENARIO UNRANKABLE. Between a crashed migration and its
+    // recovery the renames have already re-stamped the run dir's mtime while the restore has not run —
+    // and the ranking below is BY THAT MTIME. A half-migrated old run therefore ranks as the newest and
+    // evicts a genuinely newer one. Pruning the half-migrated dir itself is just as bad: it orphans the
+    // journal that holds the only record of the interrupted plan.
+    //
+    // Skipping is the conservative choice: prune is a space reclaim, so deferring it costs disk, while
+    // getting it wrong deletes a run outright — the most expensive failure in this feature.
+    const live = liveJournalsFor(runsRoot, scenarioSlug);
+    if (live > 0) {
+      log(`↷ skipped ${scenarioSlug}: ${live} migration journal(s) in flight — run \`migrate-run-dir\` to finish, then prune`);
+      continue;
+    }
 
     // Rank run dirs: (1) real-run first (a completed/in-flight run outranks an empty scaffold dir for a
     // keep slot), (2) newest first (mtime desc), (3) name desc as a deterministic tiebreaker.

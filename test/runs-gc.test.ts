@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, utimesSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, utimesSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -140,5 +140,44 @@ describe.skipIf(!can)("prune", () => {
     const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(readdirSync(join(runsRoot, "s"))).toEqual(["local_aaa"]);
+  });
+});
+
+describe.skipIf(!can)("prune refuses to rank a scenario with a migration in flight", () => {
+  // Between a crashed migration and its recovery, the renames have ALREADY dirtied the run dir's mtime
+  // but the restore has not run — and prune ranks keep-slots by exactly that mtime. So a half-migrated
+  // OLD run ranks as the newest and evicts a genuinely newer one. The failure mode is a DELETED RUN,
+  // the most expensive outcome in this feature, and it is silent.
+  function runsRootWithJournal(): { root: string; kept: string; crashed: string } {
+    const root = mkdtempSync(join(tmpdir(), "prune-mig-"));
+    const crashed = makeRunDir(root, "scn", "local_oldest");
+    const kept = makeRunDir(root, "scn", "local_newer");
+    makeRunDir(root, "scn", "local_newest");
+    // The crashed dir looks newest because migration touched it; the genuinely newer run looks older.
+    const now = Date.now();
+    utimesSync(crashed, now / 1000, now / 1000);
+    utimesSync(kept, (now - 60_000) / 1000, (now - 60_000) / 1000);
+    // A live journal for the crashed dir, where the migrator puts it.
+    const jd = join(root, ".migrating", "scn");
+    mkdirSync(jd, { recursive: true });
+    writeFileSync(join(jd, "local_oldest.json"), JSON.stringify({ outDir: crashed, ops: [], dirMtimes: {}, identity: {} }));
+    return { root, kept, crashed };
+  }
+
+  it("skips the scenario and deletes nothing while a journal is live", () => {
+    const { root, kept, crashed } = runsRootWithJournal();
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", root], { encoding: "utf8" });
+    expect(r.status, `prune failed: ${r.stderr}`).toBe(0);
+    expect(existsSync(kept), "prune deleted a run while a migration was in flight").toBe(true);
+    expect(existsSync(crashed), "prune deleted the half-migrated dir, orphaning its journal").toBe(true);
+    expect(`${r.stdout}${r.stderr}`, "prune said nothing about skipping the scenario").toMatch(/migrat/i);
+  });
+
+  it("prunes normally once the journal is gone", () => {
+    const { root, kept } = runsRootWithJournal();
+    rmSync(join(root, ".migrating"), { recursive: true, force: true });
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", root], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(existsSync(kept), "with no journal, --keep-last 1 should have pruned this").toBe(false);
   });
 });

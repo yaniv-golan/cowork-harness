@@ -327,6 +327,19 @@ export function assessRunDir(outDir: string): Assessment {
 // DONE-NESS IS DEFINED BY THE SOURCE, NEVER THE DESTINATION. A destination may exist and be torn, or may
 // hold foreign bytes; neither proves the operation completed.
 
+/** The journal store, relative to the runs root. Deliberately a SIBLING of the scenario dirs rather than
+ *  inside a run dir: a run dir's own mtime is a live signal (prune keep-slot ranking, trace-fragment
+ *  tiebreaking), so a marker written inside it would dirty exactly what the journal exists to restore.
+ *
+ *  `runs-gc` imports this rather than re-declaring it — prune has to recognise the same directory in
+ *  order to skip it, and two independent string literals would eventually drift apart. */
+export const MIGRATION_JOURNAL_DIR = ".migrating";
+
+/** The journal root for a given runs root. */
+export function journalRootFor(runsRoot: string): string {
+  return join(runsRoot, MIGRATION_JOURNAL_DIR);
+}
+
 /** Where a run dir's journal lives. NESTED, not `<scenario>__<runId>`: the flat form is ambiguous —
  *  `a__b/c` and `a/b__c` both encode to `a__b__c`, and one dir's migration would then consume another's
  *  journal and execute the wrong plan against it. */
