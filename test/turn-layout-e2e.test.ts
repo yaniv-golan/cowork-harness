@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeScenario, parseScenarioFile, beginTurn } from "../src/run/execute.js";
 import { ResourceSampler, foldResources } from "../src/runtime/resource-sampler.js";
+import { turnArtifactPath } from "../src/run/turn-layout.js";
 
 // THE GAP THIS CLOSES.
 //
@@ -35,6 +36,19 @@ function protocolScenario(name: string) {
   const dir = mkdtempSync(join(tmpdir(), "layout-scn-"));
   const f = join(dir, `${name}.yaml`);
   writeFileSync(f, `name: ${name}\nbaseline: latest\nsession: (inline)\nfidelity: protocol\nprompt: hi\n`);
+  return parseScenarioFile(f);
+}
+
+/** Same idea, but the session mounts a real folder — `--session-id`/`--resume`'s cross-project guard
+ *  treats an inline (sourceless) session as UNCONFIRMABLE and refuses to resume it at all (fail closed),
+ *  so a resume test needs a session the guard can actually confirm. */
+function sourcedProtocolScenario(name: string) {
+  const src = mkdtempSync(join(tmpdir(), "layout-resume-src-"));
+  writeFileSync(join(src, "f.txt"), "x");
+  const dir = mkdtempSync(join(tmpdir(), "layout-resume-scn-"));
+  writeFileSync(join(dir, "s.yaml"), `folders:\n  - from: ${src}\n`);
+  const f = join(dir, `${name}.yaml`);
+  writeFileSync(f, `name: ${name}\nbaseline: latest\nsession: ./s.yaml\nfidelity: protocol\nprompt: hi\n`);
   return parseScenarioFile(f);
 }
 
@@ -105,4 +119,49 @@ describe("the sampler can actually WRITE where beginTurn puts it", () => {
     );
     rmSync(outDir, { recursive: true, force: true });
   });
+});
+
+describe("resuming a PRE-LAYOUT dir does not destroy the prior turn", () => {
+  // The shape every published-1.6.0 run dir has on disk: the four artifacts at the root, no `turns/`.
+  // A user upgrading to the per-turn layout and resuming an existing session hits exactly this path.
+  //
+  // `archivePriorTurnFiles` exists to preserve turn 1 here, and its own comment claims it "runs at the
+  // START of turn N". It does not — it runs POST-run (callers at ~:934/:1303, and beginTurn's comment at
+  // ~:1577 says so explicitly), by which point `beginTurn` has already created `turns/<N>` and its
+  // `!hasTurnDirs` gate is permanently false. The branch is DEAD, its unit tests pass by calling it
+  // directly, and the turn-2 compat write then overwrites turn 1's root result.json.
+  function deShapeToLegacy(outDir: string): void {
+    for (const a of ["result.json", "run.jsonl", "trace.json", "resources.jsonl"]) {
+      const from = join(outDir, "turns", "1", a);
+      if (existsSync(from)) renameSync(from, join(outDir, a));
+    }
+    rmSync(join(outDir, "turns"), { recursive: true, force: true });
+  }
+
+  it("keeps turn 1's artifacts addressable after a resume", async () => {
+    const scn = sourcedProtocolScenario("e2e-prelayout-resume");
+    const first = await executeScenario(scn, { sessionId: "prelayout-1" });
+    const outDir = first.outDir;
+
+    deShapeToLegacy(outDir);
+    expect(existsSync(join(outDir, "turns")), "fixture is not the pre-layout shape").toBe(false);
+    const before: Record<string, string> = {};
+    for (const a of ["result.json", "run.jsonl", "trace.json"]) before[a] = readFileSync(join(outDir, a), "utf8");
+
+    await executeScenario(scn, { sessionId: "prelayout-1", resume: true });
+
+    // Mechanism-agnostic: turn 1 must still be addressable as turn 1 through the seam, whether it got
+    // there by archiving to `<stem>.turn-1.<ext>` or by moving into `turns/1/`. All three are
+    // overwritten by turn 2 today (result.json by the compat write, run.jsonl by writeRunJsonl,
+    // trace.json by writeTrace) — a rename hides data, an overwrite deletes it.
+    for (const a of ["result.json", "run.jsonl", "trace.json"]) {
+      const p = turnArtifactPath(outDir, 1, a as "result.json");
+      expect(existsSync(p), `turn 1's ${a} is not addressable at ${p} — root holds: ${readdirSync(outDir).join(", ")}`).toBe(true);
+      expect(readFileSync(p, "utf8"), `turn 1's ${a} was not preserved byte-for-byte`).toBe(before[a]);
+    }
+    expect(
+      JSON.parse(readFileSync(turnArtifactPath(outDir, 1, "result.json"), "utf8")).turn,
+      "file addressed as turn 1 is not turn 1",
+    ).toBe(1);
+  }, 90_000);
 });

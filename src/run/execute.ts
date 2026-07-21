@@ -1617,6 +1617,46 @@ export function beginTurn(outDir: string): number {
       } catch {
         /* best-effort */
       }
+
+      // The prior turn's result/run/trace, relocated into its OWN turn dir before this turn can
+      // overwrite or orphan them at the root. Two different failure modes, not one:
+      //   - `result.json` is DESTROYED — the compat write at ~:1458 targets the root unconditionally,
+      //     so turn N's result overwrites turn N-1's and the old bytes are recoverable nowhere.
+      //   - `run.jsonl` / `trace.json` are ORPHANED, not destroyed — `writeRunJsonl`/`writeTrace` both
+      //     target the TURN dir (~:1450/:1460), so the root copies are simply stranded: still turn 1's
+      //     bytes, but unaddressable as turn 1 and left behind as contamination markers that classify
+      //     the dir `mixed` under the per-turn layout.
+      // Relocating fixes both, but only the first was data loss.
+      //
+      // `archivePriorTurnFiles` was supposed to prevent exactly this and does not: it runs POST-run
+      // (callers at ~:934/:1303), by which point `turnWriteDir` above has made `hasTurnDirs` true and
+      // its `!hasTurnDirs(outDir)` gate is permanently false. Its own comment claims it "runs at the
+      // START of turn N"; that has not been true since the per-turn layout landed, and its unit tests
+      // kept passing because they call it directly rather than through a real run.
+      //
+      // Moving into `turns/<prior>/` rather than renaming to `<stem>.turn-<N>.<ext>` is deliberate: the
+      // rename mints a MIXED dir (root archives beside `turns/`), which is unaddressable — `hasTurnDirs`
+      // is all-or-nothing, so the archived turn becomes invisible and a reindex silently drops its row.
+      // Relocating converts the dir to the current shape instead, which is where it has to end up anyway.
+      const priorDir = turnWriteDir(outDir, turn - 1);
+      for (const artifact of ["result.json", "run.jsonl", "trace.json"] as const) {
+        try {
+          const from = join(outDir, artifact);
+          const to = join(priorDir, artifact);
+          // The `!existsSync(to)` arm is UNREACHABLE here and is kept only as a precondition assertion:
+          // this branch runs solely when `legacy` was true (no `turns/` existed at :1586), and
+          // `turnWriteDir` just created `turns/<turn-1>` fresh — so the destination is always empty.
+          // Documented rather than dressed up as clobber protection: a guard whose true branch cannot
+          // be reached is not protecting anything, and describing it as if it were is how this repo
+          // shipped a tautological guard before. If the relocation is ever keyed on something weaker
+          // than `legacy` (e.g. "any root artifact present", which would also close the
+          // no-transcript hole where `currentTurn` returns 1 and this branch never runs), this arm
+          // becomes live and MUST then be covered by a test.
+          if (existsSync(from) && !existsSync(to)) renameSync(from, to);
+        } catch {
+          /* best-effort, per artifact: one failure must not strand the others at the root */
+        }
+      }
     }
   }
   return turn;
