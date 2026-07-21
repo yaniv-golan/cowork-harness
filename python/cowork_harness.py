@@ -140,9 +140,27 @@ class Result:
         assert predicate(data), f"artifact predicate failed for {rel_path}"
         return self
 
+    def _latest_run_jsonl(self) -> Path:
+        """run.jsonl for the LATEST turn.
+
+        A run dir can hold several turns (any --resume; every `critique`). Under the per-turn layout each
+        turn's transcript lives in turns/<N>/run.jsonl; older/chat dirs keep it at the root. Resolving to
+        the root unconditionally made `assert_transcript_not_contains` pass VACUOUSLY on a turn-layout dir
+        — the file simply did not exist and the empty transcript satisfied every "not contains" assertion.
+        A false green, in the SDK, which no TypeScript source-scan guard can see.
+        """
+        turns = Path(self.out_dir) / "turns"
+        if turns.is_dir():
+            nums = sorted(int(d.name) for d in turns.iterdir() if d.is_dir() and d.name.isdigit())
+            for n in reversed(nums):
+                p = turns / str(n) / "run.jsonl"
+                if p.exists():
+                    return p
+        return Path(self.out_dir) / "run.jsonl"
+
     def _transcript(self) -> str:
         # prefer run.jsonl's transcript line
-        rj = Path(self.out_dir) / "run.jsonl"
+        rj = self._latest_run_jsonl()
         if rj.exists():
             for line in rj.read_text().splitlines():
                 try:

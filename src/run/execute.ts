@@ -3,6 +3,7 @@ import { BoundaryError, UsageError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
+import { hasTurnDirs, currentTurnFromDirs, turnWriteDir } from "./turn-layout.js";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -415,7 +416,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Turn-start bookkeeping for the APPEND-THROUGH-THE-TURN streams, BEFORE anything can write to them:
   // before the resource sampler opens resources.jsonl and before the agent session starts. Deliberately
   // not in `archivePriorTurnFiles`, which runs post-run — after `foldResources` has already read.
-  beginTurn(outDir);
+  const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
   if (agentSessionId) {
@@ -722,7 +723,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           pid: effectiveFidelity === "hostloop" ? (child as { pid?: number } | undefined)?.pid : undefined,
           instance: effectiveFidelity === "microvm" ? instanceName(baseline) : undefined,
         });
-        resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs());
+        resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs(), turnNumber);
         resourceSampler.start();
       }
 
@@ -961,11 +962,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
       runCrashSafety.finalize(record, "error", partialResult.durationMs!);
       // run.jsonl before result.json — see the ordering rationale on the success path below.
-      writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
+      const tDirPartial = turnWriteDir(outDir, turn);
+      writeRunJsonl(tDirPartial, scenario, effectiveFidelity, record, egress, secrets, turn);
       // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
-      writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
+      const partialText = scrub(JSON.stringify(partialResult, null, 2), secrets);
+      writeTextAtomic(join(tDirPartial, "result.json"), partialText);
+      writeTextAtomic(join(outDir, "result.json"), partialText); // compat copy — see the success path
+
       appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
-      writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
+      writeTrace(tDirPartial, record, egress, secrets, partialResult.durationMs);
       // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
       warn(
         `::notice:: [partial] run did NOT complete (unanswered gate) — salvaged the pre-failure work to:\n` +
@@ -1017,7 +1022,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
     // Thread the sampler's probe-failure count so the summary can distinguish "sampling failed" from
     // "sampling unsupported / never ran". #41
-    const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures);
+    const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures, turnNumber);
 
     // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
     // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
@@ -1441,11 +1446,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // next resume computes turn N+1 and archives this orphan as run.turn-<N>.jsonl) rather than result.json
     // present with run.jsonl absent (which would recompute the SAME turn N and overwrite the already-archived
     // result.turn-<N-1>.json). Order matters — do not swap.
-    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
+    const tDir = turnWriteDir(outDir, turn);
+    writeRunJsonl(tDir, scenario, effectiveFidelity, record, egress, secrets, turn);
     // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
-    writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
+    const resultText = scrub(JSON.stringify(result, null, 2), secrets);
+    writeTextAtomic(join(tDir, "result.json"), resultText);
+    // COMPAT COPY at the run-dir root: every existing reader (verify-run, diff, stats, latest-run, the
+    // python SDK, external consumers) addresses `<outDir>/result.json`. Written AFTER the authoritative
+    // per-turn file, so a crash between them leaves the turn recorded and the alias stale rather than the
+    // reverse. Documented as "the latest turn"; `turns/<N>/result.json` is the addressable truth.
+    writeTextAtomic(join(outDir, "result.json"), resultText);
     appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
-    writeTrace(outDir, record, egress, secrets, result.durationMs);
+    writeTrace(tDir, record, egress, secrets, result.durationMs);
     return result;
   } finally {
     // LAST on purpose: the raw-stream readers above ran on the unscrubbed files — see the comment at
@@ -1577,28 +1589,35 @@ export function beginTurn(outDir: string): number {
     } catch {
       /* best-effort: a missing marker degrades to the fail-closed whole-file scan */
     }
-    // resources.jsonl has no marker mechanism and nothing else reads it (never captured in cassettes,
-    // `resources: undefined` on replay), so a rename is the simpler scoping.
-    try {
-      const res = join(outDir, "resources.jsonl");
-      if (existsSync(res)) {
-        // NEVER clobber an existing archive. A turn can legitimately repeat its number: a turn that
-        // faults hard never writes `run.jsonl`, so `currentTurn` returns the same N on the next resume —
-        // and a plain rename would then overwrite the real prior turn's samples with the crashed
-        // attempt's partial ones, mislabelled. Pick the first free name instead; losing forensic data to
-        // a retry is not an acceptable trade for a one-line rename.
-        let dest = join(outDir, `resources.turn-${turn - 1}.jsonl`);
-        for (let attempt = 1; existsSync(dest); attempt++) dest = join(outDir, `resources.turn-${turn - 1}.retry-${attempt}.jsonl`);
-        renameSync(res, dest);
+    // The resources rename below applies to LEGACY dirs only. Under the per-turn layout each turn writes
+    // its own `turns/<N>/resources.jsonl`, so there is nothing to rename — the scoping is structural.
+    // Legacy dirs (including every `chat` dir, which never participates in turn bookkeeping) still share
+    // one root file and need it.
+    if (!hasTurnDirs(outDir)) {
+      try {
+        const res = join(outDir, "resources.jsonl");
+        if (existsSync(res)) {
+          // NEVER clobber an existing archive. A turn can legitimately repeat its number: a turn that
+          // faults hard never writes `run.jsonl`, so `currentTurn` returns the same N on the next resume —
+          // and a plain rename would overwrite the real prior turn's samples with the crashed attempt's
+          // partial ones, mislabelled. Pick the first free name instead.
+          let dest = join(outDir, `resources.turn-${turn - 1}.jsonl`);
+          for (let attempt = 1; existsSync(dest); attempt++) dest = join(outDir, `resources.turn-${turn - 1}.retry-${attempt}.jsonl`);
+          renameSync(res, dest);
+        }
+      } catch {
+        /* best-effort */
       }
-    } catch {
-      /* best-effort */
     }
   }
   return turn;
 }
 
 export function currentTurn(outDir: string): number {
+  // New layout: one past the highest turn that has a `run.jsonl` (see currentTurnFromDirs for why the key
+  // is the transcript and not the result). Legacy dirs — including every `chat` dir, which never
+  // participates in turn bookkeeping — keep the original archive-counting rule.
+  if (hasTurnDirs(outDir)) return currentTurnFromDirs(outDir);
   const archived = readdirSync(outDir).filter((f) => /^run\.turn-\d+\.jsonl$/.test(f)).length;
   return archived + (existsSync(join(outDir, "run.jsonl")) ? 1 : 0) + 1;
 }
@@ -1817,7 +1836,7 @@ export function buildPartialResult(args: {
     errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
     resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
     stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
-    resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs()),
+    resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs(), undefined, args.turn),
     // Fields this lane deliberately never sets (per this function's own doc comment: "no capability
     // probe fields") — now explicit instead of implicit:
     resultErrorKind: undefined,

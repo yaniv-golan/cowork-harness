@@ -2,6 +2,7 @@
 // "what runs exist" — the run-dir-per-run physical layout (<runsRoot>/<slug>/<runId>/) still holds the
 // heavy artifacts (events.jsonl/trace.json/result.json); only the discovery/query layer moved here.
 import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
+import { hasTurnDirs, listTurns, turnArtifactPath } from "./turn-layout.js";
 import { execFileSync } from "node:child_process";
 import { join, basename, dirname } from "node:path";
 import type { RunResult } from "../types.js";
@@ -392,6 +393,25 @@ export function reindexFromRunsTree(runsRoot: string): {
           walked.push(rootOutcome.row);
           walkedIdentities.add(rowIdentity(rootOutcome.row));
           rootWalkedOutDirs.add(rootOutcome.row.outDir);
+        }
+
+        // NEW LAYOUT: enumerate turns/<N>/result.json. The root file is then a COMPAT COPY of the latest
+        // turn — indexing both would write two rows with the SAME identity for one completion, the exact
+        // double-count this scan's strict archive regex already guards against for `result.graded.json`.
+        if (hasTurnDirs(outDir)) {
+          for (const n of listTurns(outDir)) {
+            const p = turnArtifactPath(outDir, n, "result.json");
+            const o = readResultFileForWalk(runsRoot, outDir, p, priorByOutDir);
+            if (o.kind === "unsafe") skippedUnsafe++;
+            else if (o.kind === "corrupt") skipped++;
+            else if (o.kind === "replay") skippedReplay++;
+            else if (o.kind === "row") {
+              walked.push(o.row);
+              walkedIdentities.add(rowIdentity(o.row));
+              rootWalkedOutDirs.add(o.row.outDir);
+            }
+          }
+          continue; // root result.json is the compat alias of a turn already indexed above
         }
 
         // Archived turns: `result.turn-<N>.json` files left behind when a resume/reflection overwrote the

@@ -16,6 +16,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
+import { turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
 import { existsSync, readFileSync, copyFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -805,7 +806,12 @@ export function writeGradedAliases(outDir: string): void {
     ["trace.json", "trace.graded.json"],
   ] as const) {
     try {
-      const src = join(outDir, from);
+      // Under the per-turn layout the graded turn's files live in `turns/1/`; the run-dir root holds only
+      // a compat copy of the LATEST turn (and, for trace.json, nothing at all). Resolving through the seam
+      // keeps this correct in both layouts — and landing it in the same change as the writer flip is
+      // deliberate: this copy swallows its errors, so a split would have silently stopped producing
+      // `trace.graded.json` for the one active consumer.
+      const src = turnArtifactPath(outDir, 1, from);
       if (existsSync(src)) copyFileSync(src, join(outDir, to));
     } catch {
       /* best-effort convenience copy — never fail the run for it */

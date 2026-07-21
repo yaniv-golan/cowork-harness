@@ -39,6 +39,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- ⚠️ **Per-turn run-directory layout.** A run directory that holds several turns (any `--resume`, and every
+  `critique`) now writes each turn's `result.json`, `run.jsonl`, `trace.json` and `resources.jsonl` into
+  **`turns/<N>/`**, once, under its final name — nothing is renamed or overwritten as later turns arrive.
+  Previously the latest turn lived at the root while earlier ones were name-mangled archives, so a file's
+  name depended on whether a later turn ever happened; that shape produced a wrong-turn read, a destroyed
+  trace, and a dropped index row. Cumulative streams (`events.jsonl`, `timeline.jsonl`) and session state
+  are unchanged, so `critique`'s byte-offset turn-isolation proof and cassette capture are unaffected.
+  **`<outDir>/result.json` remains, as a documented compatibility copy of the latest turn** —
+  `turns/<N>/result.json` is the addressable truth. Single-turn and `chat` directories are unchanged.
+
 - **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
   a run that previously exited `1` because one `docker exec` failed will now exit `0`. A dead sidecar
   still hard-fails. Known residual, documented in `docs/scenario.md`: if *every* exec failed the agent ran

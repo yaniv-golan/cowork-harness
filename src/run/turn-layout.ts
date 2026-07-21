@@ -19,7 +19,7 @@
 // `result.json` and never participates in turn bookkeeping, so freshly created chat run dirs are
 // legacy-shaped forever.
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 /** The four artifacts written once per turn. Anything else in a run dir is cumulative or session state. */
@@ -89,6 +89,11 @@ export function turnArtifactPath(outDir: string, turn: number, artifact: PerTurn
   if (hasTurnDirs(outDir)) return join(outDir, "turns", String(turn), artifact);
   const latest = latestTurn(outDir);
   if (turn === latest) return join(outDir, artifact); // the root file IS the latest turn
+  // A legacy dir with NO archives is single-turn by definition, so turn 1 is the root — even when
+  // `result.json` is absent and `latestTurn` therefore could not infer it. Without this, addressing
+  // `trace.json` in a run whose result assembly never completed silently resolved to a nonexistent
+  // `trace.turn-1.json`. Caught by an existing guard, not by inspection.
+  if (turn === 1 && legacyArchiveNumbers(outDir).length === 0) return join(outDir, artifact);
   const { stem, ext } = stemAndExt(artifact);
   return join(outDir, `${stem}.turn-${turn}${ext}`);
 }
@@ -119,4 +124,33 @@ export function resolveGraded(outDir: string, artifact: "result.json" | "trace.j
   if (existsSync(alias)) return alias;
   const byTurn = turnArtifactPath(outDir, 1, artifact);
   return existsSync(byTurn) ? byTurn : undefined;
+}
+
+/** The directory this turn's artifacts are WRITTEN to, created if needed.
+ *
+ *  Writers use this; readers use `turnArtifactPath`. Separate because a writer always knows its own turn
+ *  number and always uses the new layout, while a reader must also resolve legacy dirs. */
+export function turnWriteDir(outDir: string, turn: number): string {
+  const d = join(outDir, "turns", String(turn));
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+/** Turn detection: one past the highest turn that has a `run.jsonl`.
+ *
+ *  KEYED ON `run.jsonl`, NOT `result.json`, and that is the whole crash contract. The writer emits
+ *  `run.jsonl` BEFORE `result.json` (see execute.ts's ordering comment — "Order matters, do not swap"), so
+ *  a crash between the two leaves a turn whose transcript is COMPLETE and whose result assembly failed.
+ *  That is a real, paid, history-advancing turn: the model produced it and the session moved on. Counting
+ *  it as done is what stops a retry from overwriting it.
+ *
+ *  An earlier draft of this keyed on `result.json` and would have called that shape incomplete — letting
+ *  the retry clobber a completed transcript, and (on a retried turn 1, which gets no events marker) fusing
+ *  two attempts' events into one verdict. An adversarial review caught it by prototype.
+ *
+ *  `mkdir` without a `run.jsonl` is therefore NOT a turn: a crash right after creating the directory
+ *  leaves it reusable rather than inflating every later turn number. */
+export function currentTurnFromDirs(outDir: string): number {
+  const withTranscript = turnsDirNumbers(outDir).filter((n) => existsSync(join(outDir, "turns", String(n), "run.jsonl")));
+  return (withTranscript[withTranscript.length - 1] ?? 0) + 1;
 }

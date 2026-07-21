@@ -71,8 +71,12 @@ export class ResourceSampler {
     private tier: string,
     private sampleOnce: () => Promise<ResourceSample | undefined>,
     private intervalMs: number = resolveIntervalMs(),
+    turn?: number,
   ) {
-    this.path = join(outDir, "resources.jsonl");
+    // Per-turn by construction when the run dir uses the turn layout: each turn samples into its own
+    // file, so nothing has to be renamed at turn start and a retry cannot append to a prior attempt's
+    // samples. Legacy/chat dirs (no turn number) keep the root file.
+    this.path = turn === undefined ? join(outDir, "resources.jsonl") : join(outDir, "turns", String(turn), "resources.jsonl");
   }
   /** Count of `sampleOnce()` calls that returned `undefined` for THIS tier, excluding the genuinely-
    *  unsupported-tier fallback (see `UNSUPPORTED_PROBE`) — "sampling failed" vs. "sampling impossible". */
@@ -139,10 +143,19 @@ export class ResourceSampler {
  *  tier never sampled — protocol/replay, a run shorter than one interval, or a tier whose probe tool was
  *  unavailable), so a downstream assertion reads evidence-unavailable rather than a vacuous pass.
  *  Malformed lines are skipped but counted in `malformedLines`. */
-export function foldResources(outDir: string, tier: string, intervalMs: number, probeFailures?: number): ResourceSummary | undefined {
+export function foldResources(
+  outDir: string,
+  tier: string,
+  intervalMs: number,
+  probeFailures?: number,
+  turn?: number,
+): ResourceSummary | undefined {
   let text: string;
   try {
-    text = readFileSync(join(outDir, "resources.jsonl"), "utf8");
+    text = readFileSync(
+      turn === undefined ? join(outDir, "resources.jsonl") : join(outDir, "turns", String(turn), "resources.jsonl"),
+      "utf8",
+    );
   } catch {
     return undefined;
   }

@@ -145,12 +145,15 @@ describe("beginTurn is actually WIRED at turn start", () => {
     // The first version used a bare substring search, so `// beginTurn(outDir);` passed it: the guard
     // defeated exactly the one mutation I happened to run and nothing else. Anchor to a statement at the
     // start of a line instead.
-    expect(/^\s*beginTurn\(outDir\);\s*$/m.test(SRC), "the beginTurn call site is gone or commented out — the fix is inert").toBe(true);
+    expect(
+      /^\s*(?:const \w+ = )?beginTurn\(outDir\);\s*$/m.test(SRC),
+      "the beginTurn call site is gone or commented out — the fix is inert",
+    ).toBe(true);
   });
 
   it("runs BEFORE the resource sampler opens resources.jsonl", () => {
     // Otherwise the rename races the sampler and this turn's samples land in the archived file.
-    const call = SRC.search(/^\s*beginTurn\(outDir\);\s*$/m);
+    const call = SRC.search(/^\s*(?:const \w+ = )?beginTurn\(outDir\);\s*$/m);
     const sampler = SRC.indexOf("new ResourceSampler(");
     expect(sampler, "the sampler construction moved — re-anchor this guard").toBeGreaterThan(-1);
     expect(call, "beginTurn must precede the resource sampler").toBeLessThan(sampler);
@@ -159,7 +162,7 @@ describe("beginTurn is actually WIRED at turn start", () => {
   it("runs BEFORE the launch plan is built (i.e. before the agent can emit any event)", () => {
     // The marker must precede every event of this turn, or turn-2 events land above their own marker and
     // get attributed to turn 1.
-    const call = SRC.search(/^\s*beginTurn\(outDir\);\s*$/m);
+    const call = SRC.search(/^\s*(?:const \w+ = )?beginTurn\(outDir\);\s*$/m);
     const plan = SRC.indexOf("const plan = buildLaunchPlan(");
     expect(plan, "buildLaunchPlan moved — re-anchor this guard").toBeGreaterThan(-1);
     expect(call, "beginTurn must precede the launch plan / session start").toBeLessThan(plan);
