@@ -423,3 +423,52 @@ describe("assessRunDir — the boundary itself is undeterminable", () => {
     if (a.kind === "refuse") expect(a.reason).toMatch(/boundary/i);
   });
 });
+
+describe("assessRunDir — the POST-CRASH shape, where the boundary lives in turns/ not at the root", () => {
+  it("REFUSES a cumulative resources.jsonl beside turns/ rather than carrying it whole", () => {
+    // The shape left by a mid-split crash whose journal was then removed — which the tool's own
+    // malformed-journal message told the user to do. The archives have already moved into turns/, so
+    // there is no root `result.turn-N.json` left to date the boundary with. Deriving `maxArchive` from
+    // the root alone made the split unreachable, the cumulative file was moved WHOLE into the lowest free
+    // slot, a torn destination was laundered as turn-1 telemetry, and the run reported SUCCESS.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), B / 1000, B / 1000);
+    write(d, "turns/1/resources.jsonl", `{"ts":1,"TORN`); // the half-written destination
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a cumulative file was carried whole into one turn after a crash").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/resources/);
+  });
+
+  it("still SPLITS correctly when the boundary is only available from turns/", () => {
+    // The same crash WITHOUT a torn destination: every artifact has migrated except the cumulative
+    // resources file, so both turns exist and the boundary must come from `turns/1/result.json`'s mtime.
+    // (Both turns must be real — a split whose high half landed in a turn with no result or transcript
+    // would be manufacturing the very no-transcript shape the migrator refuses elsewhere.)
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), B / 1000, B / 1000);
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "no split — the boundary was not derived from turns/").toBeDefined();
+    if (split?.kind === "split") {
+      expect(split.boundaryMs).toBe(B);
+      expect(split.toLow.slice(d.length)).toBe("/turns/1/resources.jsonl");
+      expect(split.toHigh.slice(d.length)).toBe("/turns/2/resources.jsonl");
+    }
+  });
+});

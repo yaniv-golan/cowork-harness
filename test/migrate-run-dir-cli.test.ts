@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -80,5 +80,46 @@ describe.skipIf(!can)("migrate-run-dir CLI", () => {
     const r = run(["a", "b"]);
     expect(r.status).toBe(2);
     expect(`${r.stdout}${r.stderr}`).toMatch(/optional <runs-dir>/);
+  });
+});
+
+describe.skipIf(!can)("orphaned journals and the dry-run guarantee", () => {
+  it("SWEEPS a journal whose run dir no longer exists, instead of deadlocking prune forever", () => {
+    // The walker iterates RUN DIRS, so a journal whose dir was deleted is never visited and never swept.
+    // `prune` then skips that scenario permanently, printing "run migrate-run-dir to finish" — advice that
+    // provably does nothing. Nothing in the system could clear the state.
+    const root = mkdtempSync(join(tmpdir(), "mig-orphan-"));
+    const jd = join(root, ".migrating", "ghost");
+    mkdirSync(jd, { recursive: true });
+    const jp = join(jd, "sess-gone.json");
+    writeFileSync(
+      jp,
+      JSON.stringify({ outDir: join(root, "ghost", "sess-gone"), ops: [], dirMtimes: {}, identity: { ino: 1, birthtimeMs: 1 } }),
+    );
+
+    const r = spawnSync("node", [CLI, "migrate-run-dir", root, "--write"], { encoding: "utf8" });
+    expect(existsSync(jp), "an orphaned journal survived — prune will skip this scenario forever").toBe(false);
+    expect(`${r.stdout}${r.stderr}`, "the sweep was silent").toMatch(/orphan/i);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("DRY RUN performs no recovery and writes nothing, even with a journal in flight", () => {
+    // The no-write guarantee had zero coverage: a mutant that ran recovery under dry-run moved files and
+    // deleted the journal while still printing "(dry-run)", and the whole suite stayed green.
+    const root = mkdtempSync(join(tmpdir(), "mig-dryrun-"));
+    const d = join(root, "scn", "sess-a");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "result.json"), JSON.stringify({ scenario: "scn", turn: 1 }));
+    writeFileSync(join(d, "run.jsonl"), `{"t":"transcript"}`);
+    const jd = join(root, ".migrating", "scn");
+    mkdirSync(jd, { recursive: true });
+    const jp = join(jd, "sess-a.json");
+    writeFileSync(jp, JSON.stringify({ outDir: d, ops: [], dirMtimes: {}, identity: { ino: 1, birthtimeMs: 1 } }));
+
+    const before = readdirSync(d).sort().join(",");
+    spawnSync("node", [CLI, "migrate-run-dir", root], { encoding: "utf8" });
+    expect(readdirSync(d).sort().join(","), "a dry run modified the run dir").toBe(before);
+    expect(existsSync(jp), "a dry run consumed the journal").toBe(true);
+    rmSync(root, { recursive: true, force: true });
   });
 });

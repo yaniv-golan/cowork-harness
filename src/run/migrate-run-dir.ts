@@ -90,27 +90,36 @@ function stampedTurn(path: string): number | undefined {
   }
 }
 
-/** The prior turn's completion time — the mtime of its archived result. `renameSync` preserves mtimes, so
- *  this survives both the original archiving and the migration itself. */
+/** A turn's completion time — the mtime of its result, wherever that result currently lives.
+ *
+ *  Checks the root archive FIRST and then `turns/<N>/result.json`, because a partially-migrated dir has
+ *  already moved the archive into the turn dir. Looking only at the root made the boundary undiscoverable
+ *  on exactly that shape, which silently disabled the resources split: the cumulative file was then
+ *  carried whole into one turn, a half-written destination was accepted as telemetry, and the run
+ *  reported success. `renameSync` preserves mtimes, so the timestamp is identical in either location. */
 function completionMtimeOf(outDir: string, turn: number): number | undefined {
-  const p = join(outDir, `result.turn-${turn}.json`);
-  try {
-    return existsSync(p) ? statSync(p).mtimeMs : undefined;
-  } catch {
-    return undefined;
+  for (const p of [join(outDir, `result.turn-${turn}.json`), turnArtifactPath(outDir, turn, "result.json")]) {
+    try {
+      if (existsSync(p)) return statSync(p).mtimeMs;
+    } catch {
+      /* try the next location */
+    }
   }
+  return undefined;
 }
 
 /** Where a sample file's rows fall relative to the boundary. `unusable` means no row carried a parseable
  *  numeric `ts` — attribution is then a GUESS, and guessing is what the split exists to avoid. */
-type SampleSpread = "before" | "after" | "spanning" | "unusable";
+type SampleSpread = "before" | "after" | "spanning" | "unusable" | "empty";
 
 function classifySamples(path: string, boundaryMs: number): SampleSpread {
   let low = false;
   let high = false;
+  let rows = 0;
   try {
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (!line) continue;
+      rows++;
       let ts: number | undefined;
       try {
         const v = (JSON.parse(line) as { ts?: unknown }).ts;
@@ -129,7 +138,10 @@ function classifySamples(path: string, boundaryMs: number): SampleSpread {
   if (low && high) return "spanning";
   if (low) return "before";
   if (high) return "after";
-  return "unusable";
+  // A file with NO rows is not ambiguous, it is empty — it carries no telemetry to mis-attribute, so it
+  // moves like any other artifact. Only a file that HAS rows but no usable timestamp is unattributable,
+  // and that is the case worth refusing. Collapsing the two made every empty resources.jsonl refuse.
+  return rows === 0 ? "empty" : "unusable";
 }
 
 /** Plan the one artifact whose attribution is decided by CONTENT rather than by its filename.
@@ -171,7 +183,8 @@ function planResources(
     return { kind: "op", op: { kind: "split", from, boundaryMs, toLow: lowDest, toHigh: highDest } };
   }
 
-  // Wholly one side: a plain move, but to the turn the CONTENT indicates — not automatically the latest.
+  // Wholly one side (or empty): a plain move, but to the turn the CONTENT indicates — not automatically
+  // the latest. An empty file has nothing to attribute, so it follows the ordinary root-artifact rule.
   const dest = spread === "before" ? lowDest : highDest;
   if (existsSync(dest) && !sameBytes(from, dest))
     return { kind: "refuse", reason: `${rel} would overwrite the existing ${dest.slice(outDir.length + 1)}` };
@@ -245,8 +258,15 @@ export function assessRunDir(outDir: string): Assessment {
     // `resources.jsonl` spans BOTH turns (they predate `beginTurn`'s resources rename): the first sample
     // lands seconds before turn 1 completed and the last during turn 2. Carrying it whole into one slot
     // attributes turn-1 samples to turn 2 — bytes preserved, telemetry wrong.
-    if (artifact === "resources.jsonl" && maxArchive > 0) {
-      const r = planResources(outDir, from, maxArchive);
+    // A root cumulative resources file spans the LAST TWO turns, so its boundary is the completion of the
+    // second-highest — `highest - 1`, whether the highest is a root turn (maxArchive + 1, pre-migration)
+    // or an existing `turns/<N>/` (post-crash, where the archives have already moved). Deriving this from
+    // root archives alone made the branch unreachable on the post-crash shape, which is how a cumulative
+    // file got carried whole into one turn with a torn destination accepted as telemetry.
+    const highestTurn = Math.max(rootTurn, ...(turns.length ? turns : [0]));
+    const priorTurn = highestTurn - 1;
+    if (artifact === "resources.jsonl" && priorTurn > 0) {
+      const r = planResources(outDir, from, priorTurn);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
@@ -490,7 +510,16 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
     // the restore, and a journal whose ops were unrecognisable made EVERY op look already-done — so
     // recovery reported success and deleted the journal, destroying the record of an interrupted plan.
     // Nothing is deleted on this path: a journal we cannot understand is never a journal we may discard.
-    return { kind: "refuse", reason: `unreadable or malformed migration journal at ${journal} — resolve or delete it by hand` };
+    // Deliberately does NOT say "delete it". A journal records a half-applied plan, and deleting it
+    // leaves the directory in a state the assessor must reconstruct from the files alone — which is how
+    // a torn split destination once got laundered as real telemetry. Moving it aside preserves the
+    // evidence; the dir stays refused until a human looks, which is the safe resting state.
+    return {
+      kind: "refuse",
+      reason:
+        `unreadable or malformed migration journal at ${journal} — this run dir is half-migrated. ` +
+        `Move the journal aside (do not delete it: it is the only record of what was already applied) and inspect the dir before retrying.`,
+    };
   }
 
   // IDENTITY. Without this a journal outlives its directory: if the dir was deleted and a fresh run later
@@ -530,7 +559,49 @@ export interface MigrationReport {
   recovered: number;
   noop: number;
   skipped: number;
+  /** Journals whose run dir no longer exists, removed by the sweep. */
+  orphaned: number;
   refused: { dir: string; reason: string }[];
+}
+
+/** Remove journals whose run dir is gone.
+ *
+ *  The walk below iterates RUN DIRS, so a journal for a deleted dir is never visited — and `prune` skips
+ *  any scenario with a live journal, printing "run migrate-run-dir to finish". Without this sweep that
+ *  advice is false: the migrator never touches the journal, so the scenario is skipped forever and
+ *  nothing in the system can clear it. */
+function sweepOrphanedJournals(runsRoot: string, write: boolean): number {
+  const journalRoot = journalRootFor(runsRoot);
+  let swept = 0;
+  let scenarios: string[];
+  try {
+    scenarios = readdirSync(journalRoot);
+  } catch {
+    return 0; // no journal store — the ordinary case
+  }
+  for (const scenario of scenarios) {
+    const dir = join(journalRoot, scenario);
+    let files: string[];
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const runDir = join(runsRoot, scenario, f.replace(/\.json$/, ""));
+      if (existsSync(runDir)) continue; // still live — recovery owns it
+      swept++;
+      if (write) {
+        try {
+          rmSync(join(dir, f), { force: true });
+        } catch {
+          /* best-effort: a journal we cannot remove is reported, not fatal */
+        }
+      }
+    }
+  }
+  return swept;
 }
 
 /** Walk a runs root, recovering any interrupted migration and then migrating what needs it.
@@ -543,9 +614,10 @@ export function migrateRunsRoot(
   runsRoot: string,
   opts: { write: boolean; onDir?: (dir: string, outcome: string) => void },
 ): MigrationReport {
-  const report: MigrationReport = { migrated: 0, recovered: 0, noop: 0, skipped: 0, refused: [] };
+  const report: MigrationReport = { migrated: 0, recovered: 0, noop: 0, skipped: 0, orphaned: 0, refused: [] };
   const journalRoot = journalRootFor(runsRoot);
   if (!existsSync(runsRoot)) return report;
+  report.orphaned = sweepOrphanedJournals(runsRoot, opts.write);
 
   for (const scenario of readdirSync(runsRoot).sort()) {
     if (scenario === MIGRATION_JOURNAL_DIR) continue;
@@ -632,7 +704,7 @@ export function cmdMigrateRunDir(args: string[]): void {
 
   const prefix = write ? "" : "(dry-run) ";
   out(
-    `${prefix}migrate-run-dir: ${r.migrated} to migrate · ${r.recovered} recovered · ${r.noop} already current · ` +
+    `${prefix}migrate-run-dir: ${r.migrated} to migrate · ${r.recovered} recovered · ${r.orphaned} orphaned journal(s) swept · ${r.noop} already current · ` +
       `${r.skipped} skipped (no per-turn artifacts) · ${r.refused.length} refused`,
   );
   // Refusals are ENUMERATED, never just counted: each one is a directory a human has to look at, and a
