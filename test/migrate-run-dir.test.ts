@@ -549,3 +549,44 @@ describe("assessRunDir — the canonical MIXED shape every refusal routes here",
     expect(a.kind, "a mis-stamped artifact was placed anyway").toBe("refuse");
   });
 });
+
+describe("assessRunDir — the mixed shape WITH telemetry (the only kind the resume flow actually mints)", () => {
+  it("finds the turn boundary from the root result the plan has already identified as that turn's", () => {
+    // The slot-placement fix closed the loop only for telemetry-free dirs. `completionMtimeOf` looked for
+    // turn 1's result at `result.turn-1.json` or `turns/1/result.json` — but in this shape turn 1's result
+    // is the ROOT `result.json`, which this same assessment has already decided belongs in `turns/1`. The
+    // boundary was knowable from a file the plan was holding; the resources planner just never asked.
+    // Net effect: every telemetry-bearing mixed dir still dead-ended the "Convert it in place" remedy.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"turn one"}`);
+    utimesSync(join(d, "result.json"), B / 1000, B / 1000);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"turn two"}`);
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+  });
+});
+
+describe("assessRunDir — a byte-identical root copy of a NON-self-labeling artifact", () => {
+  it("drops it as the duplicate it is, instead of refusing with 'neither a duplicate nor placeable'", () => {
+    // `identicalTo` was computed for every artifact but honoured only for result.json/run.jsonl, so a
+    // root trace.json byte-identical to turns/1's refused with a message denying it was a duplicate —
+    // while the code had just detected that it was. Fail-closed, but the message actively misled.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/trace.json", "{}");
+    write(d, "result.json", RESULT(1)); // identical
+    write(d, "run.jsonl", TRANSCRIPT); // identical
+    write(d, "trace.json", "{}"); // identical — the one that used to refuse
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(a.plan.ops.filter((o) => o.kind === "delete").length, "the identical root copies were not dropped").toBe(3);
+  });
+});

@@ -108,8 +108,14 @@ function stampedTurn(path: string): number | undefined {
  *  on exactly that shape, which silently disabled the resources split: the cumulative file was then
  *  carried whole into one turn, a half-written destination was accepted as telemetry, and the run
  *  reported success. `renameSync` preserves mtimes, so the timestamp is identical in either location. */
-function completionMtimeOf(outDir: string, turn: number): number | undefined {
-  for (const p of [join(outDir, `result.turn-${turn}.json`), turnArtifactPath(outDir, turn, "result.json")]) {
+function completionMtimeOf(outDir: string, turn: number, rootResultIsTurn?: number): number | undefined {
+  // A third location, and the one the telemetry-bearing mixed shape needs: the ROOT `result.json`, when
+  // this assessment has already identified it as THAT turn's. Without it every mixed dir carrying a
+  // resources file refused for an unknowable boundary — while the plan was holding the very file that
+  // dates it. `renameSync` preserves mtimes, so all three locations carry the same timestamp.
+  const candidates = [join(outDir, `result.turn-${turn}.json`), turnArtifactPath(outDir, turn, "result.json")];
+  if (rootResultIsTurn === turn) candidates.push(join(outDir, "result.json"));
+  for (const p of candidates) {
     try {
       if (existsSync(p)) return statSync(p).mtimeMs;
     } catch {
@@ -165,9 +171,10 @@ function planResources(
   outDir: string,
   from: string,
   owningTurn: number,
+  rootResultIsTurn?: number,
 ): { kind: "op"; op: MigrationOp } | { kind: "refuse"; reason: string } {
   const rel = from.slice(outDir.length + 1);
-  const boundaryMs = completionMtimeOf(outDir, owningTurn);
+  const boundaryMs = completionMtimeOf(outDir, owningTurn, rootResultIsTurn);
   if (boundaryMs === undefined)
     return {
       kind: "refuse",
@@ -243,37 +250,6 @@ export function assessRunDir(outDir: string): Assessment {
   const maxArchive = archives.reduce((m, a) => Math.max(m, a.turn), 0);
   const rootTurn = maxArchive + 1;
 
-  for (const a of archives) {
-    const from = join(outDir, a.file);
-
-    // An ARCHIVE-NAMED resources file can be cumulative too — the resume fix mints exactly that by
-    // renaming a spanning root `resources.jsonl` to `resources.turn-<prior>.jsonl`. Trusting the name
-    // would carry turn-N and turn-N+1 samples into one slot. CONTENT decides; the filename is a hint.
-    if (a.stem === "resources" && a.retry === undefined) {
-      const r = planResources(outDir, from, a.turn);
-      if (r.kind === "refuse") return r;
-      ops.push(r.op);
-      continue;
-    }
-
-    const dest =
-      a.retry === undefined
-        ? turnArtifactPath(outDir, a.turn, artifactForStem(a.stem))
-        : // Retry archives are not PER_TURN_ARTIFACTS; keep the stem's own extension rather than
-          // hardcoding .jsonl, which mislabelled `result.turn-1.retry-2.json`.
-          join(
-            outDir,
-            "turns",
-            String(a.turn),
-            `${a.stem}.retry-${a.retry}${a.stem === "run" || a.stem === "resources" ? ".jsonl" : ".json"}`,
-          );
-    if (existsSync(dest)) {
-      // Collision: identical is a duplicate to drop, different is unresolvable.
-      if (sameBytes(from, dest)) ops.push({ kind: "delete", path: from });
-      else return { kind: "refuse", reason: `${a.file} collides with existing ${dest.slice(outDir.length + 1)} and differs` };
-    } else ops.push({ kind: "move", from, to: dest });
-  }
-
   const turns = listTurns(outDir);
 
   // ONE TURN FOR ALL ROOT ARTIFACTS. They were written by a single turn, and only `result.json` carries a
@@ -297,6 +273,37 @@ export function assessRunDir(outDir: string): Assessment {
     else rootArtifactTurn = highestOnDisk;
   }
 
+  for (const a of archives) {
+    const from = join(outDir, a.file);
+
+    // An ARCHIVE-NAMED resources file can be cumulative too — the resume fix mints exactly that by
+    // renaming a spanning root `resources.jsonl` to `resources.turn-<prior>.jsonl`. Trusting the name
+    // would carry turn-N and turn-N+1 samples into one slot. CONTENT decides; the filename is a hint.
+    if (a.stem === "resources" && a.retry === undefined) {
+      const r = planResources(outDir, from, a.turn, rootArtifactTurn);
+      if (r.kind === "refuse") return r;
+      ops.push(r.op);
+      continue;
+    }
+
+    const dest =
+      a.retry === undefined
+        ? turnArtifactPath(outDir, a.turn, artifactForStem(a.stem))
+        : // Retry archives are not PER_TURN_ARTIFACTS; keep the stem's own extension rather than
+          // hardcoding .jsonl, which mislabelled `result.turn-1.retry-2.json`.
+          join(
+            outDir,
+            "turns",
+            String(a.turn),
+            `${a.stem}.retry-${a.retry}${a.stem === "run" || a.stem === "resources" ? ".jsonl" : ".json"}`,
+          );
+    if (existsSync(dest)) {
+      // Collision: identical is a duplicate to drop, different is unresolvable.
+      if (sameBytes(from, dest)) ops.push({ kind: "delete", path: from });
+      else return { kind: "refuse", reason: `${a.file} collides with existing ${dest.slice(outDir.length + 1)} and differs` };
+    } else ops.push({ kind: "move", from, to: dest });
+  }
+
   for (const artifact of rootArtifacts) {
     const from = join(outDir, artifact);
 
@@ -312,7 +319,7 @@ export function assessRunDir(outDir: string): Assessment {
     const highestTurn = Math.max(rootTurn, ...(turns.length ? turns : [0]));
     const priorTurn = highestTurn - 1;
     if (artifact === "resources.jsonl" && priorTurn > 0) {
-      const r = planResources(outDir, from, priorTurn);
+      const r = planResources(outDir, from, priorTurn, rootArtifactTurn);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
@@ -327,8 +334,12 @@ export function assessRunDir(outDir: string): Assessment {
     // `turns/` exists: the 3-branch rule governs, ALWAYS. (The N+1 mapping applies only when `turns/`
     // is absent — otherwise both claim the same file and one reading renames onto an occupied slot.)
     const selfLabeling = artifact === "result.json" || artifact === "run.jsonl";
+    // Byte-identity means "already stored", for ANY artifact. Restricting the drop to self-labeling ones
+    // made a root trace.json identical to turns/1's refuse with "neither a duplicate of any turn nor
+    // placeable" — denying a duplicate this line had just found. (The P2-6 caveat is about which SLOT an
+    // identical file proves; it never argued the copy was worth keeping.)
     const identicalTo = turns.find((n) => sameBytes(from, turnArtifactPath(outDir, n, artifact)));
-    if (selfLabeling && identicalTo !== undefined) {
+    if (identicalTo !== undefined) {
       ops.push({ kind: "delete", path: from });
       continue;
     }

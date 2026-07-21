@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findLatestRunForScenario } from "../src/run/latest-run.js";
-import { reindexFromRunsTree } from "../src/run/run-index.js";
+import { indexRowFromResult, reindexFromRunsTree } from "../src/run/run-index.js";
 import { buildInspectView } from "../src/run/inspect-view.js";
 import { packageEvidence } from "../src/critique/package-evidence.js";
+import { buildGateTrace, buildFilesView, buildUsageView } from "../src/run/trace-view.js";
 import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 
 // LAYER 2 OF THE SINGLE-SOURCE GUARD: assert RESOLVED BEHAVIOUR, not source shape.
@@ -49,16 +50,32 @@ function poisonedDir(scenario = "scn", id = "sess-1"): string {
   writeFileSync(join(d, "status.json"), JSON.stringify({ startedAt: "2026-07-20T10:00:00.000Z" }));
 
   // The decoys: every shape a pre-layout dir could present at the root.
-  // The sentinel is placed in several fields on purpose: each reader surfaces a different slice, and a
-  // probe whose sentinel sits in a field that reader never renders passes while observing nothing —
-  // which is exactly how the critique probe below first passed against a reintroduced escape.
+  // The decoy must be a WELL-FORMED RunResult, and the sentinel must sit in fields each reader actually
+  // renders. Both halves are load-bearing and both have failed here before:
+  //   - a payload missing `assertions` (required; computeVerdict iterates it unconditionally) made every
+  //     reader THROW on it, and run-index swallows that as "corrupt" — so no root read could ever surface
+  //     the sentinel however wrong the reader was;
+  //   - a sentinel sitting only in `scenario` was invisible to packageEvidence, which never renders it.
+  // A probe that cannot observe is worse than no probe: it reports coverage it does not have.
   const decoy = JSON.stringify({
+    // The schema's required set — scenario/fidelity/baseline/result/decisions/egress/assertions/outDir.
+    // Omitting any of them makes a reader throw, and run-index swallows that as "corrupt": the sentinel
+    // then cannot surface however wrong the reader is.
+    fidelity: "container",
+    baseline: "latest",
+    egress: [],
+    outDir: d,
     scenario: SENTINEL,
     result: "failure",
-    verdict: { pass: false },
+    verdict: { pass: false, exitCode: 1, failures: [{ message: SENTINEL }] },
+    assertions: [{ assertion: { kind: SENTINEL }, pass: false, message: SENTINEL }],
     finalMessage: SENTINEL,
     referencesRead: [SENTINEL],
     toolCounts: { [SENTINEL]: 1 },
+    decisions: [{ kind: "question", by: SENTINEL, question: SENTINEL }],
+    modelUsage: [{ model: SENTINEL, cacheReadInputTokens: 1, inputTokens: 1, outputTokens: 1 }],
+    workspaceFiles: [{ path: SENTINEL, bytes: 1 }],
+    turn: 1,
   });
   writeFileSync(join(d, "result.json"), decoy);
   writeFileSync(join(d, "run.jsonl"), `{"t":"transcript","text":"${SENTINEL}"}`);
@@ -82,10 +99,41 @@ describe("no reader falls back to the run-dir root", () => {
     expect(observed, "a root file surfaced through status --latest-for").not.toContain(SENTINEL);
   });
 
-  it("reindexFromRunsTree indexes the turn, never the root decoy", () => {
+  it("reindexFromRunsTree SKIPS a poisoned dir whole rather than half-indexing it", () => {
+    // Honest name. With the removal complete, any root per-turn artifact makes a dir `mixed`, so
+    // run-index's protection is the whole-dir skip — the walk never runs. The previous name claimed it
+    // "indexes the turn, never the root decoy"; it indexed NOTHING and asserted only sentinel-absence,
+    // which a skip satisfies trivially. Assert the actual protection instead.
     poisonedDir();
-    const { rows } = reindexFromRunsTree(root);
+    const { rows, written, skippedLegacy } = reindexFromRunsTree(root);
+    expect(skippedLegacy, "the poisoned (mixed) dir was not reported as skipped").toBe(1);
+    expect(written, "half-indexed a dir it cannot fully read").toBe(0);
     expect(JSON.stringify(rows), "a root/archived file was indexed").not.toContain(SENTINEL);
+  });
+
+  it("a turns-only dir DOES index from turns/ — otherwise the skip above proves nothing", () => {
+    // Pairs with the skip: without this, "0 rows" would be indistinguishable from a reader that indexes
+    // nothing at all.
+    const d = join(root, "clean", "sess-1");
+    mkdirSync(join(d, "turns", "1"), { recursive: true });
+    writeFileSync(
+      join(d, "turns", "1", "result.json"),
+      JSON.stringify({
+        scenario: "clean",
+        fidelity: "container",
+        baseline: "latest",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: d,
+        turn: 1,
+        verdict: { pass: true, exitCode: 0, failures: [] },
+      }),
+    );
+    writeFileSync(join(d, "turns", "1", "run.jsonl"), `{"t":"transcript"}`);
+    const { written } = reindexFromRunsTree(root);
+    expect(written, "a clean turns dir produced no row — the skip assertion above would be vacuous").toBeGreaterThan(0);
   });
 
   it("buildInspectView renders the turn, never the root decoy", () => {
@@ -114,6 +162,38 @@ describe("no reader falls back to the run-dir root", () => {
     const pkg = packageEvidence(d, snapshotTurnBoundary(d), skillDir, true);
     expect(JSON.stringify(pkg), "a root/archived file surfaced through critique's evidence package").not.toContain(SENTINEL);
     rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  // `trace`'s readers are UNGATED by design — trace must keep working on a pre-layout dir, which is why
+  // every other refusal points at it. That makes them the same risk profile as packageEvidence: no
+  // refusal fires first to mask a root read. Each site's own comment records that a pre-seam root read
+  // here was "guard-invisible".
+  for (const [name, build] of [
+    ["buildGateTrace (answeredBy provenance)", buildGateTrace],
+    ["buildFilesView (--view files)", buildFilesView],
+    ["buildUsageView (--view usage)", buildUsageView],
+  ] as const) {
+    it(`${name} never surfaces the root decoy`, () => {
+      const d = poisonedDir();
+      let observed: string;
+      try {
+        observed = JSON.stringify(build(join(d, "events.jsonl")));
+      } catch (e) {
+        observed = (e as Error).message;
+      }
+      expect(observed, `a root file surfaced through ${name}`).not.toContain(SENTINEL);
+    });
+  }
+
+  it("the decoy payload SURVIVES a real reader — the check that would have caught two dead probes", () => {
+    // Twice now a probe here has passed while observing nothing: once with the sentinel in a field the
+    // reader never renders, once with a payload that THREW inside the reader (missing `assertions`) and
+    // was swallowed as "corrupt". Asserting the bytes are on disk cannot catch either. So assert the
+    // payload actually round-trips through a reader: if a root read happened, the sentinel COULD surface.
+    const d = poisonedDir();
+    const raw = JSON.parse(readFileSync(join(d, "result.json"), "utf8")) as Parameters<typeof indexRowFromResult>[0];
+    const row = indexRowFromResult(raw, { command: "run", partial: false });
+    expect(JSON.stringify(row), "the decoy cannot produce a row — every probe in this file is unobservable").toContain(SENTINEL);
   });
 
   it("the decoys are actually readable — otherwise this whole file passes vacuously", () => {

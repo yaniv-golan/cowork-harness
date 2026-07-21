@@ -49,8 +49,8 @@ const isRealRun = (dir: string) => {
 
 /** `cowork-harness prune [--keep-last <n>] [--dry-run] [<runs-dir>]`
  *
- *  For each scenario directory under the runs root, ranks EPHEMERAL run dirs by (1) real-run first (has
- *  result.json OR events.jsonl), (2) mtime descending, (3) name — then keeps the N most recent of that order
+ *  For each scenario directory under the runs root, ranks EPHEMERAL run dirs by (1) real-run first (a
+ *  turns/ dir, an events.jsonl, or a pre-layout shape — see isRealRun), (2) mtime descending, (3) name — then keeps the N most recent of that order
  *  and removes the rest. So an older COMPLETED run beats a newer empty scaffold dir for a keep slot, but
  *  `--keep-last` stays a HARD CAP (the ranking only decides WHICH N survive — never grows the kept count).
  *  Do NOT run `prune` against an actively-writing runs root.
