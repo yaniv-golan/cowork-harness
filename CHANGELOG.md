@@ -95,6 +95,22 @@ All notable changes to this project are documented here. The format is based on
   on a pre-layout dir instead of silently falling back to a root `run.jsonl` that (for any current-layout
   dir) is a path to nowhere.
 
+- **Platform baseline synced to Desktop 1.24012.0** (`baselines/desktop-1.24012.0.json`, now what
+  `baseline: latest` resolves to). Agent binary is **unchanged** at `2.1.215`, and there is no prompt,
+  spawn-env, or egress-allowlist drift vs 1.22209.3 — the 15-domain allowlist and `gvisor` mode carry over
+  untouched, and the `deriveSpawnEnv` / `checkSpawnContractFacts` oracles stay green against the live asar.
+  Three substantive deltas: `claude-sonnet-5` joins the per-model effort map
+  (`low|medium|high|xhigh|max`, recommended `medium`, modes `auto`); the `coworkRuntimeConfig` gate drops
+  its `pluginsFullSyncStalenessMs` key (never modeled here, inert); and the dormant
+  `autoModeOverridesAlwaysAllow` sentinel fired — see below. Skill/README version floors and the example
+  cassettes' `fingerprint.baseline` track the new baseline.
+- **The `autoModeOverridesAlwaysAllow` gate (`4200321681`) flipped absent → on** (`source: force`) and was
+  revisited as its pin intended. It stays **unmodeled, deliberately**: binary-verified in 1.24012.0, both
+  call sites only override an *already-existing* always-allow decision — the session rule cache
+  (`approvedToolNames`) and scheduled-task auto-approval — each further gated on `permissionMode` and
+  `isDestructiveConnectorTool`. The harness persists neither, so it already prompts wherever the gate makes
+  Cowork prompt; enabling it moves real Cowork *toward* harness behavior rather than away. Revisit only if
+  the harness gains a persistent per-tool approval cache.
 - **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
   a run that previously exited `1` because one `docker exec` failed will now exit `0`. A dead sidecar
   still hard-fails. Known residual, documented in `docs/scenario.md`: if *every* exec failed the agent ran
@@ -156,6 +172,21 @@ All notable changes to this project are documented here. The format is based on
   lost. Archived turns are now indexed too, matched strictly (`result.turn-<N>.json`) so
   `result.graded.json` — a byte-identical copy of turn 1 — cannot double-count.
 
+- **An ambient `GIT_DIR` silently computed the wrong skill file set.** Git hooks export `GIT_DIR` (and
+  `GIT_INDEX_FILE`) into every child process, and with `GIT_DIR` set but no `GIT_WORK_TREE` git stops
+  inferring the work tree from `cwd` and treats `cwd` as the repo root. `gitTrackedSet`'s
+  `rev-parse --show-toplevel` probe therefore still succeeded — so the not-a-repo raw-walk fallback never
+  fired — while `git ls-files -- .` returned the **entire repo index as root-relative paths** instead of
+  the directory-relative ones. Measured on this repo: 2 tracked files became 625 wrong ones. That set
+  feeds both `skillHash` and the mount-copy filter, so any run invoked from a git hook (or from CI that
+  exports `GIT_DIR`) got a wrong hash and a mount filter pointed at paths that do not exist under the
+  skill dir. The visible symptom was the repo's own pre-commit hook reporting committed example cassettes
+  as `[stale] skill files changed since record` on every parity sync. `skillCommit` had the same defect:
+  `git -C <dir>` is overridden by an ambient `GIT_DIR`, so every skill dir resolved to that foreign repo's
+  HEAD — recording a foreign commit as the skill's provenance and masking dirs that are genuinely in
+  different repos. Both call sites now spawn git with `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE`
+  stripped, via one shared helper so they cannot drift. `run-index`'s `gitInfo` and `doctor`'s worktree
+  probe deliberately keep inheriting — they are asking about the *ambient* repo.
 - **`stats --reindex` destroyed multi-turn history.** Every `--resume` turn — and `critique`'s task +
   reflection pair — writes to one `outDir`, so keying by directory collapsed N completions into one,
   silently changing run counts, pass rates and costs.

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFingerprint, skillCommit } from "../src/run/cassette.js";
@@ -52,6 +53,37 @@ describe("skillCommit on an inline session", () => {
   it("returns null for an inline session whose skill dirs are not in a git repo", () => {
     const { session } = inlineSessionWithSkill();
     expect(skillCommit("(inline)", session)).toBeNull();
+  });
+
+  // `git -C <dir>` sets the working directory, but an ambient GIT_DIR OVERRIDES it — so under the env a
+  // git hook exports, every skill dir resolves to the same foreign repo: the recorded provenance is that
+  // repo's HEAD rather than the skill's, and dirs genuinely in different repos stop looking different.
+  it("resolves the skill dir's own repo even when a foreign GIT_DIR is in the environment", () => {
+    const mkRepo = (marker: string): { root: string; head: string } => {
+      const root = mkdtempSync(join(tmpdir(), "cwh-skillcommit-"));
+      const run = (...a: string[]) => spawnSync("git", a, { cwd: root, encoding: "utf8" });
+      run("init", "-q");
+      run("config", "user.email", "t@t.test");
+      run("config", "user.name", "t");
+      mkdirSync(join(root, "myskill"), { recursive: true });
+      writeFileSync(join(root, "myskill", "SKILL.md"), `# ${marker}\n`);
+      run("add", "-A");
+      run("commit", "-q", "-m", marker);
+      return { root, head: run("rev-parse", "HEAD").stdout.trim() };
+    };
+    const skillRepo = mkRepo("the-skill");
+    const foreign = mkRepo("unrelated");
+    expect(skillRepo.head).not.toBe(foreign.head); // distinct fixtures, or the test proves nothing
+
+    const session = resolveSessionPaths(loadSession({ skills: { local: ["./myskill"] } }), skillRepo.root);
+    const prev = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(foreign.root, ".git");
+    try {
+      expect(skillCommit("(inline)", session)).toBe(skillRepo.head);
+    } finally {
+      if (prev === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = prev;
+    }
   });
 
   it("resolves the git HEAD of an inline session's skill dirs when they are in a repo", () => {
