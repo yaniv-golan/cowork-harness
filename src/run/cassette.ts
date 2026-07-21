@@ -27,6 +27,7 @@ import {
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
+import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
@@ -487,6 +488,9 @@ export function skillCommit(sessionPath: string, inlineSession?: SessionConfig):
       const sha = execFileSync("git", ["-C", d, "rev-parse", "HEAD"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
+        // `-C` alone is not enough: an ambient GIT_DIR overrides it and every dir would resolve to
+        // that repo's HEAD instead of its own.
+        env: gitEnvWithoutAmbientRepo(),
       }).trim();
       if (!sha) return null;
       commits.add(sha);

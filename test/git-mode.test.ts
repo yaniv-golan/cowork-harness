@@ -62,6 +62,27 @@ describe("gitTrackedSet / gitCpFilter", () => {
     });
   });
 
+  // A git hook exports GIT_DIR (and GIT_INDEX_FILE) into every child process. With GIT_DIR set and no
+  // GIT_WORK_TREE, git stops inferring the work tree from cwd and treats cwd AS the root — so
+  // `rev-parse --show-toplevel` succeeds (the non-repo fallback never fires) while `ls-files -- .`
+  // returns the WHOLE index as root-relative paths instead of the dir-relative ones. The tracked set
+  // then silently describes the wrong files: every real skill file reads as removed. This set feeds
+  // both skillHash and the mount-copy filter, so it must not depend on ambient git env.
+  it("is immune to an inherited GIT_DIR (the env a git hook exports)", () => {
+    const { dir } = gitRepo();
+    const skillDir = join(dir, "skills", "cap-table");
+    const prev = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(dir, ".git");
+    try {
+      const set = gitTrackedSet(skillDir)!;
+      expect(set.has("SKILL.md")).toBe(true); // dir-relative, as when GIT_DIR is unset
+      expect(set.has("skills/cap-table/SKILL.md")).toBe(false); // not the repo-root-relative index
+    } finally {
+      if (prev === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = prev;
+    }
+  });
+
   it("gitCpFilter admits tracked files + dirs-on-the-path, rejects untracked", () => {
     const { dir } = gitRepo();
     const f = gitCpFilter(dir)!;
