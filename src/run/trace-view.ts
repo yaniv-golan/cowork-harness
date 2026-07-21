@@ -416,6 +416,12 @@ export function buildGateTrace(file: string): GateTraceRow[] {
   // to the LATEST turn (`eventsOf`), so pairing against another turn's `decisions[]` matched nothing.
   const gtRunDir = dirname(file);
   const gtTurn = latestTurn(gtRunDir);
+  // `trace` is deliberately NOT gated — events.jsonl never moved, so it stays readable on a pre-layout
+  // dir and is what every refusal elsewhere points at. But "readable" must not mean "silently thinner":
+  // without a turn-addressed result there are no `decisions[]` to pair against, so every `answeredBy`
+  // label vanished with no indication that provenance was even attempted. Same failure mode the
+  // files/usage views were given an honest message for; this one was left silent.
+  if (gtTurn === undefined) process.stderr.write(`note: ${resultUnavailableReason(file, "gate provenance")} — answeredBy labels omitted\n`);
   const resultPath = gtTurn !== undefined ? turnArtifactPath(gtRunDir, gtTurn, "result.json") : undefined;
   if (resultPath && existsSync(resultPath)) {
     try {
@@ -619,12 +625,12 @@ function readSiblingResult(file: string): RunResult | undefined {
  *  just unaddressed by this layout. `trace` never REFUSES (its event-derived views stay fully readable —
  *  see turn-layout.ts's module doc comment) — this only shapes the degrade message for the two
  *  result-derived views. */
-function resultUnavailableReason(file: string, view: "files" | "usage"): string {
+export function resultUnavailableReason(file: string, view: "files" | "usage" | "cache-read footer" | "gate provenance"): string {
   const runDir = dirname(file);
   const shape = classifyRunDir(runDir);
   if (shape.kind === "legacy" || shape.kind === "mixed")
-    return `${view} view needs a turn-addressed result.json — ${preLayoutMessage(shape, runDir)}`;
-  return `${view} view needs a run dir (no sibling result.json)`;
+    return `${view} needs a turn-addressed result.json — ${preLayoutMessage(shape, runDir)}`;
+  return `${view} needs a run dir (no sibling result.json)`;
 }
 
 /**

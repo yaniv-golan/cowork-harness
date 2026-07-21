@@ -55,6 +55,7 @@ import {
   formatTrace,
   buildGateTrace,
   formatGateTrace,
+  resultUnavailableReason,
   buildDispatchTree,
   formatDispatchTree,
   buildToolDurations,
@@ -4146,6 +4147,11 @@ function cmdTrace(args: string[]) {
     let modelUsage: RunResult["modelUsage"] | undefined;
     const footerRunDir = dirname(file);
     const footerTurn = latestTurn(footerRunDir);
+    // Say when the footer is missing rather than just omitting it. `trace` stays readable on a pre-layout
+    // dir by design (events.jsonl never moved), but a silently absent cache-read ratio is
+    // indistinguishable from a run that had no cache activity at all.
+    if (footerTurn === undefined)
+      process.stderr.write(`note: ${resultUnavailableReason(file, "cache-read footer")} — cache-read ratio omitted\n`);
     const resultPath = footerTurn !== undefined ? turnArtifactPath(footerRunDir, footerTurn, "result.json") : undefined;
     if (resultPath && existsSync(resultPath)) {
       try {

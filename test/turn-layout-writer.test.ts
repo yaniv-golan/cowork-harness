@@ -50,13 +50,6 @@ describe("turn detection is keyed on run.jsonl, not result.json", () => {
     writeFileSync(join(dir, "turns", "2junk", "run.jsonl"), "{}\n");
     expect(currentTurnFromDirs(dir)).toBe(2);
   });
-
-  it("falls back to the LEGACY rule when there are no turn dirs", () => {
-    // chat dirs, and every run dir written before this change, are legacy-shaped forever.
-    writeFileSync(join(dir, "run.jsonl"), "{}\n");
-    writeFileSync(join(dir, "result.json"), "{}");
-    expect(currentTurn(dir)).toBe(2);
-  });
 });
 
 describe("turnWriteDir", () => {

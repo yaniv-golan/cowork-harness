@@ -14,7 +14,7 @@ import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
 
 /** Read the ARCHIVED turn-1 transcript out of `run.turn-1.jsonl`'s `{t:"transcript"}` line — the exact
  *  text `execute.ts` records for the completed task turn. Present once a resume has archived turn 1
- *  (`archivePriorTurnFiles`); if for any reason that file isn't there yet, fall back to the turn-1 slice of
+ *  under `turns/1/`; if for any reason that file isn't there yet, fall back to the turn-1 slice of
  *  `events.jsonl` (still turn-1-only, just a rawer view than the assembled transcript string).
  *
  *  The fallback slice depends on the byte boundary `snapshotTurnBoundary` captured before the reflection

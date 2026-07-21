@@ -299,7 +299,7 @@ function readResultFileForWalk(
  *
  *  Also walks every ARCHIVED turn (`result.turn-<N>.json`) in the run dir, not just the root — a
  *  `--resume` session or a `critique` task+reflection pair archives earlier turns when a later one
- *  overwrites `result.json` (execute.ts's archivePriorTurnFiles), and reading only the root would silently
+ *  overwrote `result.json` (a pre-layout writer, since removed), and reading only the root would silently
  *  DROP them on a scratch rebuild. For a `critique` dir specifically the root IS the reflection turn, so
  *  that drop would keep the reflection row and lose the GRADED row — the one consumers pair generations
  *  on. See `readResultFileForWalk` for the per-file handling shared between the root and every archive.

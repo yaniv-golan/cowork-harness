@@ -702,7 +702,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       const outDir = join(runsRoot, "s", "sess-1");
       mkdirSync(outDir, { recursive: true });
       // turn 1 completed and was indexed live; its result.json was since archived to result.turn-1.json by
-      // the resume (execute.ts's archivePriorTurnFiles) — nothing on disk at outDir/result.json represents
+      // the resume (a pre-layout writer, since removed) — nothing on disk at outDir/result.json represents
       // it anymore, so it can ONLY survive via the prior index, never via a fresh walk.
       appendIndexRow(
         runsRoot,

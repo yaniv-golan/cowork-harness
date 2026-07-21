@@ -68,7 +68,7 @@ function turnDir(outDir: string) {
 }
 
 /** The shape a pre-layout dir resumed under CURRENT code actually produces: turn 1 archived at the root
- *  (name-mangled, from `archivePriorTurnFiles`'s still-live legacy branch) and turn 2 under `turns/` (from
+ *  (name-mangled, left by a pre-layout writer that no longer exists) and turn 2 under `turns/` (from
  *  `turnWriteDir`). Not hypothetical — `execute-origin-guard.test.ts` exercises the write-side gate that
  *  now REFUSES to `--resume` onto one of these; this fixture is the shape that gate exists to stop minting
  *  and the shape any dir created before that gate existed is stuck in. */

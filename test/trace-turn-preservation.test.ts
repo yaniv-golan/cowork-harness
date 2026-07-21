@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archivePriorTurnFiles, currentTurn } from "../src/run/execute.js";
+import { currentTurn } from "../src/run/execute.js";
 import { writeGradedAliases } from "../src/critique/command.js";
 
 // `trace.json` is REBUILT from the current turn's record and overwritten on every completion
@@ -24,41 +24,6 @@ function seedTurn(contents: string) {
   writeFileSync(join(dir, "result.json"), "{}");
   writeFileSync(join(dir, "trace.json"), contents);
 }
-
-describe("a resumed turn preserves the prior turn's trace", () => {
-  it("archives trace.json instead of letting the next turn overwrite it", () => {
-    seedTurn('{"turn":1}');
-    archivePriorTurnFiles(dir);
-    expect(existsSync(join(dir, "trace.turn-1.json")), "turn 1's trace was destroyed, not archived").toBe(true);
-    expect(readFileSync(join(dir, "trace.turn-1.json"), "utf8")).toBe('{"turn":1}');
-    // and the live name is free for the incoming turn to write
-    expect(existsSync(join(dir, "trace.json"))).toBe(false);
-  });
-
-  it("does NOT perturb turn detection", () => {
-    // `currentTurn` counts `run.turn-<N>.jsonl` files only. Archiving a third file type must not change
-    // the count — a drifting turn number would corrupt every downstream row identity.
-    seedTurn("{}");
-    expect(currentTurn(dir)).toBe(2);
-    archivePriorTurnFiles(dir);
-    expect(currentTurn(dir), "archiving trace.json changed the computed turn number").toBe(2);
-  });
-
-  it("is a no-op on turn 1 (nothing to archive yet)", () => {
-    writeFileSync(join(dir, "trace.json"), "{}");
-    // No run.jsonl => this IS turn 1; archiving must not rename the trace out from under it.
-    archivePriorTurnFiles(dir);
-    expect(existsSync(join(dir, "trace.json"))).toBe(true);
-    expect(existsSync(join(dir, "trace.turn-0.json"))).toBe(false);
-  });
-
-  it("tolerates a missing trace.json", () => {
-    // A turn killed before writeTrace has no trace to archive; that must not throw.
-    writeFileSync(join(dir, "run.jsonl"), "{}\n");
-    writeFileSync(join(dir, "result.json"), "{}");
-    expect(() => archivePriorTurnFiles(dir)).not.toThrow();
-  });
-});
 
 describe("critique's graded aliases are written, not just referenced in source", () => {
   // The first version of this block was TWO SOURCE-TEXT GREPS. An adversarial review broke it in one

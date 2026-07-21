@@ -145,7 +145,7 @@ export function currentTurnFromDirs(outDir: string): number {
 
 /** Root-level names that indicate CONTAMINATION — a pre-layout marker, whether or not `turns/` also
  *  exists. No writer produces a root compat copy of any `PER_TURN_ARTIFACT` anymore, and a name-mangled
- *  `<stem>.turn-<N>.<ext>` archive is only ever produced by `execute.ts`'s `archivePriorTurnFiles` LEGACY
+ *  `<stem>.turn-<N>.<ext>` archive is a PRE-LAYOUT artifact — no writer produces one anymore (the LEGACY
  *  branch, which is itself gated `!hasTurnDirs`. So any of these can only mean a pre-layout dir (with
  *  `turns/` present: one that was resumed under current code). Detection only, for `classifyRunDir`'s
  *  message — never used to resolve a read. */
@@ -196,14 +196,14 @@ export function preLayoutMessage(shape: RunDirShape, outDir: string): string {
     return (
       `${outDir} is a pre-layout run dir (written before the turns/<N>/ layout): ${shape.markers.join(", ")} ` +
       `found at the run-dir root, no turns/ directory. \`trace ${outDir}\` still works (its views derive ` +
-      `from events.jsonl, which never moves) — re-run or re-record to get a current-layout dir.`
+      `from events.jsonl, which never moves). Convert it in place: \`cowork-harness migrate-run-dir\`.`
     );
   if (shape.kind === "mixed")
     return (
       `${outDir} is a MIXED run dir: turns/ (${shape.turns.join(", ")}) AND pre-layout markers at the root ` +
       `(${shape.markers.join(", ")}) — almost certainly a pre-layout dir that was resumed under current code, ` +
-      `which leaves its earliest turn unaddressable. \`trace ${outDir}\` still works. Re-run or re-record to ` +
-      `get a clean dir.`
+      `which leaves its earliest turn unaddressable. \`trace ${outDir}\` still works. Convert it in place: ` +
+      `\`cowork-harness migrate-run-dir\`.`
     );
   if (shape.kind === "none")
     return (

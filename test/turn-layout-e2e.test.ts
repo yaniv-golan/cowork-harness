@@ -169,7 +169,8 @@ describe("resuming a PRE-LAYOUT dir does not destroy the prior turn", () => {
   // The shape every published-1.6.0 run dir has on disk: the four artifacts at the root, no `turns/`.
   // A user upgrading to the per-turn layout and resuming an existing session hits exactly this path.
   //
-  // The prior turn used to be DESTROYED here: `archivePriorTurnFiles` exists to prevent it and could
+  // The prior turn used to be DESTROYED here: `archivePriorTurnFiles` (a function that no longer
+  // exists — see below for why) was meant to prevent it and could
   // never fire (it runs POST-run, by which point `beginTurn` has created `turns/<N>` and its
   // `!hasTurnDirs` gate is permanently false), so the turn-2 compat write overwrote turn 1's root
   // `result.json`. That is fixed on the base branch by relocating into `turns/<prior>/` at turn start.

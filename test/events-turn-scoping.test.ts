@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { currentTurnEventLines } from "../src/run/turn-events.js";
@@ -25,7 +25,16 @@ const bash = (cmd: string) =>
 const DELETE = bash("rm -rf /sessions/x/mnt/outputs/report.md");
 const write = (...lines: string[]) => writeFileSync(join(dir, "events.jsonl"), lines.join("\n") + "\n");
 /** Makes `currentTurn()` return 2, so `beginTurn` treats this as a resumed turn. */
-const asResumedTurn = () => writeFileSync(join(dir, "run.jsonl"), "{}\n");
+/** Make the dir look like a completed turn 1, so the next `beginTurn` is turn 2.
+ *
+ *  This used to write a ROOT `run.jsonl`, which counted as a turn only through `currentTurn`'s legacy
+ *  union — deleted with the legacy layer. The union is gone, so a completed turn is now what the writer
+ *  actually produces: `turns/1/run.jsonl`. Same intent (these tests are about SCOPING, not layout), only
+ *  the way a turn is spelled has changed. */
+const asResumedTurn = () => {
+  mkdirSync(join(dir, "turns", "1"), { recursive: true });
+  writeFileSync(join(dir, "turns", "1", "run.jsonl"), "{}\n");
+};
 
 describe("beginTurn scopes the append-through-the-turn streams", () => {
   it("a turn-1 outputs-delete no longer fails turn 2", () => {
@@ -43,17 +52,6 @@ describe("beginTurn scopes the append-through-the-turn streams", () => {
     beginTurn(dir);
     writeFileSync(join(dir, "events.jsonl"), readFileSync(join(dir, "events.jsonl"), "utf8") + DELETE + "\n");
     expect(scanEvents(join(dir, "events.jsonl")).outputsDeletes).toHaveLength(1);
-  });
-
-  it("archives resources.jsonl at TURN START, before the sampler can append", () => {
-    // The mechanism was first planned inside `archivePriorTurnFiles` — which runs POST-run, after
-    // foldResources has already read. It would have fixed nothing while passing a unit test of the
-    // archiver. Hence asserting the turn-START effect: the live file is gone and the prior turn is kept.
-    writeFileSync(join(dir, "resources.jsonl"), JSON.stringify({ rssBytes: 900 }) + "\n");
-    asResumedTurn();
-    beginTurn(dir);
-    expect(existsSync(join(dir, "resources.turn-1.jsonl")), "the prior turn's samples were not archived").toBe(true);
-    expect(existsSync(join(dir, "resources.jsonl")), "the live file must be clear for this turn's sampler").toBe(false);
   });
 
   it("does nothing on turn 1 — events.jsonl stays BYTE-IDENTICAL", () => {
@@ -170,22 +168,6 @@ describe("beginTurn is actually WIRED at turn start", () => {
 });
 
 describe("regressions the implementation review found", () => {
-  it("a colliding archive name does NOT clobber the prior turn's resources", () => {
-    // Legacy dirs only (chat, and anything written before the per-turn layout): they share one root
-    // resources.jsonl, so a turn that repeats its number — a hard fault never writes run.jsonl — would
-    // rename its partial samples over the real prior turn's, mislabelled. Under the per-turn layout this
-    // cannot arise: each turn owns turns/<N>/resources.jsonl.
-    //
-    // Exercised by pre-creating the collision rather than by calling beginTurn twice: the first call
-    // migrates the dir to the turn layout, so a second call is correctly a no-op for the legacy branch.
-    writeFileSync(join(dir, "resources.jsonl"), "T2-CRASHED-PARTIAL\n");
-    writeFileSync(join(dir, "resources.turn-1.jsonl"), "T1-SAMPLES\n");
-    asResumedTurn();
-    beginTurn(dir);
-    expect(readFileSync(join(dir, "resources.turn-1.jsonl"), "utf8"), "turn 1's archive was overwritten").toBe("T1-SAMPLES\n");
-    expect(existsSync(join(dir, "resources.turn-1.retry-1.jsonl")), "the colliding samples were dropped").toBe(true);
-  });
-
   it("an EMPTY completed events.jsonl still fails closed (single-turn behaviour is untouched)", () => {
     // An earlier version of this fix special-cased the empty file to [], flipping evidence-unavailable
     // into a clean PASS on single-turn runs — while the commit claimed turn 1 was unaffected.
