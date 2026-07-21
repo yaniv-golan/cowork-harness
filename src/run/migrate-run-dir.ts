@@ -99,9 +99,11 @@ function completionMtimeOf(outDir: string, turn: number): number | undefined {
   }
 }
 
-/** Whether a JSONL sample file has rows on BOTH sides of the boundary — i.e. it is genuinely cumulative
- *  across turns rather than belonging wholly to one. */
-function samplesSpan(path: string, boundaryMs: number): boolean {
+/** Where a sample file's rows fall relative to the boundary. `unusable` means no row carried a parseable
+ *  numeric `ts` — attribution is then a GUESS, and guessing is what the split exists to avoid. */
+type SampleSpread = "before" | "after" | "spanning" | "unusable";
+
+function classifySamples(path: string, boundaryMs: number): SampleSpread {
   let low = false;
   let high = false;
   try {
@@ -112,17 +114,66 @@ function samplesSpan(path: string, boundaryMs: number): boolean {
         const v = (JSON.parse(line) as { ts?: unknown }).ts;
         if (typeof v === "number") ts = v;
       } catch {
-        /* unparseable rows do not establish a span */
+        /* an unparseable row contributes no evidence either way */
       }
       if (ts === undefined) continue;
+      // `<=`: a sample taken exactly at the prior turn's completion belongs to THAT turn.
       if (ts <= boundaryMs) low = true;
       else high = true;
-      if (low && high) return true;
     }
   } catch {
-    return false;
+    return "unusable";
   }
-  return false;
+  if (low && high) return "spanning";
+  if (low) return "before";
+  if (high) return "after";
+  return "unusable";
+}
+
+/** Plan the one artifact whose attribution is decided by CONTENT rather than by its filename.
+ *
+ *  `owningTurn` is the turn the file is nominally associated with — the archive's own N, or `maxArchive`
+ *  for a root file. Samples at or before that turn's completion belong to it; later samples belong to the
+ *  next turn. Handles the root and archive-named forms identically, because the resume fix renames one
+ *  into the other and the two must not migrate differently. */
+function planResources(
+  outDir: string,
+  from: string,
+  owningTurn: number,
+): { kind: "op"; op: MigrationOp } | { kind: "refuse"; reason: string } {
+  const rel = from.slice(outDir.length + 1);
+  const boundaryMs = completionMtimeOf(outDir, owningTurn);
+  if (boundaryMs === undefined)
+    return {
+      kind: "refuse",
+      reason: `cannot determine the turn boundary for ${rel} (no mtime for result.turn-${owningTurn}.json) — refusing rather than attributing samples by guess`,
+    };
+
+  const lowDest = turnArtifactPath(outDir, owningTurn, "resources.jsonl");
+  const highDest = turnArtifactPath(outDir, owningTurn + 1, "resources.jsonl");
+  const spread = classifySamples(from, boundaryMs);
+
+  if (spread === "unusable")
+    return {
+      kind: "refuse",
+      reason: `${rel} has no usable sample timestamps — refusing rather than attributing telemetry by guess`,
+    };
+
+  // A split WRITES both destinations, so an occupied one is destroyed rather than merged. The
+  // uniqueness pass below only sees moves, so this has to be checked here.
+  if (spread === "spanning") {
+    for (const dest of [lowDest, highDest]) {
+      if (existsSync(dest))
+        return { kind: "refuse", reason: `splitting ${rel} would overwrite the existing ${dest.slice(outDir.length + 1)}` };
+    }
+    return { kind: "op", op: { kind: "split", from, boundaryMs, toLow: lowDest, toHigh: highDest } };
+  }
+
+  // Wholly one side: a plain move, but to the turn the CONTENT indicates — not automatically the latest.
+  const dest = spread === "before" ? lowDest : highDest;
+  if (existsSync(dest) && !sameBytes(from, dest))
+    return { kind: "refuse", reason: `${rel} would overwrite the existing ${dest.slice(outDir.length + 1)}` };
+  return existsSync(dest) ? { kind: "op", op: { kind: "delete", path: from } } : { kind: "op", op: { kind: "move", from, to: dest } };
 }
 
 /** Assess a run dir and return a complete plan, or a refusal. NEVER mutates anything. */
@@ -154,11 +205,29 @@ export function assessRunDir(outDir: string): Assessment {
   const rootTurn = maxArchive + 1;
 
   for (const a of archives) {
+    const from = join(outDir, a.file);
+
+    // An ARCHIVE-NAMED resources file can be cumulative too — the resume fix mints exactly that by
+    // renaming a spanning root `resources.jsonl` to `resources.turn-<prior>.jsonl`. Trusting the name
+    // would carry turn-N and turn-N+1 samples into one slot. CONTENT decides; the filename is a hint.
+    if (a.stem === "resources" && a.retry === undefined) {
+      const r = planResources(outDir, from, a.turn);
+      if (r.kind === "refuse") return r;
+      ops.push(r.op);
+      continue;
+    }
+
     const dest =
       a.retry === undefined
         ? turnArtifactPath(outDir, a.turn, artifactForStem(a.stem))
-        : join(outDir, "turns", String(a.turn), `${a.stem}.retry-${a.retry}.jsonl`);
-    const from = join(outDir, a.file);
+        : // Retry archives are not PER_TURN_ARTIFACTS; keep the stem's own extension rather than
+          // hardcoding .jsonl, which mislabelled `result.turn-1.retry-2.json`.
+          join(
+            outDir,
+            "turns",
+            String(a.turn),
+            `${a.stem}.retry-${a.retry}${a.stem === "run" || a.stem === "resources" ? ".jsonl" : ".json"}`,
+          );
     if (existsSync(dest)) {
       // Collision: identical is a duplicate to drop, different is unresolvable.
       if (sameBytes(from, dest)) ops.push({ kind: "delete", path: from });
@@ -173,29 +242,12 @@ export function assessRunDir(outDir: string): Assessment {
     // A CUMULATIVE resources file must be split, not carried. On the 12 real archive dirs
     // `resources.jsonl` spans BOTH turns (they predate `beginTurn`'s resources rename): the first sample
     // lands seconds before turn 1 completed and the last during turn 2. Carrying it whole into one slot
-    // attributes turn-1 samples to turn 2 — bytes preserved, telemetry wrong. CONTENT decides the
-    // attribution; the filename is only a hint.
+    // attributes turn-1 samples to turn 2 — bytes preserved, telemetry wrong.
     if (artifact === "resources.jsonl" && maxArchive > 0) {
-      const boundaryMs = completionMtimeOf(outDir, maxArchive);
-      if (boundaryMs !== undefined && samplesSpan(from, boundaryMs)) {
-        ops.push({
-          kind: "split",
-          from,
-          boundaryMs,
-          toLow: turnArtifactPath(outDir, maxArchive, artifact),
-          toHigh: turnArtifactPath(outDir, rootTurn, artifact),
-        });
-        continue;
-      }
-      // Fallback is explicit, never a guess: if the boundary is unknowable the file stays at the root and
-      // is reported. A left-behind root resources.jsonl keeps the dir classified `legacy`, so it remains
-      // refused until handled — which is the correct outcome. Refusing beats mislabeling telemetry.
-      if (boundaryMs === undefined) {
-        return {
-          kind: "refuse",
-          reason: `cannot determine the turn boundary for a cumulative resources.jsonl (no mtime for result.turn-${maxArchive}.json) — refusing rather than attributing samples by guess`,
-        };
-      }
+      const r = planResources(outDir, from, maxArchive);
+      if (r.kind === "refuse") return r;
+      ops.push(r.op);
+      continue;
     }
 
     if (turns.length === 0) {
@@ -229,7 +281,10 @@ export function assessRunDir(outDir: string): Assessment {
   // DESTINATION UNIQUENESS. The archive mapping and the 3-branch rule each check EXISTING occupancy;
   // neither sees the other's plan. Without this, two operations can target one path and the second
   // silently wins — destroying whatever the first moved there.
-  const dests = ops.filter((o): o is Extract<MigrationOp, { kind: "move" }> => o.kind === "move").map((o) => o.to);
+  // SPLITS COUNT TOO. Checking moves only left split destinations unguarded, and a split WRITES its
+  // destinations — so a split whose `toLow` matched an archive move's target silently overwrote whatever
+  // the move had just put there.
+  const dests = ops.flatMap((o) => (o.kind === "move" ? [o.to] : o.kind === "split" ? [o.toLow, o.toHigh] : []));
   const dup = dests.find((d, i) => dests.indexOf(d) !== i);
   if (dup !== undefined)
     return {
@@ -240,10 +295,20 @@ export function assessRunDir(outDir: string): Assessment {
   if (ops.length === 0) return { kind: "noop", reason: "already the per-turn layout" };
 
   const st = statSync(outDir);
-  return {
-    kind: "plan",
-    plan: { outDir, identity: { ino: st.ino, birthtimeMs: st.birthtimeMs }, ops, dirMtimes: { [outDir]: st.mtimeMs } },
-  };
+  // Every directory whose mtime the migration will disturb, not just the run dir: moving a file into
+  // `turns/<N>/` re-stamps that dir AND `turns/`. Only the run dir has a known reader today
+  // (prune's keep-slot ranking, trace-fragment tiebreaking), but restoring one level and leaving the
+  // others is the same partial fix that let the mtime signal break unnoticed before.
+  const dirMtimes: Record<string, number> = { [outDir]: st.mtimeMs };
+  const turnsRoot = join(outDir, "turns");
+  if (existsSync(turnsRoot)) {
+    dirMtimes[turnsRoot] = statSync(turnsRoot).mtimeMs;
+    for (const n of listTurns(outDir)) {
+      const td = join(turnsRoot, String(n));
+      if (existsSync(td)) dirMtimes[td] = statSync(td).mtimeMs;
+    }
+  }
+  return { kind: "plan", plan: { outDir, identity: { ino: st.ino, birthtimeMs: st.birthtimeMs }, ops, dirMtimes } };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -273,6 +338,33 @@ export interface ExecuteOpts {
   journalRoot: string;
   /** Per-op progress hook (the CLI uses it for --verbose). Tests throw from it to simulate a crash. */
   onOp?: (op: MigrationOp, index: number) => void;
+}
+
+/** Throws unless every field recovery depends on is present and of the right shape. Recovery reads the
+ *  journal as a plan; a field it silently lacks becomes a wrong decision rather than an error. */
+function assertWellFormed(plan: MigrationPlan): void {
+  const ok =
+    plan !== null &&
+    typeof plan === "object" &&
+    typeof plan.outDir === "string" &&
+    Array.isArray(plan.ops) &&
+    plan.dirMtimes !== null &&
+    typeof plan.dirMtimes === "object" &&
+    plan.identity !== null &&
+    typeof plan.identity === "object" &&
+    typeof plan.identity.ino === "number" &&
+    typeof plan.identity.birthtimeMs === "number" &&
+    plan.ops.every(
+      (o) =>
+        (o?.kind === "move" && typeof o.from === "string" && typeof o.to === "string") ||
+        (o?.kind === "delete" && typeof o.path === "string") ||
+        (o?.kind === "split" &&
+          typeof o.from === "string" &&
+          typeof o.boundaryMs === "number" &&
+          typeof o.toLow === "string" &&
+          typeof o.toHigh === "string"),
+    );
+  if (!ok) throw new Error("malformed journal");
 }
 
 function writeJournalAtomic(path: string, plan: MigrationPlan): void {
@@ -348,6 +440,10 @@ function runOps(plan: MigrationPlan, onOp?: ExecuteOpts["onOp"]): void {
  *  LAST — after the mtime restore, since removing it does not touch the run dir. */
 export function executeMigration(plan: MigrationPlan, opts: ExecuteOpts): void {
   const journal = journalPathFor(opts.journalRoot, plan.outDir);
+  // An existing journal means an interrupted migration. Re-executing a freshly assessed plan over it
+  // would clobber the only record of what was already half-done — the caller must recover first.
+  if (existsSync(journal))
+    throw new Error(`a migration journal already exists for ${plan.outDir} — recover it before migrating again (${journal})`);
   writeJournalAtomic(journal, plan);
   runOps(plan, opts.onOp);
   restoreDirMtimes(plan);
@@ -369,11 +465,17 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
   let plan: MigrationPlan;
   try {
     plan = JSON.parse(readFileSync(journal, "utf8")) as MigrationPlan;
-    if (!Array.isArray(plan.ops) || typeof plan.outDir !== "string") throw new Error("malformed");
+    assertWellFormed(plan);
   } catch {
-    // A torn journal blocks this dir; refusing loudly keeps the batch alive, where an uncaught parse
-    // error would abort it and violate "one bad dir never aborts the batch".
-    return { kind: "refuse", reason: `unreadable migration journal at ${journal} — resolve or delete it by hand` };
+    // A torn OR structurally invalid journal blocks this dir; refusing loudly keeps the batch alive,
+    // where an uncaught error would abort it and violate "one bad dir never aborts the batch".
+    //
+    // Validating only `ops`-is-an-array and `outDir`-is-a-string was not enough, and the two failures it
+    // let through were worse than a throw: a journal missing `dirMtimes` threw from Object.entries deep in
+    // the restore, and a journal whose ops were unrecognisable made EVERY op look already-done — so
+    // recovery reported success and deleted the journal, destroying the record of an interrupted plan.
+    // Nothing is deleted on this path: a journal we cannot understand is never a journal we may discard.
+    return { kind: "refuse", reason: `unreadable or malformed migration journal at ${journal} — resolve or delete it by hand` };
   }
 
   // IDENTITY. Without this a journal outlives its directory: if the dir was deleted and a fresh run later

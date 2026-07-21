@@ -239,3 +239,187 @@ describe("assessRunDir — the cumulative resources file on archive dirs (N6/P2-
     ).toContain("/turns/2/resources.jsonl");
   });
 });
+
+// ── Gaps a code review found by mutation: 9 of 15 mutations to assessRunDir left the suite GREEN,
+// including one that silently deleted a genuine archive. Each test below kills a specific survivor.
+
+describe("assessRunDir — split destinations are subject to the SAME collision rules as moves", () => {
+  function spanning(d: string, boundaryMs: number, name: string): void {
+    write(d, name, [`{"ts":${boundaryMs - 1000},"rssBytes":1}`, `{"ts":${boundaryMs + 1000},"rssBytes":2}`].join("\n") + "\n");
+  }
+
+  it("REFUSES when a split destination collides with another planned operation", () => {
+    // The archive move targets turns/1/resources.jsonl and the split's toLow targets the same path.
+    // Uniqueness was enforced for moves only, so execute ran the move and the split then overwrote it.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-1.jsonl", `{"ts":1,"rssBytes":9}`);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    spanning(d, boundaryMs, "resources.jsonl");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a split silently overwrote another operation's destination").toBe("refuse");
+  });
+
+  it("REFUSES when a split destination already exists on disk", () => {
+    // Fixture deliberately avoids every OTHER refusal path (the archives are byte-identical to their
+    // slots, so they resolve as duplicates) — otherwise this passes on an unrelated refusal, which is
+    // exactly what it did before: it was green while the split still overwrote the file.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/resources.jsonl", `{"ts":1,"rssBytes":42}`); // pre-existing telemetry
+    write(d, "result.turn-1.json", RESULT(1)); // identical to the slot -> duplicate, not a refusal
+    write(d, "run.turn-1.jsonl", TRANSCRIPT); // ditto
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    spanning(d, boundaryMs, "resources.jsonl");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a split overwrote pre-existing telemetry").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason, "refused, but for an unrelated reason").toMatch(/resources/);
+  });
+});
+
+describe("assessRunDir — an ARCHIVE-named resources file is split on content too (F3)", () => {
+  it("splits resources.turn-N.jsonl when its samples span the boundary — the filename is a hint, not authority", () => {
+    // The N1 resume fix MINTS exactly this file (it renames a cumulative root resources.jsonl to
+    // resources.turn-<prior>.jsonl), so every archive dir resumed between upgrade and migration hits it.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    write(
+      d,
+      "resources.turn-1.jsonl",
+      [`{"ts":${boundaryMs - 1000},"rssBytes":1}`, `{"ts":${boundaryMs + 1000},"rssBytes":2}`].join("\n") + "\n",
+    );
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "an archive-named cumulative file was carried whole into one turn").toBeDefined();
+  });
+});
+
+describe("assessRunDir — resources attribution when the file does NOT span the boundary (P2-7)", () => {
+  function archiveDir(boundaryMs: number): string {
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    return d;
+  }
+
+  it("attributes an entirely-BEFORE-boundary file to the PRIOR turn, not the latest", () => {
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    const d = archiveDir(boundaryMs);
+    write(d, "resources.jsonl", `{"ts":${boundaryMs - 5000},"rssBytes":1}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const mv = a.plan.ops.find((o) => o.kind === "move" && o.from.endsWith("resources.jsonl"));
+    expect(mv?.kind === "move" ? mv.to.slice(d.length) : undefined, "turn-1 telemetry was labeled turn 2").toBe("/turns/1/resources.jsonl");
+  });
+
+  it("REFUSES rather than attributing a file whose sample timestamps are unparseable", () => {
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    const d = archiveDir(boundaryMs);
+    write(d, "resources.jsonl", `not json at all\n`);
+    const a = assessRunDir(d);
+    expect(a.kind, "samples with no usable timestamp were attributed by guess").toBe("refuse");
+  });
+
+  it("puts a sample exactly ON the boundary in the PRIOR turn (<=, not <)", () => {
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    const d = archiveDir(boundaryMs);
+    write(d, "resources.jsonl", [`{"ts":${boundaryMs},"rssBytes":1}`, `{"ts":${boundaryMs + 1000},"rssBytes":2}`].join("\n") + "\n");
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "a boundary-exact sample did not register as spanning").toBeDefined();
+  });
+});
+
+describe("assessRunDir — archive/slot collision, BOTH arms (they are both reachable)", () => {
+  it("DROPS an archive identical to the slot it targets", () => {
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1)); // identical to the slot
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(a.plan.ops.filter((o) => o.kind === "delete").map((o) => o.path.slice(d.length))).toEqual(["/result.turn-1.json"]);
+  });
+
+  it("REFUSES when an archive collides with a slot holding DIFFERENT bytes", () => {
+    // Mutating this arm to "delete the archive" left all 24 tests green — a silent data-destroying
+    // regression with no coverage at all.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(7)); // DIFFERENT
+    const a = assessRunDir(d);
+    expect(a.kind, "a differing archive was silently dropped").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — the .turn cross-check", () => {
+  it("REFUSES when a root result.json's stamp disagrees with the only free slot", () => {
+    const d = runDir();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT); // turn 1 lacks a result -> it is the free slot
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(5)); // stamped 5, but the free slot is 1
+    const a = assessRunDir(d);
+    expect(a.kind, "a mis-stamped result was placed into a slot it does not belong to").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — byte-identity deletion is restricted to SELF-LABELING artifacts (P2-6)", () => {
+  it("does NOT delete an empty root resources.jsonl merely because a turn's is also empty", () => {
+    // trace/resources carry no turn stamp, so byte-identity is not proof of duplication: an empty file
+    // matches every other empty file. Deleting here loses turn N's file EXISTENCE.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/resources.jsonl", "");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "resources.jsonl", ""); // identical bytes to turns/1's, but it is turn 2's
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "delete"),
+      "an empty resources file was deleted as a 'duplicate'",
+    ).toBe(false);
+  });
+});
+
+describe("assessRunDir — the boundary itself is undeterminable", () => {
+  it("REFUSES when there is no archived result to date the prior turn's completion", () => {
+    // An archive dir that kept run.turn-1.jsonl but not result.turn-1.json: the boundary a resources
+    // split depends on cannot be established, so any attribution would be a guess.
+    const d = runDir();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "resources.jsonl", `{"ts":1,"rssBytes":1}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/boundary/i);
+  });
+});

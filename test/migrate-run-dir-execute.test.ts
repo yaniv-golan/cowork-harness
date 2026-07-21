@@ -302,3 +302,80 @@ describe("the cumulative resources split, driven end to end", () => {
     ).toEqual([1, 2]);
   });
 });
+
+// ── A code review found the journal loader validates only two fields, so several malformed-but-parseable
+// journals either threw (aborting the batch) or were treated as complete and deleted.
+
+describe("recovery — a journal that PARSES but is malformed", () => {
+  function plantJournal(d: string, body: unknown): string {
+    const jp = journalPathFor(journalRoot, d);
+    mkdirSync(join(jp, ".."), { recursive: true });
+    writeFileSync(jp, JSON.stringify(body));
+    return jp;
+  }
+
+  it("REFUSES a journal missing dirMtimes instead of throwing out of the batch", () => {
+    const d = legacyDir();
+    plantJournal(d, { outDir: d, ops: [], identity: { ino: 1, birthtimeMs: 1 } }); // no dirMtimes
+    const r = recoverIfNeeded(d, { journalRoot });
+    expect(r.kind, "a malformed journal escaped as an exception").toBe("refuse");
+  });
+
+  it("REFUSES a journal whose ops are not recognisable operations", () => {
+    // Garbage ops made every op look 'done' (existsSync(undefined) is false), so recovery reported
+    // SUCCESS and deleted the journal — corrupt recovery state, reported as complete.
+    const d = legacyDir();
+    const jp = plantJournal(d, {
+      outDir: d,
+      ops: [{ bogus: true }],
+      identity: { ino: 1, birthtimeMs: 1 },
+      dirMtimes: {},
+    });
+    const r = recoverIfNeeded(d, { journalRoot });
+    expect(r.kind, "unrecognisable ops were treated as already-done").toBe("refuse");
+    expect(existsSync(jp), "a journal it could not understand was deleted").toBe(true);
+  });
+
+  it("REFUSES a journal with no identity rather than deleting it as 'orphaned'", () => {
+    const d = legacyDir();
+    const jp = plantJournal(d, { outDir: d, ops: [], dirMtimes: {} });
+    const r = recoverIfNeeded(d, { journalRoot });
+    expect(r.kind).toBe("refuse");
+    expect(existsSync(jp), "an unvalidated journal was destroyed rather than refused").toBe(true);
+  });
+});
+
+describe("executeMigration — guards", () => {
+  it("REFUSES to run when a journal for this dir already exists", () => {
+    // Otherwise a crashed dir can be re-assessed and re-executed WITHOUT recovering, clobbering the only
+    // record of the interrupted plan.
+    const d = legacyDir();
+    const plan = planFor(d);
+    expect(() =>
+      executeMigration(plan, {
+        journalRoot,
+        onOp: (_o, i) => {
+          if (i === 0) throw new Error("crash");
+        },
+      }),
+    ).toThrow();
+    expect(() => executeMigration(planFor(d), { journalRoot })).toThrow(/journal|recover/i);
+  });
+
+  it("restores the mtimes of turns/ and each turns/<N>/, not just the run dir", () => {
+    const d = legacyDir();
+    mkdirSync(join(d, "turns", "1"), { recursive: true });
+    const TURNS_MS = new Date("2026-02-01T08:00:00Z").getTime();
+    utimesSync(join(d, "turns"), TURNS_MS / 1000, TURNS_MS / 1000);
+    utimesSync(join(d, "turns", "1"), TURNS_MS / 1000, TURNS_MS / 1000);
+    utimesSync(d, OLD_MS / 1000, OLD_MS / 1000);
+
+    const a = assessRunDir(d);
+    if (a.kind !== "plan") throw new Error(`expected a plan, got ${a.kind}`);
+    executeMigration(a.plan, { journalRoot });
+
+    expect(Math.round(statSync(d).mtimeMs)).toBe(OLD_MS);
+    expect(Math.round(statSync(join(d, "turns")).mtimeMs), "turns/ mtime not restored").toBe(TURNS_MS);
+    expect(Math.round(statSync(join(d, "turns", "1")).mtimeMs), "turns/1 mtime not restored").toBe(TURNS_MS);
+  });
+});
