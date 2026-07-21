@@ -86,13 +86,15 @@ describe.skipIf(!can)("cli diff — run mode reads through the seam (turns/1/), 
     expect(payload.views.meta, "meta came back empty — turns/1/result.json was not read").not.toEqual([]);
   });
 
-  it("KNOWN GAP: a genuinely LEGACY dir (root-only, no turns/) is NOT refused by diff, unlike verify-run/inspect/scaffold — it silently degrades to empty meta", () => {
-    // Documented, not celebrated: `diff` never got the `requireTurns` refusal the other single-target
-    // commands did (see turn-layout.ts's classifyRunDir / requireTurns). `latestTurn(runDir) ?? 1` falls
-    // back to a turn number that resolves to `turns/1/…` — which does not exist on a legacy dir — so this
-    // reproduces the exact silent-empty-meta/transcript defect the seam repoint fixed everywhere else.
-    // Pinned here so a future fix (adding the refusal) is a deliberate, visible diff against a documented
-    // expectation, and so this gap does not masquerade as "covered" by omission.
+  it("REFUSES a genuinely legacy dir instead of silently comparing against empty meta", () => {
+    // This replaces a test that PINNED the gap as a known defect — it asserted every meta entry had no
+    // `from` value, proving side a's result was read as {}. Its own message said "update this test, don't
+    // just re-fabricate the gap", and that is what this is: the gap is closed, so the expectation is now
+    // the refusal rather than the silent degrade.
+    //
+    // Why it mattered: with both sides legacy, diff printed "identical" and exited 0 for two genuinely
+    // different runs. diff is the regression gate, so a false green here is its worst possible failure —
+    // and strictly worse than the pre-layout behaviour, which reported the difference and exited 1.
     const root = mkdtempSync(join(tmpdir(), "cwh-diff-run-legacy-"));
     const a = join(root, "a");
     mkdirSync(a, { recursive: true });
@@ -100,17 +102,9 @@ describe.skipIf(!can)("cli diff — run mode reads through the seam (turns/1/), 
     writeFileSync(join(a, "run.jsonl"), JSON.stringify({ t: "transcript", text: "legacy transcript text" }));
     writeFileSync(join(a, "result.json"), JSON.stringify({ scenario: "a", result: "success", effectiveFidelity: "container" }));
     const b = runDir(root, "b", "legacy transcript text");
+
     const r = diff([a, b, "--view", "meta", "--output-format", "json"]);
-    const payload = JSON.parse(r.stdout);
-    // Every entry has a `to` (from side b's real turns/1/result.json) but no `from` at all — proving side
-    // a's meta came back completely empty, exactly the "guard-invisible root read silently produced {}"
-    // defect this effort fixed for every OTHER single-target command's result-derived view.
-    expect(payload.views.meta.length, "expected diff entries — side a's legacy result.json should not have been read").toBeGreaterThan(0);
-    for (const entry of payload.views.meta) {
-      expect(
-        entry.from,
-        `field "${entry.field}" unexpectedly had a "from" value — diff may have grown a real legacy read path; update this test, don't just re-fabricate the gap`,
-      ).toBeUndefined();
-    }
+    expect(r.code, "a pre-layout dir must not yield a confident comparison").not.toBe(0);
+    expect(`${r.stdout}${r.stderr}`).toMatch(/pre-layout|legacy|migrate/i);
   });
 });

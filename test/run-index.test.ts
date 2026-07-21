@@ -203,6 +203,17 @@ describe("appendIndexRow / readIndex — the on-disk round trip", () => {
   });
 });
 
+/** Where the writer actually puts a result: `turns/<N>/result.json`. These fixtures wrote it at the run-dir
+ *  ROOT because that is what the writer did when they were written — the assertions were always about
+ *  reindex behaviour (merge, idempotence, corrupt handling, containment), not about the layout. Migrating
+ *  the FIXTURE keeps those assertions meaningful; leaving it would have made them assert nothing, since a
+ *  root result.json is no longer read at all. */
+function turnDir(outDir: string, turn = 1): string {
+  const d = join(outDir, "turns", String(turn));
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
 function row(over: Partial<RunIndexRow>): RunIndexRow {
   return {
     v: 1,
@@ -367,7 +378,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
         assertions: [],
         outDir: runDir,
       };
-      writeFileSync(join(runDir, "result.json"), JSON.stringify(result));
+      writeFileSync(join(turnDir(runDir), "result.json"), JSON.stringify(result));
       // Exactly what this run's index row looked like before the turn field existed.
       const legacy = indexRowFromResult(result as never, { command: "run", partial: false });
       delete (legacy as { turn?: number }).turn;
@@ -413,7 +424,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     const runDir = join(runsRoot, "my-scenario", "local_999");
     mkdirSync(runDir, { recursive: true });
     writeFileSync(
-      join(runDir, "result.json"),
+      join(turnDir(runDir), "result.json"),
       JSON.stringify({
         scenario: "my-scenario",
         fidelity: "container",
@@ -441,7 +452,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       const runDir = join(runsRoot, "s", "local_1");
       mkdirSync(runDir, { recursive: true });
       writeFileSync(
-        join(runDir, "result.json"),
+        join(turnDir(runDir), "result.json"),
         JSON.stringify({
           scenario: "s",
           fidelity: "container",
@@ -467,7 +478,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     const runDir = join(runsRoot, "s", "local_1");
     mkdirSync(runDir, { recursive: true });
     writeFileSync(
-      join(runDir, "result.json"),
+      join(turnDir(runDir), "result.json"),
       JSON.stringify({
         scenario: "s",
         fidelity: "container",
@@ -488,11 +499,11 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
     const badDir = join(runsRoot, "s", "local_bad");
     mkdirSync(badDir, { recursive: true });
-    writeFileSync(join(badDir, "result.json"), "{ not valid json");
+    writeFileSync(join(turnDir(badDir), "result.json"), "{ not valid json");
     const goodDir = join(runsRoot, "s", "local_good");
     mkdirSync(goodDir, { recursive: true });
     writeFileSync(
-      join(goodDir, "result.json"),
+      join(turnDir(goodDir), "result.json"),
       JSON.stringify({
         scenario: "s",
         fidelity: "container",
@@ -516,7 +527,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     const outDir = join(runsRoot, "s", "local_replay");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(
-      join(outDir, "result.json"),
+      join(turnDir(outDir), "result.json"),
       JSON.stringify({
         scenario: "s",
         fidelity: "container",
@@ -545,7 +556,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     appendIndexRow(runsRoot, indexRowFromResult(rr({ scenario: "s", outDir }), { command: "run", partial: false }));
     mkdirSync(outDir, { recursive: true });
     writeFileSync(
-      join(outDir, "result.json"),
+      join(turnDir(outDir), "result.json"),
       JSON.stringify({
         scenario: "s",
         fidelity: "container",
@@ -579,7 +590,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       const freshDir = join(runsRoot, "fresh", "local_1");
       mkdirSync(freshDir, { recursive: true });
       writeFileSync(
-        join(freshDir, "result.json"),
+        join(turnDir(freshDir), "result.json"),
         JSON.stringify({
           scenario: "fresh",
           fidelity: "container",
@@ -602,7 +613,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     const runDir = join(runsRoot, "s", "local_1");
     mkdirSync(runDir, { recursive: true });
     writeFileSync(
-      join(runDir, "result.json"),
+      join(turnDir(runDir), "result.json"),
       JSON.stringify({
         scenario: "s",
         fidelity: "container",
@@ -635,7 +646,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       const outDir = join(runsRoot, "s", "local_1");
       mkdirSync(outDir, { recursive: true });
       writeFileSync(
-        join(outDir, "result.json"),
+        join(turnDir(outDir), "result.json"),
         JSON.stringify({
           scenario: "s",
           fidelity: "container",
@@ -663,7 +674,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       const outDir = join(runsRoot, "s", "local_1");
       mkdirSync(outDir, { recursive: true });
       writeFileSync(
-        join(outDir, "result.json"),
+        join(turnDir(outDir), "result.json"),
         JSON.stringify({
           scenario: "s",
           fidelity: "container",
@@ -704,7 +715,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       );
       // ...and turn 2's result.json is what's actually on disk now (the latest turn).
       writeFileSync(
-        join(outDir, "result.json"),
+        join(turnDir(outDir), "result.json"),
         JSON.stringify({
           scenario: "s",
           fidelity: "container",
@@ -734,7 +745,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     const outDir = join(runsRoot, "s", "sess-2");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(
-      join(outDir, "result.json"),
+      join(turnDir(outDir), "result.json"),
       JSON.stringify({
         scenario: "s",
         fidelity: "container",
@@ -800,7 +811,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     );
     const outDir = join(runsRoot, "s", "local_1");
     mkdirSync(outDir, { recursive: true });
-    symlinkSync(outsideFile, join(outDir, "result.json"));
+    symlinkSync(outsideFile, join(turnDir(outDir), "result.json"));
     const { rows, skippedUnsafe } = reindexFromRunsTree(runsRoot);
     expect(rows.find((r) => r.scenario === "exfiltrated-file")).toBeUndefined();
     expect(skippedUnsafe).toBeGreaterThan(0);
@@ -811,7 +822,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     const runDir = join(runsRoot, "s", "local_1");
     mkdirSync(runDir, { recursive: true });
     writeFileSync(
-      join(runDir, "result.json"),
+      join(turnDir(runDir), "result.json"),
       JSON.stringify({
         scenario: "s",
         fidelity: "container",
@@ -831,7 +842,7 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
   });
 });
 
-describe("reindexFromRunsTree — walks archived turns (result.turn-<N>.json), not just the root", () => {
+describe("reindexFromRunsTree — pre-layout dirs are REPORTED, never silently dropped", () => {
   function resultJson(over: Record<string, unknown>) {
     return JSON.stringify({
       scenario: "s",
@@ -845,147 +856,97 @@ describe("reindexFromRunsTree — walks archived turns (result.turn-<N>.json), n
     });
   }
 
-  it("a two-turn dir (root result.json is turn 2, result.turn-1.json is the archived turn 1) yields rows for BOTH turns", () => {
+  // This block used to assert that the walk INDEXED `result.turn-<N>.json` archives and a root
+  // `result.json`. That reading is gone with the legacy layer: nothing here addresses a run-dir root
+  // anymore. The tests that only exercised the archive scan are deleted rather than rewritten — there is
+  // no behaviour left for them to describe. What replaces them is the contract that actually matters now:
+  // such a dir must be COUNTED and REPORTED, because `--reindex` is documented as the migration path for
+  // exactly this population, and silently dropping it while printing a confident "reindexed N run(s)" is
+  // the failure this command exists to prevent.
+
+  it("counts a legacy dir as skippedLegacy instead of indexing or ignoring it", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
+    const outDir = join(runsRoot, "s", "sess-1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "result.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
+    writeFileSync(join(outDir, "run.jsonl"), `{"t":"transcript"}`);
+
+    const { rows, written, skippedLegacy } = reindexFromRunsTree(runsRoot);
+    expect(skippedLegacy, "a pre-layout dir was not reported").toBe(1);
+    expect(written, "a pre-layout dir was indexed from a root read that no longer exists").toBe(0);
+    expect(
+      rows.filter((r) => r.outDir === outDir),
+      "indexed a dir it cannot actually read",
+    ).toHaveLength(0);
+  });
+
+  it("counts a MIXED dir (archives beside turns/) as skippedLegacy rather than indexing half of it", () => {
+    // The dangerous one: the turns/ half is readable, so an unguarded walk indexes it and silently drops
+    // the archived turn — a confident, incomplete result. Refusing the whole dir is the honest answer.
     const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
     const outDir = join(runsRoot, "s", "sess-1");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
-    writeFileSync(join(outDir, "result.json"), resultJson({ turn: 2, outDir, cost: { usd: 2 } }));
+    writeFileSync(join(turnDir(outDir, 2), "result.json"), resultJson({ turn: 2, outDir, cost: { usd: 2 } }));
 
-    const { rows, written } = reindexFromRunsTree(runsRoot);
-    const forOutDir = rows.filter((r) => r.outDir === outDir);
-    expect(forOutDir).toHaveLength(2);
-    expect(written).toBe(2);
-    expect(forOutDir.find((r) => r.turn === 1)?.costUsd).toBe(1);
-    expect(forOutDir.find((r) => r.turn === 2)?.costUsd).toBe(2);
+    const { rows, skippedLegacy } = reindexFromRunsTree(runsRoot);
+    expect(skippedLegacy, "a mixed dir was not reported").toBe(1);
+    expect(
+      rows.filter((r) => r.outDir === outDir),
+      "indexed the turns/ half and dropped the archive",
+    ).toHaveLength(0);
   });
 
   it(
-    "does NOT pick up result.graded.json — a critique dir's byte-identical copy of the turn-1 (graded) " +
-      "result — which would otherwise double-count the graded turn on every reindex",
+    "does NOT pick up result.graded.json — a critique dir's byte-identical copy of the graded turn, " +
+      "which would otherwise double-count it on every reindex",
     () => {
-      const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
-      const outDir = join(runsRoot, "s", "sess-critique");
+      // Still exactly as relevant: `result.graded.json` is a ROOT alias in a critique dir, and a looser
+      // match (`result*.json`) would treat it as another completion. It must also not make the dir look
+      // contaminated — a critique dir is an ordinary `turns` dir that happens to carry an alias.
+      const runsRoot = mkdtempSync(join(tmpdir(), "run-index-graded-"));
+      const outDir = join(runsRoot, "s", "sess-crit");
       mkdirSync(outDir, { recursive: true });
-      // Mirrors a real critique dir: result.turn-1.json is the archived GRADED turn, result.graded.json is
-      // critique/command.ts's byte-identical stable-named copy of that same turn 1, and result.json is the
-      // REFLECTION turn (turn 2) that overwrote the live file.
       const gradedTurn = resultJson({ turn: 1, outDir, cost: { usd: 1 } });
-      writeFileSync(join(outDir, "result.turn-1.json"), gradedTurn);
-      writeFileSync(join(outDir, "result.graded.json"), gradedTurn); // byte-identical copy — must be ignored
-      writeFileSync(join(outDir, "result.json"), resultJson({ turn: 2, outDir, cost: { usd: 2 } }));
+      writeFileSync(join(turnDir(outDir, 1), "result.json"), gradedTurn);
+      writeFileSync(join(turnDir(outDir, 2), "result.json"), resultJson({ turn: 2, outDir, cost: { usd: 2 } }));
+      writeFileSync(join(outDir, "result.graded.json"), gradedTurn); // the root alias
 
-      const { rows, written } = reindexFromRunsTree(runsRoot);
-      const forOutDir = rows.filter((r) => r.outDir === outDir);
-      expect(forOutDir).toHaveLength(2); // turn 1 (graded) + turn 2 (reflection) — NOT 3
-      expect(written).toBe(2);
-      expect(forOutDir.filter((r) => r.turn === 1)).toHaveLength(1); // graded turn counted exactly once
+      const { rows, skippedLegacy } = reindexFromRunsTree(runsRoot);
+      expect(skippedLegacy, "the graded alias made a normal critique dir look pre-layout").toBe(0);
+      expect(
+        rows.filter((r) => r.outDir === outDir),
+        "the graded alias was counted as a third completion",
+      ).toHaveLength(2);
     },
   );
 
-  it("a single-turn dir (no archived result.turn-<N>.json present) is unchanged: exactly one row", () => {
+  it("a single-turn dir is unchanged: exactly one row", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
-    const outDir = join(runsRoot, "s", "local_1");
+    const outDir = join(runsRoot, "s", "sess-1");
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "result.json"), resultJson({ turn: 1, outDir }));
-
+    writeFileSync(join(turnDir(outDir), "result.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
     const { rows, written } = reindexFromRunsTree(runsRoot);
-    const forOutDir = rows.filter((r) => r.outDir === outDir);
-    expect(forOutDir).toHaveLength(1);
     expect(written).toBe(1);
-  });
-
-  it("a corrupt archived turn file is skipped, not fatal — the good root row is still indexed and the walk doesn't throw", () => {
-    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-turns-"));
-    const outDir = join(runsRoot, "s", "sess-corrupt");
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "result.turn-1.json"), "{ not valid json");
-    writeFileSync(join(outDir, "result.json"), resultJson({ turn: 2, outDir }));
-
-    let out: ReturnType<typeof reindexFromRunsTree>;
-    expect(() => (out = reindexFromRunsTree(runsRoot))).not.toThrow();
-    const forOutDir = out!.rows.filter((r) => r.outDir === outDir);
-    expect(forOutDir).toHaveLength(1); // only the good root (turn 2) row
-    expect(forOutDir[0].turn).toBe(2);
-    expect(out!.skipped).toBeGreaterThan(0); // the corrupt archived turn counted, same as a corrupt root would
-  });
-
-  it("indexes archived turns even when the ROOT result.json is MISSING", () => {
-    // The crash window execute.ts documents: `archivePriorTurnFiles` renames result.json ->
-    // result.turn-N.json, then ~150 lines run before the new root is written. A crash in between leaves
-    // archives-present/root-absent. The first version of this fix `continue`d on a missing root, so
-    // --reindex silently dropped completed prior turns on exactly the shape it exists to heal.
-    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-noroot-"));
-    const outDir = join(runsRoot, "s", "sess-crash");
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
-
-    const { rows } = reindexFromRunsTree(runsRoot);
-    const forOutDir = rows.filter((r) => r.outDir === outDir);
-    expect(forOutDir, "an archived turn with no root result.json was dropped").toHaveLength(1);
-    expect(forOutDir[0]!.turn).toBe(1);
+    expect(rows.filter((r) => r.outDir === outDir)).toHaveLength(1);
   });
 
   it("does NOT abort the whole reindex when one run dir is unreadable", () => {
-    // The archive scan now runs even when the ROOT read failed, which made an unguarded readdirSync
-    // reachable for a dir that cannot be listed at all (EACCES). Unguarded, one such dir threw out of the
-    // walk and took every healthy sibling with it — violating this function's contract that a
-    // partial/crashed run dir must not block indexing everything else.
-    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-eacces-"));
-    const ok = join(runsRoot, "s", "ok");
-    mkdirSync(ok, { recursive: true });
-    writeFileSync(join(ok, "result.json"), resultJson({ turn: 1, outDir: ok }));
-    const locked = join(runsRoot, "s", "locked");
-    mkdirSync(locked, { recursive: true });
-    chmodSync(locked, 0o000);
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-unreadable-"));
+    const bad = join(runsRoot, "s", "sess-bad");
+    mkdirSync(join(bad, "turns", "1"), { recursive: true });
+    const good = join(runsRoot, "s", "sess-good");
+    mkdirSync(good, { recursive: true });
+    writeFileSync(join(turnDir(good), "result.json"), resultJson({ turn: 1, outDir: good }));
+    chmodSync(bad, 0o000);
     try {
       const { rows } = reindexFromRunsTree(runsRoot);
       expect(
-        rows.filter((r) => r.outDir === ok),
+        rows.filter((r) => r.outDir === good),
         "a healthy sibling was lost to an unreadable dir",
       ).toHaveLength(1);
     } finally {
-      chmodSync(locked, 0o755);
+      chmodSync(bad, 0o755);
     }
-  });
-
-  it("preserves a legacy turn-less prior row when the dir walks ONLY archives", () => {
-    // The turn-less-supersede clause drops a legacy row on the grounds that the walked row "is exactly
-    // the completion the current result.json represents" — true only of a row read from the ROOT. Once
-    // archive-only walks became possible (damaged/absent root beside result.turn-N.json), keying on ANY
-    // walked row deleted the legacy row and replaced it with an OLDER archived turn: silent, permanent
-    // loss on the index that is meant to be the durable history, during the operation that heals it.
-    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-legacy-"));
-    const outDir = join(runsRoot, "s", "sess-legacy");
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir, cost: { usd: 1 } }));
-
-    const legacy = indexRowFromResult(JSON.parse(resultJson({ outDir, cost: { usd: 42 } })), { command: "skill", partial: false });
-    delete (legacy as { turn?: number }).turn; // pre-`turn`-era row
-    // reindexFromRunsTree derives the index path from runsRoot — it takes no second argument.
-    writeFileSync(join(runsRoot, "index.jsonl"), JSON.stringify(legacy) + "\n");
-
-    const { rows } = reindexFromRunsTree(runsRoot);
-    expect(
-      rows.some((r) => r.costUsd === 42),
-      "the legacy turn-less row was silently deleted by an archive-only walk",
-    ).toBe(true);
-  });
-
-  it("indexes archived turns when the root is CORRUPT, and still counts it skipped", () => {
-    // Coverage gap the missing-root test alone left open: re-adding the `corrupt` continue would have
-    // passed the whole suite. Each archived file is containment-checked independently, so a corrupt root
-    // says nothing about them.
-    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-corrupt-"));
-    const outDir = join(runsRoot, "s", "sess-corrupt");
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "result.json"), "{not json");
-    writeFileSync(join(outDir, "result.turn-1.json"), resultJson({ turn: 1, outDir }));
-    const { rows, skipped } = reindexFromRunsTree(runsRoot);
-    expect(
-      rows.filter((r) => r.outDir === outDir),
-      "archives were dropped because the ROOT was corrupt",
-    ).toHaveLength(1);
-    expect(skipped, "the corrupt root should still be reported").toBeGreaterThan(0);
   });
 });

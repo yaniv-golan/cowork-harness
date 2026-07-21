@@ -158,13 +158,12 @@ const SHAPES: [string, (d: string) => void][] = [
   ["per-turn", turnDir],
 ];
 
-describe.each(SHAPES)("stats --reindex indexes BOTH turns on a %s dir, exactly once each", (_name, build) => {
-  it("finds two rows and does not double-count the latest", () => {
-    // run-index.ts's archive scan is independent of the seam (it does its own root-dir readdir), so it
-    // keeps indexing the legacy shape's archives even though the seam no longer resolves them; the
-    // per-turn shape carries no root copy at all anymore, so there is nothing left to double-count.
+describe("stats --reindex on the per-turn shape", () => {
+  it("finds one row per turn and does not double-count the latest", () => {
+    // Only the per-turn shape is indexable now. The legacy arm of this parametrisation is gone with the
+    // archive scan it exercised — see the skippedLegacy tests in run-index.test.ts for what replaced it.
     const outDir = join(root, "s", "sess-x");
-    build(outDir);
+    turnDir(outDir);
     const { rows } = reindexFromRunsTree(root);
     const mine = rows.filter((r) => r.outDir === outDir);
     expect(mine, `expected exactly one row per turn, got ${JSON.stringify(mine.map((r) => r.turn))}`).toHaveLength(2);
@@ -172,20 +171,21 @@ describe.each(SHAPES)("stats --reindex indexes BOTH turns on a %s dir, exactly o
   });
 });
 
-describe("stats --reindex on a MIXED dir — a known, pinned gap, not a claim this is fixed", () => {
-  it("indexes ONLY the turns/ portion — the archived turn 1 is silently dropped", () => {
-    // `reindexFromRunsTree` takes the `hasTurnDirs(outDir)` branch (enumerates turns/ only) and then
-    // `continue`s past the archive scan entirely (run-index.ts) — so on a MIXED dir the archived
-    // `result.turn-1.json` is never reached, unlike on a pure `legacy` dir (no turns/) where that same scan
-    // is what indexes it. This is the reindex-side twin of the read-side "turn 1 unaddressable on a mixed
-    // dir" defect; closing it needs a run-index.ts change, out of scope here. Pinned so a future change to
-    // this behavior is a deliberate diff against a documented expectation, not a silent regression either
-    // way.
+describe("stats --reindex on a MIXED dir — the gap is now CLOSED", () => {
+  it("refuses the whole dir rather than indexing half of it", () => {
+    // This PINNED a defect: the walk took the hasTurnDirs branch, indexed turns/ only, and `continue`d
+    // past the archive — silently dropping the archived turn while reporting a confident row count. The
+    // pin existed so that changing the behaviour would be a deliberate diff rather than a silent
+    // regression. This is that deliberate diff: the dir is now counted as skippedLegacy and NOT indexed,
+    // because indexing half a directory and calling it done is the failure --reindex exists to prevent.
     const outDir = join(root, "s", "sess-mixed-reindex");
     mixedDir(outDir);
-    const { rows } = reindexFromRunsTree(root);
-    const mine = rows.filter((r) => r.outDir === outDir);
-    expect(mine.map((r) => r.turn)).toEqual([2]);
+    const { rows, skippedLegacy } = reindexFromRunsTree(root);
+    expect(skippedLegacy, "the mixed dir was not reported").toBe(1);
+    expect(
+      rows.filter((r) => r.outDir === outDir),
+      "indexed the turns/ half and dropped the archive",
+    ).toHaveLength(0);
   });
 });
 

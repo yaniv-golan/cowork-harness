@@ -37,12 +37,6 @@ const ALLOWED = new Map<string, string>([
   ["src/run/turn-layout.ts", "the seam itself"],
   ["src/run/execute.ts", "the WRITER — it owns the layout it writes, and holds the legacy archive path"],
   ["src/run/chat.ts", "a WRITER of its own turn-1 artifacts (turnWriteDir/beginTurn), same as execute.ts — not a legacy exception"],
-  [
-    "src/run/run-index.ts",
-    "the legacy-dir indexer: a genuinely-legacy dir's root result.json is its ONLY copy (no compat copy " +
-      "exists anymore to confuse this with), so reading it here is deliberate, not debt — kept until the " +
-      "legacy branch itself is removed; turns/ dirs are enumerated separately and never hit this line",
-  ],
   ["src/runtime/resource-sampler.ts", "writer; takes an explicit turn and builds its own path"],
   [
     "src/run/migrate-run-dir.ts",
@@ -53,6 +47,9 @@ const ALLOWED = new Map<string, string>([
   ],
 ]);
 
+/** A path construction into a run dir naming one of the four per-turn artifacts. */
+const SCAN = /join\([^)]*(?:runDir|outDir|dir|file)[^)]*,\s*"([^"]+)"\)/;
+
 describe("per-turn artifact paths go through the seam", () => {
   const hits: { file: string; line: string }[] = [];
   for (const abs of srcFiles(resolve("src"))) {
@@ -62,24 +59,27 @@ describe("per-turn artifact paths go through the seam", () => {
     for (const raw of text.split("\n")) {
       const line = raw.replace(/\/\/.*$/, "");
       // A path construction into a run dir, naming one of the four per-turn artifacts.
-      if (!/join\([^)]*(?:runDir|outDir|dir|file)[^)]*,\s*"([^"]+)"\)/.test(line)) continue;
+      if (!SCAN.test(line)) continue;
       for (const a of PER_TURN_ARTIFACTS) if (line.includes(`"${a}"`)) hits.push({ file: rel, line: raw.trim().slice(0, 120) });
     }
   }
 
   it("the scan is not vacuous (it can see path constructions at all)", () => {
     // Guards the guard: a regex that matches nothing would make every assertion below pass silently.
-    // The writer itself moved off this pattern (it now writes ONLY through turnWriteDir), so anchor the
-    // liveness check on the still-allowlisted legacy-dir reader instead — the one production site left
-    // that genuinely matches the scan pattern.
-    const legacyReader = readFileSync(resolve("src/run/run-index.ts"), "utf8");
-    expect(/join\([^)]*outDir[^)]*,\s*"result\.json"\)/.test(legacyReader), "the scan pattern no longer matches anything").toBe(true);
+    //
+    // Anchored on a LITERAL SAMPLE, deliberately — not on a real source line. The previous version
+    // anchored on the legacy-dir indexer's root read, which was then deleted, so the liveness check
+    // failed the moment the codebase got MORE correct. An anchor that rots when the code improves is
+    // worse than none: it trains you to edit the guard whenever it complains.
+    const SAMPLE = 'const p = join(outDir, "result.json");';
+    expect(SCAN.test(SAMPLE), "the scan pattern no longer matches a known root read").toBe(true);
     expect(srcFiles(resolve("src")).length).toBeGreaterThan(50);
   });
 
-  it("no reader outside the seam/writers/the legacy-dir indexer builds a per-turn artifact path by hand", () => {
-    // A site that is neither the seam, a writer, nor the one still-needed legacy-dir reader will read the
-    // wrong turn — or a file that does not exist — on a multi-turn dir. That is how verify-run and diff
+  it("no reader outside the seam and the writers builds a per-turn artifact path by hand", () => {
+    // A site that is neither the seam nor a writer will read the wrong turn — or a file that does not
+    // exist — on a multi-turn dir. run-index's entry is gone with its legacy branch: an allowlist that
+    // outlives its justification is how this repo shipped a 39/40-dead one. That is how verify-run and diff
     // shipped broken: both read root `run.jsonl`/`trace.json`, which the per-turn layout never creates.
     // Every COMPAT root reader that inventory once pinned (verify-run, inspect, latest-run, scaffold,
     // trace-view) has been repointed through turnArtifactPath()/latestTurn() — this must now be empty.

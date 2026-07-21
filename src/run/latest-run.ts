@@ -7,7 +7,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { slugForPath } from "./execute.js";
-import { latestTurn, turnArtifactPath } from "./turn-layout.js";
+import { classifyRunDir, latestTurn, preLayoutMessage, turnArtifactPath } from "./turn-layout.js";
+import { LegacyRunDirError } from "../errors.js";
 
 export interface LatestRunInfo {
   /** result.json's own `scenario` field when readable (the display name); falls back to the caller's
@@ -131,6 +132,19 @@ export function findLatestRunForScenario(runsRoot: string, arg: string): LatestR
     } catch {
       continue;
     }
+    // A PRE-LAYOUT CANDIDATE POISONS THE WHOLE SELECTION, so refuse rather than rank it.
+    //
+    // `resultJsonMtime` returns undefined on such a dir, so its recency silently degrades from run-END to
+    // run-START (`status.json`) — which changes WHICH run wins. Observed: a scenario whose newest run
+    // FAILED reported `verdict.pass: true` from a different, older run. Exit 0, no warning, same disk,
+    // same command. A CI script reading `.verdict.pass` gets a green light for a red run.
+    //
+    // Restoring just the verdict would not fix it: the selection flip survives that, and the flip is the
+    // half that inverts the gate. Refusing is the only answer that cannot silently mislead — and it now
+    // has a remedy to name.
+    const shape = classifyRunDir(dir);
+    if (shape.kind === "legacy" || shape.kind === "mixed")
+      throw new LegacyRunDirError(`status --latest-for: ${preLayoutMessage(shape, dir)}`);
     const createdAt = originCreatedAt(dir) ?? resultJsonMtime(dir) ?? statusStartedAt(dir);
     if (createdAt === undefined) continue; // no usable recency signal — never fall back to dir mtime
     // ISO-8601 strings with the same (Z) precision compare correctly lexically — same convention

@@ -2908,10 +2908,12 @@ function cmdStats(args: string[]) {
 
   const root = runsRoot();
   if (reindex) {
-    const { written, skipped, skippedReplay, skippedUnsafe } = reindexFromRunsTree(root);
+    const { written, skipped, skippedReplay, skippedUnsafe, skippedLegacy } = reindexFromRunsTree(root);
     const notes = [
       skipped ? `${skipped} skipped — missing/corrupt result.json` : "",
       skippedReplay ? `${skippedReplay} skipped — replay re-check, not evidence` : "",
+      // Naming the remedy matters: a bare count reads as "nothing I can do about it".
+      skippedLegacy ? `${skippedLegacy} skipped — pre-layout, run: cowork-harness migrate-run-dir` : "",
       skippedUnsafe ? `${skippedUnsafe} skipped — symlinked run dir/result.json rejected` : "",
     ].filter(Boolean);
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
@@ -4219,6 +4221,12 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const runDir = dirname(eventsFile);
   const lines = readFileSync(eventsFile, "utf8").split("\n");
   const tools = topLevelToolRows(lines, eventsFile, normalize);
+  // REFUSE A PRE-LAYOUT DIR. `latestTurn` returns undefined on one, `?? 1` resolved to a `turns/1/` that
+  // does not exist, and BOTH transcript and meta came back empty — so `diff` printed "identical" and
+  // exited 0 for two genuinely different runs. Verified against the pre-layout build, which reported both
+  // deltas and exited 1: the silent version is strictly worse than what it replaced, and `diff` is the
+  // regression gate, so a false green here is this command's worst possible failure.
+  requireTurns(runDir, "diff");
   // Same seam, same turn, same reason for both: a root read here silently produced an EMPTY transcript
   // (transcriptDiffers:false regardless of real drift) and, for meta, a guard-invisible root read of
   // `result.json` (`join(runDir, …)` — no PER_TURN_ARTIFACTS literal on the line) that silently emptied

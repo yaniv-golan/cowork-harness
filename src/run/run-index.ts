@@ -2,7 +2,7 @@
 // "what runs exist" — the run-dir-per-run physical layout (<runsRoot>/<slug>/<runId>/) still holds the
 // heavy artifacts (events.jsonl/trace.json/result.json); only the discovery/query layer moved here.
 import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
-import { hasTurnDirs, listTurns, turnArtifactPath } from "./turn-layout.js";
+import { classifyRunDir, hasTurnDirs, listTurns, turnArtifactPath } from "./turn-layout.js";
 import { execFileSync } from "node:child_process";
 import { join, basename, dirname } from "node:path";
 import type { RunResult } from "../types.js";
@@ -326,6 +326,8 @@ export function reindexFromRunsTree(runsRoot: string): {
   skipped: number;
   skippedReplay: number;
   skippedUnsafe: number;
+  /** Pre-layout dirs the walk cannot read. Reported, never silently dropped. */
+  skippedLegacy: number;
 } {
   const priorRows = readIndex(runsRoot);
   // Command-inheritance fallback ONLY (see below) — last-one-wins-per-outDir is fine for a heuristic hint,
@@ -343,6 +345,7 @@ export function reindexFromRunsTree(runsRoot: string): {
   let skipped = 0;
   let skippedReplay = 0;
   let skippedUnsafe = 0;
+  let skippedLegacy = 0;
   if (existsSync(runsRoot)) {
     for (const slug of readdirSync(runsRoot)) {
       const slugDir = join(runsRoot, slug);
@@ -370,89 +373,32 @@ export function reindexFromRunsTree(runsRoot: string): {
           continue;
         }
         if (!outDirLstat.isDirectory()) continue;
-        const resultPath = join(outDir, "result.json");
-        const rootOutcome = readResultFileForWalk(runsRoot, outDir, resultPath, priorByOutDir);
-        // NOTE the archived-turn scan below runs even when the ROOT is missing/corrupt/unsafe. An earlier
-        // version `continue`d on each of those and so indexed archives only when the root was a clean row —
-        // which silently failed on exactly the shape `--reindex` exists to heal. `archivePriorTurnFiles`
-        // renames `result.json` -> `result.turn-N.json` and the new root is not written until ~150 lines
-        // later (execute.ts, and its own comment flags that window), so a crash in between leaves
-        // archives-present/root-absent. Dropping completed prior turns there defeats the command's purpose.
-        // Each archived file is independently containment-checked, so an unsafe/corrupt ROOT says nothing
-        // about them.
-        if (rootOutcome.kind === "unsafe") skippedUnsafe++;
-        if (rootOutcome.kind === "corrupt") skipped++;
-        if (rootOutcome.kind === "replay") {
-          // `continue` leaves this outDir's rows out of walkedIdentities, so any PRIOR index row(s) for it
-          // are PRESERVED as-is by the merge below — the one intentional exception to "every on-disk run
-          // dir gets a fresh row".
-          skippedReplay++;
+
+        // UNMIGRATED DIRS ARE COUNTED AND REPORTED, NEVER SILENTLY DROPPED.
+        //
+        // The legacy layer is gone: a pre-layout dir's artifacts live at its root, which nothing here
+        // reads anymore. Skipping it quietly while printing a confident "reindexed N run(s)" is the
+        // failure this command exists to prevent — `--reindex` is documented as the one-time migration
+        // for pre-index runs, i.e. aimed squarely at exactly this population. The caller names
+        // `migrate-run-dir` as the remedy.
+        const shape = classifyRunDir(outDir);
+        if (shape.kind === "legacy" || shape.kind === "mixed") {
+          skippedLegacy++;
           continue;
         }
-        // No writer produces a root `result.json` compat copy anymore, so for a current-layout dir
-        // `rootOutcome` is always `"missing"` here — this branch only ever fires for a genuinely LEGACY dir
-        // (no `turns/`, root `result.json` is its only copy). Kept, not deleted: it's still how a kept
-        // pre-layout dir gets indexed at all. `!hasTurnDirs(outDir)` is the guard against the two shapes
-        // ever double-indexing the SAME completion, back from when a root copy existed alongside `turns/`.
-        if (rootOutcome.kind === "row" && !hasTurnDirs(outDir)) {
-          walked.push(rootOutcome.row);
-          walkedIdentities.add(rowIdentity(rootOutcome.row));
-          rootWalkedOutDirs.add(rootOutcome.row.outDir);
-        }
 
-        // NEW LAYOUT: enumerate turns/<N>/result.json — the only place a current-layout dir's results live
-        // (no root compat copy to double-index against).
-        if (hasTurnDirs(outDir)) {
-          for (const n of listTurns(outDir)) {
-            const p = turnArtifactPath(outDir, n, "result.json");
-            const o = readResultFileForWalk(runsRoot, outDir, p, priorByOutDir);
-            if (o.kind === "unsafe") skippedUnsafe++;
-            else if (o.kind === "corrupt") skipped++;
-            else if (o.kind === "replay") skippedReplay++;
-            else if (o.kind === "row") {
-              walked.push(o.row);
-              walkedIdentities.add(rowIdentity(o.row));
-              rootWalkedOutDirs.add(o.row.outDir);
-            }
+        // The only addressable shape. Each turn is an independent completion with its own identity.
+        for (const n of listTurns(outDir)) {
+          const p = turnArtifactPath(outDir, n, "result.json");
+          const o = readResultFileForWalk(runsRoot, outDir, p, priorByOutDir);
+          if (o.kind === "unsafe") skippedUnsafe++;
+          else if (o.kind === "corrupt") skipped++;
+          else if (o.kind === "replay") skippedReplay++;
+          else if (o.kind === "row") {
+            walked.push(o.row);
+            walkedIdentities.add(rowIdentity(o.row));
+            rootWalkedOutDirs.add(o.row.outDir);
           }
-          continue; // this dir's completions are fully indexed above — nothing left at the root to read
-        }
-
-        // Archived turns: `result.turn-<N>.json` files left behind when a resume/reflection overwrote the
-        // root (see the function doc comment above). The match is STRICT on purpose — a `critique` dir
-        // also carries `result.graded.json`, a byte-identical COPY of turn 1 (critique/command.ts), not an
-        // archive. A looser glob (`result*.json` / `result.*.json`) would match it too and double-count
-        // the graded turn on every reindex.
-        // Guarded: this scan now runs even when the root read FAILED, so it is reachable for dirs that
-        // are unreadable outright (EACCES on a root-owned or permission-mangled run dir). Unguarded, one
-        // such dir threw out of the whole walk and took every healthy sibling with it — violating this
-        // function's own contract that "a partial/crashed run dir shouldn't block indexing everything
-        // else". Before this scan moved past the root's `continue`s, the throw was simply unreachable.
-        let entries: string[];
-        try {
-          entries = readdirSync(outDir);
-        } catch {
-          skipped++;
-          continue;
-        }
-        for (const entry of entries) {
-          if (!/^result\.turn-\d+\.json$/.test(entry)) continue;
-          const turnOutcome = readResultFileForWalk(runsRoot, outDir, join(outDir, entry), priorByOutDir);
-          if (turnOutcome.kind === "missing") continue; // vanished between readdir and lstat — an ordinary race
-          if (turnOutcome.kind === "unsafe") {
-            skippedUnsafe++;
-            continue;
-          }
-          if (turnOutcome.kind === "corrupt") {
-            skipped++;
-            continue;
-          }
-          if (turnOutcome.kind === "replay") {
-            skippedReplay++;
-            continue;
-          }
-          walked.push(turnOutcome.row);
-          walkedIdentities.add(rowIdentity(turnOutcome.row));
         }
       }
     }
@@ -478,7 +424,7 @@ export function reindexFromRunsTree(runsRoot: string): {
   const rows = [...walked, ...preserved];
   mkdirSync(runsRoot, { recursive: true });
   writeTextAtomic(indexPath(runsRoot), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
-  return { rows, written: walked.length, skipped, skippedReplay, skippedUnsafe };
+  return { rows, written: walked.length, skipped, skippedReplay, skippedUnsafe, skippedLegacy };
 }
 
 /** An exact `runId` or `slug/runId` match — split out from `resolveRunsFromIndex` (below) so
