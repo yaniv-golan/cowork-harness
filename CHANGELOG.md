@@ -60,6 +60,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A resumed turn's telemetry included the PRIOR turn's events, and could produce a false PASS.**
+  `timeline.jsonl` is append-mode with a fresh header per turn, but `readTimeline` returned every line
+  after the first as an event — so on any `--resume` (and every `critique` reflection turn) the current
+  turn's `toolDurations`/`skillActivity`/`subagents` folded in the previous turn's tool calls. Because
+  the **`skill_tool_used` assertion** evaluates against that same `skillActivity`, a turn-1 skill window
+  could satisfy a turn-2 assertion. The reader now returns only the current turn's segment. The file
+  stays one append-only stream, so `critique`'s byte-offset turn-isolation proof is unaffected.
+
 - **A resumed turn destroyed the prior turn's `trace.json`.** Unlike `result.json`/`run.jsonl` it was not
   archived — and because it is rebuilt and overwritten on every completion, the earlier turn's trace was
   deleted rather than renamed. A `critique` therefore lost the graded turn's trace entirely. It is now
