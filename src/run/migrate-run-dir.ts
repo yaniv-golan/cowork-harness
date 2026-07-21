@@ -193,6 +193,19 @@ function planResources(
 
 /** Assess a run dir and return a complete plan, or a refusal. NEVER mutates anything. */
 export function assessRunDir(outDir: string): Assessment {
+  // READABILITY FIRST. Every shape probe below goes through existsSync/readdir, which report an
+  // UNREADABLE directory exactly like an empty one — so a permission error rendered as "aborted stub, no
+  // per-turn artifacts to migrate", exit 0. For a migration tool "could not look" must never be
+  // indistinguishable from "nothing to do": the first is unfinished work, the second is done.
+  try {
+    readdirSync(outDir);
+  } catch (e) {
+    return {
+      kind: "refuse",
+      reason: `cannot read ${outDir}: ${(e as Error).message} — refusing rather than reporting it as having nothing to migrate`,
+    };
+  }
+
   const shape = classifyRunDir(outDir);
   if (shape.kind === "none") return { kind: "skip", reason: "aborted stub — no per-turn artifacts to migrate" };
 

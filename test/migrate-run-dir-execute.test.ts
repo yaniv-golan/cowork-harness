@@ -1,8 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, statSync, utimesSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  readdirSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assessRunDir, executeMigration, recoverIfNeeded, journalPathFor } from "../src/run/migrate-run-dir.js";
+import { assessRunDir, executeMigration, recoverIfNeeded, journalPathFor, migrateRunsRoot } from "../src/run/migrate-run-dir.js";
 
 // THE CRASH PATH IS THE POINT OF THIS FILE.
 //
@@ -377,5 +388,107 @@ describe("executeMigration — guards", () => {
     expect(Math.round(statSync(d).mtimeMs)).toBe(OLD_MS);
     expect(Math.round(statSync(join(d, "turns")).mtimeMs), "turns/ mtime not restored").toBe(TURNS_MS);
     expect(Math.round(statSync(join(d, "turns", "1")).mtimeMs), "turns/1 mtime not restored").toBe(TURNS_MS);
+  });
+});
+
+// ── The batch walker had effectively no coverage: of its behaviours only the exit code had a killing
+// test, and five distinct mutations to its control flow left the whole suite green.
+
+describe("migrateRunsRoot — the batch walker's control flow", () => {
+  function legacyIn(root: string, scenario: string, id: string): string {
+    const d = join(root, scenario, id);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "result.json"), RESULT(1));
+    writeFileSync(join(d, "run.jsonl"), TRANSCRIPT);
+    return d;
+  }
+
+  it("counts a recovered dir ONCE — not as recovered AND already-current", () => {
+    const r0 = mkdtempSync(join(tmpdir(), "walk-rec-"));
+    const d = legacyIn(r0, "scn", "sess-a");
+    const a = assessRunDir(d);
+    if (a.kind !== "plan") throw new Error("expected a plan");
+    const jr = join(r0, ".migrating");
+    expect(() =>
+      executeMigration(a.plan, {
+        journalRoot: jr,
+        onOp: (_o, i) => {
+          if (i === 0) throw new Error("crash");
+        },
+      }),
+    ).toThrow();
+
+    const rep = migrateRunsRoot(r0, { write: true });
+    expect(rep.recovered, "the recovered dir was not counted as recovered").toBe(1);
+    expect(rep.recovered + rep.noop + rep.migrated + rep.skipped, "one dir was counted twice").toBe(1);
+    rmSync(r0, { recursive: true, force: true });
+  });
+
+  it("reports a dir that THROWS instead of letting it vanish from the report", () => {
+    // A per-dir failure must surface as a refusal row. Swallowing it silently drops the directory from
+    // every count — the report then claims everything was handled when it wasn't.
+    //
+    // The fixture has to make the WALKER'S catch fire, not a refusal that some callee returns. An earlier
+    // version used a journal-shaped directory, which `recoverIfNeeded` turned into an ordinary refusal —
+    // so the test passed while the catch block was entirely unexercised, and a mutation that swallowed
+    // the throw stayed green. Here `turns` exists as a FILE, so assess plans moves into `turns/1/` and
+    // execute's mkdir hits ENOTDIR — a genuine throw from inside the walker's try.
+    const r0 = mkdtempSync(join(tmpdir(), "walk-throw-"));
+    const d = legacyIn(r0, "scn", "sess-a");
+    writeFileSync(join(d, "turns"), "not a directory");
+    legacyIn(r0, "scn", "sess-b"); // a healthy sibling that must still be processed
+
+    const rep = migrateRunsRoot(r0, { write: true });
+    expect(rep.refused.length, "the throwing dir vanished from the report").toBe(1);
+    expect(rep.refused[0]?.dir).toBe(d);
+    expect(rep.migrated, "one bad dir aborted the batch — the sibling was never migrated").toBe(1);
+    rmSync(r0, { recursive: true, force: true });
+  });
+
+  it("never walks INTO the journal store as if it were a scenario", () => {
+    const r0 = mkdtempSync(join(tmpdir(), "walk-jrnl-"));
+    legacyIn(r0, "scn", "sess-a");
+    mkdirSync(join(r0, ".migrating", "scn"), { recursive: true });
+    writeFileSync(join(r0, ".migrating", "scn", "sess-a.json"), "{}");
+    const rep = migrateRunsRoot(r0, { write: false });
+    // Two entries under .migrating would inflate skipped/refused if the walker descended into it.
+    expect(rep.skipped + rep.refused.length, "the walker treated .migrating as a scenario").toBe(0);
+    expect(rep.migrated).toBe(1);
+    rmSync(r0, { recursive: true, force: true });
+  });
+
+  it("calls onDir for every directory it reaches (--verbose is not decoration)", () => {
+    const r0 = mkdtempSync(join(tmpdir(), "walk-ondir-"));
+    legacyIn(r0, "scn", "sess-a");
+    mkdirSync(join(r0, "scn", "local_stub"), { recursive: true });
+    writeFileSync(join(r0, "scn", "local_stub", "status.json"), "{}");
+    const seen: string[] = [];
+    migrateRunsRoot(r0, { write: false, onDir: (d) => seen.push(d) });
+    expect(seen.length, "onDir was not called for every dir — --verbose would print nothing").toBe(2);
+    rmSync(r0, { recursive: true, force: true });
+  });
+
+  it("REFUSES a dir it cannot read, rather than reporting it as an empty stub", () => {
+    // An unreadable dir looks identical to an aborted stub through existsSync/readdir: both "have no
+    // per-turn artifacts". For a migration tool, "could not look" must never render as "nothing to do".
+    const r0 = mkdtempSync(join(tmpdir(), "walk-perm-"));
+    const d = legacyIn(r0, "scn", "sess-a");
+    chmodSync(d, 0o000);
+    try {
+      // Skip if the platform/user can read it anyway (e.g. running as root).
+      let readable = true;
+      try {
+        readdirSync(d);
+      } catch {
+        readable = false;
+      }
+      if (readable) return;
+      const rep = migrateRunsRoot(r0, { write: false });
+      expect(rep.skipped, "an unreadable dir was counted as an empty stub").toBe(0);
+      expect(rep.refused.length, "an unreadable dir was not reported").toBe(1);
+    } finally {
+      chmodSync(d, 0o755);
+      rmSync(r0, { recursive: true, force: true });
+    }
   });
 });
