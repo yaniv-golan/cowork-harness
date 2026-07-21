@@ -1599,7 +1599,7 @@ export function beginTurn(outDir: string): number {
     } catch {
       /* best-effort: a missing marker degrades to the fail-closed whole-file scan */
     }
-    // The resources rename below applies to LEGACY dirs only. Under the per-turn layout each turn writes
+    // (A legacy resources rename used to live here for pre-layout dirs; it is gone with them.) Each turn writes
     // its own `turns/<N>/resources.jsonl`, so there is nothing to rename — the scoping is structural.
     // Legacy dirs still share one root file and need it. `chat` now goes through this same `beginTurn` too,
     // but its turn is always 1 (fresh sessionId, fresh dir, never resumed — see chat.ts), so it never

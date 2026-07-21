@@ -297,11 +297,11 @@ function readResultFileForWalk(
  *  operation meant to rebuild/heal it. Safe to re-run (idempotent: reindexing twice with no filesystem
  *  changes produces the same row set).
  *
- *  Also walks every ARCHIVED turn (`result.turn-<N>.json`) in the run dir, not just the root — a
- *  `--resume` session or a `critique` task+reflection pair archives earlier turns when a later one
- *  overwrote `result.json` (a pre-layout writer, since removed), and reading only the root would silently
- *  DROP them on a scratch rebuild. For a `critique` dir specifically the root IS the reflection turn, so
- *  that drop would keep the reflection row and lose the GRADED row — the one consumers pair generations
+ *  Walks every turn under `turns/<N>/` — each is an independent completion with its own identity. A
+ *  `--resume` session or a `critique` task+reflection pair therefore contributes one row per turn. A
+ *  PRE-LAYOUT dir is counted as `skippedLegacy` and reported, never half-indexed: reading the readable
+ *  part of such a dir and calling it done is the failure this command exists to prevent. For a `critique`
+ *  dir specifically, losing a turn would keep the reflection row and lose the GRADED row — the one consumers pair generations
  *  on. See `readResultFileForWalk` for the per-file handling shared between the root and every archive.
  *
  *  `ts`/`git` for a freshly-walked row are NOT "now"/"this checkout" — those would be fabricated
@@ -411,11 +411,11 @@ export function reindexFromRunsTree(runsRoot: string): {
   // self-heal). Note `priorByIdentity` has already collapsed all turn-less rows for one outDir into a
   // single entry, so at most one such row per outDir is dropped here: the most recent turn — which is
   // exactly the completion the current result.json (and thus the walked row) represents.
-  // ROOT rows only. The clause below supersedes a legacy turn-less prior row on the grounds that the
-  // walked row "is exactly the completion the current result.json represents" — which is true only of a
-  // row read from the ROOT file. Once archive-only walks became possible (a damaged/absent root with
-  // `result.turn-N.json` beside it), keying on any walked row silently DELETED the legacy row and
-  // replaced it with an older archived turn: unrecoverable loss on the index that is supposed to be the
+  // The clause below supersedes a turn-less prior row on the grounds that the walked row "is exactly the
+  // completion the current result represents". With one shape that holds for every walked row: each comes
+  // from a `turns/<N>/result.json`, and a dir that cannot be read that way is skipped whole rather than
+  // partially walked. (Historically this had to be restricted to ROOT rows, because an archive-only walk
+  // could key on an OLDER archived turn and silently delete the legacy row: unrecoverable loss on the index that is supposed to be the
   // durable history, during the operation whose job is to heal it.
   const walkedOutDirs = rootWalkedOutDirs;
   const preserved = [...priorByIdentity.values()].filter(

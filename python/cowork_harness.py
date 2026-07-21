@@ -162,7 +162,7 @@ class Result:
                     return p
         raise FileNotFoundError(
             f"no turns/<N>/run.jsonl under {self.out_dir} — this run dir predates the turns/<N>/ layout "
-            "(or never completed a turn); re-run or re-record to get a current-layout dir"
+            "(or never completed a turn); convert it in place with `cowork-harness migrate-run-dir`"
         )
 
     def _transcript(self) -> str:

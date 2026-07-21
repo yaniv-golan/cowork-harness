@@ -135,7 +135,7 @@ All notable changes to this project are documented here. The format is based on
 - **`verify-run` now REFUSES a multi-turn run directory** instead of certifying the wrong turn. Root
   `result.json` is the latest turn; on a `critique` directory that is the *reflection* turn while the
   scenario describes the *graded* one. Previously the cumulative gate scan false-FAILED on the other
-  turn's gates — wrong, but loud. The refusal names `result.graded.json` / `result.turn-1.json` so the
+  turn's gates — wrong, but loud. The refusal names `result.graded.json` / `turns/1/result.json` so the
   caller can still reach the graded turn.
 - **`trace` no longer mixes turn scopes.** After timeline reads became turn-scoped, `--view
   tool-durations` showed the latest turn while the tools/questions/dispatches views still showed every
@@ -161,16 +161,17 @@ All notable changes to this project are documented here. The format is based on
   could satisfy a turn-2 assertion. The reader now returns only the current turn's segment. The file
   stays one append-only stream, so `critique`'s byte-offset turn-isolation proof is unaffected.
 
-- **A resumed turn destroyed the prior turn's `trace.json`.** Unlike `result.json`/`run.jsonl` it was not
-  archived — and because it is rebuilt and overwritten on every completion, the earlier turn's trace was
-  deleted rather than renamed. A `critique` therefore lost the graded turn's trace entirely. It is now
-  archived as `trace.turn-<N>.json`, and `critique` additionally writes **`trace.graded.json`** beside
-  `result.graded.json`.
+- **A resumed turn destroyed the prior turn's `trace.json`.** Because it is rebuilt and overwritten on
+  every completion, the earlier turn's trace was deleted rather than preserved, so a `critique` lost the
+  graded turn's trace entirely. Each turn now owns its own `turns/<N>/trace.json`, written once and never
+  overwritten, and `critique` additionally writes **`trace.graded.json`** beside `result.graded.json`.
 - **`stats --reindex` dropped every non-latest turn when rebuilding from the runs tree.** It read only the
   root `result.json` per run directory, so a resumed session's earlier turns vanished — and on a
   `critique` directory the root file is the *reflection* turn, so it was the **graded** rows that were
-  lost. Archived turns are now indexed too, matched strictly (`result.turn-<N>.json`) so
-  `result.graded.json` — a byte-identical copy of turn 1 — cannot double-count.
+  lost. Every turn under `turns/<N>/` is now indexed as its own completion; `result.graded.json` — a
+  root-level copy of the graded turn — is deliberately not matched, so it cannot double-count. A dir that
+  has not been migrated is counted as `skippedLegacy` and reported with the remedy, never dropped
+  silently.
 
 - **An ambient `GIT_DIR` silently computed the wrong skill file set.** Git hooks export `GIT_DIR` (and
   `GIT_INDEX_FILE`) into every child process, and with `GIT_DIR` set but no `GIT_WORK_TREE` git stops

@@ -32,10 +32,27 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 > are never renamed or overwritten — there is **no root compat copy**; on a `critique` dir, read
 > `turns/1/result.json` (or `result.graded.json`) for the graded turn, `turns/2/` for the reflection one.
 > `events.jsonl` and `timeline.jsonl` stay cumulative across turns; the harness scopes its own reads of
-> them to the current turn. A run dir written before this layout existed — root `result.json`/`run.jsonl`,
-> no `turns/` — is a different shape: `verify-run`/`inspect`/`scaffold` refuse it by name rather than
-> silently misreading it, though `trace` still reads it fine (its views come from `events.jsonl`, which
-> never moves).
+> them to the current turn.
+>
+> **A run dir written before this layout existed** — root `result.json`/`run.jsonl`, or a name-mangled
+> `result.turn-<N>.json` archive, no `turns/` — is a different shape. `verify-run`, `inspect`, `scaffold`,
+> `diff`, `status --latest-for` and a resumed `--session-id` all refuse it **by name** rather than
+> silently misreading it, and `stats --reindex` counts it as skipped instead of dropping it from the
+> index. `trace` still reads it fine, which is why every refusal points there: its views come from
+> `events.jsonl`, which never moves.
+>
+> **Convert it in place:**
+>
+> ```bash
+> cowork-harness migrate-run-dir              # DRY RUN by default — reports, changes nothing
+> cowork-harness migrate-run-dir --write      # apply
+> cowork-harness migrate-run-dir --scenario <name> --write   # one scenario at a time
+> ```
+>
+> It renames rather than copies, so the file timestamps `stats` and `status --latest-for` rank by survive
+> untouched. Back up the runs root first, read the dry-run report — anything it cannot resolve
+> unambiguously is **refused and named**, never guessed at — and rebuild the index afterwards with
+> `stats --reindex`. Staging one scenario, checking it, then doing the rest is the safer order.
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your
