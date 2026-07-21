@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`migrate-run-dir` — convert pre-layout run dirs to the per-turn `turns/<N>/` layout, in place.**
+  A run dir written before the per-turn layout keeps `result.json` / `run.jsonl` / `trace.json` /
+  `resources.jsonl` at its root. Once the legacy read layer is removed, those dirs become unreadable to
+  `verify-run` / `diff` / `inspect` / `stats`; this command converts them so the history survives the
+  change instead of having to be re-run.
+
+  **Dry-run by default** — `--write` applies. It renames rather than copies, so file mtimes (the recency
+  signal `stats` and `status --latest-for` rank by) survive untouched, and it restores directory mtimes
+  afterwards. An interrupted run records a journal outside the run dir and is finished by re-running the
+  command. Anything it cannot resolve unambiguously — a root artifact that is neither a duplicate nor
+  placeable, telemetry whose turn cannot be established, a dir with no transcript at all — is **refused
+  and named**, never guessed at. Exit `1` when anything was refused, so a CI caller sees unfinished work.
+
+- **`prune` skips scenarios with a migration in flight.** Between an interrupted migration and its
+  recovery a run dir's mtime reflects the migration, not the run — and `prune` ranks keep-slots by that
+  mtime, so it could evict a newer run in favour of a half-migrated older one. It now defers those
+  scenarios and says so.
+
 - **`critique` surfaces the GRADED turn's `outcome` and `skillHash` in its own report**
   (`gradedOutcome` / `gradedSkillHash` in JSON, and in the text header), and writes the graded result
   under the stable name **`result.graded.json`**. `critique` runs two turns into one run directory, so

@@ -18,6 +18,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { PER_TURN_ARTIFACTS, classifyRunDir, listTurns, turnArtifactPath, type PerTurnArtifact } from "./turn-layout.js";
+import { parseArgs } from "../cli-args.js";
+import { runsWriteRoot } from "./trace-view.js";
 
 /** One planned filesystem operation. A `split` is write+write+delete, which is why done-ness for it is
  *  defined as "source is gone" rather than "destination exists" — see the recovery contract. */
@@ -518,4 +520,126 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
   restoreDirMtimes(plan);
   rmSync(journal, { force: true });
   return { kind: "recovered" };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// CLI — `cowork-harness migrate-run-dir [<runs-dir>] [--write] [--verbose]`
+
+export interface MigrationReport {
+  migrated: number;
+  recovered: number;
+  noop: number;
+  skipped: number;
+  refused: { dir: string; reason: string }[];
+}
+
+/** Walk a runs root, recovering any interrupted migration and then migrating what needs it.
+ *
+ *  `write: false` (the DEFAULT) plans and reports without touching anything — with thousands of
+ *  directories at stake the safe mode has to be the one you get by accident. Recovery is attempted FIRST
+ *  for every dir: assessing a half-migrated directory and executing a fresh plan over it would clobber
+ *  the journal that records what was already done. */
+export function migrateRunsRoot(
+  runsRoot: string,
+  opts: { write: boolean; onDir?: (dir: string, outcome: string) => void },
+): MigrationReport {
+  const report: MigrationReport = { migrated: 0, recovered: 0, noop: 0, skipped: 0, refused: [] };
+  const journalRoot = journalRootFor(runsRoot);
+  if (!existsSync(runsRoot)) return report;
+
+  for (const scenario of readdirSync(runsRoot).sort()) {
+    if (scenario === MIGRATION_JOURNAL_DIR) continue;
+    const scenarioDir = join(runsRoot, scenario);
+    let ids: string[];
+    try {
+      if (!statSync(scenarioDir).isDirectory()) continue;
+      ids = readdirSync(scenarioDir).sort();
+    } catch {
+      continue;
+    }
+
+    for (const id of ids) {
+      const dir = join(scenarioDir, id);
+      // One bad directory must never abort the batch, so every per-dir failure becomes a refusal row.
+      try {
+        if (!statSync(dir).isDirectory()) continue;
+
+        if (opts.write) {
+          const rec = recoverIfNeeded(dir, { journalRoot });
+          if (rec.kind === "refuse") {
+            report.refused.push({ dir, reason: rec.reason });
+            opts.onDir?.(dir, "refuse");
+            continue;
+          }
+          if (rec.kind === "recovered") {
+            report.recovered++;
+            opts.onDir?.(dir, "recovered");
+            continue;
+          }
+        }
+
+        const a = assessRunDir(dir);
+        if (a.kind === "refuse") {
+          report.refused.push({ dir, reason: a.reason });
+        } else if (a.kind === "skip") {
+          report.skipped++;
+        } else if (a.kind === "noop") {
+          report.noop++;
+        } else {
+          if (opts.write) executeMigration(a.plan, { journalRoot });
+          report.migrated++;
+        }
+        opts.onDir?.(dir, a.kind);
+      } catch (e) {
+        report.refused.push({ dir, reason: (e as Error).message });
+        opts.onDir?.(dir, "refuse");
+      }
+    }
+  }
+  return report;
+}
+
+/** `cowork-harness migrate-run-dir [<runs-dir>] [--write] [--verbose]`
+ *
+ *  DRY-RUN IS THE DEFAULT. Writing requires `--write`. With thousands of directories of unre-runnable
+ *  history at stake, the safe mode has to be the one you get by accident. */
+export function cmdMigrateRunDir(args: string[]): void {
+  const out = (s: string) => process.stderr.write(s + "\n");
+  let p;
+  try {
+    p = parseArgs(args, { booleans: ["--write", "--verbose"], values: [] });
+  } catch (e) {
+    out((e as Error).message);
+    return process.exit(2);
+  }
+  if (p.positionals.length > 1) {
+    out(`migrate-run-dir takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
+    return process.exit(2);
+  }
+
+  const write = p.flags["--write"] ?? false;
+  const verbose = p.flags["--verbose"] ?? false;
+  const runsRoot = p.positionals[0] ?? runsWriteRoot();
+  if (!existsSync(runsRoot)) {
+    out(`✓ migrate-run-dir: ${runsRoot} does not exist — nothing to migrate`);
+    return process.exit(0);
+  }
+
+  const r = migrateRunsRoot(runsRoot, {
+    write,
+    onDir: verbose ? (dir, outcome) => out(`  ${outcome.padEnd(9)} ${dir}`) : undefined,
+  });
+
+  const prefix = write ? "" : "(dry-run) ";
+  out(
+    `${prefix}migrate-run-dir: ${r.migrated} to migrate · ${r.recovered} recovered · ${r.noop} already current · ` +
+      `${r.skipped} skipped (no per-turn artifacts) · ${r.refused.length} refused`,
+  );
+  // Refusals are ENUMERATED, never just counted: each one is a directory a human has to look at, and a
+  // bare count is indistinguishable from "nothing to do here".
+  for (const { dir, reason } of r.refused) out(`  ✗ ${dir}\n      ${reason}`);
+  if (!write && r.migrated > 0) out(`\nRe-run with --write to apply. Back up ${runsRoot} first.`);
+
+  // Non-zero when anything was refused: a refusal is unfinished work, and a CI caller must see it.
+  return process.exit(r.refused.length > 0 ? 1 : 0);
 }

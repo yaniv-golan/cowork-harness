@@ -72,6 +72,7 @@ import {
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
 import { readIndex, reindexFromRunsTree, buildStats, type StatsSummary } from "./run/run-index.js";
+import { cmdMigrateRunDir } from "./run/migrate-run-dir.js";
 import {
   canonicalizeInput,
   diffToolSequence,
@@ -174,6 +175,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                for hostloop/protocol recordings; review + tailor the patterns before recording)
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
                                prune accumulated run dirs, keeping N most recent per scenario (default: 5)
+  migrate-run-dir [<runs-dir>] [--write]
+                               convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
@@ -511,6 +514,14 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+  "migrate-run-dir":
+    "usage: migrate-run-dir [<runs-dir>] [--write] [--verbose]\n" +
+    "       convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place.\n" +
+    "       DRY RUN BY DEFAULT — pass --write to apply. Back up the runs root first; this rewrites directories.\n" +
+    "       Preserves file and directory mtimes (they are the recency signal `stats` and `--latest-for` read), recovers an\n" +
+    "       interrupted run from its journal, and refuses any directory it cannot resolve rather than guessing.\n" +
+    "       exit: 0 nothing refused · 1 one or more directories refused (unfinished work) · 2 usage",
+
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":
@@ -563,6 +574,7 @@ const COMMANDS = [
   "rehash",
   "init-redact",
   "prune",
+  "migrate-run-dir",
 ];
 
 // --dotenv / --run-dir are GLOBAL flags honored ONLY in leading position (before the subcommand),
@@ -798,6 +810,8 @@ async function main() {
       return cmdGates(rest);
     case "answer":
       return cmdAnswer(rest);
+    case "migrate-run-dir":
+      return cmdMigrateRunDir(rest);
     case "prune":
       return cmdRunsGc(rest); // top-level: no `gc` token to strip, so pass `rest` whole (NOT rest.slice(1))
     default: {
