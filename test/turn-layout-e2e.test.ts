@@ -41,7 +41,7 @@ function protocolScenario(name: string) {
 describe("a REAL run produces the per-turn layout on disk", () => {
   it("writes turns/1/ with the per-turn artifacts, and a root compat copy", async () => {
     const res = await executeScenario(protocolScenario("e2e-layout"), {});
-    const outDir = (res.results?.[0] ?? (res as unknown as { outDir: string })).outDir;
+    const outDir = res.outDir;
 
     const turn1 = join(outDir, "turns", "1");
     expect(existsSync(turn1), `no turns/1 in a real run dir — root held: ${readdirSync(outDir).join(", ")}`).toBe(true);
@@ -58,7 +58,7 @@ describe("a REAL run produces the per-turn layout on disk", () => {
     // These must not move: `critique`'s turn-1 isolation proof records byte offsets into events.jsonl and
     // timeline.jsonl, and `cassette.events` is events.jsonl verbatim.
     const res = await executeScenario(protocolScenario("e2e-streams"), {});
-    const outDir = (res.results?.[0] ?? (res as unknown as { outDir: string })).outDir;
+    const outDir = res.outDir;
     for (const f of ["events.jsonl", "timeline.jsonl", "status.json"]) {
       expect(existsSync(join(outDir, f)), `${f} must stay at the run-dir root`).toBe(true);
     }
@@ -67,7 +67,7 @@ describe("a REAL run produces the per-turn layout on disk", () => {
 
   it("a single-turn run has exactly one turn dir", async () => {
     const res = await executeScenario(protocolScenario("e2e-single"), {});
-    const outDir = (res.results?.[0] ?? (res as unknown as { outDir: string })).outDir;
+    const outDir = res.outDir;
     expect(readdirSync(join(outDir, "turns")).sort()).toEqual(["1"]);
   }, 60_000);
 });
@@ -79,7 +79,7 @@ describe("the sampler can actually WRITE where beginTurn puts it", () => {
   it("samples land in turns/<N>/resources.jsonl and fold back out", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "sampler-"));
     const turn = beginTurn(outDir);
-    const s = new ResourceSampler(outDir, "container", async () => ({ rssBytes: 4242 }), 5, turn);
+    const s = new ResourceSampler(outDir, "container", async () => ({ ts: Date.now(), rssBytes: 4242 }), 5, turn);
     s.start();
     await new Promise((r) => setTimeout(r, 40));
     await s.stop();
@@ -95,7 +95,7 @@ describe("the sampler can actually WRITE where beginTurn puts it", () => {
     const outDir = mkdtempSync(join(tmpdir(), "sampler-retry-"));
     const turn = beginTurn(outDir);
     for (const rss of [900_000_000, 1_000]) {
-      const s = new ResourceSampler(outDir, "container", async () => ({ rssBytes: rss }), 5, turn);
+      const s = new ResourceSampler(outDir, "container", async () => ({ ts: Date.now(), rssBytes: rss }), 5, turn);
       s.start();
       await new Promise((r) => setTimeout(r, 40));
       await s.stop();
