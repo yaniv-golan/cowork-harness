@@ -1581,7 +1581,16 @@ export function beginTurn(outDir: string): number {
     // `resources: undefined` on replay), so a rename is the simpler scoping.
     try {
       const res = join(outDir, "resources.jsonl");
-      if (existsSync(res)) renameSync(res, join(outDir, `resources.turn-${turn - 1}.jsonl`));
+      if (existsSync(res)) {
+        // NEVER clobber an existing archive. A turn can legitimately repeat its number: a turn that
+        // faults hard never writes `run.jsonl`, so `currentTurn` returns the same N on the next resume —
+        // and a plain rename would then overwrite the real prior turn's samples with the crashed
+        // attempt's partial ones, mislabelled. Pick the first free name instead; losing forensic data to
+        // a retry is not an acceptable trade for a one-line rename.
+        let dest = join(outDir, `resources.turn-${turn - 1}.jsonl`);
+        for (let attempt = 1; existsSync(dest); attempt++) dest = join(outDir, `resources.turn-${turn - 1}.retry-${attempt}.jsonl`);
+        renameSync(res, dest);
+      }
     } catch {
       /* best-effort */
     }
@@ -2197,11 +2206,15 @@ export function scanEvents(file: string): {
   let lines: string[] = [];
   try {
     // CURRENT TURN ONLY. Whole-file scanning made a turn-1 delete fail turn 2's verdict on every
-    // `--resume`. An empty segment yields [] rather than [""] — the latter counted as one malformed line
-    // and read as evidence-unavailable, which FAILS an authored no_delete_in_outputs for a turn that
-    // simply produced no events yet.
-    const text = readFileSync(file, "utf8").trim();
-    lines = currentTurnEventLines(text ? text.split("\n") : []);
+    // `--resume`.
+    //
+    // NOTE the empty-FILE case is deliberately left alone: `"".trim().split("\n")` is `[""]`, one
+    // malformed line, i.e. evidence-unavailable. `scanEvents` runs POST-run, so a completed turn with an
+    // empty stream is evidence LOSS and must keep failing closed. An earlier version of this fix
+    // special-cased it to `[]` — silently flipping that to a clean PASS on single-turn runs, while the
+    // commit claimed turn 1 was untouched. The case that actually needed handling (an empty segment
+    // AFTER a marker) is already `[]` via the slice below, and on turn >= 2 the file is never empty.
+    lines = currentTurnEventLines(readFileSync(file, "utf8").trim().split("\n"));
   } catch {
     out.sidecarMissing = true;
     return out;
@@ -2267,8 +2280,7 @@ export function findUngatedPathToolCalls(file: string, gateFired: Set<string>): 
   try {
     // Current turn only: turn 1's own successfully-gated tool calls were erroring turn 2, because the
     // gate-fired set holds only THIS process's hook callbacks.
-    const text = readFileSync(file, "utf8").trim();
-    lines = currentTurnEventLines(text ? text.split("\n") : []);
+    lines = currentTurnEventLines(readFileSync(file, "utf8").trim().split("\n"));
   } catch {
     return [];
   }

@@ -141,13 +141,16 @@ describe("beginTurn is actually WIRED at turn start", () => {
   // orderings that make the fix work at all.
   const SRC = readFileSync(join(process.cwd(), "src/run/execute.ts"), "utf8");
 
-  it("is called from executeScenario", () => {
-    expect(SRC.indexOf("beginTurn(outDir);"), "the beginTurn call site is gone — the fix is inert").toBeGreaterThan(-1);
+  it("is called from executeScenario — and not merely present in a comment", () => {
+    // The first version used a bare substring search, so `// beginTurn(outDir);` passed it: the guard
+    // defeated exactly the one mutation I happened to run and nothing else. Anchor to a statement at the
+    // start of a line instead.
+    expect(/^\s*beginTurn\(outDir\);\s*$/m.test(SRC), "the beginTurn call site is gone or commented out — the fix is inert").toBe(true);
   });
 
   it("runs BEFORE the resource sampler opens resources.jsonl", () => {
     // Otherwise the rename races the sampler and this turn's samples land in the archived file.
-    const call = SRC.indexOf("beginTurn(outDir);");
+    const call = SRC.search(/^\s*beginTurn\(outDir\);\s*$/m);
     const sampler = SRC.indexOf("new ResourceSampler(");
     expect(sampler, "the sampler construction moved — re-anchor this guard").toBeGreaterThan(-1);
     expect(call, "beginTurn must precede the resource sampler").toBeLessThan(sampler);
@@ -156,9 +159,34 @@ describe("beginTurn is actually WIRED at turn start", () => {
   it("runs BEFORE the launch plan is built (i.e. before the agent can emit any event)", () => {
     // The marker must precede every event of this turn, or turn-2 events land above their own marker and
     // get attributed to turn 1.
-    const call = SRC.indexOf("beginTurn(outDir);");
+    const call = SRC.search(/^\s*beginTurn\(outDir\);\s*$/m);
     const plan = SRC.indexOf("const plan = buildLaunchPlan(");
     expect(plan, "buildLaunchPlan moved — re-anchor this guard").toBeGreaterThan(-1);
     expect(call, "beginTurn must precede the launch plan / session start").toBeLessThan(plan);
+  });
+});
+
+describe("regressions the implementation review found", () => {
+  it("a repeated turn number does NOT clobber the prior turn's resources archive", () => {
+    // A turn that faults hard never writes run.jsonl, so `currentTurn` returns the same N on the next
+    // resume. A plain rename then overwrote the real turn-1 samples with the crashed attempt's partial
+    // ones, mislabelled as turn 1 — silent forensic data loss.
+    writeFileSync(join(dir, "resources.jsonl"), "T1-SAMPLES\n");
+    asResumedTurn();
+    beginTurn(dir);
+    expect(readFileSync(join(dir, "resources.turn-1.jsonl"), "utf8")).toBe("T1-SAMPLES\n");
+
+    writeFileSync(join(dir, "resources.jsonl"), "T2-CRASHED-PARTIAL\n"); // same turn number again
+    beginTurn(dir);
+    expect(readFileSync(join(dir, "resources.turn-1.jsonl"), "utf8"), "turn 1's archive was overwritten").toBe("T1-SAMPLES\n");
+    expect(existsSync(join(dir, "resources.turn-1.retry-1.jsonl")), "the retry's samples were dropped").toBe(true);
+  });
+
+  it("an EMPTY completed events.jsonl still fails closed (single-turn behaviour is untouched)", () => {
+    // An earlier version of this fix special-cased the empty file to [], flipping evidence-unavailable
+    // into a clean PASS on single-turn runs — while the commit claimed turn 1 was unaffected.
+    // `scanEvents` runs POST-run, so an empty stream is evidence LOSS, not "no events yet".
+    writeFileSync(join(dir, "events.jsonl"), "");
+    expect(scanEvents(join(dir, "events.jsonl")).malformedLines, "the empty-file fail-closed guard was weakened").toBeGreaterThan(0);
   });
 });
