@@ -219,19 +219,20 @@ the two cannot disagree.
 
 ### Reading the graded turn's result
 
-`critique` runs two turns into one run directory, so after the resume **`result.json` is the reflection
-turn's** and the graded turn is archived as `result.turn-1.json` — the correct file is the *lower*
-number, the opposite of every other multi-run convention. Rather than expect you to know that:
+`critique` runs two turns into one run directory. Each turn's artifacts live in **`turns/<N>/`**, written
+once and never renamed — so the graded turn is `turns/1/`, and the reflection turn is `turns/2/`. The
+run-dir root still carries a `result.json`, but it is a **compatibility copy of the LATEST turn** — i.e.
+the *reflection* turn, not the graded one. Rather than expect you to know that:
 
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /
   `gradedSkillHash` in `--output-format json`, and in the text header) — a harvester never needs a turn
   file; and
-- the graded result is also written under the stable name **`result.graded.json`**, alongside the
-  archived `result.turn-1.json`; the graded turn's trace is likewise **`trace.graded.json`**.
+- the graded result is also written under the stable name **`result.graded.json`**, and the graded turn's
+  trace as **`trace.graded.json`** — both at the run-dir root, alongside `turns/1/`.
 
 Both `*.graded.json` names are written at the moment the graded turn completes, so they are correct
-immediately and survive a reflection turn that never finishes. Prefer them to the `*.turn-<N>` archives,
-whose names only appear once a later turn has run.
+immediately and survive a reflection turn that never finishes. Prefer them, or `turns/1/`, to the root
+`result.json` — which tracks whichever turn ran last.
 
 Prefer either of those to `result.json`, which will silently hand you the reflection turn's numbers.
 - **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a

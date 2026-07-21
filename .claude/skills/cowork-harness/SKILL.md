@@ -43,6 +43,17 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
   What the ≥ 1.6.0 floor gates, by release:
 
+  - **UNRELEASED (per-turn run-directory layout):** a run dir that holds several turns — any
+    `--session-id` + `--resume`, and **every `critique`** (task turn + reflection turn) — now writes each
+    turn's `result.json` / `run.jsonl` / `trace.json` / `resources.jsonl` into **`turns/<N>/`**, written
+    once and never renamed. **When a user asks about a multi-turn run, do NOT send them to
+    `<run-dir>/result.json`**: that is a compatibility copy of the LATEST turn, which on a `critique` dir
+    is the *reflection* turn, not the graded one. Point them at `turns/1/result.json` — or better, at
+    `result.graded.json` / `trace.graded.json`, the role-stable aliases `critique` writes. Single-turn and
+    `chat` dirs are unchanged (no `turns/`), and `events.jsonl` / `timeline.jsonl` stay cumulative at the
+    root. `verify-run` now REFUSES a multi-turn dir rather than certifying the wrong turn, and `trace`
+    shows the latest turn with a `::notice::` when earlier turns exist.
+
   - **UNRELEASED (limitation provenance):** every `critique` limitation in `critique --help` and
     docs/critique.md is tagged with WHY it exists — `[structural]` (permanent), `[unverified]` (unproven,
     **not** known-impossible), `[deliberate]`, `[not-built]`. **Read the tag before telling a user to

@@ -652,10 +652,19 @@ Each run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` (relocate with `
 ```
 events.jsonl      full stream-json (child→driver; also the cassette source)
 control-out.jsonl driver→child control_responses (the other cassette half)
-run.jsonl         harness log: decisions (+who), sub-agent dispatch tree, egress, transcript, cost
-trace.json        structured trace: steps, questions, sub-agents, egress, decisions, cost
+turns/<N>/        ONE DIRECTORY PER TURN, written once and never renamed. A run dir holds several
+                  turns with --session-id + --resume, and always for `critique` (task + reflection).
+                  Each holds that turn's:
+                    run.jsonl       harness log: decisions (+who), sub-agent dispatch tree, egress,
+                                    transcript, cost
+                    trace.json      structured trace: steps, questions, sub-agents, egress, cost
+                    result.json     assertion results + decisions + sub-agents + usage + status
+                                    (incl. workDir/outputsDir)
+                    resources.jsonl per-sample resource telemetry
+                  A single-turn run has just turns/1/.
 egress.log        allow/deny per outbound connection (L1/L2)
-result.json       assertion results + decisions + sub-agents + usage + status (incl. workDir/outputsDir)
+result.json       COMPATIBILITY COPY of the LATEST turn (turns/<N>/result.json is the addressable
+                  truth) — on a `critique` dir that is the reflection turn, not the graded one
 session.json      session manifest (only when --session-id/--resume is used: id + the agent's session UUID)
 status.json       run status (phase, exit, timing) — see docs/run-status.md
 mounts.json       VM→host path map (feeds trace --translate-paths; hostloop runs)

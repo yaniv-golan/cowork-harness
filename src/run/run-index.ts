@@ -389,7 +389,12 @@ export function reindexFromRunsTree(runsRoot: string): {
           skippedReplay++;
           continue;
         }
-        if (rootOutcome.kind === "row") {
+        // Under the per-turn layout the root `result.json` is a COMPAT COPY of the latest turn, which the
+        // turns/ enumeration below already indexes. Pushing it too would write two rows with the SAME
+        // identity for ONE completion — the double-count this scan's strict archive regex already guards
+        // against for `result.graded.json`. (Caught by the cross-layout parity test, which produced
+        // turns [2,1,2] on its first run.)
+        if (rootOutcome.kind === "row" && !hasTurnDirs(outDir)) {
           walked.push(rootOutcome.row);
           walkedIdentities.add(rowIdentity(rootOutcome.row));
           rootWalkedOutDirs.add(rootOutcome.row.outDir);

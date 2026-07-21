@@ -263,8 +263,9 @@ JSON, not the human-readable text (which is explicitly NOT stable).
 
 A run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` by default — outside any working tree. In CI,
 set `COWORK_HARNESS_RUNS_DIR` (or pass `--run-dir`) to a workspace-relative path (e.g. `runs`) so an
-artifact-upload step can collect them. Each run dir holds `events.jsonl`, `control-out.jsonl`, `run.jsonl`,
-`trace.json`, `egress.log`, `result.json`. Digest one with `cowork-harness trace <run-id | dir>`.
+artifact-upload step can collect them. Each run dir holds `events.jsonl`, `control-out.jsonl` and
+`egress.log` at the root, plus each turn's `run.jsonl` / `trace.json` / `result.json` under `turns/<N>/`
+(a single-turn run has just `turns/1/`; the root `result.json` is a compatibility copy of the latest turn). Digest one with `cowork-harness trace <run-id | dir>`.
 Secrets are scrubbed from every persisted log by value.
 
 ## Don't assume a fixed assertion count across lanes

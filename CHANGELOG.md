@@ -48,6 +48,10 @@ All notable changes to this project are documented here. The format is based on
   are unchanged, so `critique`'s byte-offset turn-isolation proof and cassette capture are unaffected.
   **`<outDir>/result.json` remains, as a documented compatibility copy of the latest turn** —
   `turns/<N>/result.json` is the addressable truth. Single-turn and `chat` directories are unchanged.
+  `critique`'s `result.graded.json` / `trace.graded.json` aliases are unchanged and remain the recommended
+  way to address the graded turn. The Python SDK resolves the latest turn's transcript (previously it read
+  the run-dir root unconditionally, which would have made `assert_transcript_not_contains` pass vacuously
+  under the new layout).
 
 - **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
   a run that previously exited `1` because one `docker exec` failed will now exit `0`. A dead sidecar

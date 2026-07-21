@@ -530,16 +530,25 @@ Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (out of any
 ```
 events.jsonl        full stream-json event log (child→driver; the cassette source)
 control-out.jsonl   driver→child control_responses (the other cassette half)
-run.jsonl           harness-observability log for the LATEST turn: decisions (+who decided),
-                    sub-agent dispatch tree, egress, transcript, cost, and a `turn` number
-                    (replaces transcript.json/decisions.jsonl)
-run.turn-<N>.jsonl  prior turns of a resumed (--session-id + --resume) session, preserved so an
-result.turn-<N>.json  earlier turn's transcript/result isn't clobbered by the next (both only present
-                    after a resume; the live run.jsonl/result.json carry a `turn` number)
-trace.json          structured run trace: steps, questions, sub-agents, egress, decisions, cost
+turns/<N>/          ONE DIRECTORY PER TURN — written once, never renamed or overwritten as later
+                    turns arrive. A run dir holds several turns whenever you use
+                    --session-id + --resume, and always for `critique` (task turn + reflection
+                    turn). Each turn dir holds that turn's:
+                      result.json     the turn's own result (see the fields below)
+                      run.jsonl       harness-observability log: decisions (+who decided), sub-agent
+                                      dispatch tree, egress, transcript, cost, `turn` number
+                      trace.json      structured run trace: steps, questions, sub-agents, egress
+                      resources.jsonl per-sample resource telemetry
+                    A single-turn run has just turns/1/. Prefer these paths: they mean the same
+                    thing forever, whereas the root result.json below tracks whichever turn ran last.
+trace.json          (legacy/chat run dirs only — see turns/<N>/trace.json above)
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)
-result.json         assertion results + decisions + sub-agents + cost/usage + exit status +
+result.json         COMPATIBILITY COPY of the LATEST turn (turns/<N>/result.json is the addressable
+                    truth). Kept so existing tooling keeps working; on a multi-turn dir it is
+                    whichever turn finished last — for a `critique` dir that is the REFLECTION
+                    turn, not the graded one. Contents:
+                    assertion results + decisions + sub-agents + cost/usage + exit status +
                     gate provenance + tool/model timing & errors + skill/task/context panels +
                     workspace file inventory + egress & resource telemetry (see "Observability
                     fields" below)

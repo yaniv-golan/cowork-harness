@@ -22,10 +22,17 @@ already does.
 
 Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (relocatable). A `chat` run instead
 writes to `runs/chat/<sessionId>/` — the first path segment is the literal `chat`, not a scenario name.
-The files there —
-`events.jsonl`, `run.jsonl`, `trace.json`, `result.json`, `egress.log`, `agent.stderr.log` — are the raw
+The files there — `events.jsonl`, `egress.log`, `agent.stderr.log` at the root, and each turn's
+`run.jsonl` / `trace.json` / `result.json` / `resources.jsonl` under **`turns/<N>/`** — are the raw
 evidence; see [README → What you get out](../README.md#what-you-get-out-inspectable-output) for the layout
 and how to relocate it. The tools below digest them so you rarely hand-parse.
+
+> **Multi-turn run dirs.** `--session-id` + `--resume`, and every `critique` (task turn + reflection
+> turn), write several turns into one directory. Each turn's artifacts live in its own `turns/<N>/` and
+> are never renamed or overwritten. The root `result.json` is a **compatibility copy of the latest turn**
+> — on a `critique` dir that is the *reflection* turn, so read `turns/1/result.json` (or
+> `result.graded.json`) when you want the graded one. `events.jsonl` and `timeline.jsonl` stay cumulative
+> across turns; the harness scopes its own reads of them to the current turn.
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your

@@ -3612,7 +3612,7 @@ async function cmdVerifyRun(args: string[]) {
       `verify-run: ${runDir} holds ${result.turn} turns (a --resume session, or a \`critique\` task+reflection pair). ` +
         `Root result.json is the LATEST turn (${result.turn}) — for a critique dir that is the reflection turn, not the graded one, ` +
         `so this command cannot tell which turn your scenario describes. Verify a single-turn run dir instead; ` +
-        `the graded turn is addressable as result.graded.json / result.turn-1.json for inspection. (can't verify ⇒ not green)`,
+        `the graded turn is addressable as result.graded.json or turns/1/result.json for inspection. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );

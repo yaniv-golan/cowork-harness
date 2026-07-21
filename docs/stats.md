@@ -103,7 +103,10 @@ it mounted a skill at all rather than assuming the grouping dropped it.
 `index.jsonl` only exists going forward from the version that introduced it. If you have an existing
 `~/.cowork-harness/runs/` full of pre-index runs (or the index file itself was ever lost or manually
 edited into an unrecoverable state — normal corrupt-trailing-line tolerance aside), `--reindex` rebuilds
-it by walking `<runsRoot>/<slug>/<runId>/result.json` for every run dir on disk, then merging in any rows
+it by walking every run dir on disk — `<runsRoot>/<slug>/<runId>/turns/<N>/result.json` for each turn of a
+multi-turn dir, or the root `result.json` for a single-turn/legacy one (the root file of a turn-layout dir
+is a compatibility copy of the latest turn and is deliberately skipped, so a turn is never counted twice) —
+then merging in any rows
 the prior `index.jsonl` still held for run dirs no longer on disk (e.g. pruned ones):
 
 ```bash
