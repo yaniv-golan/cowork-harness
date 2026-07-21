@@ -15,7 +15,18 @@
 // Assessment and execution were interleaved in earlier designs, and that is precisely what deleted and
 // fabricated turns: a rule would mutate one artifact and then discover the directory was inconsistent.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { PER_TURN_ARTIFACTS, classifyRunDir, listTurns, turnArtifactPath, type PerTurnArtifact } from "./turn-layout.js";
 import { parseArgs } from "../cli-args.js";
@@ -415,6 +426,23 @@ function assertWellFormed(plan: MigrationPlan): void {
   if (!ok) throw new Error("malformed journal");
 }
 
+/** Remove a journal and any directory it leaves empty behind it.
+ *
+ *  Removing only the file left one `.migrating/<scenario>/` shell per scenario — 96 of them on a real
+ *  runs root — which reads as a migration still in flight even though nothing is pending. `rmdirSync`
+ *  fails harmlessly when the directory still holds another journal, so a scenario with one crashed and
+ *  one successful dir keeps the shared parent (and the survivor's record) intact. */
+function removeJournal(path: string): void {
+  rmSync(path, { force: true });
+  for (const dir of [dirname(path), dirname(dirname(path))]) {
+    try {
+      rmdirSync(dir); // throws ENOTEMPTY when anything is still in there — exactly the wanted guard
+    } catch {
+      return; // stop climbing at the first non-empty level
+    }
+  }
+}
+
 function writeJournalAtomic(path: string, plan: MigrationPlan): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
@@ -495,7 +523,7 @@ export function executeMigration(plan: MigrationPlan, opts: ExecuteOpts): void {
   writeJournalAtomic(journal, plan);
   runOps(plan, opts.onOp);
   restoreDirMtimes(plan);
-  rmSync(journal, { force: true });
+  removeJournal(journal);
 }
 
 export type RecoveryResult =
@@ -542,11 +570,11 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
   try {
     st = statSync(outDir);
   } catch {
-    rmSync(journal, { force: true });
+    removeJournal(journal);
     return { kind: "orphaned" };
   }
   if (st.ino !== plan.identity?.ino || Math.round(st.birthtimeMs) !== Math.round(plan.identity?.birthtimeMs)) {
-    rmSync(journal, { force: true });
+    removeJournal(journal);
     return { kind: "orphaned" };
   }
 
@@ -560,7 +588,7 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
 
   runOps(plan, opts.onOp);
   restoreDirMtimes(plan);
-  rmSync(journal, { force: true });
+  removeJournal(journal);
   return { kind: "recovered" };
 }
 
@@ -607,7 +635,7 @@ function sweepOrphanedJournals(runsRoot: string, write: boolean): number {
       swept++;
       if (write) {
         try {
-          rmSync(join(dir, f), { force: true });
+          removeJournal(join(dir, f));
         } catch {
           /* best-effort: a journal we cannot remove is reported, not fatal */
         }

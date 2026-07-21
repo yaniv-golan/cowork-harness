@@ -492,3 +492,57 @@ describe("migrateRunsRoot — the batch walker's control flow", () => {
     }
   });
 });
+
+describe("the journal store does not accumulate empty shells", () => {
+  // A successful migration removed its journal FILE but left `.migrating/<scenario>/` behind. Across a
+  // real runs root that is one empty directory per scenario — 96 of them — which reads to a human (and to
+  // anyone grepping) as a migration still in flight. `prune` is not fooled (it counts .json files), so
+  // this is cosmetic, but "looks like a stalled migration" is a bad thing for a migration tool to leave.
+  it("removes the scenario dir, and .migrating itself, once the last journal is gone", () => {
+    const d = legacyDir();
+    executeMigration(planFor(d), { journalRoot });
+    expect(existsSync(journalPathFor(journalRoot, d)), "journal file left behind").toBe(false);
+    expect(existsSync(join(journalRoot, "scn")), "empty .migrating/<scenario> shell left behind").toBe(false);
+    expect(existsSync(journalRoot), "empty .migrating root left behind").toBe(false);
+  });
+
+  it("leaves a scenario dir alone while it still holds another journal", () => {
+    // Two dirs in one scenario, one crashed: removing the shared parent would destroy the survivor's
+    // journal — the only record of its interrupted plan.
+    const a = legacyDir("sess-a");
+    const b = legacyDir("sess-b");
+    const planB = planFor(b);
+    expect(() =>
+      executeMigration(planB, {
+        journalRoot,
+        onOp: (_o, i) => {
+          if (i === 0) throw new Error("crash");
+        },
+      }),
+    ).toThrow();
+    executeMigration(planFor(a), { journalRoot }); // succeeds, removes only its own journal
+
+    expect(existsSync(journalPathFor(journalRoot, a)), "the successful dir's journal survived").toBe(false);
+    expect(existsSync(journalPathFor(journalRoot, b)), "the CRASHED dir's journal was destroyed").toBe(true);
+    expect(existsSync(join(journalRoot, "scn")), "the shared scenario dir was removed while still in use").toBe(true);
+  });
+
+  it("NEVER climbs above .migrating — the runs root itself is not cleanup's business", () => {
+    // The cleanup walks up removing empty dirs. It must stop at `.migrating`: one level further is the
+    // RUNS ROOT, and a root whose only content was the journal store would be deleted outright. Bounding
+    // the climb is the entire safety property, and nothing else pins it.
+    const r0 = mkdtempSync(join(tmpdir(), "walk-bound-"));
+    mkdirSync(join(r0, ".migrating", "ghost"), { recursive: true });
+    writeFileSync(
+      join(r0, ".migrating", "ghost", "sess-gone.json"),
+      JSON.stringify({ outDir: join(r0, "ghost", "sess-gone"), ops: [], dirMtimes: {}, identity: { ino: 1, birthtimeMs: 1 } }),
+    );
+
+    // The sweep removes the orphaned journal, which empties .migrating/ghost and then .migrating.
+    migrateRunsRoot(r0, { write: true });
+
+    expect(existsSync(join(r0, ".migrating")), "the emptied journal store should be gone").toBe(false);
+    expect(existsSync(r0), "*** THE RUNS ROOT WAS DELETED ***").toBe(true);
+    rmSync(r0, { recursive: true, force: true });
+  });
+});
