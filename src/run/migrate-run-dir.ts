@@ -15,9 +15,9 @@
 // Assessment and execution were interleaved in earlier designs, and that is precisely what deleted and
 // fabricated turns: a rule would mutate one artifact and then discover the directory was inconsistent.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { PER_TURN_ARTIFACTS, classifyRunDir, listTurns, type PerTurnArtifact } from "./turn-layout.js";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { PER_TURN_ARTIFACTS, classifyRunDir, listTurns, turnArtifactPath, type PerTurnArtifact } from "./turn-layout.js";
 
 /** One planned filesystem operation. A `split` is write+write+delete, which is why done-ness for it is
  *  defined as "source is gone" rather than "destination exists" — see the recovery contract. */
@@ -88,6 +88,43 @@ function stampedTurn(path: string): number | undefined {
   }
 }
 
+/** The prior turn's completion time — the mtime of its archived result. `renameSync` preserves mtimes, so
+ *  this survives both the original archiving and the migration itself. */
+function completionMtimeOf(outDir: string, turn: number): number | undefined {
+  const p = join(outDir, `result.turn-${turn}.json`);
+  try {
+    return existsSync(p) ? statSync(p).mtimeMs : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a JSONL sample file has rows on BOTH sides of the boundary — i.e. it is genuinely cumulative
+ *  across turns rather than belonging wholly to one. */
+function samplesSpan(path: string, boundaryMs: number): boolean {
+  let low = false;
+  let high = false;
+  try {
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      if (!line) continue;
+      let ts: number | undefined;
+      try {
+        const v = (JSON.parse(line) as { ts?: unknown }).ts;
+        if (typeof v === "number") ts = v;
+      } catch {
+        /* unparseable rows do not establish a span */
+      }
+      if (ts === undefined) continue;
+      if (ts <= boundaryMs) low = true;
+      else high = true;
+      if (low && high) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 /** Assess a run dir and return a complete plan, or a refusal. NEVER mutates anything. */
 export function assessRunDir(outDir: string): Assessment {
   const shape = classifyRunDir(outDir);
@@ -104,7 +141,7 @@ export function assessRunDir(outDir: string): Assessment {
   const hasTranscript =
     existsSync(join(outDir, "run.jsonl")) ||
     archives.some((a) => a.stem === "run") ||
-    listTurns(outDir).some((n) => existsSync(join(outDir, "turns", String(n), "run.jsonl")));
+    listTurns(outDir).some((n) => existsSync(turnArtifactPath(outDir, n, "run.jsonl")));
   if (!hasTranscript)
     return { kind: "refuse", reason: "no run.jsonl anywhere — refusing rather than laundering an empty dir past the gates" };
 
@@ -119,7 +156,7 @@ export function assessRunDir(outDir: string): Assessment {
   for (const a of archives) {
     const dest =
       a.retry === undefined
-        ? join(outDir, "turns", String(a.turn), artifactForStem(a.stem))
+        ? turnArtifactPath(outDir, a.turn, artifactForStem(a.stem))
         : join(outDir, "turns", String(a.turn), `${a.stem}.retry-${a.retry}.jsonl`);
     const from = join(outDir, a.file);
     if (existsSync(dest)) {
@@ -133,23 +170,51 @@ export function assessRunDir(outDir: string): Assessment {
   for (const artifact of rootArtifacts) {
     const from = join(outDir, artifact);
 
+    // A CUMULATIVE resources file must be split, not carried. On the 12 real archive dirs
+    // `resources.jsonl` spans BOTH turns (they predate `beginTurn`'s resources rename): the first sample
+    // lands seconds before turn 1 completed and the last during turn 2. Carrying it whole into one slot
+    // attributes turn-1 samples to turn 2 — bytes preserved, telemetry wrong. CONTENT decides the
+    // attribution; the filename is only a hint.
+    if (artifact === "resources.jsonl" && maxArchive > 0) {
+      const boundaryMs = completionMtimeOf(outDir, maxArchive);
+      if (boundaryMs !== undefined && samplesSpan(from, boundaryMs)) {
+        ops.push({
+          kind: "split",
+          from,
+          boundaryMs,
+          toLow: turnArtifactPath(outDir, maxArchive, artifact),
+          toHigh: turnArtifactPath(outDir, rootTurn, artifact),
+        });
+        continue;
+      }
+      // Fallback is explicit, never a guess: if the boundary is unknowable the file stays at the root and
+      // is reported. A left-behind root resources.jsonl keeps the dir classified `legacy`, so it remains
+      // refused until handled — which is the correct outcome. Refusing beats mislabeling telemetry.
+      if (boundaryMs === undefined) {
+        return {
+          kind: "refuse",
+          reason: `cannot determine the turn boundary for a cumulative resources.jsonl (no mtime for result.turn-${maxArchive}.json) — refusing rather than attributing samples by guess`,
+        };
+      }
+    }
+
     if (turns.length === 0) {
       // No `turns/` yet: the per-dir mapping governs.
-      ops.push({ kind: "move", from, to: join(outDir, "turns", String(rootTurn), artifact) });
+      ops.push({ kind: "move", from, to: turnArtifactPath(outDir, rootTurn, artifact) });
       continue;
     }
 
     // `turns/` exists: the 3-branch rule governs, ALWAYS. (The N+1 mapping applies only when `turns/`
     // is absent — otherwise both claim the same file and one reading renames onto an occupied slot.)
     const selfLabeling = artifact === "result.json" || artifact === "run.jsonl";
-    const identicalTo = turns.find((n) => sameBytes(from, join(outDir, "turns", String(n), artifact)));
+    const identicalTo = turns.find((n) => sameBytes(from, turnArtifactPath(outDir, n, artifact)));
     if (selfLabeling && identicalTo !== undefined) {
       ops.push({ kind: "delete", path: from });
       continue;
     }
     // Lowest slot lacking this artifact. For non-self-labeling artifacts (trace/resources) byte-identity
     // is not proof of duplication — an empty file matches any other empty file — so they only ever move.
-    const slot = turns.find((n) => !existsSync(join(outDir, "turns", String(n), artifact)));
+    const slot = turns.find((n) => !existsSync(turnArtifactPath(outDir, n, artifact)));
     if (slot === undefined)
       return {
         kind: "refuse",
@@ -158,7 +223,7 @@ export function assessRunDir(outDir: string): Assessment {
     const stamp = selfLabeling ? stampedTurn(from) : undefined;
     if (stamp !== undefined && stamp !== slot)
       return { kind: "refuse", reason: `root ${artifact} is stamped turn ${stamp} but the only free slot is turn ${slot}` };
-    ops.push({ kind: "move", from, to: join(outDir, "turns", String(slot), artifact) });
+    ops.push({ kind: "move", from, to: turnArtifactPath(outDir, slot, artifact) });
   }
 
   // DESTINATION UNIQUENESS. The archive mapping and the 3-branch rule each check EXISTING occupancy;
@@ -179,4 +244,163 @@ export function assessRunDir(outDir: string): Assessment {
     kind: "plan",
     plan: { outDir, identity: { ino: st.ino, birthtimeMs: st.birthtimeMs }, ops, dirMtimes: { [outDir]: st.mtimeMs } },
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// PHASE 2 — EXECUTE, and the recovery contract.
+//
+// THE JOURNAL LIVES OUTSIDE THE RUN DIR. Every earlier design put it inside, which is self-defeating:
+// the run dir's own mtime is the signal being protected (prune's keep-slot ranking, trace-fragment
+// tiebreaking), so writing or removing a marker inside it re-dirties exactly what the journal exists to
+// restore. Outside, the safe order exists with no window: journal → ops → restore mtimes → remove journal.
+//
+// RECOVERY IS THE SAME EXECUTOR, RESUMED — not a separate code path. That is only achievable because the
+// journal carries the COMPLETE typed plan (every op kind, plus the boundary a split needs and the mtimes
+// to restore). Four prior designs each lost this at a different level and produced a directory that
+// refused forever.
+//
+// DONE-NESS IS DEFINED BY THE SOURCE, NEVER THE DESTINATION. A destination may exist and be torn, or may
+// hold foreign bytes; neither proves the operation completed.
+
+/** Where a run dir's journal lives. NESTED, not `<scenario>__<runId>`: the flat form is ambiguous —
+ *  `a__b/c` and `a/b__c` both encode to `a__b__c`, and one dir's migration would then consume another's
+ *  journal and execute the wrong plan against it. */
+export function journalPathFor(journalRoot: string, outDir: string): string {
+  return join(journalRoot, basename(dirname(outDir)), `${basename(outDir)}.json`);
+}
+
+export interface ExecuteOpts {
+  journalRoot: string;
+  /** Per-op progress hook (the CLI uses it for --verbose). Tests throw from it to simulate a crash. */
+  onOp?: (op: MigrationOp, index: number) => void;
+}
+
+function writeJournalAtomic(path: string, plan: MigrationPlan): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(plan, null, 2));
+  renameSync(tmp, path);
+}
+
+/** True when this op has already been performed. Keyed on the SOURCE in every case. */
+function opIsDone(op: MigrationOp): boolean {
+  if (op.kind === "move") return !existsSync(op.from);
+  if (op.kind === "split") return !existsSync(op.from);
+  return !existsSync(op.path);
+}
+
+/** Perform one op. Splits re-execute from scratch and OVERWRITE both destinations: a partially written
+ *  destination from a crashed attempt must never be trusted, and the boundary comes from the journal
+ *  rather than being recomputed from a source the split is midway through consuming. */
+function performOp(op: MigrationOp): void {
+  if (op.kind === "move") {
+    mkdirSync(dirname(op.to), { recursive: true });
+    renameSync(op.from, op.to);
+    return;
+  }
+  if (op.kind === "split") {
+    const lines = readFileSync(op.from, "utf8").split("\n").filter(Boolean);
+    const low: string[] = [];
+    const high: string[] = [];
+    for (const line of lines) {
+      let ts = Number.POSITIVE_INFINITY;
+      try {
+        const v = (JSON.parse(line) as { ts?: unknown }).ts;
+        if (typeof v === "number") ts = v;
+      } catch {
+        /* an unparseable sample sorts to the later turn rather than being dropped */
+      }
+      (ts <= op.boundaryMs ? low : high).push(line);
+    }
+    for (const [dest, rows] of [
+      [op.toLow, low],
+      [op.toHigh, high],
+    ] as const) {
+      mkdirSync(dirname(dest), { recursive: true });
+      writeFileSync(dest, rows.length ? `${rows.join("\n")}\n` : "");
+    }
+    rmSync(op.from, { force: true });
+    return;
+  }
+  rmSync(op.path, { force: true });
+}
+
+/** Restore recorded directory mtimes. Renaming files into `turns/` re-stamps the parent directories even
+ *  though rename preserves the files' own mtimes. */
+function restoreDirMtimes(plan: MigrationPlan): void {
+  for (const [dir, ms] of Object.entries(plan.dirMtimes)) {
+    try {
+      if (existsSync(dir)) utimesSync(dir, ms / 1000, ms / 1000);
+    } catch {
+      /* best-effort: a failed mtime restore must not strand a migrated dir */
+    }
+  }
+}
+
+function runOps(plan: MigrationPlan, onOp?: ExecuteOpts["onOp"]): void {
+  plan.ops.forEach((op, i) => {
+    onOp?.(op, i);
+    if (!opIsDone(op)) performOp(op);
+  });
+}
+
+/** Execute a plan. Writes the journal FIRST so a crash at any later point is recoverable, and removes it
+ *  LAST — after the mtime restore, since removing it does not touch the run dir. */
+export function executeMigration(plan: MigrationPlan, opts: ExecuteOpts): void {
+  const journal = journalPathFor(opts.journalRoot, plan.outDir);
+  writeJournalAtomic(journal, plan);
+  runOps(plan, opts.onOp);
+  restoreDirMtimes(plan);
+  rmSync(journal, { force: true });
+}
+
+export type RecoveryResult =
+  | { kind: "none" }
+  | { kind: "recovered" }
+  /** The journal belongs to a directory that no longer exists at this path — swept, not replayed. */
+  | { kind: "orphaned" }
+  | { kind: "refuse"; reason: string };
+
+/** Finish an interrupted migration, if one is recorded for this dir. Safe to call unconditionally. */
+export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResult {
+  const journal = journalPathFor(opts.journalRoot, outDir);
+  if (!existsSync(journal)) return { kind: "none" };
+
+  let plan: MigrationPlan;
+  try {
+    plan = JSON.parse(readFileSync(journal, "utf8")) as MigrationPlan;
+    if (!Array.isArray(plan.ops) || typeof plan.outDir !== "string") throw new Error("malformed");
+  } catch {
+    // A torn journal blocks this dir; refusing loudly keeps the batch alive, where an uncaught parse
+    // error would abort it and violate "one bad dir never aborts the batch".
+    return { kind: "refuse", reason: `unreadable migration journal at ${journal} — resolve or delete it by hand` };
+  }
+
+  // IDENTITY. Without this a journal outlives its directory: if the dir was deleted and a fresh run later
+  // reused the same scenario/runId path, the stale plan would replay onto it — mislabeling the new run
+  // and minting phantom turns, reported as success.
+  let st: ReturnType<typeof statSync>;
+  try {
+    st = statSync(outDir);
+  } catch {
+    rmSync(journal, { force: true });
+    return { kind: "orphaned" };
+  }
+  if (st.ino !== plan.identity?.ino || Math.round(st.birthtimeMs) !== Math.round(plan.identity?.birthtimeMs)) {
+    rmSync(journal, { force: true });
+    return { kind: "orphaned" };
+  }
+
+  // A pending move whose destination exists with DIFFERENT bytes is unresolvable: skipping would strand
+  // the source and keep the foreign bytes.
+  for (const op of plan.ops) {
+    if (op.kind !== "move" || opIsDone(op)) continue;
+    if (existsSync(op.to) && !sameBytes(op.from, op.to))
+      return { kind: "refuse", reason: `${op.to} already exists with different content than the pending ${op.from}` };
+  }
+
+  runOps(plan, opts.onOp);
+  restoreDirMtimes(plan);
+  rmSync(journal, { force: true });
+  return { kind: "recovered" };
 }

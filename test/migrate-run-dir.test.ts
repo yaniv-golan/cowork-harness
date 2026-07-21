@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assessRunDir } from "../src/run/migrate-run-dir.js";
@@ -179,5 +179,63 @@ describe("assessRunDir — per-dir turn mapping on archive dirs (the 12 real one
     const a = assessRunDir(d);
     expect(a.kind).toBe("refuse");
     if (a.kind === "refuse") expect(a.reason).toMatch(/destination|collide|conflict/i);
+  });
+});
+
+describe("assessRunDir — the cumulative resources file on archive dirs (N6/P2-7)", () => {
+  it("SPLITS a cumulative resources.jsonl at the prior turn's completion boundary", () => {
+    // On the 12 real archive dirs `resources.jsonl` spans BOTH turns (they predate beginTurn's resources
+    // rename): its first sample lands seconds before turn 1 completed and its last during turn 2. Carrying
+    // the whole file into one slot attributes turn-1 samples to turn 2 — data preserved, telemetry wrong.
+    // The boundary is the prior turn's result archive mtime, i.e. that turn's completion time.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    write(
+      d,
+      "resources.jsonl",
+      [
+        `{"ts":${boundaryMs - 2000},"rssBytes":1}`,
+        `{"ts":${boundaryMs - 500},"rssBytes":2}`,
+        `{"ts":${boundaryMs + 1500},"rssBytes":3}`,
+      ].join("\n") + "\n",
+    );
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "no split planned — the cumulative file would be carried whole into one turn").toBeDefined();
+    if (split?.kind !== "split") return;
+    expect(split.boundaryMs).toBe(boundaryMs);
+    expect(split.toLow.slice(d.length)).toBe("/turns/1/resources.jsonl");
+    expect(split.toHigh.slice(d.length)).toBe("/turns/2/resources.jsonl");
+  });
+
+  it("does NOT split a resources.jsonl that lies entirely on one side of the boundary", () => {
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    write(d, "resources.jsonl", `{"ts":${boundaryMs + 1000},"rssBytes":3}\n`);
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "split"),
+      "split a file that never spans the boundary",
+    ).toBe(false);
+    expect(
+      a.plan.ops.filter((o) => o.kind === "move").map((o) => o.to.slice(d.length)),
+      "a wholly-turn-2 resources file belongs in turn 2",
+    ).toContain("/turns/2/resources.jsonl");
   });
 });

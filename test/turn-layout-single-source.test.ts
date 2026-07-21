@@ -44,6 +44,13 @@ const ALLOWED = new Map<string, string>([
       "legacy branch itself is removed; turns/ dirs are enumerated separately and never hit this line",
   ],
   ["src/runtime/resource-sampler.ts", "writer; takes an explicit turn and builds its own path"],
+  [
+    "src/run/migrate-run-dir.ts",
+    "the MIGRATOR: reading a legacy dir's ROOT artifacts is its entire purpose — it is the one component " +
+      "whose input is by definition the pre-layout shape, so a root read here is the subject matter, not " +
+      "debt. Every DESTINATION it builds goes through turnArtifactPath(); the only hand-built path left is " +
+      "the `resources.retry-<A>.jsonl` archive name, which is not a PER_TURN_ARTIFACT at all",
+  ],
 ]);
 
 describe("per-turn artifact paths go through the seam", () => {
