@@ -7,6 +7,7 @@ import { labelSource } from "./gate-provenance.js";
 import type { RunResult } from "../types.js";
 import { readIndex, resolveRunsExactFromIndex, resolveRunsFragmentFromIndex, type RunIndexRow } from "./run-index.js";
 import { readTimeline } from "../agent/timeline.js";
+import { currentTurnEventLines } from "./turn-events.js";
 import { foldToolDurations } from "./timeline-fold.js";
 
 /**
@@ -263,9 +264,31 @@ export function eventsFromLines(lines: string[], source = "<lines>"): AgentEvent
   return events;
 }
 
-/** Parse every event from an events.jsonl (the shared first pass for the trace views). */
+/** Parse the CURRENT TURN's events from an events.jsonl (the shared first pass for the trace views).
+ *
+ *  Scoped for CONSISTENCY, and to fix an inconsistency this repo introduced: once `readTimeline` became
+ *  turn-scoped, `--view tool-durations` (which folds the timeline) showed the latest turn while
+ *  tools/questions/dispatches still showed every turn — two views of one run dir describing different
+ *  turn scopes, in the command the debugging docs tell users to trust for "how many sub-agents REALLY
+ *  dispatched?".
+ *
+ *  The other turns are not silently dropped: `noteIfMultiTurn` below says they exist and how to reach
+ *  them. Scoping without saying so would trade a mixed-scope bug for an invisible-evidence one. */
 function eventsOf(file: string): AgentEvent[] {
-  return eventsFromLines(readFileSync(file, "utf8").split("\n"), file);
+  const all = readFileSync(file, "utf8").split("\n");
+  return eventsFromLines(currentTurnEventLines(all), file);
+}
+
+/** Warn once when the run dir holds earlier turns the views above are not showing. */
+export function noteIfMultiTurn(file: string): string | undefined {
+  try {
+    const all = readFileSync(file, "utf8").split("\n");
+    const scoped = currentTurnEventLines(all);
+    if (scoped.length === all.length) return undefined;
+    return `this run dir holds more than one turn (a --resume session, or a \`critique\` task+reflection pair); trace shows the LATEST turn only — earlier turns remain in events.jsonl`;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Options shared by `buildTrace`/`buildTraceFromEvents`. `translate` (the `trace --translate-paths`

@@ -47,6 +47,7 @@ import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
 import {
+  noteIfMultiTurn,
   resolveEventsFile,
   buildTrace,
   formatTrace,
@@ -3592,6 +3593,30 @@ async function cmdVerifyRun(args: string[]) {
       isJsonOutput(args),
     );
   }
+  // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
+  // caller's scenario describes.
+  //
+  // Root `result.json` is the LATEST turn. For a `critique` dir that is the REFLECTION turn, while the
+  // scenario describes the GRADED (task) turn — so certifying the root file would vouch for the wrong
+  // turn. Today's cumulative gate scan at least fails LOUDLY on the other turn's unmatched gates; scoping
+  // this command to "the latest turn" instead would have turned that into a silent PASS against a
+  // transcript the scenario never described. Refusing is the fail-closed reading: an ambiguous target is
+  // not a verified one.
+  //
+  // Deliberately no turn selector yet — that is a new CLI surface (flag disposition, docs, tests) and this
+  // guard is worth having before it. The message names the addressable files so the caller is not stuck.
+  if (typeof result.turn === "number" && result.turn > 1) {
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: ${runDir} holds ${result.turn} turns (a --resume session, or a \`critique\` task+reflection pair). ` +
+        `Root result.json is the LATEST turn (${result.turn}) — for a critique dir that is the reflection turn, not the graded one, ` +
+        `so this command cannot tell which turn your scenario describes. Verify a single-turn run dir instead; ` +
+        `the graded turn is addressable as result.graded.json / result.turn-1.json for inspection. (can't verify ⇒ not green)`,
+      undefined,
+      isJsonOutput(args),
+    );
+  }
   // A `command:"replay"` result is a RE-CHECK of a recorded cassette, not run evidence (same rule
   // as the stats indexer, which never indexes replay rows). Certifying it would launder a re-check into a
   // fresh verification. Keyed on `command`, not `workspaceFiles` — an old live result.json that simply
@@ -4065,8 +4090,12 @@ function cmdTrace(args: string[]) {
     }
   }
   const rows = buildTrace(file, { tools: view === "tools", translate, fullResults });
-  if (json) out(jsonPayloadEnvelope("trace", true, { file, rows }));
+  // Every trace view is scoped to the LATEST turn. Say so when there ARE earlier turns, rather than
+  // letting a multi-turn dir look like a complete picture.
+  const multiTurn = noteIfMultiTurn(file);
+  if (json) out(jsonPayloadEnvelope("trace", true, { file, rows, ...(multiTurn ? { note: multiTurn } : {}) }));
   else {
+    if (multiTurn) process.stderr.write(`::notice:: [trace] ${multiTurn}\n`);
     // cache-read-ratio footer: best-effort read of the sibling result.json, same
     // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance.
     let modelUsage: RunResult["modelUsage"] | undefined;

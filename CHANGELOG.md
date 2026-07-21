@@ -60,6 +60,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`verify-run` now REFUSES a multi-turn run directory** instead of certifying the wrong turn. Root
+  `result.json` is the latest turn; on a `critique` directory that is the *reflection* turn while the
+  scenario describes the *graded* one. Previously the cumulative gate scan false-FAILED on the other
+  turn's gates — wrong, but loud. The refusal names `result.graded.json` / `result.turn-1.json` so the
+  caller can still reach the graded turn.
+- **`trace` no longer mixes turn scopes.** After timeline reads became turn-scoped, `--view
+  tool-durations` showed the latest turn while the tools/questions/dispatches views still showed every
+  turn — two views of one run directory describing different scopes. All views are now the latest turn,
+  and a `::notice::` reports when earlier turns exist rather than hiding them.
+
 - **A resumed turn was judged on the PRIOR turn's evidence — three wrong-verdict paths.** `events.jsonl`
   is append-only across turns with no per-turn marker, and three whole-file scanners decide a run's
   outcome: `scanEvents` (outputs-delete / host-path-leak → fail signals, and an authored
