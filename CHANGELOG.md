@@ -27,6 +27,9 @@ All notable changes to this project are documented here. The format is based on
   same never-mint rule holds on the content path: a stray `resources.turn-N.jsonl` cannot manufacture
   `turns/N/` whether it is empty or carries samples, and a fully-archived dir's trailing telemetry cannot
   manufacture the next turn out of arithmetic alone. Exit `1` when anything was refused, so a CI caller sees unfinished work.
+  After a `--write` that migrated or recovered anything, it prints a reminder to rebuild the index
+  (`cowork-harness stats --reindex`), since the index keys a row's timestamp off `result.json`'s mtime and
+  the files have moved.
 
 - **`prune` skips scenarios with a migration in flight.** Between an interrupted migration and its
   recovery a run dir's mtime reflects the migration, not the run — and `prune` ranks keep-slots by that
@@ -57,8 +60,12 @@ All notable changes to this project are documented here. The format is based on
   do" but "should I design around this forever, or wait for it?" **Container-tier-only is `unverified`**:
   the resume-continuity proof was run against the container tier's Linux ELF, and hostloop runs a
   different (native) agent binary, so the proof does not transfer — nothing suggests hostloop would fail,
-  nobody has run it. A consumer read that pin as permanent and built a second test lane around it. The
-  tags appear in `critique --help` and [docs/critique.md](./docs/critique.md), generated from one source.
+  nobody has run it. **Lifting the pin needs BOTH** a live resume-continuity proof at hostloop against its
+  native binary AND the follow-on work that proof unblocks (unpinning three hard-coded container sites,
+  stamping the tier on the session manifest so a cross-tier resume fails loud, and plumbing host-write
+  consent) — evidence alone is not sufficient. A consumer read that pin as permanent and built a second
+  test lane around it. The tags appear in `critique --help` and [docs/critique.md](./docs/critique.md),
+  generated from one source.
 - **`critique --help`'s KNOWN LIMITATIONS block is generated** from that source, and CI asserts the
   shipped binary's output, the docs bullets, and their tags all agree.
 
@@ -95,21 +102,29 @@ All notable changes to this project are documented here. The format is based on
 
   Previously the latest turn lived at the root while earlier ones were name-mangled archives, so a file's
   name depended on whether a later turn ever happened; that shape produced a wrong-turn read, a destroyed
-  trace, and a dropped index row — this release's read-side (`turnArtifactPath`/`listTurns`/`readTurnResult`
-  in `turn-layout.ts`) no longer has a legacy-resolving branch at all, so that class of bug is now
-  unrepresentable rather than merely fixed. The Python SDK's `_latest_run_jsonl` likewise now raises loudly
+  trace, and a dropped index row — this release's read-side (`turnArtifactPath` / `listTurns` in
+  `turn-layout.ts`, with the old `readTurnResult` deleted for having zero production callers) no longer has
+  a legacy-resolving branch at all, so that class of bug is now unrepresentable rather than merely fixed. The Python SDK's `_latest_run_jsonl` likewise now raises loudly
   on a pre-layout dir instead of silently falling back to a root `run.jsonl` that (for any current-layout
   dir) is a path to nowhere.
 
-- **Platform baseline synced to Desktop 1.24012.0** (`baselines/desktop-1.24012.0.json`, now what
-  `baseline: latest` resolves to). Agent binary is **unchanged** at `2.1.215`, and there is no prompt,
-  spawn-env, or egress-allowlist drift vs 1.22209.3 — the 15-domain allowlist and `gvisor` mode carry over
-  untouched, and the `deriveSpawnEnv` / `checkSpawnContractFacts` oracles stay green against the live asar.
-  Three substantive deltas: `claude-sonnet-5` joins the per-model effort map
-  (`low|medium|high|xhigh|max`, recommended `medium`, modes `auto`); the `coworkRuntimeConfig` gate drops
-  its `pluginsFullSyncStalenessMs` key (never modeled here, inert); and the dormant
-  `autoModeOverridesAlwaysAllow` sentinel fired — see below. Skill/README version floors and the example
-  cassettes' `fingerprint.baseline` track the new baseline.
+- **Platform baseline synced to Desktop 1.24012.1** (`baselines/desktop-1.24012.1.json`, now what
+  `baseline: latest` resolves to). The staged **agent binary is `2.1.217`** (native app + VM ELF, new
+  sha256 for each). The baseline moved in two steps this release — an earlier sync to **1.24012.0** (agent
+  `2.1.215`), then to 1.24012.1 — with **no prompt, spawn-env, or egress-allowlist drift across either**:
+  `spawn.env` is byte-identical to 1.22209.3, the same 15-domain allowlist and `gvisor` mode carry over
+  (the effort map is the one spawn field that changed — see the sonnet-5 delta below), and the
+  `deriveSpawnEnv` / `checkSpawnContractFacts` oracles stay green against the live asar. The
+  substantive deltas all came from the 1.24012.0 step and carry forward unchanged: `claude-sonnet-5` joins
+  the per-model effort map (`low|medium|high|xhigh|max`, recommended `medium`, modes `auto`); the
+  `coworkRuntimeConfig` gate drops its `pluginsFullSyncStalenessMs` key (never modeled here, inert); and
+  the dormant `autoModeOverridesAlwaysAllow` sentinel fired — see below. 1.24012.1 itself adds only the
+  agent bump: the `2.1.217` binary can emit the VCS SDK events `code_change_published` /
+  `vcs_state_changed` (SDK floor `2.1.216`), which the harness surfaces as a `system_event` (its existing
+  graceful degradation of an unmodeled system event, unchanged), and the binary's native skill-discovery
+  enable predicate widened to three branches — still inert here, since real Cowork's model-visible surface
+  is the Desktop SDK-MCP discovery servers, not the native tools. The example cassettes'
+  `fingerprint.baseline` tracks the new baseline.
 - **The `autoModeOverridesAlwaysAllow` gate (`4200321681`) flipped absent → on** (`source: force`) and was
   revisited as its pin intended. It stays **unmodeled, deliberately**: binary-verified in 1.24012.0, both
   call sites only override an *already-existing* always-allow decision — the session rule cache
@@ -117,6 +132,15 @@ All notable changes to this project are documented here. The format is based on
   `isDestructiveConnectorTool`. The harness persists neither, so it already prompts wherever the gate makes
   Cowork prompt; enabling it moves real Cowork *toward* harness behavior rather than away. Revisit only if
   the harness gains a persistent per-tool approval cache.
+- **The staged agent (`2.1.217`) enforces sub-agent fan-out caps, so `dispatch_count_max` is now framed as
+  a budget UNDER Cowork's cap, not a reproduction of it.** Because the harness spawns the real binary, a
+  run that fans out past the agent's caps now errors from the binary itself: a **concurrent** cap
+  (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, default 20; error `subagent_concurrency_cap`, new in 2.1.217)
+  and a **per-session** cap (`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION`, default 200; error
+  `subagent_count_cap`, present since ≤2.1.215). The scenario schema's `dispatch_count_max` description,
+  the `assert` over-budget message, and SPEC §10 no longer claim "Cowork imposes no in-conversation
+  Task-dispatch cap" — that claim was stale. The harness does not reproduce the caps; it inherits them by
+  running the binary.
 - **A host-loop `exec` infrastructure failure now WARNS instead of failing the run.** ⚠️ **Upgrade note:**
   a run that previously exited `1` because one `docker exec` failed will now exit `0`. A dead sidecar
   still hard-fails. Known residual, documented in `docs/scenario.md`: if *every* exec failed the agent ran
@@ -125,6 +149,15 @@ All notable changes to this project are documented here. The format is based on
   The model now receives its command's own partial output with `Command timed out after <duration>`
   merged into stderr — matching real Cowork, verified against the staged agent binary — instead of an
   opaque `[infrastructure error: see run log for details]`.
+- **The agent's spawn env now always carries a normalized IANA `TZ`** — matching Desktop, which injects
+  `Intl.DateTimeFormat().resolvedOptions().timeZone` unconditionally. Previously `TZ` was forwarded only
+  when the host shell exported it, and forwarded raw, so a host with no `TZ` set — or a legacy/non-IANA
+  export (`US/Eastern`, `EST5EDT`) — diverged from real Cowork's date/"today" rendering inside the agent.
+- **The `tool_available` assertion now names its evidence limit.** It evaluates against the run's
+  *eagerly-loaded* tool set (the SDK init manifest in `result.json`); a factory-deferred tool — e.g. the
+  skill-discovery MCP tools, loaded on demand via a `ToolSearch` round-trip — can be genuinely available in
+  the run yet miss here, a false negative. The assertion still fails on a miss; the failure message now
+  states that eagerly-loaded scope rather than implying provable unavailability.
 - **An explicitly requested `--dotenv` file now fails loud.** ⚠️ **Upgrade note:** an unreadable file, or
   a path that is a directory, previously fell through to lower-precedence `.env` sources *while still
   printing a success line* — so a typo'd path silently ran against the wrong credentials. It is now a
@@ -146,7 +179,15 @@ All notable changes to this project are documented here. The format is based on
 - **`trace` no longer mixes turn scopes.** After timeline reads became turn-scoped, `--view
   tool-durations` showed the latest turn while the tools/questions/dispatches views still showed every
   turn — two views of one run directory describing different scopes. All views are now the latest turn,
-  and a `::notice::` reports when earlier turns exist rather than hiding them.
+  and a `::notice::` reports when earlier turns exist rather than hiding them. Its cache-read footer and
+  gate-provenance (`answeredBy`) views also now say when a result is not turn-addressable (a pre-layout
+  dir) instead of silently omitting the cache-read ratio / labels.
+- **`prune` no longer demotes an unmigrated pre-layout run dir to the junk tier.** Its real-run predicate
+  keyed on `hasTurnDirs || events.jsonl`, reasoning only about what current writers produce — but `prune`
+  ranks *history*, including the legacy dirs `migrate-run-dir` exists to preserve, so a legacy dir with no
+  `events.jsonl` could be evicted ahead of an empty scaffold. It now also counts a `legacy` / `mixed` shape
+  as a real run. (Distinct from the in-flight-migration deferral above — this is about which dirs count as
+  real at all.)
 
 - **A resumed turn was judged on the PRIOR turn's evidence — three wrong-verdict paths.** `events.jsonl`
   is append-only across turns with no per-turn marker, and three whole-file scanners decide a run's
