@@ -98,7 +98,7 @@ cowork-harness status "$OUT_DIR" --follow
 ## Locating the newest run: `status --latest-for`
 
 `cowork-harness status --latest-for <scenario-name-or-slug>` resolves and prints the **newest** run
-directory for a scenario by its actual run time — the run's own `.origin`/`result.json` timestamps —
+directory for a scenario by its actual run time — the run's own `.origin`/latest-turn `result.json` timestamps —
 **not** `ls -td`'s directory mtime, which bumps on any later write inside a run dir (an `inspect`, a
 `trace --translate-paths`, a slow finalize) and can readily return a stale prior-session dir instead of
 the run you actually just kept. It takes no positional `<run-id | run-dir>` and cannot be combined with
@@ -120,8 +120,9 @@ See also [scenario.md → Output](./scenario.md#output), which documents the sam
 - **Never rely on `ps aux` to check a `cowork-harness` run.** It only works when the checker shares the
   target's PID namespace — true at a bare host shell, false inside almost any sandbox. `status.json` has
   no such requirement; only filesystem access to `outDir` is needed.
-- **status.json is diagnostic, not authoritative.** For the real, verdict-affecting result, read
-  `result.json` (or the process exit code / footer) once the run is `"done"`/`"error"`.
+- **status.json is diagnostic, not authoritative.** For the real, verdict-affecting result, read the
+  turn's own `result.json` under `turns/<N>/` (or the process exit code / footer) once the run is
+  `"done"`/`"error"`.
 - **`readRunStatus` shape-validates `status.json`, not just parses it.** A file that's valid JSON but the
   wrong shape (`{}`, or a `state` of the wrong type) is reported **malformed** (exit `1`) rather than
   trusted as a bogus `state: undefined` — a corrupt/truncated write caught mid-shape fails loud instead of

@@ -428,8 +428,8 @@ scenario's `assert:` block; on the live path it would fail as an empty assertion
 
 ### What replay's `RunResult` carries
 
-A replay `RunResult` is built from the same frozen recording, so several fields that were previously
-hardcoded `undefined` are now populated from it: `prompt` (the scenario prompt that drove the re-drive),
+A replay `RunResult` is built from the same frozen recording, so several fields are populated from it
+rather than left `undefined`: `prompt` (the scenario prompt that drove the re-drive),
 `toolResults` (the tool-result records, already reconstructed for assertion evaluation), and `fingerprint`
 (the record-time value — carried with a `frozen: true` flag so a consumer can't mistake it for a fresh
 run-time recompute). `resources` stays `undefined` on replay: a replay re-drive never spawns a sandbox, so
@@ -486,7 +486,7 @@ possible.
   from the per-file manifest (`fileSigs`). For a scoped cassette the drift is attributed **per bucket** by the
   actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency
   changes and a `skills/x changed since record [N changed (…)]` message for the scoped skill's own files. When
-  **both** buckets change you get **both** messages — a co-occurring shared change no longer masks the skill's
+  **both** buckets change you get **both** messages — a co-occurring shared change does not mask the skill's
   own drift. (With `COWORK_HARNESS_AGENT_SCOPE=skill`, a changed `agents/<x>.md` is attributed to skill `x`,
   matching the hash boundary.)
 - **`session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress
@@ -519,8 +519,8 @@ authored — see [fidelity-and-answers.md](../.claude/skills/cowork-harness/refe
 for the `cowork` → `hostloop`/`container` resolution.
 
 - **`the baseline's committed prompt assets changed since this cassette was recorded (same appVersion) …`**
-  (class `prompt-assets`) — prompt identity was previously keyed on `fingerprint.baseline` (appVersion)
-  alone, so editing a committed prompt asset (`spawn.promptTemplate` / `subagentAppend` /
+  (class `prompt-assets`) — prompt identity keyed on `fingerprint.baseline` (appVersion)
+  alone cannot see an edited committed prompt asset (`spawn.promptTemplate` / `subagentAppend` /
   `subagentAppendHostLoop`) under the SAME appVersion silently replayed old-prompt behavior. Non-failing
   by default (warns), `--strict` fails, `verify-cassettes` treats it like any other finding — re-record.
 - **`cassette recorded a prompt-asset fingerprint but the live baseline's prompt assets can't be hashed …`**

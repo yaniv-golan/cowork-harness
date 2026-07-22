@@ -215,9 +215,24 @@ the two cannot disagree.
 - **`[not-built]` The evidence package is not persisted.** A disputed finding cannot be re-checked
   against the record it was graded on.
 - **`[not-built]` The report is written to stdout** only — capture it with shell redirection;
-  `--output-format` changes the format, never the destination. The underlying run dirs *are* kept, but
-  after the resume `result.json` is the **reflection** turn's; the graded turn is archived as
-  **`result.turn-1.json`**.
+  `--output-format` changes the format, never the destination.
+
+### Reading the graded turn's result
+
+`critique` runs two turns into one run directory. Each turn's artifacts live in **`turns/<N>/`**, written
+once and never renamed — so the graded turn is `turns/1/`, and the reflection turn is `turns/2/`. There is
+**no root compat copy of anything** — `<run-dir>/result.json` does not exist. Rather than expect you to
+reach into `turns/1/` yourself:
+
+- the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /
+  `gradedSkillHash` in `--output-format json`, and in the text header) — a harvester never needs a turn
+  file; and
+- the graded result is also written under the stable name **`result.graded.json`**, and the graded turn's
+  trace as **`trace.graded.json`** — both at the run-dir root, alongside `turns/1/` and `turns/2/`.
+
+Both `*.graded.json` names are written at the moment the graded turn completes, so they are correct
+immediately and survive a reflection turn that never finishes. Prefer them, or `turns/1/` directly, to
+`turns/2/result.json` — which is the reflection turn's numbers, not the graded ones.
 - **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a
   guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
   source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived

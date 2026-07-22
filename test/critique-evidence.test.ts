@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -27,11 +27,16 @@ describe("turn-1 evidence slicing (uncontaminated ground truth)", () => {
     expect(sliced).not.toContain("answers.md"); // the reflection turn's read is excluded
   });
 
-  it("prefers result.turn-1.json, falls back to result.json", () => {
-    writeFileSync(join(dir, "result.json"), JSON.stringify({ turn: 2, from: "latest" }));
-    expect((readTurn1Result(dir) as { from: string }).from).toBe("latest"); // no archive → result.json is turn 1
-    writeFileSync(join(dir, "result.turn-1.json"), JSON.stringify({ turn: 1, from: "archive" }));
-    expect((readTurn1Result(dir) as { from: string }).from).toBe("archive");
+  it("reads turns/1/result.json — the single addressable turn-1 file, never a later turn's", () => {
+    // Single shape: turn 1 always lives at turns/1/result.json, whether or not the session ever resumed.
+    // No more root-file-is-turn-1-until-archived distinction to fall back through.
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(join(dir, "turns", "1", "result.json"), JSON.stringify({ turn: 1, from: "turn1" }));
+    expect((readTurn1Result(dir) as { from: string }).from).toBe("turn1");
+    // A later turn's result.json (e.g. the reflection turn's) must never be substituted for turn 1's.
+    mkdirSync(join(dir, "turns", "2"), { recursive: true });
+    writeFileSync(join(dir, "turns", "2", "result.json"), JSON.stringify({ turn: 2, from: "turn2" }));
+    expect((readTurn1Result(dir) as { from: string }).from).toBe("turn1");
   });
 });
 

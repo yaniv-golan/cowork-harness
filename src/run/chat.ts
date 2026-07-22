@@ -21,7 +21,8 @@ import { ResourceSampler, makeSampleOnce, resolveIntervalMs } from "../runtime/r
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { buildChatResult } from "./chat-result.js";
-import { writeTrace, scrubRawRunLogs } from "./execute.js";
+import { writeTrace, scrubRawRunLogs, beginTurn } from "./execute.js";
+import { turnWriteDir } from "./turn-layout.js";
 import { appendIndexRow, indexRowFromResult } from "./run-index.js";
 import { scrub, collectSecrets } from "../secrets.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
@@ -218,6 +219,14 @@ export async function cmdChat(args: string[]) {
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
+  // Turn-start bookkeeping, mirroring execute.ts's ordering: BEFORE the resource sampler opens
+  // resources.jsonl and before the agent session starts (`ResourceSampler.tick()` writeFileSync's into
+  // `turns/<N>/` but never mkdirs, so without this every sample throws ENOENT into a swallowed warning —
+  // the exact dead-telemetry bug turn-layout-e2e.test.ts exists to catch). Chat never resumes (fresh
+  // sessionId + a freshly mkdir'd outDir on every invocation — see buildLaunchPlan's `false` above), so
+  // this is always turn 1; going through `beginTurn` rather than a hardcoded `turnWriteDir(outDir, 1)`
+  // keeps ONE turn-start ritual instead of two.
+  const turnNumber = beginTurn(outDir);
   const plan = buildLaunchPlan(session, baseline, outDir, fidelity, false); // chat has no resume concept
   // mounts.json (see vm-path-ctx-file.ts's header): mirror execute.ts's unconditional write.
   // Chat's `fidelity` is fixed at CLI-parse time (no "cowork" gate resolution here, unlike execute.ts's
@@ -365,6 +374,7 @@ export async function cmdChat(args: string[]) {
         "hostloop",
         makeSampleOnce({ tier: "hostloop", runner, pid: (hl.child as { pid?: number } | undefined)?.pid }),
         resolveIntervalMs(),
+        turnNumber,
       );
       resourceSampler.start();
       logHostWriteNotice(
@@ -436,6 +446,7 @@ export async function cmdChat(args: string[]) {
         "container",
         makeSampleOnce({ tier: "container", runner, containerName }),
         resolveIntervalMs(),
+        turnNumber,
       );
       resourceSampler.start();
       const agent = new LiveAgentSession(child as any, outDir);
@@ -495,12 +506,17 @@ export async function cmdChat(args: string[]) {
       readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
       egress: sidecar ? sidecar.collect().entries : [],
       durationMs: Date.now() - start,
+      turn: turnNumber,
     });
     const secrets = collectSecrets();
+    // THROUGH THE SEAM, not a chat-only root file: chat now writes its one turn the same way run/skill
+    // write theirs (see turnWriteDir/beginTurn above), so `stats`/`trace`/`scaffold`/verify-run address it
+    // via turnArtifactPath like any other run dir, instead of a root shape only chat produced.
+    const tDir = turnWriteDir(outDir, turnNumber);
     // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
-    writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(chatResult, null, 2), secrets));
+    writeTextAtomic(join(tDir, "result.json"), scrub(JSON.stringify(chatResult, null, 2), secrets));
     appendIndexRow(runsWriteRoot(), indexRowFromResult(chatResult, { command: "chat", partial: false }));
-    writeTrace(outDir, record, chatResult.egress, secrets, chatResult.durationMs);
+    writeTrace(tDir, record, chatResult.egress, secrets, chatResult.durationMs);
   }
 }
 

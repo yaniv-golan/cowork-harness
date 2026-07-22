@@ -8,6 +8,40 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`migrate-run-dir` — convert pre-layout run dirs to the per-turn `turns/<N>/` layout, in place.**
+  A run dir written before the per-turn layout keeps `result.json` / `run.jsonl` / `trace.json` /
+  `resources.jsonl` at its root. Once the legacy read layer is removed, those dirs become unreadable to
+  `verify-run` / `diff` / `inspect` / `stats`; this command converts them so the history survives the
+  change instead of having to be re-run.
+
+  **Dry-run by default** — `--write` applies, and `--scenario <name>` scopes the run to a single
+  scenario so a rollout can be staged: migrate one, verify it, then do the rest. It renames rather than copies, so file mtimes (the recency
+  signal `stats` and `status --latest-for` rank by) survive untouched, and it restores directory mtimes
+  afterwards. An interrupted run records a journal outside the run dir and is finished by re-running the
+  command. Anything it cannot resolve unambiguously — a root artifact that is neither a duplicate nor
+  placeable, telemetry whose turn boundary cannot be dated or that spans more than two turns or whose
+  samples would land in a turn no transcript or result evidences, a dir with
+  no transcript at all — is **refused and named**. The one inference it makes is positional: an EMPTY file
+  has no content to attribute, so it follows its position to an EVIDENCED turn (its own, by name or by
+  rootArtifactTurn when a root transcript or result exists to move there) — never one it would mint. The
+  same never-mint rule holds on the content path: a stray `resources.turn-N.jsonl` cannot manufacture
+  `turns/N/` whether it is empty or carries samples, and a fully-archived dir's trailing telemetry cannot
+  manufacture the next turn out of arithmetic alone. Exit `1` when anything was refused, so a CI caller sees unfinished work.
+
+- **`prune` skips scenarios with a migration in flight.** Between an interrupted migration and its
+  recovery a run dir's mtime reflects the migration, not the run — and `prune` ranks keep-slots by that
+  mtime, so it could evict a newer run in favour of a half-migrated older one. It now defers those
+  scenarios and says so.
+
+- **`critique` surfaces the GRADED turn's `outcome` and `skillHash` in its own report**
+  (`gradedOutcome` / `gradedSkillHash` in JSON, and in the text header), and writes the graded result
+  under the stable name **`result.graded.json`**. `critique` runs two turns into one run directory, so
+  after the resume `result.json` is the *reflection* turn's and the graded turn is archived as
+  `result.turn-1.json` — the correct file to read was the *lower* number, the opposite of every other
+  multi-run convention. A harvester reading `result.json` silently ingested the reflection turn's numbers:
+  valid-looking, wrong, and unsignalled. Reported by a consumer building exactly that harvester; a
+  documentation-only fix would have helped only readers who already knew to look.
+
 - **`exec_infra_error` verdict signal (`WARN`)** — a container `exec` that failed for infrastructure
   reasons, as distinct from the fail-severity `infra_error` (a supervising process died). One failed
   command no longer contaminates a whole run's evidence.
@@ -29,6 +63,43 @@ All notable changes to this project are documented here. The format is based on
   shipped binary's output, the docs bullets, and their tags all agree.
 
 ### Changed
+
+- ⚠️ **BREAKING: per-turn run-directory layout, single shape — the root-level `result.json` compatibility
+  copy is REMOVED.** A run directory that holds several turns (any `--resume`, and every `critique`) writes
+  each turn's `result.json`, `run.jsonl`, `trace.json` and `resources.jsonl` into **`turns/<N>/`**, once,
+  under its final name — nothing is renamed or overwritten as later turns arrive. `chat` now goes through
+  the same layout too (always `turns/1/` — a `chat` session mints a fresh dir per invocation and never
+  resumes). **`<outDir>/result.json` no longer exists — there is no root compat copy of any per-turn
+  artifact, on ANY run dir.** Read `turns/<N>/result.json` directly (`turns/1/` for a single-turn run), or
+  — for `critique` — the unchanged `result.graded.json` / `trace.graded.json` role aliases. Cumulative
+  streams (`events.jsonl`, `timeline.jsonl`) and session state are unchanged, so `critique`'s byte-offset
+  turn-isolation proof and cassette capture are unaffected.
+
+  **Two prior shapes are now REFUSED, loudly, by name, instead of being silently misread:**
+  - a **pre-layout** run dir (written before `turns/<N>/` existed: root `result.json`/`run.jsonl`, or a
+    name-mangled `result.turn-<N>.json` archive, no `turns/`);
+  - a **mixed** run dir (a pre-layout dir resumed under CURRENT code before this release — `turns/` present
+    *and* a stray root/archived file).
+
+  `verify-run`, `inspect`, `scaffold`, `diff`, `status --latest-for`, and a resumed `--session-id` all
+  refuse these with a message naming the shape found and pointing at `trace <dir>` — which still works
+  fully, since every one of its views derives from `events.jsonl`, which never moves. `stats --reindex`
+  counts them as skipped and names the remedy rather than dropping them from the index quietly.
+
+  **Migration: `cowork-harness migrate-run-dir`** converts a pre-layout dir in place (dry-run by default),
+  preserving the file timestamps `stats` and `status --latest-for` rank by. `diff` and
+  `status --latest-for` are called out because their pre-refusal behaviour was the dangerous kind: `diff`
+  reported two genuinely different runs as `identical` and exited 0, and `status --latest-for` could
+  select a *different* run than the newest and report its verdict — a CI script reading `.verdict.pass`
+  got a green light for a red run.
+
+  Previously the latest turn lived at the root while earlier ones were name-mangled archives, so a file's
+  name depended on whether a later turn ever happened; that shape produced a wrong-turn read, a destroyed
+  trace, and a dropped index row — this release's read-side (`turnArtifactPath`/`listTurns`/`readTurnResult`
+  in `turn-layout.ts`) no longer has a legacy-resolving branch at all, so that class of bug is now
+  unrepresentable rather than merely fixed. The Python SDK's `_latest_run_jsonl` likewise now raises loudly
+  on a pre-layout dir instead of silently falling back to a root `run.jsonl` that (for any current-layout
+  dir) is a path to nowhere.
 
 - **Platform baseline synced to Desktop 1.24012.0** (`baselines/desktop-1.24012.0.json`, now what
   `baseline: latest` resolves to). Agent binary is **unchanged** at `2.1.215`, and there is no prompt,
@@ -66,6 +137,47 @@ All notable changes to this project are documented here. The format is based on
   by `outDir` alone, and reports rejected symlinked run directories.
 
 ### Fixed
+
+- **`verify-run` now REFUSES a multi-turn run directory** instead of certifying the wrong turn. Root
+  `result.json` is the latest turn; on a `critique` directory that is the *reflection* turn while the
+  scenario describes the *graded* one. Previously the cumulative gate scan false-FAILED on the other
+  turn's gates — wrong, but loud. The refusal names `result.graded.json` / `turns/1/result.json` so the
+  caller can still reach the graded turn.
+- **`trace` no longer mixes turn scopes.** After timeline reads became turn-scoped, `--view
+  tool-durations` showed the latest turn while the tools/questions/dispatches views still showed every
+  turn — two views of one run directory describing different scopes. All views are now the latest turn,
+  and a `::notice::` reports when earlier turns exist rather than hiding them.
+
+- **A resumed turn was judged on the PRIOR turn's evidence — three wrong-verdict paths.** `events.jsonl`
+  is append-only across turns with no per-turn marker, and three whole-file scanners decide a run's
+  outcome: `scanEvents` (outputs-delete / host-path-leak → fail signals, and an authored
+  `no_delete_in_outputs`), `findUngatedPathToolCalls` (→ a run-level `error` at hostloop), and
+  `detectCapabilityUse` (→ `missing_capability`, a fail signal, which fires on the default lean image).
+  So on any `--resume` — and every `critique` reflection turn — turn 1's delete, gated tool call, or
+  capability use FAILED turn 2. A turn-start marker now scopes all three to the current turn.
+  `resources.jsonl` had the same shape (turn 1's peak RSS judged against turn 2's `max_peak_rss_bytes`)
+  and is archived per turn. Single-turn runs write no marker, so their `events.jsonl` is byte-identical
+  and no cassette is affected. Missing marker ⇒ whole-file scan, i.e. fail-closed.
+
+- **A resumed turn's telemetry included the PRIOR turn's events, and could produce a false PASS.**
+  `timeline.jsonl` is append-mode with a fresh header per turn, but `readTimeline` returned every line
+  after the first as an event — so on any `--resume` (and every `critique` reflection turn) the current
+  turn's `toolDurations`/`skillActivity`/`subagents` folded in the previous turn's tool calls. Because
+  the **`skill_tool_used` assertion** evaluates against that same `skillActivity`, a turn-1 skill window
+  could satisfy a turn-2 assertion. The reader now returns only the current turn's segment. The file
+  stays one append-only stream, so `critique`'s byte-offset turn-isolation proof is unaffected.
+
+- **A resumed turn destroyed the prior turn's `trace.json`.** Because it is rebuilt and overwritten on
+  every completion, the earlier turn's trace was deleted rather than preserved, so a `critique` lost the
+  graded turn's trace entirely. Each turn now owns its own `turns/<N>/trace.json`, written once and never
+  overwritten, and `critique` additionally writes **`trace.graded.json`** beside `result.graded.json`.
+- **`stats --reindex` dropped every non-latest turn when rebuilding from the runs tree.** It read only the
+  root `result.json` per run directory, so a resumed session's earlier turns vanished — and on a
+  `critique` directory the root file is the *reflection* turn, so it was the **graded** rows that were
+  lost. Every turn under `turns/<N>/` is now indexed as its own completion; `result.graded.json` — a
+  root-level copy of the graded turn — is deliberately not matched, so it cannot double-count. A dir that
+  has not been migrated is counted as `skippedLegacy` and reported with the remedy, never dropped
+  silently.
 
 - **An ambient `GIT_DIR` silently computed the wrong skill file set.** Git hooks export `GIT_DIR` (and
   `GIT_INDEX_FILE`) into every child process, and with `GIT_DIR` set but no `GIT_WORK_TREE` git stops

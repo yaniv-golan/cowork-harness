@@ -27,3 +27,16 @@ export class UsageError extends Error {
     this.name = "UsageError";
   }
 }
+
+/**
+ * Thrown by `turn-layout.ts`'s `requireTurns` when a run dir is `legacy` (pre-layout, root-only),
+ * `mixed` (a pre-layout dir resumed under current code — turns/ AND stray root files), or `none` (never
+ * completed). Named for the shape the whole class shares (a dir the seam refuses to address, rather than
+ * silently guessing), not just the pre-layout case, so one catch site covers all three refusals.
+ */
+export class LegacyRunDirError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LegacyRunDirError";
+  }
+}

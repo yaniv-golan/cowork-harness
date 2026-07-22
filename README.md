@@ -285,7 +285,7 @@ cowork-harness skill --help                                               # full
 cowork-harness chat ~/my-plugin                  # interactive multi-turn REPL (full harness: egress sandbox + control protocol)
 # chat --raw  → native interactive cowork mode via `docker run -it` (needs Docker + the arm64
 #               cowork-agent-base:2 image; the egress sandbox is NOT applied in --raw)
-# chat also writes a result.json (mode:"chat", no pass/fail verdict) — so a chat session now shows up in `stats`/`trace`/`scaffold` too
+# chat writes turns/1/result.json (mode:"chat", no pass/fail verdict), so chat sessions appear in `stats`/`trace`/`scaffold`
 ```
 
 **Input policy — no silent false-greens.** When an AskUserQuestion arrives with no scripted
@@ -417,6 +417,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `diff <a> <b>` | Compare two baselines, two runs, two cassettes, or a run+cassette — kind auto-detected by content (view/normalization flags below). Token-free, no live Desktop/Docker needed | "what changed between two runs/cassettes/baselines?" |
 | `critique <skill-folder>` | **EXPERIMENTAL.** Run a skill, ask the agent what confused it, then grade that self-report against a frozen record of the run — blinded evaluator, mechanical citation checking. Accepts the `skill` flags a graded run needs — `--upload`/`--folder`/`--plugin` reach both spawned turns, `--answer`/`--decider-*` the graded turn only; anything that can't work is refused with a reason (full table in `critique --help`). Discovery instrument, never a gate (findings always exit 0). Costs four model workloads; see [docs/critique.md](./docs/critique.md) | "what confused the agent about my skill?" — including "does it even see the attached document?" |
 | `doctor [--tier <t>]` | Read-only prerequisite check, per tier (Docker + agent image for `container`/`hostloop`/`cowork`; **Lima** for `microvm`; plus staged agent, token, baseline); prints the exact `docker build` line if the agent image is missing | "can I run the live tiers — what's missing?" before a first live run |
+| `migrate-run-dir [<runs-dir>] [--scenario <name>] [--write]` | Convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place — **dry-run by default**, preserving the mtimes `stats`/`--latest-for` rank by, and refusing any dir it cannot resolve rather than guessing | upgrading a runs root written by an older version, so `verify-run`/`diff`/`inspect` can read it again; `--scenario` scopes it so you can migrate one, verify, then do the rest |
 | `prune [<runs-dir>] [--keep-last <n>] [--pinned-older-than <N>d\|h\|m]` | Prune accumulated run dirs (keeps the N most recent per scenario; pinned `--session-id` runs are never pruned unless `--pinned-older-than` opts in to reclaiming stale ones by last-activity age); the optional positional overrides the runs root; `--dry-run` | the machine-global runs root has grown and you want space back |
 | `rehash <dir/>` | Migrate cassette fingerprints to the current format version when the content is provably unchanged (`--dry-run`); no re-record needed | a cassette-format bump flagged committed fixtures as stale |
 | `init-redact [--force]` | Copy the packaged reference `.cowork-redact.json` (local-path prefixes + a generic email regex) into the cwd; refuses to overwrite without `--force`. Review + tailor before recording | `record` warned that a `hostloop`/`protocol` recording has no redaction policy |
@@ -530,25 +531,39 @@ Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (out of any
 ```
 events.jsonl        full stream-json event log (child→driver; the cassette source)
 control-out.jsonl   driver→child control_responses (the other cassette half)
-run.jsonl           harness-observability log for the LATEST turn: decisions (+who decided),
-                    sub-agent dispatch tree, egress, transcript, cost, and a `turn` number
-                    (replaces transcript.json/decisions.jsonl)
-run.turn-<N>.jsonl  prior turns of a resumed (--session-id + --resume) session, preserved so an
-result.turn-<N>.json  earlier turn's transcript/result isn't clobbered by the next (both only present
-                    after a resume; the live run.jsonl/result.json carry a `turn` number)
-trace.json          structured run trace: steps, questions, sub-agents, egress, decisions, cost
+turns/<N>/          ONE DIRECTORY PER TURN — written once, never renamed or overwritten as later
+                    turns arrive. A run dir holds several turns whenever you use
+                    --session-id + --resume, and always for `critique` (task turn + reflection
+                    turn), and — as of 1.6.0 — for `chat` too (always turns/1/, since chat mints
+                    a fresh session per invocation and never resumes). Each turn dir holds that
+                    turn's:
+                      result.json     the turn's own result (see the fields below)
+                      run.jsonl       harness-observability log: decisions (+who decided), sub-agent
+                                      dispatch tree, egress, transcript, cost, `turn` number
+                      trace.json      structured run trace: steps, questions, sub-agents, egress
+                      resources.jsonl per-sample resource telemetry
+                    A single-turn run has just turns/1/. There is NO root compat copy of any of
+                    these — `<run-dir>/result.json` does not exist. Prefer turns/<N>/ paths (or,
+                    for `critique`, the `*.graded.json` aliases below): they mean the same thing
+                    forever, unlike a "latest turn" pointer that would shift under you.
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)
-result.json         assertion results + decisions + sub-agents + cost/usage + exit status +
-                    gate provenance + tool/model timing & errors + skill/task/context panels +
-                    workspace file inventory + egress & resource telemetry (see "Observability
-                    fields" below)
 agent.stderr.log    the agent process's stderr (auth errors, flag rejects)
 ```
 
+A run dir written before this layout existed (or before 1.6.0 for `chat`) is a different, older shape —
+root `result.json`/`run.jsonl`, or a name-mangled `result.turn-<N>.json` archive, no `turns/`. The CLI
+detects this and REFUSES every command that needs a specific turn's result (`verify-run`, `inspect`,
+`scaffold`, `diff`, `status --latest-for`, and a resumed `--session-id`), naming the shape found rather
+than silently misreading it; `stats --reindex` counts such dirs as skipped instead of dropping them
+quietly. Its `events.jsonl`/`egress.log` still fully support `trace`, which never refuses — which is why
+every refusal points there. Convert one in place with `cowork-harness migrate-run-dir` (dry-run by
+default), which preserves the file timestamps `stats` and `status --latest-for` rank by.
+
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
 
-**Observability fields** — `result.json` carries a lot more than the basics above:
+**Observability fields** — `result.json` (i.e. **the turn's own** `turns/<N>/result.json`, or a
+`critique` dir's `result.graded.json`) carries a lot more than the basics above:
 
 - **Timing & model:** `toolDurations` (per-tool call count / total / max ms), `models` (distinct model ids seen) — `trace <id> --view tool-durations` renders these as a table.
 - **Tool health:** `toolErrors` (per-tool call/error counts), `redundantToolCalls` (wasted repeated `{name,args}` calls), `thinking` (reasoning blocks, capped at the last 50 — on newer models like Opus 4.8/Sonnet 5 the API omits thinking text by default, so blocks arrive as `{text:"", redacted:true}`; read that as "reasoned, text omitted by request", not "no reasoning"), `modelUsage` (per-model tokens/cost/cache, denormalized from the SDK's own field). Don't conflate the three per-tool rollups: `toolCounts` is a flat `{tool: number}` call-count map, `toolErrors` is `{tool: {calls, errors}}`, and `toolDurations` is `{tool: {calls, totalMs, maxMs}}`. `trace <id> --view tool-errors` renders one row per errored tool call with the full multi-line stderr (capped 4KB), vs. the 120-char preview `--view tools` shows.
@@ -568,7 +583,7 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
 ```
 ✓ success [container] · 4 tools · 12.3s ⚠ non-deterministic (LLM-decided)
    gates: 3 · 2 decided(llm), 1 scripted
-   → result: ~/.cowork-harness/runs/my-scenario/s1/result.json
+   → result: ~/.cowork-harness/runs/my-scenario/s1/turns/1/result.json
 ```
 
 It is informational — it never changes the verdict. The block is a live/`partial`-lane surface (absent on the replay lane, which reports reproducibility via `nonDeterministic: false`). The `→ result:` pointer itself prints on every kept run (success or failure) since the run directory is always retained on disk — it's suppressed only on the replay lane, which never writes a `result.json`.
@@ -834,4 +849,4 @@ inputs/outputs. Human-readable terminal text is explicitly **not** part of the c
 The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is
 **`desktop-1.24012.0`**. Release-by-release verification notes (what was re-verified against
 which live agent/asar) are recorded in [CHANGELOG.md](./CHANGELOG.md); the feature catalogue
-this section used to duplicate lives in the sections above.
+this section would otherwise duplicate lives in the sections above.
