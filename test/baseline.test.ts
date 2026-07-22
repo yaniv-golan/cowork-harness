@@ -186,6 +186,15 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(PINNED_GATES["4200321681"]).toBe("autoModeOverridesAlwaysAllow");
     expect(PINNED_GATES["1447478638"]).toBe("scheduledTaskToolsApprovableByAutoMode");
   });
+
+  it("PINNED_GATES tracks the three skill-discovery gates (present in fcache, so NOT dark)", () => {
+    // The gates that govern whether the Desktop SDK-MCP skill/plugin discovery tools render.
+    // 245679952 is live on/force; a flip of any of these changes the model's tool surface, and
+    // none was pinned before — so a live change was invisible to the drift guard.
+    expect(PINNED_GATES["245679952"]).toBe("suggestSkillsEnabled");
+    expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
+    expect(PINNED_GATES["3246569822"]).toBe("canSaveSkill");
+  });
 });
 
 describe("cowork-sync platform guard", () => {

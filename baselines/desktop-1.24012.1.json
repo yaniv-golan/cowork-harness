@@ -303,6 +303,11 @@
         "source": "defaultValue",
         "value": false
       },
+      "suggestSkillsEnabled:245679952": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
       "mcpConnectionNonblockingOff:434204418": {
         "on": false,
         "source": "defaultValue",
@@ -331,6 +336,11 @@
       "scheduledTaskToolsApprovableByAutoMode:1447478638": {
         "on": false,
         "source": "absent"
+      },
+      "proactiveSkillSuggestEnabled:1598976391": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
       },
       "scheduledTaskSessionLimiter:1648655587": {
         "on": true,
@@ -386,6 +396,11 @@
         "on": true,
         "source": "defaultValue",
         "value": "## Sensitive personal information\n\nDo not save the following to memory unless the user explicitly asks you to remember it:\n\n- Protected attributes: race, ethnicity, national origin, religion, age, sex, sexual orientation, gender identity, immigration status, disability, serious illness, union membership\n- Government identifiers: Social Security numbers, driver's license numbers, passport numbers, government ID numbers\n- Financial account details: credit card numbers, bank account numbers\n- Health information: medical conditions, diagnoses, lab results, mental health details, therapy or counseling\n- Home or personal mailing addresses (work addresses are fine)\n- Account passwords, secret tokens, or secret keys\n\nIf any of the above appears in conversation context, complete the task but do not persist it to a memory file. If the user explicitly says \"remember my address is X\", saving it is acceptable — they've given consent."
+      },
+      "canSaveSkill:3246569822": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
       },
       "skipPrecompactLoad:4153934152": {
         "on": false,

@@ -99,6 +99,16 @@ export const PINNED_GATES: Record<string, string> = {
   // Re-open only if the harness grows a persistent per-tool approval cache.
   "4200321681": "autoModeOverridesAlwaysAllow", // auto mode: force re-prompt (not silent-allow) for destructiveHint MCP tools
   "1447478638": "scheduledTaskToolsApprovableByAutoMode", // auto mode: scheduled-task tools auto-approvable (unless MDM workspace.autoModeEnabled=false)
+  // Skill/plugin discovery gates. These govern whether the Desktop SDK-MCP skill-discovery tools
+  // (the `mcp__skills__*` / `mcp__plugins__*` servers — the CONFIRMED model surface per the on-disk
+  // init.tools of 8 real sessions) render, and in what mode. None was pinned before, so 245679952
+  // being live on/force was invisible to the drift guard. Present in the live fcache (NOT dark), so
+  // they are read at their real state — no DARK_GATES entry. Not behaviorally modeled yet (the harness
+  // does not declare those SDK-MCP servers); pinned so a flip surfaces as a provenance.gates diff and
+  // is the trigger to revisit declare-plus-stub. A pinned drift alone WARNS + still writes.
+  "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
+  "1598976391": "proactiveSkillSuggestEnabled", // off/defaultValue — proactive (unprompted) suggest mode; at agent >=2.1.217 this widens to gate the whole discovery-tool family's enablement (tengu_saddle_lantern twin)
+  "3246569822": "canSaveSkill", // off/defaultValue — whether the save-skill affordance is offered
 };
 
 /**
