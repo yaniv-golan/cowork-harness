@@ -16,7 +16,7 @@ DOES exercise a real gate exchange, see `example-multiselect-gate.cassette.json`
 
 Run it with:
 
-> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g "cowork-harness@>=1.6.0"`. (`replay` itself needs nothing else — no token, no Docker.)
+> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g "cowork-harness@>=1.7.0"`. (`replay` itself needs nothing else — no token, no Docker.)
 
 ```sh
 cowork-harness replay examples/replays/example-pdf-skill.cassette.json

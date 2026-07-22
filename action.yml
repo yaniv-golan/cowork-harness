@@ -29,7 +29,7 @@ inputs:
     description: >-
       npm version or dist-tag of cowork-harness to install. The `latest` default is intentional so
       copy-paste recipes track the current release; for reproducible CI, pin an exact version here.
-      (This differs from the companion skill's `@>=0.32.0` floor guidance, which targets ad-hoc CLI
+      (This differs from the companion skill's `@>=1.7.0` floor guidance, which targets ad-hoc CLI
       installs where an accidental older resolve should fail loud rather than silently downgrade.)
     required: false
     default: "latest"

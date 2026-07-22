@@ -1413,7 +1413,8 @@ async function cmdRun(rawArgs: string[]) {
       undefined,
       flags.output === "json",
     );
-  // `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
+  // `--keep` on `skill` only adds the run-dir + deliverable paths to the footer (runs are kept on disk
+  // either way); `run` ALWAYS keeps runs too and logs their location.
   // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
   // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
   // Note it so the no-effect is visible.

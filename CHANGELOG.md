@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-07-22
+
 ### Added
 
 - **`migrate-run-dir` — convert pre-layout run dirs to the per-turn `turns/<N>/` layout, in place.**

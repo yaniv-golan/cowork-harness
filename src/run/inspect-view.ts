@@ -44,7 +44,7 @@ function humanMs(ms?: number): string {
 /** Build the digest for one kept run dir: header facts + the artifacts manifest, with a shallow field
  *  preview for each JSON artifact (read from the work dir, which result.json records). The manifest
  *  (paths + sizes) lives in result.json and always survives; the content preview needs the work dir, which
- *  a non-`--keep` container/microvm run tears down. */
+ *  container/microvm runs tear down (ephemeral by design; hostloop keeps its host-side tree). */
 function digestFor(runDir: string): InspectDigest {
   // cmdInspect already refuses a legacy/mixed/pre-completion dir before this is called (see cli.ts), so by
   // the time we're here the dir IS current-layout — this call re-derives the turn list rather than
@@ -132,7 +132,7 @@ export function buildInspectView(runDir: string, opts: { json?: boolean } = {}):
     }
   }
   if (!d.workDirAvailable && d.artifacts.some((a) => a.path.endsWith(".json"))) {
-    lines.push(`  (work dir torn down — re-run with --keep to preview artifact contents)`);
+    lines.push(`  (work dir torn down — artifact contents can't be previewed for container/microvm runs)`);
   }
   return lines.join("\n");
 }
