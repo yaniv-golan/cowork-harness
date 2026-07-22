@@ -332,3 +332,37 @@ between loops."
 workspace `web_fetch` server exists there to alias to — so they set NO aliases. Consequence: a VM-tier
 model emitting a bare `WebFetch` errors in the harness where production resolves it. Host-loop is the
 production-default loop; use hostloop for alias-sensitive scenarios.
+
+## Skill/plugin discovery SDK-MCP servers are not modeled
+
+**Real Cowork behaviour:** a cowork session's rendered tool surface includes Desktop-side SDK-MCP
+discovery tools — `mcp__skills__list_skills`, `mcp__skills__suggest_skills`, and
+`mcp__plugins__list_plugins` (the `mcp-registry` and `scheduled-tasks` families likewise) — delivered
+over the control protocol (`sdkMcpServers` in `initialize`, tunneled as `mcp_message`). These are
+**advisory** tools: the model calls `suggest_skills` when the user asks for recommendations or when
+`list_skills` returns no match, and the result renders an "Add" card. The call has **no side effect**
+(nothing installs; the user's Add click happens out of band). Ground truth: these tools appear in the
+`system/init` `tools` array of real on-disk sessions (`local-agent-mode-sessions/**/audit.jsonl`); the
+`suggestSkillsEnabled` gate `245679952` is on. (A proactive-suggestion mode exists behind a separate
+gate that is off for a standard account, so the model suggests only when the conversation invites it.)
+
+**Harness behaviour:** the harness declares only the `workspace` and `cowork` SDK-MCP servers, so a run's
+agent never sees the discovery tools. This is a tool-surface divergence, not a crash — most skill tests
+(artifact production, triggering, gates, egress) never touch these tools, so they are unaffected.
+
+**Where it bites — and it is silent.** A scenario testing a skill whose behaviour involves recommending
+or discovering other skills (or a prompt that leads the model there) diverges: the real agent would call
+`suggest_skills`/`list_skills`; the harness agent does the work another way or declines, with no signal
+that a tool was absent. Two consequences to keep in mind:
+- **A "did-not-suggest" style assertion can pass vacuously** — the suggest tool is not present to fire, so
+  the harness is more permissive than production for discovery behaviour. Do not read a green there as
+  proof production stays quiet.
+- **`tool_available: "mcp__skills__.*"` is a false negative** — the tool is genuinely available in
+  production but absent from the harness's `context.tools`; the assertion's miss message states this limit
+  (see the `tool_available` note in the assertion catalog).
+
+**Status:** a deferred design gap, not a bug in the harness's own logic. Modeling it means declaring the
+`skills`/`plugins` SDK-MCP servers to the agent over the control protocol and serving deterministic
+stub results (the same channel the `workspace`/`cowork` servers already use) — deliberately without
+hitting the real claude.ai org endpoints, which would couple runs to a live account. Until then, test
+discovery-adjacent skills against real Cowork rather than the harness.
