@@ -366,8 +366,10 @@ export function boundedSpawn(cmd: string, args: string[], timeoutMs: number, max
     if (child.pid) outstandingChildPids.add(child.pid); // F23/F36 residual: tracked until settled, below
     let stdout = "";
     let stderr = "";
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
+    // ONE combined stdout+stderr byte budget — the cap the comment above promises. Previously two
+    // independent per-stream counters, so a child splitting output across both streams could buffer
+    // ~2x `maxBytes` before either tripped (F4: the documented memory bound on a looping/hostile child).
+    let outBytes = 0;
     let timedOut = false;
     let truncated = false;
     let settled = false;
@@ -397,26 +399,24 @@ export function boundedSpawn(cmd: string, args: string[], timeoutMs: number, max
       finish(null);
     }, timeoutMs);
 
-    child.stdout.on("data", (d: Buffer) => {
-      stdoutBytes += d.length;
-      if (stdoutBytes > maxBytes) {
+    // Charge every chunk against the SHARED budget; on overflow keep exactly the bytes that still fit
+    // (slice the terminal chunk to the remaining room) so the captured output never exceeds `maxBytes`.
+    const onChunk = (d: Buffer, append: (s: string) => void) => {
+      if (settled) return;
+      const before = outBytes;
+      outBytes += d.length;
+      if (outBytes > maxBytes) {
+        const room = maxBytes - before; // bytes from THIS chunk that still fit under the combined cap
+        if (room > 0) append(d.subarray(0, room).toString());
         truncated = true;
         killGroup();
         finish(null);
         return;
       }
-      stdout += d.toString();
-    });
-    child.stderr.on("data", (d: Buffer) => {
-      stderrBytes += d.length;
-      if (stderrBytes > maxBytes) {
-        truncated = true;
-        killGroup();
-        finish(null);
-        return;
-      }
-      stderr += d.toString();
-    });
+      append(d.toString());
+    };
+    child.stdout.on("data", (d: Buffer) => onChunk(d, (s) => (stdout += s)));
+    child.stderr.on("data", (d: Buffer) => onChunk(d, (s) => (stderr += s)));
     child.on("close", (code) => finish(code));
     child.on("error", (e) => {
       stderr += `\n[spawn error] ${String(e)}`;
