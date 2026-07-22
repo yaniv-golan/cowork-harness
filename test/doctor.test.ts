@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runDoctorChecks, agentBuildLine, type DoctorProbe, type DoctorCheck } from "../src/run/doctor.js";
+import { runDoctorChecks, agentBuildLine, ghcrRefFor, type DoctorProbe, type DoctorCheck, type ImageFreshness } from "../src/run/doctor.js";
 
 const OK_PROBE: DoctorProbe = {
   nodeMajor: () => 20,
@@ -220,6 +220,64 @@ describe("doctor — runDoctorChecks", () => {
     // remedy now carries a GENERIC `--dotenv <path>` hint of its own, so assert the absence of the worktree
     // path specifically, not of `--dotenv` wholesale.)
     expect(tok.remedy).not.toMatch(/\/main\/\.env/);
+  });
+});
+
+describe("doctor — agent image freshness (advisory, network best-effort)", () => {
+  const withFreshness = (f: ImageFreshness, over: Partial<DoctorProbe> = {}) => probe({ imageFreshness: () => f, ...over });
+
+  it("is absent unless the probe implements imageFreshness (test doubles stay hermetic)", () => {
+    // OK_PROBE has no imageFreshness → no network, no check emitted.
+    expect(runDoctorChecks("container", OK_PROBE).find((c) => c.id === "image-freshness")).toBeUndefined();
+  });
+
+  it("current → ok, non-blocking, no remedy", () => {
+    const cs = runDoctorChecks("container", withFreshness({ state: "current", detail: "matches the published ghcr.io/…:2" }));
+    const f = get(cs, "image-freshness");
+    expect(f.status).toBe("ok");
+    expect(f.required).toBe(false);
+    expect(f.remedy).toBeUndefined();
+    expect(blocking(cs)).not.toContain("image-freshness");
+  });
+
+  it("stale → warn (never a blocking fail) with a re-pull + retag remedy", () => {
+    const cs = runDoctorChecks(
+      "container",
+      withFreshness({ state: "stale", detail: "local cowork-agent-base:2 differs …", ghcrRef: "ghcr.io/yaniv-golan/cowork-agent-base:2" }),
+    );
+    const f = get(cs, "image-freshness");
+    expect(f.status).toBe("warn");
+    expect(f.required).toBe(false);
+    expect(f.remedy).toMatch(/pull ghcr\.io\/yaniv-golan\/cowork-agent-base:2/);
+    expect(f.remedy).toMatch(/tag ghcr\.io\/yaniv-golan\/cowork-agent-base:2 cowork-agent-base:2/);
+    expect(blocking(cs)).toEqual([]); // advisory only
+  });
+
+  it("local build and unknown (offline/custom) → quiet skip, no remedy", () => {
+    for (const state of [
+      { state: "local", detail: "built locally" } as ImageFreshness,
+      { state: "unknown", detail: "offline" } as ImageFreshness,
+    ]) {
+      const f = get(runDoctorChecks("container", withFreshness(state)), "image-freshness");
+      expect(f.status).toBe("skip");
+      expect(f.remedy).toBeUndefined();
+    }
+  });
+
+  it("is not emitted when the image is absent (nothing to compare)", () => {
+    const cs = runDoctorChecks("container", withFreshness({ state: "current", detail: "x" }, { imagePresent: () => false }));
+    expect(cs.find((c) => c.id === "image-freshness")).toBeUndefined();
+  });
+
+  it("is not emitted for microvm (no Docker agent image) even if the probe implements it", () => {
+    const cs = runDoctorChecks("microvm", withFreshness({ state: "stale", detail: "x", ghcrRef: "ghcr.io/y/z:2" }));
+    expect(cs.find((c) => c.id === "image-freshness")).toBeUndefined();
+  });
+
+  it("ghcrRefFor maps published tags and returns null for custom images", () => {
+    expect(ghcrRefFor("cowork-agent-base:2")).toBe("ghcr.io/yaniv-golan/cowork-agent-base:2");
+    expect(ghcrRefFor("cowork-agent-full:2")).toBe("ghcr.io/yaniv-golan/cowork-agent-full:2");
+    expect(ghcrRefFor("my-custom-image:latest")).toBeNull();
   });
 });
 

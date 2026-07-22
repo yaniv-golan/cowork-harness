@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`doctor` warns when a *pulled* agent image is behind the published one.** For the
+  `container`/`hostloop`/`cowork` tiers, a new advisory `image-freshness` check compares the local agent
+  image's registry digest against the current published `ghcr.io/yaniv-golan/cowork-agent-base:2` (or
+  `-full`) and warns — with a re-pull + retag remedy — when they diverge. Best-effort and never blocking:
+  a locally-built image (no registry digest), an offline host, `docker buildx` being unavailable, or a
+  custom `COWORK_AGENT_IMAGE` is a quiet skip, never a false "stale"; only a pulled image incurs a network
+  probe. The `doctor --output-format json` envelope gains an `image-freshness` entry (the open
+  `checks[].id` set — SPEC §12 — already permits this).
+
+### Changed
+
+- **Published agent images (`cowork-agent-base` / `cowork-agent-full`) now carry OCI metadata labels**
+  (`org.opencontainers.image.{title,description,source,documentation,licenses}`), so their GHCR package
+  pages render a description, repo link, license, and the "contains no Anthropic binary" provenance note
+  instead of appearing bare. The `publish-image` workflow sets the `full` variant's title/description via
+  `--label` so its page isn't mislabeled by the base image's baked-in defaults.
+
+### Docs
+
+- README documents that the agent images are **published to GHCR** and can be pulled + retagged instead of
+  built from scratch (`:2` floats to the latest release; `:2-<version>` pins an immutable per-release
+  build), and that the harness resolves the *local* tag — so a stale local image shadows the published one;
+  re-pull after upgrading. The `doctor` command row notes the new freshness warning.
+
 ## [1.7.0] — 2026-07-22
 
 ### Added

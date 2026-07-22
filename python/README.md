@@ -23,9 +23,14 @@ or Lima for `microvm`).
 2. **Docker** + the agent image — for `container`, `hostloop`, and `cowork` (which auto-picks one of those):
    ```bash
    docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
+   # or pull the prebuilt image and retag to the local tag the harness resolves:
+   docker pull ghcr.io/yaniv-golan/cowork-agent-base:2 && docker tag ghcr.io/yaniv-golan/cowork-agent-base:2 cowork-agent-base:2
    ```
-   The `microvm` tier uses **Lima + Apple Virtualization.framework** instead (macOS arm64 only), **not**
-   Docker — `brew install lima`. Run `cowork-harness doctor --tier microvm` to see what's missing.
+   (For OCR / Office / PDF-table skills, swap `-base` → `-full` in both the build/pull and the tag. The
+   images carry **no Anthropic binary** — the agent is bind-mounted from your own install. `doctor` warns if
+   a pulled image drifts from the current published `:2`; re-pull to refresh.) The `microvm` tier uses
+   **Lima + Apple Virtualization.framework** instead (macOS arm64 only), **not** Docker — `brew install
+   lima`. Run `cowork-harness doctor --tier microvm` to see what's missing.
 3. **An auth token** for runs that actually call the model. Precedence: `process.env` > `--dotenv <path>` >
    `./.env` (auto-loaded from the dir you run `pytest` from) > `<install>/.env`. Simplest: put it in a `.env`
    file in the dir you run `pytest` from (it's gitignored, host-side, never mounted):

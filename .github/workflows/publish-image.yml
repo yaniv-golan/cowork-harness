@@ -76,8 +76,12 @@ jobs:
           docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2-${{ steps.pkg.outputs.version }}
 
       - name: Build + push cowork-agent-full (COWORK_FULL_PARITY=1 — OCR/Office/markitdown/opencv/table-extraction)
+        # Override the base title/description baked into the Dockerfile so the `full` package page is
+        # self-describing (the Dockerfile's default LABELs name the base variant).
         run: |
           docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -f docker/Dockerfile.agent \
+            --label org.opencontainers.image.title=cowork-agent-full \
+            --label "org.opencontainers.image.description=Full-parity sandbox runtime image for cowork-harness: the cowork-agent-base toolchain plus OCR (tesseract), LibreOffice, opencv/onnxruntime, and PDF-table extraction — a fidelity-matched Ubuntu 22.04 (linux/arm64) mirror of Claude Cowork's guest rootfs. Contains NO Anthropic binary — the agent is bind-mounted from the user's own Claude Desktop install at run time." \
             -t ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2 \
             -t ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2-${{ steps.pkg.outputs.version }} \
             .
