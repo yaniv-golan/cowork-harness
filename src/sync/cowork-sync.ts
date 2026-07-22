@@ -311,6 +311,9 @@ function extractFromAsar(
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
+    // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
+    const { deltas: tripwireDeltas, notes: tripwireNotes } = partitionSpawnFlags(checkCodeTripwires(bundle));
+    for (const f of tripwireDeltas) flag(unknown, f);
     // Spawn contract: S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
@@ -339,7 +342,14 @@ function extractFromAsar(
       INTENTIONALLY_UNMODELED_PLACEHOLDERS,
     );
     for (const d of promptDrift.unknownDeltas) flag(unknown, d);
-    return { domains, fingerprint, spawnEnv: spawn.env, modelEffortConfig, promptFingerprint, notes: [...notes, ...promptDrift.notes] };
+    return {
+      domains,
+      fingerprint,
+      spawnEnv: spawn.env,
+      modelEffortConfig,
+      promptFingerprint,
+      notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
+    };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
     return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, promptFingerprint: null, notes: [] };
@@ -358,6 +368,45 @@ function extractFromAsar(
  * Facts (app.asar 1.12603.1): uploads is mounted read-only (`mode:"ro"`); outputs + projects default to
  * `"rw"` (delete DENIED) via the `IX` resolver, whose delete-approved branch is `…?"rwd":"rw"`.
  */
+/**
+ * Code-shape tripwires: string-occurrence counts over the asar bundle that watch a feature whose
+ * runtime STATE the sync cannot otherwise see (no gate id, no spawn-env key). Returns flags in the
+ * `partitionSpawnFlags` convention — a `NOTE:`-prefixed flag is informational (surfaced in
+ * SyncResult.notes, never write-blocking); a bare flag is a hard-fail unknown delta.
+ *
+ * getMcpSkillSources (docs/internal finding 2): on 1.24012.x it appears exactly ONCE — its own
+ * definition, with ZERO callers, so MCP-contributed skills are dead scaffolding. A caller appearing
+ * (count > 1) means that channel went live: MCP servers could now contribute skills, which breaks the
+ * harness's "skills come from local dirs/plugins" assumption. That is the sharp signal to watch —
+ * strictly better than pinning the dark gate 278625510, which is meaningless while there are no
+ * callers — so a count > 1 is a HARD delta. Count 0 = the scaffolding was removed; a prune NOTE.
+ * io.modelcontextprotocol/skills (the capability-key declaration, currently 1x) is a secondary,
+ * informational signal: any change from 1 is a NOTE to re-verify finding 2, since the authoritative
+ * "it went live" signal is the getMcpSkillSources caller above.
+ */
+export function checkCodeTripwires(bundle: string): string[] {
+  const flags: string[] = [];
+  const count = (needle: string): number => bundle.split(needle).length - 1;
+
+  const gmss = count("getMcpSkillSources");
+  if (gmss > 1)
+    flags.push(
+      `code tripwire: getMcpSkillSources now appears ${gmss}x (was 1 = definition-only) — a CALLER appeared, so MCP servers may now contribute skills (dead scaffolding is now wired). Re-verify docs/internal finding 2 and decide whether the harness must model MCP-contributed skill sources; ${SPAWN_NO_BYPASS}`,
+    );
+  else if (gmss === 0)
+    flags.push(
+      "NOTE: code tripwire: getMcpSkillSources is gone from the asar — the MCP-skill-source scaffolding was removed; prune this tripwire (checkCodeTripwires in cowork-sync.ts)",
+    );
+
+  const skillsExt = count("io.modelcontextprotocol/skills");
+  if (skillsExt !== 1)
+    flags.push(
+      `NOTE: code tripwire: io.modelcontextprotocol/skills capability appears ${skillsExt}x (was 1) — the MCP-skills capability surface changed; re-verify docs/internal finding 2`,
+    );
+
+  return flags;
+}
+
 export function checkMountModeFacts(bundle: string): string[] {
   const flags: string[] = [];
   if (!/\?"rwd":"rw"/.test(bundle))

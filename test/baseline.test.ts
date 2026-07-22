@@ -21,6 +21,7 @@ import {
   checkWebFetchFacts,
   readMainBundle,
   checkSubagentOverrideGate,
+  checkCodeTripwires,
   PINNED_GATES,
 } from "../src/sync/cowork-sync.js";
 import {
@@ -194,6 +195,41 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(PINNED_GATES["245679952"]).toBe("suggestSkillsEnabled");
     expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
     expect(PINNED_GATES["3246569822"]).toBe("canSaveSkill");
+  });
+});
+
+describe("checkCodeTripwires — string-shape sentinels the sync can't see via gates/env", () => {
+  // Healthy state on 1.24012.0/.1: getMcpSkillSources appears once (definition only, zero callers),
+  // io.modelcontextprotocol/skills once (capability declaration). Dead scaffolding — see finding 2.
+  const clean = "const getMcpSkillSources = 1; caps.extensions['io.modelcontextprotocol/skills'];";
+
+  it("is clean when getMcpSkillSources is definition-only (1x) and the skills cap is 1x", () => {
+    expect(checkCodeTripwires(clean)).toEqual([]);
+  });
+
+  it("HARD-FAILS (non-NOTE delta) when a getMcpSkillSources CALLER appears (count > 1)", () => {
+    const wired = clean + " const s = getMcpSkillSources();";
+    const flags = checkCodeTripwires(wired);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).not.toMatch(/^NOTE:/); // a delta → hard-fail
+    expect(flags[0]).toMatch(/getMcpSkillSources/);
+    expect(flags[0]).toMatch(/caller/i);
+  });
+
+  it("emits a NOTE (non-blocking) when getMcpSkillSources is gone entirely (prune hint)", () => {
+    const gone = "caps.extensions['io.modelcontextprotocol/skills'];";
+    const flags = checkCodeTripwires(gone);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/^NOTE:/);
+    expect(flags[0]).toMatch(/getMcpSkillSources/);
+  });
+
+  it("emits a NOTE when the io.modelcontextprotocol/skills capability count changes from 1", () => {
+    const grew = "const getMcpSkillSources = 1; a['io.modelcontextprotocol/skills']; b['io.modelcontextprotocol/skills'];";
+    const flags = checkCodeTripwires(grew);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/^NOTE:/);
+    expect(flags[0]).toMatch(/io\.modelcontextprotocol\/skills/);
   });
 });
 
