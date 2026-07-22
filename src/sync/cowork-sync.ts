@@ -1361,7 +1361,11 @@ export function deriveSpawnEnv(
   // count surfaces a new SPREAD SITE — including an opaque one carrying non-enumerable keys, the one
   // channel spawnEnvKeys is blind to. Committed as provenance.spawnEnvSpreadCount; a change shows in
   // `sync --diff` (diff-surfacing, not a hard-fail — a benign minifier reshape must not fail CI).
-  const spreadCount = [w1, w2, w3].reduce((n, w) => n + ((w as string).match(/\.\.\.[A-Za-z_$]/g)?.length ?? 0), 0);
+  // Match every spread site `...<expr>` — an identifier (`...d`), a member (`...d.env`), OR a
+  // PARENTHESIZED expression (`...(p?.accountId)&&{…}`, the real minifier shape for a conditional opaque
+  // spread). An identifier-only regex missed the parenthesized form — the exact opaque shape this guards.
+  // `(?!\.)` excludes only a pathological `....` run (no valid spread is `...` followed by a 4th dot).
+  const spreadCount = [w1, w2, w3].reduce((n, w) => n + ((w as string).match(/\.\.\.(?!\.)/g)?.length ?? 0), 0);
   if (hardFail) return { env: null, flags, keys, spreadCount };
   return { env, flags, keys, spreadCount };
 }

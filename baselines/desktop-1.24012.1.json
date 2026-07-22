@@ -479,7 +479,7 @@
       "USE_LOCAL_OAUTH",
       "USE_STAGING_OAUTH"
     ],
-    "spawnEnvSpreadCount": 26
+    "spawnEnvSpreadCount": 29
   },
   "requireFullVmSandbox": null
 }

@@ -962,6 +962,19 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(after).toBe(before + 1);
   });
 
+  it("WI-5: counts a PARENTHESIZED opaque spread (…(expr)&&{…}) — the real minifier shape", () => {
+    // The live spawn window carries conditional opaque spreads like `...(p?.accountId)&&{…}`; a regex
+    // that only matches `...<identifier>` misses these, defeating the guard on exactly the shape it
+    // exists for. Inject one into W1 and require the count to rise.
+    const before = deriveSpawnEnv(fixture(), greenGates()).spreadCount;
+    const withParenSpread = fixture().replace(
+      'CLAUDE_CODE_IS_COWORK:"1"',
+      '...(z==null?void 0:z.accountId)&&{X_OPAQUE:"1"},CLAUDE_CODE_IS_COWORK:"1"',
+    );
+    const after = deriveSpawnEnv(withParenSpread, greenGates()).spreadCount;
+    expect(after).toBe(before + 1);
+  });
+
   // 4. Gate addition — an unknown gate id in a W1 conditional is caught at introduction.
   it("gate addition: an unknown spawn gate id in W1 hard-fails", () => {
     const mutated = fixture().replace('...At("714014285")&&{', '...At("999999999")&&{X_KEY:"1"},...At("714014285")&&{');
