@@ -21,7 +21,11 @@ function seedRun(root: string, slug: string, runId: string, opts: { originCreate
     writeFileSync(join(dir, ".origin"), JSON.stringify({ originKey: "k", sourceHint: "h", createdAt: opts.originCreatedAt }));
   }
   if (opts.resultJson) {
-    writeFileSync(join(dir, "result.json"), JSON.stringify(opts.resultJson));
+    // turns/1/result.json — the single addressable shape; findLatestRunForScenario/readResultJson go
+    // through the seam, so a root result.json (no compat copy exists anymore) wouldn't be found at all.
+    const turn1 = join(dir, "turns", "1");
+    mkdirSync(turn1, { recursive: true });
+    writeFileSync(join(turn1, "result.json"), JSON.stringify(opts.resultJson));
   }
   return dir;
 }

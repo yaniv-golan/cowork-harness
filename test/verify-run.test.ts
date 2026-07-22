@@ -9,7 +9,17 @@ import { tmpdir } from "node:os";
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 
-/** Build a kept-run dir: result.json + run.jsonl + trace.json + a workDir with one JSON artifact. */
+/** Where a kept run's per-turn artifacts (result.json/run.jsonl/trace.json) live under the current
+ *  layout — `turns/1/`, no root compat copy of any of them. Writing these fixtures at the root instead
+ *  (the pre-per-turn-layout shape) is exactly a `legacy`/`mixed` dir, which verify-run now REFUSES rather
+ *  than silently degrading — the shape this helper avoids reproducing. */
+function turn1Dir(root: string): string {
+  const d = join(root, "turns", "1");
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+/** Build a kept-run dir: turns/1/{result.json,run.jsonl,trace.json} + a workDir with one JSON artifact. */
 function keptRun(): string {
   const root = mkdtempSync(join(tmpdir(), "cwh-vr-"));
   const workDir = join(root, "work", "session", "mnt");
@@ -31,15 +41,16 @@ function keptRun(): string {
     durationMs: 1,
     scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
   };
-  writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  const t1 = turn1Dir(root);
+  writeFileSync(join(t1, "result.json"), JSON.stringify(result, null, 2));
   writeFileSync(
-    join(root, "run.jsonl"),
+    join(t1, "run.jsonl"),
     [
       JSON.stringify({ t: "run", scenario: "smoke" }),
       JSON.stringify({ t: "transcript", text: "the skill flagged the blank exclusivity field" }),
     ].join("\n"),
   );
-  writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [], steps: ["Read", "Bash"] }));
+  writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: [], steps: ["Read", "Bash"] }));
   return root;
 }
 
@@ -69,24 +80,25 @@ function keptRunForUnexpectedFiles(): string {
     userVisibleRoots: ["outputs"],
     preRunPaths: ["outputs/report.json"],
   };
-  writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
-  writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
-  writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [], steps: ["Read"] }));
+  const t1 = turn1Dir(root);
+  writeFileSync(join(t1, "result.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(t1, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
+  writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: [], steps: ["Read"] }));
   return root;
 }
 
 /** Build a kept-run dir that is missing one sidecar file. */
 function keptRunWithout(sidecar: "transcript" | "questions"): string {
   const root = keptRun();
-  if (sidecar === "transcript") require("node:fs").unlinkSync(join(root, "run.jsonl"));
-  if (sidecar === "questions") require("node:fs").unlinkSync(join(root, "trace.json"));
+  if (sidecar === "transcript") require("node:fs").unlinkSync(join(root, "turns", "1", "run.jsonl"));
+  if (sidecar === "questions") require("node:fs").unlinkSync(join(root, "turns", "1", "trace.json"));
   return root;
 }
 
 /** Build a kept-run dir whose transcript is present but empty (zero-length run.jsonl with no transcript line). */
 function keptRunWithEmptyTranscript(): string {
   const root = keptRun();
-  writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
+  writeFileSync(join(root, "turns", "1", "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
   return root;
 }
 
@@ -114,9 +126,10 @@ function keptRunWithFolder(withRoots: boolean): string {
     scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
   };
   if (withRoots) result.userVisibleRoots = ["outputs", "project"];
-  writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
-  writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "folder" }) + "\n");
-  writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [], steps: ["Write"] }));
+  const t1 = turn1Dir(root);
+  writeFileSync(join(t1, "result.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(t1, "run.jsonl"), JSON.stringify({ t: "run", scenario: "folder" }) + "\n");
+  writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: [], steps: ["Write"] }));
   return root;
 }
 
@@ -125,9 +138,10 @@ function keptRunWithFolder(withRoots: boolean): string {
 function keptRunWithout_field(field: "toolCounts" | "toolResults" | "subagents" | "scan" | "gateDeliveries"): string {
   const root = keptRun();
   const fs = require("node:fs");
-  const result = JSON.parse(fs.readFileSync(join(root, "result.json"), "utf8"));
+  const resultPath = join(root, "turns", "1", "result.json");
+  const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
   delete result[field];
-  fs.writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
   return root;
 }
 
@@ -136,11 +150,12 @@ function keptRunWithout_field(field: "toolCounts" | "toolResults" | "subagents" 
 function keptRunWithEmpty_field(field: "toolCounts" | "toolResults" | "subagents" | "scan"): string {
   const root = keptRun();
   const fs = require("node:fs");
-  const result = JSON.parse(fs.readFileSync(join(root, "result.json"), "utf8"));
+  const resultPath = join(root, "turns", "1", "result.json");
+  const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
   if (field === "toolCounts") result.toolCounts = {};
   else if (field === "scan") result.scan = { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
   else result[field] = [];
-  fs.writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
   return root;
 }
 
@@ -171,13 +186,46 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
     expect(code).toBe(0);
   });
 
+  it("refuses (exit 2) a LEGACY run dir (root result.json, no turns/), naming the shape", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-vr-legacy-"));
+    writeFileSync(join(root, "result.json"), JSON.stringify({ scenario: "s", result: "success" }));
+    writeFileSync(join(root, "run.jsonl"), "{}\n");
+    const sc = scenarioFile(root, "  - result: success\n");
+    const { code, text } = verifyRun(root, sc);
+    expect(code).toBe(2);
+    expect(text).toMatch(/pre-layout run dir/);
+  });
+
+  it("refuses (exit 2) a MIXED run dir (turns/ + a stray root archive), naming the shape", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-vr-mixed-"));
+    mkdirSync(join(root, "turns", "2"), { recursive: true });
+    writeFileSync(join(root, "turns", "2", "result.json"), JSON.stringify({ scenario: "s", result: "success" }));
+    writeFileSync(join(root, "result.turn-1.json"), JSON.stringify({ scenario: "s", result: "success" }));
+    const sc = scenarioFile(root, "  - result: success\n");
+    const { code, text } = verifyRun(root, sc);
+    expect(code).toBe(2);
+    expect(text).toMatch(/MIXED run dir/);
+  });
+
+  it("refuses (exit 2) a genuinely multi-turn (turns/1 + turns/2) dir — ambiguous which turn to verify", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-vr-multiturn-"));
+    for (const n of [1, 2]) {
+      mkdirSync(join(root, "turns", String(n)), { recursive: true });
+      writeFileSync(join(root, "turns", String(n), "result.json"), JSON.stringify({ scenario: "s", result: "success", turn: n }));
+    }
+    const sc = scenarioFile(root, "  - result: success\n");
+    const { code, text } = verifyRun(root, sc);
+    expect(code).toBe(2);
+    expect(text).toMatch(/holds 2 turns/);
+  });
+
   it("refuses a PARTIAL run (did not complete) rather than verifying its half-finished output", () => {
     const run = keptRun();
     const fs = require("node:fs");
-    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(fs.readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.partial = true;
     result.result = "error";
-    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    fs.writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result, null, 2));
     // An assertion that WOULD pass on this kept run, so a non-zero exit can only come from the partial
     // guard — not an assertion miss.
     const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
@@ -217,21 +265,21 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
   it("refuses (exit 2) a filesystem assertion when the work dir is gone (no false-fail)", () => {
     const run = keptRun();
     // Point result.workDir at a non-existent path to simulate container teardown.
-    const result = JSON.parse(require("node:fs").readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(require("node:fs").readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.workDir = join(run, "gone", "work");
-    writeFileSync(join(run, "result.json"), JSON.stringify(result));
+    writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result));
     const sc = scenarioFile(run, "  - file_exists: outputs/report.json");
     const { code, text } = verifyRun(run, sc);
     expect(code).toBe(2);
     expect(text).toContain("work dir not found");
   });
 
-  it("errors (exit 2) on a dir with no result.json", () => {
+  it("errors (exit 2) on a dir with no turns/<N>/ and no pre-layout marker (never completed)", () => {
     const empty = mkdtempSync(join(tmpdir(), "cwh-empty-"));
     const sc = scenarioFile(empty, "  - result: success");
     const { code, text } = verifyRun(empty, sc);
     expect(code).toBe(2);
-    expect(text).toContain("no result.json");
+    expect(text).toMatch(/never completed|not a run dir/i);
   });
 
   // A `command:"replay"` result is a re-check of a recorded cassette, not run evidence — certifying
@@ -239,9 +287,9 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
   it("refuses (exit 2) a REPLAY result — a re-check is not run evidence", () => {
     const run = keptRun();
     const fs = require("node:fs");
-    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(fs.readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.command = "replay";
-    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    fs.writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result, null, 2));
     // An assertion that WOULD pass on this kept run, so a non-zero exit can only be the replay guard.
     const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
     const { code, text } = verifyRun(run, sc);
@@ -253,9 +301,9 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
   it("refuses (exit 2) a CHAT result — chat carries no assertions or verdict", () => {
     const run = keptRun();
     const fs = require("node:fs");
-    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(fs.readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.mode = "chat";
-    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    fs.writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result, null, 2));
     const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
     const { code, text } = verifyRun(run, sc);
     expect(text).toMatch(/CHAT session/);
@@ -267,9 +315,9 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
   it("still verifies a live result.json with workspaceFiles ABSENT (guard must not key on workspaceFiles)", () => {
     const run = keptRun(); // keptRun omits workspaceFiles entirely
     const fs = require("node:fs");
-    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(fs.readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.command = "run"; // explicit live provenance, still no workspaceFiles
-    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    fs.writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result, null, 2));
     const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
     const { code } = verifyRun(run, sc);
     expect(code).toBe(0);
@@ -277,8 +325,9 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
 
   it("refuses a result.json that parses but is structurally invalid", () => {
     const run = mkdtempSync(join(tmpdir(), "cwh-vr-bad-"));
+    const t1 = turn1Dir(run);
     // Valid JSON, but no `result` field — the field the verdict hinges on.
-    writeFileSync(join(run, "result.json"), JSON.stringify({ assertions: [] }));
+    writeFileSync(join(t1, "result.json"), JSON.stringify({ assertions: [] }));
     const sc = scenarioFile(run, "  - result: success\n");
     const { code, text } = verifyRun(run, sc);
     expect(code).not.toBe(0);
@@ -379,9 +428,9 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
   // serialization on disk, not just a hand-built AssertContext in assert.test.ts.
   it("subagent_output_contains passes against a real result.json with output populated (verify-run ctx-site check)", () => {
     const run = keptRun();
-    const result = JSON.parse(require("node:fs").readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(require("node:fs").readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.subagents = [{ dispatchAgentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }], output: "found 3 files" }];
-    writeFileSync(join(run, "result.json"), JSON.stringify(result));
+    writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result));
     const sc = scenarioFile(run, "  - subagent_output_contains: { contains: '3 files' }\n");
     const { code, text } = verifyRun(run, sc);
     expect(text).toContain("verify-run: all");
@@ -474,9 +523,9 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
     // a missing workRoot would walk to [] created files and vacuously PASS an empty allowlist — the
     // worse failure mode (false-green), unlike the other FS keys which false-fail safe.
     const fs = require("node:fs");
-    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(fs.readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.workDir = join(run, "gone", "work");
-    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result));
+    fs.writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result));
     const sc = scenarioFile(run, "  - no_unexpected_files: []\n");
     const { code, text } = verifyRun(run, sc);
     expect(code).toBe(2);
@@ -512,9 +561,10 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
       readonlyFolderRoots: [],
       scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
     };
-    writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
-    writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }));
-    writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [] }));
+    const t1 = turn1Dir(root);
+    writeFileSync(join(t1, "result.json"), JSON.stringify(result, null, 2));
+    writeFileSync(join(t1, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }));
+    writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: [] }));
     return root;
   }
 
@@ -539,9 +589,9 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
   it("refuses (exit 2) no_lost_write_back when the work dir is gone (cannot recompute the authored set)", () => {
     const run = keptRunForWriteBack(`<!DOCTYPE html><html><body><form method="post" action="/x"></form></body></html>`);
     const fs = require("node:fs");
-    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    const result = JSON.parse(fs.readFileSync(join(run, "turns", "1", "result.json"), "utf8"));
     result.workDir = join(run, "gone", "work");
-    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result));
+    fs.writeFileSync(join(run, "turns", "1", "result.json"), JSON.stringify(result));
     const { code, text } = verifyRun(run, scenarioFile(run, "  - no_lost_write_back: true\n"));
     expect(code).toBe(2);
     expect(text).toContain("work dir not found");

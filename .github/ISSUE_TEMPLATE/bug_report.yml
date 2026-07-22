@@ -41,5 +41,5 @@ body:
     id: logs
     attributes:
       label: Logs / run artifacts
-      description: Relevant lines from runs/<name>/<id>/ (result.json, egress.log) or console output.
+      description: Relevant lines from runs/<name>/<id>/ (turns/<N>/result.json, egress.log) or console output.
       render: shell

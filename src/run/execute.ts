@@ -1,7 +1,9 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { BoundaryError, UsageError } from "../errors.js";
+import { BoundaryError, UsageError, LegacyRunDirError } from "../errors.js";
 import { ZodError } from "zod";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
+import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
+import { hasTurnDirs, currentTurnFromDirs, turnWriteDir, classifyRunDir, preLayoutMessage } from "./turn-layout.js";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -320,6 +322,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
                 : `can't be confirmed as this project's (the session mounts no source to identify it)`) +
               ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir`,
           );
+        // Refuse to resume onto a pre-layout/mixed shape. `turnArtifactPath` addresses ONLY `turns/<N>/`
+        // (no legacy fallback), so resuming one of these writes `turns/<currentTurn>/` next to a root/
+        // name-mangled turn 1 that becomes permanently unaddressable the moment this returns — reintroducing
+        // the exact "turn 1 invisible on a mixed dir" defect this layout removal exists to eliminate, on a
+        // dir mutated AFTER the fix. Gated here (dir-open time), not inside `beginTurn`, so it fires before
+        // any turn-start bookkeeping touches the dir. classifyRunDir is a DETECTOR, never a resolver — see
+        // turn-layout.ts's module doc comment.
+        const resumeShape = classifyRunDir(outDir);
+        if (resumeShape.kind === "legacy" || resumeShape.kind === "mixed")
+          throw new LegacyRunDirError(`--resume: ${preLayoutMessage(resumeShape, outDir)}`);
       } else if (sameOrigin) {
         // a same-project non-resume run must be FRESH — the prior staged tree (uploads, plugins,
         // mnt/.claude agent state, outputs) would otherwise leak in via cpSync's merge semantics, and a
@@ -410,6 +422,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // native agent process genuine, software-checked-only host filesystem access — no container sandbox.
   // Refuse LOUD, before any spawn, unless the scenario opts in via `allow_host_writes: true`.
   if (effectiveFidelity === "hostloop") checkHostLoopWriteConsent(session, scenario.allow_host_writes ?? false);
+
+  // Turn-start bookkeeping for the APPEND-THROUGH-THE-TURN streams, BEFORE anything can write to them:
+  // before the resource sampler opens resources.jsonl and before the agent session starts. Deliberately
+  // deliberately at turn START: the post-run path has already let `foldResources` read.
+  const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
   if (agentSessionId) {
@@ -716,7 +733,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           pid: effectiveFidelity === "hostloop" ? (child as { pid?: number } | undefined)?.pid : undefined,
           instance: effectiveFidelity === "microvm" ? instanceName(baseline) : undefined,
         });
-        resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs());
+        resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs(), turnNumber);
         resourceSampler.start();
       }
 
@@ -924,7 +941,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // exits 2. Skip assertion eval and the capability probe (a real container spawn) — a partial run has no
     // meaningful assertion or verdict outcome.
     if (unansweredErr) {
-      const turn = archivePriorTurnFiles(outDir);
+      const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         turn,
         ablated: opts.ablateSkill,
@@ -955,11 +972,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
       runCrashSafety.finalize(record, "error", partialResult.durationMs!);
       // run.jsonl before result.json — see the ordering rationale on the success path below.
-      writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
+      const tDirPartial = turnWriteDir(outDir, turn);
+      writeRunJsonl(tDirPartial, scenario, effectiveFidelity, record, egress, secrets, turn);
       // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
-      writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
+      const partialText = scrub(JSON.stringify(partialResult, null, 2), secrets);
+      writeTextAtomic(join(tDirPartial, "result.json"), partialText);
+
       appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
-      writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
+      writeTrace(tDirPartial, record, egress, secrets, partialResult.durationMs);
       // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
       warn(
         `::notice:: [partial] run did NOT complete (unanswered gate) — salvaged the pre-failure work to:\n` +
@@ -1011,7 +1031,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
     // Thread the sampler's probe-failure count so the summary can distinguish "sampling failed" from
     // "sampling unsupported / never ran". #41
-    const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures);
+    const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures, turnNumber);
 
     // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
     // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
@@ -1289,7 +1309,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
     // Multi-turn: archive the prior turn's run.jsonl/result.json (if this is a --resume) and get THIS
     // turn's number, so the RunResult and run.jsonl agree and each turn's result stays recoverable.
-    const turn = archivePriorTurnFiles(outDir);
+    const turn = currentTurn(outDir);
 
     const result: RunResult = assembleRunResult({
       $schema: RUN_RESULT_SCHEMA_URL,
@@ -1435,11 +1455,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // next resume computes turn N+1 and archives this orphan as run.turn-<N>.jsonl) rather than result.json
     // present with run.jsonl absent (which would recompute the SAME turn N and overwrite the already-archived
     // result.turn-<N-1>.json). Order matters — do not swap.
-    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
+    const tDir = turnWriteDir(outDir, turn);
+    writeRunJsonl(tDir, scenario, effectiveFidelity, record, egress, secrets, turn);
     // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
-    writeTextAtomic(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
+    const resultText = scrub(JSON.stringify(result, null, 2), secrets);
+    writeTextAtomic(join(tDir, "result.json"), resultText);
     appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
-    writeTrace(outDir, record, egress, secrets, result.durationMs);
+    writeTrace(tDir, record, egress, secrets, result.durationMs);
     return result;
   } finally {
     // LAST on purpose: the raw-stream readers above ran on the unscrubbed files — see the comment at
@@ -1552,31 +1574,54 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
 
 /** THIS write's 1-based turn number, derived from how many prior turns are already archived. Pure — no
  *  side effects, so it can be read before the result is assembled (to stamp `RunResult.turn`). */
-export function currentTurn(outDir: string): number {
-  const archived = readdirSync(outDir).filter((f) => /^run\.turn-\d+\.jsonl$/.test(f)).length;
-  return archived + (existsSync(join(outDir, "run.jsonl")) ? 1 : 0) + 1;
-}
 
-/** Multi-turn preservation: before a resumed turn overwrites them, archive the prior turn's `run.jsonl`
- *  and `result.json` under `<name>.turn-<N>` so an earlier turn's transcript/result stays recoverable.
- *  `run.jsonl`/`result.json` themselves remain the LATEST turn (back-compat: the transcript-sidecar
- *  readers in cli.ts/assert.ts, and every result.json consumer, read the just-completed run). Returns
- *  THIS turn's 1-based number. A fresh `--session-id` run rmSync's its dir first, so an existing
- *  `run.jsonl` here means a genuine resume. Call ONCE per turn, before writing the new result.json. */
-export function archivePriorTurnFiles(outDir: string): number {
+/** Turn-start bookkeeping for the two APPEND-THROUGH-THE-TURN streams. Must run BEFORE the resource
+ *  sampler opens its file and BEFORE the agent session starts.
+ *
+ *  Deliberately at turn START, not post-run: the post-run path runs after `foldResources` has
+ *  already read), so an archive there fixes nothing and would mislabel a two-turn file as turn 1.
+ *
+ *  Nothing happens on turn 1, so a single-turn run's `events.jsonl` stays BYTE-IDENTICAL — which is what
+ *  keeps cassettes (whose `events` array is this file verbatim) unaffected. */
+export function beginTurn(outDir: string): number {
   const turn = currentTurn(outDir);
+  // Create the turn dir HERE, at turn start. The resource sampler opens
+  // `turns/<N>/resources.jsonl` as soon as the run starts, but `turnWriteDir` only runs POST-run — so
+  // without this every sample throws ENOENT, swallowed into a per-tick "sample failed" warning, and
+  // `RunResult.resources` came back undefined on EVERY container/hostloop/microvm run. Turn-aware
+  // addressing without a directory to write into is structural and nonfunctional.
+  turnWriteDir(outDir, turn);
   if (turn > 1) {
-    const prior = turn - 1;
-    const runPath = join(outDir, "run.jsonl");
-    if (existsSync(runPath)) renameSync(runPath, join(outDir, `run.turn-${prior}.jsonl`));
-    const resPath = join(outDir, "result.json");
-    if (existsSync(resPath)) renameSync(resPath, join(outDir, `result.turn-${prior}.json`));
+    // The harness is the sole writer of events.jsonl (agent stdout is persisted only inside the session
+    // read loop), so appending here cannot be preceded by any event of this turn.
+    try {
+      appendFileSync(join(outDir, "events.jsonl"), JSON.stringify({ _emu: "turn_start", turn }) + "\n");
+    } catch {
+      /* best-effort: a missing marker degrades to the fail-closed whole-file scan */
+    }
+    // (A legacy resources rename used to live here for pre-layout dirs; it is gone with them.) Each turn writes
+    // its own `turns/<N>/resources.jsonl`, so there is nothing to rename — the scoping is structural.
+    // Legacy dirs still share one root file and need it. `chat` now goes through this same `beginTurn` too,
+    // but its turn is always 1 (fresh sessionId, fresh dir, never resumed — see chat.ts), so it never
+    // reaches this `turn > 1` branch at all.
   }
   return turn;
 }
 
+export function currentTurn(outDir: string): number {
+  // One past the highest turn that has a `run.jsonl` — see currentTurnFromDirs for why the key is the
+  // transcript and not the result.
+  //
+  // This used to MAX that against an archive-counting "legacy rule", because a pre-layout dir resumed
+  // under the new code was MIXED (turn 1 a root archive, turn 2 a turn dir) and switching on `hasTurnDirs`
+  // made each rule blind to the other's turns — the number went BACKWARDS on the next resume, overwriting
+  // a completed turn. That union is gone with the legacy layer: a pre-layout dir is now refused at
+  // dir-open, so no mixed dir can reach here and there is only one rule to apply.
+  return currentTurnFromDirs(outDir);
+}
+
 /** the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. `turn` is
- *  computed once by the caller (via {@link archivePriorTurnFiles}) so it matches `result.json`'s. */
+ *  computed once by the caller (via {@link currentTurn}) so it matches `result.json`'s. */
 function writeRunJsonl(
   outDir: string,
   scenario: Scenario,
@@ -1761,7 +1806,7 @@ export function buildPartialResult(args: {
     errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
     resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
     stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
-    resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs()),
+    resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs(), undefined, args.turn),
     // Fields this lane deliberately never sets (per this function's own doc comment: "no capability
     // probe fields") — now explicit instead of implicit:
     resultErrorKind: undefined,
@@ -2149,7 +2194,16 @@ export function scanEvents(file: string): {
   const out = { outputsDeletes: [] as string[], hostPathLeaked: false, selfHealRan: false, sidecarMissing: false, malformedLines: 0 };
   let lines: string[] = [];
   try {
-    lines = readFileSync(file, "utf8").trim().split("\n");
+    // CURRENT TURN ONLY. Whole-file scanning made a turn-1 delete fail turn 2's verdict on every
+    // `--resume`.
+    //
+    // NOTE the empty-FILE case is deliberately left alone: `"".trim().split("\n")` is `[""]`, one
+    // malformed line, i.e. evidence-unavailable. `scanEvents` runs POST-run, so a completed turn with an
+    // empty stream is evidence LOSS and must keep failing closed. An earlier version of this fix
+    // special-cased it to `[]` — silently flipping that to a clean PASS on single-turn runs, while the
+    // commit claimed turn 1 was untouched. The case that actually needed handling (an empty segment
+    // AFTER a marker) is already `[]` via the slice below, and on turn >= 2 the file is never empty.
+    lines = currentTurnEventLines(readFileSync(file, "utf8").trim().split("\n"));
   } catch {
     out.sidecarMissing = true;
     return out;
@@ -2213,7 +2267,9 @@ export function findUngatedPathToolCalls(file: string, gateFired: Set<string>): 
   const toolResultIsError = new Map<string, boolean>();
   let lines: string[] = [];
   try {
-    lines = readFileSync(file, "utf8").trim().split("\n");
+    // Current turn only: turn 1's own successfully-gated tool calls were erroring turn 2, because the
+    // gate-fired set holds only THIS process's hook callbacks.
+    lines = currentTurnEventLines(readFileSync(file, "utf8").trim().split("\n"));
   } catch {
     return [];
   }
@@ -2308,4 +2364,4 @@ export function readSessionManifest(path: string, sessionId: string): string {
   return id;
 }
 
-export { UnansweredError, BoundaryError, UsageError };
+export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError };

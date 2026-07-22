@@ -654,6 +654,17 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_stall",
 ] as const satisfies readonly (keyof Assertion)[];
 
+/** THE fidelity tiers the harness understands — the single source for the Scenario `fidelity:` enum, the
+ *  CLI's `--fidelity`/`--tier` validation, and `doctor`. It was previously written out as a literal in
+ *  five places in `src` alone (plus help text and docs); a canonical `FIDELITY_TIERS` const already
+ *  existed in cli.ts and three other sites simply did not use it. A downstream consumer reading a stale
+ *  copy is one of the misreads this consolidation exists to prevent.
+ *
+ *  `test/fidelity-tiers-single-source.test.ts` fails if a new literal copy appears in `src`. */
+export const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "cowork"] as const;
+
+export type FidelityTier = (typeof FIDELITY_TIERS)[number];
+
 export const ScenarioObject = z.strictObject({
   // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
   // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).
@@ -671,7 +682,7 @@ export const ScenarioObject = z.strictObject({
   // cowork = auto-pick host-loop vs container via Cowork's own decision logic (the gate);
   // hostloop = force host-loop; container/microvm = force VM-loop; protocol = L0.
   fidelity: z
-    .enum(["protocol", "container", "microvm", "hostloop", "cowork"])
+    .enum(FIDELITY_TIERS)
     .default("container")
     .describe(
       "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
@@ -1177,10 +1188,10 @@ export interface RunResult {
    *  **both live and replay**; absent when no such file was Read. */
   referencesRead?: string[];
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
-   *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
-   *  turns are archived as `result.turn-<N>.json` / `run.turn-<N>.jsonl`. Lets a multi-turn consumer
-   *  attribute a result to its turn instead of blending cumulative telemetry. Absent on replay/chat
-   *  lanes that don't track it. */
+   *  single-shot run, incrementing per resume. Each turn owns its artifacts under `turns/<N>/`
+   *  (`result.json`, `run.jsonl`, `trace.json`, `resources.jsonl`), so a multi-turn consumer attributes a
+   *  result to its turn instead of blending cumulative telemetry. Absent on replay/chat lanes that don't
+   *  track it. */
   turn?: number;
   subagents?: Array<{
     toolUseId: string;

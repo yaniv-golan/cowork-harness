@@ -428,6 +428,36 @@ describe("assertions --list (every Assertion key has a description, drift guard)
 // SCAFFOLD-FROM-RUN — turn a kept run into a starter scenario YAML.
 import { buildScaffold } from "../src/run/scaffold.js";
 import { parse as parseYaml } from "yaml";
+describe("scaffold refuses a legacy/mixed/pre-completion run dir, naming the shape", () => {
+  // Before this refusal existed, a miss fell through to `result = {}` and emitted a structurally valid
+  // starter YAML asserting NOTHING, exit 0 — a false-clean generator. `requireTurns` refuses loudly
+  // instead, at the moment scaffold resolves its run dir, before `result = {}` is ever reached.
+  it("legacy: root events.jsonl/result.json, no turns/", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-legacy-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    writeFileSync(join(dir, "result.json"), JSON.stringify({ prompt: "p", fidelity: "container", result: "success" }));
+    expect(() => buildScaffold(eventsFilePath)).toThrow(/pre-layout run dir/);
+  });
+
+  it("mixed: turns/ present AND a stray root archive", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-mixed-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    mkdirSync(join(dir, "turns", "2"), { recursive: true });
+    writeFileSync(join(dir, "turns", "2", "result.json"), JSON.stringify({ prompt: "p", fidelity: "container", result: "success" }));
+    writeFileSync(join(dir, "result.turn-1.json"), JSON.stringify({ prompt: "p", fidelity: "container", result: "success" }));
+    expect(() => buildScaffold(eventsFilePath)).toThrow(/MIXED run dir/);
+  });
+
+  it("none: no turns/ and no pre-layout marker — never completed, not silently scaffolded from {}", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-none-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    expect(() => buildScaffold(eventsFilePath)).toThrow(/never completed/);
+  });
+});
+
 describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
   it("emits a scenario from observed gates, artifacts, and prompt", () => {
     const reqId = "r1";
@@ -464,8 +494,9 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
         },
       }),
     );
+    mkdirSync(join(dir, "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root — no compat copy
     writeFileSync(
-      join(dir, "result.json"),
+      join(dir, "turns", "1", "result.json"),
       JSON.stringify({
         prompt: "make a report",
         fidelity: "container",
@@ -486,6 +517,11 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
   it("emits a loud multiSelect marker when a delivered answer looks like a ', '-joined set", () => {
     const reqId = "r1";
     const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-ms-"));
+    // This test has no result.json at all (only checks the YAML's multiSelect comment) — but buildScaffold
+    // now refuses a dir with no turns/<N>/ at all (kind:"none", "this run never completed"). An empty
+    // turns/1/ represents a turn that STARTED but whose result.json hasn't landed yet — buildScaffold's own
+    // `result = {}` fallback still handles that gracefully, same as before this refusal existed.
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
     const eventsFilePath = join(dir, "events.jsonl");
     const events = [
       { type: "system", subtype: "init", tools: ["AskUserQuestion"] },
@@ -556,8 +592,9 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
         },
       }),
     );
+    mkdirSync(join(dir, "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root — no compat copy
     writeFileSync(
-      join(dir, "result.json"),
+      join(dir, "turns", "1", "result.json"),
       JSON.stringify({
         prompt: "make a report",
         fidelity: "container",
@@ -582,8 +619,9 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-artifacts-unavail-"));
     const eventsFilePath = join(dir, "events.jsonl");
     writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    mkdirSync(join(dir, "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root — no compat copy
     writeFileSync(
-      join(dir, "result.json"),
+      join(dir, "turns", "1", "result.json"),
       JSON.stringify({
         prompt: "make a report",
         fidelity: "container",
@@ -607,8 +645,9 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-artifacts-empty-"));
     const eventsFilePath = join(dir, "events.jsonl");
     writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    mkdirSync(join(dir, "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root — no compat copy
     writeFileSync(
-      join(dir, "result.json"),
+      join(dir, "turns", "1", "result.json"),
       JSON.stringify({
         prompt: "make a report",
         fidelity: "container",
@@ -628,8 +667,9 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-artifacts-populated-"));
     const eventsFilePath = join(dir, "events.jsonl");
     writeFileSync(eventsFilePath, JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+    mkdirSync(join(dir, "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root — no compat copy
     writeFileSync(
-      join(dir, "result.json"),
+      join(dir, "turns", "1", "result.json"),
       JSON.stringify({
         prompt: "make a report",
         fidelity: "container",
@@ -648,8 +688,9 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-chat-"));
     const eventsFilePath = join(dir, "events.jsonl");
     writeFileSync(eventsFilePath, ""); // buildGateTrace reads this with no ENOENT guard — an empty file is valid
+    mkdirSync(join(dir, "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root — no compat copy
     writeFileSync(
-      join(dir, "result.json"),
+      join(dir, "turns", "1", "result.json"),
       JSON.stringify({
         $schema: "x",
         generator: "cowork-harness",
@@ -690,8 +731,9 @@ describe("buildGateTrace — provenance annotation", () => {
       userResult("toolu_g", false, "delivered"),
       { type: "result", is_error: false },
     ]);
+    mkdirSync(join(f, "..", "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root
     writeFileSync(
-      join(f, "..", "result.json"),
+      join(f, "..", "turns", "1", "result.json"),
       JSON.stringify({
         decisions: [
           {
@@ -709,6 +751,53 @@ describe("buildGateTrace — provenance annotation", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ question: "Stage?", answeredBy: "llm", model: "claude-sonnet-4-5" });
     expect(formatGateTrace(rows)).toContain("by: decided(llm) (claude-sonnet-4-5)");
+  });
+
+  it("on a genuinely MULTI-turn dir, pairs against the LATEST turn's decisions, not turn 1's", () => {
+    // The guard-invisible defect this covers: `join(file, "..", "result.json")` (pre-seam) resolved to
+    // nothing on any current-layout dir, so every `answeredBy`/`model` label silently vanished. A
+    // single-turn fixture can't distinguish "reads the latest turn correctly" from "reads turns/1/ because
+    // that's the only turn dir that happens to exist" — this dir has TWO, so only the right selection rule
+    // produces a match at all.
+    const f = eventsFile([
+      gate("uuid-3", "toolu_i", "Stage?", "Series B+"),
+      userResult("toolu_i", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
+    const runDir = join(f, "..");
+    mkdirSync(join(runDir, "turns", "1"), { recursive: true });
+    // Turn 1's decisions describe a DIFFERENT question — if this were paired instead, either the
+    // requestId/positional match would fail to find "Stage?" at all, or (worse) it would silently succeed
+    // against the wrong turn's data.
+    writeFileSync(
+      join(runDir, "turns", "1", "result.json"),
+      JSON.stringify({
+        decisions: [{ kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "Turn 1 only?": "yes" } }],
+      }),
+    );
+    mkdirSync(join(runDir, "turns", "2"), { recursive: true });
+    writeFileSync(
+      join(runDir, "turns", "2", "result.json"),
+      JSON.stringify({
+        decisions: [
+          {
+            kind: "question",
+            name: "AskUserQuestion",
+            decision: "answered",
+            by: "llm",
+            model: "claude-sonnet-4-5",
+            detail: { "Stage?": "Series B+" },
+          },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0], "answeredBy/model vanished, or matched turn 1's decisions instead of turn 2's").toMatchObject({
+      question: "Stage?",
+      answeredBy: "llm",
+      model: "claude-sonnet-4-5",
+    });
   });
 
   it("leaves rows unannotated when there is no sibling result.json", () => {
@@ -730,8 +819,9 @@ describe("buildGateTrace — provenance annotation", () => {
       userResult("toolu_b", false, "ok"),
       { type: "result", is_error: false },
     ]);
+    mkdirSync(join(f, "..", "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root
     writeFileSync(
-      join(f, "..", "result.json"),
+      join(f, "..", "turns", "1", "result.json"),
       JSON.stringify({
         decisions: [
           { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
@@ -756,8 +846,9 @@ describe("buildGateTrace — provenance annotation", () => {
       userResult("toolu_b", false, "ok"),
       { type: "result", is_error: false },
     ]);
+    mkdirSync(join(f, "..", "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root
     writeFileSync(
-      join(f, "..", "result.json"),
+      join(f, "..", "turns", "1", "result.json"),
       JSON.stringify({
         decisions: [
           // reversed vs ask order — positional pairing would swap the labels; requestId keeps them correct
@@ -801,8 +892,9 @@ describe("buildGateTrace — provenance annotation", () => {
       userResult("toolu_e", false, "ok"),
       { type: "result", is_error: false },
     ]);
+    mkdirSync(join(f, "..", "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root
     writeFileSync(
-      join(f, "..", "result.json"),
+      join(f, "..", "turns", "1", "result.json"),
       JSON.stringify({
         decisions: [
           { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
@@ -832,8 +924,9 @@ describe("buildGateTrace — provenance annotation", () => {
       userResult("toolu_g", false, "ok"),
       { type: "result", is_error: false },
     ]);
+    mkdirSync(join(f, "..", "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root
     writeFileSync(
-      join(f, "..", "result.json"),
+      join(f, "..", "turns", "1", "result.json"),
       JSON.stringify({
         decisions: [
           { kind: "tool", name: "Bash", decision: "allow", by: "cowork" },
@@ -881,8 +974,9 @@ describe.skipIf(!canCli)("cli trace — cache-read-ratio footer (sibling result.
         JSON.stringify({ type: "result", is_error: false }),
       ].join("\n"),
     );
+    mkdirSync(join(outDir, "turns", "1"), { recursive: true }); // result.json lives under turns/1/, not the root
     writeFileSync(
-      join(outDir, "result.json"),
+      join(outDir, "turns", "1", "result.json"),
       JSON.stringify({ modelUsage: { "claude-opus-4-8": { inputTokens: 100, cacheReadInputTokens: 900 } } }),
     );
     const r = runCliTrace(["trace", "local_1"], runsDir);
@@ -907,5 +1001,34 @@ describe.skipIf(!canCli)("cli trace — cache-read-ratio footer (sibling result.
     const r = runCliTrace(["trace", "local_1"], runsDir);
     expect(r.code).toBe(0);
     expect(r.stdout).not.toContain("cache-read ratio");
+  });
+
+  it("on a genuinely multi-turn dir, the footer reflects the LATEST turn's modelUsage, not turn 1's", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "cwh-trace-cli-runs-multiturn-"));
+    const outDir = join(runsDir, "a-scenario", "local_1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "events.jsonl"),
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] },
+        }),
+        JSON.stringify({ type: "result", is_error: false }),
+      ].join("\n"),
+    );
+    mkdirSync(join(outDir, "turns", "1"), { recursive: true });
+    writeFileSync(
+      join(outDir, "turns", "1", "result.json"),
+      JSON.stringify({ modelUsage: { "claude-opus-4-8": { inputTokens: 100, cacheReadInputTokens: 0 } } }), // 0% — must NOT be what prints
+    );
+    mkdirSync(join(outDir, "turns", "2"), { recursive: true });
+    writeFileSync(
+      join(outDir, "turns", "2", "result.json"),
+      JSON.stringify({ modelUsage: { "claude-opus-4-8": { inputTokens: 100, cacheReadInputTokens: 900 } } }), // 90% — the latest turn
+    );
+    const r = runCliTrace(["trace", "local_1"], runsDir);
+    expect(r.code).toBe(0);
+    expect(r.stdout, "footer used turn 1's modelUsage instead of the latest turn's").toContain("cache-read ratio: 90%");
   });
 });

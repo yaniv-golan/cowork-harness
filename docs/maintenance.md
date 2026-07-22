@@ -48,7 +48,7 @@ Then commit:
 cowork-harness sync             # writes baselines/desktop-<new>.json
 git add baselines/desktop-<new>.json
 git commit -m "parity: sync to Desktop <new>"
-cowork-harness run examples/scenarios/   # regression — drift now shows as test diffs (this repo's scenarios live under examples/)
+cowork-harness run examples/scenarios/   # regression — drift shows as test diffs (this repo's scenarios live under examples/)
 ```
 
 If the agent version bumped, there is no image rebuild: the agent ELF is bind-mounted at runtime from the staged Desktop install (`resolveAgentBinary`, `src/baseline.ts`), not baked into the container image. A bumped `agentVersion` only updates `agentBinary.stagedPath` in the baseline (`src/cli.ts`); the container picks up the new binary from that path.

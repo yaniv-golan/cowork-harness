@@ -24,7 +24,16 @@ function gateFrame(question: string, optionLabels: string[]) {
   };
 }
 
-/** Kept-run dir (success) with result.json + sidecars; `gateOpts` adds an events.jsonl with one gate. */
+/** Where a kept run's per-turn artifacts (result.json/run.jsonl/trace.json) live under the current
+ *  layout — `turns/1/`, no root compat copy of any of them. See verify-run.test.ts's `turn1Dir` for the
+ *  same rationale. */
+function turn1Dir(root: string): string {
+  const d = join(root, "turns", "1");
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+/** Kept-run dir (success) with turns/1/result.json + sidecars; `gateOpts` adds an events.jsonl with one gate. */
 function keptRun(opts: { withGate?: { question: string; options: string[] } } = {}): string {
   const root = mkdtempSync(join(tmpdir(), "cwh-vra-"));
   const workDir = join(root, "work", "session", "mnt");
@@ -45,9 +54,10 @@ function keptRun(opts: { withGate?: { question: string; options: string[] } } = 
     durationMs: 1,
     scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
   };
-  writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
-  writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
-  writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: opts.withGate ? [opts.withGate.question] : [], steps: [] }));
+  const t1 = turn1Dir(root);
+  writeFileSync(join(t1, "result.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(t1, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
+  writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: opts.withGate ? [opts.withGate.question] : [], steps: [] }));
   if (opts.withGate) {
     // a non-control line first, to prove the parser filters by type and survives noise
     const lines = [
@@ -151,7 +161,7 @@ describe.skipIf(!can)("verify-run answer-coverage", () => {
     // A clean, well-formed non-control_request line — NOT corrupt, just not a gate.
     writeFileSync(join(run, "events.jsonl"), JSON.stringify({ type: "assistant", text: "thinking" }) + "\n");
     // trace.json records a question the (gateless) events.jsonl never yields — incomplete evidence.
-    writeFileSync(join(run, "trace.json"), JSON.stringify({ questions: ["Which scenario?"], steps: [] }));
+    writeFileSync(join(run, "turns", "1", "trace.json"), JSON.stringify({ questions: ["Which scenario?"], steps: [] }));
     const sc = scenarioFile(run, `answers:\n  - when_question: "anything"\n    choose: "X"\nassert:\n  - result: success\n`);
     const r = verifyRun(run, sc);
     expect(r.code).not.toBe(0);

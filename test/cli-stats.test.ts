@@ -16,9 +16,12 @@ function runsRoot() {
 
 function seedRun(root: string, scenario: string, runId: string, over: Record<string, unknown> = {}) {
   const dir = join(root, scenario, runId);
-  mkdirSync(dir, { recursive: true });
+  // `turns/1/` — where the writer actually puts a result. This fixture wrote it at the run-dir root
+  // because that is what the writer did when it was written; nothing reads a root result.json now, so
+  // leaving it would have made every assertion in this file vacuous rather than failing loudly.
+  mkdirSync(join(dir, "turns", "1"), { recursive: true });
   writeFileSync(
-    join(dir, "result.json"),
+    join(dir, "turns", "1", "result.json"),
     JSON.stringify({
       scenario,
       fidelity: "container",

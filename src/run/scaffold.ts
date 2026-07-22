@@ -1,9 +1,10 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname } from "node:path";
 import { stringify } from "yaml";
 import type { RunResult } from "../types.js";
 import { buildGateTrace } from "./trace-view.js";
 import { pkgVersion } from "./envelope.js";
+import { requireTurns, turnArtifactPath } from "./turn-layout.js";
 
 /** Regex-escape a question so the scaffolded `when_question` matches it literally (the author can shorten
  *  it to a stable fragment afterwards). */
@@ -19,7 +20,13 @@ function escapeRx(s: string): string {
  */
 export function buildScaffold(eventsFile: string): string {
   const runDir = dirname(eventsFile);
-  const resultPath = join(runDir, "result.json");
+  // Refuse a legacy/mixed/pre-completion dir loudly rather than falling through to `result = {}` — that
+  // fallback is for a genuinely in-flight turn dir (a crash between run.jsonl and result.json), not for a
+  // dir this layout can't address at all. Silently scaffolding from `{}` there emitted a structurally valid
+  // starter YAML with NO assertions, exit 0 — a false-clean generator.
+  const turns = requireTurns(runDir, "scaffold");
+  const turn = turns[turns.length - 1]; // latest — its observed gates/artifacts are the most complete
+  const resultPath = turnArtifactPath(runDir, turn, "result.json");
   let result: Partial<RunResult>;
   if (!existsSync(resultPath)) {
     result = {};

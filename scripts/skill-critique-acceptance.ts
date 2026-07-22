@@ -19,10 +19,10 @@
 // the composition — not just the evaluator — works live and archives the turn-1 slice.
 import { spawn } from "node:child_process";
 import { existsSync, writeSync } from "node:fs";
-import { join } from "node:path";
 import { loadDotenv } from "../src/dotenv.js";
 import { runCritique } from "../src/critique/evaluator.js";
 import type { CritiqueItem } from "../src/critique/evidence.js";
+import { turnArtifactPath } from "../src/run/turn-layout.js";
 
 const SEEDED_PKG = `## Final answer (turn 1)
 Created outputs/scenario.yaml with three assertions and selected the container fidelity tier for the run.
@@ -103,7 +103,9 @@ const E2E_PROBE = "Which fidelity tier should I use for a scenario that writes a
 /** Run the ACTUAL `skill-critique` command once against a real skill and confirm the composition works
  *  end-to-end live — the plumbing the unit tests can only stub: spawn → resume-for-self-report → package →
  *  evaluate → report. Asserts the command exits 0, emits a parseable report, and (the load-bearing check)
- *  archived `result.turn-1.json`, proving the turn-1 slice actually happened on resume. */
+ *  wrote `turns/1/result.json`, proving the turn-1 slice actually happened on resume. NOT part of `npm run
+ *  ci` (this whole script is a live acceptance test, run manually) — a stale hand-probe here would keep
+ *  passing even after the on-disk layout it checks moved. */
 function runCommandSmoke(skill: string, dotenv: string | undefined): Promise<{ ok: boolean; detail: string }> {
   return new Promise((res) => {
     const cmdArgs = [
@@ -135,8 +137,8 @@ function runCommandSmoke(skill: string, dotenv: string | undefined): Promise<{ o
       if (!env || !Array.isArray(env.items)) return res({ ok: false, detail: `report has no items[] array` });
       const outDir = env.outDir;
       if (!outDir || !existsSync(outDir)) return res({ ok: false, detail: `outDir missing or nonexistent: ${outDir}` });
-      if (!existsSync(join(outDir, "result.turn-1.json")))
-        return res({ ok: false, detail: `result.turn-1.json NOT archived in ${outDir} — the reflection turn did not resume/slice turn 1` });
+      if (!existsSync(turnArtifactPath(outDir, 1, "result.json")))
+        return res({ ok: false, detail: `turns/1/result.json missing in ${outDir} — the reflection turn did not resume/slice turn 1` });
       return res({ ok: true, detail: `exit 0, ${env.items.length} items, turn-1 archived, outDir=${outDir}` });
     });
     child.on("error", (e) => res({ ok: false, detail: `spawn error: ${String(e)}` }));

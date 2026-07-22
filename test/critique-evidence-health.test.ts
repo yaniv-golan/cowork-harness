@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -46,6 +46,14 @@ beforeEach(() => {
 
 let dir: string;
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "cwh-crit-health-"))));
+
+/** Write turn N's result.json (`turns/<N>/result.json` — the single addressable shape; no root compat
+ *  copy, no `result.turn-<N>.json` archive). */
+function putTurnResult(n: number, body: string): void {
+  const d = join(dir, "turns", String(n));
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, "result.json"), body);
+}
 
 describe("F28 — a stat error is distinguishable from a real zero-byte boundary", () => {
   it("a genuinely empty (0-byte) stream captures size:0, not null", () => {
@@ -243,30 +251,30 @@ describe("a captured non-empty boundary whose file later vanishes is an integrit
 });
 
 describe("F30 — a corrupt canonical turn-1 result surfaces a typed degradation flag (never a silent turn-2 substitution)", () => {
-  it("readTurn1ResultWithStatus reports 'corrupted' for a malformed result.turn-1.json and does NOT fall back to result.json", () => {
-    writeFileSync(join(dir, "result.turn-1.json"), "{ this is not valid json");
-    writeFileSync(join(dir, "result.json"), JSON.stringify({ turn: 2, finalMessage: "TURN-2 DATA — must not leak" }));
+  it("readTurn1ResultWithStatus reports 'corrupted' for a malformed turns/1/result.json and does NOT fall back to a later turn's", () => {
+    putTurnResult(1, "{ this is not valid json");
+    putTurnResult(2, JSON.stringify({ turn: 2, finalMessage: "TURN-2 DATA — must not leak" }));
     const { value, status } = readTurn1ResultWithStatus(dir);
     expect(status).toBe("corrupted");
-    expect(value).toBeNull(); // never silently substitutes result.json (turn-2) for a corrupt turn-1 file
+    expect(value).toBeNull(); // never silently substitutes a later turn's result for a corrupt turn-1 file
   });
 
-  it("readTurn1ResultWithStatus reports 'missing' (distinct from 'corrupted') when neither result file exists", () => {
+  it("readTurn1ResultWithStatus reports 'missing' (distinct from 'corrupted') when no turns/1/result.json exists", () => {
     const { value, status } = readTurn1ResultWithStatus(dir);
     expect(status).toBe("missing");
     expect(value).toBeNull();
   });
 
-  it("readTurn1ResultWithStatus reports 'ok' for a well-formed result.turn-1.json", () => {
-    writeFileSync(join(dir, "result.turn-1.json"), JSON.stringify({ finalMessage: "hi" }));
+  it("readTurn1ResultWithStatus reports 'ok' for a well-formed turns/1/result.json", () => {
+    putTurnResult(1, JSON.stringify({ finalMessage: "hi" }));
     const { value, status } = readTurn1ResultWithStatus(dir);
     expect(status).toBe("ok");
     expect((value as { finalMessage: string }).finalMessage).toBe("hi");
   });
 
-  it("packageEvidence sets turn1ResultDegraded and never leaks the turn-2 result.json content into the package", () => {
-    writeFileSync(join(dir, "result.turn-1.json"), "{ not valid json at all");
-    writeFileSync(join(dir, "result.json"), JSON.stringify({ finalMessage: "TURN-2-ONLY-SENTINEL-TEXT" }));
+  it("packageEvidence sets turn1ResultDegraded and never leaks a later turn's result.json content into the package", () => {
+    putTurnResult(1, "{ not valid json at all");
+    putTurnResult(2, JSON.stringify({ finalMessage: "TURN-2-ONLY-SENTINEL-TEXT" }));
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
@@ -278,38 +286,40 @@ describe("F30 — a corrupt canonical turn-1 result surfaces a typed degradation
   });
 });
 
-describe("F30 residual — a MISSING (not corrupt) turn-1 archive on a validated resume never silently serves turn-2 data", () => {
-  it("readTurn1ResultWithStatus(outDir, requireArchive:true) reports 'missing' — and never even looks at result.json — when result.turn-1.json was never archived", () => {
-    // No result.turn-1.json at all; result.json exists (this IS the turn-2 result on a resumed run).
-    writeFileSync(join(dir, "result.json"), JSON.stringify({ turn: 2, finalMessage: "TURN-2 DATA — must not leak" }));
+describe("F30 residual — a MISSING (not corrupt) turn-1 result on a validated resume never silently serves a later turn's data", () => {
+  it("readTurn1ResultWithStatus(outDir, requireArchive:true) reports 'missing' — and never even looks at a later turn's result — when turns/1/result.json was never written", () => {
+    // No turns/1/result.json at all; turns/2/result.json exists (the reflection turn's result on a resumed
+    // run). `requireArchive` predates the per-turn layout and no longer changes which file is READ (see
+    // readTurn1ResultWithStatus's doc comment) — this pins that it still can't leak a later turn's data.
+    putTurnResult(2, JSON.stringify({ turn: 2, finalMessage: "TURN-2 DATA — must not leak" }));
     const { value, status } = readTurn1ResultWithStatus(dir, true);
     expect(status).toBe("missing");
-    expect(value).toBeNull(); // requireArchive:true never falls through to result.json
+    expect(value).toBeNull(); // never falls through to turns/2/result.json
   });
 
-  it("readTurn1ResultWithStatus(outDir, requireArchive:false) (the default) still tolerates the single-shot 'no archive, result.json IS turn 1' case", () => {
-    writeFileSync(join(dir, "result.json"), JSON.stringify({ turn: 1, from: "single-shot" }));
+  it("readTurn1ResultWithStatus(outDir, requireArchive:false) (the default) still reads an ordinary single-shot turns/1/result.json", () => {
+    putTurnResult(1, JSON.stringify({ turn: 1, from: "single-shot" }));
     const { value, status } = readTurn1ResultWithStatus(dir); // default requireArchive:false, unchanged behavior
     expect(status).toBe("ok");
     expect((value as { from: string }).from).toBe("single-shot");
   });
 
-  it("packageEvidence(..., isResume:true) sets turn1ResultDegraded and never leaks result.json's turn-2 content when the archive is simply MISSING", () => {
-    // No result.turn-1.json — only the turn-2 result.json, exactly the shape a resumed session has if the
-    // archive step silently failed.
-    writeFileSync(join(dir, "result.json"), JSON.stringify({ finalMessage: "TURN-2-ONLY-SENTINEL-TEXT", turn: 2 }));
+  it("packageEvidence(..., isResume:true) sets turn1ResultDegraded and never leaks a later turn's content when turns/1/result.json is simply MISSING", () => {
+    // No turns/1/result.json — only the reflection turn's turns/2/result.json, exactly the shape a resumed
+    // session has if turn 1 somehow never completed.
+    putTurnResult(2, JSON.stringify({ finalMessage: "TURN-2-ONLY-SENTINEL-TEXT", turn: 2 }));
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
     const result = packageEvidence(dir, boundary, skillDir, true); // isResume:true
     expect(result.turn1ResultDegraded).toBe(true);
     expect(result.pkg).toMatch(/DEGRADED/);
-    expect(result.pkg).not.toContain("TURN-2-ONLY-SENTINEL-TEXT"); // never substituted turn-2 data for turn-1
+    expect(result.pkg).not.toContain("TURN-2-ONLY-SENTINEL-TEXT"); // never substituted a later turn's data for turn-1
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  it("packageEvidence(..., isResume:false) (the default) does NOT flag the same missing-archive shape as degraded — result.json legitimately IS turn 1 there", () => {
-    writeFileSync(join(dir, "result.json"), JSON.stringify({ finalMessage: "single-shot turn-1 result", turn: 1 }));
+  it("packageEvidence(..., isResume:false) (the default) does NOT flag the same missing-turn-1 shape as degraded — an ordinary single-shot run legitimately has one", () => {
+    putTurnResult(1, JSON.stringify({ finalMessage: "single-shot turn-1 result", turn: 1 }));
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
