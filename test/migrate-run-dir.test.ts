@@ -833,6 +833,38 @@ describe("assessRunDir — resources attribution, table-driven properties", () =
     if (res?.kind === "move") expect(res.to.slice(d.length)).toBe("/turns/1/resources.jsonl");
   });
 
+  it("the property's UNDATED arm: an undated boundary in the span forces a refusal, never a silent placement", () => {
+    // The generator above only makes DATED tables, which is why the round-5 undated-edge defects shipped
+    // green. This arm injects the ambiguity: a two-turn span where the earlier turn has no result to date
+    // its boundary MUST refuse — a silent placement here is the exact defect class.
+    for (const datedTurn of [1, 2] as const) {
+      const d = runDir(`sess-undated-${datedTurn}`);
+      const C = new Date("2026-01-15T10:00:00Z").getTime();
+      // both turns exist; only `datedTurn` has a result. samples straddle C.
+      for (const t of [1, 2]) {
+        write(d, `turns/${t}/run.jsonl`, `{"t":"transcript","text":"t${t}"}`);
+        if (t === datedTurn) {
+          write(d, `turns/${t}/result.json`, RESULT(t));
+          utimesSync(join(d, `turns/${t}/result.json`), C / 1000, C / 1000);
+        }
+      }
+      // root artifacts are turn 3 so the resources file at root is cumulative over an undatable boundary
+      write(d, "result.json", RESULT(3));
+      write(d, "run.jsonl", `{"t":"transcript","text":"t3"}`);
+      write(
+        d,
+        "resources.jsonl",
+        `{"ts":${C - 1000},"rss":1}
+{"ts":${C + 1000},"rss":2}
+`,
+      );
+      const a = assessRunDir(d);
+      // With one of turns 1/2 undated, at least one sample's turn is unprovable → refuse. Never a plan
+      // that silently places a sample.
+      expect(a.kind, `undated span (dated=${datedTurn}) was not refused: ${a.kind}`).toBe("refuse");
+    }
+  });
+
   it("does NOT mint a turn dir for an empty resources archive whose turn nothing else evidences", () => {
     // F2 from the plan review: an empty resources.turn-5.jsonl in a {1,2}-turn dir must not create turns/5.
     const d = runDir();
@@ -844,5 +876,67 @@ describe("assessRunDir — resources attribution, table-driven properties", () =
     const a = assessRunDir(d);
     expect(a.kind, "an empty resources archive minted a phantom turn").toBe("refuse");
     if (a.kind === "refuse") expect(a.reason).toMatch(/not evidenced|turn 5/i);
+  });
+});
+
+describe("assessRunDir — resources attribution in UNDATED-completion shapes (round-5 review)", () => {
+  it("REFUSES when every turn is undated and a resources file spans them (no silent highest-turn dump)", () => {
+    // Both turns aborted before writing a result (the crash contract writes run.jsonl first), so no
+    // completion boundary exists — a sample cannot be attributed. The old rule silently dumped everything
+    // into the highest turn. This is the wrong-turn class, in the all-undated edge.
+    const d = runDir();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`);
+    write(d, "resources.jsonl", `{"ts":100,"rss":1}\n{"ts":999999999999,"rss":2}\n`);
+    expect(assessRunDir(d).kind, "an all-undated table silently placed samples").toBe("refuse");
+  });
+
+  it("ACCEPTS a sample into the sole undated turn AFTER the last dated completion", () => {
+    // [turn1 dated, turn2 aborted-pre-result]. A sample past turn 1's completion can only be turn 2's —
+    // it is the one turn after the last boundary. Over-refusing this leaves a migratable dir stuck.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`);
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":1}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind, `should place into turn 2, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind === "move" ? res.to.slice(d.length) : "(not a move)").toBe("/turns/2/resources.jsonl");
+  });
+
+  it("REFUSES rather than misplacing a resources archive whose own turn is undated", () => {
+    // result.turn-1 dated, resources.turn-2.jsonl (turn 2 evidenced only by itself, undated), root=turn 3.
+    // The table excluded turn 2 while maxArchive counted it, sending turn-2 samples into turns/3. Now turn
+    // 2 is an undated table entry, so its samples refuse — and its EMPTY sibling still cannot mint a turn.
+    const d = runDir();
+    const T1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), T1 / 1000, T1 / 1000);
+    write(d, "resources.turn-2.jsonl", `{"ts":${T1 + 1000},"rss":1}\n`);
+    write(d, "result.json", RESULT(3));
+    write(d, "run.jsonl", TRANSCRIPT);
+    expect(assessRunDir(d).kind, "a resources archive's samples landed in the wrong turn").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — a sample past the last dated completion with ≥2 undated tail turns is ambiguous", () => {
+  it("REFUSES rather than dumping into the highest of several undated tail turns", () => {
+    // table [1 dated, 2 undated, 3 undated]: a sample after turn 1's completion could be turn 2's OR
+    // turn 3's — two undated turns follow the last boundary, so it cannot be attributed. Placing it in the
+    // highest (turn 3) is a silent guess; this pins the refusal.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`); // undated
+    write(d, "turns/3/run.jsonl", `{"t":"transcript","text":"t3"}`); // undated
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":1}\n`); // past c1, ambiguous between 2 and 3
+    expect(assessRunDir(d).kind, "a sample was dumped into the highest of several undated tail turns").toBe("refuse");
   });
 });

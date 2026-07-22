@@ -138,14 +138,16 @@ function completionMtimeOf(outDir: string, turn: number, rootResultIsTurn?: numb
 // file spanning ≥3 turns exists nowhere real and is refused rather than adding an N-way op — the crash
 // contract and journal are left exactly as four rounds cleared them.
 
-/** A turn the directory EVIDENCES (a `turns/<N>/`, or a result/run archive — never a resources file
- *  alone, which would let a stray `resources.turn-5.jsonl` invent turn 5), with its completion time or
- *  undefined when that turn's result cannot be dated. */
+/** One turn in the whole-directory completion table, with its completion time or undefined when that
+ *  turn's result cannot be dated. Turn K ran over `(completion(K-1), completion(K)]`. */
 interface TurnCompletion {
   turn: number;
   completionMs: number | undefined;
 }
 
+/** Every turn that could OWN a sample: `turns/` ∪ ALL archives (a `resources.turn-<N>.jsonl` means turn N
+ *  produced telemetry, so N can own samples even though it is undated) ∪ `rootArtifactTurn`. Sorted asc.
+ *  Whether such a turn has a HOME to place a file into is a separate question — see `evidencedTurns`. */
 function completionTable(
   outDir: string,
   archives: Archive[],
@@ -154,40 +156,67 @@ function completionTable(
   rootResultTurn: number,
 ): TurnCompletion[] {
   const turnSet = new Set<number>(turns);
-  for (const a of archives) if (a.stem !== "resources") turnSet.add(a.turn); // result/run/trace archives evidence a turn; a resources archive does not
-  turnSet.add(rootArtifactTurn); // the root artifacts' turn will exist after migration
+  for (const a of archives) turnSet.add(a.turn);
+  turnSet.add(rootArtifactTurn);
   return [...turnSet].sort((a, b) => a - b).map((turn) => ({ turn, completionMs: completionMtimeOf(outDir, turn, rootResultTurn) }));
 }
 
-/** The turn a single sample belongs to, or a refusal cause. A sample belongs to the smallest table turn
- *  whose completion is defined and `>= ts`; if it exceeds every defined completion it belongs to the
- *  highest turn. It is AMBIGUOUS — and refused — when the turn it would land in has a predecessor in the
- *  table whose completion is undefined, because then the sample cannot be proven not to be that
- *  predecessor's. This is the single predicate; there is no separate walk. */
-function bucketOneSample(ts: number, table: TurnCompletion[]): { turn: number } | { ambiguous: true } | { outside: true } {
-  for (let i = 0; i < table.length; i++) {
+/** Turns EVIDENCED by a transcript or result — the turns an empty resources file may be placed into.
+ *  Deliberately excludes resources-only archives: a stray `resources.turn-5.jsonl` must never MINT turn 5. */
+function evidencedTurns(archives: Archive[], turns: number[], rootArtifactTurn: number): Set<number> {
+  const s = new Set<number>(turns);
+  for (const a of archives) if (a.stem !== "resources") s.add(a.turn);
+  s.add(rootArtifactTurn);
+  return s;
+}
+
+/** The turn a single sample belongs to, or `ambiguous` when the table cannot prove one turn.
+ *
+ *  Turn at table position `i` owns `(completion(i-1), completion(i)]`. A sample `ts` is assignable ONLY
+ *  when both endpoints of the interval it falls in are pinned:
+ *   - `ts <= completion[hi]` for the smallest dated `hi` → turn `hi`, but only if `hi`'s predecessor is
+ *     dated (else `ts` might be the predecessor's) or `hi` is first;
+ *   - `ts` past every dated completion → the highest turn, but only if AT MOST ONE turn follows the last
+ *     dated completion (else any of several undated tail turns could own it);
+ *   - no dated completion at all → the sole turn if there is one, else ambiguous.
+ *  This is the single predicate; there is no separate walk. The undated cases are the ones four review
+ *  rounds' successors kept getting wrong. */
+function bucketOneSample(ts: number, table: TurnCompletion[]): { turn: number } | { ambiguous: true } {
+  const n = table.length;
+  let hi = -1;
+  for (let i = 0; i < n; i++) {
     const c = table[i].completionMs;
     if (c !== undefined && ts <= c) {
-      if (i > 0 && table[i - 1].completionMs === undefined) return { ambiguous: true };
-      return { turn: table[i].turn };
+      hi = i;
+      break;
     }
   }
-  // Past every dated completion → the highest turn. Ambiguous only if a later, undated turn could also own it.
-  if (table.length === 0) return { outside: true };
-  const lastDated = [...table].reverse().find((e) => e.completionMs !== undefined);
-  const highest = table[table.length - 1];
-  if (lastDated !== undefined && highest.turn !== lastDated.turn && highest.completionMs === undefined) return { ambiguous: true };
-  return { turn: highest.turn };
+  if (hi !== -1) {
+    if (hi === 0) return { turn: table[0].turn };
+    return table[hi - 1].completionMs === undefined ? { ambiguous: true } : { turn: table[hi].turn };
+  }
+  // ts is past every dated completion.
+  let lastDated = -1;
+  for (let i = n - 1; i >= 0; i--)
+    if (table[i].completionMs !== undefined) {
+      lastDated = i;
+      break;
+    }
+  if (lastDated === -1) return n === 1 ? { turn: table[0].turn } : { ambiguous: true }; // no boundaries: sole turn, else can't tell
+  // Turns after `lastDated` are all undated. Unambiguous only if there is at most one of them (or none —
+  // then ts is a trailing sample of the dated highest turn).
+  return lastDated >= n - 2 ? { turn: table[n - 1].turn } : { ambiguous: true };
 }
 
 /** Plan a single resources file (root `resources.jsonl` or a `resources.turn-<N>.jsonl` archive) by the
  *  completion table. `ownTurn` is the turn the file's POSITION names — used only to place an EMPTY file,
- *  and only when that turn is evidenced (in the table). */
+ *  and only into an EVIDENCED turn (a transcript/result home), never one it would mint. */
 function planResourcesFile(
   outDir: string,
   from: string,
   ownTurn: number,
   table: TurnCompletion[],
+  evidenced: Set<number>,
 ): { kind: "op"; op: MigrationOp } | { kind: "refuse"; reason: string } {
   const rel = from.slice(outDir.length + 1);
   const dest = (turn: number) => turnArtifactPath(outDir, turn, "resources.jsonl");
@@ -206,9 +235,10 @@ function planResourcesFile(
   }
 
   if (lines.length === 0) {
-    // EMPTY: no content to attribute, so it follows its POSITION — but only to an EVIDENCED turn, never
-    // one it would invent. (`ownTurn` is in the table by construction for both root and archive forms.)
-    if (!table.some((e) => e.turn === ownTurn))
+    // EMPTY: no content to attribute, so it follows its POSITION — but only to an EVIDENCED turn (one
+    // with a transcript or result), never one it would mint. A resources archive's own turn is in the
+    // completion table but NOT necessarily evidenced, so this check is `evidenced`, not table membership.
+    if (!evidenced.has(ownTurn))
       return { kind: "refuse", reason: `${rel} is empty and turn ${ownTurn} is not evidenced by any transcript or result` };
     return placeInto(ownTurn);
   }
@@ -229,9 +259,8 @@ function planResourcesFile(
     if ("ambiguous" in b)
       return {
         kind: "refuse",
-        reason: `${rel} has a sample whose turn is ambiguous (an adjacent turn's completion is undated) — refusing rather than attributing by guess`,
+        reason: `${rel} has a sample whose turn cannot be determined (an adjacent turn is undated) — refusing rather than attributing by guess`,
       };
-    if ("outside" in b) return { kind: "refuse", reason: `${rel} has a sample that falls outside every known turn` };
     turnsHit.add(b.turn);
   }
   if (!sawTimestamp)
@@ -327,6 +356,7 @@ export function assessRunDir(outDir: string): Assessment {
   // One completion table for the whole directory. Every resources file — root and archive — buckets
   // against it, so there is a single notion of which turn a sample belongs to.
   const table = completionTable(outDir, archives, turns, rootArtifactTurn, rootArtifactTurn);
+  const evidenced = evidencedTurns(archives, turns, rootArtifactTurn);
 
   for (const a of archives) {
     const from = join(outDir, a.file);
@@ -336,7 +366,7 @@ export function assessRunDir(outDir: string): Assessment {
     // would carry turn-N and turn-N+1 samples into one slot. CONTENT decides; the filename is only the
     // POSITION used to place an empty one.
     if (a.stem === "resources" && a.retry === undefined) {
-      const r = planResourcesFile(outDir, from, a.turn, table);
+      const r = planResourcesFile(outDir, from, a.turn, table, evidenced);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
@@ -369,7 +399,7 @@ export function assessRunDir(outDir: string): Assessment {
     // the directory's shape. The old shape-keyed discriminator (`rootIsLatest`/`highestTurn-1`) is where
     // a whole class of misplacement lived: it split a gap-filling root file across the wrong boundary.
     if (artifact === "resources.jsonl") {
-      const r = planResourcesFile(outDir, from, rootArtifactTurn, table);
+      const r = planResourcesFile(outDir, from, rootArtifactTurn, table, evidenced);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
