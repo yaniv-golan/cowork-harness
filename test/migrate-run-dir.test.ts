@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assessRunDir } from "../src/run/migrate-run-dir.js";
+import { assessRunDir, executeMigration } from "../src/run/migrate-run-dir.js";
 
 // Phase 1 (ASSESS) is where every data-safety rule lives, and it is specified to be COMPLETELY
 // mutation-free: three prior revisions of this spec deleted or fabricated a turn because assessment and
@@ -410,9 +410,11 @@ describe("assessRunDir — byte-identity deletion is restricted to SELF-LABELING
 });
 
 describe("assessRunDir — the boundary itself is undeterminable", () => {
-  it("REFUSES when there is no archived result to date the prior turn's completion", () => {
-    // An archive dir that kept run.turn-1.jsonl but not result.turn-1.json: the boundary a resources
-    // split depends on cannot be established, so any attribution would be a guess.
+  it("REFUSES when a turn adjacent to a sample's has no datable completion", () => {
+    // An archive dir that kept run.turn-1.jsonl but not result.turn-1.json: turn 1 EXISTS (a transcript
+    // evidences it) but has no completion time, so a sample that could be turn 1's or turn 2's cannot be
+    // attributed. The table-driven rule names this precisely — "an adjacent turn's completion is undated"
+    // — rather than the old generic "boundary". Intent (refuse rather than guess) is unchanged.
     const d = runDir();
     write(d, "run.turn-1.jsonl", TRANSCRIPT);
     write(d, "result.json", RESULT(2));
@@ -420,7 +422,7 @@ describe("assessRunDir — the boundary itself is undeterminable", () => {
     write(d, "resources.jsonl", `{"ts":1,"rssBytes":1}\n`);
     const a = assessRunDir(d);
     expect(a.kind).toBe("refuse");
-    if (a.kind === "refuse") expect(a.reason).toMatch(/boundary/i);
+    if (a.kind === "refuse") expect(a.reason).toMatch(/undated|ambiguous|boundary/i);
   });
 });
 
@@ -764,5 +766,83 @@ describe("assessRunDir — a cumulative resources file spanning ≥3 turns", () 
     const a = assessRunDir(d);
     expect(a.kind, "a ≥3-turn cumulative file was split at one boundary, mis-attributing the earliest turn").toBe("refuse");
     if (a.kind === "refuse") expect(a.reason).toMatch(/resources|turn|span/i);
+  });
+});
+
+describe("assessRunDir — resources attribution, table-driven properties", () => {
+  // A deterministic generator (no Math.random — this repo bans it and it would break reproducibility):
+  // enumerate 2-turn dirs with samples placed in each turn, and assert clean dirs PLAN with the samples
+  // landing in their true turns. The single property that would have caught all four rounds' defects:
+  // no sample changes turn across migration.
+  it("splits a cumulative root resources file so every sample lands in the turn its timestamp falls in", () => {
+    // The cumulative case: a pre-layout dir where root artifacts ARE the latest turn (turn 2) and turn 1
+    // is an archive. Its root resources.jsonl spans both turns. Every low sample must land in turns/1,
+    // every high sample in turns/2, none lost — the property that would have caught all four rounds.
+    for (const [lowN, highN] of [
+      [2, 1],
+      [1, 2],
+      [1, 1],
+      [3, 2],
+    ] as const) {
+      const d = runDir(`sess-cum-${lowN}-${highN}`);
+      const C1 = new Date("2026-01-15T10:00:00Z").getTime(); // turn-1 completion
+      write(d, "result.turn-1.json", RESULT(1));
+      write(d, "run.turn-1.jsonl", TRANSCRIPT);
+      utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+      write(d, "result.json", RESULT(2));
+      write(d, "run.jsonl", `{"t":"transcript","text":"t2"}`);
+      const lows = Array.from({ length: lowN }, (_, i) => `{"ts":${C1 - 1000 - i},"rss":${i}}`);
+      const highs = Array.from({ length: highN }, (_, i) => `{"ts":${C1 + 1000 + i},"rss":${100 + i}}`);
+      write(d, "resources.jsonl", [...lows, ...highs].join("\n") + "\n");
+
+      const a = assessRunDir(d);
+      expect(a.kind, `clean cumulative dir ${lowN}/${highN} did not plan: ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+      if (a.kind !== "plan") continue;
+      executeMigration(a.plan, { journalRoot: join(d, "..", ".migrating") });
+      const readTurn = (t: number) => {
+        const p2 = join(d, "turns", String(t), "resources.jsonl");
+        return existsSync(p2)
+          ? readFileSync(p2, "utf8")
+              .split("\n")
+              .filter(Boolean)
+              .map((l) => JSON.parse(l).ts as number)
+          : [];
+      };
+      for (const ts of readTurn(1)) expect(ts <= C1, `sample ${ts} in turns/1 but it is after turn-1 completion`).toBe(true);
+      for (const ts of readTurn(2)) expect(ts > C1, `sample ${ts} in turns/2 but it is turn 1's`).toBe(true);
+      expect(readTurn(1).length + readTurn(2).length, "a sample was lost or duplicated").toBe(lowN + highN);
+    }
+  });
+
+  it("moves a single-turn root resources file whole to its own turn (gap-fill, not cumulative)", () => {
+    // The gap-fill case: root turn-1 artifacts beside turns/2 (a resumed pre-layout dir). root
+    // resources.jsonl is turn 1's ONLY — all samples are turn-1 samples, and it moves whole to turns/1.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.json"), C1 / 1000, C1 / 1000);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`);
+    write(d, "resources.jsonl", `{"ts":${C1 - 500},"rss":1}\n{"ts":${C1 - 100},"rss":2}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind, `gap-fill did not plan: ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : o.kind === "split" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind, "a gap-fill single-turn file was split rather than moved whole").toBe("move");
+    if (res?.kind === "move") expect(res.to.slice(d.length)).toBe("/turns/1/resources.jsonl");
+  });
+
+  it("does NOT mint a turn dir for an empty resources archive whose turn nothing else evidences", () => {
+    // F2 from the plan review: an empty resources.turn-5.jsonl in a {1,2}-turn dir must not create turns/5.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-5.jsonl", ""); // turn 5 evidenced by nothing but itself
+    const a = assessRunDir(d);
+    expect(a.kind, "an empty resources archive minted a phantom turn").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/not evidenced|turn 5/i);
   });
 });

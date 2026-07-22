@@ -125,128 +125,139 @@ function completionMtimeOf(outDir: string, turn: number, rootResultIsTurn?: numb
   return undefined;
 }
 
-/** Where a sample file's rows fall relative to the boundary. `unusable` means no row carried a parseable
- *  numeric `ts` — attribution is then a GUESS, and guessing is what the split exists to avoid. */
-type SampleSpread = "before" | "after" | "spanning" | "unusable" | "empty";
+// ── RESOURCES ATTRIBUTION, table-driven ────────────────────────────────────────────────────────────
+//
+// Every `resources.jsonl` sample was produced DURING some turn. Turn K ran over (completion(K-1),
+// completion(K)], where completion(K) is the mtime of turn K's result (renameSync preserves it, so it is
+// stable wherever that result currently lives). So attribution is a bucketing of samples by ONE
+// whole-directory completion table — not a pile of special cases keyed on directory shape, which is what
+// let the same defect recur for four review rounds. Content decides; a filename or a file's position is
+// only a hint. A file that cannot be attributed UNAMBIGUOUSLY is refused, by one rule, named.
+//
+// The op stays the two-way `split`: the real population maxes out at TWO turns (census 2026-07-22), so a
+// file spanning ≥3 turns exists nowhere real and is refused rather than adding an N-way op — the crash
+// contract and journal are left exactly as four rounds cleared them.
 
-function classifySamples(path: string, boundaryMs: number): SampleSpread {
-  let low = false;
-  let high = false;
-  let rows = 0;
-  try {
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      if (!line) continue;
-      rows++;
-      let ts: number | undefined;
-      try {
-        const v = (JSON.parse(line) as { ts?: unknown }).ts;
-        if (typeof v === "number") ts = v;
-      } catch {
-        /* an unparseable row contributes no evidence either way */
-      }
-      if (ts === undefined) continue;
-      // `<=`: a sample taken exactly at the prior turn's completion belongs to THAT turn.
-      if (ts <= boundaryMs) low = true;
-      else high = true;
-    }
-  } catch {
-    return "unusable";
-  }
-  if (low && high) return "spanning";
-  if (low) return "before";
-  if (high) return "after";
-  // A file with NO rows is not ambiguous, it is empty — it carries no telemetry to mis-attribute, so it
-  // moves like any other artifact. Only a file that HAS rows but no usable timestamp is unattributable,
-  // and that is the case worth refusing. Collapsing the two made every empty resources.jsonl refuse.
-  return rows === 0 ? "empty" : "unusable";
+/** A turn the directory EVIDENCES (a `turns/<N>/`, or a result/run archive — never a resources file
+ *  alone, which would let a stray `resources.turn-5.jsonl` invent turn 5), with its completion time or
+ *  undefined when that turn's result cannot be dated. */
+interface TurnCompletion {
+  turn: number;
+  completionMs: number | undefined;
 }
 
-/** True when the file has any sample at or before `boundaryMs` — evidence of a turn earlier than the
- *  split can attribute. Unparseable lines contribute nothing (they cannot prove an early turn). */
-function sampleAtOrBefore(path: string, boundaryMs: number): boolean {
-  try {
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      if (!line) continue;
-      try {
-        const v = (JSON.parse(line) as { ts?: unknown }).ts;
-        if (typeof v === "number" && v <= boundaryMs) return true;
-      } catch {
-        /* unparseable — no evidence */
-      }
-    }
-  } catch {
-    return false;
-  }
-  return false;
+function completionTable(
+  outDir: string,
+  archives: Archive[],
+  turns: number[],
+  rootArtifactTurn: number,
+  rootResultTurn: number,
+): TurnCompletion[] {
+  const turnSet = new Set<number>(turns);
+  for (const a of archives) if (a.stem !== "resources") turnSet.add(a.turn); // result/run/trace archives evidence a turn; a resources archive does not
+  turnSet.add(rootArtifactTurn); // the root artifacts' turn will exist after migration
+  return [...turnSet].sort((a, b) => a - b).map((turn) => ({ turn, completionMs: completionMtimeOf(outDir, turn, rootResultTurn) }));
 }
 
-/** Plan the one artifact whose attribution is decided by CONTENT rather than by its filename.
- *
- *  `owningTurn` is the turn the file is nominally associated with — the archive's own N, or `maxArchive`
- *  for a root file. Samples at or before that turn's completion belong to it; later samples belong to the
- *  next turn. Handles the root and archive-named forms identically, because the resume fix renames one
- *  into the other and the two must not migrate differently. */
-function planResources(
+/** The turn a single sample belongs to, or a refusal cause. A sample belongs to the smallest table turn
+ *  whose completion is defined and `>= ts`; if it exceeds every defined completion it belongs to the
+ *  highest turn. It is AMBIGUOUS — and refused — when the turn it would land in has a predecessor in the
+ *  table whose completion is undefined, because then the sample cannot be proven not to be that
+ *  predecessor's. This is the single predicate; there is no separate walk. */
+function bucketOneSample(ts: number, table: TurnCompletion[]): { turn: number } | { ambiguous: true } | { outside: true } {
+  for (let i = 0; i < table.length; i++) {
+    const c = table[i].completionMs;
+    if (c !== undefined && ts <= c) {
+      if (i > 0 && table[i - 1].completionMs === undefined) return { ambiguous: true };
+      return { turn: table[i].turn };
+    }
+  }
+  // Past every dated completion → the highest turn. Ambiguous only if a later, undated turn could also own it.
+  if (table.length === 0) return { outside: true };
+  const lastDated = [...table].reverse().find((e) => e.completionMs !== undefined);
+  const highest = table[table.length - 1];
+  if (lastDated !== undefined && highest.turn !== lastDated.turn && highest.completionMs === undefined) return { ambiguous: true };
+  return { turn: highest.turn };
+}
+
+/** Plan a single resources file (root `resources.jsonl` or a `resources.turn-<N>.jsonl` archive) by the
+ *  completion table. `ownTurn` is the turn the file's POSITION names — used only to place an EMPTY file,
+ *  and only when that turn is evidenced (in the table). */
+function planResourcesFile(
   outDir: string,
   from: string,
-  owningTurn: number,
-  rootResultIsTurn?: number,
-  /** True when `from` is an ARCHIVE (`resources.turn-<N>.jsonl`), whose NAME states its turn. */
-  isArchiveNamed = false,
+  ownTurn: number,
+  table: TurnCompletion[],
 ): { kind: "op"; op: MigrationOp } | { kind: "refuse"; reason: string } {
   const rel = from.slice(outDir.length + 1);
-  const boundaryMs = completionMtimeOf(outDir, owningTurn, rootResultIsTurn);
-  if (boundaryMs === undefined)
-    return {
-      kind: "refuse",
-      reason: `cannot determine the turn boundary for ${rel} (no mtime for result.turn-${owningTurn}.json) — refusing rather than attributing samples by guess`,
-    };
+  const dest = (turn: number) => turnArtifactPath(outDir, turn, "resources.jsonl");
+  const placeInto = (turn: number): { kind: "op"; op: MigrationOp } | { kind: "refuse"; reason: string } => {
+    const to = dest(turn);
+    if (existsSync(to) && !sameBytes(from, to))
+      return { kind: "refuse", reason: `${rel} would overwrite the existing ${to.slice(outDir.length + 1)}` };
+    return existsSync(to) ? { kind: "op", op: { kind: "delete", path: from } } : { kind: "op", op: { kind: "move", from, to } };
+  };
 
-  const lowDest = turnArtifactPath(outDir, owningTurn, "resources.jsonl");
-  const highDest = turnArtifactPath(outDir, owningTurn + 1, "resources.jsonl");
-
-  // A SINGLE BOUNDARY CAN ONLY SEPARATE TWO TURNS. This splits between `owningTurn` and `owningTurn+1`;
-  // a sample at or before turn `owningTurn-1`'s completion belongs to a THIRD, earlier turn that one
-  // boundary cannot carve out — the file was assumed to span only the last two turns, and that assumption
-  // was never checked. The evidence is in hand: if the prior turn's completion time is known and any
-  // sample predates it, refuse rather than lump earlier turns' samples into `owningTurn`.
-  const priorBoundaryMs = completionMtimeOf(outDir, owningTurn - 1, rootResultIsTurn);
-  if (priorBoundaryMs !== undefined && sampleAtOrBefore(from, priorBoundaryMs))
-    return {
-      kind: "refuse",
-      reason: `${rel} spans more than two turns (a sample predates turn ${owningTurn - 1}'s completion) — a single boundary cannot attribute it; refusing rather than mis-splitting`,
-    };
-
-  const spread = classifySamples(from, boundaryMs);
-
-  if (spread === "unusable")
-    return {
-      kind: "refuse",
-      reason: `${rel} has no usable sample timestamps — refusing rather than attributing telemetry by guess`,
-    };
-
-  // A split WRITES both destinations, so an occupied one is destroyed rather than merged. The
-  // uniqueness pass below only sees moves, so this has to be checked here.
-  if (spread === "spanning") {
-    for (const dest of [lowDest, highDest]) {
-      if (existsSync(dest))
-        return { kind: "refuse", reason: `splitting ${rel} would overwrite the existing ${dest.slice(outDir.length + 1)}` };
-    }
-    return { kind: "op", op: { kind: "split", from, boundaryMs, toLow: lowDest, toHigh: highDest } };
+  let lines: string[];
+  try {
+    lines = readFileSync(from, "utf8").split("\n").filter(Boolean);
+  } catch {
+    return { kind: "refuse", reason: `${rel} is unreadable — refusing rather than migrating telemetry it cannot inspect` };
   }
 
-  // Wholly one side: a plain move, but to the turn the CONTENT indicates — not automatically the latest.
-  //
-  // An EMPTY file has no content to attribute, so it falls back to what its POSITION says. For a root
-  // file that is the later turn (root artifacts are the latest turn's); for an ARCHIVE the name already
-  // states the turn, and folding both into the after-boundary arm sent an empty `resources.turn-1.jsonl`
-  // into turn 2 — handing a turn that never had telemetry a file carrying turn 1's mtime, which this
-  // branch treats as data, and colliding with a genuine turn-2 file when one existed.
-  const emptyDest = isArchiveNamed ? lowDest : highDest;
-  const dest = spread === "empty" ? emptyDest : spread === "before" ? lowDest : highDest;
-  if (existsSync(dest) && !sameBytes(from, dest))
-    return { kind: "refuse", reason: `${rel} would overwrite the existing ${dest.slice(outDir.length + 1)}` };
-  return existsSync(dest) ? { kind: "op", op: { kind: "delete", path: from } } : { kind: "op", op: { kind: "move", from, to: dest } };
+  if (lines.length === 0) {
+    // EMPTY: no content to attribute, so it follows its POSITION — but only to an EVIDENCED turn, never
+    // one it would invent. (`ownTurn` is in the table by construction for both root and archive forms.)
+    if (!table.some((e) => e.turn === ownTurn))
+      return { kind: "refuse", reason: `${rel} is empty and turn ${ownTurn} is not evidenced by any transcript or result` };
+    return placeInto(ownTurn);
+  }
+
+  const turnsHit = new Set<number>();
+  let sawTimestamp = false;
+  for (const line of lines) {
+    let ts: number | undefined;
+    try {
+      const v = (JSON.parse(line) as { ts?: unknown }).ts;
+      if (typeof v === "number") ts = v;
+    } catch {
+      /* unparseable line carries no evidence */
+    }
+    if (ts === undefined) continue;
+    sawTimestamp = true;
+    const b = bucketOneSample(ts, table);
+    if ("ambiguous" in b)
+      return {
+        kind: "refuse",
+        reason: `${rel} has a sample whose turn is ambiguous (an adjacent turn's completion is undated) — refusing rather than attributing by guess`,
+      };
+    if ("outside" in b) return { kind: "refuse", reason: `${rel} has a sample that falls outside every known turn` };
+    turnsHit.add(b.turn);
+  }
+  if (!sawTimestamp)
+    return { kind: "refuse", reason: `${rel} has no usable sample timestamps — refusing rather than attributing telemetry by guess` };
+
+  const hit = [...turnsHit].sort((a, b) => a - b);
+  if (hit.length === 1) return placeInto(hit[0]);
+
+  if (hit.length === 2 && hit[1] === hit[0] + 1) {
+    // Exactly two ADJACENT turns → the existing two-way split at the earlier turn's completion.
+    const boundaryMs = table.find((e) => e.turn === hit[0])?.completionMs;
+    if (boundaryMs === undefined)
+      return { kind: "refuse", reason: `${rel} spans turns ${hit.join(" and ")} but turn ${hit[0]}'s completion is undated` };
+    const toLow = dest(hit[0]);
+    const toHigh = dest(hit[1]);
+    for (const d of [toLow, toHigh])
+      if (existsSync(d)) return { kind: "refuse", reason: `splitting ${rel} would overwrite the existing ${d.slice(outDir.length + 1)}` };
+    return { kind: "op", op: { kind: "split", from, boundaryMs, toLow, toHigh } };
+  }
+
+  // ≥3 turns, or two non-adjacent — a single boundary cannot express it. Zero real dirs are ≥3 turns
+  // (census), so this refuses a shape that exists nowhere rather than adding an N-way op.
+  return {
+    kind: "refuse",
+    reason: `${rel} spans turns ${hit.join(", ")} — a single boundary cannot attribute more than two adjacent turns`,
+  };
 }
 
 /** Assess a run dir and return a complete plan, or a refusal. NEVER mutates anything. */
@@ -313,14 +324,19 @@ export function assessRunDir(outDir: string): Assessment {
     else rootArtifactTurn = highestOnDisk;
   }
 
+  // One completion table for the whole directory. Every resources file — root and archive — buckets
+  // against it, so there is a single notion of which turn a sample belongs to.
+  const table = completionTable(outDir, archives, turns, rootArtifactTurn, rootArtifactTurn);
+
   for (const a of archives) {
     const from = join(outDir, a.file);
 
     // An ARCHIVE-NAMED resources file can be cumulative too — the resume fix mints exactly that by
     // renaming a spanning root `resources.jsonl` to `resources.turn-<prior>.jsonl`. Trusting the name
-    // would carry turn-N and turn-N+1 samples into one slot. CONTENT decides; the filename is a hint.
+    // would carry turn-N and turn-N+1 samples into one slot. CONTENT decides; the filename is only the
+    // POSITION used to place an empty one.
     if (a.stem === "resources" && a.retry === undefined) {
-      const r = planResources(outDir, from, a.turn, rootArtifactTurn, true);
+      const r = planResourcesFile(outDir, from, a.turn, table);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
@@ -347,30 +363,17 @@ export function assessRunDir(outDir: string): Assessment {
   for (const artifact of rootArtifacts) {
     const from = join(outDir, artifact);
 
-    // A root `resources.jsonl` is one of two things, and only one of them is cumulative:
-    //
-    //   - CUMULATIVE across the last two turns, when the root artifacts ARE the latest turn (a pre-layout
-    //     dir not yet resumed under the new layout — root turn N beside archives 1..N-1). It predates
-    //     `beginTurn`'s per-turn resources rename, so its first sample lands just before turn N-1 completed
-    //     and its last during turn N; carrying it whole attributes earlier samples to the wrong turn. This
-    //     is the case that must be SPLIT at turn N-1's completion.
-    //
-    //   - THAT TURN'S OWN, when the root artifacts fill a GAP below the highest turn (a pre-layout dir
-    //     resumed one or more times: root turn 1 beside turns/2, turns/3, …). Here `resources.jsonl` is
-    //     turn 1's file, full stop — splitting it against turn (highest-1) sent turn-1 samples into a later
-    //     turn, exactly the misplacement the archive path was fixed for. It is a plain move to
-    //     `rootArtifactTurn`, handled by the ordinary root-artifact rules below.
-    //
-    // The discriminator is whether the root artifacts are the latest turn.
-    const highestTurn = Math.max(rootTurn, ...(turns.length ? turns : [0]));
-    const rootIsLatest = rootArtifactTurn === highestTurn;
-    if (artifact === "resources.jsonl" && rootIsLatest && highestTurn - 1 > 0) {
-      const r = planResources(outDir, from, highestTurn - 1, rootArtifactTurn);
+    // A root `resources.jsonl` buckets against the same whole-dir table as every archive one — its
+    // POSITION (rootArtifactTurn) is used only to place it when empty. Whether it is cumulative (samples
+    // spanning two turns → split) or one turn's own (single bucket → move) is decided by CONTENT, not by
+    // the directory's shape. The old shape-keyed discriminator (`rootIsLatest`/`highestTurn-1`) is where
+    // a whole class of misplacement lived: it split a gap-filling root file across the wrong boundary.
+    if (artifact === "resources.jsonl") {
+      const r = planResourcesFile(outDir, from, rootArtifactTurn, table);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
     }
-    // else: falls through to the ordinary root-artifact placement, which uses rootArtifactTurn.
 
     if (turns.length === 0) {
       // No `turns/` yet: the per-dir mapping governs.
