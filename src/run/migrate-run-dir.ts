@@ -95,7 +95,11 @@ function sameBytes(a: string, b: string): boolean {
 function stampedTurn(path: string): number | undefined {
   try {
     const v = (JSON.parse(readFileSync(path, "utf8")) as { turn?: unknown }).turn;
-    return typeof v === "number" ? v : undefined;
+    // A turn is a positive integer. A fractional or <1 value is not a turn number — trusting it would
+    // migrate history into `turns/1.5/`, which `listTurns`' `^\d+$` scan can never address, while a
+    // re-assessment then calls the dir "already current". Treat a malformed stamp as absent (the cross-
+    // check is corroborating only, never the deciding test — see the header).
+    return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined;
   } catch {
     return undefined;
   }
@@ -169,8 +173,15 @@ function completionTable(
  *  without one it is arithmetic (maxArchive+1, or a gap), and placing telemetry by it mints the same
  *  transcript-less `turns/<N>/` through a different channel — a fully-archived dir's trailing sample is
  *  as likely the last real turn's own post-result sample as a phantom next turn's. */
-function evidencedTurns(archives: Archive[], turns: number[], rootArtifactTurn: number, rootHasHome: boolean): Set<number> {
-  const s = new Set<number>(turns);
+function evidencedTurns(outDir: string, archives: Archive[], turns: number[], rootArtifactTurn: number, rootHasHome: boolean): Set<number> {
+  const s = new Set<number>();
+  // A `turns/<N>/` that exists but holds NO run.jsonl or result.json is not evidence: it is a crash between
+  // turnWriteDir's mkdir and the turn's first write. `listTurns` counts the bare dir (pure enumeration), so
+  // seeding from it directly let a trailing resources sample land in an empty dir and mint a telemetry-only
+  // turn — the same phantom the archive/rootArtifactTurn gates below refuse. Mirrors currentTurnFromDirs'
+  // and assessRunDir's own "no transcript/result = not a real turn".
+  for (const n of turns)
+    if (existsSync(turnArtifactPath(outDir, n, "run.jsonl")) || existsSync(turnArtifactPath(outDir, n, "result.json"))) s.add(n);
   for (const a of archives) if (a.stem !== "resources") s.add(a.turn);
   if (rootHasHome) s.add(rootArtifactTurn);
   return s;
@@ -375,7 +386,7 @@ export function assessRunDir(outDir: string): Assessment {
   // against it, so there is a single notion of which turn a sample belongs to.
   const table = completionTable(outDir, archives, turns, rootArtifactTurn, rootArtifactTurn);
   const rootHasHome = existsSync(join(outDir, "run.jsonl")) || existsSync(join(outDir, "result.json"));
-  const evidenced = evidencedTurns(archives, turns, rootArtifactTurn, rootHasHome);
+  const evidenced = evidencedTurns(outDir, archives, turns, rootArtifactTurn, rootHasHome);
 
   for (const a of archives) {
     const from = join(outDir, a.file);
@@ -759,7 +770,7 @@ export interface MigrationReport {
  *  any scenario with a live journal, printing "run migrate-run-dir to finish". Without this sweep that
  *  advice is false: the migrator never touches the journal, so the scenario is skipped forever and
  *  nothing in the system can clear it. */
-function sweepOrphanedJournals(runsRoot: string, write: boolean): number {
+function sweepOrphanedJournals(runsRoot: string, write: boolean, onlyScenario?: string): number {
   const journalRoot = journalRootFor(runsRoot);
   let swept = 0;
   let scenarios: string[];
@@ -769,6 +780,10 @@ function sweepOrphanedJournals(runsRoot: string, write: boolean): number {
     return 0; // no journal store — the ordinary case
   }
   for (const scenario of scenarios) {
+    // --scenario stages a rollout one scenario at a time; the sweep is a mutation and a count, so it must
+    // stay inside that scope too. Sweeping another scenario's journal here (before the walker's own filter)
+    // removed state the scoped run never asked to touch, and reported it under the scoped run's totals.
+    if (onlyScenario !== undefined && scenario !== onlyScenario) continue;
     const dir = join(journalRoot, scenario);
     let files: string[];
     try {
@@ -806,7 +821,7 @@ export function migrateRunsRoot(
   const report: MigrationReport = { migrated: 0, recovered: 0, noop: 0, skipped: 0, orphaned: 0, refused: [] };
   const journalRoot = journalRootFor(runsRoot);
   if (!existsSync(runsRoot)) return report;
-  report.orphaned = sweepOrphanedJournals(runsRoot, opts.write);
+  report.orphaned = sweepOrphanedJournals(runsRoot, opts.write, opts.scenario);
 
   for (const scenario of readdirSync(runsRoot).sort()) {
     if (scenario === MIGRATION_JOURNAL_DIR) continue;

@@ -43,9 +43,14 @@ function stemAndExt(artifact: PerTurnArtifact): { stem: string; ext: string } {
  *  stray directory shift every turn number in the run dir. */
 function turnsDirNumbers(outDir: string): number[] {
   try {
-    return readdirSync(join(outDir, "turns"))
-      .filter((e) => /^\d+$/.test(e))
-      .map(Number)
+    // A turn is a DIRECTORY named with a CANONICAL decimal: `withFileTypes` excludes a stray file (or
+    // symlink) that happens to be named like a number, and `^(0|[1-9]\d*)$` rejects a non-canonical
+    // spelling like `01` — the writer only ever produces `String(n)`, so `turns/01` would be addressed as
+    // the missing `turns/1` and its data left invisible. An anchored match already stopped `2junk`; these
+    // close the file-masquerading-as-a-turn and leading-zero variants.
+    return readdirSync(join(outDir, "turns"), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && /^(?:0|[1-9]\d*)$/.test(e.name))
+      .map((e) => Number(e.name))
       .sort((a, b) => a - b);
   } catch {
     return [];
@@ -142,7 +147,10 @@ function contaminationMarkers(outDir: string): string[] {
   for (const a of PER_TURN_ARTIFACTS) if (existsSync(join(outDir, a))) markers.push(a);
   try {
     for (const e of readdirSync(outDir)) {
-      if (/^(?:result|run|trace|resources)\.turn-\d+\.(?:json|jsonl)$/.test(e)) markers.push(e);
+      // Mirror the migrator's ARCHIVE_RE, INCLUDING the optional `.retry-<N>` — the migrator plans to move
+      // a root retry archive, so if this detector missed it the dir classified as clean `turns` and readers
+      // read it instead of refusing. The two seams must name the same set of pre-layout markers.
+      if (/^(?:result|run|trace|resources)\.turn-\d+(?:\.retry-\d+)?\.(?:json|jsonl)$/.test(e)) markers.push(e);
     }
   } catch {
     /* outDir absent/unreadable — no markers */

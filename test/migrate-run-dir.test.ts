@@ -1056,3 +1056,50 @@ describe("assessRunDir — a NON-empty resources file must not mint a turn nothi
     if (a.kind === "refuse") expect(a.reason).toMatch(/turn 7/);
   });
 });
+
+describe("assessRunDir — an EMPTY turns/<N>/ dir is not evidence (the phantom channel the archive guard didn't cover)", () => {
+  it("REFUSES placing a trailing root resources sample into an empty crash-remnant turn dir", () => {
+    // turns/2 exists but is EMPTY: a crash between turnWriteDir's mkdir and the turn's first write. It is a
+    // directory (so listTurns counts it), but nothing — no run.jsonl, no result.json — vouches that turn 2
+    // ran. A root resources sample after turn 1 buckets past every dated completion to the highest turn (2);
+    // placing it there mints a telemetry-only turn. The sample is as likely turn 1's own trailing one.
+    const d = runDir();
+    const T1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    utimesSync(join(d, "turns/1/result.json"), T1 / 1000, T1 / 1000);
+    mkdirSync(join(d, "turns", "2"), { recursive: true }); // empty
+    write(d, "resources.jsonl", `{"ts":${T1 + 5000},"rss":1}\n`);
+    const before = snapshot(d);
+
+    const a = assessRunDir(d);
+
+    expect(a.kind, a.kind === "plan" ? `planned ${JSON.stringify(a.plan.ops)}` : "").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2.*evidences|not evidenced/);
+    expect(snapshot(d), "ASSESSMENT MUTATED THE DIRECTORY").toBe(before);
+  });
+});
+
+describe("assessRunDir — a non-integer .turn stamp is ignored, never migrated into an unaddressable dir", () => {
+  it("does not place root artifacts into turns/1.5 for a fractional stamp", () => {
+    // The schema requires an integer >= 1, but the migrator reads legacy files that may predate/violate it.
+    // A fractional stamp must never become turns/1.5 — listTurns' `^\d+$` scan can never address it, so the
+    // history would be migrated into a dir no reader sees, while a re-assessment reports the dir as current.
+    const d = runDir();
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "result.json", '{"scenario":"scn","turn":1.5}');
+    write(d, "run.jsonl", TRANSCRIPT);
+
+    const a = assessRunDir(d);
+
+    expect(a.kind, a.kind === "refuse" ? a.reason : a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const tos = a.plan.ops.flatMap((o) => (o.kind === "move" ? [o.to.slice(d.length)] : []));
+    expect(tos.join(), "a fractional stamp created an unaddressable turns/1.5").not.toContain("turns/1.5");
+    expect(
+      tos.some((t) => t.includes("/turns/1/")),
+      "root artifacts should fall back to the first addressable gap",
+    ).toBe(true);
+  });
+});

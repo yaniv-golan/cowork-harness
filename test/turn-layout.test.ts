@@ -199,4 +199,31 @@ describe("classifyRunDir: the ONLY place the legacy/mixed shape is still named, 
     expect(() => requireTurns(dir, "verify-run")).toThrow(/verify-run/);
     expect(classifyRunDir(dir).kind).toBe("legacy");
   });
+
+  it("mixed: a root RETRY archive is a marker too — the migrator moves it, so a reader must not read the dir as clean", () => {
+    // contaminationMarkers and the migrator's ARCHIVE_RE must agree on what a pre-layout marker is. A root
+    // `run.turn-1.retry-2.jsonl` is one the migrator plans to move; if the classifier misses it, diff/verify
+    // read the dir as clean current-layout instead of refusing and pointing at migrate-run-dir.
+    put("turns/1/run.jsonl");
+    put("run.turn-1.retry-2.jsonl");
+    const shape = classifyRunDir(dir);
+    expect(shape.kind).toBe("mixed");
+    expect((shape as { markers: string[] }).markers).toContain("run.turn-1.retry-2.jsonl");
+  });
+});
+
+describe("turnsDirNumbers is a DIRECTORY scan with canonical decimals — a stray file or non-canonical name is not a turn", () => {
+  it("a plain FILE named turns/1 is not counted as a turn", () => {
+    put("turns/1", "i am a file, not a turn dir");
+    expect(listTurns(dir)).toEqual([]);
+    expect(classifyRunDir(dir).kind).toBe("none");
+  });
+
+  it("a non-canonical turns/01 directory is not silently addressed as turn 1", () => {
+    // '01' -> Number 1, but the writer only ever produces String(1) = 'turns/1', so turnArtifactPath(,1,)
+    // reads turns/1 — the data in turns/01 would be invisible. Reject the non-canonical spelling outright.
+    put("turns/01/run.jsonl");
+    put("turns/01/result.json");
+    expect(listTurns(dir)).toEqual([]);
+  });
 });

@@ -424,6 +424,26 @@ describe("migrateRunsRoot — the batch walker's control flow", () => {
     rmSync(r0, { recursive: true, force: true });
   });
 
+  it("--scenario scopes the orphan-journal sweep to that scenario", () => {
+    // --scenario stages a rollout one scenario at a time; EVERY mutation and count must stay inside it.
+    // The orphan sweep ran globally before the scenario filter, so an unrelated scenario's journal was
+    // removed (and counted) during a scoped run.
+    const r0 = mkdtempSync(join(tmpdir(), "walk-scope-"));
+    legacyIn(r0, "alpha", "run-a");
+    const betaJ = join(r0, ".migrating", "beta");
+    mkdirSync(betaJ, { recursive: true });
+    writeFileSync(
+      join(betaJ, "gone.json"),
+      JSON.stringify({ outDir: join(r0, "beta", "gone"), identity: { ino: 1, birthtimeMs: 1 }, ops: [], dirMtimes: {} }),
+    );
+
+    const rep = migrateRunsRoot(r0, { write: true, scenario: "alpha" });
+
+    expect(existsSync(join(betaJ, "gone.json")), "beta's orphan journal was swept during a --scenario alpha run").toBe(true);
+    expect(rep.orphaned, "an out-of-scenario orphan journal was counted").toBe(0);
+    rmSync(r0, { recursive: true, force: true });
+  });
+
   it("reports a dir that THROWS instead of letting it vanish from the report", () => {
     // A per-dir failure must surface as a refusal row. Swallowing it silently drops the directory from
     // every count — the report then claims everything was handled when it wasn't.
