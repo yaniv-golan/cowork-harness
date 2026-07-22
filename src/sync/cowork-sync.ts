@@ -417,14 +417,23 @@ export function checkCodeTripwires(bundle: string): string[] {
   const flags: string[] = [];
   const count = (needle: string): number => bundle.split(needle).length - 1;
 
+  // Distinguish the DEFINITION from callers so `count` isn't read blindly: the baseline is "1 = the
+  // definition, 0 callers". defPresent guards two edges (D3): (a) count 1 but NOT the definition = a
+  // caller with the def moved out of the scanned require() graph — NOT "clean"; (b) count 0 might be a
+  // dynamic-import() move, not a removal, so the prune NOTE must say so rather than coach a deletion.
   const gmss = count("getMcpSkillSources");
+  const defPresent = /getMcpSkillSources\(\)\{/.test(bundle);
   if (gmss > 1)
     flags.push(
       `code tripwire: getMcpSkillSources now appears ${gmss}x (was 1 = definition-only) — a CALLER appeared, so MCP servers may now contribute skills (dead scaffolding is now wired). Re-verify docs/internal finding 2 and decide whether the harness must model MCP-contributed skill sources; ${SPAWN_NO_BYPASS}`,
     );
+  else if (gmss === 1 && !defPresent)
+    flags.push(
+      "NOTE: code tripwire: getMcpSkillSources appears once but its definition (`getMcpSkillSources(){`) is not in the require() graph — likely a caller remaining while the definition moved to a dynamically-imported chunk; verify against ALL .vite/build chunks before trusting the count (checkCodeTripwires in cowork-sync.ts)",
+    );
   else if (gmss === 0)
     flags.push(
-      "NOTE: code tripwire: getMcpSkillSources is gone from the asar — the MCP-skill-source scaffolding was removed; prune this tripwire (checkCodeTripwires in cowork-sync.ts)",
+      "NOTE: code tripwire: getMcpSkillSources not found in the require() graph — it was REMOVED, or moved out of the scanned graph (a dynamic import()); confirm against ALL .vite/build chunks before pruning this tripwire (checkCodeTripwires in cowork-sync.ts)",
     );
 
   const skillsExt = count("io.modelcontextprotocol/skills");

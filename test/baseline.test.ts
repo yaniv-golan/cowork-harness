@@ -240,11 +240,11 @@ describe("countStringInFile — literal occurrence counter for binary string sen
 });
 
 describe("checkCodeTripwires — string-shape sentinels the sync can't see via gates/env", () => {
-  // Healthy state on 1.24012.0/.1: getMcpSkillSources appears once (definition only, zero callers),
-  // io.modelcontextprotocol/skills once (capability declaration). Dead scaffolding — see finding 2.
-  const clean = "const getMcpSkillSources = 1; caps.extensions['io.modelcontextprotocol/skills'];";
+  // Healthy state on 1.24012.0/.1: getMcpSkillSources appears once AS ITS DEFINITION (`(){`), zero
+  // callers; io.modelcontextprotocol/skills once (capability declaration). Dead scaffolding — finding 2.
+  const clean = "getMcpSkillSources(){return[...x]} caps.extensions['io.modelcontextprotocol/skills'];";
 
-  it("is clean when getMcpSkillSources is definition-only (1x) and the skills cap is 1x", () => {
+  it("is clean when getMcpSkillSources is definition-only (1x, the `(){` def) and the skills cap is 1x", () => {
     expect(checkCodeTripwires(clean)).toEqual([]);
   });
 
@@ -257,16 +257,29 @@ describe("checkCodeTripwires — string-shape sentinels the sync can't see via g
     expect(flags[0]).toMatch(/caller/i);
   });
 
-  it("emits a NOTE (non-blocking) when getMcpSkillSources is gone entirely (prune hint)", () => {
+  it("emits a NOTE when count is 1 but it is NOT the definition (def moved out of graph, caller remains)", () => {
+    // D3(a): keying purely on total count would read this as "definition-only, clean" — but it is a
+    // caller with the definition gone from the scanned graph. The def-presence check catches it.
+    const callerNoDef = "const s = getMcpSkillSources(); caps.extensions['io.modelcontextprotocol/skills'];";
+    const flags = checkCodeTripwires(callerNoDef);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/^NOTE:/);
+    expect(flags[0]).toMatch(/definition/i);
+    expect(flags[0]).toMatch(/graph|chunk/i);
+  });
+
+  it("emits a NOTE (non-blocking) when getMcpSkillSources is gone — flagging the graph-visibility caveat", () => {
+    // D3(b): must NOT flatly say "removed; prune" — it may have merely moved out of the require() graph.
     const gone = "caps.extensions['io.modelcontextprotocol/skills'];";
     const flags = checkCodeTripwires(gone);
     expect(flags.length).toBe(1);
     expect(flags[0]).toMatch(/^NOTE:/);
     expect(flags[0]).toMatch(/getMcpSkillSources/);
+    expect(flags[0]).toMatch(/graph|chunk/i); // caveats that it may have moved, not just been removed
   });
 
   it("emits a NOTE when the io.modelcontextprotocol/skills capability count changes from 1", () => {
-    const grew = "const getMcpSkillSources = 1; a['io.modelcontextprotocol/skills']; b['io.modelcontextprotocol/skills'];";
+    const grew = "getMcpSkillSources(){return[]} a['io.modelcontextprotocol/skills']; b['io.modelcontextprotocol/skills'];";
     const flags = checkCodeTripwires(grew);
     expect(flags.length).toBe(1);
     expect(flags[0]).toMatch(/^NOTE:/);

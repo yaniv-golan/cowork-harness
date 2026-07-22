@@ -13,9 +13,18 @@ describe("runtimeAuthEnv TZ parity (WI-7)", () => {
     else process.env.TZ = prev;
   });
 
-  it("passes the host TZ through when it is set", () => {
+  it("a valid IANA host TZ flows through (resolved to the same zone)", () => {
     process.env.TZ = "America/New_York";
     expect(runtimeAuthEnv().TZ).toBe("America/New_York");
+  });
+
+  it("NORMALIZES a legacy/non-IANA host TZ to the IANA zone (matches Desktop), not the raw export", () => {
+    // Desktop sends Intl.DateTimeFormat().resolvedOptions().timeZone unconditionally — never the shell's
+    // raw value. Node resolves US/Eastern -> America/New_York, so forwarding the raw string would diverge.
+    process.env.TZ = "US/Eastern";
+    const tz = runtimeAuthEnv().TZ;
+    expect(tz).toBe("America/New_York"); // the resolved IANA zone, NOT the raw "US/Eastern"
+    expect(tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 
   it("falls back to the resolved IANA zone when the host does NOT export TZ (never absent)", () => {

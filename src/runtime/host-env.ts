@@ -16,11 +16,12 @@ export const SECRET_ENV_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AP
 
 export function runtimeAuthEnv(): Record<string, string> {
   const e: Record<string, string> = {};
-  // TZ parity: Desktop injects the resolved IANA zone into the agent env unconditionally
-  // (Intl.DateTimeFormat().resolvedOptions().timeZone). Forwarding it only when the host shell exports
-  // TZ would leave the agent with no timezone on a host without it set — diverging from Cowork on date
-  // rendering / "today" resolution. Prefer the host value; otherwise resolve it the same way Desktop does.
-  const tz = process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // TZ parity: Desktop injects `Intl.DateTimeFormat().resolvedOptions().timeZone` into the agent env
+  // UNCONDITIONALLY — it never forwards the shell's raw TZ. Match that exactly: Node's resolver already
+  // honors a valid TZ export (a host-set IANA zone still flows through), but a legacy/non-IANA export
+  // (US/Eastern, EST5EDT, an offset) is NORMALIZED to the IANA zone rather than forwarded raw. Also
+  // guarantees a timezone even when the host exports none (else the agent diverges on date/"today").
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (tz) e.TZ = tz;
   const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
   if (token) {

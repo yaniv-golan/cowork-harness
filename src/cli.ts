@@ -2607,6 +2607,11 @@ async function cmdSync(args: string[]) {
     }
   } else if (officialElfChecksum !== undefined) {
     shaFields = { sha256: officialElfChecksum, shaProvenance: "official-manifest" };
+    // The ELF isn't staged (Desktop pruned it) but the manifest gave us a sha. The string sentinel has
+    // no manifest fallback — yet the ELF is immutable per version, so for the SAME agentVersion the
+    // base's count is not stale: carry it rather than silently dropping the tripwire on an online
+    // same-version re-sync after a prune (mirrors the offline-same-version branch below).
+    if ((base.agentVersion as string | undefined) === res.agentVersion) stringSentinels = baseSentinels;
   } else if ((base.agentVersion as string | undefined) === res.agentVersion) {
     // offline re-sync of the same version — keep what the base recorded rather than dropping it.
     shaFields = {
