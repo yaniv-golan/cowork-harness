@@ -32,6 +32,14 @@ All notable changes to this project are documented here. The format is based on
   build), and that the harness resolves the *local* tag — so a stale local image shadows the published one;
   re-pull after upgrading. The `doctor` command row notes the new freshness warning.
 
+### Fixed
+
+- **`critique`'s spaced flag parser no longer silently grabs the next flag as a value.** `critique
+  <folder> --prompt --output-format json` (a forgotten `--prompt` value) swallowed `--output-format` as the
+  prompt AND dropped the real flag, then ran a four-workload critique on the wrong input. The spaced form
+  now fails loud and points at the equals escape hatch (`--prompt=<value>`) for a value that intentionally
+  starts with `-`.
+
 ## [1.7.0] — 2026-07-22
 
 ### Added
