@@ -16,7 +16,13 @@ export const SECRET_ENV_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AP
 
 export function runtimeAuthEnv(): Record<string, string> {
   const e: Record<string, string> = {};
-  if (process.env.TZ) e.TZ = process.env.TZ;
+  // TZ parity: Desktop injects `Intl.DateTimeFormat().resolvedOptions().timeZone` into the agent env
+  // UNCONDITIONALLY — it never forwards the shell's raw TZ. Match that exactly: Node's resolver already
+  // honors a valid TZ export (a host-set IANA zone still flows through), but a legacy/non-IANA export
+  // (US/Eastern, EST5EDT, an offset) is NORMALIZED to the IANA zone rather than forwarded raw. Also
+  // guarantees a timezone even when the host exports none (else the agent diverges on date/"today").
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz) e.TZ = tz;
   const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
   if (token) {
     e.CLAUDE_CODE_OAUTH_TOKEN = token; // faithful: token only, no ANTHROPIC_* keys

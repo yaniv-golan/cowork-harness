@@ -15,5 +15,6 @@ assert:
       were used
     - dispatch_count_max is an author-chosen budget / post-hoc count assertion, not a reproduction of
       a production cap
-    - Cowork imposes no in-conversation Task-dispatch cap to reproduce
+    - Cowork DOES cap Task fan-out agent-side (taskRegistry, concurrent/per-session), separate from the
+      scheduled-task limiter, and the harness inherits it by running the real agent binary
     - dispatch_count_max should be used only to catch a fan-out you don't want

@@ -272,7 +272,7 @@
         },
         {
           "index": 4,
-          "claim": "Cowork imposes no in-conversation Task-dispatch cap to reproduce",
+          "claim": "Cowork DOES cap Task fan-out agent-side (taskRegistry, concurrent/per-session), separate from the scheduled-task limiter, and the harness inherits it by running the real agent binary",
           "pass": "6/6",
           "priors": null,
           "discriminating": true

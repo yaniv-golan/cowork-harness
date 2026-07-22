@@ -108,37 +108,54 @@ describe("extractFromAsar temp dir cleanup (try/finally semantics)", () => {
   // extractFromAsar is module-private and needs a real asar + npx, so we can't call it directly in the
   // token-free lane. Instead we pin the try/finally contract it now uses: a mkdtempSync dir is removed
   // even when the work inside throws. This mirrors the exact cleanup wrapper added for the fix.
+  //
+  // Hermeticity: all dirs are created inside a private per-test scratch root, never counted against
+  // the shared OS tmpdir. The machine-wide tmpdir is shared with concurrent vitest invocations (other
+  // worktrees / sessions), so any assertion about a global "cowork-sync-test-*" count is racy.
+  // The scratch root's own prefix deliberately does NOT start with "cowork-sync-test-" so it can
+  // never perturb another invocation still counting that prefix globally.
   it("removes a mkdtempSync dir on both success and error paths", () => {
-    const run = (shouldThrow: boolean): string => {
-      const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-test-"));
-      writeFileSync(join(tmp, "extracted.js"), "x");
+    const root = mkdtempSync(join(tmpdir(), "cowork-sync-hermetic-"));
+    try {
+      const run = (shouldThrow: boolean): string => {
+        const tmp = mkdtempSync(join(root, "cowork-sync-test-"));
+        writeFileSync(join(tmp, "extracted.js"), "x");
+        try {
+          if (shouldThrow) throw new Error("asar extract failed");
+        } catch {
+          /* swallowed like the real flag() path */
+        } finally {
+          rmSync(tmp, { recursive: true, force: true });
+        }
+        return tmp;
+      };
+      const okDir = run(false);
+      const errDir = run(true);
+      expect(existsSync(okDir)).toBe(false);
+      expect(existsSync(errDir)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves no cowork-sync-test-* leftovers in its scratch root after the error path", () => {
+    const root = mkdtempSync(join(tmpdir(), "cowork-sync-hermetic-"));
+    try {
+      // The root is freshly minted and private, so it must start empty — fail loud if not.
+      expect(readdirSync(root)).toEqual([]);
+      const tmp = mkdtempSync(join(root, "cowork-sync-test-"));
       try {
-        if (shouldThrow) throw new Error("asar extract failed");
+        throw new Error("boom");
       } catch {
-        /* swallowed like the real flag() path */
+        /* ignore */
       } finally {
         rmSync(tmp, { recursive: true, force: true });
       }
-      return tmp;
-    };
-    const okDir = run(false);
-    const errDir = run(true);
-    expect(existsSync(okDir)).toBe(false);
-    expect(existsSync(errDir)).toBe(false);
-  });
-
-  it("leaves no cowork-sync-test-* leftovers in TMPDIR after the run", () => {
-    const before = readdirSync(tmpdir()).filter((n) => n.startsWith("cowork-sync-test-"));
-    const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-test-"));
-    try {
-      throw new Error("boom");
-    } catch {
-      /* ignore */
+      const after = readdirSync(root).filter((n) => n.startsWith("cowork-sync-test-"));
+      expect(after).toEqual([]);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
-    const after = readdirSync(tmpdir()).filter((n) => n.startsWith("cowork-sync-test-"));
-    expect(after.length).toBe(before.length);
   });
 });
 

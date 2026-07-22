@@ -206,7 +206,7 @@ skill that echoes or pattern-matches its own cwd.
 
 ---
 
-## Gate `1648655587` is the scheduled-task session limiter — no in-conversation Task cap exists
+## Gate `1648655587` is the scheduled-task session limiter — distinct from the agent-side Task fan-out cap
 
 **What the gate actually is (binary-verified 2026-07-04, asar 1.18286.0):** gate `1648655587`
 (`{perTask:1, global:3}`) governs Cowork's **scheduled/recurring (cron) task** scheduler (`class
@@ -215,16 +215,22 @@ L9t` "[ScheduledTasks]"), NOT the in-conversation `Task` tool. It skips launchin
 sessions globally**. This corrects an earlier mislabeling of this gate as an in-conversation
 "Task-dispatch rate-limiter."
 
-**Real Cowork behaviour for the `Task` tool:** none of the above applies — the Desktop imposes **no
-concurrency cap** on in-conversation `Task`-tool sub-agent fan-out (the `Task` PreToolUse hook only
-blocks `run_in_background`). So a skill that fans out many sub-agents in one conversation is not
-throttled in production either.
+**Real Cowork behaviour for the `Task` tool:** the scheduled-task limiter does not apply, but `Task`
+fan-out IS capped **agent-side** (`taskRegistry`, binary-verified agent 2.1.217), a separate mechanism:
+a **concurrent** cap (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, default **20**; error
+`subagent_concurrency_cap`; bypassed under gate `tengu_amber_kestrel` or ultracode x-high effort; landed
+2.1.217) and a **per-session** cap (`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION`, default **200**; error
+`subagent_count_cap`; present since ≤2.1.215), with nesting off by default (depth 1, gate
+`tengu_hazel_trellis`). So a skill that fans out past those limits IS throttled in production.
 
-**Harness behaviour:** the harness runs a single foreground session and has no scheduled-task
-scheduler, so gate `1648655587` has **no applicable surface** to reproduce; it is pinned only as a
-sync drift-sentinel (`src/sync/cowork-sync.ts`). There is no production Task-fan-out cap to be
-unfaithful to. `dispatch_count_max` (`src/assert.ts`) remains a useful **author-chosen** budget
-assertion — catch a fan-out you don't want — not enforcement of a production cap.
+**Harness behaviour — faithful by inheritance:** the harness runs a single foreground session and has no
+scheduled-task scheduler, so gate `1648655587` has **no applicable surface** to reproduce (pinned only as
+a sync drift-sentinel, `src/sync/cowork-sync.ts`). The `taskRegistry` fan-out caps, by contrast, ARE in
+effect: Desktop sets none of the cap env vars, so the real agent uses the defaults, and the harness
+inherits them by spawning the same agent binary (it sets neither var) — a run that fans out past the cap
+hits the same `subagent_concurrency_cap`/`subagent_count_cap` error real Cowork does. `dispatch_count_max`
+(`src/assert.ts`) remains a useful **author-chosen** budget assertion — your tighter budget under that
+production ceiling — not a reproduction of the cap.
 
 ---
 
@@ -326,3 +332,37 @@ between loops."
 workspace `web_fetch` server exists there to alias to — so they set NO aliases. Consequence: a VM-tier
 model emitting a bare `WebFetch` errors in the harness where production resolves it. Host-loop is the
 production-default loop; use hostloop for alias-sensitive scenarios.
+
+## Skill/plugin discovery SDK-MCP servers are not modeled
+
+**Real Cowork behaviour:** a cowork session's rendered tool surface includes Desktop-side SDK-MCP
+discovery tools — `mcp__skills__list_skills`, `mcp__skills__suggest_skills`, and
+`mcp__plugins__list_plugins` (the `mcp-registry` and `scheduled-tasks` families likewise) — delivered
+over the control protocol (`sdkMcpServers` in `initialize`, tunneled as `mcp_message`). These are
+**advisory** tools: the model calls `suggest_skills` when the user asks for recommendations or when
+`list_skills` returns no match, and the result renders an "Add" card. The call has **no side effect**
+(nothing installs; the user's Add click happens out of band). Ground truth: these tools appear in the
+`system/init` `tools` array of real on-disk sessions (`local-agent-mode-sessions/**/audit.jsonl`); the
+`suggestSkillsEnabled` gate `245679952` is on. (A proactive-suggestion mode exists behind a separate
+gate that is off for a standard account, so the model suggests only when the conversation invites it.)
+
+**Harness behaviour:** the harness declares only the `workspace` and `cowork` SDK-MCP servers, so a run's
+agent never sees the discovery tools. This is a tool-surface divergence, not a crash — most skill tests
+(artifact production, triggering, gates, egress) never touch these tools, so they are unaffected.
+
+**Where it bites — and it is silent.** A scenario testing a skill whose behaviour involves recommending
+or discovering other skills (or a prompt that leads the model there) diverges: the real agent would call
+`suggest_skills`/`list_skills`; the harness agent does the work another way or declines, with no signal
+that a tool was absent. Two consequences to keep in mind:
+- **A "did-not-suggest" style assertion can pass vacuously** — the suggest tool is not present to fire, so
+  the harness is more permissive than production for discovery behaviour. Do not read a green there as
+  proof production stays quiet.
+- **`tool_available: "mcp__skills__.*"` is a false negative** — the tool is genuinely available in
+  production but absent from the harness's `context.tools`; the assertion's miss message states this limit
+  (see the `tool_available` note in the assertion catalog).
+
+**Status:** a deferred design gap, not a bug in the harness's own logic. Modeling it means declaring the
+`skills`/`plugins` SDK-MCP servers to the agent over the control protocol and serving deterministic
+stub results (the same channel the `workspace`/`cowork` servers already use) — deliberately without
+hitting the real claude.ai org endpoints, which would couple runs to a live account. Until then, test
+discovery-adjacent skills against real Cowork rather than the harness.

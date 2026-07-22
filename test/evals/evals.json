@@ -98,7 +98,7 @@
       "id": 14,
       "name": "subagent-dispatch-and-declared-unused",
       "prompt": "My `subagent_dispatched: researcher` assertion never matches even though a sub-agent clearly ran, and `subagent_declared_but_unused` keeps firing. How do these assertions actually match, and is `dispatch_count_max` a real production cap I'm reproducing?",
-      "expected_output": "Explains `subagent_dispatched` matches by the dispatch DESCRIPTION too, and that skills often dispatch with no `subagent_type` (agentType is 'unknown'), so you should match against the description rather than the type. Explains `subagent_declared_but_unused` fires when a sub-agent was declared a tool but didn't use THAT tool, even if it used other tools. States that `dispatch_count_max` is an author-chosen budget — a post-hoc count assertion, not a production cap — because Cowork imposes no in-conversation Task-dispatch cap to reproduce; use it only to catch a fan-out you don't want.",
+      "expected_output": "Explains `subagent_dispatched` matches by the dispatch DESCRIPTION too, and that skills often dispatch with no `subagent_type` (agentType is 'unknown'), so you should match against the description rather than the type. Explains `subagent_declared_but_unused` fires when a sub-agent was declared a tool but didn't use THAT tool, even if it used other tools. States that `dispatch_count_max` is an author-chosen budget — a post-hoc count assertion, not a reproduction of a production cap — noting Cowork DOES cap Task fan-out agent-side (taskRegistry: concurrent/per-session), separate from the scheduled-task limiter, which the harness inherits by running the real agent binary; use dispatch_count_max only to catch a fan-out you don't want.",
       "files": []
     },
     {
