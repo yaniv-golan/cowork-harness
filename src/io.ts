@@ -52,14 +52,23 @@ export function envPositiveNumber(name: string, dflt: number): number {
 }
 
 /**
- * Write JSON atomically — a mid-write crash must never leave a partial/corrupt file at the real path.
- * Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then `renameSync` over
- * the target (atomic on POSIX). Mirrors the existing temp+rename idiom already used independently in
- * `src/run/cassette.ts` (`writeFileAtomic`) and `src/decide/external-channel.ts` — this is the first
- * SHARED copy; the two existing call sites are left as-is (out of scope for this change).
+ * Write pre-serialized text atomically — a mid-write crash must never leave a partial/corrupt file at
+ * the real path. Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then
+ * `renameSync` over the target (atomic on POSIX). Mirrors the existing temp+rename idiom already used
+ * independently in `src/run/cassette.ts` (`writeFileAtomic`) and `src/decide/external-channel.ts` — this
+ * is the first SHARED copy; the two existing call sites are left as-is (out of scope for this change).
+ *
+ * String-accepting sibling of {@link writeJsonAtomic}: callers that already have a scrubbed/serialized
+ * string (e.g. `scrub(JSON.stringify(result, null, 2), secrets)`) shouldn't have to re-serialize an
+ * object just to get atomicity.
  */
-export function writeJsonAtomic(path: string, data: unknown): void {
+export function writeTextAtomic(path: string, data: string): void {
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(data));
+  writeFileSync(tmp, data);
   renameSync(tmp, path);
+}
+
+/** Write JSON atomically — see {@link writeTextAtomic}, which this delegates to. */
+export function writeJsonAtomic(path: string, data: unknown): void {
+  writeTextAtomic(path, JSON.stringify(data));
 }

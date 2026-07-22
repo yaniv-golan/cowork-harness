@@ -323,7 +323,7 @@
             "additionalProperties": false
           },
           "dispatch_count_max": {
-            "description": "total sub-agent dispatches ≤ N — an author-chosen budget; Cowork imposes no in-conversation Task-dispatch cap (see SPEC §10)",
+            "description": "total sub-agent dispatches ≤ N — an author-chosen budget under Cowork's agent-side fan-out cap, not a reproduction of it (see SPEC §10)",
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991

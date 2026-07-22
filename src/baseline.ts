@@ -13,6 +13,26 @@ export function sha256File(path: string): string {
 }
 
 /**
+ * Count non-overlapping literal occurrences of `needle` in a file's bytes. Reads the whole file (same
+ * one-off cost as `sha256File` — sync/verify time only, never the hot path), so a match anywhere in the
+ * ~240 MB agent ELF is found with no chunk-boundary blind spot. Used for the agent-binary string
+ * sentinels (e.g. `tengu_saddle_lantern`), whose runtime feature state the sync cannot see any other
+ * way; a change in the committed count surfaces as a `sync --diff` line.
+ */
+export function countStringInFile(path: string, needle: string): number {
+  const buf = readFileSync(path);
+  const nb = Buffer.from(needle);
+  if (nb.length === 0) return 0;
+  let n = 0;
+  let i = buf.indexOf(nb, 0);
+  while (i !== -1) {
+    n++;
+    i = buf.indexOf(nb, i + nb.length);
+  }
+  return n;
+}
+
+/**
  * Point-of-use integrity check for the agent ELF against the baseline's recorded `sha256`. **On by
  * default** (opt out with `COWORK_HARNESS_VERIFY_AGENT_SHA=0`) — a recorded hash that is never enforced at
  * the point of use is decorative, and fidelity is the whole point. Cost is one ~240 MB hash per resolve

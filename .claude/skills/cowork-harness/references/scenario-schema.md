@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.6.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.7.0`
 (baseline `desktop-1.20186.1`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -269,7 +269,7 @@ same set live from the schema.
 | `subagent_dispatched: <regex>` | a sub-agent whose `dispatchAgentType`, binary-*resolved* `resolvedAgentType`, **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the substring `contains` — `match` (optional regex over `dispatchAgentType`/`resolvedAgentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it (existence check, not "all"); a miss against an output that was **truncated at the assert cap** reports evidence-unavailable instead of a proven absence — the substring could lie past the cut |
-| `dispatch_count_max: <N>` | at most N sub-agents dispatched — an author-chosen budget (Cowork imposes no in-conversation Task-dispatch cap; records only, enforces nothing — see gotcha 12) |
+| `dispatch_count_max: <N>` | at most N sub-agents dispatched — your author-chosen budget under Cowork's agent-side fan-out cap (concurrent 20 / per-session 200, inherited by the harness); records only, does not itself enforce — see gotcha 12 |
 | `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
 | `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
 | `skill_available: <regex>` | a staged skill's id matched the regex (offered, not necessarily invoked — see `skill_triggered` for invocation) — content-class: the id list comes from the agent's init `skills` listing, so it replays from the frozen init event (id-only; the `whenToUse` enrichment is live-disk and thus absent on replay, but the id is what's matched); evidence-unavailable only if `RunResult.context.availableSkills` is absent entirely (an older cassette recorded before the available-skills listing was captured) |
@@ -348,16 +348,17 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `host_path_leak` | fail | A host path leaked into model-visible text (opt out: author `transcript_no_host_path`) |
 | `l0_plugin_divergence` | fail | L0/protocol plugin loading diverged from Cowork (opt out: `allow_l0_plugin_divergence`) |
 | `missing_capability` | fail | A `requires_capabilities` need was unmet, or the skill used a capability the image omits (opt out: `allow_missing_capability`, or `skill --allow-missing-capability` on an open-ended run) |
-| `infra_error` | fail | A VM/egress sidecar crashed mid-run — not author-suppressible |
+| `infra_error` | fail | A supervising process died mid-run (VM/egress sidecar) — the run's evidence is contaminated, not author-suppressible |
 | `stalled` | fail | The run ended on an unanswered question, or on a trailing-`?` final turn with no tool work after the last gate (opt out: `allow_stall`) |
 | `non_deterministic` | warn | The run was LLM/external/human-decided — not reproducible |
 | `prompt_asset_missing` | warn | The run proceeded with a missing prompt asset (`COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded |
 | `scan_unavailable` | warn | Post-run scan evidence unavailable (`RunResult.scan` undefined) — the host-path and outputs-delete guards did not run this run |
 | `ended_with_question` | warn | Live-lane heuristic: the final answer contains a question and the run wrote no deliverable to `outputs/` — the lenient sibling of `stalled` (covers a mid-message `?`, or tool work after the last gate that still ended asking). Opt out: `allow_stall` |
+| `exec_infra_error` | warn | Host-loop: one or more container `exec` calls failed for infrastructure reasons, so those tool calls returned an error to the agent. Warns rather than fails because the run's other evidence is intact — unlike `infra_error`, where a dead supervisor contaminates everything. Caveat: if *every* exec failed, the agent ran nothing and this still only warns — check `result.infraErrors` |
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.verdict.signals[].severity` or the run's exit code. Only the four **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the five **warn** codes are truly benign.
 
 ## Replay class
 
@@ -417,7 +418,7 @@ skill-source drift; every replay result also reports it class-tagged in `stalene
 **Mixed assertions on replay:** before evaluating, `replay` strips each assertion to its replay-checkable
 keys and drops any left empty. So `{result, egress_denied}` evaluates on replay as `{result}` alone — its
 `egress_denied` half is removed (not AND-ed against an unreadable value); with a manifest, `file_exists`/
-`artifact_json` are no longer stripped. The harness is **loud in two classes**: a *full skip* (`::warning::`
+`artifact_json` are not stripped. The harness is **loud in two classes**: a *full skip* (`::warning::`
 with the count of pure live-only assertions not evaluated) and a *partial skip* (`::warning::` when a mixed
 assertion's live-only half was dropped).
 Two CI consequences: skipped assertions are **absent** from `results[].assertions[]` (not
@@ -529,11 +530,12 @@ reference omits). Neither list is a strict superset of the other — reach for t
 11. **`subagent_declared_but_unused` fires on declared-but-didn't-use-THAT-tool**, even if the
     sub-agent used other tools.
 
-12. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It records the count
-    and asserts on it; passing means "dispatched ≤N this run," not "the harness capped it." Cowork
-    imposes no in-conversation Task-dispatch cap to reproduce — gate `1648655587`'s
-    `{perTask:1, global:3}` is the scheduled/cron-task session limiter, a different mechanism
-    (binary-verified; SPEC §10).
+12. **`dispatch_count_max` is your author-chosen budget under Cowork's production cap, not a
+    reproduction of it.** It records the count and asserts on it; passing means "dispatched ≤N this
+    run," not "the harness capped it." Cowork DOES cap `Task` fan-out agent-side (`taskRegistry`:
+    concurrent 20 / per-session 200, landed 2.1.212/2.1.217), which the harness inherits by spawning the
+    real agent binary — SEPARATE from gate `1648655587`'s `{perTask:1, global:3}` scheduled/cron-task
+    session limiter, a different mechanism (binary-verified; SPEC §10).
 
 13. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
     assertions need `container`+. Fails loud by design.

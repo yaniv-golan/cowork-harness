@@ -12,24 +12,30 @@
 set -euo pipefail
 
 # Staged (Added/Copied/Modified/Renamed) TypeScript under src/ or test/.
+#
+# NOTE: do NOT `exit 0` here when there are no staged .ts files. The baseline→cassette check
+# below must run for EVERY commit that stages a baseline — and a parity-sync commit stages a
+# baseline and NOTHING ELSE (no src/test .ts). An early exit here let exactly those commits — the
+# ones most likely to move `latest` and stale the cassettes — bypass the guard entirely (the
+# staleness then surfaced a commit later, on the next commit that happened to touch a .ts file, or
+# on the release PR's first CI run). So the prettier block is now CONDITIONAL on there being .ts
+# files, and control always falls through to the baseline check.
 files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(src|test)/.*\.ts$' || true)
-[ -z "$files" ] && exit 0
 
-# Degrade gracefully if deps aren't installed yet (e.g. fresh clone pre-`npm install`).
-if ! npx --no-install prettier --version >/dev/null 2>&1; then
-  echo "⚠ pre-commit: prettier not installed (run 'npm install') — skipping format check."
-  exit 0
-fi
-
-# prettier honors .prettierrc.json + .prettierignore; --check lists unformatted files.
-# shellcheck disable=SC2086
-if ! npx --no-install prettier --check $files; then
-  echo ""
-  echo "✖ pre-commit: the staged TypeScript above is not prettier-formatted."
-  echo "  Fix these:  npx prettier --write $files"
-  echo "  Or all:     npm run format:write"
-  echo "  Then re-stage and commit. (Bypass with 'git commit --no-verify' if you must.)"
-  exit 1
+if [ -n "$files" ]; then
+  # Degrade gracefully if deps aren't installed yet (e.g. fresh clone pre-`npm install`).
+  if ! npx --no-install prettier --version >/dev/null 2>&1; then
+    echo "⚠ pre-commit: prettier not installed (run 'npm install') — skipping format check."
+  # prettier honors .prettierrc.json + .prettierignore; --check lists unformatted files.
+  # shellcheck disable=SC2086
+  elif ! npx --no-install prettier --check $files; then
+    echo ""
+    echo "✖ pre-commit: the staged TypeScript above is not prettier-formatted."
+    echo "  Fix these:  npx prettier --write $files"
+    echo "  Or all:     npm run format:write"
+    echo "  Then re-stage and commit. (Bypass with 'git commit --no-verify' if you must.)"
+    exit 1
+  fi
 fi
 
 #

@@ -270,18 +270,21 @@ describe("renderer — renderFooter", () => {
     expect(s.text()).toContain("→ outputs:  runs/s/x/work/session/mnt/outputs");
   });
 
-  it("footer points at result.json on a completed run even without --keep", () => {
+  it("footer points at turns/1/result.json on a completed run even without --keep", () => {
+    // `base.turn` is unset (undefined) — matches RunResult.turn's contract for a single-shot run — so the
+    // footer's `r.turn ?? 1` fallback resolves it to turn 1, same as `beginTurn` would for this run's own
+    // (only) turn.
     const s = sink();
     renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }] }, plan({ color: false }), { write: s.write });
-    expect(s.text()).toMatch(/→ result: runs\/s\/x\/result\.json/);
+    expect(s.text()).toMatch(/→ result: runs\/s\/x\/turns\/1\/result\.json/);
   });
 
-  it("also points at result.json on FAIL (transcript-less), outside the transcript block", () => {
+  it("also points at turns/1/result.json on FAIL (transcript-less), outside the transcript block", () => {
     const s = sink();
     renderFooter({ ...base, assertions: [{ assertion: { file_exists: "x" }, pass: false, message: "missing" }] }, plan({ color: false }), {
       write: s.write,
     });
-    expect(s.text()).toMatch(/→ result: runs\/s\/x\/result\.json/);
+    expect(s.text()).toMatch(/→ result: runs\/s\/x\/turns\/1\/result\.json/);
   });
 
   it("does NOT print a result pointer on the replay lane (no result.json exists there)", () => {

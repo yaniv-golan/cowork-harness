@@ -109,9 +109,12 @@ describe("web_fetch pins the fetch to the SSRF-vetted address (no second resolut
 // recorded to the run log, and a GENERIC error returned to the model (no verbatim daemon text).
 // ---------------------------------------------------------------------------------------------
 describe("isExecInfraError classifier", () => {
-  it("catches timeouts and kills regardless of output (preserved behavior)", () => {
+  it("catches spawn-level timeouts and unrequested kills, but not the agent's own timeout budget", () => {
     expect(isExecInfraError({ code: "ETIMEDOUT" })).toBe(true);
-    expect(isExecInfraError({ killed: true, stderr: "partial" })).toBe(true);
+    // an unrequested kill carries a STRING code — still infrastructure
+    expect(isExecInfraError({ killed: true, code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stderr: "partial" })).toBe(true);
+    // a model-requested timeout_ms expiry is killed + a NULL code — the command's outcome, not infra
+    expect(isExecInfraError({ killed: true, code: null, stderr: "partial" })).toBe(false);
   });
   it("catches a pure spawn failure (no code, no output)", () => {
     expect(isExecInfraError({})).toBe(true);

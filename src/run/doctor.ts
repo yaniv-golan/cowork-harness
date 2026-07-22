@@ -1,3 +1,4 @@
+import { FIDELITY_TIERS } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, writeSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
@@ -479,7 +480,7 @@ export function cmdDoctor(args: string[]): void {
     p = parseArgs(args, {
       values: ["--tier", "--output-format"],
       enums: {
-        "--tier": ["protocol", "container", "microvm", "hostloop", "cowork"],
+        "--tier": [...FIDELITY_TIERS],
         "--output-format": ["text", "json"],
       },
     });

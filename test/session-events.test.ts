@@ -19,6 +19,42 @@ describe("parseMessage system-subtype catch-all", () => {
     }
   });
 
+  // WI-9 (docs/internal finding 3): the staged agent is 2.1.217, PAST the 2.1.216 VCS-event EMIT
+  // floor, so a hostloop/cowork run now RECEIVES code_change_published / vcs_state_changed on the
+  // stream. They are agent-side ungated and git-operation-driven (code_change_published fires on an
+  // observed `gh pr create` PR URL; vcs_state_changed per commit/push/merge/rebase — independent
+  // triggers). The harness is the consumer and models neither; this locks in that each degrades to a
+  // recorded system_event and can NEVER be mistaken for a control_request (the only fail-closed path)
+  // or dropped — so the run does not fail. NOTE: this is the deterministic HANDLING guarantee; a LIVE
+  // scenario asserting emission must perform a real git action (a bare run emits nothing to degrade),
+  // and must assert the two subtypes SEPARATELY because their triggers are independent.
+  it("degrades code_change_published to a system_event (real wire shape), never a fail path", () => {
+    const evs = parseMessage({
+      type: "system",
+      subtype: "code_change_published",
+      url: "https://github.com/o/r/pull/1",
+      provider: "github",
+      repo: "o/r",
+      identifier: "1",
+    });
+    expect(evs).toContainEqual({
+      type: "system_event",
+      subtype: "code_change_published",
+      data: { url: "https://github.com/o/r/pull/1", provider: "github", repo: "o/r", identifier: "1" },
+    });
+    // it parses into exactly the system_event, never an error / infra_error event that would taint the run
+    expect(evs.every((e) => e.type !== "error" && e.type !== "infra_error")).toBe(true);
+  });
+
+  it("degrades vcs_state_changed to a system_event (real wire shape), independently of the PR event", () => {
+    const evs = parseMessage({ type: "system", subtype: "vcs_state_changed", kind: "commit", cwd: "/work/session" });
+    expect(evs).toContainEqual({
+      type: "system_event",
+      subtype: "vcs_state_changed",
+      data: { kind: "commit", cwd: "/work/session" },
+    });
+  });
+
   it("flags an assistant thinking block redacted when text is empty and a signature is present", () => {
     // The "omitted" display mode (API default on Opus 4.8 / Sonnet 5) returns empty thinking + signature.
     const evs = parseMessage({

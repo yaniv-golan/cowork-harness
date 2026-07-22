@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json",
   "title": "RunResult",
-  "description": "Structured output written to runs/<sha>/result.json by cowork-harness executeScenario",
+  "description": "Structured output written to runs/<scenario>/<runId>/turns/<N>/result.json by cowork-harness executeScenario",
   "type": "object",
   "required": [
     "scenario",
@@ -24,7 +24,7 @@
     "turn": {
       "type": "integer",
       "minimum": 1,
-      "description": "1-based turn number within a resumed (--session-id + --resume) session; 1 for a normal single-shot run. result.json/run.jsonl hold the latest turn, prior turns are archived as result.turn-<N>.json / run.turn-<N>.jsonl. Absent on replay/chat lanes."
+      "description": "1-based turn number within a resumed (--session-id + --resume) session; 1 for a normal single-shot run. Each turn owns its artifacts under turns/<N>/ (result.json, run.jsonl, trace.json, resources.jsonl). Absent on replay/chat lanes."
     },
     "referencesRead": {
       "type": "array",
@@ -376,7 +376,7 @@
     },
     "infraErrors": {
       "type": "array",
-      "description": "Infrastructure errors (VM/egress sidecar crashes). A non-empty list is a hard verdict fail on BOTH lanes and is NOT author-suppressible — the run's evidence is contaminated.",
+      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died — a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'hostloop-exec' is a single failed container exec: the tool call failed, the run did not, so it only warns.",
       "items": {
         "type": "object",
         "required": [
@@ -385,7 +385,12 @@
         ],
         "properties": {
           "source": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "hostloop-sidecar",
+              "hostloop-exec",
+              "egress-sidecar"
+            ]
           },
           "message": {
             "type": "string"
@@ -675,6 +680,7 @@
                   "l0_plugin_divergence",
                   "missing_capability",
                   "infra_error",
+                  "exec_infra_error",
                   "stalled",
                   "prompt_asset_missing",
                   "scan_unavailable",

@@ -1,6 +1,7 @@
 import type { EvidenceSection } from "./armor.js";
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { turnArtifactPath } from "../run/turn-layout.js";
 import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
 import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
 
@@ -13,7 +14,7 @@ import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
 
 /** Read the ARCHIVED turn-1 transcript out of `run.turn-1.jsonl`'s `{t:"transcript"}` line — the exact
  *  text `execute.ts` records for the completed task turn. Present once a resume has archived turn 1
- *  (`archivePriorTurnFiles`); if for any reason that file isn't there yet, fall back to the turn-1 slice of
+ *  under `turns/1/`; if for any reason that file isn't there yet, fall back to the turn-1 slice of
  *  `events.jsonl` (still turn-1-only, just a rawer view than the assembled transcript string).
  *
  *  The fallback slice depends on the byte boundary `snapshotTurnBoundary` captured before the reflection
@@ -22,7 +23,11 @@ import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
  *  boundary relies on changed between capture and packaging) and the returned text must NOT be treated as
  *  reliable ground truth by the evaluator. */
 function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: string; degraded: boolean } {
-  const archived = join(runDir, "run.turn-1.jsonl");
+  // Through the seam: the new layout writes turn 1's transcript to `turns/1/run.jsonl` and NEVER creates
+  // `run.turn-1.jsonl`. Probing only the legacy name made every new critique fall back to the raw
+  // events-slice transcript with `degraded: false` — i.e. the evaluator silently graded a rawer view,
+  // unflagged, which is exactly the kind of quiet degradation this pipeline exists to surface.
+  const archived = turnArtifactPath(runDir, 1, "run.jsonl");
   if (existsSync(archived)) {
     try {
       for (const line of readFileSync(archived, "utf8").split("\n")) {
@@ -43,9 +48,15 @@ function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: st
   try {
     const text = readTurn1Slice(runDir, "events.jsonl", boundary);
     const integrity = verifyBoundaryIntegrity(runDir, "events.jsonl", boundary);
-    return { text, degraded: integrity === "mismatch" };
+    // "unavailable" is benign (no boundary, or genuinely empty at capture) and must NOT degrade; "mismatch"
+    // and "unreadable" both mean a positive captured boundary can no longer be trusted (tampered vs.
+    // vanished/unreadable, respectively) and must both degrade. In practice `readTurn1Slice` above already
+    // throws for the "unreadable" case (landing in the catch below), but this keeps the mapping correct on
+    // its own terms rather than relying on that ordering.
+    return { text, degraded: integrity === "mismatch" || integrity === "unreadable" };
   } catch {
-    // F28: the boundary for events.jsonl was never established — an error, not a valid empty slice.
+    // F28/F28-residual: the boundary for events.jsonl was never established, OR a positive captured boundary's
+    // file is now missing/unreadable/short — none of these is a valid empty slice.
     return { text: "", degraded: true };
   }
 }
@@ -162,14 +173,12 @@ export interface PackageEvidenceResult {
    *  told this: a claim about something that fell outside a truncated window is `not-adjudicable`, NOT
    *  `confabulated` — absence from a truncated package is not proof the thing didn't happen. */
   truncated: boolean;
-  /** F30 (+ residual): true when the canonical turn-1 result file (`result.turn-1.json`) either existed but
-   *  failed to parse (corrupted), OR — on a validated resume (`isResume: true`) — never existed at all
-   *  (missing archive). The "Turn-1 outcome" / toolCounts / skillActivity / subagents / "Final answer"
-   *  sections above are therefore EMPTY DEFAULTS, not a genuinely empty turn-1 result — the evaluator must
-   *  treat their absence as UNKNOWN, never as evidence something didn't happen. This is never resolved by
-   *  falling back to `result.json`'s turn-2 data (that would contaminate turn-1 isolation) — it is a
-   *  degradation signal only. (On a non-resumed run, a missing archive is NOT degraded — `result.json`
-   *  genuinely IS turn 1 there, per `readTurn1ResultWithStatus`'s `requireArchive:false` default.) */
+  /** F30 (+ residual): true when the canonical turn-1 result file (`turns/1/result.json`) either existed
+   *  but failed to parse (corrupted), OR — on a validated resume (`isResume: true`) — never existed at all.
+   *  The "Turn-1 outcome" / toolCounts / skillActivity / subagents / "Final answer" sections above are
+   *  therefore EMPTY DEFAULTS, not a genuinely empty turn-1 result — the evaluator must treat their absence
+   *  as UNKNOWN, never as evidence something didn't happen. This is a degradation signal only — never
+   *  resolved by substituting a LATER turn's result (that would contaminate turn-1 isolation). */
   turn1ResultDegraded: boolean;
   /** F28/F29: true when the turn-1 transcript's `events.jsonl`-slice fallback could not be trusted as
    *  ground truth — either the byte boundary was never established (a `snapshotTurnBoundary` stat failure)
@@ -182,18 +191,17 @@ export interface PackageEvidenceResult {
 }
 
 /** Assemble the evidence document for `runCritique`. `runDir` is the KEPT run dir of the task+reflection
- *  session (post-resume, so `run.turn-1.jsonl`/`result.turn-1.json` are archived); `boundary` is the
- *  `snapshotTurnBoundary` captured right before the reflection turn; `skillDir` is the skill folder under
- *  test (containing `SKILL.md` and, optionally, a `references/` subdir). Pure and testable: every input is
- *  a path or an already-captured boundary, nothing here spawns a process or calls a model.
+ *  session (post-resume, so `turns/1/` and `turns/2/` both exist); `boundary` is the `snapshotTurnBoundary`
+ *  captured right before the reflection turn; `skillDir` is the skill folder under test (containing
+ *  `SKILL.md` and, optionally, a `references/` subdir). Pure and testable: every input is a path or an
+ *  already-captured boundary, nothing here spawns a process or calls a model.
  *
  *  `isResume` (F30 residual): true when the CALLER has already validated this is a genuine resume (turn>1
  *  reflection) — the only case this function is actually invoked in today (`scripts/skill-critique.ts`
- *  calls this only after `validateReflectionTurn` succeeds). In that case `result.turn-1.json` MUST have
- *  been archived by the resume; a missing archive is never papered over by falling back to `result.json`
- *  (which would be TURN-2 data at that point) — it is instead treated exactly like a corrupted archive
- *  (`turn1ResultDegraded: true`, empty-default sections). Defaults to `false` so a hypothetical future
- *  single-shot (never-resumed) caller keeps the original "no archive → `result.json` IS turn 1" behavior. */
+ *  calls this only after `validateReflectionTurn` succeeds). In that case `turns/1/result.json` MUST exist;
+ *  a missing turn-1 result is treated exactly like a corrupted one (`turn1ResultDegraded: true`,
+ *  empty-default sections), never silently read from a later turn. Defaults to `false` so a hypothetical
+ *  future single-shot (never-resumed) caller does not flag an ordinary absent turn-1 result as degraded. */
 export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir: string, isResume = false): PackageEvidenceResult {
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
   // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
@@ -206,11 +214,12 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
   };
 
   const turn1Result = readTurn1ResultWithStatus(runDir, isResume);
-  // F30 residual: on a validated resume, "missing" is JUST as degraded as "corrupted" — `readTurn1ResultWithStatus`
-  // was called with `requireArchive: isResume` above, so a "missing" status here means the archive genuinely
-  // never existed (result.json was NOT silently substituted); that must be surfaced the same way a corrupt
-  // archive already was, never treated as "no turn-1 result, nothing to show" (the pre-fix default for a
-  // status other than "corrupted").
+  // F30 residual: on a validated resume, "missing" is JUST as degraded as "corrupted" — a resumed session's
+  // `turns/1/result.json` genuinely not existing must be surfaced the same way a corrupted one already was,
+  // never treated as "no turn-1 result, nothing to show" (the pre-fix default for a status other than
+  // "corrupted"). (`isResume` is passed through to `readTurn1ResultWithStatus` for its own inert
+  // `requireArchive` parameter — see that function's doc comment — but the degraded computation below is
+  // what actually consumes it.)
   const turn1ResultDegraded = turn1Result.status === "corrupted" || (isResume && turn1Result.status === "missing");
   const raw = turn1Result.value as Record<string, unknown> | null;
 

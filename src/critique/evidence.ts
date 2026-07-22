@@ -1,6 +1,7 @@
 import { readFileSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { turnArtifactPath } from "../run/turn-layout.js";
 
 // Foundations for the reflective skill-critique loop's UNCONTAMINATED, MECHANICALLY-GROUNDED evidence.
 //
@@ -9,8 +10,7 @@ import { join } from "node:path";
 //     resume (reflection) turn's own tool reads would otherwise pollute the "ground truth" the evaluator
 //     checks the self-report against. We snapshot the byte boundary BEFORE the reflection turn and only
 //     ever read `[0, boundary)` — the task turn's events. (JSONL appends whole lines, so a byte length is
-//     always a clean line boundary.) `result.turn-1.json` (already archived by the run dir) is the turn-1
-//     result.
+//     always a clean line boundary.) `turns/1/result.json` is the turn-1 result.
 //  2. MECHANICAL citation grounding. The evaluator is a tool-less model; its cited evidence is free text.
 //     We VALIDATE each citation is a verbatim excerpt of the evidence package we handed it, and drop those
 //     that don't resolve — so a hallucinated citation can't ship a recommendation.
@@ -78,20 +78,49 @@ function streamBoundary(boundary: TurnBoundary, file: "events.jsonl" | "timeline
 }
 
 /** The task-turn (turn-1) slice of an append-only stream: bytes `[0, boundary)`. Returns "" if the file is
- *  legitimately absent (not yet created). THROWS if the boundary for this stream was never established
- *  (`size: null`, i.e. the original `snapshotTurnBoundary` stat failed) — an unestablished required
- *  boundary must abort, not silently degrade to a zero-byte slice masquerading as ground truth (F28). */
+ *  legitimately absent (not yet created) — i.e. the boundary itself was never established (`size: null`)
+ *  AND the file still doesn't exist, the ordinary "this stream was never written" case. THROWS if:
+ *   - the boundary was never established (`size: null`) but the file DOES exist now (a stat failure at
+ *     capture time on a file that turns out to be there is unavailable, not a zero-byte slice); or
+ *   - the boundary was POSITIVE (non-zero bytes were captured) and the file is now missing or unreadable —
+ *     genuine captured content must never be reported back as an empty slice (F28 residual: the original
+ *     check order tested existence BEFORE inspecting the boundary, so a captured, non-empty stream that was
+ *     deleted before packaging slipped past as "" instead of aborting).
+ *  A boundary of exactly 0 bytes (the stream was genuinely empty at capture) always returns "" without even
+ *  touching the file's current state — the captured slice is definitionally empty regardless of what
+ *  happens to the file afterward, so that case must never be treated as an integrity failure. */
 export function readTurn1Slice(outDir: string, file: "events.jsonl" | "timeline.jsonl", boundary: TurnBoundary): string {
   const path = join(outDir, file);
-  if (!existsSync(path)) return "";
   const sb = streamBoundary(boundary, file);
+  const exists = existsSync(path);
+
   if (sb.size === null) {
+    if (!exists) return ""; // legitimately never created — orthogonal to a stat ERROR on a file that exists
     throw new Error(
       `readTurn1Slice: the turn-1/turn-2 boundary for ${file} was never established (snapshotTurnBoundary's ` +
         `stat failed) — refusing to treat that as a zero-byte slice.`,
     );
   }
-  const buf = readFileSync(path);
+
+  if (sb.size === 0) return ""; // captured empty at boundary time; nothing to read regardless of current state
+
+  // sb.size > 0: a non-empty turn-1 region was captured. The file must still be present and readable, or
+  // the slice we'd hand back would misrepresent genuine captured content as "nothing happened here."
+  if (!exists) {
+    throw new Error(
+      `readTurn1Slice: ${file} had a captured turn-1 boundary of ${sb.size} bytes but the file is now missing — ` +
+        `refusing to treat captured content as an empty slice.`,
+    );
+  }
+  let buf: Buffer;
+  try {
+    buf = readFileSync(path);
+  } catch (err) {
+    throw new Error(
+      `readTurn1Slice: ${file} had a captured turn-1 boundary of ${sb.size} bytes but could not be read ` +
+        `(${(err as Error).message}) — refusing to treat captured content as an empty slice.`,
+    );
+  }
   // F29 residual: a stream truncated BELOW its captured boundary (e.g. 50KB→10KB) must not silently hand
   // back a SHORT slice as if it were the full turn-1 region — that is exactly the "looks like ok, isn't"
   // shape this whole module exists to prevent. A short read is therefore its own abort condition, distinct
@@ -105,16 +134,20 @@ export function readTurn1Slice(outDir: string, file: "events.jsonl" | "timeline.
   return buf.subarray(0, sb.size).toString("utf8");
 }
 
-export type BoundaryIntegrity = "ok" | "mismatch" | "unavailable";
+export type BoundaryIntegrity = "ok" | "mismatch" | "unavailable" | "unreadable";
 
 /** Defense-in-depth (F29). The turn-1 slicing above assumes the streams are append-only by CONVENTION, not
  *  by a filesystem guarantee — nothing stops a truncate/replace of `[0, boundary)` between the boundary
  *  snapshot and packaging. Re-hash the same prefix captured at `snapshotTurnBoundary` time and compare: a
  *  mismatch means the bytes under the boundary changed, so the slice can no longer be trusted as ground
- *  truth (surfaced as a DEGRADED signal by the caller, not silently ignored). Returns `"unavailable"` when
- *  there is nothing to compare against (boundary unestablished, stream was empty at capture, or the file is
- *  now missing/unreadable) — that is a distinct state from a confirmed match.
- */
+ *  truth (surfaced as a DEGRADED signal by the caller, not silently ignored).
+ *
+ *  Returns `"unavailable"` when there is BENIGNLY nothing to compare against — the boundary was never
+ *  established, or the stream was genuinely empty (`size: 0`) at capture time — neither of which implies
+ *  anything went wrong. Returns the DISTINCT `"unreadable"` when a POSITIVE boundary was captured (there was
+ *  something to compare against) but the file is now missing or its prefix can no longer be read — that is
+ *  itself an integrity failure (captured content can't be verified, not "nothing captured"), so callers must
+ *  not fold it into the benign `"unavailable"` case. */
 export function verifyBoundaryIntegrity(
   outDir: string,
   file: "events.jsonl" | "timeline.jsonl",
@@ -123,12 +156,12 @@ export function verifyBoundaryIntegrity(
   const sb = streamBoundary(boundary, file);
   if (sb.size === null || sb.prefixHash === undefined) return "unavailable";
   const path = join(outDir, file);
-  if (!existsSync(path)) return "unavailable";
+  if (!existsSync(path)) return "unreadable";
   let currentSize: number;
   try {
     currentSize = statSync(path).size;
   } catch {
-    return "unavailable";
+    return "unreadable";
   }
   // F29 residual: a stream truncated BELOW its captured boundary (e.g. 50KB→10KB) keeps its first
   // PREFIX_HASH_BYTES bytes byte-for-byte intact — the prefix-hash compare alone would report "ok" even
@@ -142,45 +175,41 @@ export function verifyBoundaryIntegrity(
   try {
     current = hashPrefix(readPrefixBytes(path, Math.min(sb.size, PREFIX_HASH_BYTES)));
   } catch {
-    return "unavailable";
+    return "unreadable";
   }
   return current === sb.prefixHash ? "ok" : "mismatch";
 }
 
 export type Turn1ResultStatus = "ok" | "missing" | "corrupted";
 
-/** Like `readTurn1Result`, but also reports WHY a null came back (F30): `"corrupted"` when the canonical
- *  turn-1 result file existed but failed to parse, vs. `"missing"` when neither `result.turn-1.json` nor
- *  `result.json` exists at all. Deliberately does NOT fall further down the preference list past a corrupt
- *  file — on a resumed session `result.json` is the TURN-2 result, and silently substituting it for a
- *  corrupt `result.turn-1.json` would contaminate turn-1 isolation.
+/** Like `readTurn1Result`, but also reports WHY a null came back (F30): `"corrupted"` when turn 1's
+ *  `result.json` (`turns/1/result.json` — see `turn-layout.ts`) existed but failed to parse, vs.
+ *  `"missing"` when it doesn't exist at all.
  *
- *  `requireArchive` (F30 residual): when the CALLER already knows this run resumed (a validated turn>1
- *  reflection), a MISSING `result.turn-1.json` is just as unsafe to paper over as a corrupt one — falling
- *  through to `result.json` would silently serve TURN-2 data labeled as turn 1. Set `requireArchive: true`
- *  in that case: the fallback to `result.json` is skipped entirely (never even read) and a missing archive
- *  reports `status: "missing"` with `value: null`, exactly like the corrupted case, rather than treating
- *  `result.json` as a legitimate substitute. Defaults to `false` (the original single-shot-tolerant
- *  behavior: no archive exists on a run that never resumed, and `result.json` genuinely IS turn 1 there). */
+ *  `requireArchive` PREDATES the per-turn `turns/<N>/` layout, from when an un-resumed run's turn 1 lived
+ *  at the run-dir root and a resumed run's turn 1 was archived to `result.turn-1.json` — two different
+ *  files, and this flag chose which one was authoritative. Under the single shape `turnArtifactPath`
+ *  always resolves turn 1 to the same file (`turns/1/result.json`) regardless of resume history, so the
+ *  flag no longer changes what gets READ here. It is kept — inert — because its CALLER
+ *  (`package-evidence.ts`) still uses the boolean it's passed (`isResume`) to decide whether a "missing"
+ *  status counts as degraded, which is an orthogonal, still-meaningful question. Left for the sweep that
+ *  simplifies all three degraded-status call sites together, not as a drive-by here. */
 export function readTurn1ResultWithStatus(outDir: string, requireArchive = false): { value: unknown | null; status: Turn1ResultStatus } {
-  const candidates = requireArchive ? ["result.turn-1.json"] : ["result.turn-1.json", "result.json"];
-  for (const f of candidates) {
-    const p = join(outDir, f);
-    if (existsSync(p)) {
-      try {
-        return { value: JSON.parse(readFileSync(p, "utf8")), status: "ok" };
-      } catch {
-        return { value: null, status: "corrupted" };
-      }
+  void requireArchive; // see doc comment — inert until the degraded-status sweep
+  const p = turnArtifactPath(outDir, 1, "result.json");
+  if (existsSync(p)) {
+    try {
+      return { value: JSON.parse(readFileSync(p, "utf8")), status: "ok" };
+    } catch {
+      return { value: null, status: "corrupted" };
     }
   }
   return { value: null, status: "missing" };
 }
 
-/** The turn-1 result (falls back to the archived `result.turn-1.json`; if a run never resumed there is no
- *  archive and `result.json` IS turn 1). Returns the parsed object or null. See `readTurn1ResultWithStatus`
- *  for a version that distinguishes "corrupt" from "missing" (F30) — this wrapper preserves the original
- *  value-only contract for existing callers. */
+/** The turn-1 result (`turns/1/result.json`). Returns the parsed object or null. See
+ *  `readTurn1ResultWithStatus` for a version that distinguishes "corrupt" from "missing" (F30) — this
+ *  wrapper preserves the original value-only contract for existing callers. */
 export function readTurn1Result(outDir: string): unknown | null {
   return readTurn1ResultWithStatus(outDir).value;
 }

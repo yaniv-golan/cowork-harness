@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.6.0
-  tracks-harness: cowork-harness 1.6.0 (baseline desktop-1.22209.3)
+  version: 1.7.0
+  tracks-harness: cowork-harness 1.7.0 (baseline desktop-1.24012.1)
 ---
 
 # cowork-harness
@@ -22,8 +22,8 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.6.0` (baseline
-> `desktop-1.22209.3`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.7.0` (baseline
+> `desktop-1.24012.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
@@ -39,9 +39,30 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.6.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.6.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.6.0"`. **Pin `@>=1.6.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.7.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.7.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.7.0"`. **Pin `@>=1.7.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 1.6.0 floor gates, by release:
+  What the ≥ 1.7.0 floor gates, by release:
+
+  - **1.7.0 (per-turn run-directory layout, single shape):** every run dir — `run`/`skill`/`chat`,
+    single-turn or multi-turn (any `--session-id` + `--resume`, and **every `critique`**: task turn +
+    reflection turn) — writes each turn's `result.json` / `run.jsonl` / `trace.json` / `resources.jsonl`
+    into **`turns/<N>/`**, written once and never renamed. **There is no root compat copy of anything —
+    `<run-dir>/result.json` does not exist.** **When a user asks about a run, point them at
+    `turns/1/result.json`** (the only completion on a single-turn dir) — or on a `critique` dir, better yet
+    at `result.graded.json` / `trace.graded.json`, the role-stable aliases `critique` writes (the graded
+    task turn, never the reflection one). `events.jsonl` / `timeline.jsonl` stay cumulative at the run-dir
+    root, always. A dir written before this layout existed is refused LOUD, by name, naming the shape found
+    — never silently misread as if it were `turns/1/`. **Convert it in place with
+    `cowork-harness migrate-run-dir` (dry-run by default); do NOT tell the user to re-run or re-record,
+    which throws away history the migrator recovers.** Its `events.jsonl` still fully supports `trace`,
+    which is why every refusal points there. `verify-run` REFUSES a multi-turn dir rather than certifying
+    the wrong turn, and `trace` shows the latest turn with a `::notice::` when earlier turns exist.
+
+  - **1.7.0 (limitation provenance):** every `critique` limitation in `critique --help` and
+    docs/critique.md is tagged with WHY it exists — `[structural]` (permanent), `[unverified]` (unproven,
+    **not** known-impossible), `[deliberate]`, `[not-built]`. **Read the tag before telling a user to
+    design around a limitation.** In particular `critique`'s container-tier pin is `[unverified]`, not
+    permanent: do not advise building a second hostloop test lane on the assumption it can never lift.
 
   - **1.6.0 (`critique`'s skill-flag parity):** `critique` accepts most `skill` flags under the same names,
     which is what makes a document-analysis skill (cap table, deck, financial model, transcript)
@@ -81,7 +102,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred), or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
-- **`--dotenv` is a GLOBAL flag — put it BEFORE the subcommand.** `cowork-harness --dotenv .env record …`, never `cowork-harness record … --dotenv .env`. Every *other* flag is subcommand-level, so muscle memory fights this one; the harness rejects the misplaced form with an exact-fix error, but placing it first avoids the round-trip. **One exception: `critique` also accepts `--dotenv` per-command** (`critique <folder> --prompt "…" --dotenv <path>`) — UNRELEASED, see the floor list; `--run-dir` stays global-only everywhere.
+- **`--dotenv` is a GLOBAL flag — put it BEFORE the subcommand.** `cowork-harness --dotenv .env record …`, never `cowork-harness record … --dotenv .env`. Every *other* flag is subcommand-level, so muscle memory fights this one; the harness rejects the misplaced form with an exact-fix error, but placing it first avoids the round-trip. **One exception: `critique` also accepts `--dotenv` per-command** (`critique <folder> --prompt "…" --dotenv <path>`) — available as of **1.6.0** (documented but unreachable before then); `--run-dir` stays global-only everywhere.
 
 ## Orient — the three loops
 
@@ -113,7 +134,7 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
 > `node_modules/cowork-harness/docs/<name>.md` before assuming a pointer dangles. A **plugin**
 > install loads a trimmed source-only cache where those pointers genuinely do dangle.
 
-Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
+Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · migrate-run-dir · lint ·
 lint-skill · analyze-skill · probe-dispatch ·
 verify-run · trace · inspect · diff · critique · stats · decide · gates · answer · scaffold · assertions --list · sync ·
 list · boundary-check · status · vm <init|status|delete|prune> · doctor · init-redact`. Always check `cowork-harness <cmd> --help`.
@@ -155,7 +176,7 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 > is your **working tree**, so an uncommitted edit to an already-tracked file *is* tested — you needn't
 > commit to iterate. Only brand-new (untracked) files must be `git add`-ed to appear. Commit before you
 > record the **locking cassette**, though: real Cowork ships the *committed* tree, so a green on
-> uncommitted edits isn't yet a green on what installs. An **all-untracked** skill folder used to mount *empty* and the agent reported "the skill isn't
+> uncommitted edits isn't yet a green on what installs. An **all-untracked** skill folder mounts *empty* and the agent reports "the skill isn't
 > installed" then did the work itself — a green-looking run where the skill never loaded. That now
 > **hard-fails** (`BoundaryError`, exit 3) naming the dir, and a partially-tracked folder emits a loud
 > `::notice:: [stage]` listing the excluded files. Fix: `git add` the skill, or `COWORK_HARNESS_GITSET=0`
@@ -372,7 +393,7 @@ cassette — has its own recipe:
    "<q>=Israeli company"` binds whichever option starts with `Israeli company`. It is uniqueness-guarded and
    **fails loud** if the anchor ever matches two options (the documented trade: drift-tolerance, not strict
    CI reproducibility — for that, pin a full exact label or a free-text `answer:`).
-3. **Budget ~1 re-run per file.** If a gate whiffs, the run no longer vanishes — it exits non-zero but
+3. **Budget ~1 re-run per file.** If a gate whiffs, the run does not vanish — it exits non-zero but
    **salvages a PARTIAL run** (the extraction the agent already did is written to disk). So the cost of a
    missed gate is one re-run with a better `--intent` or a scripted answer, not a lost paid run.
 4. **Inspect the outputs to judge correctness.** `cowork-harness inspect <run-dir>` shows what the run
@@ -435,6 +456,14 @@ Recognize these before "fixing" a non-bug:
   `transcript_no_host_path`. At `fidelity: cowork` the skip follows the **resolved** tier, so a `cowork`
   run that lands on `container` is armed. Author `transcript_no_host_path` to enforce cleanliness where
   it's valid.
+- **`exec_infra_error`** (`WARN`, host-loop) — one or more container `exec` calls failed for
+  infrastructure reasons (daemon/container-level), so those tool calls returned an error to the agent
+  rather than the command's own output. Warn-severity because the run's other evidence is intact — unlike
+  the fail-severity `infra_error`, where a **supervising process** died and contaminated everything. Note
+  a model-requested `timeout_ms` expiry is *not* this: it returns the command's partial output with
+  `Command timed out after <duration>` in stderr, matching production. Known gap: if **every** exec
+  failed, the agent ran nothing yet the run still only warns — read `result.infraErrors` when a run looks
+  suspiciously empty.
 - **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so
   `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
@@ -638,12 +667,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    `mcp__workspace__bash` alias, so a "sub-agent used no shell" check must glob **both** `Bash` and
    `mcp__workspace__*` to hold across every tier.
 
-6. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It's a post-hoc count
-   assertion: passing means "happened to dispatch ≤N this run," nothing more. Cowork imposes **no**
-   in-conversation `Task`-dispatch cap — gate `1648655587`'s `{perTask:1, global:3}` governs the
-   separate scheduled/cron-task session scheduler, not the `Task` tool (binary-verified; details in
-   `SPEC.md` §10 — repo-only). So there is no "skip-on-cap" for the harness to reproduce; use this key
-   only to catch a fan-out you don't want.
+6. **`dispatch_count_max` is your author-chosen budget UNDER Cowork's production cap, not a
+   reproduction of it.** It's a post-hoc count assertion: passing means "happened to dispatch ≤N this
+   run." Cowork DOES cap `Task` fan-out **agent-side** (`taskRegistry`: concurrent **20** /
+   per-session **200**, landed 2.1.212/2.1.217) — SEPARATE from the scheduled-task session limiter
+   (gate `1648655587`'s `{perTask:1, global:3}`, a different mechanism; binary-verified, `SPEC.md` §10
+   — repo-only). The harness **inherits** the production cap by spawning the real agent binary, so a
+   `dispatch_count_max` pass means "your tighter budget held," not "near a real limit"; use it to catch
+   a fan-out you don't want.
 
 7. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.
@@ -727,7 +758,7 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 
 17. **Editing `scenarios/*.yaml` `assert:` does NOT change a plain `replay`.** *Why:* `replay` evaluates the
     assertions **frozen in the cassette** by default — it is byte-deterministic and ignores the working tree (so
-    a committed cassette can't silently re-interpret against an uncommitted YAML). This used to be a *silent*
+    a committed cassette can't silently re-interpret against an uncommitted YAML). This is *loud* rather than a *silent*
     no-op; now plain `replay` prints a `::notice::` when a sibling's `assert:` differs and points you at the fix.
     *Fix:* to re-check token-free against the edited block, `replay --assert-from <scenario.yaml>` (or
     `--reassert`). That opt-in path is safe by construction for the authored fields — it **hard-fails** if

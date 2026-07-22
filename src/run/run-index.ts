@@ -1,13 +1,15 @@
 // Queryable cross-run result store. index.jsonl (one JSON line per run) is the SOURCE OF TRUTH for
 // "what runs exist" — the run-dir-per-run physical layout (<runsRoot>/<slug>/<runId>/) still holds the
 // heavy artifacts (events.jsonl/trace.json/result.json); only the discovery/query layer moved here.
-import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
+import { classifyRunDir, hasTurnDirs, listTurns, turnArtifactPath } from "./turn-layout.js";
 import { execFileSync } from "node:child_process";
 import { join, basename, dirname } from "node:path";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
 import { budgetFields } from "../assert.js";
-import { warn } from "../io.js";
+import { warn, writeTextAtomic } from "../io.js";
+import { containedRealPath } from "../boundary-paths.js";
 
 export interface RunIndexRow {
   v: 1;
@@ -27,6 +29,13 @@ export interface RunIndexRow {
   // reindexFromRunsTree from result.json (unlike `git`).
   runLabel?: string;
   skillHash?: string;
+  // 1-based turn number within a resumed (`--session-id`+`--resume`) session, straight from
+  // RunResult.turn — set on essentially every run/skill/record completion (a fresh single-shot run gets
+  // turn:1). THE per-completion identity discriminator `reindexFromRunsTree` merges rows by: a resumed
+  // session's turns (and critique's task+reflection turns) all share one `outDir`, so `outDir` alone is
+  // not a valid identity for them. Absent on the chat lane (never tracked) and on rows written before
+  // this field existed.
+  turn?: number;
   signals: string[]; // VerdictSignal["code"][]
   costUsd?: number;
   tokens?: number;
@@ -100,6 +109,7 @@ export function indexRowFromResult(
     pass: verdict.pass,
     runLabel: result.runLabel,
     skillHash: result.fingerprint?.skillHash?.slice(0, 12), // short prefix — the full hash lives in result.json
+    turn: result.turn,
     signals: verdict.signals.map((s) => s.code),
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,
@@ -118,6 +128,49 @@ function indexPath(runsRoot: string): string {
   return join(runsRoot, "index.jsonl");
 }
 
+/** The stable event identity `reindexFromRunsTree` merges rows by — NEVER `outDir` alone, which is a
+ *  mutable STORAGE LOCATION, not an event: a resumed session's every turn (and critique's task +
+ *  reflection turns) write to the same `outDir`. When `turn` is present (essentially every run/skill/record
+ *  row from now on) it precisely distinguishes one completion from another sharing that outDir. Rows with
+ *  no `turn` (the chat lane, or a row written before this field existed) fall back to bare `outDir` —
+ *  this module's historical behavior for that case, and the only signal available to disambiguate them;
+ *  it is not a fix for pre-existing legacy data, only for every row written going forward. */
+function rowIdentity(r: RunIndexRow): string {
+  return r.turn !== undefined ? `${r.outDir} turn:${r.turn}` : r.outDir;
+}
+
+/** Runtime shape check for a parsed index line — `JSON.parse` only proves valid JSON, not a valid
+ *  `RunIndexRow`; a same-shaped-but-wrong-typed object (or one from an incompatible future schema) must
+ *  never be cast and handed to `buildStats`, which dereferences `r.git.branch` unconditionally. Uses the
+ *  otherwise-unused `v` field as the schema-version gate: anything not exactly `v:1` is rejected outright
+ *  rather than assumed compatible. */
+function isValidRunIndexRow(x: unknown): x is RunIndexRow {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  if (r.v !== 1) return false;
+  if (typeof r.ts !== "string") return false;
+  if (typeof r.command !== "string" || !["run", "skill", "record", "chat"].includes(r.command)) return false;
+  if (typeof r.scenario !== "string") return false;
+  if (typeof r.slug !== "string") return false;
+  if (typeof r.runId !== "string") return false;
+  if (typeof r.fidelity !== "string") return false;
+  if (typeof r.baseline !== "string") return false;
+  if (r.result !== "success" && r.result !== "error") return false;
+  if (typeof r.pass !== "boolean") return false;
+  if (!Array.isArray(r.signals)) return false;
+  if (typeof r.partial !== "boolean") return false;
+  if (typeof r.nonDeterministic !== "boolean") return false;
+  if (typeof r.outDir !== "string") return false;
+  // Type-checked because `rowIdentity` interpolates it: a string "2" would otherwise mint an identity
+  // distinct from the numeric 2 the walk derives, resurrecting the duplicate-row failure the merge guards.
+  if (r.turn !== undefined && typeof r.turn !== "number") return false;
+  if (typeof r.git !== "object" || r.git === null) return false;
+  const git = r.git as Record<string, unknown>;
+  if (git.branch !== null && typeof git.branch !== "string") return false;
+  if (git.sha !== null && typeof git.sha !== "string") return false;
+  return true;
+}
+
 /** Single-line O_APPEND write — atomic at these sizes, safe under `record --concurrency`'s in-process
  *  pool (same reasoning as the writer note in async-pool.ts). Creates `runsRoot` if it doesn't exist yet
  *  (a fresh machine's first run). */
@@ -127,8 +180,10 @@ export function appendIndexRow(runsRoot: string, row: RunIndexRow): void {
 }
 
 /** Reads every row, tolerating a corrupt/truncated TRAILING line (a crash mid-append) by skipping just
- *  that line rather than throwing and losing every prior row. Returns `[]` for a runs root with no
- *  index.jsonl yet — never throws on a fresh clone / pre-index-era runs root. */
+ *  that line rather than throwing and losing every prior row. Also validates every successfully-parsed
+ *  line against the `RunIndexRow` shape (see `isValidRunIndexRow`) and quarantines (skips, with a warning)
+ *  any row that is valid JSON but the wrong shape — the returned array is never a blind cast. Returns `[]`
+ *  for a runs root with no index.jsonl yet — never throws on a fresh clone / pre-index-era runs root. */
 export function readIndex(runsRoot: string): RunIndexRow[] {
   const p = indexPath(runsRoot);
   if (!existsSync(p)) return [];
@@ -138,7 +193,19 @@ export function readIndex(runsRoot: string): RunIndexRow[] {
     const line = lines[i];
     if (!line.trim()) continue;
     try {
-      rows.push(JSON.parse(line) as RunIndexRow);
+      const parsed: unknown = JSON.parse(line);
+      // Valid JSON, wrong shape (or an incompatible future `v`) — quarantined, not cast: a cast row
+      // reaches `buildStats`, which dereferences `r.git.branch` unconditionally and either throws or
+      // fabricates a pass/cost value. This is a DIFFERENT failure mode from the corrupt-JSON branch below
+      // (which `.catch`es a parse error) and always warns — there is no "expected trailing" shape for a
+      // syntactically-valid-but-wrong-schema row.
+      if (!isValidRunIndexRow(parsed)) {
+        warn(
+          `::warning:: stats: quarantining invalid-shape row ${i + 1} of ${indexPath(runsRoot)} (valid JSON, wrong RunIndexRow shape — not indexed, not counted): ${line.slice(0, 120)}\n`,
+        );
+        continue;
+      }
+      rows.push(parsed);
     } catch {
       // A truncated TRAILING line (the last non-empty line) is the expected shape of a crash
       // mid-append — tolerated silently, one lost row is the documented worst case. A corrupt line
@@ -155,6 +222,71 @@ export function readIndex(runsRoot: string): RunIndexRow[] {
   return rows;
 }
 
+/** Discriminated outcome of reading ONE on-disk result file (the root `result.json`, or an archived
+ *  `result.turn-<N>.json`) during a `reindexFromRunsTree` walk. A plain row-or-null return would force the
+ *  caller to re-derive which counter (`skipped`/`skippedReplay`/`skippedUnsafe`) a given failure maps to;
+ *  returning the classification instead keeps that mapping in one place — the walk loop below — for both
+ *  the root file and every archived turn, rather than two hand-rolled copies that could drift apart. */
+type WalkedResultFile =
+  | { kind: "row"; row: RunIndexRow }
+  | { kind: "missing" } // no such file, or not a regular file — not countable evidence, no counter moves
+  | { kind: "unsafe" } // a symlink, or resolves outside runsRoot — counted as skippedUnsafe
+  | { kind: "corrupt" } // safely resolved but the containment check raced or the JSON didn't parse — counted as skipped
+  | { kind: "replay" }; // a command:"replay" result — a re-check, not new evidence — counted as skippedReplay
+
+/** Symlink-rejecting, containment-checked, replay-aware read of one result file for the walk below. Shared
+ *  by the root `result.json` and every archived `result.turn-<N>.json` in a run dir so an archived turn
+ *  gets EXACTLY the same defense-in-depth (never follow a symlink; require the real path to resolve inside
+ *  `runsRoot`) and the same "a corrupt file is skipped, not fatal to the whole walk" handling the root file
+ *  always had — not a hand-rolled variant for the archived case. */
+function readResultFileForWalk(
+  runsRoot: string,
+  outDir: string,
+  filePath: string,
+  priorByOutDir: Map<string, RunIndexRow>,
+): WalkedResultFile {
+  let fileLstat;
+  try {
+    fileLstat = lstatSync(filePath);
+  } catch {
+    return { kind: "missing" }; // same miss the old existsSync(resultPath) check caught
+  }
+  if (fileLstat.isSymbolicLink()) return { kind: "unsafe" };
+  if (!fileLstat.isFile()) return { kind: "missing" };
+  // Both sides are confirmed to exist (lstat above) and neither is a symlink (rejected above) — realpath
+  // containment is still checked as defense-in-depth against a non-symlink escape (e.g. a TOCTOU swap of
+  // an ancestor component). `realpathSync` inside throws if the entry is deleted between the lstat above
+  // and this call (a concurrent `runs gc`, say). Treat that as an ordinary miss — before containment
+  // checking existed the same race was absorbed as `skipped++`, and letting the raw ENOENT escape would
+  // abort the entire reindex over one vanished run dir.
+  let contained: boolean;
+  try {
+    contained = containedRealPath(runsRoot, filePath);
+  } catch {
+    return { kind: "corrupt" };
+  }
+  if (!contained) return { kind: "unsafe" };
+  try {
+    const result = JSON.parse(readFileSync(filePath, "utf8")) as RunResult;
+    // A `command:"replay"` result is a RE-CHECK, not new evidence — see the matching comment on the walk
+    // loop below for why this must never be relabeled "run" and indexed as fresh evidence.
+    if (result.command === "replay") return { kind: "replay" };
+    const ts = fileLstat.mtime.toISOString(); // confirmed a regular (non-symlink) file above
+    // RunResult.mode has no "skill"/"record" value, so a run originally recorded under one of those
+    // commands would otherwise be relabeled "run"/"chat" on every reindex. Prefer the command now
+    // persisted in result.json (#48); fall back to a prior index row (for results written before that
+    // field existed), then to deriving from `result.mode` for a brand-new outDir with neither.
+    const prior = priorByOutDir.get(outDir);
+    // `result.command` here is already narrowed to exclude "replay" (returned above), so it maps straight
+    // onto the index row's command union — no re-check ever reaches this row.
+    const command = result.command ?? prior?.command ?? (result.mode === "chat" ? "chat" : "run");
+    const row = indexRowFromResult(result, { command, partial: !!result.partial, ts, git: { branch: null, sha: null } });
+    return { kind: "row", row };
+  } catch {
+    return { kind: "corrupt" };
+  }
+}
+
 /** One-time local migration + self-heal: rebuilds index.jsonl by walking the physical
  *  `<runsRoot>/<slug>/<runId>/result.json` tree, MERGED with any prior index.jsonl — never a blind
  *  overwrite. Every run dir still on disk gets a FRESH row (re-derived from its real result.json,
@@ -165,77 +297,134 @@ export function readIndex(runsRoot: string): RunIndexRow[] {
  *  operation meant to rebuild/heal it. Safe to re-run (idempotent: reindexing twice with no filesystem
  *  changes produces the same row set).
  *
+ *  Walks every turn under `turns/<N>/` — each is an independent completion with its own identity. A
+ *  `--resume` session or a `critique` task+reflection pair therefore contributes one row per turn. A
+ *  PRE-LAYOUT dir is counted as `skippedLegacy` and reported, never half-indexed: reading the readable
+ *  part of such a dir and calling it done is the failure this command exists to prevent. For a `critique`
+ *  dir specifically, losing a turn would keep the reflection row and lose the GRADED row — the one consumers pair generations
+ *  on. See `readResultFileForWalk` for the per-file handling shared between the root and every archive.
+ *
  *  `ts`/`git` for a freshly-walked row are NOT "now"/"this checkout" — those would be fabricated
- *  provenance for a run that may have happened days/branches ago. `ts` is `result.json`'s own mtime
+ *  provenance for a run that may have happened days/branches ago. `ts` is the result file's own mtime
  *  (the closest available proxy for "when this run completed"); `git` is honestly `{branch:null,sha:null}`
  *  (unknowable from a bare result.json). `gitInfo()` is intentionally never called during a walk (it was
  *  in an earlier version, once per row — a real perf cost, N subprocess spawns for N run dirs, for a value
  *  that was wrong anyway).
  *
  *  A missing/corrupt result.json is skipped, not fatal — a partial/crashed run dir shouldn't block indexing
- *  everything else. */
-export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; written: number; skipped: number; skippedReplay: number } {
+ *  everything else. A slug/runId directory entry, or a result file itself, that is a SYMLINK is rejected
+ *  outright (never followed) and its real path is additionally required to resolve inside `runsRoot` before
+ *  it is opened — a symlinked entry under the runs root must never cause an arbitrary external file to be
+ *  read and indexed as harness evidence.
+ *
+ *  The MERGE below keys prior rows by `rowIdentity` (turn-aware), never by bare `outDir` — a resumed
+ *  session's turns (and critique's task+reflection turns) legitimately share one `outDir`, and keying by
+ *  that alone would collapse N historical rows down to one on every reindex. */
+export function reindexFromRunsTree(runsRoot: string): {
+  rows: RunIndexRow[];
+  written: number;
+  skipped: number;
+  skippedReplay: number;
+  skippedUnsafe: number;
+  /** Pre-layout dirs the walk cannot read. Reported, never silently dropped. */
+  skippedLegacy: number;
+} {
+  const priorRows = readIndex(runsRoot);
+  // Command-inheritance fallback ONLY (see below) — last-one-wins-per-outDir is fine for a heuristic hint,
+  // but must never be the thing that decides which HISTORICAL rows survive a reindex (that collapse was
+  // the actual defect: a mutable storage location standing in for an event identity).
   const priorByOutDir = new Map<string, RunIndexRow>();
-  for (const r of readIndex(runsRoot)) priorByOutDir.set(r.outDir, r);
+  for (const r of priorRows) priorByOutDir.set(r.outDir, r);
+  const priorByIdentity = new Map<string, RunIndexRow>();
+  for (const r of priorRows) priorByIdentity.set(rowIdentity(r), r);
 
-  const walkedOutDirs = new Set<string>();
+  const walkedIdentities = new Set<string>();
+  /** outDirs that yielded a row from the ROOT `result.json` (not an archive) — see the supersede clause. */
+  const rootWalkedOutDirs = new Set<string>();
   const walked: RunIndexRow[] = [];
   let skipped = 0;
   let skippedReplay = 0;
+  let skippedUnsafe = 0;
+  let skippedLegacy = 0;
   if (existsSync(runsRoot)) {
     for (const slug of readdirSync(runsRoot)) {
       const slugDir = join(runsRoot, slug);
-      let slugStat;
+      let slugLstat;
       try {
-        slugStat = statSync(slugDir);
+        slugLstat = lstatSync(slugDir);
       } catch {
         continue;
       }
-      if (!slugStat.isDirectory()) continue;
+      if (slugLstat.isSymbolicLink()) {
+        skippedUnsafe++;
+        continue;
+      }
+      if (!slugLstat.isDirectory()) continue;
       for (const runId of readdirSync(slugDir)) {
         const outDir = join(slugDir, runId);
-        const resultPath = join(outDir, "result.json");
-        if (!existsSync(resultPath)) continue;
+        let outDirLstat;
         try {
-          const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
-          // A `command:"replay"` result is a RE-CHECK, not new evidence. Skip it entirely rather
-          // than relabeling it "run" (the fallback below would, since replay carries mode:"run") and
-          // laundering a re-check into the evidence index. `continue` leaves this outDir out of
-          // walkedOutDirs, so any PRIOR index row for it is PRESERVED as-is by the merge below — the one
-          // intentional exception to "every on-disk run dir gets a fresh row".
-          if (result.command === "replay") {
-            skippedReplay++;
-            continue;
-          }
-          const ts = statSync(resultPath).mtime.toISOString();
-          // RunResult.mode has no "skill"/"record" value, so a run originally recorded under one of those
-          // commands would otherwise be relabeled "run"/"chat" on every reindex. Prefer the command now
-          // persisted in result.json (#48); fall back to a prior index row (for results written before that
-          // field existed), then to deriving from `result.mode` for a brand-new outDir with neither.
-          const prior = priorByOutDir.get(outDir);
-          // `result.command` here is already narrowed to exclude "replay" (skipped above), so it maps
-          // straight onto the index row's command union — no re-check ever reaches this row.
-          const command = result.command ?? prior?.command ?? (result.mode === "chat" ? "chat" : "run");
-          walked.push(
-            indexRowFromResult(result, {
-              command,
-              partial: !!result.partial,
-              ts,
-              git: { branch: null, sha: null },
-            }),
-          );
-          walkedOutDirs.add(outDir);
+          outDirLstat = lstatSync(outDir);
         } catch {
-          skipped++;
+          continue;
+        }
+        if (outDirLstat.isSymbolicLink()) {
+          skippedUnsafe++;
+          continue;
+        }
+        if (!outDirLstat.isDirectory()) continue;
+
+        // UNMIGRATED DIRS ARE COUNTED AND REPORTED, NEVER SILENTLY DROPPED.
+        //
+        // The legacy layer is gone: a pre-layout dir's artifacts live at its root, which nothing here
+        // reads anymore. Skipping it quietly while printing a confident "reindexed N run(s)" is the
+        // failure this command exists to prevent — `--reindex` is documented as the one-time migration
+        // for pre-index runs, i.e. aimed squarely at exactly this population. The caller names
+        // `migrate-run-dir` as the remedy.
+        const shape = classifyRunDir(outDir);
+        if (shape.kind === "legacy" || shape.kind === "mixed") {
+          skippedLegacy++;
+          continue;
+        }
+
+        // The only addressable shape. Each turn is an independent completion with its own identity.
+        for (const n of listTurns(outDir)) {
+          const p = turnArtifactPath(outDir, n, "result.json");
+          const o = readResultFileForWalk(runsRoot, outDir, p, priorByOutDir);
+          if (o.kind === "unsafe") skippedUnsafe++;
+          else if (o.kind === "corrupt") skipped++;
+          else if (o.kind === "replay") skippedReplay++;
+          else if (o.kind === "row") {
+            walked.push(o.row);
+            walkedIdentities.add(rowIdentity(o.row));
+            rootWalkedOutDirs.add(o.row.outDir);
+          }
         }
       }
     }
   }
-  const preserved = [...priorByOutDir.values()].filter((r) => !walkedOutDirs.has(r.outDir));
+  // A turn-less prior row is SUPERSEDED by any walked row for its outDir, and must not be preserved
+  // alongside one. Rows written before `turn` existed carry identity `<outDir>`, while the row the walk
+  // re-derives from that same run's result.json carries `<outDir> turn:N` — the identities can never
+  // match, so a plain "identity not walked" filter would preserve the stale row NEXT TO its own
+  // replacement and permanently double-count every pre-existing run on the first reindex (and never
+  // self-heal). Note `priorByIdentity` has already collapsed all turn-less rows for one outDir into a
+  // single entry, so at most one such row per outDir is dropped here: the most recent turn — which is
+  // exactly the completion the current result.json (and thus the walked row) represents.
+  // The clause below supersedes a turn-less prior row on the grounds that the walked row "is exactly the
+  // completion the current result represents". With one shape that holds for every walked row: each comes
+  // from a `turns/<N>/result.json`, and a dir that cannot be read that way is skipped whole rather than
+  // partially walked. (Historically this had to be restricted to ROOT rows, because an archive-only walk
+  // could key on an OLDER archived turn and silently delete the legacy row: unrecoverable loss on the index that is supposed to be the
+  // durable history, during the operation whose job is to heal it.
+  const walkedOutDirs = rootWalkedOutDirs;
+  const preserved = [...priorByIdentity.values()].filter(
+    (r) => !walkedIdentities.has(rowIdentity(r)) && !(r.turn === undefined && walkedOutDirs.has(r.outDir)),
+  );
   const rows = [...walked, ...preserved];
   mkdirSync(runsRoot, { recursive: true });
-  writeFileSync(indexPath(runsRoot), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
-  return { rows, written: walked.length, skipped, skippedReplay };
+  writeTextAtomic(indexPath(runsRoot), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
+  return { rows, written: walked.length, skipped, skippedReplay, skippedUnsafe, skippedLegacy };
 }
 
 /** An exact `runId` or `slug/runId` match — split out from `resolveRunsFromIndex` (below) so

@@ -1,0 +1,1105 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { assessRunDir, executeMigration } from "../src/run/migrate-run-dir.js";
+
+// Phase 1 (ASSESS) is where every data-safety rule lives, and it is specified to be COMPLETELY
+// mutation-free: three prior revisions of this spec deleted or fabricated a turn because assessment and
+// execution were interleaved. So these tests assert on the PLAN, and additionally assert that assessing
+// never touched the directory.
+
+let root: string;
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "migrate-"));
+});
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+/** A run dir under a realistic `<runsRoot>/<scenario>/<runId>` tree. */
+function runDir(name = "sess-1"): string {
+  const d = join(root, "scn", name);
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function write(dir: string, rel: string, body: string): void {
+  const p = join(dir, rel);
+  mkdirSync(join(p, ".."), { recursive: true });
+  writeFileSync(p, body);
+}
+
+/** A snapshot of every file path + its bytes, to prove assessment mutated nothing. */
+function snapshot(dir: string): string {
+  const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.push(`${p.slice(dir.length)}:${statSync(p).size}:${readFileSync(p, "utf8")}`);
+    }
+  };
+  walk(dir);
+  return out.join("\n");
+}
+
+const RESULT = (turn?: number) => JSON.stringify(turn === undefined ? { scenario: "scn" } : { scenario: "scn", turn });
+const TRANSCRIPT = `{"t":"transcript","text":"hi"}`;
+
+describe("assessRunDir — the plain single-turn legacy dir (1,618 of the real population)", () => {
+  it("plans a move of every root artifact into turns/1", () => {
+    const d = runDir();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "trace.json", "{}");
+    write(d, "events.jsonl", "");
+    const before = snapshot(d);
+
+    const a = assessRunDir(d);
+
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const moves = a.plan.ops.filter((o) => o.kind === "move").map((o) => `${o.from.slice(d.length)} -> ${o.to.slice(d.length)}`);
+    expect(moves.sort()).toEqual(
+      ["/result.json -> /turns/1/result.json", "/run.jsonl -> /turns/1/run.jsonl", "/trace.json -> /turns/1/trace.json"].sort(),
+    );
+    // events.jsonl is NOT per-turn: moving it breaks `trace`, the one command that reads legacy dirs.
+    expect(moves.join(), "events.jsonl must never move").not.toContain("events.jsonl");
+    expect(snapshot(d), "ASSESSMENT MUTATED THE DIRECTORY").toBe(before);
+  });
+});
+
+describe("assessRunDir — the shapes that must NOT be migrated", () => {
+  it("skips an aborted stub (2,111 of the real population) without calling it a failure", () => {
+    const d = runDir();
+    write(d, "status.json", "{}");
+    write(d, "mounts.json", "{}");
+    expect(assessRunDir(d).kind).toBe("skip");
+  });
+
+  it("reports an already-current dir as a no-op", () => {
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    expect(assessRunDir(d).kind).toBe("noop");
+  });
+
+  it("REFUSES a dir with no transcript anywhere, rather than laundering it past the gates", () => {
+    // The 5 real resources-only dirs. Migrating one yields a `turns` shape with no run.jsonl, which
+    // `requireTurns` happily passes — and `diff` then reports two DIFFERENT such dirs as identical,
+    // exit 0. Migration must never convert refused-legacy into gate-passing-empty.
+    const d = runDir();
+    write(d, "resources.jsonl", `{"ts":1,"rssBytes":1}`);
+    write(d, "events.jsonl", "");
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/transcript|run\.jsonl/i);
+  });
+});
+
+describe("assessRunDir — the compat-copy trap (root artifact beside turns/)", () => {
+  it("DELETES a root result.json byte-identical to a lower turn, without minting a bogus slot", () => {
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(1)); // identical to turn 1, NOT the highest turn
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(a.plan.ops.filter((o) => o.kind === "delete").map((o) => o.path.slice(d.length))).toEqual(["/result.json"]);
+    expect(
+      a.plan.ops.some((o) => o.kind === "move" && o.to.includes("turns/3")),
+      "minted a bogus turn 3",
+    ).toBe(false);
+  });
+
+  it("MOVES a root result.json into an empty counterpart slot instead of deleting the only copy", () => {
+    // The documented crash contract: run.jsonl is written before result.json, so turns/1 can hold a
+    // transcript and no result while the root still holds that turn's only result.
+    const d = runDir();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(1));
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.filter((o) => o.kind === "delete"),
+      "deleted the only copy of turn 1's result",
+    ).toEqual([]);
+    expect(a.plan.ops.filter((o) => o.kind === "move").map((o) => o.to.slice(d.length))).toEqual(["/turns/1/result.json"]);
+  });
+
+  it("REFUSES when the root artifact is neither a duplicate nor placeable", () => {
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(9)); // different content, and turn 1's slot is occupied
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("refuse");
+    // The reason must name THIS cause. Asserting only `kind === "refuse"` passes against any
+    // refuse-everything implementation — it cannot tell a correct refusal from a broken one.
+    if (a.kind === "refuse") expect(a.reason).toMatch(/result\.json/);
+  });
+});
+
+describe("assessRunDir — per-dir turn mapping on archive dirs (the 12 real ones)", () => {
+  it("maps archives to their own turn and root artifacts to max+1, per DIR not per artifact family", () => {
+    // These dirs archive result/run but NEVER trace — so root trace.json is the LATEST turn's, not
+    // turn 1's. A per-artifact-family reading mislabels it in 12/12 real cases.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "trace.json", "{}");
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const moves = Object.fromEntries(
+      a.plan.ops.filter((o) => o.kind === "move").map((o) => [o.from.slice(d.length), o.to.slice(d.length)]),
+    );
+    expect(moves["/result.turn-1.json"]).toBe("/turns/1/result.json");
+    expect(moves["/run.turn-1.jsonl"]).toBe("/turns/1/run.jsonl");
+    expect(moves["/result.json"]).toBe("/turns/2/result.json");
+    expect(moves["/trace.json"], "root trace.json is turn 2's, not turn 1's").toBe("/turns/2/trace.json");
+  });
+
+  it("REFUSES when two planned operations would target the same destination", () => {
+    // Neither the archive mapping nor the 3-branch rule sees the other's PLAN; each only checks
+    // existing occupancy. Without a uniqueness assertion the second rename silently wins.
+    const d = runDir();
+    mkdirSync(join(d, "turns", "1"), { recursive: true });
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT()); // no .turn stamp — 404 of 1,630 real results have none
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/destination|collide|conflict/i);
+  });
+});
+
+describe("assessRunDir — the cumulative resources file on archive dirs (N6/P2-7)", () => {
+  it("SPLITS a cumulative resources.jsonl at the prior turn's completion boundary", () => {
+    // On the 12 real archive dirs `resources.jsonl` spans BOTH turns (they predate beginTurn's resources
+    // rename): its first sample lands seconds before turn 1 completed and its last during turn 2. Carrying
+    // the whole file into one slot attributes turn-1 samples to turn 2 — data preserved, telemetry wrong.
+    // The boundary is the prior turn's result archive mtime, i.e. that turn's completion time.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    write(
+      d,
+      "resources.jsonl",
+      [
+        `{"ts":${boundaryMs - 2000},"rssBytes":1}`,
+        `{"ts":${boundaryMs - 500},"rssBytes":2}`,
+        `{"ts":${boundaryMs + 1500},"rssBytes":3}`,
+      ].join("\n") + "\n",
+    );
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "no split planned — the cumulative file would be carried whole into one turn").toBeDefined();
+    if (split?.kind !== "split") return;
+    expect(split.boundaryMs).toBe(boundaryMs);
+    expect(split.toLow.slice(d.length)).toBe("/turns/1/resources.jsonl");
+    expect(split.toHigh.slice(d.length)).toBe("/turns/2/resources.jsonl");
+  });
+
+  it("does NOT split a resources.jsonl that lies entirely on one side of the boundary", () => {
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    write(d, "resources.jsonl", `{"ts":${boundaryMs + 1000},"rssBytes":3}\n`);
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "split"),
+      "split a file that never spans the boundary",
+    ).toBe(false);
+    expect(
+      a.plan.ops.filter((o) => o.kind === "move").map((o) => o.to.slice(d.length)),
+      "a wholly-turn-2 resources file belongs in turn 2",
+    ).toContain("/turns/2/resources.jsonl");
+  });
+});
+
+// ── Gaps a code review found by mutation: 9 of 15 mutations to assessRunDir left the suite GREEN,
+// including one that silently deleted a genuine archive. Each test below kills a specific survivor.
+
+describe("assessRunDir — split destinations are subject to the SAME collision rules as moves", () => {
+  function spanning(d: string, boundaryMs: number, name: string): void {
+    write(d, name, [`{"ts":${boundaryMs - 1000},"rssBytes":1}`, `{"ts":${boundaryMs + 1000},"rssBytes":2}`].join("\n") + "\n");
+  }
+
+  it("REFUSES when a split destination collides with another planned operation", () => {
+    // The archive move targets turns/1/resources.jsonl and the split's toLow targets the same path.
+    // Uniqueness was enforced for moves only, so execute ran the move and the split then overwrote it.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-1.jsonl", `{"ts":1,"rssBytes":9}`);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    spanning(d, boundaryMs, "resources.jsonl");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a split silently overwrote another operation's destination").toBe("refuse");
+  });
+
+  it("REFUSES when a split destination already exists on disk", () => {
+    // Fixture deliberately avoids every OTHER refusal path (the archives are byte-identical to their
+    // slots, so they resolve as duplicates) — otherwise this passes on an unrelated refusal, which is
+    // exactly what it did before: it was green while the split still overwrote the file.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/resources.jsonl", `{"ts":1,"rssBytes":42}`); // pre-existing telemetry
+    write(d, "result.turn-1.json", RESULT(1)); // identical to the slot -> duplicate, not a refusal
+    write(d, "run.turn-1.jsonl", TRANSCRIPT); // ditto
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    spanning(d, boundaryMs, "resources.jsonl");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a split overwrote pre-existing telemetry").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason, "refused, but for an unrelated reason").toMatch(/resources/);
+  });
+});
+
+describe("assessRunDir — an ARCHIVE-named resources file is split on content too (F3)", () => {
+  it("splits resources.turn-N.jsonl when its samples span the boundary — the filename is a hint, not authority", () => {
+    // The N1 resume fix MINTS exactly this file (it renames a cumulative root resources.jsonl to
+    // resources.turn-<prior>.jsonl), so every archive dir resumed between upgrade and migration hits it.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    write(
+      d,
+      "resources.turn-1.jsonl",
+      [`{"ts":${boundaryMs - 1000},"rssBytes":1}`, `{"ts":${boundaryMs + 1000},"rssBytes":2}`].join("\n") + "\n",
+    );
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "an archive-named cumulative file was carried whole into one turn").toBeDefined();
+  });
+});
+
+describe("assessRunDir — resources attribution when the file does NOT span the boundary (P2-7)", () => {
+  function archiveDir(boundaryMs: number): string {
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), boundaryMs / 1000, boundaryMs / 1000);
+    return d;
+  }
+
+  it("attributes an entirely-BEFORE-boundary file to the PRIOR turn, not the latest", () => {
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    const d = archiveDir(boundaryMs);
+    write(d, "resources.jsonl", `{"ts":${boundaryMs - 5000},"rssBytes":1}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const mv = a.plan.ops.find((o) => o.kind === "move" && o.from.endsWith("resources.jsonl"));
+    expect(mv?.kind === "move" ? mv.to.slice(d.length) : undefined, "turn-1 telemetry was labeled turn 2").toBe("/turns/1/resources.jsonl");
+  });
+
+  it("REFUSES rather than attributing a file whose sample timestamps are unparseable", () => {
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    const d = archiveDir(boundaryMs);
+    write(d, "resources.jsonl", `not json at all\n`);
+    const a = assessRunDir(d);
+    expect(a.kind, "samples with no usable timestamp were attributed by guess").toBe("refuse");
+  });
+
+  it("puts a sample exactly ON the boundary in the PRIOR turn (<=, not <)", () => {
+    const boundaryMs = new Date("2026-01-15T10:00:00Z").getTime();
+    const d = archiveDir(boundaryMs);
+    write(d, "resources.jsonl", [`{"ts":${boundaryMs},"rssBytes":1}`, `{"ts":${boundaryMs + 1000},"rssBytes":2}`].join("\n") + "\n");
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "a boundary-exact sample did not register as spanning").toBeDefined();
+  });
+});
+
+describe("assessRunDir — archive/slot collision, BOTH arms (they are both reachable)", () => {
+  it("DROPS an archive identical to the slot it targets", () => {
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1)); // identical to the slot
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(a.plan.ops.filter((o) => o.kind === "delete").map((o) => o.path.slice(d.length))).toEqual(["/result.turn-1.json"]);
+  });
+
+  it("REFUSES when an archive collides with a slot holding DIFFERENT bytes", () => {
+    // Mutating this arm to "delete the archive" left all 24 tests green — a silent data-destroying
+    // regression with no coverage at all.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(7)); // DIFFERENT
+    const a = assessRunDir(d);
+    expect(a.kind, "a differing archive was silently dropped").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — the .turn cross-check", () => {
+  it("REFUSES when a root result.json's stamp disagrees with the only free slot", () => {
+    const d = runDir();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT); // turn 1 lacks a result -> it is the free slot
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(5)); // stamped 5, but the free slot is 1
+    const a = assessRunDir(d);
+    expect(a.kind, "a mis-stamped result was placed into a slot it does not belong to").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — byte-identity deletion is restricted to SELF-LABELING artifacts (P2-6)", () => {
+  it("does NOT delete an empty root resources.jsonl merely because a turn's is also empty", () => {
+    // trace/resources carry no turn stamp, so byte-identity is not proof of duplication: an empty file
+    // matches every other empty file. Deleting here loses turn N's file EXISTENCE.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/resources.jsonl", "");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "resources.jsonl", ""); // identical bytes to turns/1's, but it is turn 2's
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "delete"),
+      "an empty resources file was deleted as a 'duplicate'",
+    ).toBe(false);
+  });
+});
+
+describe("assessRunDir — the boundary itself is undeterminable", () => {
+  it("REFUSES when a turn adjacent to a sample's has no datable completion", () => {
+    // An archive dir that kept run.turn-1.jsonl but not result.turn-1.json: turn 1 EXISTS (a transcript
+    // evidences it) but has no completion time, so a sample that could be turn 1's or turn 2's cannot be
+    // attributed. The table-driven rule names this precisely — "an adjacent turn's completion is undated"
+    // — rather than the old generic "boundary". Intent (refuse rather than guess) is unchanged.
+    const d = runDir();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "resources.jsonl", `{"ts":1,"rssBytes":1}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/undated|ambiguous|boundary/i);
+  });
+});
+
+describe("assessRunDir — the POST-CRASH shape, where the boundary lives in turns/ not at the root", () => {
+  it("REFUSES a cumulative resources.jsonl beside turns/ rather than carrying it whole", () => {
+    // The shape left by a mid-split crash whose journal was then removed — which the tool's own
+    // malformed-journal message told the user to do. The archives have already moved into turns/, so
+    // there is no root `result.turn-N.json` left to date the boundary with. Deriving `maxArchive` from
+    // the root alone made the split unreachable, the cumulative file was moved WHOLE into the lowest free
+    // slot, a torn destination was laundered as turn-1 telemetry, and the run reported SUCCESS.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), B / 1000, B / 1000);
+    write(d, "turns/1/resources.jsonl", `{"ts":1,"TORN`); // the half-written destination
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a cumulative file was carried whole into one turn after a crash").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/resources/);
+  });
+
+  it("still SPLITS correctly when the boundary is only available from turns/", () => {
+    // The same crash WITHOUT a torn destination: every artifact has migrated except the cumulative
+    // resources file, so both turns exist and the boundary must come from `turns/1/result.json`'s mtime.
+    // (Both turns must be real — a split whose high half landed in a turn with no result or transcript
+    // would be manufacturing the very no-transcript shape the migrator refuses elsewhere.)
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), B / 1000, B / 1000);
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const split = a.plan.ops.find((o) => o.kind === "split");
+    expect(split, "no split — the boundary was not derived from turns/").toBeDefined();
+    if (split?.kind === "split") {
+      expect(split.boundaryMs).toBe(B);
+      expect(split.toLow.slice(d.length)).toBe("/turns/1/resources.jsonl");
+      expect(split.toHigh.slice(d.length)).toBe("/turns/2/resources.jsonl");
+    }
+  });
+});
+
+describe("assessRunDir — critique's graded aliases (the plan's last open question)", () => {
+  it("leaves result.graded.json / trace.graded.json alone and does not treat them as contamination", () => {
+    // The plan left this OPEN: should the migrator re-point the graded aliases? Answering it here rather
+    // than shipping an unanswered question.
+    //
+    // No. They are root-level COPIES of the graded turn, not per-turn artifacts — critique writes them
+    // precisely so a consumer has a role-stable name that does not move. The migrator must neither move
+    // them (that would break the stable name) nor count them as pre-layout markers (that would make every
+    // migrated critique dir look mixed and get refused forever).
+    const d = runDir();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "result.graded.json", RESULT(1));
+    write(d, "trace.graded.json", "{}");
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const touched = a.plan.ops.map((o) => (o.kind === "delete" ? o.path : o.kind === "move" ? o.from : o.from));
+    expect(
+      touched.some((p) => p.includes("graded")),
+      "the migrator moved or deleted a graded alias",
+    ).toBe(false);
+  });
+
+  it("a MIGRATED critique dir is `turns`, not `mixed` — the aliases must not make it look contaminated", () => {
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "result.graded.json", RESULT(1));
+    write(d, "trace.graded.json", "{}");
+    expect(assessRunDir(d).kind, "a normal critique dir was not recognised as already current").toBe("noop");
+  });
+});
+
+describe("assessRunDir — the canonical MIXED shape every refusal routes here", () => {
+  it("places a stamped root artifact into its OWN turn slot, even when that slot does not exist yet", () => {
+    // Six commands refuse this shape with "Convert it in place: cowork-harness migrate-run-dir" — and the
+    // migrator refused it too, saying "every turn already has one" when turns/1 did not exist at all. The
+    // slot search only scanned EXISTING turn dirs, so a root artifact belonging to a turn with no
+    // directory had nowhere to go. That closed the loop the whole UX depends on: refuse -> migrate ->
+    // refuse. Fail-closed, but a dead end.
+    const d = runDir();
+    write(d, "result.json", RESULT(1)); // stamped turn 1
+    // Distinct transcripts per turn — identical ones would (correctly) resolve as a compat duplicate and
+    // never exercise the placement path this test is about.
+    write(d, "run.jsonl", `{"t":"transcript","text":"turn one"}`);
+    write(d, "trace.json", "{}");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"turn two"}`);
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const moves = Object.fromEntries(
+      a.plan.ops.filter((o) => o.kind === "move").map((o) => [o.from.slice(d.length), o.to.slice(d.length)]),
+    );
+    expect(moves["/result.json"], "the stamped turn-1 result did not land in turns/1").toBe("/turns/1/result.json");
+    expect(moves["/run.jsonl"]).toBe("/turns/1/run.jsonl");
+  });
+
+  it("still REFUSES when the stamp disagrees with every free slot", () => {
+    // The placement must be driven by the artifact's own stamp, not by "any gap will do".
+    const d = runDir();
+    write(d, "result.json", RESULT(7)); // claims turn 7
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    const a = assessRunDir(d);
+    expect(a.kind, "a mis-stamped artifact was placed anyway").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — the mixed shape WITH telemetry (the only kind the resume flow actually mints)", () => {
+  it("finds the turn boundary from the root result the plan has already identified as that turn's", () => {
+    // The slot-placement fix closed the loop only for telemetry-free dirs. `completionMtimeOf` looked for
+    // turn 1's result at `result.turn-1.json` or `turns/1/result.json` — but in this shape turn 1's result
+    // is the ROOT `result.json`, which this same assessment has already decided belongs in `turns/1`. The
+    // boundary was knowable from a file the plan was holding; the resources planner just never asked.
+    // Net effect: every telemetry-bearing mixed dir still dead-ended the "Convert it in place" remedy.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"turn one"}`);
+    utimesSync(join(d, "result.json"), B / 1000, B / 1000);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"turn two"}`);
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+  });
+});
+
+describe("assessRunDir — a byte-identical root copy of a NON-self-labeling artifact", () => {
+  it("drops it as the duplicate it is, instead of refusing with 'neither a duplicate nor placeable'", () => {
+    // `identicalTo` was computed for every artifact but honoured only for result.json/run.jsonl, so a
+    // root trace.json byte-identical to turns/1's refused with a message denying it was a duplicate —
+    // while the code had just detected that it was. Fail-closed, but the message actively misled.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/trace.json", "{}");
+    write(d, "result.json", RESULT(1)); // identical
+    write(d, "run.jsonl", TRANSCRIPT); // identical
+    write(d, "trace.json", "{}"); // identical — the one that used to refuse
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(a.plan.ops.filter((o) => o.kind === "delete").length, "the identical root copies were not dropped").toBe(3);
+  });
+});
+
+describe("assessRunDir — byte-identity is only proof of duplication FOR THE SLOT IT RESOLVES TO", () => {
+  it("MOVES a root trace identical to a DIFFERENT turn's, instead of deleting turn 1's only copy", () => {
+    // The regression this pins was self-inflicted: universal byte-identity dedupe was introduced to stop a
+    // misleading refusal, and it silently DESTROYED data on the branch's own canonical shape. Two
+    // tool-less turns produce identical minimal traces, so root trace.json (turn 1's) matched
+    // turns/2/trace.json and was deleted — on a success path, with turns/1/trace.json then absent.
+    //
+    // Identity proves "already stored" only when the match is in the slot this artifact resolves to.
+    // Matching some OTHER turn means the copy is that turn's only instance.
+    const d = runDir();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"one"}`);
+    write(d, "trace.json", "{}");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"two"}`);
+    write(d, "turns/2/trace.json", "{}"); // identical bytes, different turn
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "delete" && o.path.endsWith("trace.json")),
+      "turn 1's trace was DELETED because turn 2's happened to be byte-identical",
+    ).toBe(false);
+    expect(
+      a.plan.ops.some((o) => o.kind === "move" && o.to.endsWith("/turns/1/trace.json")),
+      "turn 1's trace was not placed in its own turn",
+    ).toBe(true);
+  });
+
+  it("still drops a root copy identical to the slot it would occupy", () => {
+    // The legitimate case the dedupe exists for: the compat copy a mid-branch writer left beside turns/1.
+    const d = runDir();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/trace.json", "{}");
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "trace.json", "{}");
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(a.plan.ops.filter((o) => o.kind === "delete").length, "the true compat copies were not dropped").toBe(3);
+  });
+});
+
+describe("assessRunDir — an EMPTY archive-named resources file belongs to its OWN turn", () => {
+  it("places resources.turn-1.jsonl in turns/1, not turns/2", () => {
+    // `"empty"` was folded into the after-boundary arm, which is right for a ROOT file (it belongs to the
+    // latest turn) but wrong for an ARCHIVE-named one, whose name states its turn. The empty archive
+    // landed in turn 2 — giving a turn that never had telemetry a file carrying turn 1's mtime, which
+    // this branch treats as data — and when a genuine turn-2 resources file also existed, the collision
+    // refused an otherwise valid directory.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-1.jsonl", ""); // empty
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const mv = a.plan.ops.find((o) => o.kind === "move" && o.from.endsWith("resources.turn-1.jsonl"));
+    expect(mv?.kind === "move" ? mv.to.slice(d.length) : undefined).toBe("/turns/1/resources.jsonl");
+  });
+
+  it("does not refuse a valid dir because the empty archive collided with a real turn-2 file", () => {
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-1.jsonl", "");
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "resources.jsonl", `{"ts":9999999999999,"rss":1}\n`); // genuinely turn 2's
+    expect(assessRunDir(d).kind).toBe("plan");
+  });
+});
+
+describe("assessRunDir — root resources follows rootArtifactTurn, not highestTurn-1", () => {
+  it("moves a gap-filling root resources file to ITS turn, not the second-highest", () => {
+    // The resources planner used `highestTurn - 1` unconditionally — the cumulative-split model, correct
+    // only when root artifacts ARE the latest turn. When root artifacts fill a GAP (a pre-layout dir
+    // resumed twice: root turn-1 beside turns/2 and turns/3), result/run/trace correctly go to turns/1 but
+    // resources went to turns/2 — the same "telemetry into a turn it never produced" defect the previous
+    // fix closed for archives, reappearing for root files.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"one"}`);
+    write(d, "trace.json", "{}");
+    utimesSync(join(d, "result.json"), B / 1000, B / 1000);
+    for (const t of [2, 3]) {
+      write(d, `turns/${t}/result.json`, RESULT(t));
+      write(d, `turns/${t}/run.jsonl`, `{"t":"transcript","text":"t${t}"}`);
+    }
+    write(d, "resources.jsonl", `{"ts":${B - 2000},"rss":1}\n`); // a turn-1 sample
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind === "move" ? res.to.slice(d.length) : "(not a plain move)", "turn-1 telemetry landed in the wrong turn").toBe(
+      "/turns/1/resources.jsonl",
+    );
+  });
+
+  it("moves an EMPTY gap-filling root resources file to its turn too", () => {
+    const d = runDir();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"one"}`);
+    write(d, "trace.json", "{}");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"two"}`);
+    write(d, "resources.jsonl", ""); // empty, gap-filling → belongs to turn 1
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind === "move" ? res.to.slice(d.length) : "(not a move)").toBe("/turns/1/resources.jsonl");
+  });
+
+  it("still SPLITS a cumulative root resources file when root artifacts ARE the latest turn", () => {
+    // The case highestTurn-1 was written for: a pre-layout dir NOT yet resumed under the new layout —
+    // just root artifacts + archives, resources spanning the boundary. Must still split.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), B / 1000, B / 1000);
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "split"),
+      "a genuinely cumulative root file was not split",
+    ).toBe(true);
+  });
+});
+
+describe("assessRunDir — a cumulative resources file spanning ≥3 turns", () => {
+  it("REFUSES rather than lumping turn-1 samples into turn 2", () => {
+    // The old planner split at ONE boundary (turn N-1's completion) on the assumption a cumulative file
+    // spans only the last two turns. That was never validated — and on a dir with archives 1 and 2 plus
+    // root turn-3 artifacts, a resources file with a turn-1 sample got that sample put in turns/2. The
+    // evidence to refuse is in hand: any sample at or before turn (N-2)'s completion proves a third turn
+    // is in the file, which a single boundary cannot separate. Refuse rather than mis-attribute.
+    const d = runDir();
+    const T1 = new Date("2026-01-15T10:00:00Z").getTime();
+    const T2 = new Date("2026-01-15T11:00:00Z").getTime();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-2.json", RESULT(2));
+    write(d, "run.turn-2.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(3));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), T1 / 1000, T1 / 1000);
+    utimesSync(join(d, "result.turn-2.json"), T2 / 1000, T2 / 1000);
+    // samples in all three turns
+    write(
+      d,
+      "resources.jsonl",
+      [`{"ts":${T1 - 1000},"rss":1}`, `{"ts":${T2 - 1000},"rss":2}`, `{"ts":${T2 + 1000},"rss":3}`].join("\n") + "\n",
+    );
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a ≥3-turn cumulative file was split at one boundary, mis-attributing the earliest turn").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/resources|turn|span/i);
+  });
+});
+
+describe("assessRunDir — resources attribution, table-driven properties", () => {
+  // A deterministic generator (no Math.random — this repo bans it and it would break reproducibility):
+  // enumerate 2-turn dirs with samples placed in each turn, and assert clean dirs PLAN with the samples
+  // landing in their true turns. The single property that would have caught all four rounds' defects:
+  // no sample changes turn across migration.
+  it("splits a cumulative root resources file so every sample lands in the turn its timestamp falls in", () => {
+    // The cumulative case: a pre-layout dir where root artifacts ARE the latest turn (turn 2) and turn 1
+    // is an archive. Its root resources.jsonl spans both turns. Every low sample must land in turns/1,
+    // every high sample in turns/2, none lost — the property that would have caught all four rounds.
+    for (const [lowN, highN] of [
+      [2, 1],
+      [1, 2],
+      [1, 1],
+      [3, 2],
+    ] as const) {
+      const d = runDir(`sess-cum-${lowN}-${highN}`);
+      const C1 = new Date("2026-01-15T10:00:00Z").getTime(); // turn-1 completion
+      write(d, "result.turn-1.json", RESULT(1));
+      write(d, "run.turn-1.jsonl", TRANSCRIPT);
+      utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+      write(d, "result.json", RESULT(2));
+      write(d, "run.jsonl", `{"t":"transcript","text":"t2"}`);
+      const lows = Array.from({ length: lowN }, (_, i) => `{"ts":${C1 - 1000 - i},"rss":${i}}`);
+      const highs = Array.from({ length: highN }, (_, i) => `{"ts":${C1 + 1000 + i},"rss":${100 + i}}`);
+      write(d, "resources.jsonl", [...lows, ...highs].join("\n") + "\n");
+
+      const a = assessRunDir(d);
+      expect(a.kind, `clean cumulative dir ${lowN}/${highN} did not plan: ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+      if (a.kind !== "plan") continue;
+      executeMigration(a.plan, { journalRoot: join(d, "..", ".migrating") });
+      const readTurn = (t: number) => {
+        const p2 = join(d, "turns", String(t), "resources.jsonl");
+        return existsSync(p2)
+          ? readFileSync(p2, "utf8")
+              .split("\n")
+              .filter(Boolean)
+              .map((l) => JSON.parse(l).ts as number)
+          : [];
+      };
+      for (const ts of readTurn(1)) expect(ts <= C1, `sample ${ts} in turns/1 but it is after turn-1 completion`).toBe(true);
+      for (const ts of readTurn(2)) expect(ts > C1, `sample ${ts} in turns/2 but it is turn 1's`).toBe(true);
+      expect(readTurn(1).length + readTurn(2).length, "a sample was lost or duplicated").toBe(lowN + highN);
+    }
+  });
+
+  it("moves a single-turn root resources file whole to its own turn (gap-fill, not cumulative)", () => {
+    // The gap-fill case: root turn-1 artifacts beside turns/2 (a resumed pre-layout dir). root
+    // resources.jsonl is turn 1's ONLY — all samples are turn-1 samples, and it moves whole to turns/1.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.json"), C1 / 1000, C1 / 1000);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`);
+    write(d, "resources.jsonl", `{"ts":${C1 - 500},"rss":1}\n{"ts":${C1 - 100},"rss":2}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind, `gap-fill did not plan: ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : o.kind === "split" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind, "a gap-fill single-turn file was split rather than moved whole").toBe("move");
+    if (res?.kind === "move") expect(res.to.slice(d.length)).toBe("/turns/1/resources.jsonl");
+  });
+
+  it("the property's UNDATED arm: an undated boundary in the span forces a refusal, never a silent placement", () => {
+    // The generator above only makes DATED tables, which is why the round-5 undated-edge defects shipped
+    // green. This arm injects the ambiguity. The FIRST version of this fixture put a root result stamped
+    // turn 3 beside turns/{1,2} — which refuses at the root-result stamp mismatch before the resources
+    // planner is ever reached, so it pinned nothing about attribution (a mutant that assigned across an
+    // undated boundary still passed it). This shape has NO root result: three turns exist, one carries the
+    // only date, and each arm leaves a straddling sample with more than one possible owner — so the
+    // refusal can only come from the resources rule itself.
+    for (const datedTurn of [1, 2] as const) {
+      const d = runDir(`sess-undated-${datedTurn}`);
+      const C = new Date("2026-01-15T10:00:00Z").getTime();
+      // three turns exist; only `datedTurn` has a result. samples straddle C.
+      for (const t of [1, 2, 3]) {
+        write(d, `turns/${t}/run.jsonl`, `{"t":"transcript","text":"t${t}"}`);
+        if (t === datedTurn) {
+          write(d, `turns/${t}/result.json`, RESULT(t));
+          utimesSync(join(d, `turns/${t}/result.json`), C / 1000, C / 1000);
+        }
+      }
+      write(
+        d,
+        "resources.jsonl",
+        `{"ts":${C - 1000},"rss":1}
+{"ts":${C + 1000},"rss":2}
+`,
+      );
+      const a = assessRunDir(d);
+      // dated=1: the past-C sample has TWO undated tail candidates (2 and 3). dated=2: the pre-C sample
+      // could be turn 1's or turn 2's. Either way a sample's turn is unprovable → refuse, never a plan
+      // that silently places a sample.
+      expect(a.kind, `undated span (dated=${datedTurn}) was not refused: ${a.kind}`).toBe("refuse");
+      if (a.kind === "refuse") {
+        expect(a.reason, "refused, but not by the resources-attribution rule").toMatch(/resources\.jsonl/);
+        // Pin the AMBIGUITY refusal specifically. Matching only /resources\.jsonl/ let the tail-assign
+        // mutant pass the dated=1 arm: it assigned the past-C sample to turn 3, and the resulting
+        // {1,3} NON-ADJACENT-span refusal matched the same loose regex — same kind, same file name,
+        // wrong rule. The refusal this arm exists to pin is "a sample's turn cannot be determined".
+        expect(a.reason, `dated=${datedTurn} refused by a different rule than sample-ambiguity`).toMatch(/cannot be determined/);
+      }
+    }
+  });
+
+  it("does NOT mint a turn dir for an empty resources archive whose turn nothing else evidences", () => {
+    // F2 from the plan review: an empty resources.turn-5.jsonl in a {1,2}-turn dir must not create turns/5.
+    const d = runDir();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    write(d, "resources.turn-5.jsonl", ""); // turn 5 evidenced by nothing but itself
+    const a = assessRunDir(d);
+    expect(a.kind, "an empty resources archive minted a phantom turn").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/not evidenced|turn 5/i);
+  });
+});
+
+describe("assessRunDir — resources attribution in UNDATED-completion shapes (round-5 review)", () => {
+  it("REFUSES when every turn is undated and a resources file spans them (no silent highest-turn dump)", () => {
+    // Both turns aborted before writing a result (the crash contract writes run.jsonl first), so no
+    // completion boundary exists — a sample cannot be attributed. The old rule silently dumped everything
+    // into the highest turn. This is the wrong-turn class, in the all-undated edge.
+    const d = runDir();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`);
+    write(d, "resources.jsonl", `{"ts":100,"rss":1}\n{"ts":999999999999,"rss":2}\n`);
+    expect(assessRunDir(d).kind, "an all-undated table silently placed samples").toBe("refuse");
+  });
+
+  it("ACCEPTS a sample into the sole undated turn AFTER the last dated completion", () => {
+    // [turn1 dated, turn2 aborted-pre-result]. A sample past turn 1's completion can only be turn 2's —
+    // it is the one turn after the last boundary. Over-refusing this leaves a migratable dir stuck.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`);
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":1}\n`);
+    const a = assessRunDir(d);
+    expect(a.kind, `should place into turn 2, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind === "move" ? res.to.slice(d.length) : "(not a move)").toBe("/turns/2/resources.jsonl");
+  });
+
+  it("REFUSES rather than misplacing a resources archive whose own turn is undated", () => {
+    // result.turn-1 dated, resources.turn-2.jsonl (turn 2 evidenced only by itself, undated), root=turn 3.
+    // The table excluded turn 2 while maxArchive counted it, sending turn-2 samples into turns/3. Now turn
+    // 2 is an undated table entry, so its samples refuse — and its EMPTY sibling still cannot mint a turn.
+    const d = runDir();
+    const T1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), T1 / 1000, T1 / 1000);
+    write(d, "resources.turn-2.jsonl", `{"ts":${T1 + 1000},"rss":1}\n`);
+    write(d, "result.json", RESULT(3));
+    write(d, "run.jsonl", TRANSCRIPT);
+    expect(assessRunDir(d).kind, "a resources archive's samples landed in the wrong turn").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — a sample past the last dated completion with ≥2 undated tail turns is ambiguous", () => {
+  it("REFUSES rather than dumping into the highest of several undated tail turns", () => {
+    // table [1 dated, 2 undated, 3 undated]: a sample after turn 1's completion could be turn 2's OR
+    // turn 3's — two undated turns follow the last boundary, so it cannot be attributed. Placing it in the
+    // highest (turn 3) is a silent guess; this pins the refusal.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/result.json", RESULT(1));
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"t2"}`); // undated
+    write(d, "turns/3/run.jsonl", `{"t":"transcript","text":"t3"}`); // undated
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":1}\n`); // past c1, ambiguous between 2 and 3
+    expect(assessRunDir(d).kind, "a sample was dumped into the highest of several undated tail turns").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — a NON-empty resources file must not mint a turn nothing else evidences", () => {
+  // The evidenced-turn gate guarded only the EMPTY path. A non-empty stray whose samples land past every
+  // dated completion bucketed to its own (undated, resources-only) table entry via the tail rule — and the
+  // planned move CREATED turns/<N>/ holding nothing but resources.jsonl: a turn with no transcript, which
+  // listTurns then reports as addressable. The sample could equally be the last real turn's trailing one;
+  // the stray FILENAME stole it. Same rule as the empty gate: content may only place into an evidenced turn.
+  it("REFUSES a stray non-empty resources archive whose samples bucket to its self-named turn", () => {
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.turn-5.jsonl", `{"ts":${C1 + 60_000},"rssBytes":1}\n`); // turn 5 evidenced by nothing but itself
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a non-empty stray resources archive minted a phantom turn dir").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 5/);
+  });
+
+  it("REFUSES a split whose high side would mint an unevidenced turn", () => {
+    // turns/1 and turns/2 dated; stray resources.turn-3.jsonl spans (c1,c2] and past-c2 → the two-way
+    // split's toHigh would create turns/3 out of nothing.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    const C2 = new Date("2026-01-15T11:00:00Z").getTime();
+    for (const [t, c] of [
+      [1, C1],
+      [2, C2],
+    ] as const) {
+      write(d, `turns/${t}/run.jsonl`, `{"t":"transcript","text":"t${t}"}`);
+      write(d, `turns/${t}/result.json`, RESULT(t));
+      utimesSync(join(d, `turns/${t}/result.json`), c / 1000, c / 1000);
+    }
+    write(d, "resources.turn-3.jsonl", [`{"ts":${C2 - 500},"rss":1}`, `{"ts":${C2 + 1500},"rss":2}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a split's toHigh minted a phantom turn dir").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 3/);
+  });
+
+  it("REFUSES a fully-archived dir whose spanning resources archive would mint rootArtifactTurn", () => {
+    // The guard's bypass channel: `evidencedTurns` counted rootArtifactTurn as evidenced UNCONDITIONALLY,
+    // but rootArtifactTurn is only arithmetic (maxArchive+1) — it is a real turn only when a root
+    // transcript or result exists to move there. A resume interrupted between archiving and the new
+    // turn's first write leaves exactly this: archives only, and a cumulative resources.turn-1.jsonl
+    // whose trailing sample is as likely turn 1's own post-result sample. Planning it minted turns/2/
+    // holding nothing but resources.jsonl — the same transcript-less phantom, one channel over.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1));
+    utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.turn-1.jsonl", `{"ts":${C1 - 500},"rss":1}\n{"ts":${C1 + 1500},"rss":2}\n`);
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a spanning archive in a rootless dir minted turns/2 from telemetry alone").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2/);
+  });
+
+  it("REFUSES a root resources file whose samples would mint a rootArtifactTurn with no root transcript/result", () => {
+    // Same channel, root file: archived turn 1 plus a root resources.jsonl (the new turn's sampler wrote
+    // telemetry before any transcript). Nothing will ever move a transcript or result into turns/2.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1));
+    utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":1}\n`);
+
+    const a = assessRunDir(d);
+    expect(a.kind, "root telemetry minted a rootArtifactTurn no root transcript/result backs").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2/);
+  });
+
+  it("REFUSES an EMPTY root resources file when no root transcript/result backs rootArtifactTurn", () => {
+    // The empty gate shares `evidenced`, so the same bypass held there: position pointed at a
+    // rootArtifactTurn that only arithmetic vouched for, and following it minted the phantom.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1));
+    utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.jsonl", "");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "an empty root resources file minted a rootArtifactTurn no root artifact backs").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2/);
+  });
+
+  it("REFUSES rather than dragging ROOT telemetry into a stray archive's unevidenced turn", () => {
+    // The stray archive itself plans cleanly (its samples are turn 1's), but its presence puts turn 7 in
+    // the completion table — and the ROOT file's past-c1 sample then bucketed to turn 7 by the tail rule.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.turn-7.jsonl", `{"ts":${C1 - 200},"rss":1}\n`); // buckets to turn 1 — fine
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":2}\n`); // would bucket to phantom turn 7
+
+    const a = assessRunDir(d);
+    expect(a.kind, "root telemetry was dragged into a turn only a stray filename evidences").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 7/);
+  });
+});
+
+describe("assessRunDir — an EMPTY turns/<N>/ dir is not evidence (the phantom channel the archive guard didn't cover)", () => {
+  it("REFUSES placing a trailing root resources sample into an empty crash-remnant turn dir", () => {
+    // turns/2 exists but is EMPTY: a crash between turnWriteDir's mkdir and the turn's first write. It is a
+    // directory (so listTurns counts it), but nothing — no run.jsonl, no result.json — vouches that turn 2
+    // ran. A root resources sample after turn 1 buckets past every dated completion to the highest turn (2);
+    // placing it there mints a telemetry-only turn. The sample is as likely turn 1's own trailing one.
+    const d = runDir();
+    const T1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    utimesSync(join(d, "turns/1/result.json"), T1 / 1000, T1 / 1000);
+    mkdirSync(join(d, "turns", "2"), { recursive: true }); // empty
+    write(d, "resources.jsonl", `{"ts":${T1 + 5000},"rss":1}\n`);
+    const before = snapshot(d);
+
+    const a = assessRunDir(d);
+
+    expect(a.kind, a.kind === "plan" ? `planned ${JSON.stringify(a.plan.ops)}` : "").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2.*evidences|not evidenced/);
+    expect(snapshot(d), "ASSESSMENT MUTATED THE DIRECTORY").toBe(before);
+  });
+});
+
+describe("assessRunDir — a non-integer .turn stamp is ignored, never migrated into an unaddressable dir", () => {
+  it("does not place root artifacts into turns/1.5 for a fractional stamp", () => {
+    // The schema requires an integer >= 1, but the migrator reads legacy files that may predate/violate it.
+    // A fractional stamp must never become turns/1.5 — listTurns' `^\d+$` scan can never address it, so the
+    // history would be migrated into a dir no reader sees, while a re-assessment reports the dir as current.
+    const d = runDir();
+    write(d, "turns/2/run.jsonl", TRANSCRIPT);
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "result.json", '{"scenario":"scn","turn":1.5}');
+    write(d, "run.jsonl", TRANSCRIPT);
+
+    const a = assessRunDir(d);
+
+    expect(a.kind, a.kind === "refuse" ? a.reason : a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const tos = a.plan.ops.flatMap((o) => (o.kind === "move" ? [o.to.slice(d.length)] : []));
+    expect(tos.join(), "a fractional stamp created an unaddressable turns/1.5").not.toContain("turns/1.5");
+    expect(
+      tos.some((t) => t.includes("/turns/1/")),
+      "root artifacts should fall back to the first addressable gap",
+    ).toBe(true);
+  });
+});

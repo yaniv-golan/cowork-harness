@@ -35,6 +35,28 @@ describe.runIf(can)("skill --repeat preconditions", () => {
     expect(r.out).toMatch(/not a measurement/);
   });
 
+  it("ACCEPTS --decider-llm — the one decider that is not rejected, and a paid consumer rides on it", () => {
+    // Asymmetry worth pinning: --decider-dir/--decider-cmd are refused under --repeat as "not a
+    // measurement" (an external channel drives the run), but --decider-llm is ALLOWED — the
+    // independent-samples design tolerates it, and gated skills cannot be swept without it.
+    //
+    // Until now that acceptance was only an ABSENCE of rejection, verified by inspection and never
+    // exercised. A downstream consumer's ~$50-100 `--repeat 12` sweep needs this path to clear its
+    // skill's gates, so the positive path gets a test rather than an inference. --dry-run keeps it free:
+    // this pins argument ACCEPTANCE, not decider behavior at runtime.
+    const r = run(["skill", SKILL, "prompt", "--repeat", "2", "--decider-llm", "--dry-run"]);
+    // POSITIVE assertion first, deliberately. A test built only from `.not.toMatch(...)` passes when the
+    // command fails for an UNRELATED reason (a missing skill dir, an unknown flag) — it cannot
+    // distinguish "accepted" from "broke differently", which is the vacuous-guard shape this repo keeps
+    // shipping. Exit 0 plus the dry-run plan proves the argv was actually accepted.
+    expect(r.code, `expected the dry-run to succeed; got:\n${r.out}`).toBe(0);
+    expect(r.out).toMatch(/"fidelity"/);
+    // ...and only then, that it was not accepted-then-rejected by a sibling guard.
+    expect(r.out).not.toMatch(/not a measurement/);
+    expect(r.out).not.toMatch(/cannot be combined/);
+    expect(r.out).not.toMatch(/unknown flag/);
+  });
+
   it("still prints help when a companion flag is present (help must not require --repeat)", () => {
     const r = run(["skill", "--stop-on-diverge", "--help"]);
     expect(r.code).toBe(0);

@@ -36,6 +36,8 @@ export interface SyncResult {
   asarFingerprint: string;
   gates: Record<string, GateState> | null; // decoded GrowthBook gate states (null = fcache absent/unreadable)
   spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
+  spawnEnvKeys: string[]; // WI-6: the sorted SET of constructed spawn-env keys — committed as provenance.spawnEnvKeys (regex-rot oracle)
+  spawnEnvSpreadCount: number; // WI-5: count of `...`-spread sites across the spawn windows — committed as provenance.spawnEnvSpreadCount
   // per-model effort/regex-default config (the literal map + the fable|mythos regex-default class); null =
   // a hard-fail flag blocked it (carry the base baseline's spawn.effortByModel/effortRegexDefault forward).
   modelEffortConfig: ModelEffortConfig | null;
@@ -54,9 +56,11 @@ export const PINNED_GATES: Record<string, string> = {
   "1143815894": "hostLoop", // loop decision (decideLoopFromBaseline)
   // Binary-verified 2026-07-04 (asar 1.18286.0, class L9t "[ScheduledTasks]"): the SCHEDULED-TASK
   // (cron) session limiter (<=1 concurrent session per scheduled task, <=3 concurrent scheduled-task
-  // sessions globally), NOT an in-conversation Task-tool dispatch cap; the Desktop imposes no cap on
-  // Task-tool fan-out at all. Formerly mislabeled `taskDispatchLimiter` — baselines captured before
-  // the rename keep the old label in their provenance.gates as a historical release fact.
+  // sessions globally), NOT an in-conversation Task-tool dispatch cap. In-conversation Task fan-out is
+  // capped SEPARATELY, agent-side (taskRegistry: concurrent 20 / per-session 200, agent >=2.1.212/2.1.217
+  // — see SPEC §10), which the harness inherits by spawning the real agent binary. Formerly mislabeled
+  // `taskDispatchLimiter` — baselines captured before the rename keep the old label in their
+  // provenance.gates as a historical release fact.
   "1648655587": "scheduledTaskSessionLimiter",
   "1978029737": "coworkRuntimeConfig", // web_fetch routing + workspace knobs
   "583857784": "bridgeSdkTransport", // SDK control-protocol transport
@@ -88,8 +92,27 @@ export const PINNED_GATES: Record<string, string> = {
   // modeled — this harness has no persistent per-tool "always allow" concept to model against (no
   // updatedPermissions analog anywhere in src/decide/ or src/session.ts). Pinned so a live flip from
   // off to on surfaces as a provenance.gates diff, which is the trigger to revisit modeling this.
+  //
+  // 4200321681 FIRED at Desktop 1.24012.0 (absent -> on, source=force) and was revisited: still NOT
+  // modeled, and deliberately so. Binary-verified in 1.24012.0, both call sites only override an
+  // ALREADY-EXISTING always-allow decision — `sessionRuleCacheAllows(tool, session.approvedToolNames)`
+  // (source "rule_cache") and `coworkScheduledTasks.shouldAutoApprovePermission` (source
+  // "scheduled_task"), each additionally gated on permissionMode + isDestructiveConnectorTool. The
+  // harness persists neither, so it already prompts where the gate makes Cowork prompt: ON moves real
+  // Cowork TOWARD harness behavior, and modeling it would be modeling the always-allow it overrides.
+  // Re-open only if the harness grows a persistent per-tool approval cache.
   "4200321681": "autoModeOverridesAlwaysAllow", // auto mode: force re-prompt (not silent-allow) for destructiveHint MCP tools
   "1447478638": "scheduledTaskToolsApprovableByAutoMode", // auto mode: scheduled-task tools auto-approvable (unless MDM workspace.autoModeEnabled=false)
+  // Skill/plugin discovery gates. These govern whether the Desktop SDK-MCP skill-discovery tools
+  // (the `mcp__skills__*` / `mcp__plugins__*` servers — the CONFIRMED model surface per the on-disk
+  // init.tools of 8 real sessions) render, and in what mode. None was pinned before, so 245679952
+  // being live on/force was invisible to the drift guard. Present in the live fcache (NOT dark), so
+  // they are read at their real state — no DARK_GATES entry. Not behaviorally modeled yet (the harness
+  // does not declare those SDK-MCP servers); pinned so a flip surfaces as a provenance.gates diff and
+  // is the trigger to revisit declare-plus-stub. A pinned drift alone WARNS + still writes.
+  "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
+  "1598976391": "proactiveSkillSuggestEnabled", // off/defaultValue — proactive (unprompted) suggest mode; at agent >=2.1.217 this widens to gate the whole discovery-tool family's enablement (tengu_saddle_lantern twin)
+  "3246569822": "canSaveSkill", // off/defaultValue — whether the save-skill affordance is offered
 };
 
 /**
@@ -198,7 +221,8 @@ export function sync(): SyncResult {
 
   // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
   // merged with user hosts.
-  const { domains, fingerprint, spawnEnv, modelEffortConfig, promptFingerprint, notes } = extractFromAsar(unknown, gates);
+  const { domains, fingerprint, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } =
+    extractFromAsar(unknown, gates);
   const allowDomains = dedupe([...domains, ...userAllow]);
 
   if (!gates) {
@@ -223,6 +247,8 @@ export function sync(): SyncResult {
     asarFingerprint: fingerprint,
     gates,
     spawnEnv,
+    spawnEnvKeys,
+    spawnEnvSpreadCount,
     modelEffortConfig,
     promptFingerprint,
     unknownDeltas: unknown,
@@ -266,13 +292,24 @@ function extractFromAsar(
   domains: string[];
   fingerprint: string;
   spawnEnv: Record<string, string> | null;
+  spawnEnvKeys: string[];
+  spawnEnvSpreadCount: number;
   modelEffortConfig: ModelEffortConfig | null;
   promptFingerprint: PromptFingerprint | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
     flag(unknown, `asar not found at ${ASAR} — install/open Claude Desktop once, or fix ASAR in cowork-sync.ts`);
-    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, promptFingerprint: null, notes: [] };
+    return {
+      domains: [],
+      fingerprint: "",
+      spawnEnv: null,
+      spawnEnvKeys: [],
+      spawnEnvSpreadCount: 0,
+      modelEffortConfig: null,
+      promptFingerprint: null,
+      notes: [],
+    };
   }
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
@@ -292,6 +329,9 @@ function extractFromAsar(
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
+    // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
+    const { deltas: tripwireDeltas, notes: tripwireNotes } = partitionSpawnFlags(checkCodeTripwires(bundle));
+    for (const f of tripwireDeltas) flag(unknown, f);
     // Spawn contract: S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
@@ -320,10 +360,28 @@ function extractFromAsar(
       INTENTIONALLY_UNMODELED_PLACEHOLDERS,
     );
     for (const d of promptDrift.unknownDeltas) flag(unknown, d);
-    return { domains, fingerprint, spawnEnv: spawn.env, modelEffortConfig, promptFingerprint, notes: [...notes, ...promptDrift.notes] };
+    return {
+      domains,
+      fingerprint,
+      spawnEnv: spawn.env,
+      spawnEnvKeys: spawn.keys,
+      spawnEnvSpreadCount: spawn.spreadCount,
+      modelEffortConfig,
+      promptFingerprint,
+      notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
+    };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
-    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, promptFingerprint: null, notes: [] };
+    return {
+      domains: [],
+      fingerprint: "",
+      spawnEnv: null,
+      spawnEnvKeys: [],
+      spawnEnvSpreadCount: 0,
+      modelEffortConfig: null,
+      promptFingerprint: null,
+      notes: [],
+    };
   } finally {
     // mkdtempSync extraction dir is otherwise leaked under $TMPDIR on every invocation.
     rmSync(tmp, { recursive: true, force: true });
@@ -339,6 +397,54 @@ function extractFromAsar(
  * Facts (app.asar 1.12603.1): uploads is mounted read-only (`mode:"ro"`); outputs + projects default to
  * `"rw"` (delete DENIED) via the `IX` resolver, whose delete-approved branch is `…?"rwd":"rw"`.
  */
+/**
+ * Code-shape tripwires: string-occurrence counts over the asar bundle that watch a feature whose
+ * runtime STATE the sync cannot otherwise see (no gate id, no spawn-env key). Returns flags in the
+ * `partitionSpawnFlags` convention — a `NOTE:`-prefixed flag is informational (surfaced in
+ * SyncResult.notes, never write-blocking); a bare flag is a hard-fail unknown delta.
+ *
+ * getMcpSkillSources (docs/internal finding 2): on 1.24012.x it appears exactly ONCE — its own
+ * definition, with ZERO callers, so MCP-contributed skills are dead scaffolding. A caller appearing
+ * (count > 1) means that channel went live: MCP servers could now contribute skills, which breaks the
+ * harness's "skills come from local dirs/plugins" assumption. That is the sharp signal to watch —
+ * strictly better than pinning the dark gate 278625510, which is meaningless while there are no
+ * callers — so a count > 1 is a HARD delta. Count 0 = the scaffolding was removed; a prune NOTE.
+ * io.modelcontextprotocol/skills (the capability-key declaration, currently 1x) is a secondary,
+ * informational signal: any change from 1 is a NOTE to re-verify finding 2, since the authoritative
+ * "it went live" signal is the getMcpSkillSources caller above.
+ */
+export function checkCodeTripwires(bundle: string): string[] {
+  const flags: string[] = [];
+  const count = (needle: string): number => bundle.split(needle).length - 1;
+
+  // Distinguish the DEFINITION from callers so `count` isn't read blindly: the baseline is "1 = the
+  // definition, 0 callers". defPresent guards two edges (D3): (a) count 1 but NOT the definition = a
+  // caller with the def moved out of the scanned require() graph — NOT "clean"; (b) count 0 might be a
+  // dynamic-import() move, not a removal, so the prune NOTE must say so rather than coach a deletion.
+  const gmss = count("getMcpSkillSources");
+  const defPresent = /getMcpSkillSources\(\)\{/.test(bundle);
+  if (gmss > 1)
+    flags.push(
+      `code tripwire: getMcpSkillSources now appears ${gmss}x (was 1 = definition-only) — a CALLER appeared, so MCP servers may now contribute skills (dead scaffolding is now wired). Re-verify docs/internal finding 2 and decide whether the harness must model MCP-contributed skill sources; ${SPAWN_NO_BYPASS}`,
+    );
+  else if (gmss === 1 && !defPresent)
+    flags.push(
+      "NOTE: code tripwire: getMcpSkillSources appears once but its definition (`getMcpSkillSources(){`) is not in the require() graph — likely a caller remaining while the definition moved to a dynamically-imported chunk; verify against ALL .vite/build chunks before trusting the count (checkCodeTripwires in cowork-sync.ts)",
+    );
+  else if (gmss === 0)
+    flags.push(
+      "NOTE: code tripwire: getMcpSkillSources not found in the require() graph — it was REMOVED, or moved out of the scanned graph (a dynamic import()); confirm against ALL .vite/build chunks before pruning this tripwire (checkCodeTripwires in cowork-sync.ts)",
+    );
+
+  const skillsExt = count("io.modelcontextprotocol/skills");
+  if (skillsExt !== 1)
+    flags.push(
+      `NOTE: code tripwire: io.modelcontextprotocol/skills capability appears ${skillsExt}x (was 1) — the MCP-skills capability surface changed; re-verify docs/internal finding 2`,
+    );
+
+  return flags;
+}
+
 export function checkMountModeFacts(bundle: string): string[] {
   const flags: string[] = [];
   if (!/\?"rwd":"rw"/.test(bundle))
@@ -1117,10 +1223,10 @@ function enumSpawnKeys(text: string): { key: string; valueStart: number }[] {
 export function deriveSpawnEnv(
   bundle: string,
   gates: Record<string, GateState> | null,
-): { env: Record<string, string> | null; flags: string[] } {
+): { env: Record<string, string> | null; flags: string[]; keys: string[]; spreadCount: number } {
   const flags: string[] = [];
   // If the fcache is unreadable the caller already flags it; emit no spurious spawn flags, no partial env.
-  if (!gates) return { env: null, flags: [] };
+  if (!gates) return { env: null, flags: [], keys: [], spreadCount: 0 };
 
   const w1 = twoAnchorWindow(bundle, "env:{CLAUDE_CONFIG_DIR", ",systemPrompt:");
   const w2 = twoAnchorWindow(bundle, "return{CLAUDE_CODE_ENTRYPOINT", ".sessionEnvVars()}");
@@ -1144,7 +1250,7 @@ export function deriveSpawnEnv(
       degenerate = true;
     }
   }
-  if (degenerate) return { env: null, flags };
+  if (degenerate) return { env: null, flags, keys: [], spreadCount: 0 };
 
   const env: Record<string, string> = {};
   const enumerated = new Set<string>();
@@ -1170,12 +1276,17 @@ export function deriveSpawnEnv(
   };
   // Top-level / non-gate-spread key: allowlist-first, then it MUST be a registered pin (an unregistered
   // key here is an ADDITION → hard-fail so it is classified, never silently auto-pinned).
-  const resolveInto = (rawKey: string, expr: string, target: Record<string, string>) => {
+  // `apply=false` classifies the key (allowlisted / pinned / unknown) WITHOUT writing its value — used
+  // for an OFF-gate conditional spread's inner keys (WI-4): the key must still be caught if it's brand
+  // new, but its value must NOT be applied (an off-gate value must not override a W2 pin, e.g. off-gate
+  // MCP_CONNECTION_NONBLOCKING:"0" must not clobber W2's "true"). A pinned key is still resolved so an
+  // unresolvable value flags, but the resolved value is dropped when apply=false.
+  const resolveInto = (rawKey: string, expr: string, target: Record<string, string>, apply = true) => {
     if (SPAWN_ENV_ALLOWLIST[rawKey] !== undefined) return; // deliberately not pinned
     if ((SPAWN_PIN_KEYS as readonly string[]).includes(rawKey)) {
       const r = resolveSpawnValue(bundle, expr, gates);
       if ("unknown" in r) flagUnresolvable(rawKey, expr);
-      else target[rawKey] = r.value;
+      else if (apply) target[rawKey] = r.value;
       return;
     }
     flags.push(`spawn.env: unknown key ${rawKey} constructed in the asar — ${SPAWN_ADVICE}`);
@@ -1207,9 +1318,16 @@ export function deriveSpawnEnv(
       for (const sm of text.matchAll(/\.\.\.(?:[\w$]+\.)?[A-Za-z_$][\w$]*\("(\d+)"\)&&\{([^{}]*)\}/g)) {
         const id = sm[1];
         const inner = sm[2];
-        for (const k of enumSpawnKeys("{" + inner)) enumerated.add(k.key);
-        if (id in SPAWN_GATES && gates[id]?.on) {
-          for (const k of enumSpawnKeys("{" + inner)) resolveGateInner(k.key, sliceSpawnValue("{" + inner, k.valueStart), target);
+        const gateOn = id in SPAWN_GATES && gates[id]?.on;
+        for (const k of enumSpawnKeys("{" + inner)) {
+          enumerated.add(k.key);
+          const expr = sliceSpawnValue("{" + inner, k.valueStart);
+          // ON gate: the gate IS the classifier — resolve + auto-pin (resolveGateInner). OFF gate (or an
+          // unknown/non-SPAWN gate id): classify by name WITHOUT applying (WI-4) so a brand-new key in an
+          // off-gate spread hard-fails instead of being silently enumerated, while a known off-gate key's
+          // value stays unapplied (W2 wins).
+          if (gateOn) resolveGateInner(k.key, expr, target);
+          else resolveInto(k.key, expr, target, false);
         }
         work = work.replace(sm[0], "");
       }
@@ -1241,8 +1359,26 @@ export function deriveSpawnEnv(
       flags.push(`NOTE: spawn.env allowlist entry ${k} is no longer constructed in the asar — prune it from SPAWN_ENV_ALLOWLIST`);
   }
 
-  if (hardFail) return { env: null, flags };
-  return { env, flags };
+  // WI-6: the constructed key SET, committed as provenance.spawnEnvKeys — a reviewable record and an
+  // enumeration-regex-rot oracle (if enumSpawnKeys silently starts matching fewer keys, the committed
+  // set shrinks and shows in `sync --diff`). It does NOT catch opaque-spread keys (those carry zero
+  // statically-enumerable keys — WI-5 guards that surface); nor is it the under-match guard (that is
+  // REQUIRED_SPAWN_KEYS + the prune NOTE). Emitted even on hardFail so a partial derivation's set is
+  // still visible in the diff.
+  const keys = [...enumerated].sort();
+  // WI-5: count the `...`-spread SITES across the three spawn windows. A spread is either a recognized
+  // gate-conditional / expandable helper OR an OPAQUE source (`...d.env`, `...h`, `...getOtelEnvVars(…)`)
+  // that carries env keys enumeration can't see. spawnEnvKeys (WI-6) surfaces a new ENUMERABLE key; this
+  // count surfaces a new SPREAD SITE — including an opaque one carrying non-enumerable keys, the one
+  // channel spawnEnvKeys is blind to. Committed as provenance.spawnEnvSpreadCount; a change shows in
+  // `sync --diff` (diff-surfacing, not a hard-fail — a benign minifier reshape must not fail CI).
+  // Match every spread site `...<expr>` — an identifier (`...d`), a member (`...d.env`), OR a
+  // PARENTHESIZED expression (`...(p?.accountId)&&{…}`, the real minifier shape for a conditional opaque
+  // spread). An identifier-only regex missed the parenthesized form — the exact opaque shape this guards.
+  // `(?!\.)` excludes only a pathological `....` run (no valid spread is `...` followed by a 4th dot).
+  const spreadCount = [w1, w2, w3].reduce((n, w) => n + ((w as string).match(/\.\.\.(?!\.)/g)?.length ?? 0), 0);
+  if (hardFail) return { env: null, flags, keys, spreadCount };
+  return { env, flags, keys, spreadCount };
 }
 
 /**

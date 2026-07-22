@@ -3,8 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildInspectView } from "../src/run/inspect-view.js";
+import { LegacyRunDirError } from "../src/errors.js";
 
-/** A kept run dir: result.json + a work tree with one JSON artifact. */
+/** A kept run dir: turns/1/result.json + a work tree with one JSON artifact. */
 function runDir(over: Record<string, unknown> = {}, opts: { withWork?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), "cwh-inspect-"));
   const workDir = join(root, "work", "session", "mnt");
@@ -26,7 +27,9 @@ function runDir(over: Record<string, unknown> = {}, opts: { withWork?: boolean }
     artifacts: [{ path: "outputs/model.json", bytes: 80 }],
     ...over,
   };
-  writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  const turn1 = join(root, "turns", "1");
+  mkdirSync(turn1, { recursive: true });
+  writeFileSync(join(turn1, "result.json"), JSON.stringify(result, null, 2));
   return root;
 }
 
@@ -77,5 +80,31 @@ describe("buildInspectView — surface what a run produced", () => {
     expect(text).toContain("artifacts (0):");
     const digest = JSON.parse(buildInspectView(runDir({ artifacts: [] }), { json: true }));
     expect(digest.artifactsRecorded).toBe(true);
+  });
+});
+
+// Before the per-turn layout, a dir with no result.json at all just threw a generic "no result.json"
+// message (`inspect-view.ts:49-50`, pre-seam) — which reads as corruption on a LEGACY dir, where the file
+// is sitting right there at the root. `requireTurns` refuses these loudly instead, naming the shape.
+describe("buildInspectView refuses a legacy/mixed/pre-completion run dir, naming the shape", () => {
+  it("legacy: root result.json, no turns/ — the pre-per-turn-layout shape", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-inspect-legacy-"));
+    writeFileSync(join(root, "result.json"), JSON.stringify({ scenario: "s", result: "success" }));
+    writeFileSync(join(root, "run.jsonl"), "{}\n");
+    expect(() => buildInspectView(root)).toThrow(LegacyRunDirError);
+    expect(() => buildInspectView(root)).toThrow(/pre-layout run dir/);
+  });
+
+  it("mixed: turns/ present AND a stray root marker — a pre-layout dir resumed under current code", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-inspect-mixed-"));
+    mkdirSync(join(root, "turns", "2"), { recursive: true });
+    writeFileSync(join(root, "turns", "2", "result.json"), JSON.stringify({ scenario: "s", result: "success" }));
+    writeFileSync(join(root, "result.turn-1.json"), JSON.stringify({ scenario: "s", result: "success" }));
+    expect(() => buildInspectView(root)).toThrow(/MIXED run dir/);
+  });
+
+  it("none: neither turns/ nor any pre-layout marker — this run never completed", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-inspect-none-"));
+    expect(() => buildInspectView(root)).toThrow(/never completed/);
   });
 });

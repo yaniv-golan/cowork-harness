@@ -22,10 +22,45 @@ already does.
 
 Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (relocatable). A `chat` run instead
 writes to `runs/chat/<sessionId>/` — the first path segment is the literal `chat`, not a scenario name.
-The files there —
-`events.jsonl`, `run.jsonl`, `trace.json`, `result.json`, `egress.log`, `agent.stderr.log` — are the raw
+The files there — `events.jsonl`, `egress.log`, `agent.stderr.log` at the root, and each turn's
+`run.jsonl` / `trace.json` / `result.json` / `resources.jsonl` under **`turns/<N>/`** — are the raw
 evidence; see [README → What you get out](../README.md#what-you-get-out-inspectable-output) for the layout
 and how to relocate it. The tools below digest them so you rarely hand-parse.
+
+> **Multi-turn run dirs.** `--session-id` + `--resume`, and every `critique` (task turn + reflection
+> turn), write several turns into one directory. Each turn's artifacts live in its own `turns/<N>/` and
+> are never renamed or overwritten — there is **no root compat copy**; on a `critique` dir, read
+> `turns/1/result.json` (or `result.graded.json`) for the graded turn, `turns/2/` for the reflection one.
+> `events.jsonl` and `timeline.jsonl` stay cumulative across turns; the harness scopes its own reads of
+> them to the current turn.
+>
+> **A run dir written before this layout existed** — root `result.json`/`run.jsonl`, or a name-mangled
+> `result.turn-<N>.json` archive, no `turns/` — is a different shape. `verify-run`, `inspect`, `scaffold`,
+> `diff`, `status --latest-for` and a resumed `--session-id` all refuse it **by name** rather than
+> silently misreading it, and `stats --reindex` counts it as skipped instead of dropping it from the
+> index. `trace` still reads it fine, which is why every refusal points there: its views come from
+> `events.jsonl`, which never moves.
+>
+> **Convert it in place:**
+>
+> ```bash
+> cowork-harness migrate-run-dir              # DRY RUN by default — reports, changes nothing
+> cowork-harness migrate-run-dir --write      # apply
+> cowork-harness migrate-run-dir --scenario <name> --write   # one scenario at a time
+> ```
+>
+> It renames rather than copies, so the file timestamps `stats` and `status --latest-for` rank by survive
+> untouched. Back up the runs root first, read the dry-run report, and rebuild the index afterwards with
+> `stats --reindex`. Staging one scenario, checking it, then doing the rest is the safer order.
+>
+> **What it refuses vs. infers.** A directory it cannot resolve is **refused and named** — an artifact
+> that is neither a duplicate of its slot nor placeable, a turn stamp that disagrees with its destination,
+> two operations targeting one path, telemetry whose turn boundary cannot be dated or whose samples would
+> land in a turn no transcript or result evidences, a directory it cannot read. It never attributes
+> telemetry by guess, and it never creates a `turns/<N>/` that nothing but a resources file vouches for.
+> The one inference it does make is positional: an **empty** file carries no content to attribute, so it
+> follows its position to an **evidenced** turn (a root file to its own turn, an archive to the turn its
+> name states) — never one that nothing else evidences.
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your
@@ -96,7 +131,7 @@ A green run is not automatically a correct run.
   Read it before trusting a green you didn't expect.
 - **Gate provenance** — a green run whose premise came from a *decided* (LLM/external) gate is the classic
   false-green. `result.json`'s `gateProvenance` block, the footer `gates: N · …` line, and
-  `trace <run-dir> --view questions` (which now shows each gate's `by`/`model`) tell you exactly which
+  `trace <run-dir> --view questions` (which shows each gate's `by`/`model`) tell you exactly which
   gates were decided vs scripted — so you can spot a semantic assertion resting on a non-reproducible
   answer. Pin those gates with `--answer`. (Informational; live/`partial` lane only — see
   [fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md).)

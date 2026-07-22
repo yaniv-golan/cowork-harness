@@ -47,6 +47,13 @@ export const PlatformBaseline = z.looseObject({
     sha256: z.string().optional(),
     shaProvenance: z.enum(["measured-local", "official-manifest"]).optional(),
     manifestChecksumMatch: z.union([z.boolean(), z.literal("unknown")]).optional(),
+    // String sentinels: literal-occurrence counts of feature markers in the staged ELF whose runtime
+    // STATE the sync cannot see via a gate id or a spawn-env key (e.g. `tengu_saddle_lantern`, which at
+    // agent >=2.1.217 gates the skill-discovery tool family's enablement — docs/internal finding 1).
+    // Measured when the ELF is staged, carried on an offline same-version re-sync, else dropped. Pure
+    // `sync --diff` tripwire: a changed count is the trigger to re-verify the feature wiring; nothing
+    // consumes it at runtime.
+    stringSentinels: z.record(z.string(), z.number()).optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z
@@ -350,7 +357,7 @@ export const Assertion = z.strictObject({
     .nonnegative()
     .optional()
     .describe(
-      "total sub-agent dispatches ≤ N — an author-chosen budget; Cowork imposes no in-conversation Task-dispatch cap (see SPEC §10)",
+      "total sub-agent dispatches ≤ N — an author-chosen budget under Cowork's agent-side fan-out cap, not a reproduction of it (see SPEC §10)",
     ),
   skill_triggered: z
     .string()
@@ -647,6 +654,17 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_stall",
 ] as const satisfies readonly (keyof Assertion)[];
 
+/** THE fidelity tiers the harness understands — the single source for the Scenario `fidelity:` enum, the
+ *  CLI's `--fidelity`/`--tier` validation, and `doctor`. It was previously written out as a literal in
+ *  five places in `src` alone (plus help text and docs); a canonical `FIDELITY_TIERS` const already
+ *  existed in cli.ts and three other sites simply did not use it. A downstream consumer reading a stale
+ *  copy is one of the misreads this consolidation exists to prevent.
+ *
+ *  `test/fidelity-tiers-single-source.test.ts` fails if a new literal copy appears in `src`. */
+export const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "cowork"] as const;
+
+export type FidelityTier = (typeof FIDELITY_TIERS)[number];
+
 export const ScenarioObject = z.strictObject({
   // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
   // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).
@@ -664,7 +682,7 @@ export const ScenarioObject = z.strictObject({
   // cowork = auto-pick host-loop vs container via Cowork's own decision logic (the gate);
   // hostloop = force host-loop; container/microvm = force VM-loop; protocol = L0.
   fidelity: z
-    .enum(["protocol", "container", "microvm", "hostloop", "cowork"])
+    .enum(FIDELITY_TIERS)
     .default("container")
     .describe(
       "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
@@ -884,6 +902,11 @@ interface ModelUsageEntry {
   webSearchRequests?: number;
 }
 
+/** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
+ *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
+ *  differently instead of collapsing both into one fatal class. */
+export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar";
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -970,9 +993,11 @@ export interface RunResult {
    *  call's Links array failed to parse — the two are indistinguishable here by design; cross-reference
    *  `toolCounts.WebSearch` (the truthful call count) if that distinction ever matters to a consumer. */
   webSearches?: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
-  /** Infrastructure errors (VM/egress sidecar crashes). A non-empty list is a hard verdict fail on BOTH
-   *  lanes and is NOT author-suppressible — the run's evidence is contaminated. */
-  infraErrors?: Array<{ source: string; message: string }>;
+  /** Infrastructure errors, tagged by ORIGIN — origin drives severity. `hostloop-sidecar`/`egress-sidecar`
+   *  mean a SUPERVISING PROCESS died, so the run's evidence is contaminated: a hard verdict fail on BOTH
+   *  lanes, not author-suppressible. `hostloop-exec` is a single failed `docker exec` — the tool call
+   *  failed, the run did not — so it warns, because one bad command must not red an otherwise sound run. */
+  infraErrors?: Array<{ source: InfraErrorSource; message: string }>;
   /** Companion counters for malformed/dropped telemetry streams. A >0 count makes the dependent assertion
    *  fail "malformed" rather than silently dropping the bad entries (`taskTracking` → task assertions,
    *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` and `egressParse` are observability-only
@@ -1132,6 +1157,7 @@ export interface RunResult {
         | "l0_plugin_divergence"
         | "missing_capability"
         | "infra_error"
+        | "exec_infra_error"
         | "stalled"
         | "prompt_asset_missing"
         | "scan_unavailable"
@@ -1162,10 +1188,10 @@ export interface RunResult {
    *  **both live and replay**; absent when no such file was Read. */
   referencesRead?: string[];
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
-   *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
-   *  turns are archived as `result.turn-<N>.json` / `run.turn-<N>.jsonl`. Lets a multi-turn consumer
-   *  attribute a result to its turn instead of blending cumulative telemetry. Absent on replay/chat
-   *  lanes that don't track it. */
+   *  single-shot run, incrementing per resume. Each turn owns its artifacts under `turns/<N>/`
+   *  (`result.json`, `run.jsonl`, `trace.json`, `resources.jsonl`), so a multi-turn consumer attributes a
+   *  result to its turn instead of blending cumulative telemetry. Absent on replay/chat lanes that don't
+   *  track it. */
   turn?: number;
   subagents?: Array<{
     toolUseId: string;

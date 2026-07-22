@@ -3,8 +3,8 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSyn
 import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
-import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, newestStagedSibling } from "./baseline.js";
+import { Scenario, AnswerRule, Assertion, FIDELITY_TIERS, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
+import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, countStringInFile, newestStagedSibling } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, expandUserPath } from "./session.js";
 import {
   executeScenario,
@@ -13,6 +13,7 @@ import {
   UnansweredError,
   BoundaryError,
   UsageError,
+  LegacyRunDirError,
   type ExecuteOptions,
 } from "./run/execute.js";
 import {
@@ -43,15 +44,18 @@ import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
 import { resolveStatusTarget } from "./run/status-target.js";
+import { classifyRunDir, hasTurnDirs, latestTurn, preLayoutMessage, requireTurns, turnArtifactPath } from "./run/turn-layout.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
 import {
+  noteIfMultiTurn,
   resolveEventsFile,
   buildTrace,
   formatTrace,
   buildGateTrace,
   formatGateTrace,
+  resultUnavailableReason,
   buildDispatchTree,
   formatDispatchTree,
   buildToolDurations,
@@ -69,6 +73,7 @@ import {
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
 import { readIndex, reindexFromRunsTree, buildStats, type StatsSummary } from "./run/run-index.js";
+import { cmdMigrateRunDir } from "./run/migrate-run-dir.js";
 import {
   canonicalizeInput,
   diffToolSequence,
@@ -171,6 +176,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                for hostloop/protocol recordings; review + tailor the patterns before recording)
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
                                prune accumulated run dirs, keeping N most recent per scenario (default: 5)
+  migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
+                               convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
@@ -508,6 +515,15 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+  "migrate-run-dir":
+    "usage: migrate-run-dir [<runs-dir>] [--scenario <name>] [--write] [--verbose]\n" +
+    "       convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place.\n" +
+    "       DRY RUN BY DEFAULT — pass --write to apply. Back up the runs root first; this rewrites directories.\n" +
+    "       Preserves file and directory mtimes (they are the recency signal `stats` and `--latest-for` read), recovers an\n" +
+    "       interrupted run from its journal, and refuses any directory it cannot resolve rather than guessing.\n" +
+    "       --scenario <name> scopes the run to one scenario dir — migrate a single scenario, verify it, then do the rest.\n" +
+    "       exit: 0 nothing refused · 1 one or more directories refused (unfinished work) · 2 usage (or unknown --scenario)",
+
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":
@@ -560,6 +576,7 @@ const COMMANDS = [
   "rehash",
   "init-redact",
   "prune",
+  "migrate-run-dir",
 ];
 
 // --dotenv / --run-dir are GLOBAL flags honored ONLY in leading position (before the subcommand),
@@ -661,12 +678,26 @@ async function main() {
   }
 
   const packageRootEnv = fileURLToPath(new URL("../.env", import.meta.url)); // dist/cli.js → <install>/.env
-  const sources = [...(explicitEnvFile ? [explicitEnvFile] : []), resolve(process.cwd(), ".env"), packageRootEnv];
   const loadedEnv: string[] = [];
   const seenSources = new Set<string>();
-  for (const f of sources) {
+  // The explicit file is loaded STRICTLY and first: `existsSync` above only proves the path exists,
+  // not that it's a readable regular file (a directory passes existsSync and then throws EISDIR from
+  // readFileSync). Non-strict loadDotenv swallows any read failure and returns [], which would let
+  // this silently fall through to the lower-precedence sources below — running against the wrong
+  // credentials with the `[env] loaded …` line still printing from THOSE, a false confirmation. Fail
+  // loud instead, naming the path and the underlying cause, before any fallback source is touched.
+  if (explicitEnvFile) {
+    seenSources.add(resolve(explicitEnvFile));
+    try {
+      loadedEnv.push(...loadDotenv(explicitEnvFile, { strict: true }));
+    } catch (err) {
+      fail("cowork-harness", "usage", (err as Error).message, undefined, isJsonOutput(argv));
+    }
+  }
+  const autoSources = [resolve(process.cwd(), ".env"), packageRootEnv];
+  for (const f of autoSources) {
     const key = resolve(f);
-    if (seenSources.has(key)) continue; // don't double-load when cwd === install dir
+    if (seenSources.has(key)) continue; // don't double-load when cwd (or --dotenv) === install dir
     seenSources.add(key);
     loadedEnv.push(...loadDotenv(f));
   }
@@ -781,6 +812,8 @@ async function main() {
       return cmdGates(rest);
     case "answer":
       return cmdAnswer(rest);
+    case "migrate-run-dir":
+      return cmdMigrateRunDir(rest);
     case "prune":
       return cmdRunsGc(rest); // top-level: no `gc` token to strip, so pass `rest` whole (NOT rest.slice(1))
     default: {
@@ -1380,7 +1413,8 @@ async function cmdRun(rawArgs: string[]) {
       undefined,
       flags.output === "json",
     );
-  // `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
+  // `--keep` on `skill` only adds the run-dir + deliverable paths to the footer (runs are kept on disk
+  // either way); `run` ALWAYS keeps runs too and logs their location.
   // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
   // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
   // Note it so the no-effect is visible.
@@ -1682,7 +1716,7 @@ async function cmdSkill(rawArgs: string[]) {
   const uploads: string[] = [];
   const folders: string[] = [];
   const envFidelity = process.env.COWORK_HARNESS_FIDELITY;
-  const FID_VALUES = ["protocol", "container", "microvm", "hostloop", "cowork"];
+  const FID_VALUES: readonly string[] = FIDELITY_TIERS;
   if (envFidelity && !FID_VALUES.includes(envFidelity))
     fail(
       "skill",
@@ -1751,7 +1785,7 @@ async function cmdSkill(rawArgs: string[]) {
       // validate at parse time → category `usage`. Previously an invalid value was only rejected
       // later by Scenario.parse (a Zod throw), which the top-level catch mapped to `internal` — a user
       // mistake masquerading as a harness bug.
-      const FID = ["protocol", "container", "microvm", "hostloop", "cowork"];
+      const FID: readonly string[] = FIDELITY_TIERS;
       if (!FID.includes(fidelity))
         fail("skill", "usage", `--fidelity must be one of ${FID.join("|")} (got "${fidelity}")`, undefined, isJson0);
     } else if (name === "--model") model = nextValStrict();
@@ -2031,8 +2065,9 @@ const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
   {resolvedAgentType, pathDenials, delivered}. NO new data model — every field is a projection of the same
   RunResult 'skill' already produces (subagents[]/fileToolAttempts/pathDenials/toolResults).
 
-  "One dispatch" is PROMPT-SCOPED, not enforced by the harness: Cowork itself imposes no in-conversation
-  Task-dispatch cap. The probe just ASSERTS it (subagent_dispatched + dispatch_count_max: 1) so a prompt
+  "One dispatch" is PROMPT-SCOPED: it is well under Cowork's agent-side fan-out cap (concurrent 20 /
+  per-session 200, which the harness inherits), so the probe just ASSERTS it (subagent_dispatched +
+  dispatch_count_max: 1) so a prompt
   that fanned out to several dispatches shows up as a failed verdict instead of a silently-averaged one.
 
 Fidelity  --fidelity <container|microvm|hostloop>   (default: hostloop — path-fidelity, this probe's whole
@@ -2187,10 +2222,6 @@ async function cmdProbeDispatch(rawArgs: string[]) {
   else out(formatDispatchProbe(projection));
   process.exit(projection.verdict.pass ? 0 : 1);
 }
-
-/** All fidelity tiers the harness understands (the canonical Scenario `fidelity:` enum), surfaced so a
- *  JSON caller of `vm status` sees the same set the CLI validates. `container` is the default tier. */
-const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "cowork"] as const;
 
 /** Resolve the on-disk file a named baseline loads from (mirrors loadBaseline's resolution) so the JSON
  *  envelope can report it. `latest` resolves to its concrete file; an absolute name is itself. */
@@ -2550,10 +2581,21 @@ async function cmdSync(args: string[]) {
   // release manifest; if the binary isn't staged on this machine, fall back to the official-manifest hash
   // (staging-identity unverified); if offline AND this is a re-sync of the SAME version, keep the base's
   // recorded hash; otherwise drop the fields rather than carry a stale hash from a different version.
+  // Agent-binary string sentinels: literal-occurrence counts of feature markers whose runtime STATE the
+  // sync cannot see (no gate id, no spawn-env key), measured from the staged ELF. tengu_saddle_lantern
+  // gates the skill-discovery tool family's ENABLEMENT at agent >=2.1.217 (docs/internal finding 1); its
+  // count is 2 in the 2.1.215/2.1.217 ELF. A change surfaces as a `sync --diff` agentBinary line — the
+  // trigger to re-check whether the discovery-tool wiring moved. Same lifecycle as sha256 below: measured
+  // when staged, carried from the base on an offline same-version re-sync, else dropped (never stale).
+  const AGENT_STRING_SENTINELS = ["tengu_saddle_lantern"] as const;
+  const baseSentinels = (baseAgentBinary.stringSentinels ?? undefined) as Record<string, number> | undefined;
+
   const officialElfChecksum = await fetchOfficialElfChecksum(res.agentVersion);
   let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
+  let stringSentinels: Record<string, number> | undefined;
   if (existsSync(resolvedDerived)) {
     const measured = sha256File(resolvedDerived);
+    stringSentinels = Object.fromEntries(AGENT_STRING_SENTINELS.map((s) => [s, countStringInFile(resolvedDerived, s)]));
     shaFields = {
       sha256: measured,
       shaProvenance: "measured-local",
@@ -2566,6 +2608,11 @@ async function cmdSync(args: string[]) {
     }
   } else if (officialElfChecksum !== undefined) {
     shaFields = { sha256: officialElfChecksum, shaProvenance: "official-manifest" };
+    // The ELF isn't staged (Desktop pruned it) but the manifest gave us a sha. The string sentinel has
+    // no manifest fallback — yet the ELF is immutable per version, so for the SAME agentVersion the
+    // base's count is not stale: carry it rather than silently dropping the tripwire on an online
+    // same-version re-sync after a prune (mirrors the offline-same-version branch below).
+    if ((base.agentVersion as string | undefined) === res.agentVersion) stringSentinels = baseSentinels;
   } else if ((base.agentVersion as string | undefined) === res.agentVersion) {
     // offline re-sync of the same version — keep what the base recorded rather than dropping it.
     shaFields = {
@@ -2573,6 +2620,7 @@ async function cmdSync(args: string[]) {
       shaProvenance: baseAgentBinary.shaProvenance as string | undefined,
       manifestChecksumMatch: baseAgentBinary.manifestChecksumMatch as boolean | "unknown" | undefined,
     };
+    stringSentinels = baseSentinels;
   }
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
@@ -2583,6 +2631,7 @@ async function cmdSync(args: string[]) {
     sha256: shaFields.sha256,
     shaProvenance: shaFields.shaProvenance,
     manifestChecksumMatch: shaFields.manifestChecksumMatch,
+    stringSentinels,
   };
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
@@ -2675,7 +2724,13 @@ async function cmdSync(args: string[]) {
           }
         : {}),
     },
-    provenance: { ...baseProvenance, gates: nextGates, asarFingerprint: res.asarFingerprint },
+    provenance: {
+      ...baseProvenance,
+      gates: nextGates,
+      asarFingerprint: res.asarFingerprint,
+      spawnEnvKeys: res.spawnEnvKeys,
+      spawnEnvSpreadCount: res.spawnEnvSpreadCount,
+    },
   };
   const diffFlag = !!syncParsed.flags["--diff"];
   if (diffFlag) {
@@ -2880,10 +2935,13 @@ function cmdStats(args: string[]) {
 
   const root = runsRoot();
   if (reindex) {
-    const { written, skipped, skippedReplay } = reindexFromRunsTree(root);
+    const { written, skipped, skippedReplay, skippedUnsafe, skippedLegacy } = reindexFromRunsTree(root);
     const notes = [
       skipped ? `${skipped} skipped — missing/corrupt result.json` : "",
       skippedReplay ? `${skippedReplay} skipped — replay re-check, not evidence` : "",
+      // Naming the remedy matters: a bare count reads as "nothing I can do about it".
+      skippedLegacy ? `${skippedLegacy} skipped — pre-layout, run: cowork-harness migrate-run-dir` : "",
+      skippedUnsafe ? `${skippedUnsafe} skipped — symlinked run dir/result.json rejected` : "",
     ].filter(Boolean);
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
@@ -3409,7 +3467,15 @@ function cmdScaffold(args: string[]) {
   } catch (e) {
     return void fail("scaffold", "usage", String((e as Error).message), undefined, json);
   }
-  const yaml = buildScaffold(file);
+  let yaml: string;
+  try {
+    yaml = buildScaffold(file);
+  } catch (e) {
+    // LegacyRunDirError → a well-formed target that predates the layout: `runtime`, matching every other
+    // refusing command's category. Anything else (e.g. an unparseable result.json) also degrades cleanly
+    // here rather than falling through to main().catch's stack-trace branch.
+    return void fail("scaffold", "runtime", String((e as Error).message), undefined, json);
+  }
   if (outPath !== undefined) {
     try {
       mkdirSync(dirname(outPath), { recursive: true });
@@ -3537,12 +3603,49 @@ async function cmdVerifyRun(args: string[]) {
       isJsonOutput(args),
     );
   }
-  const resultPath = join(runDir, "result.json");
+  // Shape-gate FIRST, before loading anything: a legacy/mixed/pre-completion dir gets a message naming
+  // what it IS (see turn-layout.ts's preLayoutMessage), not a generic "no result.json" that reads as
+  // corruption when the file is sitting right there at the root.
+  let turns: number[];
+  try {
+    turns = requireTurns(runDir, "verify-run");
+  } catch (e) {
+    return fail("verify-run", "runtime", (e as Error).message, undefined, isJsonOutput(args));
+  }
+  // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
+  // caller's scenario describes. Checked on the TURN COUNT (before loading any result), not a `result.turn`
+  // field read off whichever turn we'd otherwise load — RunResult.turn is documented absent on some lanes,
+  // so a field-based check silently passed a multi-turn dir whose latest result happened to omit it.
+  //
+  // This command reads TURN 1. For a `critique` dir that is the GRADED task turn, not the reflection one —
+  // so on a genuinely single-turn dir (the only case that survives this refusal) turn 1 IS the run's only
+  // completion, and there is no ambiguity left to resolve. Today's cumulative gate scan at least fails
+  // LOUDLY on the other turn's unmatched gates; scoping this command to "whichever turn is latest" instead
+  // would have turned that into a silent PASS against a transcript the scenario never described. Refusing
+  // is the fail-closed reading: an ambiguous target is not a verified one.
+  //
+  // Deliberately no turn selector yet — that is a new CLI surface (flag disposition, docs, tests) and this
+  // guard is worth having before it. The message names the addressable files so the caller is not stuck.
+  if (turns.length > 1) {
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: ${runDir} holds ${turns.length} turns (a --resume session, or a \`critique\` task+reflection pair). ` +
+        `This command reads turn 1 only — for a critique dir that is the graded task turn, not the reflection one, ` +
+        `so it cannot tell which turn your scenario describes when there is more than one. Verify a single-turn ` +
+        `run dir instead; the graded turn is addressable as result.graded.json or turns/1/result.json for inspection. ` +
+        `(can't verify ⇒ not green)`,
+      undefined,
+      isJsonOutput(args),
+    );
+  }
+  const resultPath = turnArtifactPath(runDir, turns[0], "result.json");
   if (!existsSync(resultPath)) {
     return fail(
       "verify-run",
       "runtime",
-      `verify-run: no result.json under ${runDir} (is this a kept run dir? e.g. runs/<scenario>/<sessionId>/)`,
+      `verify-run: no result.json under ${resultPath} (turn ${turns[0]} directory exists with no completed ` +
+        `result — a crash between run.jsonl and result.json, or a run still in flight)`,
       undefined,
       isJsonOutput(args),
     );
@@ -3650,8 +3753,11 @@ async function cmdVerifyRun(args: string[]) {
     );
   }
 
-  const sidecarTranscript = readTranscriptSidecar(join(runDir, "run.jsonl"));
-  const sidecarQuestions = readQuestionsSidecar(join(runDir, "trace.json"));
+  // Through the seam, same turn the result above was read from (turns[0] — the guard above already
+  // refused anything with more than one).
+  const vrTurn = turns[0];
+  const sidecarTranscript = readTranscriptSidecar(turnArtifactPath(runDir, vrTurn, "run.jsonl"));
+  const sidecarQuestions = readQuestionsSidecar(turnArtifactPath(runDir, vrTurn, "trace.json"));
 
   // no_lost_write_back needs the run's authored-file set. It isn't persisted in result.json, so recompute it
   // from the KEPT work dir (verify-run re-checks on the same machine, exactly as input_unmodified re-hashes
@@ -4054,13 +4160,26 @@ function cmdTrace(args: string[]) {
     }
   }
   const rows = buildTrace(file, { tools: view === "tools", translate, fullResults });
-  if (json) out(jsonPayloadEnvelope("trace", true, { file, rows }));
+  // Every trace view is scoped to the LATEST turn. Say so when there ARE earlier turns, rather than
+  // letting a multi-turn dir look like a complete picture.
+  const multiTurn = noteIfMultiTurn(file);
+  if (json) out(jsonPayloadEnvelope("trace", true, { file, rows, ...(multiTurn ? { note: multiTurn } : {}) }));
   else {
-    // cache-read-ratio footer: best-effort read of the sibling result.json, same
-    // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance.
+    if (multiTurn) process.stderr.write(`::notice:: [trace] ${multiTurn}\n`);
+    // cache-read-ratio footer: best-effort read of the LATEST turn's sibling result.json, same
+    // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance. Through the
+    // seam — a root read here was guard-invisible (no PER_TURN_ARTIFACTS literal on the line) and
+    // silently omitted the footer on every current-layout run.
     let modelUsage: RunResult["modelUsage"] | undefined;
-    const resultPath = join(dirname(file), "result.json");
-    if (existsSync(resultPath)) {
+    const footerRunDir = dirname(file);
+    const footerTurn = latestTurn(footerRunDir);
+    // Say when the footer is missing rather than just omitting it. `trace` stays readable on a pre-layout
+    // dir by design (events.jsonl never moved), but a silently absent cache-read ratio is
+    // indistinguishable from a run that had no cache activity at all.
+    if (footerTurn === undefined)
+      process.stderr.write(`note: ${resultUnavailableReason(file, "cache-read footer")} — cache-read ratio omitted\n`);
+    const resultPath = footerTurn !== undefined ? turnArtifactPath(footerRunDir, footerTurn, "result.json") : undefined;
+    if (resultPath && existsSync(resultPath)) {
       try {
         modelUsage = (JSON.parse(readFileSync(resultPath, "utf8")) as RunResult).modelUsage;
       } catch (e) {
@@ -4134,11 +4253,30 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const runDir = dirname(eventsFile);
   const lines = readFileSync(eventsFile, "utf8").split("\n");
   const tools = topLevelToolRows(lines, eventsFile, normalize);
-  const transcript = readTranscriptSidecar(join(runDir, "run.jsonl")) ?? "";
+  // REFUSE A PRE-LAYOUT DIR — but ONLY a pre-layout one. `latestTurn` returns undefined on one, `?? 1`
+  // resolved to a `turns/1/` that does not exist, and BOTH transcript and meta came back empty, so `diff`
+  // printed "identical" and exited 0 for two genuinely different runs. That is this command's worst
+  // failure: it is the regression gate.
+  //
+  // A blanket `requireTurns` was too broad and BROKE a flow main supported: diffing two bare
+  // `events.jsonl` streams (a `none` shape — no run dir at all). Tool rows come from events.jsonl, which
+  // never moves, so that comparison is still perfectly sound; it is only transcript/meta that need a turn.
+  // The dangerous case is specifically `legacy`/`mixed`, where a root result.json EXISTS and would
+  // silently be ignored — a `none` shape has no meta to miss, so degrading is honest there and refusing
+  // is not. `trace` draws the same line for the same reason.
+  const diffShape = classifyRunDir(runDir);
+  if (diffShape.kind === "legacy" || diffShape.kind === "mixed")
+    throw new LegacyRunDirError(`diff: ${preLayoutMessage(diffShape, runDir)}`);
+  // Same seam, same turn, same reason for both: a root read here silently produced an EMPTY transcript
+  // (transcriptDiffers:false regardless of real drift) and, for meta, a guard-invisible root read of
+  // `result.json` (`join(runDir, …)` — no PER_TURN_ARTIFACTS literal on the line) that silently emptied
+  // `meta` on every current-layout dir.
+  const diffTurn = latestTurn(runDir) ?? 1;
+  const transcript = readTranscriptSidecar(turnArtifactPath(runDir, diffTurn, "run.jsonl")) ?? "";
   let meta: Partial<DiffMetaSummary> = {};
   let artifacts: Array<[string, string]> | undefined;
   let scenarioName: string | undefined;
-  const resultPath = join(runDir, "result.json");
+  const resultPath = turnArtifactPath(runDir, diffTurn, "result.json");
   if (existsSync(resultPath)) {
     const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
     scenarioName = result.scenario;
@@ -4231,7 +4369,13 @@ function renderDiffText(r: DiffViewResult, view: string): string[] {
     }
   }
   if (view === "artifacts" || view === "all") {
-    if (!r.artifacts) lines.push("artifacts: no manifest on one or both sides — not compared");
+    if (r.artifactsAvailability === "both-unavailable")
+      lines.push("artifacts: no manifest on either side — not compared (does not affect the identical verdict)");
+    else if (r.artifactsAvailability === "a-unavailable" || r.artifactsAvailability === "b-unavailable")
+      lines.push(
+        `artifacts: no manifest on side ${r.artifactsAvailability === "a-unavailable" ? "a" : "b"} — not compared (this alone makes the comparison non-identical)`,
+      );
+    else if (!r.artifacts) lines.push("artifacts: no manifest on one or both sides — not compared");
     else if (r.artifacts.added.length === 0 && r.artifacts.removed.length === 0 && r.artifacts.changed.length === 0)
       lines.push("artifacts: identical");
     else {
@@ -4325,6 +4469,7 @@ function cmdDiff(args: string[]) {
         b: bName,
         identical: result.identical,
         transcriptDiffers: result.transcriptDiffers,
+        artifactsAvailability: result.artifactsAvailability,
         views: { tools: result.tools, transcript: result.transcript, artifacts: result.artifacts, meta: result.meta },
       }),
     );
@@ -4344,6 +4489,17 @@ function cmdDiff(args: string[]) {
   } else {
     for (const line of renderDiffText(result, view)) out(line);
     if (result.transcriptDiffers && view === "all") out("(transcript also differs — advisory, not part of the exit code)");
+    // A one-sided artifactsAvailability (a-unavailable/b-unavailable) forces non-identical on its own — see
+    // compareDiffSides. Views other than "artifacts"/"all" never render that field, so a `--view tools` or
+    // `--view meta` run can print an all-"identical" view yet still exit 1 with no visible explanation.
+    if (
+      view !== "all" &&
+      view !== "artifacts" &&
+      (result.artifactsAvailability === "a-unavailable" || result.artifactsAvailability === "b-unavailable")
+    )
+      out(
+        `(also: no artifact manifest on side ${result.artifactsAvailability === "a-unavailable" ? "a" : "b"} — this alone makes the comparison non-identical; see --view artifacts)`,
+      );
   }
   process.exit(result.identical ? 0 : 1);
 }
@@ -4355,14 +4511,24 @@ function cmdInspect(args: string[]) {
   rejectUnknownFlags("inspect", args, ["--output-format", "--output-format=json", "--output-format=text"], json);
   const allPositionals = positionals(args, ["--output-format"]);
   if (allPositionals.length !== 1) return void fail("inspect", "usage", SUBCOMMAND_USAGE.inspect, undefined, json);
-  // Resolve a run-id or run-dir to its dir. A run dir already holding result.json is used directly; otherwise
-  // reuse trace's resolver (run-id → events.jsonl) and take the parent.
+  // Resolve a run-id or run-dir to its dir. `hasTurnDirs` is a SHAPE PREDICATE ("does turns/ exist here"),
+  // not a turn read, so a run dir already in the per-turn layout is used directly; otherwise reuse trace's
+  // resolver (run-id → events.jsonl) and take the parent.
   const target = allPositionals[0];
   let runDir: string;
   try {
-    runDir = existsSync(join(target, "result.json")) ? target : dirname(resolveEventsFile(target));
+    runDir = hasTurnDirs(target) ? target : dirname(resolveEventsFile(target));
   } catch (e) {
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
+  }
+  // A legacy/mixed/pre-completion dir is refused HERE, before buildInspectView ever tries to load a
+  // result.json. The invocation itself is well-formed (a real dir/run-id was resolved above) — the dir
+  // simply predates the layout — so this is a `runtime` refusal, not `usage` (unlike the resolver throw
+  // above, which fires on a target that couldn't be resolved to a run dir at all).
+  try {
+    requireTurns(runDir, "inspect");
+  } catch (e) {
+    return void fail("inspect", "runtime", (e as Error).message, undefined, json);
   }
   try {
     out(buildInspectView(runDir, { json }));
@@ -4377,6 +4543,11 @@ main().catch((e) => {
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
   if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
   if (e instanceof UsageError) fail(command, "usage", e.message, undefined, json);
+  // A refused legacy/mixed/pre-completion run dir (e.g. `--resume` onto one, see execute.ts) is a legible,
+  // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
+  // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a
+  // stack trace for what is actually the expected "this dir predates the layout" message.
+  if (e instanceof LegacyRunDirError) fail(command, "runtime", e.message, undefined, json);
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
   if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
   else log(String(e?.stack ?? e));

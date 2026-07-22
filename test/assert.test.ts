@@ -364,6 +364,16 @@ describe("tool_available", () => {
     expect(result.pass).toBe(false);
     expect(result.message).toContain("evidence unavailable");
   });
+  it("a miss FAILS but its message states the deferred-tool evidence limit (WI-2)", () => {
+    // context.tools is the SDK init manifest = eagerly-loaded tools only; a factory-deferred NATIVE
+    // tool (surfaced via a system-reminder, not init.tools) can be genuinely available yet absent here.
+    // The miss must stay a fail (no miss→pass), but the message must not overclaim "unavailable".
+    const c = ctx({ availableTools: ["Bash", "Read"] });
+    const result = evaluate([{ tool_available: "SuggestSkills" }], c)[0];
+    expect(result.pass).toBe(false); // still a fail — never softened to a pass
+    expect(String(result.message).toLowerCase()).toContain("deferred");
+    expect(String(result.message).toLowerCase()).toContain("eagerly-loaded");
+  });
 });
 
 describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation used by live/replay/verify-run", () => {

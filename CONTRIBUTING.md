@@ -44,6 +44,9 @@ src/
   decide/             Decider — answer policy (scripted / LLM / external-channel deciders)
   run/                Run — turn loop + RunRecord (run.ts); executeScenario (execute.ts); cassette replay
   runtime/            protocol (L0) / container (L1) / microvm (L2) / hostloop / lima
+  hostloop/           Cowork host-loop handlers — can_use_tool gate, web_fetch dedup, workspace/path hooks
+  critique/           critique — run a skill, then grade its self-report against a frozen run record
+  staging/            agent-binary resolution + mount naming for the sandboxed live tiers
   egress/             default-deny allowlist proxy
   boundary.ts         sandbox self-test probes
   assert.ts           synchronous assertion evaluator

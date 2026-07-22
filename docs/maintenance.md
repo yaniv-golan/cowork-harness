@@ -48,7 +48,7 @@ Then commit:
 cowork-harness sync             # writes baselines/desktop-<new>.json
 git add baselines/desktop-<new>.json
 git commit -m "parity: sync to Desktop <new>"
-cowork-harness run examples/scenarios/   # regression — drift now shows as test diffs (this repo's scenarios live under examples/)
+cowork-harness run examples/scenarios/   # regression — drift shows as test diffs (this repo's scenarios live under examples/)
 ```
 
 If the agent version bumped, there is no image rebuild: the agent ELF is bind-mounted at runtime from the staged Desktop install (`resolveAgentBinary`, `src/baseline.ts`), not baked into the container image. A bumped `agentVersion` only updates `agentBinary.stagedPath` in the baseline (`src/cli.ts`); the container picks up the new binary from that path.
@@ -71,7 +71,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.215   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.217   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
 # verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
 shasum -a 256 "claude-$V"

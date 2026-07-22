@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from "node:fs";
+import { writeFileSync, appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -62,6 +62,8 @@ export class ResourceSampler {
   private readonly path: string;
   private timer: NodeJS.Timeout | undefined;
   private inFlight = false;
+  /** First-sample-of-this-attempt flag — see the truncate in the sample loop. */
+  private wroteAny = false;
   private stopped = false;
   private probeFailureCount = 0;
   /** Latest in-flight (or just-completed) tick, so `stop()` can await it instead of racing it. */
@@ -71,8 +73,12 @@ export class ResourceSampler {
     private tier: string,
     private sampleOnce: () => Promise<ResourceSample | undefined>,
     private intervalMs: number = resolveIntervalMs(),
+    turn?: number,
   ) {
-    this.path = join(outDir, "resources.jsonl");
+    // Per-turn by construction when the run dir uses the turn layout: each turn samples into its own
+    // file, so nothing has to be renamed at turn start and a retry cannot append to a prior attempt's
+    // samples. Legacy/chat dirs (no turn number) keep the root file.
+    this.path = turn === undefined ? join(outDir, "resources.jsonl") : join(outDir, "turns", String(turn), "resources.jsonl");
   }
   /** Count of `sampleOnce()` calls that returned `undefined` for THIS tier, excluding the genuinely-
    *  unsupported-tier fallback (see `UNSUPPORTED_PROBE`) — "sampling failed" vs. "sampling impossible". */
@@ -96,7 +102,17 @@ export class ResourceSampler {
       try {
         const sample = await this.sampleOnce();
         if (sample === undefined && this.sampleOnce !== UNSUPPORTED_PROBE) this.probeFailureCount++;
-        if (sample && !this.stopped) appendFileSync(this.path, JSON.stringify(sample) + "\n");
+        if (sample && !this.stopped) {
+          // Truncate on the FIRST sample of this attempt. The sampler appends, and a retried turn reuses
+          // its own `turns/<N>/` — so without this a retry's samples fuse with the crashed attempt's and
+          // `foldResources` reports a peak that no single attempt reached. The legacy path solved this
+          // with retry-suffixed archives; per-turn dirs need this instead.
+          if (!this.wroteAny) {
+            writeFileSync(this.path, "");
+            this.wroteAny = true;
+          }
+          appendFileSync(this.path, JSON.stringify(sample) + "\n");
+        }
       } catch (e) {
         warn(`::warning:: [resources] sample failed (${this.tier}): ${String((e as Error)?.message ?? e)}\n`);
       } finally {
@@ -139,10 +155,19 @@ export class ResourceSampler {
  *  tier never sampled — protocol/replay, a run shorter than one interval, or a tier whose probe tool was
  *  unavailable), so a downstream assertion reads evidence-unavailable rather than a vacuous pass.
  *  Malformed lines are skipped but counted in `malformedLines`. */
-export function foldResources(outDir: string, tier: string, intervalMs: number, probeFailures?: number): ResourceSummary | undefined {
+export function foldResources(
+  outDir: string,
+  tier: string,
+  intervalMs: number,
+  probeFailures?: number,
+  turn?: number,
+): ResourceSummary | undefined {
   let text: string;
   try {
-    text = readFileSync(join(outDir, "resources.jsonl"), "utf8");
+    text = readFileSync(
+      turn === undefined ? join(outDir, "resources.jsonl") : join(outDir, "turns", String(turn), "resources.jsonl"),
+      "utf8",
+    );
   } catch {
     return undefined;
   }

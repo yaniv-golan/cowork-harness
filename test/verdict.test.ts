@@ -368,8 +368,35 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     expect(v.failures.some((f) => f.message === "run result was error")).toBe(false);
   });
 
+  it("hard-fails a dead supervisor but only warns a failed container exec", () => {
+    const fatal = computeVerdict(rr({ infraErrors: [{ source: "hostloop-sidecar", message: "died" }] }), "live");
+    expect(fatal.pass).toBe(false);
+    expect(fatal.signals.find((s) => s.code === "infra_error")?.severity).toBe("fail");
+
+    const soft = computeVerdict(rr({ infraErrors: [{ source: "hostloop-exec", message: "exec failed" }] }), "live");
+    expect(soft.pass).toBe(true);
+    expect(soft.signals.find((s) => s.code === "exec_infra_error")?.severity).toBe("warn");
+    // and it must NOT also raise the fatal signal
+    expect(soft.signals.find((s) => s.code === "infra_error")).toBeUndefined();
+  });
+
+  it("still hard-fails when a sidecar death accompanies a failed exec", () => {
+    const v = computeVerdict(
+      rr({
+        infraErrors: [
+          { source: "hostloop-exec", message: "exec failed" },
+          { source: "hostloop-sidecar", message: "died" },
+        ],
+      }),
+      "live",
+    );
+    expect(v.pass).toBe(false);
+    expect(v.signals.find((s) => s.code === "infra_error")?.message).toContain("died");
+    expect(v.signals.find((s) => s.code === "infra_error")?.message).not.toContain("exec failed");
+  });
+
   it("jq-shape sanity: plain JSON — round-trips through JSON.stringify/parse with no functions, and an unnamed failure drops its `assertion` key rather than serializing `assertion: undefined`", () => {
-    const r = rr({ assertions: [assn({ tool_called: "Bash" }, false)], infraErrors: [{ source: "x", message: "boom" }] });
+    const r = rr({ assertions: [assn({ tool_called: "Bash" }, false)], infraErrors: [{ source: "hostloop-sidecar", message: "boom" }] });
     const v = computeVerdict(r, "live");
     const roundTripped = JSON.parse(JSON.stringify(v));
     expect(roundTripped).toEqual(v);

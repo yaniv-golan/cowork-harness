@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
+import { requireTurns, turnArtifactPath } from "./turn-layout.js";
 
 /** A compact, depth-1 preview of a JSON artifact: scalars kept inline, arrays shown as a count, nested
  *  objects collapsed to `{…}` — enough to answer "did it produce the right fields?" without dumping blobs. */
@@ -43,11 +44,17 @@ function humanMs(ms?: number): string {
 /** Build the digest for one kept run dir: header facts + the artifacts manifest, with a shallow field
  *  preview for each JSON artifact (read from the work dir, which result.json records). The manifest
  *  (paths + sizes) lives in result.json and always survives; the content preview needs the work dir, which
- *  a non-`--keep` container/microvm run tears down. */
+ *  container/microvm runs tear down (ephemeral by design; hostloop keeps its host-side tree). */
 function digestFor(runDir: string): InspectDigest {
-  const resultPath = join(runDir, "result.json");
+  // cmdInspect already refuses a legacy/mixed/pre-completion dir before this is called (see cli.ts), so by
+  // the time we're here the dir IS current-layout — this call re-derives the turn list rather than
+  // trusting that invariant blindly, and still throws legibly if invoked directly (e.g. from a test) on a
+  // dir it doesn't hold for.
+  const turns = requireTurns(runDir, "inspect");
+  const turn = turns[turns.length - 1]; // latest — artifacts accumulate, so the latest manifest is most complete
+  const resultPath = turnArtifactPath(runDir, turn, "result.json");
   if (!existsSync(resultPath))
-    throw new Error(`no result.json under ${runDir} (is this a kept run dir? e.g. runs/<scenario>/<sessionId>/)`);
+    throw new Error(`no result.json under ${resultPath} (turn ${turn} directory exists with no completed result)`);
   let result: RunResult;
   try {
     result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
@@ -125,7 +132,7 @@ export function buildInspectView(runDir: string, opts: { json?: boolean } = {}):
     }
   }
   if (!d.workDirAvailable && d.artifacts.some((a) => a.path.endsWith(".json"))) {
-    lines.push(`  (work dir torn down — re-run with --keep to preview artifact contents)`);
+    lines.push(`  (work dir torn down — artifact contents can't be previewed for container/microvm runs)`);
   }
   return lines.join("\n");
 }

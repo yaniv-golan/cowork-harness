@@ -11,9 +11,11 @@ import {
   classifyNativeStagingDrift,
   resolveMounts,
   sha256File,
+  countStringInFile,
 } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
+import { PlatformBaseline as PlatformBaselineSchema } from "../src/types.js";
 import {
   decodeFcacheGates,
   sync,
@@ -21,6 +23,7 @@ import {
   checkWebFetchFacts,
   readMainBundle,
   checkSubagentOverrideGate,
+  checkCodeTripwires,
   PINNED_GATES,
 } from "../src/sync/cowork-sync.js";
 import {
@@ -185,6 +188,102 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
   it("PINNED_GATES tracks the two Desktop 1.22209.0 auto-mode gates", () => {
     expect(PINNED_GATES["4200321681"]).toBe("autoModeOverridesAlwaysAllow");
     expect(PINNED_GATES["1447478638"]).toBe("scheduledTaskToolsApprovableByAutoMode");
+  });
+
+  it("PINNED_GATES tracks the three skill-discovery gates (present in fcache, so NOT dark)", () => {
+    // The gates that govern whether the Desktop SDK-MCP skill/plugin discovery tools render.
+    // 245679952 is live on/force; a flip of any of these changes the model's tool surface, and
+    // none was pinned before — so a live change was invisible to the drift guard.
+    expect(PINNED_GATES["245679952"]).toBe("suggestSkillsEnabled");
+    expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
+    expect(PINNED_GATES["3246569822"]).toBe("canSaveSkill");
+  });
+});
+
+describe("countStringInFile — literal occurrence counter for binary string sentinels", () => {
+  const tmp = join(tmpdir(), `cwh-count-${process.pid}.bin`);
+  afterEach(() => {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("counts non-overlapping literal occurrences", () => {
+    writeFileSync(tmp, "x tengu_saddle_lantern y tengu_saddle_lantern z");
+    expect(countStringInFile(tmp, "tengu_saddle_lantern")).toBe(2);
+  });
+
+  it("returns 0 when the needle is absent", () => {
+    writeFileSync(tmp, "nothing to see here");
+    expect(countStringInFile(tmp, "tengu_saddle_lantern")).toBe(0);
+  });
+
+  it("counts a match that would straddle a naive chunk boundary (single read, whole file)", () => {
+    // a large filler so the needle sits well past any small buffer, proving we scan the full file
+    writeFileSync(tmp, "A".repeat(200_000) + "tengu_saddle_lantern" + "B".repeat(200_000));
+    expect(countStringInFile(tmp, "tengu_saddle_lantern")).toBe(1);
+  });
+
+  it("agentBinary.stringSentinels ROUND-TRIPS through the schema (not stripped by the z.object)", () => {
+    // The inner agentBinary is a z.object (strips unknown keys), so stringSentinels must be a declared
+    // field or it would silently vanish on load — the exact trap this locks against. Spread a real full
+    // baseline (so all required fields are satisfied) and prove an arbitrary sentinel map survives parse.
+    const base = loadBaseline("desktop-1.24012.1") as unknown as Record<string, unknown>;
+    const reparsed = PlatformBaselineSchema.parse({
+      ...base,
+      agentBinary: { ...(base.agentBinary as object), stringSentinels: { some_marker: 7 } },
+    });
+    expect(reparsed.agentBinary?.stringSentinels).toEqual({ some_marker: 7 });
+  });
+});
+
+describe("checkCodeTripwires — string-shape sentinels the sync can't see via gates/env", () => {
+  // Healthy state on 1.24012.0/.1: getMcpSkillSources appears once AS ITS DEFINITION (`(){`), zero
+  // callers; io.modelcontextprotocol/skills once (capability declaration). Dead scaffolding — finding 2.
+  const clean = "getMcpSkillSources(){return[...x]} caps.extensions['io.modelcontextprotocol/skills'];";
+
+  it("is clean when getMcpSkillSources is definition-only (1x, the `(){` def) and the skills cap is 1x", () => {
+    expect(checkCodeTripwires(clean)).toEqual([]);
+  });
+
+  it("HARD-FAILS (non-NOTE delta) when a getMcpSkillSources CALLER appears (count > 1)", () => {
+    const wired = clean + " const s = getMcpSkillSources();";
+    const flags = checkCodeTripwires(wired);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).not.toMatch(/^NOTE:/); // a delta → hard-fail
+    expect(flags[0]).toMatch(/getMcpSkillSources/);
+    expect(flags[0]).toMatch(/caller/i);
+  });
+
+  it("emits a NOTE when count is 1 but it is NOT the definition (def moved out of graph, caller remains)", () => {
+    // D3(a): keying purely on total count would read this as "definition-only, clean" — but it is a
+    // caller with the definition gone from the scanned graph. The def-presence check catches it.
+    const callerNoDef = "const s = getMcpSkillSources(); caps.extensions['io.modelcontextprotocol/skills'];";
+    const flags = checkCodeTripwires(callerNoDef);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/^NOTE:/);
+    expect(flags[0]).toMatch(/definition/i);
+    expect(flags[0]).toMatch(/graph|chunk/i);
+  });
+
+  it("emits a NOTE (non-blocking) when getMcpSkillSources is gone — flagging the graph-visibility caveat", () => {
+    // D3(b): must NOT flatly say "removed; prune" — it may have merely moved out of the require() graph.
+    const gone = "caps.extensions['io.modelcontextprotocol/skills'];";
+    const flags = checkCodeTripwires(gone);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/^NOTE:/);
+    expect(flags[0]).toMatch(/getMcpSkillSources/);
+    expect(flags[0]).toMatch(/graph|chunk/i); // caveats that it may have moved, not just been removed
+  });
+
+  it("emits a NOTE when the io.modelcontextprotocol/skills capability count changes from 1", () => {
+    const grew = "getMcpSkillSources(){return[]} a['io.modelcontextprotocol/skills']; b['io.modelcontextprotocol/skills'];";
+    const flags = checkCodeTripwires(grew);
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/^NOTE:/);
+    expect(flags[0]).toMatch(/io\.modelcontextprotocol\/skills/);
   });
 });
 
@@ -837,6 +936,58 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     });
   }
 
+  // 3c. WI-4: a NEW key inside an OFF-gate conditional spread must hard-fail. Before WI-4 the off-gate
+  // inner keys were enumerated but never classified (resolveGateInner ran only when the gate was ON), so
+  // a brand-new key shipped in an off-gate spread was a silent channel. 434204418 is OFF in greenGates.
+  it("WI-4: an unknown key in an OFF-gate spread hard-fails (not silently enumerated)", () => {
+    const injected = fixture().replace('MCP_CONNECT_TIMEOUT_MS:"10000"}', 'MCP_CONNECT_TIMEOUT_MS:"10000",OFFGATE_MYSTERY_KEY:"1"}');
+    expect(injected).not.toBe(fixture()); // the injection applied
+    const { env, flags } = deriveSpawnEnv(injected, greenGates());
+    expect(env).toBeNull();
+    expect(flags.some((f) => f.includes("OFFGATE_MYSTERY_KEY") && f.includes("--allow-empty"))).toBe(true);
+  });
+
+  // 3d. WI-4 non-breaking guard: the OFF-gate block's OWN keys (pinned MCP_CONNECTION_NONBLOCKING,
+  // allowlisted MCP_CONNECT_TIMEOUT_MS) must still NOT hard-fail AND must not override W2's value — the
+  // off-gate "0" stays unapplied (W2's "true" wins), exactly as before.
+  it("WI-4: classifying off-gate inner keys does NOT apply their values (W2 still wins) or flag known keys", () => {
+    const { env, flags } = deriveSpawnEnv(fixture(), greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env!.MCP_CONNECTION_NONBLOCKING).toBe("true"); // W2 value, NOT the off-gate "0"
+  });
+
+  // WI-6: deriveSpawnEnv returns the sorted SET of constructed keys (committed as
+  // provenance.spawnEnvKeys — an enumeration-regex-rot oracle). WI-5: a count of spread SITES across
+  // the windows (provenance.spawnEnvSpreadCount — surfaces a new spread source, incl. an opaque one).
+  it("WI-6/WI-5: returns the constructed key SET and the spread-site count", () => {
+    const { keys, spreadCount } = deriveSpawnEnv(fixture(), greenGates());
+    expect(keys).toContain("CLAUDE_CODE_IS_COWORK"); // a known constructed key is in the set
+    expect(keys).toEqual([...keys].sort()); // sorted (stable diff)
+    expect(keys.length).toBeGreaterThan(10);
+    expect(spreadCount).toBeGreaterThan(0); // the fixture has gate/helper spreads
+  });
+
+  it("WI-5: a NEW spread site increases spawnEnvSpreadCount (tracks opaque sources)", () => {
+    const before = deriveSpawnEnv(fixture(), greenGates()).spreadCount;
+    // inject an opaque spread of the kind enumeration can't see (…someHostObj.env)
+    const withSpread = fixture().replace('CLAUDE_CODE_IS_COWORK:"1"', '...someHostObj.env,CLAUDE_CODE_IS_COWORK:"1"');
+    const after = deriveSpawnEnv(withSpread, greenGates()).spreadCount;
+    expect(after).toBe(before + 1);
+  });
+
+  it("WI-5: counts a PARENTHESIZED opaque spread (…(expr)&&{…}) — the real minifier shape", () => {
+    // The live spawn window carries conditional opaque spreads like `...(p?.accountId)&&{…}`; a regex
+    // that only matches `...<identifier>` misses these, defeating the guard on exactly the shape it
+    // exists for. Inject one into W1 and require the count to rise.
+    const before = deriveSpawnEnv(fixture(), greenGates()).spreadCount;
+    const withParenSpread = fixture().replace(
+      'CLAUDE_CODE_IS_COWORK:"1"',
+      '...(z==null?void 0:z.accountId)&&{X_OPAQUE:"1"},CLAUDE_CODE_IS_COWORK:"1"',
+    );
+    const after = deriveSpawnEnv(withParenSpread, greenGates()).spreadCount;
+    expect(after).toBe(before + 1);
+  });
+
   // 4. Gate addition — an unknown gate id in a W1 conditional is caught at introduction.
   it("gate addition: an unknown spawn gate id in W1 hard-fails", () => {
     const mutated = fixture().replace('...At("714014285")&&{', '...At("999999999")&&{X_KEY:"1"},...At("714014285")&&{');
@@ -886,7 +1037,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
 
   // 8. gates:null — env null, and NO spurious spawn flags (the fcache flag covers it).
   it("gates null: env null with no spurious spawn flags", () => {
-    expect(deriveSpawnEnv(fixture(), null)).toEqual({ env: null, flags: [] });
+    expect(deriveSpawnEnv(fixture(), null)).toEqual({ env: null, flags: [], keys: [], spreadCount: 0 });
   });
 
   // 9. Stale allowlist NOTE — an allowlist key absent from all windows emits a non-blocking NOTE.

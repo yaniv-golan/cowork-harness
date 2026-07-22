@@ -15,6 +15,7 @@ export interface VerdictSignal {
     | "l0_plugin_divergence"
     | "missing_capability"
     | "infra_error"
+    | "exec_infra_error"
     | "stalled"
     | "prompt_asset_missing"
     | "scan_unavailable"
@@ -155,11 +156,26 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   // an infrastructure crash (VM/egress sidecar) is a hard fail on BOTH lanes and is NOT author-suppressible
   // (like a transport error — the run's evidence is contaminated, so "pass anyway" is never a valid choice).
   // Re-derived on the replay drive from the frozen infra_error events, so a recorded crash fails replay too.
-  if (result.infraErrors && result.infraErrors.length > 0) {
+  // Split by ORIGIN: a dead supervisor contaminates the whole run, a single failed `docker exec` does not.
+  // Collapsing both into one fatal class meant one slow or unlucky command red-ed an otherwise sound run.
+  // NOTE a residual gap this split does not close: if EVERY exec failed, the agent ran nothing and the
+  // evidence is worthless, yet the run still only warns. Escalating that needs a successful-exec count,
+  // which is not observable on the replay lane without freezing it into the cassette — deliberately left
+  // for a follow-up rather than shipped as a rule that silently disagrees between lanes.
+  const fatalInfra = (result.infraErrors ?? []).filter((e) => e.source !== "hostloop-exec");
+  const execInfra = (result.infraErrors ?? []).filter((e) => e.source === "hostloop-exec");
+  if (fatalInfra.length > 0) {
     signals.push({
       code: "infra_error",
       severity: "fail",
-      message: `infrastructure error(s) during the run (evidence contaminated): ${result.infraErrors.map((e) => e.message).join("; ")}`,
+      message: `infrastructure error(s) during the run (evidence contaminated): ${fatalInfra.map((e) => e.message).join("; ")}`,
+    });
+  }
+  if (execInfra.length > 0) {
+    signals.push({
+      code: "exec_infra_error",
+      severity: "warn",
+      message: `tool-call infrastructure error(s) — the affected command(s) failed, the run's evidence is otherwise intact: ${execInfra.map((e) => e.message).join("; ")}`,
     });
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -22,12 +22,18 @@ const userResult = (toolUseId: string, isError: boolean, text: string) => ({
   message: { content: [{ type: "tool_result", tool_use_id: toolUseId, is_error: isError, content: text }] },
 });
 
-/** Write an events.jsonl (and optional sibling result.json) into a fresh run dir; return the events.jsonl
- *  path — exactly what `resolveEventsFile` yields and what the build* views consume. */
+/** Write an events.jsonl (and optional turn-1 result.json) into a fresh run dir; return the events.jsonl
+ *  path — exactly what `resolveEventsFile` yields and what the build* views consume. The result, when
+ *  given, goes under `turns/1/` — the only place a current-layout dir's result.json lives (no root compat
+ *  copy) — so `readSiblingResult` (trace-view.ts) actually finds it through the seam. */
 function runDir(events: unknown[], result?: object): string {
   const dir = mkdtempSync(join(tmpdir(), "cwh-trace-views-"));
   writeFileSync(join(dir, "events.jsonl"), events.map((l) => JSON.stringify(l)).join("\n"));
-  if (result) writeFileSync(join(dir, "result.json"), JSON.stringify(result));
+  if (result) {
+    const turn1 = join(dir, "turns", "1");
+    mkdirSync(turn1, { recursive: true });
+    writeFileSync(join(turn1, "result.json"), JSON.stringify(result));
+  }
   return join(dir, "events.jsonl");
 }
 

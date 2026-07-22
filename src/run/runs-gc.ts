@@ -2,8 +2,19 @@ import { existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
+import { classifyRunDir, hasTurnDirs } from "./turn-layout.js";
+import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
 
 const log = (s: string) => process.stderr.write(s + "\n");
+
+/** How many interrupted migrations are recorded for this scenario. */
+function liveJournalsFor(runsRoot: string, scenarioSlug: string): number {
+  try {
+    return readdirSync(join(runsRoot, MIGRATION_JOURNAL_DIR, scenarioSlug)).filter((f) => f.endsWith(".json")).length;
+  } catch {
+    return 0; // no journal dir for this scenario — the ordinary case
+  }
+}
 
 const DEFAULT_KEEP_LAST = 5;
 
@@ -19,17 +30,27 @@ function parseRetentionMs(s: string): number | undefined {
   return n * mult;
 }
 
-/** A "real run" — has a `result.json` (completed; success OR a recorded error) OR an `events.jsonl`
- *  (a session started, so the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail
- *  writes no result.json but DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session
- *  dir has neither → it is what GC should drop first. `events.jsonl` exists from session start, so an
- *  in-flight run is protected without a wall-clock guard. */
-const isRealRun = (dir: string) => existsSync(join(dir, "result.json")) || existsSync(join(dir, "events.jsonl"));
+/** A "real run" — has completed at least one turn (`turns/<N>/`, current layout — no writer produces a
+ *  root `result.json` compat copy to check for anymore) OR has an `events.jsonl` (a session started, so
+ *  the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail writes no turn dir but
+ *  DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session dir has neither → it
+ *  is what GC should drop first. `events.jsonl` exists from session start, so an in-flight run is
+ *  protected without a wall-clock guard. */
+const isRealRun = (dir: string) => {
+  if (hasTurnDirs(dir) || existsSync(join(dir, "events.jsonl"))) return true;
+  // A PRE-LAYOUT dir is still a real run. This predicate reasons about the RANKING population, which is
+  // history — not about what current writers produce. Keying it on `hasTurnDirs` alone demoted an
+  // unmigrated legacy dir (root result.json, no events.jsonl) into the junk tier, so prune deleted it
+  // ahead of an empty scaffold: silent destruction of exactly the history `migrate-run-dir` exists to
+  // preserve, in the same file whose journal guard calls that the most expensive outcome in this feature.
+  const shape = classifyRunDir(dir);
+  return shape.kind === "legacy" || shape.kind === "mixed";
+};
 
 /** `cowork-harness prune [--keep-last <n>] [--dry-run] [<runs-dir>]`
  *
- *  For each scenario directory under the runs root, ranks EPHEMERAL run dirs by (1) real-run first (has
- *  result.json OR events.jsonl), (2) mtime descending, (3) name — then keeps the N most recent of that order
+ *  For each scenario directory under the runs root, ranks EPHEMERAL run dirs by (1) real-run first (a
+ *  turns/ dir, an events.jsonl, or a pre-layout shape — see isRealRun), (2) mtime descending, (3) name — then keeps the N most recent of that order
  *  and removes the rest. So an older COMPLETED run beats a newer empty scaffold dir for a keep slot, but
  *  `--keep-last` stays a HARD CAP (the ranking only decides WHICH N survive — never grows the kept count).
  *  Do NOT run `prune` against an actively-writing runs root.
@@ -86,6 +107,7 @@ export function cmdRunsGc(args: string[]): void {
   let kept = 0;
 
   for (const scenarioSlug of readdirSync(runsRoot).sort()) {
+    if (scenarioSlug === MIGRATION_JOURNAL_DIR) continue; // the journal store is not a scenario
     const scenarioDir = join(runsRoot, scenarioSlug);
     let st: ReturnType<typeof statSync>;
     try {
@@ -94,6 +116,20 @@ export function cmdRunsGc(args: string[]): void {
       continue;
     }
     if (!st.isDirectory()) continue;
+
+    // A LIVE MIGRATION JOURNAL MAKES THIS SCENARIO UNRANKABLE. Between a crashed migration and its
+    // recovery the renames have already re-stamped the run dir's mtime while the restore has not run —
+    // and the ranking below is BY THAT MTIME. A half-migrated old run therefore ranks as the newest and
+    // evicts a genuinely newer one. Pruning the half-migrated dir itself is just as bad: it orphans the
+    // journal that holds the only record of the interrupted plan.
+    //
+    // Skipping is the conservative choice: prune is a space reclaim, so deferring it costs disk, while
+    // getting it wrong deletes a run outright — the most expensive failure in this feature.
+    const live = liveJournalsFor(runsRoot, scenarioSlug);
+    if (live > 0) {
+      log(`↷ skipped ${scenarioSlug}: ${live} migration journal(s) in flight — run \`migrate-run-dir\` to finish, then prune`);
+      continue;
+    }
 
     // Rank run dirs: (1) real-run first (a completed/in-flight run outranks an empty scaffold dir for a
     // keep slot), (2) newest first (mtime desc), (3) name desc as a deterministic tiebreaker.

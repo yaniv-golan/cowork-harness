@@ -383,7 +383,7 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only four codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only five codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
@@ -393,6 +393,12 @@ pass/fail):
 - `scan_unavailable` (**warn**) — post-run scan evidence unavailable (`RunResult.scan` undefined); the
   host-path and outputs-delete guards did not run this run (assert `no_delete_in_outputs` /
   `transcript_no_host_path` to hard-fail on this instead).
+- `exec_infra_error` (**warn**, host-loop) — one or more container `exec` calls failed for infrastructure
+  reasons (daemon/container-level), so those tool calls returned an error to the agent. The run's other
+  evidence is intact, which is why this warns rather than fails — unlike a `hostloop-sidecar` /
+  `egress-sidecar` crash, which is fail-severity `infra_error` because a dead supervisor contaminates the
+  whole run. Note the residual gap: if *every* exec failed, the agent ran nothing and this still only
+  warns — inspect `result.infraErrors` when a run looks suspiciously empty.
 - `ended_with_question` (**warn**, live lane) — the agent's final answer contains a question and the run
   wrote no deliverable to `outputs/` — a likely dead-end that still exited `result:"success"`. The lenient
   sibling of the strict, fail-severity `stalled` (which catches a *trailing*-`?` final turn with no
@@ -530,7 +536,7 @@ drifted — `baseline`, `skill`/`shared-root`, `format`, `resolved-tier`, `promp
 on skill-source drift only, and every result reports it in `staleness[]` for a JSON gate). `prompt-assets`
 covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`subagentAppendHostLoop`)
 edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
-identity was previously keyed on `appVersion` only.
+identity keyed on `appVersion` alone cannot see it.
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
@@ -646,10 +652,20 @@ Each run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` (relocate with `
 ```
 events.jsonl      full stream-json (child→driver; also the cassette source)
 control-out.jsonl driver→child control_responses (the other cassette half)
-run.jsonl         harness log: decisions (+who), sub-agent dispatch tree, egress, transcript, cost
-trace.json        structured trace: steps, questions, sub-agents, egress, decisions, cost
+turns/<N>/        ONE DIRECTORY PER TURN, written once and never renamed. A run dir holds several
+                  turns with --session-id + --resume, and always for `critique` (task + reflection),
+                  and always for `chat` too (always turns/1/ — chat never resumes). Each holds that
+                  turn's:
+                    run.jsonl       harness log: decisions (+who), sub-agent dispatch tree, egress,
+                                    transcript, cost
+                    trace.json      structured trace: steps, questions, sub-agents, egress, cost
+                    result.json     assertion results + decisions + sub-agents + usage + status
+                                    (incl. workDir/outputsDir)
+                    resources.jsonl per-sample resource telemetry
+                  A single-turn run has just turns/1/. There is NO root compat copy — a bare
+                  `<run-dir>/result.json` does not exist; a dir that has one instead predates this
+                  layout and is refused (naming the shape) by verify-run/inspect/scaffold/--resume.
 egress.log        allow/deny per outbound connection (L1/L2)
-result.json       assertion results + decisions + sub-agents + usage + status (incl. workDir/outputsDir)
 session.json      session manifest (only when --session-id/--resume is used: id + the agent's session UUID)
 status.json       run status (phase, exit, timing) — see docs/run-status.md
 mounts.json       VM→host path map (feeds trace --translate-paths; hostloop runs)

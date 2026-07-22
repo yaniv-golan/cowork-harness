@@ -178,3 +178,83 @@ describe.skipIf(!can)("cli: diff (cassette/run mode, E2)", () => {
     expect(r.stderr).not.toContain("different scenarios");
   });
 });
+
+// artifactsAvailability plumbing: compareDiffSides (src/run/diff.ts) computes it, but a consumer only
+// benefits if the CLI actually surfaces it — the JSON envelope and both the --view artifacts and
+// --view tools/meta text renders. A cassette with its `artifacts` manifest stripped reproduces the
+// one-sided-unavailable case without needing a live run dir.
+describe.skipIf(!can)("cli: diff surfaces artifactsAvailability", () => {
+  function withoutArtifacts(tmpDir: string, name: string): string {
+    const cassette = JSON.parse(readFileSync(CASSETTE, "utf8"));
+    delete cassette.artifacts;
+    const out = join(tmpDir, name);
+    writeFileSync(out, JSON.stringify(cassette));
+    return out;
+  }
+
+  it("--output-format json includes artifactsAvailability alongside identical", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));
+    const noManifest = withoutArtifacts(tmpDir, "no-manifest.cassette.json");
+    const r = run(["diff", CASSETTE, noManifest, "--output-format", "json"]);
+    expect(r.code).toBe(1); // one-sided unavailability forces non-identical
+    const envelope = JSON.parse(r.stdout);
+    expect(envelope.identical).toBe(false);
+    expect(envelope.artifactsAvailability).toBe("b-unavailable");
+  });
+
+  it("both sides missing a manifest reports both-unavailable and stays identical in JSON", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));
+    const a = withoutArtifacts(tmpDir, "a.cassette.json");
+    const b = withoutArtifacts(tmpDir, "b.cassette.json");
+    const r = run(["diff", a, b, "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    const envelope = JSON.parse(r.stdout);
+    expect(envelope.identical).toBe(true);
+    expect(envelope.artifactsAvailability).toBe("both-unavailable");
+  });
+
+  it("--view artifacts distinguishes the red one-sided case from the still-green both-sided case, even when both land in an overall non-identical diff", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));
+    // One-sided unavailable: artifacts ALONE causes the red exit (tools/meta otherwise agree).
+    const noManifest = withoutArtifacts(tmpDir, "no-manifest.cassette.json");
+    const oneSided = run(["diff", CASSETTE, noManifest, "--view", "artifacts"]);
+    expect(oneSided.code).toBe(1);
+    expect(oneSided.stdout).toContain("this alone makes the comparison non-identical");
+
+    // Both-sided unavailable, but paired with a REAL tool-sequence difference — the overall verdict is
+    // still non-identical (because of tools), yet the artifacts view must read as the still-green
+    // "doesn't affect the verdict" case, not be conflated with the one-sided case above.
+    const mutated = JSON.parse(readFileSync(CASSETTE, "utf8"));
+    delete mutated.artifacts;
+    mutated.events = mutated.events.map((line: string) => {
+      const ev = JSON.parse(line);
+      if (ev.type === "assistant") {
+        for (const block of ev.message?.content ?? []) {
+          if (block.type === "tool_use" && block.name === "Skill") block.name = "MutatedToolName";
+        }
+      }
+      return JSON.stringify(ev);
+    });
+    const mutatedPath = join(tmpDir, "mutated-no-manifest.cassette.json");
+    writeFileSync(mutatedPath, JSON.stringify(mutated));
+    const noManifestOther = withoutArtifacts(tmpDir, "no-manifest-2.cassette.json");
+    const bothSided = run(["diff", noManifestOther, mutatedPath, "--view", "artifacts"]);
+    expect(bothSided.code).toBe(1); // non-identical overall, due to the tools mutation
+    expect(bothSided.stdout).toContain("does not affect the identical verdict");
+    expect(bothSided.stdout).not.toContain("this alone makes the comparison non-identical");
+  });
+
+  it("--view tools (or meta) explains an otherwise-unexplained red exit caused by one-sided artifact unavailability", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));
+    const noManifest = withoutArtifacts(tmpDir, "no-manifest.cassette.json");
+    const toolsView = run(["diff", CASSETTE, noManifest, "--view", "tools"]);
+    expect(toolsView.code).toBe(1);
+    expect(toolsView.stdout).toContain("tools: identical"); // the view itself shows nothing wrong...
+    expect(toolsView.stdout).toContain("this alone makes the comparison non-identical"); // ...but this explains the exit code
+
+    const metaView = run(["diff", CASSETTE, noManifest, "--view", "meta"]);
+    expect(metaView.code).toBe(1);
+    expect(metaView.stdout).toContain("meta: identical");
+    expect(metaView.stdout).toContain("this alone makes the comparison non-identical");
+  });
+});
