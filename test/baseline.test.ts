@@ -11,9 +11,11 @@ import {
   classifyNativeStagingDrift,
   resolveMounts,
   sha256File,
+  countStringInFile,
 } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
+import { PlatformBaseline as PlatformBaselineSchema } from "../src/types.js";
 import {
   decodeFcacheGates,
   sync,
@@ -195,6 +197,45 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(PINNED_GATES["245679952"]).toBe("suggestSkillsEnabled");
     expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
     expect(PINNED_GATES["3246569822"]).toBe("canSaveSkill");
+  });
+});
+
+describe("countStringInFile — literal occurrence counter for binary string sentinels", () => {
+  const tmp = join(tmpdir(), `cwh-count-${process.pid}.bin`);
+  afterEach(() => {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("counts non-overlapping literal occurrences", () => {
+    writeFileSync(tmp, "x tengu_saddle_lantern y tengu_saddle_lantern z");
+    expect(countStringInFile(tmp, "tengu_saddle_lantern")).toBe(2);
+  });
+
+  it("returns 0 when the needle is absent", () => {
+    writeFileSync(tmp, "nothing to see here");
+    expect(countStringInFile(tmp, "tengu_saddle_lantern")).toBe(0);
+  });
+
+  it("counts a match that would straddle a naive chunk boundary (single read, whole file)", () => {
+    // a large filler so the needle sits well past any small buffer, proving we scan the full file
+    writeFileSync(tmp, "A".repeat(200_000) + "tengu_saddle_lantern" + "B".repeat(200_000));
+    expect(countStringInFile(tmp, "tengu_saddle_lantern")).toBe(1);
+  });
+
+  it("agentBinary.stringSentinels ROUND-TRIPS through the schema (not stripped by the z.object)", () => {
+    // The inner agentBinary is a z.object (strips unknown keys), so stringSentinels must be a declared
+    // field or it would silently vanish on load — the exact trap this locks against. Spread a real full
+    // baseline (so all required fields are satisfied) and prove an arbitrary sentinel map survives parse.
+    const base = loadBaseline("desktop-1.24012.1") as unknown as Record<string, unknown>;
+    const reparsed = PlatformBaselineSchema.parse({
+      ...base,
+      agentBinary: { ...(base.agentBinary as object), stringSentinels: { some_marker: 7 } },
+    });
+    expect(reparsed.agentBinary?.stringSentinels).toEqual({ some_marker: 7 });
   });
 });
 

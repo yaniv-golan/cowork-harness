@@ -8,7 +8,10 @@
     "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.217/claude.app/Contents/MacOS/claude",
     "sha256": "40c53507ac669c1d438366c19760c22f52748a06e50e0fc0e353d2cb73425597",
     "shaProvenance": "measured-local",
-    "manifestChecksumMatch": true
+    "manifestChecksumMatch": true,
+    "stringSentinels": {
+      "tengu_saddle_lantern": 2
+    }
   },
   "guest": {
     "os": "linux",

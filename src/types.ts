@@ -47,6 +47,13 @@ export const PlatformBaseline = z.looseObject({
     sha256: z.string().optional(),
     shaProvenance: z.enum(["measured-local", "official-manifest"]).optional(),
     manifestChecksumMatch: z.union([z.boolean(), z.literal("unknown")]).optional(),
+    // String sentinels: literal-occurrence counts of feature markers in the staged ELF whose runtime
+    // STATE the sync cannot see via a gate id or a spawn-env key (e.g. `tengu_saddle_lantern`, which at
+    // agent >=2.1.217 gates the skill-discovery tool family's enablement — docs/internal finding 1).
+    // Measured when the ELF is staged, carried on an offline same-version re-sync, else dropped. Pure
+    // `sync --diff` tripwire: a changed count is the trigger to re-verify the feature wiring; nothing
+    // consumes it at runtime.
+    stringSentinels: z.record(z.string(), z.number()).optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z

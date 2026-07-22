@@ -4,7 +4,7 @@ import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
-import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, newestStagedSibling } from "./baseline.js";
+import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, countStringInFile, newestStagedSibling } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, expandUserPath } from "./session.js";
 import {
   executeScenario,
@@ -2564,10 +2564,21 @@ async function cmdSync(args: string[]) {
   // release manifest; if the binary isn't staged on this machine, fall back to the official-manifest hash
   // (staging-identity unverified); if offline AND this is a re-sync of the SAME version, keep the base's
   // recorded hash; otherwise drop the fields rather than carry a stale hash from a different version.
+  // Agent-binary string sentinels: literal-occurrence counts of feature markers whose runtime STATE the
+  // sync cannot see (no gate id, no spawn-env key), measured from the staged ELF. tengu_saddle_lantern
+  // gates the skill-discovery tool family's ENABLEMENT at agent >=2.1.217 (docs/internal finding 1); its
+  // count is 2 in the 2.1.215/2.1.217 ELF. A change surfaces as a `sync --diff` agentBinary line — the
+  // trigger to re-check whether the discovery-tool wiring moved. Same lifecycle as sha256 below: measured
+  // when staged, carried from the base on an offline same-version re-sync, else dropped (never stale).
+  const AGENT_STRING_SENTINELS = ["tengu_saddle_lantern"] as const;
+  const baseSentinels = (baseAgentBinary.stringSentinels ?? undefined) as Record<string, number> | undefined;
+
   const officialElfChecksum = await fetchOfficialElfChecksum(res.agentVersion);
   let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
+  let stringSentinels: Record<string, number> | undefined;
   if (existsSync(resolvedDerived)) {
     const measured = sha256File(resolvedDerived);
+    stringSentinels = Object.fromEntries(AGENT_STRING_SENTINELS.map((s) => [s, countStringInFile(resolvedDerived, s)]));
     shaFields = {
       sha256: measured,
       shaProvenance: "measured-local",
@@ -2587,6 +2598,7 @@ async function cmdSync(args: string[]) {
       shaProvenance: baseAgentBinary.shaProvenance as string | undefined,
       manifestChecksumMatch: baseAgentBinary.manifestChecksumMatch as boolean | "unknown" | undefined,
     };
+    stringSentinels = baseSentinels;
   }
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
@@ -2597,6 +2609,7 @@ async function cmdSync(args: string[]) {
     sha256: shaFields.sha256,
     shaProvenance: shaFields.shaProvenance,
     manifestChecksumMatch: shaFields.manifestChecksumMatch,
+    stringSentinels,
   };
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
