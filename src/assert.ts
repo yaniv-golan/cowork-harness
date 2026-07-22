@@ -438,10 +438,13 @@ export interface AssertContext {
    *  evidence-unavailable signal for connector_available; an empty `[]` is a valid "no connectors" state
    *  and is NOT the same as undefined. */
   mcpServers?: Array<{ name: string; status?: string; [k: string]: unknown }>;
-  /** RunResult.context.tools — the SDK's init-event tool manifest. Undefined means no context telemetry
-   *  was recorded for this run (an older run that never captured this field) — the evidence-unavailable
-   *  signal for tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as
-   *  undefined. */
+  /** RunResult.context.tools — the SDK's init-event tool manifest, i.e. the run's EAGERLY-LOADED tools.
+   *  It is NOT the complete callable surface: a factory-DEFERRED tool (native or MCP) is loaded on demand
+   *  via a ToolSearch `select:` round-trip and surfaces in a system-reminder, not in init.tools — so
+   *  tool_available can false-NEGATIVE on a genuinely-available deferred tool (e.g. the skill-discovery
+   *  tools). Capturing the deferred set is WI-1, deferred (docs/internal). Undefined means no context
+   *  telemetry was recorded (an older run that never captured this field) — the evidence-unavailable
+   *  signal for tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as undefined. */
   availableTools?: string[];
   /** RunResult.contextEvents — `system` stream messages the harness doesn't special-case (e.g.
    *  `compact_boundary`). Undefined means no context-events telemetry was recorded for this run (an
@@ -1420,7 +1423,14 @@ function check(
     if ("error" in c) results.push(fail(`tool_available: bad regex "${a.tool_available}": ${c.error}`));
     else if (ctx.availableTools === undefined)
       results.push(fail(`evidence unavailable: availableTools absent from result.json — cannot evaluate tool_available`));
-    else results.push(ctx.availableTools.some((t) => c.re.test(t)) ? ok() : fail(`no available tool matched "${a.tool_available}"`));
+    else
+      results.push(
+        ctx.availableTools.some((t) => c.re.test(t))
+          ? ok()
+          : fail(
+              `no tool in the init manifest matched "${a.tool_available}" — note context.tools is the EAGERLY-LOADED tool set; a factory-deferred tool (surfaced via a system-reminder, e.g. the skill-discovery tools) can be available yet absent here, so a miss is "not eagerly loaded", not "provably unavailable"`,
+            ),
+      );
   }
   if (a.skill_tool_used !== undefined) {
     const { skill, tool } = a.skill_tool_used;
