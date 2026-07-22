@@ -250,6 +250,47 @@ describe("a captured non-empty boundary whose file later vanishes is an integrit
   });
 });
 
+describe("a partly-corrupt archived turn-1 transcript degrades, never reads as clean ground truth", () => {
+  let dir: string;
+  beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "cwh-crit-arch-"))));
+  const skill = () => {
+    const s = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(s, "SKILL.md"), "# a skill\nguidance");
+    return s;
+  };
+  // The archived branch (turns/1/run.jsonl) short-circuits before the boundary-dependent slice fallback,
+  // so the boundary is irrelevant here — a benign zero-size one keeps turn1SliceDegraded sourced ONLY from
+  // the archived-transcript read under test.
+  const BENIGN: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
+
+  it("a malformed (skipped) JSONL row sets turn1SliceDegraded — but the transcript is still delivered (resilient)", () => {
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(
+      join(dir, "turns", "1", "run.jsonl"),
+      '{"t":"init"}\n{ this is not valid json\n' + JSON.stringify({ t: "transcript", text: "the agent read the file" }) + "\n",
+    );
+    const result = packageEvidence(dir, BENIGN, skill());
+    expect(result.turn1SliceDegraded).toBe(true); // corruption surfaced, not silently clean
+    const transcript = result.sections.find((s) => s.title.startsWith("Transcript"));
+    expect(transcript?.body).toContain("the agent read the file"); // still resilient — the transcript is delivered
+  });
+
+  it("a clean archive (exactly one transcript record, no corruption) is NOT degraded", () => {
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(join(dir, "turns", "1", "run.jsonl"), '{"t":"init"}\n' + JSON.stringify({ t: "transcript", text: "clean" }) + "\n");
+    expect(packageEvidence(dir, BENIGN, skill()).turn1SliceDegraded).toBe(false);
+  });
+
+  it("an ambiguous archive with TWO transcript records degrades (completeness unknown)", () => {
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(
+      join(dir, "turns", "1", "run.jsonl"),
+      JSON.stringify({ t: "transcript", text: "first" }) + "\n" + JSON.stringify({ t: "transcript", text: "second" }) + "\n",
+    );
+    expect(packageEvidence(dir, BENIGN, skill()).turn1SliceDegraded).toBe(true);
+  });
+});
+
 describe("F30 — a corrupt canonical turn-1 result surfaces a typed degradation flag (never a silent turn-2 substitution)", () => {
   it("readTurn1ResultWithStatus reports 'corrupted' for a malformed turns/1/result.json and does NOT fall back to a later turn's", () => {
     putTurnResult(1, "{ this is not valid json");
