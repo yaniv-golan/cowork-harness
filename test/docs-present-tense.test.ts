@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { execSync } from "node:child_process";
 
 // User-facing docs describe how the harness IS. They are not a changelog.
 //
@@ -93,15 +94,25 @@ const KNOWN_DEBT: { file: string; needle: string }[] = [
   { file: "docs/fidelity-gaps.md", needle: "no longer a divergence" },
 ];
 
+/** Only git-TRACKED files are user-facing docs. Gitignored working notes live under docs/ too —
+ *  docs/internal (our own plans) and docs/superpowers (the plugin's) — and a filesystem walk would
+ *  scan them and flag their historical narration, which is none of this guard's business. Tracking is
+ *  the exact line: committed = shipped = subject to the present-tense rule; gitignored = not. This also
+ *  means a future gitignored docs subdir is excluded automatically, with no new special-case here. */
+const tracked = new Set(
+  execSync("git ls-files", { encoding: "utf8", cwd: resolve(".") })
+    .split("\n")
+    .filter(Boolean),
+);
+
 function docFiles(): string[] {
   const out = ["README.md", "SPEC.md"];
   for (const base of ["docs", ".claude/skills/cowork-harness"]) {
     const walk = (d: string) => {
       for (const e of readdirSync(resolve(d))) {
         const p = join(d, e);
-        if (p.includes("docs/internal")) continue; // gitignored working notes, not user-facing
         if (statSync(resolve(p)).isDirectory()) walk(p);
-        else if (p.endsWith(".md")) out.push(p);
+        else if (p.endsWith(".md") && tracked.has(p)) out.push(p);
       }
     };
     walk(base);
