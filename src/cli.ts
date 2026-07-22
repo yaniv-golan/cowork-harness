@@ -2717,7 +2717,13 @@ async function cmdSync(args: string[]) {
           }
         : {}),
     },
-    provenance: { ...baseProvenance, gates: nextGates, asarFingerprint: res.asarFingerprint },
+    provenance: {
+      ...baseProvenance,
+      gates: nextGates,
+      asarFingerprint: res.asarFingerprint,
+      spawnEnvKeys: res.spawnEnvKeys,
+      spawnEnvSpreadCount: res.spawnEnvSpreadCount,
+    },
   };
   const diffFlag = !!syncParsed.flags["--diff"];
   if (diffFlag) {

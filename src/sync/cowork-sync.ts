@@ -36,6 +36,8 @@ export interface SyncResult {
   asarFingerprint: string;
   gates: Record<string, GateState> | null; // decoded GrowthBook gate states (null = fcache absent/unreadable)
   spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
+  spawnEnvKeys: string[]; // WI-6: the sorted SET of constructed spawn-env keys — committed as provenance.spawnEnvKeys (regex-rot oracle)
+  spawnEnvSpreadCount: number; // WI-5: count of `...`-spread sites across the spawn windows — committed as provenance.spawnEnvSpreadCount
   // per-model effort/regex-default config (the literal map + the fable|mythos regex-default class); null =
   // a hard-fail flag blocked it (carry the base baseline's spawn.effortByModel/effortRegexDefault forward).
   modelEffortConfig: ModelEffortConfig | null;
@@ -217,7 +219,8 @@ export function sync(): SyncResult {
 
   // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
   // merged with user hosts.
-  const { domains, fingerprint, spawnEnv, modelEffortConfig, promptFingerprint, notes } = extractFromAsar(unknown, gates);
+  const { domains, fingerprint, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } =
+    extractFromAsar(unknown, gates);
   const allowDomains = dedupe([...domains, ...userAllow]);
 
   if (!gates) {
@@ -242,6 +245,8 @@ export function sync(): SyncResult {
     asarFingerprint: fingerprint,
     gates,
     spawnEnv,
+    spawnEnvKeys,
+    spawnEnvSpreadCount,
     modelEffortConfig,
     promptFingerprint,
     unknownDeltas: unknown,
@@ -285,13 +290,24 @@ function extractFromAsar(
   domains: string[];
   fingerprint: string;
   spawnEnv: Record<string, string> | null;
+  spawnEnvKeys: string[];
+  spawnEnvSpreadCount: number;
   modelEffortConfig: ModelEffortConfig | null;
   promptFingerprint: PromptFingerprint | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
     flag(unknown, `asar not found at ${ASAR} — install/open Claude Desktop once, or fix ASAR in cowork-sync.ts`);
-    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, promptFingerprint: null, notes: [] };
+    return {
+      domains: [],
+      fingerprint: "",
+      spawnEnv: null,
+      spawnEnvKeys: [],
+      spawnEnvSpreadCount: 0,
+      modelEffortConfig: null,
+      promptFingerprint: null,
+      notes: [],
+    };
   }
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
@@ -346,13 +362,24 @@ function extractFromAsar(
       domains,
       fingerprint,
       spawnEnv: spawn.env,
+      spawnEnvKeys: spawn.keys,
+      spawnEnvSpreadCount: spawn.spreadCount,
       modelEffortConfig,
       promptFingerprint,
       notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
     };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
-    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, promptFingerprint: null, notes: [] };
+    return {
+      domains: [],
+      fingerprint: "",
+      spawnEnv: null,
+      spawnEnvKeys: [],
+      spawnEnvSpreadCount: 0,
+      modelEffortConfig: null,
+      promptFingerprint: null,
+      notes: [],
+    };
   } finally {
     // mkdtempSync extraction dir is otherwise leaked under $TMPDIR on every invocation.
     rmSync(tmp, { recursive: true, force: true });
@@ -1185,10 +1212,10 @@ function enumSpawnKeys(text: string): { key: string; valueStart: number }[] {
 export function deriveSpawnEnv(
   bundle: string,
   gates: Record<string, GateState> | null,
-): { env: Record<string, string> | null; flags: string[] } {
+): { env: Record<string, string> | null; flags: string[]; keys: string[]; spreadCount: number } {
   const flags: string[] = [];
   // If the fcache is unreadable the caller already flags it; emit no spurious spawn flags, no partial env.
-  if (!gates) return { env: null, flags: [] };
+  if (!gates) return { env: null, flags: [], keys: [], spreadCount: 0 };
 
   const w1 = twoAnchorWindow(bundle, "env:{CLAUDE_CONFIG_DIR", ",systemPrompt:");
   const w2 = twoAnchorWindow(bundle, "return{CLAUDE_CODE_ENTRYPOINT", ".sessionEnvVars()}");
@@ -1212,7 +1239,7 @@ export function deriveSpawnEnv(
       degenerate = true;
     }
   }
-  if (degenerate) return { env: null, flags };
+  if (degenerate) return { env: null, flags, keys: [], spreadCount: 0 };
 
   const env: Record<string, string> = {};
   const enumerated = new Set<string>();
@@ -1238,12 +1265,17 @@ export function deriveSpawnEnv(
   };
   // Top-level / non-gate-spread key: allowlist-first, then it MUST be a registered pin (an unregistered
   // key here is an ADDITION → hard-fail so it is classified, never silently auto-pinned).
-  const resolveInto = (rawKey: string, expr: string, target: Record<string, string>) => {
+  // `apply=false` classifies the key (allowlisted / pinned / unknown) WITHOUT writing its value — used
+  // for an OFF-gate conditional spread's inner keys (WI-4): the key must still be caught if it's brand
+  // new, but its value must NOT be applied (an off-gate value must not override a W2 pin, e.g. off-gate
+  // MCP_CONNECTION_NONBLOCKING:"0" must not clobber W2's "true"). A pinned key is still resolved so an
+  // unresolvable value flags, but the resolved value is dropped when apply=false.
+  const resolveInto = (rawKey: string, expr: string, target: Record<string, string>, apply = true) => {
     if (SPAWN_ENV_ALLOWLIST[rawKey] !== undefined) return; // deliberately not pinned
     if ((SPAWN_PIN_KEYS as readonly string[]).includes(rawKey)) {
       const r = resolveSpawnValue(bundle, expr, gates);
       if ("unknown" in r) flagUnresolvable(rawKey, expr);
-      else target[rawKey] = r.value;
+      else if (apply) target[rawKey] = r.value;
       return;
     }
     flags.push(`spawn.env: unknown key ${rawKey} constructed in the asar — ${SPAWN_ADVICE}`);
@@ -1275,9 +1307,16 @@ export function deriveSpawnEnv(
       for (const sm of text.matchAll(/\.\.\.(?:[\w$]+\.)?[A-Za-z_$][\w$]*\("(\d+)"\)&&\{([^{}]*)\}/g)) {
         const id = sm[1];
         const inner = sm[2];
-        for (const k of enumSpawnKeys("{" + inner)) enumerated.add(k.key);
-        if (id in SPAWN_GATES && gates[id]?.on) {
-          for (const k of enumSpawnKeys("{" + inner)) resolveGateInner(k.key, sliceSpawnValue("{" + inner, k.valueStart), target);
+        const gateOn = id in SPAWN_GATES && gates[id]?.on;
+        for (const k of enumSpawnKeys("{" + inner)) {
+          enumerated.add(k.key);
+          const expr = sliceSpawnValue("{" + inner, k.valueStart);
+          // ON gate: the gate IS the classifier — resolve + auto-pin (resolveGateInner). OFF gate (or an
+          // unknown/non-SPAWN gate id): classify by name WITHOUT applying (WI-4) so a brand-new key in an
+          // off-gate spread hard-fails instead of being silently enumerated, while a known off-gate key's
+          // value stays unapplied (W2 wins).
+          if (gateOn) resolveGateInner(k.key, expr, target);
+          else resolveInto(k.key, expr, target, false);
         }
         work = work.replace(sm[0], "");
       }
@@ -1309,8 +1348,22 @@ export function deriveSpawnEnv(
       flags.push(`NOTE: spawn.env allowlist entry ${k} is no longer constructed in the asar — prune it from SPAWN_ENV_ALLOWLIST`);
   }
 
-  if (hardFail) return { env: null, flags };
-  return { env, flags };
+  // WI-6: the constructed key SET, committed as provenance.spawnEnvKeys — a reviewable record and an
+  // enumeration-regex-rot oracle (if enumSpawnKeys silently starts matching fewer keys, the committed
+  // set shrinks and shows in `sync --diff`). It does NOT catch opaque-spread keys (those carry zero
+  // statically-enumerable keys — WI-5 guards that surface); nor is it the under-match guard (that is
+  // REQUIRED_SPAWN_KEYS + the prune NOTE). Emitted even on hardFail so a partial derivation's set is
+  // still visible in the diff.
+  const keys = [...enumerated].sort();
+  // WI-5: count the `...`-spread SITES across the three spawn windows. A spread is either a recognized
+  // gate-conditional / expandable helper OR an OPAQUE source (`...d.env`, `...h`, `...getOtelEnvVars(…)`)
+  // that carries env keys enumeration can't see. spawnEnvKeys (WI-6) surfaces a new ENUMERABLE key; this
+  // count surfaces a new SPREAD SITE — including an opaque one carrying non-enumerable keys, the one
+  // channel spawnEnvKeys is blind to. Committed as provenance.spawnEnvSpreadCount; a change shows in
+  // `sync --diff` (diff-surfacing, not a hard-fail — a benign minifier reshape must not fail CI).
+  const spreadCount = [w1, w2, w3].reduce((n, w) => n + ((w as string).match(/\.\.\.[A-Za-z_$]/g)?.length ?? 0), 0);
+  if (hardFail) return { env: null, flags, keys, spreadCount };
+  return { env, flags, keys, spreadCount };
 }
 
 /**

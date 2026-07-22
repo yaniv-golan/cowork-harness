@@ -923,6 +923,45 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     });
   }
 
+  // 3c. WI-4: a NEW key inside an OFF-gate conditional spread must hard-fail. Before WI-4 the off-gate
+  // inner keys were enumerated but never classified (resolveGateInner ran only when the gate was ON), so
+  // a brand-new key shipped in an off-gate spread was a silent channel. 434204418 is OFF in greenGates.
+  it("WI-4: an unknown key in an OFF-gate spread hard-fails (not silently enumerated)", () => {
+    const injected = fixture().replace('MCP_CONNECT_TIMEOUT_MS:"10000"}', 'MCP_CONNECT_TIMEOUT_MS:"10000",OFFGATE_MYSTERY_KEY:"1"}');
+    expect(injected).not.toBe(fixture()); // the injection applied
+    const { env, flags } = deriveSpawnEnv(injected, greenGates());
+    expect(env).toBeNull();
+    expect(flags.some((f) => f.includes("OFFGATE_MYSTERY_KEY") && f.includes("--allow-empty"))).toBe(true);
+  });
+
+  // 3d. WI-4 non-breaking guard: the OFF-gate block's OWN keys (pinned MCP_CONNECTION_NONBLOCKING,
+  // allowlisted MCP_CONNECT_TIMEOUT_MS) must still NOT hard-fail AND must not override W2's value — the
+  // off-gate "0" stays unapplied (W2's "true" wins), exactly as before.
+  it("WI-4: classifying off-gate inner keys does NOT apply their values (W2 still wins) or flag known keys", () => {
+    const { env, flags } = deriveSpawnEnv(fixture(), greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env!.MCP_CONNECTION_NONBLOCKING).toBe("true"); // W2 value, NOT the off-gate "0"
+  });
+
+  // WI-6: deriveSpawnEnv returns the sorted SET of constructed keys (committed as
+  // provenance.spawnEnvKeys — an enumeration-regex-rot oracle). WI-5: a count of spread SITES across
+  // the windows (provenance.spawnEnvSpreadCount — surfaces a new spread source, incl. an opaque one).
+  it("WI-6/WI-5: returns the constructed key SET and the spread-site count", () => {
+    const { keys, spreadCount } = deriveSpawnEnv(fixture(), greenGates());
+    expect(keys).toContain("CLAUDE_CODE_IS_COWORK"); // a known constructed key is in the set
+    expect(keys).toEqual([...keys].sort()); // sorted (stable diff)
+    expect(keys.length).toBeGreaterThan(10);
+    expect(spreadCount).toBeGreaterThan(0); // the fixture has gate/helper spreads
+  });
+
+  it("WI-5: a NEW spread site increases spawnEnvSpreadCount (tracks opaque sources)", () => {
+    const before = deriveSpawnEnv(fixture(), greenGates()).spreadCount;
+    // inject an opaque spread of the kind enumeration can't see (…someHostObj.env)
+    const withSpread = fixture().replace('CLAUDE_CODE_IS_COWORK:"1"', '...someHostObj.env,CLAUDE_CODE_IS_COWORK:"1"');
+    const after = deriveSpawnEnv(withSpread, greenGates()).spreadCount;
+    expect(after).toBe(before + 1);
+  });
+
   // 4. Gate addition — an unknown gate id in a W1 conditional is caught at introduction.
   it("gate addition: an unknown spawn gate id in W1 hard-fails", () => {
     const mutated = fixture().replace('...At("714014285")&&{', '...At("999999999")&&{X_KEY:"1"},...At("714014285")&&{');
@@ -972,7 +1011,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
 
   // 8. gates:null — env null, and NO spurious spawn flags (the fcache flag covers it).
   it("gates null: env null with no spurious spawn flags", () => {
-    expect(deriveSpawnEnv(fixture(), null)).toEqual({ env: null, flags: [] });
+    expect(deriveSpawnEnv(fixture(), null)).toEqual({ env: null, flags: [], keys: [], spreadCount: 0 });
   });
 
   // 9. Stale allowlist NOTE — an allowlist key absent from all windows emits a non-blocking NOTE.
