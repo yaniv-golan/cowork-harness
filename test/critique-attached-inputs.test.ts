@@ -104,6 +104,25 @@ describe("Attached inputs evidence section", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
+  it("surfaces UNKNOWN (not '(none)') when the uploads dir can't be read — a read fault is not 'no attachments'", () => {
+    // Point uploadsHostDir at a FILE, not a dir → readdirSync throws ENOTDIR (a genuine read fault,
+    // deterministically, no chmod/root dependency). Conflating this with "(none)" would tell the evaluator
+    // "the agent correctly saw no file" when the truth is UNKNOWN — the confabulation-vs-correct distinction
+    // this whole section exists to protect.
+    const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
+    const notADir = join(runDir, "uploads-is-a-file");
+    writeFileSync(notADir, "x");
+    const ctx: VmPathContext = { sessionId: "sess-abc", uploadsHostDir: notADir, folders: new Map() };
+    writeVmPathContextFile(runDir, ctx, "hostloop");
+    const skillDir = makeSkillDir();
+    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
+    expect(section.body).toMatch(/could not be read|UNKNOWN/);
+    expect(section.body).not.toBe("(none)"); // must NOT read as "correctly no attachments"
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
   it("reports '(none)' when the uploads dir referenced by mounts.json is empty and there are no folders", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     const uploadsDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-uploads-"));
