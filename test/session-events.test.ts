@@ -42,8 +42,8 @@ describe("parseMessage system-subtype catch-all", () => {
       subtype: "code_change_published",
       data: { url: "https://github.com/o/r/pull/1", provider: "github", repo: "o/r", identifier: "1" },
     });
-    // never a control_request (the only subtype class that can hard-fail a run on non-recognition)
-    expect(evs.every((e) => e.type !== "decision_request")).toBe(true);
+    // it parses into exactly the system_event, never an error / infra_error event that would taint the run
+    expect(evs.every((e) => e.type !== "error" && e.type !== "infra_error")).toBe(true);
   });
 
   it("degrades vcs_state_changed to a system_event (real wire shape), independently of the PR event", () => {
