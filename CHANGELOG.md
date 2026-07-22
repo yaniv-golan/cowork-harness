@@ -53,6 +53,12 @@ All notable changes to this project are documented here. The format is based on
   (`EACCES`/`ENOTDIR`/…) collapsed to the same `(none)` as a legitimately-absent one — telling the
   evaluator "the agent correctly saw no file" when attachment presence was actually UNKNOWN. It now
   distinguishes `ENOENT` (absent) from a genuine read fault and surfaces the uncertainty loudly.
+- **critique flags a partly-corrupt archived turn-1 transcript instead of grading it as clean.**
+  `readTurn1Transcript` skipped malformed JSONL rows (resilient) but returned `degraded: false` on the
+  first valid transcript record regardless — so archive corruption vanished from evidence health and the
+  evaluator graded a silently-incomplete transcript as solid ground truth. It now scans the whole
+  (turn-1-only) archive and sets `turn1SliceDegraded` when a malformed row was skipped or the archive
+  doesn't hold exactly one transcript record; the transcript is still delivered, just flagged.
 
 ## [1.7.0] — 2026-07-22
 

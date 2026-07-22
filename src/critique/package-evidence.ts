@@ -30,17 +30,31 @@ function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: st
   const archived = turnArtifactPath(runDir, 1, "run.jsonl");
   if (existsSync(archived)) {
     try {
+      // Resilient BUT honest: skip malformed lines (one bad line must not sink the read) yet COUNT them,
+      // and count transcript records. A partly-corrupt archive (a skipped malformed row) or an ambiguous
+      // one (≠ 1 transcript record) means the transcript's completeness is UNKNOWN — returning it as
+      // `degraded: false` would let the evaluator grade a silently-incomplete view as clean ground truth,
+      // the exact quiet degradation `turn1SliceDegraded` exists to surface. The whole (turn-1-only) archive
+      // is already read into memory, so scanning every line costs no extra I/O.
+      let malformed = 0;
+      let transcript: string | undefined;
+      let transcriptCount = 0;
       for (const line of readFileSync(archived, "utf8").split("\n")) {
         if (!line.trim()) continue;
         let obj: unknown;
         try {
           obj = JSON.parse(line);
         } catch {
-          continue; // one malformed line must not sink the whole read
+          malformed++;
+          continue;
         }
         const rec = obj as { t?: unknown; text?: unknown };
-        if (rec.t === "transcript" && typeof rec.text === "string") return { text: rec.text, degraded: false };
+        if (rec.t === "transcript" && typeof rec.text === "string") {
+          transcriptCount++;
+          if (transcript === undefined) transcript = rec.text;
+        }
       }
+      if (transcript !== undefined) return { text: transcript, degraded: malformed > 0 || transcriptCount !== 1 };
     } catch {
       /* fall through to the slice fallback below */
     }
