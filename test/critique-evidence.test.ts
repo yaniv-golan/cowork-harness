@@ -49,6 +49,14 @@ describe("mechanical citation grounding", () => {
     expect(citationResolves(pkg, "never consulted the tier table")).toBe(false); // not in the package
   });
 
+  it("is CASE-sensitive — a case-altered citation is paraphrase and does NOT resolve (the verbatim gate)", () => {
+    // The package says "container fidelity tier" (lowercase). Folding case would let a paraphrase through
+    // the grounding gate — the principal defense against evaluator hallucination.
+    expect(citationResolves(pkg, "Container Fidelity Tier")).toBe(false); // case changed → not verbatim
+    expect(citationResolves(pkg, "the container fidelity tier")).toBe(true); // exact case still resolves
+    expect(citationResolves(pkg, "the   container   fidelity   tier")).toBe(true); // whitespace reflow still tolerated
+  });
+
   it("rejects trivially-short citations that would match by accident", () => {
     expect(citationResolves(pkg, "the")).toBe(false);
   });

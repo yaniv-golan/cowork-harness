@@ -43,6 +43,11 @@ All notable changes to this project are documented here. The format is based on
   independent per-stream counters, so a looping or hostile child splitting output across both streams could
   buffer ~2× the documented cap before either tripped. It now charges both streams against a single budget
   and slices the terminal chunk to the remaining room, so captured output never exceeds the cap.
+- **`critique`'s verbatim citation-grounding is now case-sensitive.** The mechanical check that drops any
+  finding whose cited evidence is not a verbatim excerpt normalized whitespace AND folded case — so a
+  case-altered (paraphrased) citation resolved as "grounded," weakening the principal defense against
+  evaluator hallucination. It now matches case-exact; whitespace reflow stays tolerated (models reflow
+  spacing when quoting — they don't change case).
 
 ## [1.7.0] — 2026-07-22
 
