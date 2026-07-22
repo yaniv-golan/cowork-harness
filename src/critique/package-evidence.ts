@@ -95,8 +95,17 @@ function listAttachedInputs(runDir: string): string {
       }
       lines.push(`${name} (${sizeNote})`);
     }
-  } catch {
-    /* uploads dir absent/unreadable — no uploads to list, not an error */
+  } catch (err) {
+    // ENOENT = the uploads dir was never created (legitimately no uploads) → nothing to list. ANY OTHER
+    // failure (EACCES / ENOTDIR / EIO / …) means we could NOT determine what was attached — rendering
+    // "(none)" there would tell the evaluator "there was correctly no file" when the truth is UNKNOWN,
+    // the exact conflation this section exists to prevent (see the header). Surface it loudly instead.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      lines.push(
+        `(uploads directory could not be read: ${(err as NodeJS.ErrnoException).code ?? "error"} — ` +
+          `attachment presence UNKNOWN, not confirmed absent)`,
+      );
+    }
   }
   for (const name of folderNames) lines.push(`${name} (connected folder)`);
 

@@ -48,6 +48,11 @@ All notable changes to this project are documented here. The format is based on
   case-altered (paraphrased) citation resolved as "grounded," weakening the principal defense against
   evaluator hallucination. It now matches case-exact; whitespace reflow stays tolerated (models reflow
   spacing when quoting — they don't change case).
+- **critique's "Attached inputs" evidence no longer reports `(none)` when the uploads dir is unreadable.**
+  `listAttachedInputs` caught every `readdirSync` failure identically, so an unreadable uploads dir
+  (`EACCES`/`ENOTDIR`/…) collapsed to the same `(none)` as a legitimately-absent one — telling the
+  evaluator "the agent correctly saw no file" when attachment presence was actually UNKNOWN. It now
+  distinguishes `ENOENT` (absent) from a genuine read fault and surfaces the uncertainty loudly.
 
 ## [1.7.0] — 2026-07-22
 
