@@ -667,12 +667,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    `mcp__workspace__bash` alias, so a "sub-agent used no shell" check must glob **both** `Bash` and
    `mcp__workspace__*` to hold across every tier.
 
-6. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It's a post-hoc count
-   assertion: passing means "happened to dispatch ≤N this run," nothing more. Cowork imposes **no**
-   in-conversation `Task`-dispatch cap — gate `1648655587`'s `{perTask:1, global:3}` governs the
-   separate scheduled/cron-task session scheduler, not the `Task` tool (binary-verified; details in
-   `SPEC.md` §10 — repo-only). So there is no "skip-on-cap" for the harness to reproduce; use this key
-   only to catch a fan-out you don't want.
+6. **`dispatch_count_max` is your author-chosen budget UNDER Cowork's production cap, not a
+   reproduction of it.** It's a post-hoc count assertion: passing means "happened to dispatch ≤N this
+   run." Cowork DOES cap `Task` fan-out **agent-side** (`taskRegistry`: concurrent **20** /
+   per-session **200**, landed 2.1.212/2.1.217) — SEPARATE from the scheduled-task session limiter
+   (gate `1648655587`'s `{perTask:1, global:3}`, a different mechanism; binary-verified, `SPEC.md` §10
+   — repo-only). The harness **inherits** the production cap by spawning the real agent binary, so a
+   `dispatch_count_max` pass means "your tighter budget held," not "near a real limit"; use it to catch
+   a fan-out you don't want.
 
 7. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.

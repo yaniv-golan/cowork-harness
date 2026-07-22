@@ -206,7 +206,7 @@ skill that echoes or pattern-matches its own cwd.
 
 ---
 
-## Gate `1648655587` is the scheduled-task session limiter — no in-conversation Task cap exists
+## Gate `1648655587` is the scheduled-task session limiter — distinct from the agent-side Task fan-out cap
 
 **What the gate actually is (binary-verified 2026-07-04, asar 1.18286.0):** gate `1648655587`
 (`{perTask:1, global:3}`) governs Cowork's **scheduled/recurring (cron) task** scheduler (`class
@@ -215,16 +215,22 @@ L9t` "[ScheduledTasks]"), NOT the in-conversation `Task` tool. It skips launchin
 sessions globally**. This corrects an earlier mislabeling of this gate as an in-conversation
 "Task-dispatch rate-limiter."
 
-**Real Cowork behaviour for the `Task` tool:** none of the above applies — the Desktop imposes **no
-concurrency cap** on in-conversation `Task`-tool sub-agent fan-out (the `Task` PreToolUse hook only
-blocks `run_in_background`). So a skill that fans out many sub-agents in one conversation is not
-throttled in production either.
+**Real Cowork behaviour for the `Task` tool:** the scheduled-task limiter does not apply, but `Task`
+fan-out IS capped **agent-side** (`taskRegistry`, binary-verified agent 2.1.217), a separate mechanism:
+a **concurrent** cap (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, default **20**; error
+`subagent_concurrency_cap`; bypassed under gate `tengu_amber_kestrel` or ultracode x-high effort; landed
+2.1.217) and a **per-session** cap (`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION`, default **200**; error
+`subagent_count_cap`; present since ≤2.1.215), with nesting off by default (depth 1, gate
+`tengu_hazel_trellis`). So a skill that fans out past those limits IS throttled in production.
 
-**Harness behaviour:** the harness runs a single foreground session and has no scheduled-task
-scheduler, so gate `1648655587` has **no applicable surface** to reproduce; it is pinned only as a
-sync drift-sentinel (`src/sync/cowork-sync.ts`). There is no production Task-fan-out cap to be
-unfaithful to. `dispatch_count_max` (`src/assert.ts`) remains a useful **author-chosen** budget
-assertion — catch a fan-out you don't want — not enforcement of a production cap.
+**Harness behaviour — faithful by inheritance:** the harness runs a single foreground session and has no
+scheduled-task scheduler, so gate `1648655587` has **no applicable surface** to reproduce (pinned only as
+a sync drift-sentinel, `src/sync/cowork-sync.ts`). The `taskRegistry` fan-out caps, by contrast, ARE in
+effect: Desktop sets none of the cap env vars, so the real agent uses the defaults, and the harness
+inherits them by spawning the same agent binary (it sets neither var) — a run that fans out past the cap
+hits the same `subagent_concurrency_cap`/`subagent_count_cap` error real Cowork does. `dispatch_count_max`
+(`src/assert.ts`) remains a useful **author-chosen** budget assertion — your tighter budget under that
+production ceiling — not a reproduction of the cap.
 
 ---
 

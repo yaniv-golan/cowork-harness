@@ -56,9 +56,11 @@ export const PINNED_GATES: Record<string, string> = {
   "1143815894": "hostLoop", // loop decision (decideLoopFromBaseline)
   // Binary-verified 2026-07-04 (asar 1.18286.0, class L9t "[ScheduledTasks]"): the SCHEDULED-TASK
   // (cron) session limiter (<=1 concurrent session per scheduled task, <=3 concurrent scheduled-task
-  // sessions globally), NOT an in-conversation Task-tool dispatch cap; the Desktop imposes no cap on
-  // Task-tool fan-out at all. Formerly mislabeled `taskDispatchLimiter` — baselines captured before
-  // the rename keep the old label in their provenance.gates as a historical release fact.
+  // sessions globally), NOT an in-conversation Task-tool dispatch cap. In-conversation Task fan-out is
+  // capped SEPARATELY, agent-side (taskRegistry: concurrent 20 / per-session 200, agent >=2.1.212/2.1.217
+  // — see SPEC §10), which the harness inherits by spawning the real agent binary. Formerly mislabeled
+  // `taskDispatchLimiter` — baselines captured before the rename keep the old label in their
+  // provenance.gates as a historical release fact.
   "1648655587": "scheduledTaskSessionLimiter",
   "1978029737": "coworkRuntimeConfig", // web_fetch routing + workspace knobs
   "583857784": "bridgeSdkTransport", // SDK control-protocol transport

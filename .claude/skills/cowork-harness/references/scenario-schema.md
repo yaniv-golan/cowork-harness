@@ -269,7 +269,7 @@ same set live from the schema.
 | `subagent_dispatched: <regex>` | a sub-agent whose `dispatchAgentType`, binary-*resolved* `resolvedAgentType`, **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the substring `contains` — `match` (optional regex over `dispatchAgentType`/`resolvedAgentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it (existence check, not "all"); a miss against an output that was **truncated at the assert cap** reports evidence-unavailable instead of a proven absence — the substring could lie past the cut |
-| `dispatch_count_max: <N>` | at most N sub-agents dispatched — an author-chosen budget (Cowork imposes no in-conversation Task-dispatch cap; records only, enforces nothing — see gotcha 12) |
+| `dispatch_count_max: <N>` | at most N sub-agents dispatched — your author-chosen budget under Cowork's agent-side fan-out cap (concurrent 20 / per-session 200, inherited by the harness); records only, does not itself enforce — see gotcha 12 |
 | `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
 | `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
 | `skill_available: <regex>` | a staged skill's id matched the regex (offered, not necessarily invoked — see `skill_triggered` for invocation) — content-class: the id list comes from the agent's init `skills` listing, so it replays from the frozen init event (id-only; the `whenToUse` enrichment is live-disk and thus absent on replay, but the id is what's matched); evidence-unavailable only if `RunResult.context.availableSkills` is absent entirely (an older cassette recorded before the available-skills listing was captured) |
@@ -530,11 +530,12 @@ reference omits). Neither list is a strict superset of the other — reach for t
 11. **`subagent_declared_but_unused` fires on declared-but-didn't-use-THAT-tool**, even if the
     sub-agent used other tools.
 
-12. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It records the count
-    and asserts on it; passing means "dispatched ≤N this run," not "the harness capped it." Cowork
-    imposes no in-conversation Task-dispatch cap to reproduce — gate `1648655587`'s
-    `{perTask:1, global:3}` is the scheduled/cron-task session limiter, a different mechanism
-    (binary-verified; SPEC §10).
+12. **`dispatch_count_max` is your author-chosen budget under Cowork's production cap, not a
+    reproduction of it.** It records the count and asserts on it; passing means "dispatched ≤N this
+    run," not "the harness capped it." Cowork DOES cap `Task` fan-out agent-side (`taskRegistry`:
+    concurrent 20 / per-session 200, landed 2.1.212/2.1.217), which the harness inherits by spawning the
+    real agent binary — SEPARATE from gate `1648655587`'s `{perTask:1, global:3}` scheduled/cron-task
+    session limiter, a different mechanism (binary-verified; SPEC §10).
 
 13. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
     assertions need `container`+. Fails loud by design.

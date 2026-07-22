@@ -360,8 +360,16 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   host **SKIPS** launching a scheduled-task *session* that would exceed the cap
   (`recordSkipAndEmit`/`PerTaskLimit`|`GlobalLimit` — not queue, not error): **≤1 concurrent session
   per scheduled task** and **≤3 concurrent scheduled-task sessions globally** (`_pendingTaskDispatches`
-  included). It does **not** cap in-conversation `Task`-tool sub-agent fan-out — the Desktop imposes
-  no such cap at all (the `Task` PreToolUse hook only blocks `run_in_background`). The harness runs a
+  included). It does **not** govern in-conversation `Task`-tool sub-agent fan-out — that is capped
+  **separately, agent-side** (`taskRegistry`, binary-verified in agent 2.1.217): a **concurrent** cap
+  (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, default **20**; error `subagent_concurrency_cap` "Do not
+  retry"; bypassed under gate `tengu_amber_kestrel` or ultracode x-high effort; landed 2.1.217) and a
+  **per-session** cap (`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION`, default **200**; error
+  `subagent_count_cap`; present since ≤2.1.215), with nesting **off by default** (depth 1, gate
+  `tengu_hazel_trellis`, error `subagent_depth_cap`). Desktop sets none of these env vars, so the agent
+  uses the defaults — and the harness **inherits** them by spawning the same agent binary (it sets
+  neither var), so this is faithful, not reproduced in harness code. The `Task` PreToolUse hook
+  additionally blocks `run_in_background`. The harness runs a
   single foreground session with no scheduled-task scheduler, so this gate has **no applicable
   surface** to reproduce; it is pinned only as a sync drift-sentinel. `dispatch_count_max` remains an
   author-chosen budget assertion, not enforcement of this gate.

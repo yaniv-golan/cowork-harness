@@ -1212,7 +1212,7 @@ function check(
         : ctx.subagents.length <= a.dispatch_count_max
           ? ok()
           : fail(
-              `dispatched ${ctx.subagents.length} sub-agents, max ${a.dispatch_count_max} (author-chosen budget; Cowork imposes no in-conversation Task-dispatch cap — see SPEC §10)`,
+              `dispatched ${ctx.subagents.length} sub-agents, max ${a.dispatch_count_max} (author-chosen budget under Cowork's agent-side fan-out cap — see SPEC §10)`,
             ),
     );
   if (a.skill_triggered !== undefined) {

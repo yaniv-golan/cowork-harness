@@ -357,7 +357,7 @@ export const Assertion = z.strictObject({
     .nonnegative()
     .optional()
     .describe(
-      "total sub-agent dispatches ≤ N — an author-chosen budget; Cowork imposes no in-conversation Task-dispatch cap (see SPEC §10)",
+      "total sub-agent dispatches ≤ N — an author-chosen budget under Cowork's agent-side fan-out cap, not a reproduction of it (see SPEC §10)",
     ),
   skill_triggered: z
     .string()

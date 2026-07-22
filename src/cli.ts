@@ -2064,8 +2064,9 @@ const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
   {resolvedAgentType, pathDenials, delivered}. NO new data model — every field is a projection of the same
   RunResult 'skill' already produces (subagents[]/fileToolAttempts/pathDenials/toolResults).
 
-  "One dispatch" is PROMPT-SCOPED, not enforced by the harness: Cowork itself imposes no in-conversation
-  Task-dispatch cap. The probe just ASSERTS it (subagent_dispatched + dispatch_count_max: 1) so a prompt
+  "One dispatch" is PROMPT-SCOPED: it is well under Cowork's agent-side fan-out cap (concurrent 20 /
+  per-session 200, which the harness inherits), so the probe just ASSERTS it (subagent_dispatched +
+  dispatch_count_max: 1) so a prompt
   that fanned out to several dispatches shows up as a failed verdict instead of a silently-averaged one.
 
 Fidelity  --fidelity <container|microvm|hostloop>   (default: hostloop — path-fidelity, this probe's whole
