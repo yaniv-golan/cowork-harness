@@ -6,7 +6,7 @@ import { findLatestRunForScenario } from "../src/run/latest-run.js";
 import { indexRowFromResult, reindexFromRunsTree } from "../src/run/run-index.js";
 import { buildInspectView } from "../src/run/inspect-view.js";
 import { packageEvidence } from "../src/critique/package-evidence.js";
-import { buildFilesView, buildUsageView } from "../src/run/trace-view.js";
+import { buildFilesView, buildUsageView, buildGateTrace } from "../src/run/trace-view.js";
 import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 
 // LAYER 2 OF THE SINGLE-SOURCE GUARD: assert RESOLVED BEHAVIOUR, not source shape.
@@ -171,17 +171,61 @@ describe("no reader falls back to the run-dir root", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  // NOT PROBED, DELIBERATELY: `buildGateTrace`'s provenance pairing. Its rows come from `decision`
-  // protocol frames, which this fixture cannot synthesise, so a probe here would assert "sentinel absent"
-  // against an empty row set — blind, and claiming coverage it does not have. That is the exact defect
-  // this file has now shipped three times, so it is recorded as a gap rather than papered over. The path
-  // is covered positively by trace.test.ts's gate-provenance tests; what is missing is the
-  // prefer-turn-fall-back-to-root regression, which those cannot see.
-  //
   // `trace`'s readers are UNGATED by design — trace must keep working on a pre-layout dir, which is why
   // every other refusal points at it. That makes them the same risk profile as packageEvidence: no
   // refusal fires first to mask a root read. Each site's own comment records that a pre-seam root read
   // here was "guard-invisible".
+  it("buildGateTrace never surfaces the root decoy's provenance", () => {
+    // `buildGateTrace` earlier claimed to be un-synthesizable and was recorded as a gap. That was wrong —
+    // trace.test.ts synthesises exactly the control_request frame it needs, in this same repo. Its
+    // answeredBy/model come from the LATEST turn's result.json (guard-invisible if a reader falls back to
+    // the root), so it is the same escape-history profile as packageEvidence and must be probed.
+    const d = join(root, "gate", "sess-1");
+    mkdirSync(join(d, "turns", "1"), { recursive: true });
+    writeFileSync(
+      join(d, "events.jsonl"),
+      [
+        JSON.stringify({
+          type: "control_request",
+          request_id: "uuid-1",
+          request: {
+            subtype: "can_use_tool",
+            tool_name: "AskUserQuestion",
+            tool_use_id: "toolu_g",
+            input: { questions: [{ question: "Q?", options: [{ label: "A" }] }] },
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          message: { content: [{ type: "tool_result", tool_use_id: "toolu_g", is_error: false, content: "ok" }] },
+        }),
+        JSON.stringify({ type: "result", is_error: false }),
+      ].join("\n") + "\n",
+    );
+    // the REAL provenance under turns/1
+    writeFileSync(
+      join(d, "turns", "1", "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "real-model", detail: { "Q?": "A" } },
+        ],
+      }),
+    );
+    // a root decoy carrying poisoned provenance a fall-back reader would surface instead
+    writeFileSync(
+      join(d, "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: SENTINEL, model: SENTINEL, detail: { "Q?": "A" } },
+        ],
+      }),
+    );
+    expect(
+      JSON.stringify(buildGateTrace(join(d, "events.jsonl"))),
+      "the root decoy's provenance surfaced through buildGateTrace",
+    ).not.toContain(SENTINEL);
+  });
+
   for (const [name, build] of [
     ["buildFilesView (--view files)", buildFilesView],
     ["buildUsageView (--view usage)", buildUsageView],

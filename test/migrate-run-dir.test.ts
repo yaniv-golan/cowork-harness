@@ -669,3 +669,100 @@ describe("assessRunDir — an EMPTY archive-named resources file belongs to its 
     expect(assessRunDir(d).kind).toBe("plan");
   });
 });
+
+describe("assessRunDir — root resources follows rootArtifactTurn, not highestTurn-1", () => {
+  it("moves a gap-filling root resources file to ITS turn, not the second-highest", () => {
+    // The resources planner used `highestTurn - 1` unconditionally — the cumulative-split model, correct
+    // only when root artifacts ARE the latest turn. When root artifacts fill a GAP (a pre-layout dir
+    // resumed twice: root turn-1 beside turns/2 and turns/3), result/run/trace correctly go to turns/1 but
+    // resources went to turns/2 — the same "telemetry into a turn it never produced" defect the previous
+    // fix closed for archives, reappearing for root files.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"one"}`);
+    write(d, "trace.json", "{}");
+    utimesSync(join(d, "result.json"), B / 1000, B / 1000);
+    for (const t of [2, 3]) {
+      write(d, `turns/${t}/result.json`, RESULT(t));
+      write(d, `turns/${t}/run.jsonl`, `{"t":"transcript","text":"t${t}"}`);
+    }
+    write(d, "resources.jsonl", `{"ts":${B - 2000},"rss":1}\n`); // a turn-1 sample
+
+    const a = assessRunDir(d);
+    expect(a.kind, `expected a plan, got ${a.kind === "refuse" ? a.reason : a.kind}`).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind === "move" ? res.to.slice(d.length) : "(not a plain move)", "turn-1 telemetry landed in the wrong turn").toBe(
+      "/turns/1/resources.jsonl",
+    );
+  });
+
+  it("moves an EMPTY gap-filling root resources file to its turn too", () => {
+    const d = runDir();
+    write(d, "result.json", RESULT(1));
+    write(d, "run.jsonl", `{"t":"transcript","text":"one"}`);
+    write(d, "trace.json", "{}");
+    write(d, "turns/2/result.json", RESULT(2));
+    write(d, "turns/2/run.jsonl", `{"t":"transcript","text":"two"}`);
+    write(d, "resources.jsonl", ""); // empty, gap-filling → belongs to turn 1
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    const res = a.plan.ops.find((o) => (o.kind === "move" ? o.from : "").endsWith("resources.jsonl"));
+    expect(res?.kind === "move" ? res.to.slice(d.length) : "(not a move)").toBe("/turns/1/resources.jsonl");
+  });
+
+  it("still SPLITS a cumulative root resources file when root artifacts ARE the latest turn", () => {
+    // The case highestTurn-1 was written for: a pre-layout dir NOT yet resumed under the new layout —
+    // just root artifacts + archives, resources spanning the boundary. Must still split.
+    const d = runDir();
+    const B = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(2));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), B / 1000, B / 1000);
+    write(d, "resources.jsonl", [`{"ts":${B - 2000},"rss":1}`, `{"ts":${B + 1500},"rss":3}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind).toBe("plan");
+    if (a.kind !== "plan") return;
+    expect(
+      a.plan.ops.some((o) => o.kind === "split"),
+      "a genuinely cumulative root file was not split",
+    ).toBe(true);
+  });
+});
+
+describe("assessRunDir — a cumulative resources file spanning ≥3 turns", () => {
+  it("REFUSES rather than lumping turn-1 samples into turn 2", () => {
+    // planResources splits at ONE boundary (turn N-1's completion) on the assumption a cumulative file
+    // spans only the last two turns. That is never validated — and on a dir with archives 1 and 2 plus
+    // root turn-3 artifacts, a resources file with a turn-1 sample got that sample put in turns/2. The
+    // evidence to refuse is in hand: any sample at or before turn (N-2)'s completion proves a third turn
+    // is in the file, which a single boundary cannot separate. Refuse rather than mis-attribute.
+    const d = runDir();
+    const T1 = new Date("2026-01-15T10:00:00Z").getTime();
+    const T2 = new Date("2026-01-15T11:00:00Z").getTime();
+    write(d, "result.turn-1.json", RESULT(1));
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-2.json", RESULT(2));
+    write(d, "run.turn-2.jsonl", TRANSCRIPT);
+    write(d, "result.json", RESULT(3));
+    write(d, "run.jsonl", TRANSCRIPT);
+    utimesSync(join(d, "result.turn-1.json"), T1 / 1000, T1 / 1000);
+    utimesSync(join(d, "result.turn-2.json"), T2 / 1000, T2 / 1000);
+    // samples in all three turns
+    write(
+      d,
+      "resources.jsonl",
+      [`{"ts":${T1 - 1000},"rss":1}`, `{"ts":${T2 - 1000},"rss":2}`, `{"ts":${T2 + 1000},"rss":3}`].join("\n") + "\n",
+    );
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a ≥3-turn cumulative file was split at one boundary, mis-attributing the earliest turn").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/resources|turn|span/i);
+  });
+});

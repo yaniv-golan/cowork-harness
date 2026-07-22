@@ -161,6 +161,25 @@ function classifySamples(path: string, boundaryMs: number): SampleSpread {
   return rows === 0 ? "empty" : "unusable";
 }
 
+/** True when the file has any sample at or before `boundaryMs` — evidence of a turn earlier than the
+ *  split can attribute. Unparseable lines contribute nothing (they cannot prove an early turn). */
+function sampleAtOrBefore(path: string, boundaryMs: number): boolean {
+  try {
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      if (!line) continue;
+      try {
+        const v = (JSON.parse(line) as { ts?: unknown }).ts;
+        if (typeof v === "number" && v <= boundaryMs) return true;
+      } catch {
+        /* unparseable — no evidence */
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 /** Plan the one artifact whose attribution is decided by CONTENT rather than by its filename.
  *
  *  `owningTurn` is the turn the file is nominally associated with — the archive's own N, or `maxArchive`
@@ -185,6 +204,19 @@ function planResources(
 
   const lowDest = turnArtifactPath(outDir, owningTurn, "resources.jsonl");
   const highDest = turnArtifactPath(outDir, owningTurn + 1, "resources.jsonl");
+
+  // A SINGLE BOUNDARY CAN ONLY SEPARATE TWO TURNS. This splits between `owningTurn` and `owningTurn+1`;
+  // a sample at or before turn `owningTurn-1`'s completion belongs to a THIRD, earlier turn that one
+  // boundary cannot carve out — the file was assumed to span only the last two turns, and that assumption
+  // was never checked. The evidence is in hand: if the prior turn's completion time is known and any
+  // sample predates it, refuse rather than lump earlier turns' samples into `owningTurn`.
+  const priorBoundaryMs = completionMtimeOf(outDir, owningTurn - 1, rootResultIsTurn);
+  if (priorBoundaryMs !== undefined && sampleAtOrBefore(from, priorBoundaryMs))
+    return {
+      kind: "refuse",
+      reason: `${rel} spans more than two turns (a sample predates turn ${owningTurn - 1}'s completion) — a single boundary cannot attribute it; refusing rather than mis-splitting`,
+    };
+
   const spread = classifySamples(from, boundaryMs);
 
   if (spread === "unusable")
@@ -315,23 +347,30 @@ export function assessRunDir(outDir: string): Assessment {
   for (const artifact of rootArtifacts) {
     const from = join(outDir, artifact);
 
-    // A CUMULATIVE resources file must be split, not carried. On the 12 real archive dirs
-    // `resources.jsonl` spans BOTH turns (they predate `beginTurn`'s resources rename): the first sample
-    // lands seconds before turn 1 completed and the last during turn 2. Carrying it whole into one slot
-    // attributes turn-1 samples to turn 2 — bytes preserved, telemetry wrong.
-    // A root cumulative resources file spans the LAST TWO turns, so its boundary is the completion of the
-    // second-highest — `highest - 1`, whether the highest is a root turn (maxArchive + 1, pre-migration)
-    // or an existing `turns/<N>/` (post-crash, where the archives have already moved). Deriving this from
-    // root archives alone made the branch unreachable on the post-crash shape, which is how a cumulative
-    // file got carried whole into one turn with a torn destination accepted as telemetry.
+    // A root `resources.jsonl` is one of two things, and only one of them is cumulative:
+    //
+    //   - CUMULATIVE across the last two turns, when the root artifacts ARE the latest turn (a pre-layout
+    //     dir not yet resumed under the new layout — root turn N beside archives 1..N-1). It predates
+    //     `beginTurn`'s per-turn resources rename, so its first sample lands just before turn N-1 completed
+    //     and its last during turn N; carrying it whole attributes earlier samples to the wrong turn. This
+    //     is the case that must be SPLIT at turn N-1's completion.
+    //
+    //   - THAT TURN'S OWN, when the root artifacts fill a GAP below the highest turn (a pre-layout dir
+    //     resumed one or more times: root turn 1 beside turns/2, turns/3, …). Here `resources.jsonl` is
+    //     turn 1's file, full stop — splitting it against turn (highest-1) sent turn-1 samples into a later
+    //     turn, exactly the misplacement the archive path was fixed for. It is a plain move to
+    //     `rootArtifactTurn`, handled by the ordinary root-artifact rules below.
+    //
+    // The discriminator is whether the root artifacts are the latest turn.
     const highestTurn = Math.max(rootTurn, ...(turns.length ? turns : [0]));
-    const priorTurn = highestTurn - 1;
-    if (artifact === "resources.jsonl" && priorTurn > 0) {
-      const r = planResources(outDir, from, priorTurn, rootArtifactTurn);
+    const rootIsLatest = rootArtifactTurn === highestTurn;
+    if (artifact === "resources.jsonl" && rootIsLatest && highestTurn - 1 > 0) {
+      const r = planResources(outDir, from, highestTurn - 1, rootArtifactTurn);
       if (r.kind === "refuse") return r;
       ops.push(r.op);
       continue;
     }
+    // else: falls through to the ordinary root-artifact placement, which uses rootArtifactTurn.
 
     if (turns.length === 0) {
       // No `turns/` yet: the per-dir mapping governs.
@@ -354,8 +393,10 @@ export function assessRunDir(outDir: string): Assessment {
     // own turn's artifact. So compare against the resolved slot only, and let everything else fall through
     // to placement. (That restriction was originally scoped to non-self-labeling artifacts; the shape
     // above shows an empty run.jsonl has the same problem, so it applies to all four.)
-    const identicalTo = turns.find((n) => sameBytes(from, turnArtifactPath(outDir, n, artifact)));
-    if (identicalTo !== undefined && identicalTo === rootArtifactTurn) {
+    // Compare against the RESOLVED slot directly, not find-first. A root trace identical to BOTH turns
+    // (two tool-less turns) resolves to `rootArtifactTurn` but find-first returned turn 1, so an artifact
+    // that WAS a duplicate of its own slot fell through to a spurious "neither a duplicate nor placeable".
+    if (sameBytes(from, turnArtifactPath(outDir, rootArtifactTurn, artifact))) {
       ops.push({ kind: "delete", path: from });
       continue;
     }
