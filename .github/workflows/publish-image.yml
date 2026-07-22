@@ -31,7 +31,7 @@ jobs:
   publish:
     runs-on: ubuntu-24.04-arm # linux/arm64 native build, matching Cowork's guest architecture
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # A red-CI tag must not overwrite the floating :2 tags packaged-Action consumers pull.
       # The publish gate must be no weaker than the merge gate (same rule as release.yml).
@@ -60,7 +60,7 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        uses: docker/login-action@c66a8fcb2472d4283042d726b2a061b43b3f49ab # v3.6.0
+        uses: docker/login-action@03c851098f316948386b8ff87f424ddf8c01536e # v3.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
