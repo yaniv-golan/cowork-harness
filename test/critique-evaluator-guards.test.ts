@@ -166,6 +166,19 @@ describe("F36: boundedSpawn enforces a wall-clock timeout and a byte cap (real c
     expect(outcome.code).toBeNull();
   }, 10000);
 
+  it("counts stdout+stderr against ONE combined cap (a child splitting output across both can't buffer ~2x)", async () => {
+    // 2000 bytes to EACH stream: neither alone exceeds the 3000 cap, but combined (4000) does. The old
+    // per-stream counters let this through (truncated:false, ~4000 buffered); the shared budget trips it.
+    const outcome = await boundedSpawn(
+      "node",
+      ["-e", "process.stdout.write('x'.repeat(2000)); process.stderr.write('y'.repeat(2000)); setTimeout(() => {}, 1000)"],
+      5000,
+      3000,
+    );
+    expect(outcome.truncated).toBe(true);
+    expect(outcome.stdout.length + outcome.stderr.length).toBeLessThanOrEqual(3000); // captured output never exceeds the cap
+  }, 10000);
+
   it("does not report timedOut/truncated for a quick, well-behaved child", async () => {
     const outcome = await boundedSpawn("node", ["-e", "process.stdout.write('ok')"], 5000, 1024 * 1024);
     expect(outcome.timedOut).toBe(false);

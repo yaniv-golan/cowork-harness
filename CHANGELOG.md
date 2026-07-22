@@ -39,6 +39,10 @@ All notable changes to this project are documented here. The format is based on
   prompt AND dropped the real flag, then ran a four-workload critique on the wrong input. The spaced form
   now fails loud and points at the equals escape hatch (`--prompt=<value>`) for a value that intentionally
   starts with `-`.
+- **`critique`'s subprocess byte cap is now one combined stdout+stderr budget.** `boundedSpawn` kept two
+  independent per-stream counters, so a looping or hostile child splitting output across both streams could
+  buffer ~2× the documented cap before either tripped. It now charges both streams against a single budget
+  and slices the terminal chunk to the remaining room, so captured output never exceeds the cap.
 
 ## [1.7.0] — 2026-07-22
 
