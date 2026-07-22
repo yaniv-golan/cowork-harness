@@ -20,6 +20,7 @@ jobs:
   build:
     name: build · typecheck · guards
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -107,6 +108,10 @@ jobs:
     name: unit tests (sharded)
     runs-on: ubuntu-latest
     needs: build
+    # Hard backstop: a hung shard fails here instead of running to GitHub's 6h default. A test that
+    # spawns a CLI subprocess which blocks (waiting on stdin / a gate / a channel) hangs SYNCHRONOUSLY,
+    # and vitest's per-test testTimeout cannot interrupt a blocked sync call — only a wall-clock kill can.
+    timeout-minutes: 12
     permissions:
       contents: read
     strategy:
@@ -125,7 +130,10 @@ jobs:
       - name: Fail LOUD if dist/cli.js is missing (never let skipIf false-green a shard)
         run: test -f dist/cli.js || { echo "::error::dist/cli.js missing after build — CLI-integration cases would silently skip."; exit 1; }
       - name: Unit tests — shard ${{ matrix.shard }}/4
-        run: npx vitest run --shard=${{ matrix.shard }}/4
+        # `timeout` bounds the whole shard: SIGTERM at 10 min, SIGKILL 30s later. This is the guard
+        # that turns an indefinite hang into a loud failure with the captured log — belt to the job's
+        # `timeout-minutes` suspenders. --preserve-status surfaces vitest's real exit code on a clean run.
+        run: timeout --preserve-status --signal=SIGTERM --kill-after=30s 600 npx vitest run --shard=${{ matrix.shard }}/4
 
   # ── Stage 1a: packaged Action self-test (uses: ./ against THIS commit, packed as a tarball —
   # never against whatever's currently published on npm) ─────────────────────────
@@ -260,6 +268,7 @@ jobs:
     name: boundary parity (L1 container)
     runs-on: ubuntu-24.04-arm # arm64 to match Cowork's linux/arm64 guest
     needs: build
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -301,6 +310,7 @@ jobs:
     name: scenario suite (mixed protocol/container, live inference)
     runs-on: ubuntu-24.04-arm
     needs: [boundary, test]
+    timeout-minutes: 30
     permissions:
       contents: read
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}

@@ -5,6 +5,22 @@ import { join } from "node:path";
 import { executeScenario, parseScenarioFile, beginTurn } from "../src/run/execute.js";
 import { ResourceSampler, foldResources } from "../src/runtime/resource-sampler.js";
 import { turnArtifactPath } from "../src/run/turn-layout.js";
+import { spawnSync } from "node:child_process";
+
+// protocol (L0) `executeScenario` spawns the host `claude` CLI (src/runtime/protocol.ts) — these tests
+// drive REAL runs, so without `claude` the spawn ENOENTs and the AgentSession awaits stdout that never
+// comes: an indefinite hang, NOT a failure (vitest's testTimeout can't interrupt a blocked spawn). Gate
+// the run-driving describes on `claude` being resolvable, exactly like the live lane
+// (test/live-contract.test.ts) — CI runners have no host `claude`, so they skip cleanly. The pure
+// ResourceSampler describe below needs no agent and always runs.
+const CLAUDE_BIN = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude";
+const CLAUDE_AVAILABLE = ((): boolean => {
+  try {
+    return !spawnSync(CLAUDE_BIN, ["--version"], { stdio: "ignore", timeout: 10_000 }).error;
+  } catch {
+    return false;
+  }
+})();
 
 // THE GAP THIS CLOSES.
 //
@@ -29,9 +45,9 @@ afterEach(() => {
   rmSync(runsRoot, { recursive: true, force: true });
 });
 
-/** A `protocol`-tier scenario: no real agent binary spawns, so this is token-free and needs no Docker.
- *  It still drives the REAL executeScenario startup/teardown, which is the whole point — and that takes
- *  longer than vitest's 5s default, hence the explicit per-test timeouts below. */
+/** A `protocol`-tier scenario. L0 spawns the HOST `claude` CLI (no Docker, no staged VM agent) — hence
+ *  the CLAUDE_AVAILABLE gate above. It drives the REAL executeScenario startup/teardown, which is the
+ *  whole point — and that takes longer than vitest's 5s default, hence the explicit per-test timeouts. */
 function protocolScenario(name: string) {
   const dir = mkdtempSync(join(tmpdir(), "layout-scn-"));
   const f = join(dir, `${name}.yaml`);
@@ -52,7 +68,7 @@ function sourcedProtocolScenario(name: string) {
   return parseScenarioFile(f);
 }
 
-describe("a REAL run produces the per-turn layout on disk", () => {
+describe.skipIf(!CLAUDE_AVAILABLE)("a REAL run produces the per-turn layout on disk", () => {
   it("writes turns/1/ with the per-turn artifacts, and NO root compat copy", async () => {
     const res = await executeScenario(protocolScenario("e2e-layout"), {});
     const outDir = res.outDir;
@@ -87,7 +103,7 @@ describe("a REAL run produces the per-turn layout on disk", () => {
   }, 60_000);
 });
 
-describe("a REAL two-turn resume — the actual path both shipped defects lived in", () => {
+describe.skipIf(!CLAUDE_AVAILABLE)("a REAL two-turn resume — the actual path both shipped defects lived in", () => {
   // Every other test in this suite (and every fabricated-dir test elsewhere) drives at most ONE turn.
   // Both shipped defects — turn 1 unaddressable on a mixed dir, and `currentTurn` going BACKWARDS
   // (2 -> 1) on a resume — are RESUME-path defects, so a single-turn e2e cannot catch either. This drives
@@ -165,7 +181,7 @@ describe("the sampler can actually WRITE where beginTurn puts it", () => {
   });
 });
 
-describe("resuming a PRE-LAYOUT dir does not destroy the prior turn", () => {
+describe.skipIf(!CLAUDE_AVAILABLE)("resuming a PRE-LAYOUT dir does not destroy the prior turn", () => {
   // The shape every published-1.6.0 run dir has on disk: the four artifacts at the root, no `turns/`.
   // A user upgrading to the per-turn layout and resuming an existing session hits exactly this path.
   //
