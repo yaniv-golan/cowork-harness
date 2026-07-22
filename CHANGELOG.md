@@ -19,10 +19,14 @@ All notable changes to this project are documented here. The format is based on
   signal `stats` and `status --latest-for` rank by) survive untouched, and it restores directory mtimes
   afterwards. An interrupted run records a journal outside the run dir and is finished by re-running the
   command. Anything it cannot resolve unambiguously — a root artifact that is neither a duplicate nor
-  placeable, telemetry whose turn boundary cannot be dated or that spans more than two turns, a dir with
+  placeable, telemetry whose turn boundary cannot be dated or that spans more than two turns or whose
+  samples would land in a turn no transcript or result evidences, a dir with
   no transcript at all — is **refused and named**. The one inference it makes is positional: an EMPTY file
   has no content to attribute, so it follows its position to an EVIDENCED turn (its own, by name or by
-  rootArtifactTurn) — never one it would mint. Exit `1` when anything was refused, so a CI caller sees unfinished work.
+  rootArtifactTurn when a root transcript or result exists to move there) — never one it would mint. The
+  same never-mint rule holds on the content path: a stray `resources.turn-N.jsonl` cannot manufacture
+  `turns/N/` whether it is empty or carries samples, and a fully-archived dir's trailing telemetry cannot
+  manufacture the next turn out of arithmetic alone. Exit `1` when anything was refused, so a CI caller sees unfinished work.
 
 - **`prune` skips scenarios with a migration in flight.** Between an interrupted migration and its
   recovery a run dir's mtime reflects the migration, not the run — and `prune` ranks keep-slots by that

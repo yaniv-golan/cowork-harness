@@ -161,12 +161,18 @@ function completionTable(
   return [...turnSet].sort((a, b) => a - b).map((turn) => ({ turn, completionMs: completionMtimeOf(outDir, turn, rootResultTurn) }));
 }
 
-/** Turns EVIDENCED by a transcript or result — the turns an empty resources file may be placed into.
- *  Deliberately excludes resources-only archives: a stray `resources.turn-5.jsonl` must never MINT turn 5. */
-function evidencedTurns(archives: Archive[], turns: number[], rootArtifactTurn: number): Set<number> {
+/** Turns EVIDENCED by a transcript or result — the only turns a resources file may be PLACED into,
+ *  whether by position (the empty-file gate) or by content (bucketed samples). Deliberately excludes
+ *  resources-only archives: a stray `resources.turn-5.jsonl` must never MINT turn 5 — not when empty, and
+ *  not by carrying samples that bucket past every dated completion into its own self-named table entry.
+ *  `rootArtifactTurn` counts ONLY when a root transcript or result exists to move there (`rootHasHome`):
+ *  without one it is arithmetic (maxArchive+1, or a gap), and placing telemetry by it mints the same
+ *  transcript-less `turns/<N>/` through a different channel — a fully-archived dir's trailing sample is
+ *  as likely the last real turn's own post-result sample as a phantom next turn's. */
+function evidencedTurns(archives: Archive[], turns: number[], rootArtifactTurn: number, rootHasHome: boolean): Set<number> {
   const s = new Set<number>(turns);
   for (const a of archives) if (a.stem !== "resources") s.add(a.turn);
-  s.add(rootArtifactTurn);
+  if (rootHasHome) s.add(rootArtifactTurn);
   return s;
 }
 
@@ -266,6 +272,18 @@ function planResourcesFile(
   if (!sawTimestamp)
     return { kind: "refuse", reason: `${rel} has no usable sample timestamps — refusing rather than attributing telemetry by guess` };
 
+  // Same rule as the empty gate, on the CONTENT path: a bucketed turn must be EVIDENCED (a transcript or
+  // result home). A resources-only archive puts its turn in the completion table — it can be undated tail
+  // there — but placing a file into it would MINT `turns/<N>/` holding nothing but telemetry: a turn with
+  // no transcript, which `listTurns` then reports as addressable. The sample could equally be the last
+  // real turn's trailing one; a stray filename must not steal it.
+  const unevidenced = [...turnsHit].filter((t) => !evidenced.has(t)).sort((a, b) => a - b);
+  if (unevidenced.length > 0)
+    return {
+      kind: "refuse",
+      reason: `${rel} has samples that would land in turn${unevidenced.length > 1 ? "s" : ""} ${unevidenced.join(", ")}, which no transcript or result evidences — refusing rather than minting a turn from telemetry alone`,
+    };
+
   const hit = [...turnsHit].sort((a, b) => a - b);
   if (hit.length === 1) return placeInto(hit[0]);
 
@@ -356,7 +374,8 @@ export function assessRunDir(outDir: string): Assessment {
   // One completion table for the whole directory. Every resources file — root and archive — buckets
   // against it, so there is a single notion of which turn a sample belongs to.
   const table = completionTable(outDir, archives, turns, rootArtifactTurn, rootArtifactTurn);
-  const evidenced = evidencedTurns(archives, turns, rootArtifactTurn);
+  const rootHasHome = existsSync(join(outDir, "run.jsonl")) || existsSync(join(outDir, "result.json"));
+  const evidenced = evidencedTurns(archives, turns, rootArtifactTurn, rootHasHome);
 
   for (const a of archives) {
     const from = join(outDir, a.file);

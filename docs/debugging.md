@@ -55,10 +55,12 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 >
 > **What it refuses vs. infers.** A directory it cannot resolve is **refused and named** — an artifact
 > that is neither a duplicate of its slot nor placeable, a turn stamp that disagrees with its destination,
-> two operations targeting one path, telemetry whose turn boundary cannot be dated, a directory it cannot
-> read. It never attributes telemetry by guess. The one inference it does make is positional: an **empty**
-> file carries no content to attribute, so it follows its position to an **evidenced** turn (a root file
-> to its own turn, an archive to the turn its name states) — never one that nothing else evidences.
+> two operations targeting one path, telemetry whose turn boundary cannot be dated or whose samples would
+> land in a turn no transcript or result evidences, a directory it cannot read. It never attributes
+> telemetry by guess, and it never creates a `turns/<N>/` that nothing but a resources file vouches for.
+> The one inference it does make is positional: an **empty** file carries no content to attribute, so it
+> follows its position to an **evidenced** turn (a root file to its own turn, an archive to the turn its
+> name states) — never one that nothing else evidences.
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your

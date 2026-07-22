@@ -740,8 +740,8 @@ describe("assessRunDir — root resources follows rootArtifactTurn, not highestT
 
 describe("assessRunDir — a cumulative resources file spanning ≥3 turns", () => {
   it("REFUSES rather than lumping turn-1 samples into turn 2", () => {
-    // planResources splits at ONE boundary (turn N-1's completion) on the assumption a cumulative file
-    // spans only the last two turns. That is never validated — and on a dir with archives 1 and 2 plus
+    // The old planner split at ONE boundary (turn N-1's completion) on the assumption a cumulative file
+    // spans only the last two turns. That was never validated — and on a dir with archives 1 and 2 plus
     // root turn-3 artifacts, a resources file with a turn-1 sample got that sample put in turns/2. The
     // evidence to refuse is in hand: any sample at or before turn (N-2)'s completion proves a third turn
     // is in the file, which a single boundary cannot separate. Refuse rather than mis-attribute.
@@ -835,22 +835,23 @@ describe("assessRunDir — resources attribution, table-driven properties", () =
 
   it("the property's UNDATED arm: an undated boundary in the span forces a refusal, never a silent placement", () => {
     // The generator above only makes DATED tables, which is why the round-5 undated-edge defects shipped
-    // green. This arm injects the ambiguity: a two-turn span where the earlier turn has no result to date
-    // its boundary MUST refuse — a silent placement here is the exact defect class.
+    // green. This arm injects the ambiguity. The FIRST version of this fixture put a root result stamped
+    // turn 3 beside turns/{1,2} — which refuses at the root-result stamp mismatch before the resources
+    // planner is ever reached, so it pinned nothing about attribution (a mutant that assigned across an
+    // undated boundary still passed it). This shape has NO root result: three turns exist, one carries the
+    // only date, and each arm leaves a straddling sample with more than one possible owner — so the
+    // refusal can only come from the resources rule itself.
     for (const datedTurn of [1, 2] as const) {
       const d = runDir(`sess-undated-${datedTurn}`);
       const C = new Date("2026-01-15T10:00:00Z").getTime();
-      // both turns exist; only `datedTurn` has a result. samples straddle C.
-      for (const t of [1, 2]) {
+      // three turns exist; only `datedTurn` has a result. samples straddle C.
+      for (const t of [1, 2, 3]) {
         write(d, `turns/${t}/run.jsonl`, `{"t":"transcript","text":"t${t}"}`);
         if (t === datedTurn) {
           write(d, `turns/${t}/result.json`, RESULT(t));
           utimesSync(join(d, `turns/${t}/result.json`), C / 1000, C / 1000);
         }
       }
-      // root artifacts are turn 3 so the resources file at root is cumulative over an undatable boundary
-      write(d, "result.json", RESULT(3));
-      write(d, "run.jsonl", `{"t":"transcript","text":"t3"}`);
       write(
         d,
         "resources.jsonl",
@@ -859,9 +860,18 @@ describe("assessRunDir — resources attribution, table-driven properties", () =
 `,
       );
       const a = assessRunDir(d);
-      // With one of turns 1/2 undated, at least one sample's turn is unprovable → refuse. Never a plan
+      // dated=1: the past-C sample has TWO undated tail candidates (2 and 3). dated=2: the pre-C sample
+      // could be turn 1's or turn 2's. Either way a sample's turn is unprovable → refuse, never a plan
       // that silently places a sample.
       expect(a.kind, `undated span (dated=${datedTurn}) was not refused: ${a.kind}`).toBe("refuse");
+      if (a.kind === "refuse") {
+        expect(a.reason, "refused, but not by the resources-attribution rule").toMatch(/resources\.jsonl/);
+        // Pin the AMBIGUITY refusal specifically. Matching only /resources\.jsonl/ let the tail-assign
+        // mutant pass the dated=1 arm: it assigned the past-C sample to turn 3, and the resulting
+        // {1,3} NON-ADJACENT-span refusal matched the same loose regex — same kind, same file name,
+        // wrong rule. The refusal this arm exists to pin is "a sample's turn cannot be determined".
+        expect(a.reason, `dated=${datedTurn} refused by a different rule than sample-ambiguity`).toMatch(/cannot be determined/);
+      }
     }
   });
 
@@ -938,5 +948,111 @@ describe("assessRunDir — a sample past the last dated completion with ≥2 und
     write(d, "turns/3/run.jsonl", `{"t":"transcript","text":"t3"}`); // undated
     write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":1}\n`); // past c1, ambiguous between 2 and 3
     expect(assessRunDir(d).kind, "a sample was dumped into the highest of several undated tail turns").toBe("refuse");
+  });
+});
+
+describe("assessRunDir — a NON-empty resources file must not mint a turn nothing else evidences", () => {
+  // The evidenced-turn gate guarded only the EMPTY path. A non-empty stray whose samples land past every
+  // dated completion bucketed to its own (undated, resources-only) table entry via the tail rule — and the
+  // planned move CREATED turns/<N>/ holding nothing but resources.jsonl: a turn with no transcript, which
+  // listTurns then reports as addressable. The sample could equally be the last real turn's trailing one;
+  // the stray FILENAME stole it. Same rule as the empty gate: content may only place into an evidenced turn.
+  it("REFUSES a stray non-empty resources archive whose samples bucket to its self-named turn", () => {
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.turn-5.jsonl", `{"ts":${C1 + 60_000},"rssBytes":1}\n`); // turn 5 evidenced by nothing but itself
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a non-empty stray resources archive minted a phantom turn dir").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 5/);
+  });
+
+  it("REFUSES a split whose high side would mint an unevidenced turn", () => {
+    // turns/1 and turns/2 dated; stray resources.turn-3.jsonl spans (c1,c2] and past-c2 → the two-way
+    // split's toHigh would create turns/3 out of nothing.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    const C2 = new Date("2026-01-15T11:00:00Z").getTime();
+    for (const [t, c] of [
+      [1, C1],
+      [2, C2],
+    ] as const) {
+      write(d, `turns/${t}/run.jsonl`, `{"t":"transcript","text":"t${t}"}`);
+      write(d, `turns/${t}/result.json`, RESULT(t));
+      utimesSync(join(d, `turns/${t}/result.json`), c / 1000, c / 1000);
+    }
+    write(d, "resources.turn-3.jsonl", [`{"ts":${C2 - 500},"rss":1}`, `{"ts":${C2 + 1500},"rss":2}`].join("\n") + "\n");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a split's toHigh minted a phantom turn dir").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 3/);
+  });
+
+  it("REFUSES a fully-archived dir whose spanning resources archive would mint rootArtifactTurn", () => {
+    // The guard's bypass channel: `evidencedTurns` counted rootArtifactTurn as evidenced UNCONDITIONALLY,
+    // but rootArtifactTurn is only arithmetic (maxArchive+1) — it is a real turn only when a root
+    // transcript or result exists to move there. A resume interrupted between archiving and the new
+    // turn's first write leaves exactly this: archives only, and a cumulative resources.turn-1.jsonl
+    // whose trailing sample is as likely turn 1's own post-result sample. Planning it minted turns/2/
+    // holding nothing but resources.jsonl — the same transcript-less phantom, one channel over.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1));
+    utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.turn-1.jsonl", `{"ts":${C1 - 500},"rss":1}\n{"ts":${C1 + 1500},"rss":2}\n`);
+
+    const a = assessRunDir(d);
+    expect(a.kind, "a spanning archive in a rootless dir minted turns/2 from telemetry alone").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2/);
+  });
+
+  it("REFUSES a root resources file whose samples would mint a rootArtifactTurn with no root transcript/result", () => {
+    // Same channel, root file: archived turn 1 plus a root resources.jsonl (the new turn's sampler wrote
+    // telemetry before any transcript). Nothing will ever move a transcript or result into turns/2.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1));
+    utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":1}\n`);
+
+    const a = assessRunDir(d);
+    expect(a.kind, "root telemetry minted a rootArtifactTurn no root transcript/result backs").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2/);
+  });
+
+  it("REFUSES an EMPTY root resources file when no root transcript/result backs rootArtifactTurn", () => {
+    // The empty gate shares `evidenced`, so the same bypass held there: position pointed at a
+    // rootArtifactTurn that only arithmetic vouched for, and following it minted the phantom.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "run.turn-1.jsonl", TRANSCRIPT);
+    write(d, "result.turn-1.json", RESULT(1));
+    utimesSync(join(d, "result.turn-1.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.jsonl", "");
+
+    const a = assessRunDir(d);
+    expect(a.kind, "an empty root resources file minted a rootArtifactTurn no root artifact backs").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 2/);
+  });
+
+  it("REFUSES rather than dragging ROOT telemetry into a stray archive's unevidenced turn", () => {
+    // The stray archive itself plans cleanly (its samples are turn 1's), but its presence puts turn 7 in
+    // the completion table — and the ROOT file's past-c1 sample then bucketed to turn 7 by the tail rule.
+    const d = runDir();
+    const C1 = new Date("2026-01-15T10:00:00Z").getTime();
+    write(d, "turns/1/run.jsonl", TRANSCRIPT);
+    write(d, "turns/1/result.json", RESULT(1));
+    utimesSync(join(d, "turns/1/result.json"), C1 / 1000, C1 / 1000);
+    write(d, "resources.turn-7.jsonl", `{"ts":${C1 - 200},"rss":1}\n`); // buckets to turn 1 — fine
+    write(d, "resources.jsonl", `{"ts":${C1 + 5000},"rss":2}\n`); // would bucket to phantom turn 7
+
+    const a = assessRunDir(d);
+    expect(a.kind, "root telemetry was dragged into a turn only a stray filename evidences").toBe("refuse");
+    if (a.kind === "refuse") expect(a.reason).toMatch(/turn 7/);
   });
 });
