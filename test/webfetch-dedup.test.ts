@@ -154,7 +154,9 @@ describe("coworkWebFetchDedup wired into fetchViaHost (PATH A)", () => {
   it("keys under the terminal destination_url — a direct fetch of the redirect target is a hit", async () => {
     let bFetches = 0;
     const rawFetch: RawFetch = async (url) => {
-      if (url.startsWith("http://a.example")) return { status: 302, location: "http://b.example/y", text: async () => "" };
+      // host-bounded prefix (trailing `/`): "http://a.example" alone would also match "http://a.example.evil"
+      // — CodeQL js/incomplete-url-substring-sanitization. The `/` pins the host so this mock routes only a.example.
+      if (url.startsWith("http://a.example/")) return { status: 302, location: "http://b.example/y", text: async () => "" };
       bFetches++;
       return { status: 200, text: async () => "B BODY" };
     };
