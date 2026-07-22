@@ -372,6 +372,32 @@ describe("F37 residual (part 2): taskTurnInfraFailure gates a killed TASK turn b
     };
     expect(taskTurnInfraFailure(task)).toBeUndefined();
   });
+
+  it("reports a task that exited NONZERO with no parseable envelope (a crash) as an infra failure", () => {
+    // Crashed after the early `[status]` line but before writing its envelope — `extractOutDir` would still
+    // recover a dir from `[status]`, so without this the reflection turn would grade evidence from a broken run.
+    const task = {
+      stdout: "partial junk, no envelope",
+      stderr: "[status] /tmp/eval-x/sess-1\n",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    };
+    expect(taskTurnInfraFailure(task)).toMatch(/crashed|no parseable result envelope/i);
+  });
+
+  it("returns undefined for a NONZERO-exit task that DID complete a valid envelope (a failing verdict is gradeable, not a crash)", () => {
+    // The narrow gate must NOT flag a run that reported a failing verdict (`ok:false` / `result:"error"`) —
+    // that is a genuine, gradeable outcome the skill produced, exactly what the critique exists to surface.
+    const task = {
+      stdout: JSON.stringify({ ok: false, results: [{ outDir: "/tmp/eval-x/sess-1", result: "error" }] }),
+      stderr: "",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    };
+    expect(taskTurnInfraFailure(task)).toBeUndefined();
+  });
 });
 
 describe("F31: SKILL.md not confirmed readable refuses presence/coverage classification (mechanical, not just prompt-reliant)", () => {

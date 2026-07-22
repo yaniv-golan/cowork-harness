@@ -59,6 +59,12 @@ All notable changes to this project are documented here. The format is based on
   evaluator graded a silently-incomplete transcript as solid ground truth. It now scans the whole
   (turn-1-only) archive and sets `turn1SliceDegraded` when a malformed row was skipped or the archive
   doesn't hold exactly one transcript record; the transcript is still delivered, just flagged.
+- **critique flags a crashed task turn instead of grading evidence from it.** `taskTurnInfraFailure` only
+  treated a *killed* (timed-out / byte-capped) task turn as an instrument failure — a task that exited
+  nonzero without ever printing a parseable result envelope (a crash after the early `[status]` line)
+  slipped through, and its `[status]`-recovered run dir was reflected on and graded as a legitimate task.
+  It now also flags a nonzero exit with no parseable envelope. Deliberately narrow: a completed run that
+  reported a failing verdict (`ok:false` / `result:"error"` with a valid envelope) stays gradeable.
 
 ## [1.7.0] — 2026-07-22
 

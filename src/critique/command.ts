@@ -563,6 +563,19 @@ export function validateReflectionTurn(
 export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
   if (task.timedOut) return "task turn timed out and was killed before it could complete";
   if (task.truncated) return "task turn's output exceeded the byte cap and was killed";
+  // A task that exited NONZERO without ever printing a parseable result envelope (a `results[0]` with an
+  // outDir) crashed before it completed. The task turn is spawned `--output-format json`, so a run that
+  // actually finished always prints one; when it didn't, `extractOutDir` recovers the dir only from the
+  // early `[status]` line, and there is no trustworthy result/finalMessage to reflect on and grade.
+  //
+  // Deliberately NARROW — this does NOT protocol-validate a COMPLETED task the way the reflection turn is
+  // validated. A task that RAN and reported a failing verdict (a nonzero exit carrying a VALID envelope —
+  // `ok:false` or `results[0].result:"error"`) is a genuine, GRADEABLE outcome the skill produced, the
+  // whole point of the critique. So this fires ONLY on the crash-with-no-envelope case, never on a
+  // completed run's success/verdict.
+  if (task.code !== 0 && !parseEnvelope(task.stdout)?.results?.[0]?.outDir) {
+    return "task turn exited nonzero without a parseable result envelope — it crashed before completing a gradeable task, so its evidence cannot be trusted";
+  }
   return undefined;
 }
 
