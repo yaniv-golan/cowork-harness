@@ -101,6 +101,19 @@ describe("critique parseArgs: equals-form parity for its own flags", () => {
     expect(opts.outputFormat).toBe("json");
   });
 
+  it("rejects a flag-looking value in the SPACE form (no silent positional-grab), pointing at the equals escape hatch", () => {
+    // `--prompt --output-format json`: the value was forgotten. The old parser swallowed `--output-format`
+    // as the prompt AND dropped the real flag, then ran a four-workload critique on the wrong input.
+    expect(() => parseArgs(["some-skill-dir", "--prompt", "--output-format", "json"])).toThrow(/--prompt looks like it's missing a value/);
+    expect(() => parseArgs(["some-skill-dir", "--prompt", "--output-format", "json"])).toThrow(/equals form: --prompt=/);
+    // The guard is on every value-taking flag, not just --prompt.
+    expect(() => parseArgs(["some-skill-dir", "--fidelity", "--output-format", "json"])).toThrow(
+      /--fidelity looks like it's missing a value/,
+    );
+    // The equals form IS the escape hatch for a value that intentionally starts with "-".
+    expect(parseArgs(["some-skill-dir", "--prompt=-summarize"]).prompt).toBe("-summarize");
+  });
+
   it("a genuinely unknown flag (in either spelling) is still rejected", () => {
     expect(() => parseArgs(["some-skill-dir", "--prompt", "hi", "--bogus"])).toThrow(/unknown flag: --bogus/);
     expect(() => parseArgs(["some-skill-dir", "--prompt", "hi", "--bogus=x"])).toThrow(/unknown flag: --bogus=x/);

@@ -160,6 +160,15 @@ function flagVal(argv: string[], i: number, flag: string): { value: string; adv:
   // trim(), matching the child's own value checks — otherwise `--label " "` passes here and dies
   // one layer later, which is the failure shape this check exists to prevent.
   if (value === undefined || value.trim() === "") throw new Error(`${flag} requires a value\n${usage()}`);
+  // No silent positional-grab (the idiom cli.ts's parser and the CI guard ban): a flag-looking NEXT token
+  // in the SPACE form means the value was forgotten — `--prompt --output-format json` would otherwise
+  // swallow `--output-format` as the prompt AND drop the real flag, then run a four-workload critique on the
+  // wrong input. A value that genuinely starts with `-` must use the equals form (this branch's escape hatch).
+  if (value.startsWith("-"))
+    throw new Error(
+      `${flag} looks like it's missing a value — the next token is the flag "${value}". ` +
+        `For a value that intentionally starts with "-", use the equals form: ${flag}=<value>\n${usage()}`,
+    );
   return { value, adv: 1, equalsForm: false };
 }
 
