@@ -215,9 +215,12 @@ export function readTurn1Result(outDir: string): unknown | null {
 }
 
 /** Normalize whitespace for citation matching — models rarely reproduce exact spacing/newlines, so we
- *  compare on collapsed whitespace rather than byte-for-byte (still requires the literal token sequence). */
+ *  compare on collapsed whitespace rather than byte-for-byte (still requires the literal token sequence).
+ *  Case is NOT folded: this is the "verbatim excerpt" grounding gate, and a genuine quote preserves case —
+ *  a case change is paraphrase, exactly what this check exists to drop. (Whitespace reflow is tolerated
+ *  because models do reflow it when quoting; case is semantic content they don't.) */
 function norm(s: string): string {
-  return s.replace(/\s+/g, " ").trim().toLowerCase();
+  return s.replace(/\s+/g, " ").trim();
 }
 
 /** A verbatim citation resolves iff its normalized text is a substring of the normalized evidence package.
