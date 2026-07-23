@@ -11,6 +11,7 @@ const state = {
   prompt: "p",
   sessionId: "sess-1",
   outDir: "/runs/x",
+  fidelity: "container",
   taskResult: "success" as const,
   gradedOutcome: "delivered_clean",
   gradedSkillHash: "abcdef0123456789",
