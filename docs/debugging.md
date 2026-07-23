@@ -34,9 +34,10 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 > `events.jsonl` and `timeline.jsonl` stay cumulative across turns; the harness scopes its own reads of
 > them to the current turn.
 >
-> A run dir with root `result.json`/`run.jsonl` and no `turns/` predates this layout — the tools refuse
-> it by name; see [Old run dirs (pre-`turns/` layout)](#old-run-dirs-pre-turns-layout) at the end of
-> this page for `migrate-run-dir`.
+> A run dir with root `result.json`/`run.jsonl` (or a name-mangled `result.turn-<N>.json` archive) and
+> no `turns/` predates this layout — the tools refuse it by name; see
+> [Old run dirs (pre-`turns/` layout)](#old-run-dirs-pre-turns-layout) at the end of this page for
+> `migrate-run-dir`.
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your

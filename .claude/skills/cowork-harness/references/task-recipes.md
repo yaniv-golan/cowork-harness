@@ -1,8 +1,8 @@
 # Task recipes — end-to-end paths for the jobs consumers actually do
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
-decision path. Every one answers a question a real fleet owner had to work out the hard way. Tracks
-`cowork-harness 1.7.0` (baseline `desktop-1.24012.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+decision path. Every one answers a question a real fleet owner had to work out the hard way.
+Tracks `cowork-harness 1.7.0` (baseline `desktop-1.24012.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
