@@ -1,6 +1,6 @@
 import type { EvidenceSection } from "./armor.js";
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { turnArtifactPath } from "../run/turn-layout.js";
 import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
 import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
@@ -172,6 +172,16 @@ export const SKILL_MD_CAP = 64 * 1024; // fits the ~51.6KB flagship skill with h
 const REFERENCE_LIST_CAP = 1 * 1024;
 export const TRANSCRIPT_CAP = 32 * 1024; // the other permanent-`truncated` driver on real runs (was 16KB)
 const ATTACHED_INPUTS_CAP = 1 * 1024;
+// The invoked skill's OPERATIVE guidance often lives outside SKILL.md: sub-agent system prompts in the
+// plugin's agents/<skill>.md, rubrics in references/*.md. Filenames alone ("presence, not coverage") left
+// most coverage claims unadjudicable for exactly the skills that need critique most — so bounded CONTENT
+// of both is packaged too. Sized to keep the per-section sum under MAX_PACKAGE_BYTES.
+export const AGENTS_MD_CAP = 8 * 1024;
+export const REFERENCES_CONTENT_CAP = 8 * 1024; // TOTAL across all references/ files, not per-file
+// Sub-agent WebSearch query+result (subagents[].webSearches, live-lane capture): the evidence an
+// evaluator needs to ground a sub-agent's evidence_source:"researched" claim — previously invisible
+// (agentType/description only), which made every such claim not-adjudicable.
+export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
 
 /** The overall package hard cap — the whole assembled document is trimmed to this even if every
  *  per-section budget above was individually respected (their sum is deliberately a bit under this, but a
@@ -225,7 +235,18 @@ export interface PackageEvidenceResult {
  *  a missing turn-1 result is treated exactly like a corrupted one (`turn1ResultDegraded: true`,
  *  empty-default sections), never silently read from a later turn. Defaults to `false` so a hypothetical
  *  future single-shot (never-resumed) caller does not flag an ordinary absent turn-1 result as degraded. */
-export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir: string, isResume = false): PackageEvidenceResult {
+export function packageEvidence(
+  runDir: string,
+  boundary: TurnBoundary,
+  skillDir: string,
+  isResume = false,
+  opts: {
+    /** Path to the invoked skill's agent system-prompt markdown (a multi-skill plugin's
+     *  `agents/<skill>.md`, resolved by the caller) — packaged as its own bounded section when given.
+     *  For sub-agent-heavy skills this file IS most of the operative guidance. */
+    agentsMdPath?: string;
+  } = {},
+): PackageEvidenceResult {
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
   // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
   let truncated = false;
@@ -263,6 +284,32 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     description: typeof s.description === "string" ? s.description : undefined,
   }));
 
+  // Sub-agent research: each dispatch's own WebSearch query + (bounded) result text, from the live-lane
+  // child-transcript capture. An empty assembly gets an explicit absence-is-not-evidence note — this
+  // capture is live/record-only, so a missing section must never read as "no research happened".
+  const researchParts: string[] = [];
+  for (const s of subagentsRaw) {
+    const ws = Array.isArray(s.webSearches) ? (s.webSearches as Array<Record<string, unknown>>) : [];
+    if (!ws.length) continue;
+    const label =
+      typeof s.resolvedAgentType === "string"
+        ? s.resolvedAgentType
+        : typeof s.dispatchAgentType === "string"
+          ? s.dispatchAgentType
+          : typeof s.description === "string"
+            ? s.description
+            : "dispatch";
+    for (const w of ws) {
+      if (typeof w.query !== "string") continue;
+      researchParts.push(
+        `[${label}] query: ${w.query}\nresult:\n${typeof w.resultText === "string" ? w.resultText : "(no result text captured)"}`,
+      );
+    }
+  }
+  const subagentResearch = researchParts.length
+    ? researchParts.join("\n\n")
+    : "(none captured — sub-agent WebSearch is recorded on the live lane only; absence here is NOT evidence no research happened)";
+
   const { text: transcript, degraded: turn1SliceDegraded } = readTurn1Transcript(runDir, boundary);
 
   // Skill source. SKILL.md is delivered whole to the agent and is NEVER captured by a Read event (see
@@ -293,6 +340,48 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     /* no references/ subdir — an empty list is a legitimate answer, not an error */
   }
 
+  // references/ CONTENT (bounded TOTAL) — concatenated with a per-file header so a citation still names
+  // its source file. Read failures degrade per-file to a loud inline note, never sink packaging.
+  let referencesContent = "";
+  {
+    let budget = REFERENCES_CONTENT_CAP;
+    const parts: string[] = [];
+    for (const name of referenceFiles) {
+      if (budget <= 0) {
+        parts.push(`### ${name}\n(omitted — references/ content budget exhausted)`);
+        truncated = true;
+        continue;
+      }
+      let body: string;
+      try {
+        body = readFileSync(join(skillDir, "references", name), "utf8");
+      } catch {
+        parts.push(`### ${name}\n(could not be read — presence known from the listing, content unavailable)`);
+        continue;
+      }
+      const bounded = bound(body, budget);
+      budget -= Buffer.byteLength(bounded, "utf8");
+      parts.push(`### ${name}\n${bounded}`);
+    }
+    referencesContent = parts.join("\n\n");
+  }
+
+  // agents/<skill>.md content — only when the caller resolved one (see the opts doc comment).
+  let agentsMdBody: string | undefined;
+  let agentsMdTitle: string | undefined;
+  if (opts.agentsMdPath !== undefined) {
+    agentsMdTitle = `agents markdown (${basename(opts.agentsMdPath)} — the invoked skill's sub-agent system prompt / dispatch guidance)`;
+    if (!existsSync(opts.agentsMdPath)) {
+      agentsMdBody = `(no file found at ${opts.agentsMdPath})`;
+    } else {
+      try {
+        agentsMdBody = readFileSync(opts.agentsMdPath, "utf8");
+      } catch {
+        agentsMdBody = `(exists at ${opts.agentsMdPath} but could not be read)`;
+      }
+    }
+  }
+
   const turn1ResultDegradedNote = turn1ResultDegraded
     ? turn1Result.status === "corrupted"
       ? " [DEGRADED: the canonical turn-1 result file exists but failed to parse — this section is an empty default, NOT a genuinely empty turn-1 result; treat as unknown, not as evidence of absence]"
@@ -318,15 +407,25 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     sec("skillActivity (turn 1, per-invocation window rollups)" + turn1ResultDegradedNote, bound(safeJson(skillActivity), STRUCTURED_CAP)),
     sec("Sub-agents dispatched (turn 1; agentType/description only)" + turn1ResultDegradedNote, bound(safeJson(subagents), STRUCTURED_CAP)),
     sec(
+      "Sub-agent research (each dispatch's own WebSearch query + bounded result; live-lane capture — absence is NOT evidence of no research)" +
+        turn1ResultDegradedNote,
+      bound(subagentResearch, SUBAGENT_RESEARCH_CAP),
+    ),
+    sec(
       "referencesRead (turn 1, main-agent Reads only, references/+scripts/ under the mounted skill — " +
         "NEVER includes SKILL.md itself, which is delivered whole and never Read as a file)" +
         turn1ResultDegradedNote,
       bound(referencesRead.length ? referencesRead.join("\n") : "(none)", REFERENCES_READ_CAP),
     ),
     sec(skillMdSectionTitle, bound(skillMdSectionBody, SKILL_MD_CAP)),
+    ...(agentsMdBody !== undefined ? [sec(agentsMdTitle!, bound(agentsMdBody, AGENTS_MD_CAP))] : []),
     sec(
-      "references/ available (filenames only, NOT content — presence, not coverage)",
+      "references/ available (filenames only — the bounded content follows in the next section)",
       bound(referenceFiles.length ? referenceFiles.join("\n") : "(none)", REFERENCE_LIST_CAP),
+    ),
+    sec(
+      "references/ content (each file under a '### <name>' header; BOUNDED — an omitted/cut file is marked, absence past a cut is not evidence)",
+      bound(referencesContent, REFERENCES_CONTENT_CAP + 1024), // headers/notes ride above the raw-content budget
     ),
     sec(
       "Attached inputs (mnt/uploads filenames + sizes, and connected-folder mount names — NOT content)",

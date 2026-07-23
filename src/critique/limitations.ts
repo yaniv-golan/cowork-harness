@@ -93,7 +93,8 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
   },
   {
     id: "skill-md-size-cap",
-    summary: 'SKILL.md is capped at 64KB in the evidence — a larger one degrades toward "not adjudicable"',
+    summary:
+      'SKILL.md is capped at 64KB in the evidence — an oversized one is truncated but still graded; only a missing/unreadable one forces "not adjudicable"',
     provenance: {
       kind: "deliberate",
       rationale: "the evidence package is bounded so the evaluator sees a whole record rather than a truncated tail",
@@ -106,21 +107,10 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     provenance: { kind: "not-built", note: "no localization work has been attempted; nothing blocks it" },
     docsAnchor: "English-only",
   },
-  {
-    id: "evidence-not-persisted",
-    summary: "the evidence package the evaluator graded against is not written to disk",
-    provenance: {
-      kind: "not-built",
-      note: "a disputed finding cannot be re-checked against the record it was graded on; persisting the ARMORED render would close it",
-    },
-    docsAnchor: "evidence package is not persisted",
-  },
-  {
-    id: "report-stdout-only",
-    summary: "the report goes to stdout only — capture it with shell redirection",
-    provenance: { kind: "not-built", note: "there is no --out flag; --output-format changes the format, never the destination" },
-    docsAnchor: "written to stdout",
-  },
+  // Two former `not-built` limitations were BUILT (deliberately deleted here; the pinned id set in
+  // test/critique-limitations-sync.test.ts was updated in the same change):
+  //  - "evidence-not-persisted": the armored corpus is now written to critique-evidence-package.txt;
+  //  - "report-stdout-only": critique-report.json is always written, and --out copies the report.
   {
     id: "attached-content-may-enter-evidence",
     summary: "attached-file CONTENT usually stays out of the evidence, but that is the common case, not a guarantee",

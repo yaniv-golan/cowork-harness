@@ -1577,6 +1577,26 @@
         "type": "string",
         "required": true
       },
+      ".subagents[].webSearches": {
+        "type": "array"
+      },
+      ".subagents[].webSearchesElided": {
+        "type": "number"
+      },
+      ".subagents[].webSearches[]": {
+        "type": "object"
+      },
+      ".subagents[].webSearches[].query": {
+        "type": "string",
+        "required": true
+      },
+      ".subagents[].webSearches[].resultText": {
+        "type": "string",
+        "required": true
+      },
+      ".subagents[].webSearches[].resultTruncated": {
+        "type": "boolean"
+      },
       ".tasks": {
         "type": "array"
       },

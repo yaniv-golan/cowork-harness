@@ -42,9 +42,15 @@ import type { RunResult } from "../types.js";
  */
 export const REASONING_CAP = 50;
 export const REASONING_TEXT_CAP_BYTES = 10 * 1024;
+/** Per-dispatch WebSearch capture caps: enough for real research fan-out without letting a
+ *  search-looping sub-agent balloon result.json. Oldest entries elide first (sliding window, matching
+ *  the reasoning cap's convention). */
+export const SUBAGENT_WEBSEARCH_CAP = 10;
+export const SUBAGENT_WEBSEARCH_RESULT_CAP_BYTES = 4 * 1024;
 
 type SubagentEntry = NonNullable<RunResult["subagents"]>[number];
 type ReasoningTurn = NonNullable<SubagentEntry["reasoning"]>[number];
+type SubagentWebSearch = NonNullable<SubagentEntry["webSearches"]>[number];
 
 /** Recursively find every `agent-*.meta.json` under `<configDirRoot>/projects/**\/subagents/` (any
  *  nesting depth — the projSlug/parentSessionUUID path segments are NOT reconstructed; the join happens
@@ -77,14 +83,27 @@ function findMetaFiles(configDirRoot: string): string[] {
 
 /** Parse ONE child session transcript (`agent-<id>.jsonl`, same per-line `{type, message:{role,
  *  content:[...]}}` shape as the main transcript) into its ordered thinking+text turns
- *  (tool_use/tool_result excluded — those are already covered by `toolsUsed`/`referencesRead`).
+ *  (non-WebSearch tool_use/tool_result excluded — those are already covered by
+ *  `toolsUsed`/`referencesRead`) PLUS the sub-agent's own WebSearch calls (query from the assistant
+ *  `tool_use` block, result text from the paired user `tool_result` block, both bounded) — the only
+ *  place a sub-agent's research is recorded at all (the parent stream's `webSearches[]` is
+ *  main-agent-scoped by design).
  *  Capped with the same sliding-window convention `Run.noteThinking` uses: push, and once the array
  *  exceeds the cap, shift the oldest entry out and count it in `elided` — so the surfaced turns are
  *  always the MOST RECENT `REASONING_CAP`. A malformed line (bad JSON, unexpected shape) is skipped,
  *  not fatal — the rest of the file still parses. */
-function parseChildTranscript(jsonlPath: string): { reasoning: ReasoningTurn[]; elided: number } {
+function parseChildTranscript(jsonlPath: string): {
+  reasoning: ReasoningTurn[];
+  elided: number;
+  webSearches: SubagentWebSearch[];
+  webSearchesElided: number;
+} {
   const reasoning: ReasoningTurn[] = [];
   let elided = 0;
+  const webSearches: SubagentWebSearch[] = [];
+  let webSearchesElided = 0;
+  /** WebSearch tool_use id → its query, awaiting the paired tool_result on a later user record. */
+  const pendingSearches = new Map<string, string>();
   const raw = readFileSync(jsonlPath, "utf8");
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -96,10 +115,47 @@ function parseChildTranscript(jsonlPath: string): { reasoning: ReasoningTurn[]; 
       continue; // one malformed line does not abort the file
     }
     const rec = parsed as { type?: string; message?: { role?: string; content?: unknown } };
+    // USER records carry the tool_result halves — resolve any pending WebSearch before the
+    // assistant-only filter below skips the record.
+    if (rec.type === "user" && Array.isArray(rec.message?.content)) {
+      for (const block of rec.message.content) {
+        const b = block as { type?: string; tool_use_id?: string; content?: unknown };
+        if (b?.type !== "tool_result" || typeof b.tool_use_id !== "string") continue;
+        const query = pendingSearches.get(b.tool_use_id);
+        if (query === undefined) continue;
+        pendingSearches.delete(b.tool_use_id);
+        // tool_result content is a string OR an array of {type:"text",text} blocks — take the text parts.
+        const text =
+          typeof b.content === "string"
+            ? b.content
+            : Array.isArray(b.content)
+              ? b.content
+                  .map((c) =>
+                    c && typeof c === "object" && typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : "",
+                  )
+                  .join("\n")
+              : "";
+        const truncatedResult = text.length > SUBAGENT_WEBSEARCH_RESULT_CAP_BYTES;
+        const entry: SubagentWebSearch = { query, resultText: truncatedResult ? text.slice(0, SUBAGENT_WEBSEARCH_RESULT_CAP_BYTES) : text };
+        if (truncatedResult) entry.resultTruncated = true;
+        webSearches.push(entry);
+        if (webSearches.length > SUBAGENT_WEBSEARCH_CAP) {
+          webSearches.shift();
+          webSearchesElided++;
+        }
+      }
+      continue;
+    }
     if (rec.type !== "assistant" || rec.message?.role !== "assistant") continue;
     const content = rec.message?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
+      // A WebSearch tool_use stashes its query keyed by id, awaiting the paired user-record tool_result.
+      const tu = block as { type?: string; id?: string; name?: string; input?: { query?: unknown } };
+      if (tu?.type === "tool_use" && tu.name === "WebSearch" && typeof tu.id === "string" && typeof tu.input?.query === "string") {
+        pendingSearches.set(tu.id, tu.input.query);
+        continue;
+      }
       const b = block as { type?: string; text?: string; thinking?: string; signature?: string };
       let kind: "thinking" | "text" | undefined;
       let text: string | undefined;
@@ -129,7 +185,7 @@ function parseChildTranscript(jsonlPath: string): { reasoning: ReasoningTurn[]; 
       }
     }
   }
-  return { reasoning, elided };
+  return { reasoning, elided, webSearches, webSearchesElided };
 }
 
 /**
@@ -159,9 +215,12 @@ export function captureSubagentReasoning(configDirRoot: string, subagents: Subag
         if (!entry) continue; // meta file for a dispatch not (or no longer) in this result — skip
         const jsonlPath = metaPath.replace(/\.meta\.json$/, ".jsonl"); // agent-<id>.meta.json's sibling
         if (!existsSync(jsonlPath)) continue;
-        const { reasoning, elided } = parseChildTranscript(jsonlPath);
+        const { reasoning, elided, webSearches, webSearchesElided } = parseChildTranscript(jsonlPath);
         entry.reasoning = reasoning;
         if (elided > 0) entry.reasoningElided = elided;
+        // Same live-lane-only channel as reasoning: absent = never captured (replay), [] = captured, none made.
+        if (webSearches.length > 0) entry.webSearches = webSearches;
+        if (webSearchesElided > 0) entry.webSearchesElided = webSearchesElided;
       } catch {
         // this ONE dispatch's meta/child file is malformed — skip it, other dispatches still join
         continue;

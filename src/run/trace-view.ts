@@ -625,12 +625,71 @@ function readSiblingResult(file: string): RunResult | undefined {
  *  just unaddressed by this layout. `trace` never REFUSES (its event-derived views stay fully readable —
  *  see turn-layout.ts's module doc comment) — this only shapes the degrade message for the two
  *  result-derived views. */
-export function resultUnavailableReason(file: string, view: "files" | "usage" | "cache-read footer" | "gate provenance"): string {
+export function resultUnavailableReason(
+  file: string,
+  view: "files" | "usage" | "subagent-research" | "cache-read footer" | "gate provenance",
+): string {
   const runDir = dirname(file);
   const shape = classifyRunDir(runDir);
   if (shape.kind === "legacy" || shape.kind === "mixed")
     return `${view} needs a turn-addressed result.json — ${preLayoutMessage(shape, runDir)}`;
   return `${view} needs a run dir (no sibling result.json)`;
+}
+
+/**
+ * `trace --view subagent-research` — each dispatch's OWN WebSearch calls (query + bounded result text),
+ * read from the sibling result.json's `subagents[].webSearches` (captured from the child session
+ * transcript on the live/record lane; `undefined` there on replay — surfaced as UNAVAILABLE, never as
+ * "no research"). This is the trace-side window on research the main `toolCounts`/`webSearches` can't
+ * see: a sub-agent's searches never enter either.
+ */
+export interface SubagentResearchView {
+  available: boolean;
+  reason?: string;
+  /** One row per dispatch that has ANY capture state worth showing. `webSearches: undefined` = the
+   *  live-lane child transcript never joined (or replay) — unavailable, not zero. */
+  rows: Array<{
+    label: string; // resolved/dispatch agent type or description — whatever identifies the dispatch best
+    webSearches?: Array<{ query: string; resultText: string; resultTruncated?: boolean }>;
+    webSearchesElided?: number;
+  }>;
+}
+
+export function buildSubagentResearchView(file: string): SubagentResearchView {
+  const result = readSiblingResult(file);
+  if (!result) return { available: false, reason: resultUnavailableReason(file, "subagent-research"), rows: [] };
+  const subs = result.subagents ?? [];
+  return {
+    available: true,
+    rows: subs.map((s) => ({
+      label: s.resolvedAgentType ?? s.dispatchAgentType ?? s.description ?? s.toolUseId,
+      webSearches: s.webSearches,
+      webSearchesElided: s.webSearchesElided,
+    })),
+  };
+}
+
+export function formatSubagentResearchView(v: SubagentResearchView): string {
+  if (!v.available) return `subagent-research UNAVAILABLE — ${v.reason}`;
+  if (!v.rows.length) return "(no sub-agent dispatches in this run)";
+  const lines: string[] = [];
+  for (const r of v.rows) {
+    if (r.webSearches === undefined) {
+      lines.push(`▷ ${r.label}: research UNAVAILABLE (no child transcript joined — replay, or capture never ran)`);
+      continue;
+    }
+    if (!r.webSearches.length) {
+      lines.push(`▷ ${r.label}: no WebSearch calls captured`);
+      continue;
+    }
+    lines.push(`▷ ${r.label}: ${r.webSearches.length} WebSearch call(s)${r.webSearchesElided ? ` (+${r.webSearchesElided} elided)` : ""}`);
+    for (const w of r.webSearches) {
+      lines.push(`    query: ${w.query}`);
+      const first = w.resultText.split("\n").find((l) => l.trim()) ?? "";
+      lines.push(`    result: ${first.slice(0, 160)}${w.resultTruncated ? " …[truncated at cap]" : ""}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 /**

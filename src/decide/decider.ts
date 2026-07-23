@@ -325,6 +325,13 @@ export class FirstOptionDecider implements Decider {
 export interface CompleteResult {
   text: string;
   model: string;
+  /** The transport envelope's per-model usage/cost map (`claude -p --output-format json`'s `modelUsage`
+   *  VALUE, e.g. `{ "<model>": { inputTokens, outputTokens, costUSD, … } }`), passed through verbatim.
+   *  OPTIONAL and additive: deciders ignore it; the critique evaluator reads it so a per-critique cost
+   *  can include the evaluator passes (previously discarded here — the model KEY was kept for
+   *  provenance, the usage value dropped, making true four-workload cost untallyable). A test double
+   *  may omit it. */
+  usage?: Record<string, unknown>;
 }
 export type Complete = (prompt: string, model: string) => Promise<CompleteResult>;
 

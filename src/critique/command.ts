@@ -17,13 +17,13 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
-import { existsSync, readFileSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename, join } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import type { SkillMdStatus } from "./package-evidence.js";
-import { snapshotTurnBoundary } from "./evidence.js";
+import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
 import type { CritiqueItem } from "./evidence.js";
 
@@ -65,6 +65,11 @@ interface ParsedArgs {
   fidelity: "container" | "hostloop";
   evaluatorModel?: string;
   outputFormat: "json" | "text";
+  /** ALSO write the selected-format report to this file (stdout unchanged). */
+  out?: string;
+  /** For a MULTI-SKILL PLUGIN target: which `skills/<name>` the packager should grade. Selection only —
+   *  the positional folder is still what both turns mount (session identity must not change). */
+  skillSelector?: string;
   /** argv fragments for BOTH spawned turns — session SOURCES, which must match or the resume throws. */
   forwardBoth: string[];
   /** argv fragments for the GRADED turn only. */
@@ -102,6 +107,12 @@ Graded-run tuning (shapes the run being graded):
 Critique's own:
   --evaluator-model <id>    the grading model (env: COWORK_HARNESS_EVALUATOR_MODEL)
   --output-format json|text critique's REPORT format (inner turns always speak json internally)
+  --out <path>              ALSO write the selected-format report to this file (stdout unchanged)
+  --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ its agents/<name>.md)
+                            instead of a missing plugin-root SKILL.md. Selection only — the positional
+                            folder is still what both turns mount, and fingerprint.skillHash is unchanged
+                            (it keys the mounted folder: per-plugin, not per-skill). A multi-skill root
+                            with no --skill is REFUSED before any model spend.
   --fidelity <tier>         container (default) or hostloop; microvm/protocol/cowork refused with a reason
   --keep                    accepted as a no-op — runs are always kept
   --dotenv <path>           credentials
@@ -126,6 +137,11 @@ COST AND PREREQUISITES — read before running:
   * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
     agent binary, and writes to the real host FS (a writable --folder requires --allow-host-writes). Both
     tiers need an authenticated \`claude\` CLI on PATH.
+
+RUN-DIR ARTIFACTS (written best-effort alongside turns/):
+  critique-report.json           the machine-readable report, every outcome
+  critique-evidence-package.txt  the ARMORED corpus the evaluator graded against (when it ran)
+  critique-salvage.json          on exit 2 only: self-report + each pass's RAW reply, pre-parse
 
 EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself errored — that is a
   finding about the skill, not a broken instrument). 2 = usage error, or an instrument failure (turn
@@ -180,6 +196,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let fidelity = "container";
   let evaluatorModel: string | undefined;
   let outputFormat: "json" | "text" = "text";
+  let out: string | undefined;
+  let skillSelector: string | undefined;
   let promptFile: string | undefined;
   let taskTimeoutMs: number | undefined;
   const forwardBoth: string[] = [];
@@ -225,6 +243,16 @@ function parseArgs(argv: string[]): ParsedArgs {
       once("--prompt-file");
       const { value: v, adv } = flagVal(argv, i, "--prompt-file");
       promptFile = v;
+      i += adv;
+    } else if (a === "--out" || a.startsWith("--out=")) {
+      once("--out");
+      const { value: v, adv } = flagVal(argv, i, "--out");
+      out = v;
+      i += adv;
+    } else if (a === "--skill" || a.startsWith("--skill=")) {
+      once("--skill");
+      const { value: v, adv } = flagVal(argv, i, "--skill");
+      skillSelector = v;
       i += adv;
     } else if (a === "--keep" || a.startsWith("--keep=")) {
       // Match the equals form too so it errors as "takes no value" rather than falling through to the
@@ -314,10 +342,67 @@ function parseArgs(argv: string[]): ParsedArgs {
     fidelity: fidelity as ParsedArgs["fidelity"],
     evaluatorModel,
     outputFormat,
+    out,
+    skillSelector,
     forwardBoth,
     forwardTask,
     taskTimeoutMs,
   };
+}
+
+/** Resolve WHICH folder the packager grades (and, for a plugin, the invoked skill's `agents/<name>.md`).
+ *
+ *  The positional `skillFolder` is what both turns MOUNT — that never changes here (the reflection turn's
+ *  resume recomputes session identity from the same sources, so a selection that changed the mount would
+ *  break the resume). This resolves only the PACKAGER's view:
+ *   - a plain skill folder (root `SKILL.md`) → itself;
+ *   - a multi-skill plugin + `--skill <name>` → `skills/<name>/` (fail loud if absent, naming what exists);
+ *   - a multi-skill plugin, no `--skill`, exactly ONE skill → auto-selected with a stderr notice;
+ *   - a multi-skill plugin, no `--skill`, several skills → REFUSED loud before any model spend — grading
+ *     a plugin root with no SKILL.md silently downgraded every coverage finding to "not adjudicable"
+ *     (observed in the field as a 100% not-adjudicable critique).
+ *  `fingerprint.skillHash` is computed over the MOUNTED folder and is unchanged by `--skill` — same
+ *  folder → same hash — so generation pairing keeps working; it is a per-plugin key, not per-skill.
+ *  Exported for unit tests. */
+export function resolveCritiquedSkillDir(
+  skillFolder: string,
+  skillSelector: string | undefined,
+): { skillDir: string; agentsMdPath?: string; autoSelectedSkill?: string } {
+  const agentsMdFor = (name: string): string | undefined => {
+    const p = join(skillFolder, "agents", `${name}.md`);
+    return existsSync(p) ? p : undefined;
+  };
+  const listPluginSkills = (): string[] => {
+    try {
+      return readdirSync(join(skillFolder, "skills"), { withFileTypes: true })
+        .filter((e) => e.isDirectory() && existsSync(join(skillFolder, "skills", e.name, "SKILL.md")))
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      return [];
+    }
+  };
+  if (skillSelector !== undefined) {
+    const candidate = join(skillFolder, "skills", skillSelector);
+    if (!existsSync(join(candidate, "SKILL.md"))) {
+      const available = listPluginSkills();
+      throw new Error(
+        `--skill ${skillSelector}: no skills/${skillSelector}/SKILL.md under ${skillFolder}` +
+          (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),
+      );
+    }
+    return { skillDir: candidate, agentsMdPath: agentsMdFor(skillSelector) };
+  }
+  if (existsSync(join(skillFolder, "SKILL.md"))) return { skillDir: skillFolder }; // plain skill folder
+  const skills = listPluginSkills();
+  if (skills.length === 1)
+    return { skillDir: join(skillFolder, "skills", skills[0]!), agentsMdPath: agentsMdFor(skills[0]!), autoSelectedSkill: skills[0]! };
+  if (skills.length > 1)
+    throw new Error(
+      `${skillFolder} is a multi-skill plugin root (no root SKILL.md; skills: ${skills.join(", ")}) — ` +
+        `pass --skill <name> so critique grades the INVOKED skill's SKILL.md instead of a missing root one`,
+    );
+  return { skillDir: skillFolder }; // no SKILL.md anywhere — the packager's existing missing/degraded flow reports it
 }
 
 interface TurnOutcome {
@@ -584,7 +669,11 @@ export function validateReflectionTurn(
  *  gradeable outcome, not an infra failure). `main()` itself spawns real processes and isn't directly
  *  testable, so this decision is factored out and exported for the unit test. */
 export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
-  if (task.timedOut) return "task turn timed out and was killed before it could complete";
+  if (task.timedOut)
+    return (
+      "task turn timed out and was killed before it could complete — pass --timeout <ms> to raise the " +
+      "task-turn wall-clock budget (high-fan-out skills routinely need more than the 10-minute default)"
+    );
   if (task.truncated) return "task turn's output exceeded the byte cap and was killed";
   // A task that exited NONZERO without ever printing a parseable result envelope (a `results[0]` with an
   // outDir) crashed before it completed. The task turn is spawned `--output-format json`, so a run that
@@ -623,11 +712,55 @@ function formatItem(item: CritiqueItem): string {
  *  reader to infer it from an empty-looking findings list. */
 type SelfReportStatus = "captured" | "unavailable";
 
+/** Per-critique cost rollup: the four model workloads, each priced from its own usage record when
+ *  available. `complete` is true ONLY when all four are priced — a partial total must never present
+ *  itself as the full spend. */
+export interface CritiqueCost {
+  taskTurnUsd?: number;
+  reflectionTurnUsd?: number;
+  evaluatorPass1Usd?: number;
+  evaluatorPass2Usd?: number;
+  totalUsd: number;
+  complete: boolean;
+}
+
+/** Sum `costUSD` across a result/envelope `modelUsage` map. `undefined` when the map is absent or
+ *  carries no numeric costUSD at all — "unpriced", which is DIFFERENT from a genuine $0. */
+export function sumCostUsd(modelUsage: unknown): number | undefined {
+  if (!modelUsage || typeof modelUsage !== "object") return undefined;
+  let total = 0;
+  let priced = false;
+  for (const v of Object.values(modelUsage as Record<string, unknown>)) {
+    const c = v && typeof v === "object" ? (v as { costUSD?: unknown }).costUSD : undefined;
+    if (typeof c === "number") {
+      total += c;
+      priced = true;
+    }
+  }
+  return priced ? total : undefined;
+}
+
 interface ReportState {
   skillFolder: string;
   prompt: string;
   sessionId: string;
   outDir: string;
+  /** The tier critique pinned for BOTH turns (cowork is refused, so requested == resolved). */
+  fidelity: string;
+  /** Best-effort from the graded turn's own result.json — which tier/baseline that run RECORDS itself
+   *  as (should equal `fidelity`; surfacing both makes a mismatch visible instead of assumed away). */
+  gradedEffectiveFidelity?: string;
+  gradedBaseline?: string;
+  /** Per-critique cost across all four workloads — see CritiqueCost. Absent when nothing was priceable. */
+  costUsd?: CritiqueCost;
+  /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether the graded
+   *  run's own skillActivity mentions it. `false` = the critique may be grading a run that never invoked
+   *  the selected skill. `undefined` = not applicable or no evidence either way. */
+  skillInvocationObserved?: boolean;
+  /** The graded run's resolved gate answers (from its result.json's gateProvenance), lifted so a
+   *  follow-up run can be made deterministic — the text report echoes them as copy-pasteable --answer
+   *  lines, mirroring the `skill` lane's footer. */
+  gateAnswers?: Array<{ question: string; answer: string; answeredBy: string }>;
   taskResult: "success" | "error" | undefined;
   /** The GRADED (task) turn's `outcome` and `skillHash`, lifted into the report so a consumer never opens
    *  a turn file to get them.
@@ -657,6 +790,10 @@ interface ReportState {
   /** Mechanical integrity signal from the evaluator's trusted canary — false means that pass stopped
    *  following trusted instructions, so an empty critique may be adversarial silencing, not a clean skill. */
   evaluatorIntegrity?: { pass1Canary: boolean; pass2Canary?: boolean };
+  /** Per-pass count of malformed items the evaluator's PER-ITEM-tolerant parse dropped (see
+   *  `parseCritiqueItems`). Surfaced in BOTH output formats whenever non-zero — a dropped finding the
+   *  report never mentions would be a silent recall loss, the exact shape this tool exists to kill. */
+  droppedEvaluatorItems?: { pass1: number; pass2?: number };
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
    *  when packaging never ran (an infra failure short-circuited before it). */
@@ -712,6 +849,21 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  probe: ${prompt}`);
   out.push(`  session: ${sessionId}`);
   out.push(`  run dir: ${outDir}`);
+  out.push(
+    `  fidelity: ${state.fidelity}` +
+      (state.gradedEffectiveFidelity
+        ? ` (graded turn recorded ${state.gradedEffectiveFidelity}${state.gradedBaseline ? `, baseline ${state.gradedBaseline}` : ""})`
+        : ""),
+  );
+  const cost = state.costUsd;
+  if (cost) {
+    const part = (v: number | undefined) => (v === undefined ? "unpriced" : `$${v.toFixed(4)}`);
+    out.push(
+      `  cost: $${cost.totalUsd.toFixed(4)}${cost.complete ? "" : " (INCOMPLETE — one or more workloads unpriced)"} — ` +
+        `task ${part(cost.taskTurnUsd)}, reflection ${part(cost.reflectionTurnUsd)}, ` +
+        `evaluator ${part(cost.evaluatorPass1Usd)} + ${part(cost.evaluatorPass2Usd)}`,
+    );
+  }
   out.push(`  task run result: ${taskResult ?? "unknown (envelope unavailable)"}`);
   // The GRADED turn's facts, so a consumer never opens result.turn-1.json (and never mistakes the
   // reflection turn's result.json for them).
@@ -722,6 +874,10 @@ export function buildTextReport(state: ReportState): string {
     out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
   if (taskResult === "error")
     out.push(`  NOTE: the task run ended in error — recommendations below reflect whatever happened before the failure.`);
+  if (state.skillInvocationObserved === false)
+    out.push(
+      `  NOTE: the graded run's recorded skillActivity never mentions the selected skill — this critique may be grading a run that did not actually invoke it.`,
+    );
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
     out.push(
@@ -739,8 +895,23 @@ export function buildTextReport(state: ReportState): string {
     );
   if (skillMdStatus && skillMdStatus !== "readable")
     out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
+  // The dominant real-world cause of a "missing" SKILL.md is pointing critique at a MULTI-SKILL PLUGIN
+  // root (skills/<name>/SKILL.md, no root SKILL.md) — name the cause and the fix, not just the symptom.
+  if (skillMdStatus === "missing")
+    out.push(
+      `  NOTE: if ${skillFolder} is a multi-skill plugin root, point critique at the invoked skill's own folder (e.g. <plugin>/skills/<name>) so its SKILL.md is graded.`,
+    );
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
+
+  const dropped = state.droppedEvaluatorItems;
+  const droppedTotal = dropped ? dropped.pass1 + (dropped.pass2 ?? 0) : 0;
+  if (droppedTotal > 0)
+    out.push(
+      `  evaluator reply: ${droppedTotal} malformed item(s) DROPPED by the per-item-tolerant parse` +
+        ` (pass 1: ${dropped!.pass1}${dropped!.pass2 !== undefined ? `, pass 2: ${dropped!.pass2}` : ""}) — ` +
+        `the findings below are the surviving items, not necessarily the complete reply.`,
+    );
 
   const integ = state.evaluatorIntegrity;
   if (integ && (integ.pass1Canary === false || integ.pass2Canary === false)) {
@@ -787,6 +958,15 @@ export function buildTextReport(state: ReportState): string {
   );
 
   if (items.length === 0) out.push("No findings from either pass.");
+
+  // G2: echo the graded run's resolved gate answers as copy-pasteable flags, so a follow-up run can be
+  // made deterministic without digging them out of result.json (mirrors the `skill` lane's footer).
+  if (state.gateAnswers?.length) {
+    out.push("");
+    out.push("To reproduce the graded run's gates deterministically, pass:");
+    for (const g of state.gateAnswers)
+      out.push(`  --answer ${JSON.stringify(`${g.question}=${g.answer}`)}  # was answered by: ${g.answeredBy}`);
+  }
   return out.join("\n");
 }
 
@@ -825,6 +1005,12 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     prompt,
     sessionId,
     outDir,
+    fidelity: state.fidelity,
+    gradedEffectiveFidelity: state.gradedEffectiveFidelity,
+    gradedBaseline: state.gradedBaseline,
+    costUsd: state.costUsd,
+    skillInvocationObserved: state.skillInvocationObserved,
+    gateAnswers: state.gateAnswers,
     taskResult,
     // On `base`, not a branch: a harvester reads these on EVERY outcome, including the infra-failure
     // paths where knowing which skill generation was graded matters most.
@@ -832,6 +1018,9 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     gradedSkillHash,
     selfReportStatus,
     evaluatorIntegrity,
+    // On `base` for the same reason as evaluatorIntegrity: a reply with dropped items is exactly where
+    // the surviving findings under-represent the full reply — every branch must carry the count.
+    droppedEvaluatorItems: state.droppedEvaluatorItems,
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
@@ -874,6 +1063,60 @@ export function writeGradedAliases(outDir: string): void {
     } catch {
       /* best-effort convenience copy — never fail the run for it */
     }
+  }
+}
+
+/** Best-effort write of one critique run-dir artifact. Warns on stderr rather than failing the
+ *  critique — these are durable convenience copies; stdout remains the authoritative report. */
+function writeRunArtifact(outDir: string, name: string, content: string): void {
+  try {
+    writeFileSync(join(outDir, name), content);
+  } catch (e) {
+    process.stderr.write(`skill-critique: could not write ${name} under ${outDir}: ${String(e)}\n`);
+  }
+}
+
+/** Persist the run-dir artifacts every critique leaves behind (all best-effort):
+ *   - `critique-report.json` — the machine-readable report, ALWAYS (harvesters read the run dir, not
+ *     a shell redirect);
+ *   - `critique-evidence-package.txt` — the ARMORED corpus the evaluator graded against, when the
+ *     evaluator ran (a disputed finding is re-gradeable offline against the exact record);
+ *   - `critique-salvage.json` — on an instrument failure only: the self-report + each pass's RAW reply
+ *     (captured pre-parse), so salvage is a file read, not console scraping. */
+export function persistCritiqueArtifacts(
+  outDir: string,
+  state: ReportState,
+  evidenceText: string | undefined,
+  salvage: { selfReport?: string; rawEvaluatorReplies: Array<{ pass: 1 | 2; raw: string }> },
+): void {
+  writeRunArtifact(outDir, "critique-report.json", JSON.stringify(buildJsonReport(state), null, 2) + "\n");
+  if (evidenceText !== undefined) writeRunArtifact(outDir, "critique-evidence-package.txt", evidenceText);
+  if (state.infraFailure || state.evaluatorError)
+    writeRunArtifact(
+      outDir,
+      "critique-salvage.json",
+      JSON.stringify(
+        {
+          infraFailure: state.infraFailure,
+          evaluatorError: state.evaluatorError,
+          selfReport: salvage.selfReport,
+          rawEvaluatorReplies: salvage.rawEvaluatorReplies,
+          reportState: buildJsonReport(state),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+}
+
+/** `--out`: ALSO write the selected-format report to an explicit file. Loud on failure (the user asked
+ *  for this file by name) but never changes the exit taxonomy — the stdout report already shipped. */
+function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" | "text"): void {
+  const content = outputFormat === "json" ? JSON.stringify(buildJsonReport(state)) + "\n" : buildTextReport(state) + "\n";
+  try {
+    writeFileSync(outPath, content);
+  } catch (e) {
+    process.stderr.write(`skill-critique: --out ${outPath} could not be written: ${String(e)}\n`);
   }
 }
 
@@ -938,6 +1181,22 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     return;
   }
 
+  // Resolve which folder the PACKAGER grades — fail-fast (usage error, exit 2) BEFORE any model spend:
+  // a multi-skill plugin root with no --skill would burn four workloads to produce a critique whose every
+  // coverage finding is "not adjudicable".
+  let resolvedSkill: ReturnType<typeof resolveCritiquedSkillDir>;
+  try {
+    resolvedSkill = resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector);
+  } catch (e) {
+    process.stderr.write(`${(e as Error).message}\n`);
+    process.exit(2);
+    return;
+  }
+  if (resolvedSkill.autoSelectedSkill)
+    process.stderr.write(
+      `::notice:: [critique] ${opts.skillFolder} is a single-skill plugin — grading skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
+    );
+
   const sessionId = `crit-${randomUUID()}`;
 
   try {
@@ -975,6 +1234,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         prompt: opts.prompt,
         sessionId,
         outDir,
+        fidelity: opts.fidelity,
         taskResult: undefined,
         selfReportStatus: "unavailable",
         items: [],
@@ -983,6 +1243,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       };
       if (opts.outputFormat === "json") writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
       else printTextReport(state);
+      // Salvage what exists even for a killed task turn: the report itself, structurally on disk.
+      persistCritiqueArtifacts(outDir, state, undefined, { rawEvaluatorReplies: [] });
+      if (opts.out) writeOutFile(opts.out, state, opts.outputFormat);
       // The INSTRUMENT failed at the TASK turn (killed by the timeout or the byte cap) — no critique was
       // produced. Findings never gate, but this is not a finding. The other instrument causes exit
       // elsewhere: a reflection-protocol break or an evaluator throw routes through the report path below.
@@ -997,6 +1260,39 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const taskRow = parseEnvelope(task.stdout)?.results?.[0];
     const gradedOutcome = taskRow?.outcome;
     const gradedSkillHash = taskRow?.fingerprint?.skillHash;
+
+    // Best-effort lift of the graded turn's own recorded tier/baseline/cost from turns/1/result.json —
+    // written by the time the task turn's envelope printed, same source writeGradedAliases copies. Every
+    // field defensive: an absent/odd result degrades to "unknown"/unpriced, never a throw.
+    const taskRaw = readTurn1Result(outDir) as Record<string, unknown> | null;
+    const gradedEffectiveFidelity = typeof taskRaw?.effectiveFidelity === "string" ? taskRaw.effectiveFidelity : undefined;
+    const taskFp = taskRaw?.fingerprint as { baseline?: unknown } | undefined;
+    const gradedBaseline = typeof taskFp?.baseline === "string" ? taskFp.baseline : undefined;
+    const taskTurnUsd = sumCostUsd(taskRaw?.modelUsage);
+    // Graded-run validity (advisory): when a specific plugin skill was selected, check the run's own
+    // skillActivity actually mentions it — packaging can be perfectly plugin-aware and still be grading a
+    // run that never invoked the selected skill. Best-effort string scan of the recorded activity;
+    // `undefined` = not applicable (plain skill folder) or no evidence either way (absent result).
+    const gradedSkillName = opts.skillSelector ?? resolvedSkill.autoSelectedSkill;
+    const skillInvocationObserved =
+      gradedSkillName !== undefined && taskRaw?.skillActivity !== undefined
+        ? JSON.stringify(taskRaw.skillActivity).includes(gradedSkillName)
+        : undefined;
+    // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
+    // does this in its footer; critique's report gets the same courtesy). Defensive over the raw shape.
+    const gpGates = (taskRaw?.gateProvenance as { gates?: unknown } | undefined)?.gates;
+    const gateAnswers = Array.isArray(gpGates)
+      ? gpGates
+          .filter(
+            (g): g is { question: string; answer: string; answeredBy: string } =>
+              !!g &&
+              typeof g === "object" &&
+              typeof (g as Record<string, unknown>).question === "string" &&
+              typeof (g as Record<string, unknown>).answer === "string" &&
+              typeof (g as Record<string, unknown>).answeredBy === "string",
+          )
+          .map((g) => ({ question: g.question, answer: g.answer, answeredBy: g.answeredBy }))
+      : undefined;
 
     // Stable-named copy of the GRADED turn's result, written HERE — while `result.json` is still turn 1
     // and before the reflection turn's resume renames it to `result.turn-1.json`. Writing it at this point
@@ -1021,6 +1317,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const requestedModel = opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL;
     let items: CritiqueItem[] = [];
     let evaluatorIntegrity: { pass1Canary: boolean; pass2Canary?: boolean } | undefined;
+    let droppedEvaluatorItems: { pass1: number; pass2?: number } | undefined;
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
     let evaluatorModel: string | undefined;
@@ -1028,16 +1325,32 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let turn1ResultDegraded: boolean | undefined;
     let turn1SliceDegraded: boolean | undefined;
     let skillMdStatus: SkillMdStatus | undefined;
+    // Salvage/cost/evidence capture — populated by the evaluator's callbacks (raw replies land here
+    // BEFORE parsing, so a parse throw cannot lose them) and by the per-turn result reads.
+    let evidenceText: string | undefined;
+    const rawEvaluatorReplies: Array<{ pass: 1 | 2; raw: string }> = [];
+    let evaluatorPass1Usd: number | undefined;
+    let evaluatorPass2Usd: number | undefined;
+    let reflectionTurnUsd: number | undefined;
+    let salvageSelfReport: string | undefined;
 
     if (!reflectionValidation.ok) {
       infraFailure = reflectionValidation.reason;
       // Per this tool's contract (a discovery instrument, never a gate) the defect is REPORTED, not thrown —
       // main() then exits 2 (no critique was produced). The evaluator is deliberately never invoked.
     } else {
+      // Reflection turn cost (best-effort, same posture as the task turn's read above).
+      try {
+        const r2 = JSON.parse(readFileSync(turnArtifactPath(outDir, 2, "result.json"), "utf8")) as Record<string, unknown>;
+        reflectionTurnUsd = sumCostUsd(r2.modelUsage);
+      } catch {
+        /* unpriced */
+      }
       // F38: `selfReport` is `undefined` (never a placeholder string) when the reflection turn produced no
       // finalMessage — `runCritique` skips pass 2 entirely in that case; the typed `selfReportStatus` below
       // is what carries "no self-report" into both output formats.
       const selfReport = extractFinalMessage(reflect);
+      salvageSelfReport = selfReport;
       selfReportStatus = selfReport !== undefined ? "captured" : "unavailable";
 
       // 4. Package the TURN-1-ONLY evidence and run the critique. `isResume: true` (F30 residual) — we are
@@ -1051,7 +1364,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         turn1ResultDegraded: trd,
         turn1SliceDegraded: tsd,
         skillMdStatus: sms,
-      } = packageEvidence(outDir, boundary, opts.skillFolder, true);
+      } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, { agentsMdPath: resolvedSkill.agentsMdPath });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
@@ -1059,6 +1372,19 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         items = await runCritique(sections, selfReport, {
           onEvaluatorIntegrity: (i) => {
             evaluatorIntegrity = i;
+          },
+          onDroppedItems: (d) => {
+            droppedEvaluatorItems = d;
+          },
+          onArmoredEvidence: (t) => {
+            evidenceText = t;
+          },
+          onRawReply: (pass, raw) => {
+            rawEvaluatorReplies.push({ pass, raw });
+          },
+          onUsage: (pass, usage) => {
+            if (pass === 1) evaluatorPass1Usd = sumCostUsd(usage);
+            else evaluatorPass2Usd = sumCostUsd(usage);
           },
           model: requestedModel,
           packageTruncated: truncated,
@@ -1074,12 +1400,31 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       }
     }
 
-    // 5. Report.
+    // 5. Report. Cost rollup first: total over whatever workloads were priceable, with `complete`
+    // marking whether that is genuinely all four — a partial sum must never masquerade as the full spend.
+    const costParts = [taskTurnUsd, reflectionTurnUsd, evaluatorPass1Usd, evaluatorPass2Usd];
+    const priced = costParts.filter((p): p is number => p !== undefined);
+    const costUsd: CritiqueCost | undefined = priced.length
+      ? {
+          taskTurnUsd,
+          reflectionTurnUsd,
+          evaluatorPass1Usd,
+          evaluatorPass2Usd,
+          totalUsd: priced.reduce((a, b) => a + b, 0),
+          complete: priced.length === costParts.length,
+        }
+      : undefined;
     const state: ReportState = {
       skillFolder: opts.skillFolder,
       prompt: opts.prompt,
       sessionId,
       outDir,
+      fidelity: opts.fidelity,
+      gradedEffectiveFidelity,
+      gradedBaseline,
+      costUsd,
+      skillInvocationObserved,
+      gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
       gradedOutcome,
       gradedSkillHash,
@@ -1090,6 +1435,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       evaluatorError,
       infraFailure,
       evaluatorIntegrity,
+      droppedEvaluatorItems,
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,
@@ -1100,6 +1446,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     } else {
       printTextReport(state);
     }
+    // Durable run-dir artifacts on EVERY outcome (report always; evidence when the evaluator ran;
+    // salvage on instrument failure), plus the explicit --out copy when requested.
+    persistCritiqueArtifacts(outDir, state, evidenceText, { selfReport: salvageSelfReport, rawEvaluatorReplies });
+    if (opts.out) writeOutFile(opts.out, state, opts.outputFormat);
     // A reflection-protocol break or an evaluator failure reaches HERE, not the early returns above —
     // the report is still printed (it carries the diagnosis), but no critique was produced, so this is an
     // instrument failure, not a finding. Missing this path is what made the documented exit contract

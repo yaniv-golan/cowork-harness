@@ -867,6 +867,33 @@
           "reasoningElided": {
             "type": "number",
             "description": "count of reasoning turns dropped by the cap (oldest-first) — mirrors thinkingElided"
+          },
+          "webSearches": {
+            "type": "array",
+            "description": "the sub-agent's OWN WebSearch calls (query + the paired tool_result's text, bounded), read from the same child session transcript as `reasoning` (LIVE/record lane only — undefined on replay). Sub-agent searches never enter the top-level webSearches[] (main-agent/fork-scoped) or toolCounts, so this is the only place a sub-agent's research is grounded. RAW bounded text rather than the top-level field's parsed {title,url} shape: grounding needs the content the sub-agent actually saw. Absent = never captured OR the dispatch made no searches; a present array is 1+ captured searches.",
+            "items": {
+              "type": "object",
+              "required": [
+                "query",
+                "resultText"
+              ],
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "resultText": {
+                  "type": "string"
+                },
+                "resultTruncated": {
+                  "type": "boolean",
+                  "description": "present and true ONLY when the result text was cut at the per-entry byte cap"
+                }
+              }
+            }
+          },
+          "webSearchesElided": {
+            "type": "number",
+            "description": "count of WebSearch entries dropped past the per-dispatch cap (oldest-first) — mirrors reasoningElided"
           }
         }
       }

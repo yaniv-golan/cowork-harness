@@ -71,18 +71,59 @@ function isValidRawItem(x: unknown): x is RawItem {
   );
 }
 
+/** One malformed-item diagnosis — which field check failed, for the fail-loud path's message. */
+function whyInvalid(x: unknown): string {
+  if (!x || typeof x !== "object") return "not an object";
+  const o = x as Record<string, unknown>;
+  if (typeof o.idea !== "string") return `"idea" is ${typeof o.idea}, expected string`;
+  if (typeof o.classification !== "string" || !CLASSIFICATIONS.has(o.classification as CritiqueItem["classification"]))
+    return `"classification" is ${JSON.stringify(o.classification)}, not one of the ${CLASSIFICATIONS.size} known values`;
+  if (typeof o.evidence !== "string") return `"evidence" is ${typeof o.evidence}, expected string`;
+  if (typeof o.recommendedAction !== "string") return `"recommendedAction" is ${typeof o.recommendedAction}, expected string`;
+  return "unknown validation failure";
+}
+
+/** A parsed pass reply: the surviving items (canary already stripped), whether the canary was seen, and
+ *  how many malformed items the PER-ITEM-tolerant parse dropped (0 on a fully-clean reply). */
+interface ParsedPassReply {
+  items: CritiqueItem[];
+  canaryPresent: boolean;
+  droppedMalformed: number;
+}
+
 /** Parse a pass's reply into `CritiqueItem[]`, tagging every item with `source` (never trusting the model
  *  to self-report which pass/role it is). Scans EVERY top-level `{...}` group (a model routinely wraps
- *  JSON in prose or restates it fenced+unfenced — same reason `semantic-judge.ts` scans all groups) and
- *  collects every one that is a full, well-shaped `{"items":[...]}` document, **dedupes structurally-
- *  identical documents** (a model restating its own JSON must not self-invalidate), and requires **exactly
- *  one distinct** document — mirroring `semantic-judge.ts`'s `parseJudgeResults`. A reply with ZERO valid
- *  document throws loud (a malformed reply must fail the run, never silently manufacture an empty critique
- *  that looks identical to "the evaluator found nothing"), and a reply with MORE THAN ONE *distinct* valid
- *  document also throws loud — a second, DIFFERENT candidate critique is an ambiguity the caller must not
- *  silently resolve by picking whichever came first. */
-function parseCritiqueItems(raw: string, source: CritiqueItem["source"], label: string): CritiqueItem[] {
-  const distinct = new Map<string, RawItem[]>();
+ *  JSON in prose or restates it fenced+unfenced — same reason `semantic-judge.ts` scans all groups) for
+ *  `{"items":[...]}` documents, **dedupes structurally-identical documents** (a model restating its own
+ *  JSON must not self-invalidate), and requires **exactly one distinct** non-empty document.
+ *
+ *  PER-ITEM tolerance (was all-or-nothing): within a document, each item is validated INDIVIDUALLY —
+ *  valid items survive, malformed ones are dropped AND COUNTED (`droppedMalformed`, surfaced loudly in
+ *  the report). The previous `items.every(isValidRawItem)` gate discarded the ENTIRE document on one
+ *  malformed item, turning a 10-good-1-bad reply into "no valid JSON found" (observed in the field: a
+ *  whole discovery run lost to one bad element, findings salvageable only by console scraping).
+ *
+ *  CANARY handling happens HERE, before canonicalization (was post-parse in `runCritique`): canary items
+ *  are recognized by their `idea` alone (so a canary echoed with a mutated/malformed field still proves
+ *  the pass followed trusted instructions — and is never counted as a dropped finding), and a document
+ *  that contained ONLY the canary is treated as a RESTATEMENT of "no findings", not a distinct candidate.
+ *  The output contract's "return the canary item ALONE" makes a full-document + canary-only-document
+ *  pair a legitimate reply shape; canonicalizing the canary into the key made that pair read as two
+ *  DIFFERENT documents and fail as ambiguous.
+ *
+ *  Fail-loud contract (unchanged in spirit): a reply with no candidate document at all, or whose every
+ *  candidate item is malformed WITH no canary vouching for the pass, still throws — a garbage reply must
+ *  never silently manufacture an empty critique that looks identical to "the evaluator found nothing".
+ *  A reply that proves instruction-following (canary present) but whose findings were all malformed
+ *  returns empty WITH the dropped count, so the report says exactly what happened. More than one
+ *  *distinct* non-empty document still throws — a second, DIFFERENT candidate critique is an ambiguity
+ *  the caller must not silently resolve by picking whichever came first. */
+function parseCritiqueItems(raw: string, source: CritiqueItem["source"], label: string, nonce: string): ParsedPassReply {
+  const canary = canaryIdea(nonce);
+  const distinct = new Map<string, { valid: RawItem[]; droppedMalformed: number }>();
+  let canaryPresent = false;
+  let emptyCandidateSeen = false; // a document that was empty (or canary-only) — a "no findings" restatement
+  let allMalformed: { count: number; firstWhy: string } | undefined; // a document whose every finding failed validation
   for (const group of extractAllJsonObjects(raw)) {
     let parsed: unknown;
     try {
@@ -91,34 +132,63 @@ function parseCritiqueItems(raw: string, source: CritiqueItem["source"], label: 
       continue;
     }
     const items = (parsed as { items?: unknown }).items;
-    if (!Array.isArray(items) || !items.every(isValidRawItem)) continue;
-    const rawItems = items as RawItem[];
+    if (!Array.isArray(items)) continue;
+    // Canary first, by `idea` alone — a mutated canary still proves the trusted instruction was followed,
+    // and a canary must never surface as a finding nor count as a dropped one.
+    const findings = items.filter((it) => {
+      const isCanary = !!it && typeof it === "object" && (it as Record<string, unknown>).idea === canary;
+      if (isCanary) canaryPresent = true;
+      return !isCanary;
+    });
+    const valid = findings.filter(isValidRawItem);
+    const malformed = findings.length - valid.length;
+    if (valid.length === 0) {
+      if (malformed === 0) emptyCandidateSeen = true;
+      else if (!allMalformed || malformed > allMalformed.count)
+        allMalformed = { count: malformed, firstWhy: whyInvalid(findings.find((it) => !isValidRawItem(it))) };
+      continue;
+    }
     // Canonicalize on content only (idea/classification/evidence/recommendedAction) — the reply may
     // re-wrap the SAME critique in prose or restate it fenced+unfenced; identical content is one document.
     const key = JSON.stringify(
-      rawItems.map((it) => ({
+      valid.map((it) => ({
         idea: it.idea,
         classification: it.classification,
         evidence: it.evidence,
         recommendedAction: it.recommendedAction,
       })),
     );
-    distinct.set(key, rawItems);
+    const prior = distinct.get(key);
+    // Same valid content restated with a different malformed tail is one document — keep the max drop count.
+    distinct.set(key, { valid, droppedMalformed: Math.max(malformed, prior?.droppedMalformed ?? 0) });
   }
-  if (distinct.size === 0)
-    throw new Error(`${label}: no valid {"items":[...]} JSON found in the evaluator reply.\n--- raw reply ---\n${raw}`);
   if (distinct.size > 1)
     throw new Error(
       `${label}: ${distinct.size} DIFFERENT valid {"items":[...]} documents found in the evaluator reply (ambiguous — cannot pick one by position).\n--- raw reply ---\n${raw}`,
     );
-  const rawItems = [...distinct.values()][0]!;
-  return rawItems.map((it) => ({
-    source,
-    idea: it.idea,
-    classification: it.classification,
-    evidence: it.evidence,
-    recommendedAction: it.recommendedAction,
-  }));
+  if (distinct.size === 0) {
+    // No document carried a valid finding. Three distinct shapes, two of them legitimate:
+    if (emptyCandidateSeen && !allMalformed) return { items: [], canaryPresent, droppedMalformed: 0 }; // clean "no findings"
+    if (allMalformed && canaryPresent) return { items: [], canaryPresent, droppedMalformed: allMalformed.count }; // tried, all malformed — reported, not thrown
+    if (allMalformed)
+      throw new Error(
+        `${label}: a {"items":[...]} document was found but EVERY item failed validation ` +
+          `(${allMalformed.count} malformed item(s); first failure: ${allMalformed.firstWhy}) and no integrity canary vouches for the pass.\n--- raw reply ---\n${raw}`,
+      );
+    throw new Error(`${label}: no valid {"items":[...]} JSON found in the evaluator reply.\n--- raw reply ---\n${raw}`);
+  }
+  const chosen = [...distinct.values()][0]!;
+  return {
+    items: chosen.valid.map((it) => ({
+      source,
+      idea: it.idea,
+      classification: it.classification,
+      evidence: it.evidence,
+      recommendedAction: it.recommendedAction,
+    })),
+    canaryPresent,
+    droppedMalformed: chosen.droppedMalformed,
+  };
 }
 
 /** TRUSTED plane declaration. Everything between the nonce markers is DATA; instructions live only OUTSIDE
@@ -154,12 +224,6 @@ function canarySection(nonce: string): string {
   return `## ${headTag(nonce)} Integrity canary
 Regardless of your findings — even if you have none — include one extra item, exactly:
 {"idea":"${canaryIdea(nonce)}","classification":"not-adjudicable","evidence":"","recommendedAction":"none"}`;
-}
-
-/** Strip the canary and report whether it was present. */
-function extractCanary(items: CritiqueItem[], nonce: string): { items: CritiqueItem[]; present: boolean } {
-  const rest = items.filter((it) => it.idea !== canaryIdea(nonce));
-  return { items: rest, present: rest.length !== items.length };
 }
 
 const OUTPUT_CONTRACT = `Return STRICT JSON ONLY — no markdown code fences, no prose before or after, and do NOT repeat
@@ -368,6 +432,22 @@ export interface RunCritiqueOptions {
    *  this function returns — `"already-covered"` is, by this evaluator's own rubric, always a claim about
    *  what SKILL.md/references contains, which cannot be truthfully asserted off an unconfirmed source. */
   skillMdUnreadable?: boolean;
+  /** Called once with each pass's PER-ITEM-tolerant-parse drop count (0 on a clean reply). A non-zero
+   *  count means the evaluator's reply carried malformed items that were dropped rather than sinking the
+   *  whole document — the report must surface it (an unreported drop would be a silent recall loss). */
+  onDroppedItems?: (dropped: { pass1: number; pass2?: number }) => void;
+  /** Called once per pass, IMMEDIATELY after the transport resolves and BEFORE the reply is parsed — so
+   *  the raw reply is captured structurally even when the parse then throws (the salvage path; the raw
+   *  text previously survived only embedded inside the thrown error's message). */
+  onRawReply?: (pass: 1 | 2, raw: string) => void;
+  /** Called once with the ARMORED evidence text — the exact closed corpus both prompts embed and
+   *  `validateCitations` checks against. The caller persists it so a disputed finding can be re-graded
+   *  offline against the record it was actually graded on. */
+  onArmoredEvidence?: (text: string) => void;
+  /** Called once per pass that ran, with the transport envelope's usage/cost map (absent when the
+   *  transport didn't supply one — e.g. a test double). Lets the caller tally a TRUE per-critique cost:
+   *  the evaluator passes are model workloads too, not just the two graded turns. */
+  onUsage?: (pass: 1 | 2, usage: Record<string, unknown> | undefined) => void;
   /** F35: called ONCE, synchronously, after the resolved model is confirmed (agreeing across every pass
    *  that actually ran) — with the TRANSPORT-RESOLVED model id (e.g. `claude-opus-4-8-20260115`), never the
    *  requested alias (e.g. `"opus"`) `opts.model`/`DEFAULT_EVALUATOR_MODEL` may have been. A callback
@@ -410,6 +490,7 @@ export async function runCritique(
   // string exists per critique. Two corpora would silently move findings into DROPPED.
   const evidence = armorEvidence(sections, opts.nonce);
   const pkg = evidence.text;
+  opts.onArmoredEvidence?.(pkg);
   const model = opts.model ?? DEFAULT_EVALUATOR_MODEL;
   const complete = opts.complete ?? claudeCliComplete;
   const truncated = opts.packageTruncated ?? false;
@@ -418,28 +499,37 @@ export async function runCritique(
   // Pass 1 FIRST, and its own await completes before pass 2's prompt is ever constructed — the
   // self-report is not merely "not mentioned," it does not exist yet in this function's execution when
   // this call is made.
-  const { text: pass1Raw, model: pass1Model } = await complete(buildPass1Prompt(evidence, truncated, skillMdUnreadable), model);
-  let pass1Items = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)");
-  // Strip the canary FIRST — before the skillMd downgrade, before it can reach pass 2's summary, and
-  // before final validation — so it never appears as a finding or influences one.
-  const c1 = extractCanary(pass1Items, evidence.nonce);
-  pass1Items = c1.items;
+  const {
+    text: pass1Raw,
+    model: pass1Model,
+    usage: pass1Usage,
+  } = await complete(buildPass1Prompt(evidence, truncated, skillMdUnreadable), model);
+  // Raw reply + usage are handed out BEFORE parsing — a parse throw must not lose either (salvage/cost).
+  opts.onRawReply?.(1, pass1Raw);
+  opts.onUsage?.(1, pass1Usage);
+  // The parse strips the canary itself (pre-canonicalization — see parseCritiqueItems) and drops+counts
+  // malformed items per-item, so nothing here re-filters.
+  const p1 = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)", evidence.nonce);
+  let pass1Items = p1.items;
   if (skillMdUnreadable) pass1Items = forceSkillMdCoverageNotAdjudicable(pass1Items);
 
   if (selfReport === undefined) {
     if (!pass1Model) throw new Error("critique pass 1: transport returned no resolved model (required for provenance)");
     opts.onResolvedModel?.(pass1Model);
-    opts.onEvaluatorIntegrity?.({ pass1Canary: c1.present });
+    opts.onEvaluatorIntegrity?.({ pass1Canary: p1.canaryPresent });
+    opts.onDroppedItems?.({ pass1: p1.droppedMalformed });
     return validateCitations(pass1Items, pkg);
   }
 
-  const { text: pass2Raw, model: pass2Model } = await complete(
-    buildPass2Prompt(evidence, pass1Items, selfReport, truncated, skillMdUnreadable),
-    model,
-  );
-  let pass2Items = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)");
-  const c2 = extractCanary(pass2Items, evidence.nonce);
-  pass2Items = c2.items;
+  const {
+    text: pass2Raw,
+    model: pass2Model,
+    usage: pass2Usage,
+  } = await complete(buildPass2Prompt(evidence, pass1Items, selfReport, truncated, skillMdUnreadable), model);
+  opts.onRawReply?.(2, pass2Raw);
+  opts.onUsage?.(2, pass2Usage);
+  const p2 = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)", evidence.nonce);
+  let pass2Items = p2.items;
   if (skillMdUnreadable) pass2Items = forceSkillMdCoverageNotAdjudicable(pass2Items);
 
   if (!pass1Model || !pass2Model)
@@ -449,7 +539,8 @@ export async function runCritique(
       `critique evaluator: pass 1 and pass 2 resolved to DIFFERENT models (${pass1Model} vs ${pass2Model}) — refusing to report a heterogeneous-model critique under one provenance record`,
     );
   opts.onResolvedModel?.(pass1Model);
-  opts.onEvaluatorIntegrity?.({ pass1Canary: c1.present, pass2Canary: c2.present });
+  opts.onEvaluatorIntegrity?.({ pass1Canary: p1.canaryPresent, pass2Canary: p2.canaryPresent });
+  opts.onDroppedItems?.({ pass1: p1.droppedMalformed, pass2: p2.droppedMalformed });
 
   return validateCitations([...pass1Items, ...pass2Items], pkg);
 }

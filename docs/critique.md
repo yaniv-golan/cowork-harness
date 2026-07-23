@@ -110,6 +110,8 @@ ignored.
 |---|---|
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
+| `--out <path>` | **also** write the selected-format report to this file (stdout unchanged) |
+| `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ its `agents/<name>.md`) instead of a missing plugin-root SKILL.md — see below |
 | `--fidelity container\|hostloop` | container (default) or hostloop; `microvm`/`protocol`/`cowork` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
@@ -128,6 +130,25 @@ ignored.
 so repeating them is how you pass several. Every other value-taking flag is single-valued and repeating it is
 a **usage error** (exit `2`) rather than a silent last-wins — `--prompt a --prompt b` would otherwise discard
 a probe you typed. Boolean flags may be repeated harmlessly.
+
+### Multi-skill plugins (`--skill`)
+
+A multi-skill plugin has `skills/<name>/SKILL.md` and **no root `SKILL.md`** — a plugin root graded as a
+plain skill folder has no SKILL.md to read, which downgrades every coverage finding to "not
+adjudicable". So:
+
+- **`--skill <name>`** makes the packager grade `skills/<name>/SKILL.md`, and also packages the invoked
+  skill's **`agents/<name>.md`** (sub-agent system prompts) plus bounded **`references/*.md` content** —
+  for sub-agent-heavy skills that is where most operative guidance lives.
+- A multi-skill root with **no `--skill` is refused before any model spend**; a single-skill plugin
+  auto-selects with a notice.
+- **Selection only:** the positional folder is still what both turns mount (session identity is
+  unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the *mounted folder*,
+  so it pairs generations per-plugin, not per-skill. Pair per-skill runs by `--label` if you need finer
+  grouping.
+- The report carries an advisory **`skillInvocationObserved`**: `false` means the graded run's own
+  `skillActivity` never mentions the selected skill — the critique may be grading a run that did not
+  actually invoke it.
 
 ### Skills that need an attached file
 
@@ -153,6 +174,27 @@ It does **not** record their contents — see Known limitations.
   staged native agent binary, and writes to the real host filesystem — a writable `--folder` there requires
   `--allow-host-writes`. Both tiers need an authenticated `claude` CLI on PATH.
 
+### Research, egress, and the lean image
+
+- **Reading `egress.log` on a research-heavy critique:** a `WebSearch` does **not** produce search-host
+  entries in the container `egress.log`. An egress log showing only `api.anthropic.com` (plus denied
+  telemetry) is consistent with WebSearch working normally — it is *not* evidence that research was
+  blocked. What **is** container-egress-gated is `web_fetch` (the hostname allowlist); a skill that
+  fetches off-allowlist hosts via `web_fetch` is denied at `container` and host-routed at `hostloop`.
+- **Sub-agent research is not in the main turn's `toolCounts`.** A `WebSearch` issued by a dispatched
+  sub-agent does not increment the main `toolCounts.WebSearch` — a `0` there with researched facts in
+  the output usually means the sub-agents did the searching. Each dispatch's own searches ARE captured
+  (live/record lane) as `subagents[].webSearches` (query + bounded result text), surfaced by
+  `trace --view subagent-research`, and packaged into critique's evidence as a "Sub-agent research"
+  section — so the evaluator can ground a sub-agent's "researched" claim instead of marking it
+  not-adjudicable. Absent on replay (the child transcript only exists while the real binary ran) —
+  absence is never evidence of no research.
+- **Critiquing a document-analysis skill?** The lean default image omits OCR / LibreOffice / PDF-table
+  tooling (native `Read` handles text PDFs fine). If the skill needs them, pass
+  `--allow-missing-capability`, or point `COWORK_AGENT_IMAGE` at a full-parity build
+  (`--build-arg COWORK_FULL_PARITY=1`). The lean default is deliberate — don't treat a
+  `missing_capability` signal there as a skill defect.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -175,6 +217,46 @@ Never gate CI on findings; that is the whole design.
 Every report also carries the advisory scoping machine-readably: a `verdictProvenance` object in
 `--output-format json`, and a "verdict scope:" line in the text report — both marking the verdict as an
 advisory self-run, not an independent attestation.
+
+The header also reports the pinned **fidelity** (plus the tier/baseline the graded turn *recorded*, so a
+mismatch is visible rather than assumed away) and a per-critique **cost** rollup across all four model
+workloads — the two graded turns *and* the two evaluator passes — marked `INCOMPLETE` whenever any
+workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFidelity` / `gradedBaseline`
+/ `costUsd`, and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
+malformed evaluator items (the surviving findings are then not necessarily the complete reply).
+
+### Run-dir artifacts
+
+Beyond stdout, every critique leaves durable artifacts at the run-dir root (best-effort writes —
+`turns/1/`, `turns/2/` and the `*.graded.json` aliases sit alongside them):
+
+| File | When | What |
+|---|---|---|
+| `critique-report.json` | always | the machine-readable report a harvester reads without shell redirection |
+| `critique-evidence-package.txt` | when the evaluator ran | the **armored** corpus the evaluator actually graded against — re-grade a disputed finding offline against the exact record |
+| `critique-salvage.json` | exit 2 only | the self-report + each evaluator pass's RAW reply (captured **pre-parse**), so salvage is a file read, not console scraping |
+
+## Reproduction — the ≥2-run discipline
+
+`critique --repeat` is refused (fixed two-turn protocol). The supported N-run reproduction recipe:
+
+```bash
+for i in 1 2 3; do
+  cowork-harness critique ./my-plugin --skill my-skill --prompt "<same probe>" \
+    --label gen1 --output-format json --out "runs/critique-$i.json"
+done
+```
+
+Then pair/cluster across the reports:
+
+- **Same skill generation?** group by `gradedSkillHash` (content-exact — an edited skill changes it).
+- **Same finding across runs/inputs?** cluster by each item's **`findingFingerprint`** (sha over the
+  normalized idea + classification + recommendedAction, deliberately excluding the input-specific
+  `evidence` excerpt — so the same finding matches across different decks/transcripts).
+- A finding that recurs across ≥2 runs with the same `findingFingerprint` meets the reproduction bar;
+  a one-off is a lead, not a conclusion.
+- To make the graded runs deterministic across repeats, copy the report's echoed `--answer` lines
+  (the graded run's resolved gate answers) into the next invocation.
 
 ## Running it on a skill you did not write
 
@@ -233,15 +315,12 @@ the two cannot disagree.
   Desktop baseline), so two runs of the same skill could quietly land in different environments — and
   critique's whole value is comparing runs over time, which needs a fixed, known environment. Naming a real
   tier keeps that comparison honest.
-- **`[deliberate]` SKILL.md is capped at 64KB** in the evidence; a larger one degrades toward "not
-  adjudicable". The package is bounded so the evaluator sees a whole record rather than a truncated tail.
-  Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —
-  only an unreadable SKILL.md forces one.
+- **`[deliberate]` SKILL.md is capped at 64KB** in the evidence; an oversized one is **truncated but
+  still graded** (its status stays `readable`) — size alone never forces a downgrade. Only a **missing
+  or unreadable** SKILL.md forces the mechanical `"already-covered"` → `"not adjudicable"` downgrade.
+  The package is bounded so the evaluator sees a whole record rather than a truncated tail; the
+  truncation caveat is a *prompted* nudge toward `not-adjudicable`, never a mechanical one.
 - **`[not-built]` English-only prompts.** No localization has been attempted; nothing blocks it.
-- **`[not-built]` The evidence package is not persisted.** A disputed finding cannot be re-checked
-  against the record it was graded on.
-- **`[not-built]` The report is written to stdout** only — capture it with shell redirection;
-  `--output-format` changes the format, never the destination.
 
 ### Reading the graded turn's result
 

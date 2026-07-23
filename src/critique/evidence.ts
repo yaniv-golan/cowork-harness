@@ -239,14 +239,32 @@ export interface CritiqueItem {
   evidence: string; // the model's cited excerpt
   recommendedAction: string;
   citationResolved?: boolean; // set by validateItems
+  /** Stable content fingerprint for CROSS-INPUT corroboration (set by `validateCitations`): sha256/16
+   *  over the whitespace-normalized idea + classification + recommendedAction, deliberately EXCLUDING
+   *  the `evidence` excerpt — evidence quotes the specific input document, so including it would give
+   *  the same finding a different fingerprint on every deck/model/transcript it recurs against. This
+   *  complements `fingerprint.skillHash`: skillHash pairs critiques of the SAME skill across fixes;
+   *  this clusters the SAME finding across DIFFERENT inputs. */
+  findingFingerprint?: string;
+}
+
+/** See `CritiqueItem.findingFingerprint`. Exported for harvest tooling and the unit test. */
+export function findingFingerprint(item: Pick<CritiqueItem, "idea" | "classification" | "recommendedAction">): string {
+  return createHash("sha256")
+    .update(`${norm(item.idea)}\n${item.classification}\n${norm(item.recommendedAction)}`)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 /** Mechanically validate each item's citation against the evidence package. An item whose citation doesn't
  *  resolve is FLAGGED (citationResolved:false) — the caller drops it from actionable output. A
  *  `not-adjudicable` item needs no citation (there is, by definition, no deciding evidence). */
 export function validateCitations(items: CritiqueItem[], evidencePackage: string): CritiqueItem[] {
+  // Also the single choke point every returned item passes through — so the cross-input
+  // `findingFingerprint` is stamped here rather than at each caller.
   return items.map((it) => ({
     ...it,
     citationResolved: it.classification === "not-adjudicable" ? true : citationResolves(evidencePackage, it.evidence),
+    findingFingerprint: findingFingerprint(it),
   }));
 }

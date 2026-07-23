@@ -113,7 +113,8 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
       arity: flag === "--stop-on-diverge" || flag === "--allow-budget-stop" ? 0 : 1,
       critique: {
         kind: "reject",
-        reason: "critique is a fixed two-turn protocol — loop `critique` itself and pair generations by fingerprint.skillHash",
+        reason:
+          "critique is a fixed two-turn protocol — loop `critique` itself and pair generations by fingerprint.skillHash (docs/critique.md's 'Reproduction' section has the recipe)",
       },
     }),
   ),
