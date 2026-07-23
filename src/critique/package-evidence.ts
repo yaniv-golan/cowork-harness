@@ -178,6 +178,10 @@ const ATTACHED_INPUTS_CAP = 1 * 1024;
 // of both is packaged too. Sized to keep the per-section sum under MAX_PACKAGE_BYTES.
 export const AGENTS_MD_CAP = 8 * 1024;
 export const REFERENCES_CONTENT_CAP = 8 * 1024; // TOTAL across all references/ files, not per-file
+// Sub-agent WebSearch query+result (subagents[].webSearches, live-lane capture): the evidence an
+// evaluator needs to ground a sub-agent's evidence_source:"researched" claim — previously invisible
+// (agentType/description only), which made every such claim not-adjudicable.
+export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
 
 /** The overall package hard cap — the whole assembled document is trimmed to this even if every
  *  per-section budget above was individually respected (their sum is deliberately a bit under this, but a
@@ -280,6 +284,32 @@ export function packageEvidence(
     description: typeof s.description === "string" ? s.description : undefined,
   }));
 
+  // Sub-agent research: each dispatch's own WebSearch query + (bounded) result text, from the live-lane
+  // child-transcript capture. An empty assembly gets an explicit absence-is-not-evidence note — this
+  // capture is live/record-only, so a missing section must never read as "no research happened".
+  const researchParts: string[] = [];
+  for (const s of subagentsRaw) {
+    const ws = Array.isArray(s.webSearches) ? (s.webSearches as Array<Record<string, unknown>>) : [];
+    if (!ws.length) continue;
+    const label =
+      typeof s.resolvedAgentType === "string"
+        ? s.resolvedAgentType
+        : typeof s.dispatchAgentType === "string"
+          ? s.dispatchAgentType
+          : typeof s.description === "string"
+            ? s.description
+            : "dispatch";
+    for (const w of ws) {
+      if (typeof w.query !== "string") continue;
+      researchParts.push(
+        `[${label}] query: ${w.query}\nresult:\n${typeof w.resultText === "string" ? w.resultText : "(no result text captured)"}`,
+      );
+    }
+  }
+  const subagentResearch = researchParts.length
+    ? researchParts.join("\n\n")
+    : "(none captured — sub-agent WebSearch is recorded on the live lane only; absence here is NOT evidence no research happened)";
+
   const { text: transcript, degraded: turn1SliceDegraded } = readTurn1Transcript(runDir, boundary);
 
   // Skill source. SKILL.md is delivered whole to the agent and is NEVER captured by a Read event (see
@@ -376,6 +406,11 @@ export function packageEvidence(
     sec("toolCounts (turn 1, top-level tool calls)" + turn1ResultDegradedNote, bound(safeJson(toolCounts), STRUCTURED_CAP)),
     sec("skillActivity (turn 1, per-invocation window rollups)" + turn1ResultDegradedNote, bound(safeJson(skillActivity), STRUCTURED_CAP)),
     sec("Sub-agents dispatched (turn 1; agentType/description only)" + turn1ResultDegradedNote, bound(safeJson(subagents), STRUCTURED_CAP)),
+    sec(
+      "Sub-agent research (each dispatch's own WebSearch query + bounded result; live-lane capture — absence is NOT evidence of no research)" +
+        turn1ResultDegradedNote,
+      bound(subagentResearch, SUBAGENT_RESEARCH_CAP),
+    ),
     sec(
       "referencesRead (turn 1, main-agent Reads only, references/+scripts/ under the mounted skill — " +
         "NEVER includes SKILL.md itself, which is delivered whole and never Read as a file)" +

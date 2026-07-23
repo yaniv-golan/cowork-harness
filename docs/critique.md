@@ -183,7 +183,12 @@ It does **not** record their contents — see Known limitations.
   fetches off-allowlist hosts via `web_fetch` is denied at `container` and host-routed at `hostloop`.
 - **Sub-agent research is not in the main turn's `toolCounts`.** A `WebSearch` issued by a dispatched
   sub-agent does not increment the main `toolCounts.WebSearch` — a `0` there with researched facts in
-  the output usually means the sub-agents did the searching.
+  the output usually means the sub-agents did the searching. Each dispatch's own searches ARE captured
+  (live/record lane) as `subagents[].webSearches` (query + bounded result text), surfaced by
+  `trace --view subagent-research`, and packaged into critique's evidence as a "Sub-agent research"
+  section — so the evaluator can ground a sub-agent's "researched" claim instead of marking it
+  not-adjudicable. Absent on replay (the child transcript only exists while the real binary ran) —
+  absence is never evidence of no research.
 - **Critiquing a document-analysis skill?** The lean default image omits OCR / LibreOffice / PDF-table
   tooling (native `Read` handles text PDFs fine). If the skill needs them, pass
   `--allow-missing-capability`, or point `COWORK_AGENT_IMAGE` at a full-parity build

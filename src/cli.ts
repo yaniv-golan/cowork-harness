@@ -66,6 +66,8 @@ import {
   formatFilesView,
   buildUsageView,
   formatUsageView,
+  buildSubagentResearchView,
+  formatSubagentResearchView,
   noteRunsLocation,
   eventsFromLines,
   runsRoot,
@@ -4063,7 +4065,7 @@ function cmdTrace(args: string[]) {
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   const viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
-  const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage"] as const;
+  const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage", "subagent-research"] as const;
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
@@ -4154,6 +4156,14 @@ function cmdTrace(args: string[]) {
     const v = buildUsageView(file);
     if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
     else out(formatUsageView(v));
+    return;
+  }
+  if (view === "subagent-research") {
+    // subagent-research view: each dispatch's OWN WebSearch query+result (live/record lane capture) —
+    // reads the sibling result.json's subagents[].webSearches; UNAVAILABLE on replay, never "no research".
+    const v = buildSubagentResearchView(file);
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
+    else out(formatSubagentResearchView(v));
     return;
   }
   // Build the translator, if any, ONLY for text output — json is the raw machine record and must stay
