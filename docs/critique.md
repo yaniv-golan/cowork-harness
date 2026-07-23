@@ -200,6 +200,12 @@ you whether to design around it permanently:
 The same tags appear in `critique --help`, generated from one source (`src/critique/limitations.ts`), so
 the two cannot disagree.
 
+- **`[deliberate]` The verdict is an advisory self-run — a discovery lead, not an independent attestation.**
+  The skill under review controls text (its `SKILL.md`) that enters the evaluator's prompt, so a crafted
+  skill can steer the grade. Treat the output as a lead to investigate — never as trustworthy proof of a
+  skill's quality or safety, and never as a gate. This holds whether you authored the skill or are probing
+  one you did not (see *Running it on a skill you did not write* above). It is a separate point from "never a
+  gate / findings exit 0", which is about not blocking CI on findings.
 - **Tiers.** critique runs at `--fidelity container` (default) or `hostloop`. The container→hostloop pin
   was lifted on 2026-07-23 once hostloop resume-continuity was proven live against the *native* agent
   binary (`test/live-contract.test.ts`, "resume-continuity proof at hostloop"; 4/4 runs). A cross-tier

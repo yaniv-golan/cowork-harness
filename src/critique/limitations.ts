@@ -140,6 +140,16 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     },
     docsAnchor: "Citation seams",
   },
+  {
+    id: "advisory-self-run-verdict",
+    summary: "the verdict is an advisory self-run — a discovery lead, NOT an independent attestation",
+    provenance: {
+      kind: "deliberate",
+      rationale:
+        "the skill under review controls text that enters the evaluator's prompt, so a crafted skill can steer the grade; treat the verdict as a lead to investigate, never as trustworthy proof of a skill's quality or safety",
+    },
+    docsAnchor: "not an independent attestation",
+  },
 ];
 
 const CLASS_GLOSS: Record<LimitationProvenance["kind"], string> = {
