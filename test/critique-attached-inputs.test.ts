@@ -169,14 +169,20 @@ describe("Attached inputs evidence section", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  it("falls back gracefully to '(none)' when mounts.json is corrupt AND the fallback container path doesn't exist", () => {
+  it("surfaces UNKNOWN (not '(none)') when mounts.json is corrupt — folder context is unknown, not 'no folders' (#14)", () => {
+    // A present-but-unparseable mounts.json means the connected-folder map is UNKNOWN. Rendering "(none)"
+    // would tell the evaluator "the agent correctly saw no connected folder" when the truth is unknown —
+    // the same confabulation-vs-correct false-clean the uploads read-fault case above guards against.
+    // (Uploads still falls back to the fixed container layout; folders have no fallback, so the corrupt
+    // mounts.json must be surfaced explicitly.) The package must not throw and must not read as "(none)".
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     writeFileSync(join(runDir, "mounts.json"), "{ this is not valid json");
     const skillDir = makeSkillDir();
     expect(() => packageEvidence(runDir, EMPTY_BOUNDARY, skillDir)).not.toThrow();
     const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
     const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
-    expect(section.body).toBe("(none)");
+    expect(section.body).toMatch(/could not be read|UNKNOWN/);
+    expect(section.body).not.toBe("(none)"); // must NOT read as "correctly no connected folders"
     rmSync(runDir, { recursive: true, force: true });
     rmSync(skillDir, { recursive: true, force: true });
   });

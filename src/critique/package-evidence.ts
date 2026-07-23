@@ -93,6 +93,13 @@ function listAttachedInputs(runDir: string): string {
   const loaded = loadVmPathContext(runDir);
   const uploadsDir = loaded?.ctx.uploadsHostDir ?? join(runDir, "work", "session", "mnt", "uploads");
   const folderNames = loaded ? Array.from(loaded.ctx.folders.keys()).sort() : [];
+  // `loadVmPathContext` returns null for BOTH an absent mounts.json (legitimately no recorded mount
+  // context — folders default to []) AND a present-but-corrupt one (the folder map is UNKNOWN, not empty).
+  // Uploads has a fixed-layout fallback dir it can still probe; connected FOLDERS have none, so a corrupt
+  // mounts.json would silently render "(none)" — telling the evaluator "the agent correctly saw no
+  // connected folder" when the truth is UNKNOWN. That is the same confabulation-vs-correct false-clean the
+  // uploads path guards against below (the ENOENT-vs-read-fault split); mirror it for folders. #14
+  const mountsCorrupt = loaded === null && existsSync(join(runDir, "mounts.json"));
 
   const lines: string[] = [];
   try {
@@ -122,6 +129,11 @@ function listAttachedInputs(runDir: string): string {
     }
   }
   for (const name of folderNames) lines.push(`${name} (connected folder)`);
+  if (mountsCorrupt)
+    lines.push(
+      `(connected-folder context could not be read: mounts.json present but unparseable — ` +
+        `folder attachment presence UNKNOWN, not confirmed absent)`,
+    );
 
   return lines.join("\n");
 }

@@ -36,6 +36,19 @@ All notable changes to this project are documented here. The format is based on
   candidate on the `doctor.json` template once critique stabilizes. README, llms.txt, and the shipped
   skill point at the schema and the `(gradedSkillHash, gradedSkill)` pairing rule.
 
+### Fixed
+
+- **critique's "Attached inputs" evidence no longer reports `(none)` when `mounts.json` is corrupt.**
+  `listAttachedInputs` derived connected-folder names from `loadVmPathContext`, which returns `null` for
+  BOTH an absent `mounts.json` (legitimately no mounts) and a present-but-unparseable one (the folder map
+  is UNKNOWN). Uploads already distinguished these (the ENOENT-vs-read-fault split), but folders — which
+  have no fixed-layout fallback — silently collapsed to `[]`, so a corrupt `mounts.json` rendered `(none)`,
+  telling the evaluator "the agent correctly saw no connected folder" when the truth was unknown. It now
+  surfaces a corrupt `mounts.json` as an explicit UNKNOWN note, completing the same
+  confabulation-vs-correct guard the uploads path already applies.
+
+## [1.8.0] — 2026-07-23
+
 ### Added
 
 - **`check:versions` closes the stale-pin gap a docs audit found.** Three new enforcement surfaces:
