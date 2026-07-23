@@ -262,3 +262,105 @@ describe.skipIf(!PROBE_CAN)("live: sub-agent relative-Write acceptance probe (ho
     expect(r.status).toBe(0);
   }, 620_000);
 });
+
+// The empirical proof named by critique's `container-tier-only` limitation (src/critique/limitations.ts):
+// "a live resume-continuity proof at hostloop (its NATIVE agent binary, not the container ELF)". critique
+// pins itself to container because its reflection turn must RESUME the same mounted skill + conversation as
+// the task turn, and that continuity has only ever been proven for the container Linux ELF. This drives the
+// SAME two-turn shape at hostloop's NATIVE binary and asserts both halves independently:
+//   (1) conversation continuity — turn 2 recalls a codeword given ONLY in turn 1's conversation (native
+//       session store restored across --resume);
+//   (2) mount survival — turn 2 freshly READS references/passphrase.txt (a value that appears in NO prompt,
+//       only in the mounted skill), captured in referencesRead, proving the staged skill tree survived the
+//       resume rather than being remembered.
+// A green here satisfies the EVIDENCE half of `liftedBy`; it does not by itself remove the pin (the
+// `thenRequires` work — unpinning three sites, a manifest tier stamp, host-write consent — is separate).
+const RC_SKILL = "examples/probes/resume-continuity-probe";
+const CODEWORD = "ZEPHYR-NINE-CORAL"; // planted in turn 1's conversation only
+const PASSPHRASE = "TANGERINE-42-OBELISK"; // lives only in the mounted skill's references/passphrase.txt
+
+function runSkillTurn(sessionId: string, prompt: string, resume: boolean) {
+  const args = [
+    "dist/cli.js",
+    "skill",
+    RC_SKILL,
+    prompt,
+    "--fidelity",
+    "hostloop",
+    "--session-id",
+    sessionId,
+    ...(resume ? ["--resume"] : []),
+    "--on-unanswered",
+    "first",
+    "--output-format",
+    "json",
+  ];
+  const r = spawnSync("node", args, {
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN },
+    timeout: 600_000,
+  });
+  let env: any;
+  try {
+    env = JSON.parse(r.stdout);
+  } catch {
+    throw new Error(`turn (resume=${resume}) did not emit a JSON envelope.\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  }
+  // The `skill` command wraps the RunResult in {ok, results:[…], error?}. Surface a boundary/infra error
+  // (empty results) legibly rather than letting a later `res.finalMessage` read undefined.
+  if (!env.results?.length) throw new Error(`turn (resume=${resume}) produced no run: ${JSON.stringify(env.error ?? env)}`);
+  return { r, res: env.results[0] as any };
+}
+
+describe.skipIf(!PROBE_CAN)("live: resume-continuity proof at hostloop (native binary) — critique's pin", () => {
+  it("turn 2 (--resume) recalls turn-1 conversation AND re-reads the mounted skill", () => {
+    // A UNIQUE session id per run: a fresh (non-resume) turn 1 into an already-populated session dir is
+    // refused by executeScenario ("same-project non-resume run must be FRESH"), so a fixed id would fail
+    // on the second CI run.
+    const sessionId = `probe-resume-continuity-${Date.now()}`;
+
+    // ---- Turn 1: load the skill, plant a conversation codeword, do NOT open the passphrase file ----
+    const t1 = runSkillTurn(
+      sessionId,
+      `You are running an internal resume-continuity probe. Do exactly two things and nothing else: ` +
+        `(1) Invoke the resume-continuity-probe skill via the Skill tool so it is loaded. ` +
+        `(2) Remember this conversation codeword for a later turn: ${CODEWORD}. ` +
+        `Do NOT open the passphrase file on this turn. ` +
+        `Then reply with exactly this single line and nothing else: LOADED ${CODEWORD}`,
+      false,
+    );
+    expect(t1.r.status, `turn 1 exited nonzero.\nstderr:\n${t1.r.stderr}`).toBe(0);
+    expect(String(t1.res.finalMessage ?? ""), "turn 1 did not echo the planted codeword").toContain(CODEWORD);
+
+    // ---- Turn 2: resume the SAME session; recall the codeword + fetch the passphrase from disk ----
+    const t2 = runSkillTurn(
+      sessionId,
+      `This is a resumed session. Answer using only what is available now. Do two things: ` +
+        `(1) State the conversation codeword I gave you on the previous turn. ` +
+        `(2) Obtain the vault passphrase by following the resume-continuity-probe skill's instructions — ` +
+        `read its references/passphrase.txt file with the Read tool and report the exact contents. ` +
+        `Reply with exactly one line and nothing else: CODEWORD=<the codeword> PASSPHRASE=<the passphrase>`,
+      true,
+    );
+    expect(t2.r.status, `turn 2 (resume) exited nonzero.\nstderr:\n${t2.r.stderr}`).toBe(0);
+
+    const t2final = String(t2.res.finalMessage ?? "");
+    const refsRead: string[] = t2.res.referencesRead ?? [];
+
+    // (1) CONVERSATION CONTINUITY: the codeword existed only in turn 1's conversation. Turn 2 knowing it
+    //     proves the native agent's session store was restored by --resume.
+    expect(
+      t2final,
+      `turn 2 lost the turn-1 codeword — NO conversation continuity across native resume.\nfinalMessage: ${t2final}`,
+    ).toContain(CODEWORD);
+
+    // (2) MOUNT SURVIVAL: the passphrase appears in NO prompt — only in the mounted skill's reference file.
+    //     A fresh Read of it on turn 2 (captured in referencesRead) proves the staged skill tree survived
+    //     the resume. Both signals must hold: the value reported AND the file actually read this turn.
+    expect(t2final, `turn 2 did not report the on-disk passphrase.\nfinalMessage: ${t2final}`).toContain(PASSPHRASE);
+    expect(
+      refsRead.some((p) => /passphrase\.txt/.test(p)),
+      `turn 2 never READ references/passphrase.txt on the resumed turn — mounted skill did not survive resume.\nreferencesRead: ${JSON.stringify(refsRead)}`,
+    ).toBe(true);
+  }, 1_260_000);
+});
