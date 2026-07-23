@@ -133,9 +133,9 @@ a probe you typed. Boolean flags may be repeated harmlessly.
 
 ### Multi-skill plugins (`--skill`)
 
-A multi-skill plugin has `skills/<name>/SKILL.md` and **no root `SKILL.md`** — pointing critique at the
-plugin root used to grade a missing file and downgrade every coverage finding to "not adjudicable".
-Now:
+A multi-skill plugin has `skills/<name>/SKILL.md` and **no root `SKILL.md`** — a plugin root graded as a
+plain skill folder has no SKILL.md to read, which downgrades every coverage finding to "not
+adjudicable". So:
 
 - **`--skill <name>`** makes the packager grade `skills/<name>/SKILL.md`, and also packages the invoked
   skill's **`agents/<name>.md`** (sub-agent system prompts) plus bounded **`references/*.md` content** —
