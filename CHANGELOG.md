@@ -46,6 +46,14 @@ All notable changes to this project are documented here. The format is based on
   telling the evaluator "the agent correctly saw no connected folder" when the truth was unknown. It now
   surfaces a corrupt `mounts.json` as an explicit UNKNOWN note, completing the same
   confabulation-vs-correct guard the uploads path already applies.
+- **`diff` no longer treats two tool inputs that differ only past the ~2000-char cap as the same call.**
+  `canonicalizeInput` truncated a tool input's canonical JSON to a 2000-char cap and used that truncated
+  string as the tool-sequence equality key, so two `Write`/`Bash` calls sharing a long identical prefix
+  but differing only in the dropped tail compared as `op: "same"` in `diffToolSequence` — a false "no
+  change" that could flip the advisory `diff` exit code to 0. A truncated key now folds in a
+  `#<len>·<sha16>` hash of the full canonical string, so the key depends on the entire content while the
+  visible prefix stays readable in the hunk; both diff sides canonicalize identically, so the comparison
+  stays consistent.
 
 ## [1.8.0] — 2026-07-23
 
