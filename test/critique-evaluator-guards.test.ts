@@ -69,6 +69,91 @@ describe("F32: parseCritiqueItems ambiguity handling", () => {
   });
 });
 
+describe("per-item-tolerant parse (one malformed item must not sink the document)", () => {
+  const CANARY = { idea: `CANARY-${NONCE}`, classification: "not-adjudicable", evidence: "", recommendedAction: "none" };
+
+  it("keeps valid items and drops+counts a malformed one, instead of rejecting the whole reply", async () => {
+    // Mutation guard: restoring the all-or-nothing `items.every(isValidRawItem)` gate turns this red —
+    // the field failure this covers was a full discovery run lost to ONE bad element in an 11-item reply.
+    const reply = itemsReply([VALID_ITEM, { ...VALID_ITEM, idea: "typo'd verdict", classification: "grounded-and-actoinable" }, CANARY]);
+    const complete: Complete = vi.fn(async () => ({ text: reply, model: "x" }));
+    let dropped: { pass1: number; pass2?: number } | undefined;
+    let integrity: { pass1Canary: boolean } | undefined;
+    const items = await runCritique(SECTIONS, undefined, {
+      nonce: NONCE,
+      complete,
+      onDroppedItems: (d) => (dropped = d),
+      onEvaluatorIntegrity: (i) => (integrity = i),
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].idea).toBe(VALID_ITEM.idea);
+    expect(dropped).toEqual({ pass1: 1 });
+    expect(integrity?.pass1Canary).toBe(true);
+  });
+
+  it("still fails loud when EVERY item is malformed and no canary vouches for the pass", async () => {
+    const reply = itemsReply([{ ...VALID_ITEM, classification: "no-such-class" }]);
+    const complete: Complete = vi.fn(async () => ({ text: reply, model: "x" }));
+    await expect(runCritique(SECTIONS, undefined, { nonce: NONCE, complete })).rejects.toThrow(/EVERY item failed validation/);
+  });
+
+  it("all-malformed WITH the canary returns empty and reports the drop count (tried, not silenced)", async () => {
+    const reply = itemsReply([{ ...VALID_ITEM, evidence: 42 }, CANARY]);
+    const complete: Complete = vi.fn(async () => ({ text: reply, model: "x" }));
+    let dropped: { pass1: number } | undefined;
+    const items = await runCritique(SECTIONS, undefined, { nonce: NONCE, complete, onDroppedItems: (d) => (dropped = d) });
+    expect(items).toHaveLength(0);
+    expect(dropped).toEqual({ pass1: 1 });
+  });
+
+  it("a full document PLUS a canary-only restatement is NOT ambiguous (the output contract invites that pair)", async () => {
+    // The contract says "return the canary item ALONE" when there are no findings — a model restating a
+    // canary-only document next to its real one must not trip the distinct-documents throw.
+    const full = itemsReply([VALID_ITEM, CANARY]);
+    const canaryOnly = itemsReply([CANARY]);
+    const complete: Complete = vi.fn(async () => ({ text: `${full}\n\nIf no findings: ${canaryOnly}`, model: "x" }));
+    const items = await runCritique(SECTIONS, undefined, { nonce: NONCE, complete });
+    expect(items).toHaveLength(1);
+    expect(items[0].idea).toBe(VALID_ITEM.idea);
+  });
+
+  it("a MUTATED canary echo still counts as canary presence and is never a dropped finding", async () => {
+    // Recognized by `idea` alone: a canary echoed with a malformed field proves the trusted instruction
+    // was followed; counting it as a dropped finding (or losing presence) would misread protocol noise.
+    const mutatedCanary = { ...CANARY, classification: "not-a-class", extra: { nested: true } };
+    const reply = itemsReply([VALID_ITEM, mutatedCanary]);
+    const complete: Complete = vi.fn(async () => ({ text: reply, model: "x" }));
+    let dropped: { pass1: number } | undefined;
+    let integrity: { pass1Canary: boolean } | undefined;
+    const items = await runCritique(SECTIONS, undefined, {
+      nonce: NONCE,
+      complete,
+      onDroppedItems: (d) => (dropped = d),
+      onEvaluatorIntegrity: (i) => (integrity = i),
+    });
+    expect(items).toHaveLength(1);
+    expect(dropped).toEqual({ pass1: 0 });
+    expect(integrity?.pass1Canary).toBe(true);
+  });
+
+  it("the dropped count reaches BOTH report formats", async () => {
+    const state = {
+      skillFolder: "./s",
+      prompt: "p",
+      sessionId: "sess",
+      outDir: "/tmp/x",
+      fidelity: "container",
+      taskResult: "success" as const,
+      selfReportStatus: "captured" as const,
+      items: [] as CritiqueItem[],
+      requestedModel: "m",
+      droppedEvaluatorItems: { pass1: 2, pass2: 1 },
+    };
+    expect(buildTextReport(state)).toMatch(/3 malformed item\(s\) DROPPED/);
+    expect(buildJsonReport(state).droppedEvaluatorItems).toEqual({ pass1: 2, pass2: 1 });
+  });
+});
+
 describe("F33: pass-1 items are citation-validated before entering the pass-2 prompt", () => {
   it("an unresolved/hallucinated pass-1 item is NOT injected raw into the pass-2 prompt", () => {
     const hallucinated = {
@@ -314,6 +399,7 @@ describe("F37: the reflection turn is validated (exit code / envelope / continui
       prompt: "do the thing",
       sessionId: "sess-1",
       outDir: "/tmp/x",
+      fidelity: "container",
       taskResult: "success",
       selfReportStatus: "unavailable",
       items: [],
@@ -329,6 +415,7 @@ describe("F37: the reflection turn is validated (exit code / envelope / continui
       prompt: "do the thing",
       sessionId: "sess-1",
       outDir: "/tmp/x",
+      fidelity: "container",
       taskResult: "success",
       selfReportStatus: "unavailable",
       items: [],
@@ -485,6 +572,7 @@ describe("F38: a missing self-report skips pass 2 entirely and is marked unavail
       prompt: "do the thing",
       sessionId: "sess-1",
       outDir: "/tmp/x",
+      fidelity: "container",
       taskResult: "success" as const,
       selfReportStatus: "unavailable" as const,
       items: [item],
@@ -505,6 +593,7 @@ describe("F38: a missing self-report skips pass 2 entirely and is marked unavail
       prompt: "do the thing",
       sessionId: "sess-1",
       outDir: "/tmp/x",
+      fidelity: "container",
       taskResult: "success" as const,
       selfReportStatus: "captured" as const,
       items: [],

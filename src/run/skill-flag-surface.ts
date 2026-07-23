@@ -62,6 +62,10 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
   // Without this a lean-image capability gap makes the task turn error, and the critique harvests a fact
   // about the rig instead of the skill — the same failure class as a missing upload.
   { flag: "--allow-missing-capability", arity: 0, critique: forwardBoth() },
+  // hostloop host-write consent. forwardBoth is load-bearing: checkHostLoopWriteConsent runs on EVERY
+  // executeScenario at hostloop (the reflection resume included), so a task-only forward would refuse
+  // every reflection turn of a folder-bearing hostloop critique.
+  { flag: "--allow-host-writes", arity: 0, critique: forwardBoth() },
 
   // ---- the GRADED run only ----
   // TASK-only deliberately: forwarding to the reflection turn would inject a near-always-green row into the
@@ -109,7 +113,8 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
       arity: flag === "--stop-on-diverge" || flag === "--allow-budget-stop" ? 0 : 1,
       critique: {
         kind: "reject",
-        reason: "critique is a fixed two-turn protocol — loop `critique` itself and pair generations by fingerprint.skillHash",
+        reason:
+          "critique is a fixed two-turn protocol — loop `critique` itself and pair generations by fingerprint.skillHash (docs/critique.md's 'Reproduction' section has the recipe)",
       },
     }),
   ),
@@ -134,7 +139,14 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
 
   // ---- critique implements or pins these itself ----
   { flag: "--prompt-file", arity: 1, critique: { kind: "owned", note: "critique's probe prompt, read from a file" } },
-  { flag: "--fidelity", arity: 1, critique: { kind: "owned", note: "pinned container — resume continuity is verified only there" } },
+  {
+    flag: "--fidelity",
+    arity: 1,
+    critique: {
+      kind: "owned",
+      note: "container (default) or hostloop; microvm/protocol/cowork refused (resume continuity unproven there)",
+    },
+  },
   {
     flag: "--output-format",
     arity: 1,

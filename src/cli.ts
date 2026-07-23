@@ -66,6 +66,8 @@ import {
   formatFilesView,
   buildUsageView,
   formatUsageView,
+  buildSubagentResearchView,
+  formatSubagentResearchView,
   noteRunsLocation,
   eventsFromLines,
   runsRoot,
@@ -207,7 +209,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
   critique <skill-folder>      EXPERIMENTAL — run a skill, ask the agent what confused it, then grade that
-                               self-report against a frozen record of the run (see 'critique --help' for cost)
+                               self-report against a frozen record of the run (see 'critique --help' for cost).
+                               Advisory — a discovery lead, not an independent attestation.
       [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
       [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
       [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage
@@ -340,6 +343,9 @@ Output:
   --allow-missing-capability       don't fail the verdict when the (partial 'core') image omits a capability
                                    the skill used but real Cowork ships — open-ended-run equivalent of a
                                    scenario asserting allow_missing_capability: true
+  --allow-host-writes              consent to a writable hostloop connected folder (native host FS access,
+                                   no container sandbox); refused loud otherwise. Forwarded to both turns
+                                   by critique. No effect off hostloop or without a writable --folder
   --model <id>                     override the session model
   --dry-run                        preview scenarios, token and binary checks, without recording     NO_COLOR=1   disable ANSI
 
@@ -1735,6 +1741,7 @@ async function cmdSkill(rawArgs: string[]) {
   let deciderModel: string | undefined;
   let deciderLlm = false;
   let allowMissingCapability = false; // --allow-missing-capability: open-ended-lane opt-out (merged into the synthesized assert)
+  let allowHostWrites = false; // --allow-host-writes: hostloop writable-folder consent (ad-hoc lane has no scenario YAML)
   let resume = false;
   let dryRun = false;
   let keep = false;
@@ -1776,7 +1783,8 @@ async function cmdSkill(rawArgs: string[]) {
         name === "--decider-llm" ||
         name === "--dry-run" ||
         name === "--keep" ||
-        name === "--allow-missing-capability")
+        name === "--allow-missing-capability" ||
+        name === "--allow-host-writes")
     ) {
       fail("skill", "usage", `${name} takes no value`, undefined, isJson0);
     }
@@ -1796,6 +1804,7 @@ async function cmdSkill(rawArgs: string[]) {
     else if (a === "--resume") resume = true;
     else if (a === "--decider-llm") deciderLlm = true;
     else if (a === "--allow-missing-capability") allowMissingCapability = true;
+    else if (a === "--allow-host-writes") allowHostWrites = true;
     else if (name === "--intent") intent = nextValStrict();
     else if (name === "--decider-model") deciderModel = nextValStrict();
     else if (a === "--dry-run") dryRun = true;
@@ -1972,6 +1981,7 @@ async function cmdSkill(rawArgs: string[]) {
     fidelity,
     prompt,
     ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+    ...(allowHostWrites ? { allow_host_writes: true as const } : {}),
     answers,
     // Open-ended lane has no authored assert: block, so --allow-missing-capability merges the modifier onto
     // the synthesized success assertion — this suppresses BOTH capability fail sources (verdict.ts) AND the
@@ -2583,7 +2593,7 @@ async function cmdSync(args: string[]) {
   // recorded hash; otherwise drop the fields rather than carry a stale hash from a different version.
   // Agent-binary string sentinels: literal-occurrence counts of feature markers whose runtime STATE the
   // sync cannot see (no gate id, no spawn-env key), measured from the staged ELF. tengu_saddle_lantern
-  // gates the skill-discovery tool family's ENABLEMENT at agent >=2.1.217 (docs/internal finding 1); its
+  // gates the skill-discovery tool family's ENABLEMENT at agent >=2.1.217; its
   // count is 2 in the 2.1.215/2.1.217 ELF. A change surfaces as a `sync --diff` agentBinary line — the
   // trigger to re-check whether the discovery-tool wiring moved. Same lifecycle as sha256 below: measured
   // when staged, carried from the base on an offline same-version re-sync, else dropped (never stale).
@@ -4055,7 +4065,7 @@ function cmdTrace(args: string[]) {
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   const viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
-  const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage"] as const;
+  const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage", "subagent-research"] as const;
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
@@ -4146,6 +4156,14 @@ function cmdTrace(args: string[]) {
     const v = buildUsageView(file);
     if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
     else out(formatUsageView(v));
+    return;
+  }
+  if (view === "subagent-research") {
+    // subagent-research view: each dispatch's OWN WebSearch query+result (live/record lane capture) —
+    // reads the sibling result.json's subagents[].webSearches; UNAVAILABLE on replay, never "no research".
+    const v = buildSubagentResearchView(file);
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
+    else out(formatSubagentResearchView(v));
     return;
   }
   // Build the translator, if any, ONLY for text output — json is the raw machine record and must stay

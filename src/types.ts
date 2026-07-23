@@ -49,7 +49,7 @@ export const PlatformBaseline = z.looseObject({
     manifestChecksumMatch: z.union([z.boolean(), z.literal("unknown")]).optional(),
     // String sentinels: literal-occurrence counts of feature markers in the staged ELF whose runtime
     // STATE the sync cannot see via a gate id or a spawn-env key (e.g. `tengu_saddle_lantern`, which at
-    // agent >=2.1.217 gates the skill-discovery tool family's enablement — docs/internal finding 1).
+    // agent >=2.1.217 gates the skill-discovery tool family's enablement).
     // Measured when the ELF is staged, carried on an offline same-version re-sync, else dropped. Pure
     // `sync --diff` tripwire: a changed count is the trigger to re-verify the feature wiring; nothing
     // consumes it at runtime.
@@ -1242,6 +1242,17 @@ export interface RunResult {
     reasoning?: Array<{ kind: "thinking" | "text"; text: string; redacted?: boolean }>;
     /** Count of `reasoning` turns dropped by the cap above (oldest-first) — mirrors `thinkingElided`. */
     reasoningElided?: number;
+    /** This sub-agent's OWN WebSearch calls (query + the paired tool_result's text, bounded), captured
+     *  from the child session transcript alongside `reasoning` — sub-agent searches never enter the
+     *  top-level `webSearches[]` (that field is main-agent/fork-scoped) or `toolCounts`, so without this
+     *  a "researched" claim from a sub-agent was ungroundable from the result. RAW bounded text (not the
+     *  parsed {title,url} shape of the top-level field): grounding needs the content the sub-agent
+     *  actually saw, and the Links-convention parse would silently drop a format drift. LIVE/record lane
+     *  only — the child transcript does not exist on replay, so this is `undefined` there (same contract
+     *  as `reasoning`). `resultTruncated` marks a result cut at the per-entry byte cap. */
+    webSearches?: Array<{ query: string; resultText: string; resultTruncated?: boolean }>;
+    /** Count of WebSearch calls dropped past the per-dispatch cap (oldest-first) — mirrors `reasoningElided`. */
+    webSearchesElided?: number;
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,

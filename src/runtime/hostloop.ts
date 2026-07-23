@@ -161,7 +161,13 @@ export function spawnHostLoop(
   // {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; of those only Bash/NotebookEdit/WebFetch exist in
   // the CLI agent's registry, so disallowing the three real ones is the faithful set.
   const hostOutputsDir = join(mntHost, "outputs");
-  const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan, hostOutputsDir)]
+  // Hoisted from the path-gate config below: the SAME staged dir is both the Read-allowed uploads root
+  // and the uploads bullet's file-tool path — one value, so the prompt and the gate can never disagree.
+  const uploadsRoot = join(mntHost, "uploads");
+  const systemPromptAppend = [
+    opts.systemPromptAppend,
+    hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan, hostOutputsDir, uploadsRoot),
+  ]
     .filter(Boolean)
     .join("\n\n");
 
@@ -192,7 +198,6 @@ export function spawnHostLoop(
   // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's
   // `hostCwd = getOutputsDir(e)`); scratchRoots = [hostCwd] (hostCwd and hostOutputsDir are the SAME dir
   // here, so this is one entry, not two).
-  const uploadsRoot = join(mntHost, "uploads");
   const spoolRoot = join(plan.configDir, "projects"); // production's spooled-tool-results dir analog: the staged config dir's own "projects" subdir
   const skillsRoot = join(plan.configDir, "skills");
   const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
@@ -379,6 +384,7 @@ function hostLoopShellSection(
   mntRoot: string,
   plan: LaunchPlan,
   hostOutputsDir: string,
+  hostUploadsDir: string,
 ): string {
   const appVersion = baseline.appVersion;
   // Generator era (Desktop >= 1.14271.0): the section is built from live mount state, not a static
@@ -393,6 +399,7 @@ function hostLoopShellSection(
       uploads: plan.mounts.filter((m) => m.kind === "upload"),
       skillsConfigDir: skillsPresent ? plan.configDir : undefined,
       hostOutputsDir,
+      hostUploadsDir,
     });
   }
 

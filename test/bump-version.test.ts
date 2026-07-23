@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { rewriteFileContent, parseArgs, TARGET_FILES } from "../scripts/bump-version.js";
 
 describe("parseArgs", () => {
@@ -231,6 +233,7 @@ describe("TARGET_FILES", () => {
       ".claude/skills/cowork-harness/SKILL.md",
       ".claude/skills/cowork-harness/references/scenario-schema.md",
       ".claude/skills/cowork-harness/references/fidelity-and-answers.md",
+      ".claude/skills/cowork-harness/references/task-recipes.md",
       ".claude/skills/cowork-harness/references/ci-recipe.md",
       "examples/replays/README.md",
       "README.md",
@@ -240,6 +243,21 @@ describe("TARGET_FILES", () => {
   it("every target file has a working rewrite rule (does not throw) on trivial content", () => {
     for (const file of TARGET_FILES) {
       expect(() => rewriteFileContent(file, "no version here", "0.34.0")).not.toThrow();
+    }
+  });
+
+  it("bumps the Tracks stamp in each reference file's REAL committed content — synthetic fixtures once hid a line-wrapped stamp the space-literal regex could not match", () => {
+    const stampRefs = [
+      ".claude/skills/cowork-harness/references/scenario-schema.md",
+      ".claude/skills/cowork-harness/references/fidelity-and-answers.md",
+      ".claude/skills/cowork-harness/references/task-recipes.md",
+      ".claude/skills/cowork-harness/references/ci-recipe.md",
+    ];
+    for (const file of stampRefs) {
+      const real = readFileSync(resolve(file), "utf8");
+      const next = rewriteFileContent(file, real, "9.9.9");
+      expect(next, `${file}: bump was a no-op on the real content`).toContain("Tracks `cowork-harness 9.9.9`");
+      expect(next).not.toMatch(/Tracks `cowork-harness \d+\.\d+\.\d+`.*Tracks `cowork-harness (?!9\.9\.9)/s);
     }
   });
 });

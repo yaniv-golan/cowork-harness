@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 1.7.0` (baseline `desktop-1.20186.1`).
+Self-contained reference. Tracks `cowork-harness 1.8.0` (baseline `desktop-1.24012.1`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -23,6 +23,22 @@ Self-contained reference. Tracks `cowork-harness 1.7.0` (baseline `desktop-1.201
 - **Set the tier in the scenario's `fidelity:` field — not a flag.** `--fidelity` is accepted only by
   `skill` (any tier) and `chat` (`protocol`/`container`/`hostloop`; only `microvm`/`cowork` unsupported); `run` rejects an extra `--fidelity`
   positional ("Fidelity is set by the scenario's `fidelity:` field, not a flag").
+
+### hostloop paths: what Read sees vs what bash sees (uploads included)
+
+At `hostloop` the native file tools (Read/Write/Edit/Glob/Grep) run **on the host** and are gated by a
+path-containment hook (production's own model), while `mcp__workspace__bash` runs **in the VM sidecar**
+and sees `/sessions/<id>/...` paths. Consequences an agent (or a debugging author) must know:
+
+- A `/sessions/...` path handed to `Read` fails ("is a VM path") — that split is **production-faithful**,
+  not a harness bug. Translate via the prompt's path-mapping table.
+- **Uploads ARE Read-able at hostloop**: the staged uploads dir on the host is in the containment
+  allowlist (read-only — writes/edits there are blocked, matching production). If a Read of an uploads
+  path fails "outside this session's connected folders", the path *form* is wrong (e.g. a relative
+  `mnt/uploads/...`, which resolves against the outputs cwd) — the file itself is reachable at the
+  staged host uploads dir; it does not need to be copied into `outputs/` first.
+- In real Cowork an upload is a **hardlink** in the session's uploads dir; the harness **copies** it
+  instead. Read-reachability is the same; only the advertised parent dir can differ.
 
 ### `microvm` prerequisites & lifecycle
 

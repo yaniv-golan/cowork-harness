@@ -395,6 +395,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // which a Node `"exit"` handler requires.
   const runCrashSafety = registerRunForCrashSafety(outDir, runStatusMeta);
 
+  // Resolve the effective tier early — it is needed BOTH to stamp the session manifest below (so a
+  // --resume at a different tier fails loud; the agent's native conversation store is tier-local) AND,
+  // later, before buildLaunchPlan so mount naming is tier-accurate (host-loop folders use hL, VM/container
+  // use fy). `cowork` resolves to hostloop|container via the loop-decision gate. Depends only on
+  // scenario.fidelity + baseline (both resolved above); nothing between here and its former site read it.
+  const effectiveFidelity =
+    scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
+  if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
+
   let agentSessionId: string | undefined;
   if (opts.sessionId || opts.resume) {
     const manifestPath = join(outDir, "session.json");
@@ -403,21 +412,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         throw new Error(`cannot resume "${opts.sessionId}": no prior session at ${outDir} (run it once with --session-id first)`);
       // validate the manifest rather than silently degrading to a fresh session on a corrupt
       // or older-format file — a missing agentSessionId on the resume path is a hard error.
-      agentSessionId = readSessionManifest(manifestPath, opts.sessionId ?? "");
+      agentSessionId = readSessionManifest(manifestPath, opts.sessionId ?? "", effectiveFidelity);
     } else {
       agentSessionId = randomUUID(); // fresh pinned session
       writeFileSync(
         manifestPath,
-        JSON.stringify({ sessionId: opts.sessionId, agentSessionId, createdAt: new Date().toISOString() }, null, 2),
+        JSON.stringify(
+          { sessionId: opts.sessionId, agentSessionId, fidelity: effectiveFidelity, createdAt: new Date().toISOString() },
+          null,
+          2,
+        ),
       );
     }
   }
-
-  // Resolve the effective tier BEFORE buildLaunchPlan so mount naming is tier-accurate (host-loop folders
-  // use hL, VM/container use fy). `cowork` resolves to hostloop|container via the loop-decision gate.
-  const effectiveFidelity =
-    scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
-  if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
 
   // Safety design layer 1 (the load-bearing layer): hostloop with a writable connected folder gives the
   // native agent process genuine, software-checked-only host filesystem access — no container sandbox.
@@ -2356,7 +2363,7 @@ export function parseEnvPort(name: string, defaultValue: number): number {
  * missing or not a string (corrupt or older-format file) instead of silently degrading to a fresh
  * session. Extracted so it's unit-testable without spawning a run.
  */
-export function readSessionManifest(path: string, sessionId: string): string {
+export function readSessionManifest(path: string, sessionId: string, expectedFidelity: string): string {
   const raw = readFileSync(path, "utf8");
   let parsed: any;
   try {
@@ -2369,6 +2376,27 @@ export function readSessionManifest(path: string, sessionId: string): string {
   // sessionId field are allowed through for backward compatibility.
   if (parsed?.sessionId !== undefined && sessionId && parsed.sessionId !== sessionId) {
     throw new Error(`cowork-harness: manifest session ID mismatch: manifest has ${parsed.sessionId}, expected ${sessionId}`);
+  }
+  // Verify the fidelity tier matches. The agent's native conversation store is tier-LOCAL — container
+  // persists it under the work tree, hostloop under the host config dir, microvm inside the guest — so a
+  // resume at a different tier hands the agent a `--resume <uuid>` for a conversation its store has never
+  // seen (it would error late in the spawn, or silently mint fresh history). Fail closed, up front, with
+  // an actionable message. Legacy manifests written before the stamp have no `fidelity` field and are let
+  // through (mirrors the sessionId tolerance above) with a warning — every manifest written from now on
+  // carries the stamp, so this hole self-closes.
+  if (parsed?.fidelity !== undefined) {
+    if (expectedFidelity && parsed.fidelity !== expectedFidelity) {
+      throw new Error(
+        `cannot resume "${sessionId}": session was created at fidelity "${parsed.fidelity}" but this resume is ` +
+          `"${expectedFidelity}" — the agent's conversation store is tier-local; re-run at --fidelity ${parsed.fidelity}, ` +
+          `or start a fresh session`,
+      );
+    }
+  } else {
+    process.stderr.write(
+      `::warning:: [resume] session manifest at ${path} predates the fidelity stamp — ` +
+        `a cross-tier resume cannot be checked for this pre-existing session\n`,
+    );
   }
   const id = parsed?.agentSessionId;
   if (typeof id !== "string" || !id) {

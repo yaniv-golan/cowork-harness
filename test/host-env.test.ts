@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { runtimeAuthEnv } from "../src/runtime/host-env.js";
 
-// WI-7 (docs/internal finding, TZ parity): Desktop always injects the resolved IANA zone into the
+// TZ parity: Desktop always injects the resolved IANA zone into the
 // agent env (Intl.DateTimeFormat().resolvedOptions().timeZone), unconditionally. The harness used to
 // forward TZ ONLY when the host shell exported it — so a run on a host without TZ set spawned the
 // agent with no timezone, diverging from Cowork (date rendering / "today" resolution in prompts and
 // outputs). runtimeAuthEnv is the single seam all real-agent tiers spread (hostloop/container/microvm).
-describe("runtimeAuthEnv TZ parity (WI-7)", () => {
+describe("runtimeAuthEnv TZ parity", () => {
   const prev = process.env.TZ;
   afterEach(() => {
     if (prev === undefined) delete process.env.TZ;

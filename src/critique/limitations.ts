@@ -57,33 +57,49 @@ export interface Limitation {
 }
 
 export const CRITIQUE_LIMITATIONS: Limitation[] = [
+  // The container pin was LIFTED on 2026-07-23: hostloop resume-continuity was proven live (native binary,
+  // test/live-contract.test.ts) and critique now accepts `--fidelity container|hostloop`. What remains is
+  // the three tiers still refused — each for its OWN, distinctly-classed reason, which is exactly the
+  // per-limitation provenance this module exists to record. A cross-tier resume is blocked separately by
+  // the session-manifest fidelity stamp (src/run/execute.ts).
   {
-    id: "container-tier-only",
-    summary: "container tier only — `--fidelity hostloop|cowork|microvm|protocol` is refused",
+    id: "microvm-tier-refused",
+    summary: "the microvm tier is refused — resume-continuity is unproven for the microVM guest",
     provenance: {
-      kind: "not-built",
-      // WAS `unverified` until 2026-07-23. The proof its `liftedBy` named — a live resume-continuity run
-      // at hostloop against the NATIVE agent binary (not the container ELF) — has now PASSED
-      // (test/live-contract.test.ts, "resume-continuity proof at hostloop"; 4/4 live, native+ELF 2.1.217):
-      // a resumed turn BOTH recalled a prior-turn-only conversation codeword (native session store
-      // restored across --resume) AND freshly re-read the mounted skill's reference file (staged tree
-      // survived resume). The container proof demonstrably transfers → the evidence obstacle is cleared, so
-      // this is no longer `unverified`. What remains is BUILD work, not proof: unpin three hard-coded
-      // container sites, stamp the tier on the session manifest so a cross-tier resume fails loud, and plumb
-      // host-write consent for skill/critique — the one real design call, since hostloop writes to the
-      // user's real FS whereas container is throwaway.
-      note: "resume-continuity is PROVEN at hostloop's native binary (test/live-contract.test.ts; 4/4 live) — the tier is reachable, NOT a permanent boundary. The pin now remains only for build work: unpin three container sites, tier-stamp the session manifest so a cross-tier resume fails loud, and plumb host-write consent for skill/critique",
+      kind: "unverified",
+      liftedBy:
+        "a live resume-continuity proof at the microvm tier (its Apple-VZ guest and in-guest session store, which the container/hostloop proofs do not cover)",
     },
-    docsAnchor: "Container tier only",
+    docsAnchor: "microvm tier is refused",
   },
   {
-    id: "skill-md-16kb-cap",
-    summary: 'SKILL.md is capped at 16KB in the evidence — a larger one degrades toward "not adjudicable"',
+    id: "protocol-tier-refused",
+    summary: "the protocol tier is refused — it never plumbs a session id or --resume",
+    provenance: {
+      kind: "not-built",
+      note: "protocol's spawn hand-builds its argv and never emits --session-id/--resume, so critique's two-turn resume protocol has nothing to resume; adding session plumbing to the protocol tier (which also runs with no sandbox) is the work",
+    },
+    docsAnchor: "protocol tier is refused",
+  },
+  {
+    id: "cowork-tier-refused",
+    summary: "the cowork tier is refused — pass the resolved tier (container|hostloop) explicitly",
+    provenance: {
+      kind: "deliberate",
+      rationale:
+        "cowork resolves dynamically to hostloop|container via the synced loop gate; accepting it would make the graded tier baseline-dependent, adding noise to skillHash-paired generation comparisons",
+    },
+    docsAnchor: "cowork tier is refused",
+  },
+  {
+    id: "skill-md-size-cap",
+    summary:
+      'SKILL.md is capped at 64KB in the evidence — an oversized one is truncated but still graded; only a missing/unreadable one forces "not adjudicable"',
     provenance: {
       kind: "deliberate",
       rationale: "the evidence package is bounded so the evaluator sees a whole record rather than a truncated tail",
     },
-    docsAnchor: "capped at 16KB",
+    docsAnchor: "capped at 64KB",
   },
   {
     id: "english-only",
@@ -91,21 +107,10 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     provenance: { kind: "not-built", note: "no localization work has been attempted; nothing blocks it" },
     docsAnchor: "English-only",
   },
-  {
-    id: "evidence-not-persisted",
-    summary: "the evidence package the evaluator graded against is not written to disk",
-    provenance: {
-      kind: "not-built",
-      note: "a disputed finding cannot be re-checked against the record it was graded on; persisting the ARMORED render would close it",
-    },
-    docsAnchor: "evidence package is not persisted",
-  },
-  {
-    id: "report-stdout-only",
-    summary: "the report goes to stdout only — capture it with shell redirection",
-    provenance: { kind: "not-built", note: "there is no --out flag; --output-format changes the format, never the destination" },
-    docsAnchor: "written to stdout",
-  },
+  // Two former `not-built` limitations were BUILT (deliberately deleted here; the pinned id set in
+  // test/critique-limitations-sync.test.ts was updated in the same change):
+  //  - "evidence-not-persisted": the armored corpus is now written to critique-evidence-package.txt;
+  //  - "report-stdout-only": critique-report.json is always written, and --out copies the report.
   {
     id: "attached-content-may-enter-evidence",
     summary: "attached-file CONTENT usually stays out of the evidence, but that is the common case, not a guarantee",
@@ -124,6 +129,16 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
       why: "armor must interpose a marker between heading and body for the fence to hold; a quote crossing that boundary cannot match verbatim",
     },
     docsAnchor: "Citation seams",
+  },
+  {
+    id: "advisory-self-run-verdict",
+    summary: "the verdict is an advisory self-run — a discovery lead, NOT an independent attestation",
+    provenance: {
+      kind: "deliberate",
+      rationale:
+        "the skill under review controls text that enters the evaluator's prompt, so a crafted skill can steer the grade; treat the verdict as a lead to investigate, never as trustworthy proof of a skill's quality or safety",
+    },
+    docsAnchor: "not an independent attestation",
   },
 ];
 

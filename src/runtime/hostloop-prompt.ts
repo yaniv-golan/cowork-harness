@@ -1,5 +1,3 @@
-import { dirname } from "node:path";
-
 /**
  * Dynamic host-loop "## Shell access" prompt section for Desktop >= 1.14271.0.
  *
@@ -46,6 +44,15 @@ export interface HostLoopShellInputs {
    *  translate example (production `q = Ct ?? me`, `Ct` = hostOutputsDir). REQUIRED: the caller always
    *  knows it, and the old sessionRoot rendering was the bug — no fallback keeps it representable. */
   hostOutputsDir: string;
+  /** HOST path of the STAGED uploads dir (`<mntHost>/uploads`) — the file-tool side of the uploads
+   *  bullet. REQUIRED for the same reason as hostOutputsDir: the caller always knows it, and the old
+   *  `dirname(uploads[0].hostPath)` rendering was a real misdirection — the harness COPIES uploads into
+   *  the staged dir (production hardlinks them), so the mount's `hostPath` parent is the user's original
+   *  source dir, which is NOT a path-containment-allowed Read root. Advertising it sent agents to a
+   *  guaranteed "outside this session's connected folders" denial while the base prompt pointed at the
+   *  correct staged dir — two prompt surfaces in disagreement. This value is the Read-allowed root
+   *  (`uploadsRoot` in the path-gate config), so both surfaces now agree. */
+  hostUploadsDir: string;
   // Constants — defaulted to the binary-verified production names; overridable for tests.
   workspaceServer?: string;
   bashTool?: string;
@@ -78,9 +85,11 @@ export function generateHostLoopShellSection(inp: HostLoopShellInputs): string {
   const skillsPresent = !!inp.skillsConfigDir;
   const Ae = skillsPresent ? `\n- ${inp.skillsConfigDir}/skills → ${mntRoot}/.claude/skills/ (read-only)` : "";
 
-  // Uploads bullet (asar `ne`) — single line per the asar shape. The harness mounts uploads per-file with
-  // arbitrary parents; represent the host side with the first upload's parent dir (approximate but real).
-  const ne = uploads.length > 0 ? `\n- ${dirname(uploads[0].hostPath)} → ${mntRoot}/uploads/ (read-only, attached files)` : "";
+  // Uploads bullet (asar `ne`) — single line per the asar shape. The host side is the STAGED uploads
+  // dir (the Read-allowed root), NOT dirname(uploads[0].hostPath): the harness copies uploads (production
+  // hardlinks), so the mount hostPath's parent is the un-allowed original source dir — see the
+  // hostUploadsDir doc comment above.
+  const ne = uploads.length > 0 ? `\n- ${inp.hostUploadsDir} → ${mntRoot}/uploads/ (read-only, attached files)` : "";
 
   // Example translate line (asar `zA`/`DA`): first folder if any, else the outputs dir.
   const first = folders[0];

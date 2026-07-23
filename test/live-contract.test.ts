@@ -30,9 +30,22 @@ const IMAGE = "cowork-agent-base:2";
 const dockerOk = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const imageOk = dockerOk && spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" }).status === 0;
 const binOk = !!AGENT && existsSync(AGENT);
+/** Minimal `.env` probe for ONE key — the skip-gate must mirror the CLI's own token-resolution chain
+ *  (env > dotenv > ./.env > install .env) or it under-detects: on a dev machine whose token lives only in
+ *  the repo `.env`, the gate said "no token" and silently skipped 12 live tests that the spawned CLI
+ *  would have authenticated fine (observed). Not a general dotenv parser: one key, quotes stripped. */
+function tokenFromDotenv(): string {
+  try {
+    const m = readFileSync(".env", "utf8").match(/^CLAUDE_CODE_OAUTH_TOKEN=(.*)$/m);
+    return m ? m[1].trim().replace(/^["']|["']$/g, "") : "";
+  } catch {
+    return "";
+  }
+}
 const TOKEN =
   process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-  (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "");
+  (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "") ||
+  tokenFromDotenv();
 const CAN = dockerOk && imageOk && binOk;
 
 interface AgentRun {
@@ -363,4 +376,115 @@ describe.skipIf(!PROBE_CAN)("live: resume-continuity proof at hostloop (native b
       `turn 2 never READ references/passphrase.txt on the resumed turn — mounted skill did not survive resume.\nreferencesRead: ${JSON.stringify(refsRead)}`,
     ).toBe(true);
   }, 1_260_000);
+});
+
+// End-to-end proof that the unpin works: `critique --fidelity hostloop` runs its full two-turn protocol
+// (task turn -> reflection RESUME at the native binary -> evaluator) and produces a report, not an
+// instrument failure. Folder-less (skill dir + no writable --folder), so no --allow-host-writes needed.
+// Gated on PROBE_CAN like the other hostloop probes; four model workloads, so a generous timeout.
+describe.skipIf(!PROBE_CAN)("live: critique runs at hostloop (the unpinned tier)", () => {
+  it("critique --fidelity hostloop yields a report (exit 0, no instrument failure)", () => {
+    const r = spawnSync(
+      "node",
+      [
+        "dist/cli.js",
+        "critique",
+        RC_SKILL,
+        "--prompt",
+        "Invoke the resume-continuity-probe skill, then reply with exactly: DONE",
+        "--fidelity",
+        "hostloop",
+        "--output-format",
+        "json",
+      ],
+      { encoding: "utf8", env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, timeout: 900_000 },
+    );
+    // critique exits 0 whenever a critique was PRODUCED (any findings); exit 2 = no critique (usage or
+    // instrument failure). The unpin is proven iff the hostloop two-turn protocol produced a report.
+    expect(r.status, `critique exited ${r.status} (2 = no critique produced).\nstderr:\n${r.stderr}`).toBe(0);
+    // A produced critique report carries the graded session and has NEITHER an instrument failure nor an
+    // evaluator error (buildJsonReport's shape — there is no top-level `ok`).
+    const env = JSON.parse(r.stdout);
+    expect(env.infraFailure, `critique hit an instrument failure: ${JSON.stringify(env.infraFailure)}`).toBeUndefined();
+    expect(env.evaluatorError, `evaluator errored: ${JSON.stringify(env.evaluatorError)}`).toBeUndefined();
+    expect(typeof env.sessionId, "critique report has no sessionId").toBe("string");
+    expect(typeof env.outDir, "critique report has no outDir").toBe("string");
+  }, 920_000);
+});
+
+// The hostloop uploads-bullet fix, proven end-to-end: the shell-access section now advertises the STAGED
+// uploads dir (the path-containment-allowed Read root) instead of dirname(upload.hostPath) — an agent
+// following the prompt must be able to Read the attached file directly, with no bash and no
+// copy-into-outputs workaround (the field failure this guards against ended in a spurious outputs-delete).
+describe.skipIf(!PROBE_CAN)("live: hostloop uploads are Read-able at the advertised path", () => {
+  it("the agent Reads the upload with the Read tool (no bash), and no outputs-delete fires", () => {
+    const r = spawnSync(
+      "node",
+      [
+        "dist/cli.js",
+        "skill",
+        "examples/probes/upload-read-probe",
+        "Use the Read tool (not bash) to read the attached uploaded file and reply with its first line verbatim.",
+        "--fidelity",
+        "hostloop",
+        "--upload",
+        "examples/probes/upload-probe.txt",
+        "--keep",
+        "--output-format",
+        "json",
+      ],
+      { encoding: "utf8", env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, timeout: 600_000 },
+    );
+    const env = JSON.parse(r.stdout);
+    expect(env.results?.length, `no run produced: ${JSON.stringify(env.error ?? env)}`).toBeGreaterThan(0);
+    const res = env.results[0];
+    expect(res.finalMessage ?? "").toContain("MARKER-UPLOAD-READ-PROBE");
+    // The full result carries the tool + scan evidence.
+    const full = JSON.parse(readFileSync(join(res.outDir, "turns", "1", "result.json"), "utf8"));
+    expect(full.toolCounts?.Read ?? 0, "the Read tool never ran").toBeGreaterThan(0);
+    expect(full.toolCounts?.Bash ?? 0, "native bash ran — the workaround path").toBe(0);
+    expect(full.toolCounts?.["mcp__workspace__bash"] ?? 0, "workspace bash ran — the workaround path").toBe(0);
+    expect(full.scan?.outputsDeletes ?? [], "outputs-delete fired — the workaround chain is back").toEqual([]);
+    expect(r.status).toBe(0);
+  }, 620_000);
+});
+
+// Sub-agent WebSearch capture, proven against a REAL child session transcript (the unit tests use
+// synthetic transcripts; this is the live proof that the actual on-disk tool_use/tool_result shape a
+// dispatched sub-agent writes is what subagents[].webSearches parses).
+describe.skipIf(!PROBE_CAN)("live: sub-agent WebSearch is captured as subagents[].webSearches", () => {
+  it("a dispatched sub-agent's search lands with query + result text", () => {
+    const r = spawnSync(
+      "node",
+      [
+        "dist/cli.js",
+        "skill",
+        "examples/probes/subagent-research-probe",
+        "Research this using the skill's dispatch instructions: in what year was the first iPhone released?",
+        "--fidelity",
+        "hostloop",
+        "--keep",
+        "--output-format",
+        "json",
+      ],
+      { encoding: "utf8", env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, timeout: 600_000 },
+    );
+    const env = JSON.parse(r.stdout);
+    expect(env.results?.length, `no run produced: ${JSON.stringify(env.error ?? env)}`).toBeGreaterThan(0);
+    const res = env.results[0];
+    const full = JSON.parse(readFileSync(join(res.outDir, "turns", "1", "result.json"), "utf8"));
+    const subs = full.subagents ?? [];
+    expect(subs.length, "no sub-agent was dispatched — the probe prompt failed to trigger a Task").toBeGreaterThan(0);
+    const withSearch = subs.filter((s: { webSearches?: unknown[] }) => (s.webSearches?.length ?? 0) > 0);
+    expect(
+      withSearch.length,
+      `no dispatch captured a WebSearch (subagents: ${JSON.stringify(subs.map((s: { toolsUsed?: unknown }) => s.toolsUsed))})`,
+    ).toBeGreaterThan(0);
+    const ws = (withSearch[0] as { webSearches: Array<{ query: string; resultText: string }> }).webSearches[0];
+    expect(typeof ws.query).toBe("string");
+    expect(ws.query.length).toBeGreaterThan(0);
+    expect(typeof ws.resultText).toBe("string");
+    expect(ws.resultText.length, "a query with EMPTY result text — the tool_result pairing failed").toBeGreaterThan(0);
+    expect(r.status).toBe(0);
+  }, 620_000);
 });

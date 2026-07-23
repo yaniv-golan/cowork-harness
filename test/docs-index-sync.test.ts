@@ -87,6 +87,39 @@ describe("verdict-signals docs ↔ code", () => {
   });
 });
 
+describe("README § Documentation ↔ docs/README.md Guides (the two doc indexes can't drift)", () => {
+  // The two human doc indexes are parallel surfaces (the planned dedup is a separate restructure);
+  // until then, a guide listed in one and not the other is drift — that's exactly how critique.md
+  // went missing from README's table while present in docs/README.md, llms.txt, and the command table.
+  const readme = readFileSync(resolve("README.md"), "utf8");
+  const docsReadme = readFileSync(resolve("docs/README.md"), "utf8");
+
+  const section = (text: string, heading: string) => {
+    const start = text.indexOf(`\n## ${heading}`);
+    expect(start, `heading "## ${heading}" not found`).toBeGreaterThan(-1);
+    const rest = text.slice(start + 1);
+    const end = rest.indexOf("\n## ");
+    return end === -1 ? rest : rest.slice(0, end);
+  };
+
+  it("every guide in docs/README.md's Guides table has a row in README's Documentation table", () => {
+    const guides = [...section(docsReadme, "Guides").matchAll(/\| \[[^\]]+\]\(\.\/([\w.-]+\.md)\)/g)].map((m) => m[1]);
+    expect(guides.length).toBeGreaterThan(10); // parse canary — an empty scrape must not false-green
+    const docTable = section(readme, "Documentation");
+    const missing = guides.filter((f) => !docTable.includes(`(./docs/${f})`)).sort();
+    expect(missing).toEqual([]);
+  });
+
+  it("every docs/*.md in README's Documentation table is indexed somewhere in docs/README.md", () => {
+    // docs/README.md can't list itself — the one intentional asymmetry.
+    const ALLOWLIST = new Set<string>(["README.md"]);
+    const rows = [...section(readme, "Documentation").matchAll(/\(\.\/docs\/([\w.-]+\.md)\)/g)].map((m) => m[1]);
+    expect(rows.length).toBeGreaterThan(10); // parse canary
+    const missing = rows.filter((f) => !ALLOWLIST.has(f) && !docsReadme.includes(`(./${f})`)).sort();
+    expect(missing).toEqual([]);
+  });
+});
+
 describe("llms.txt ↔ docs/*.md", () => {
   const llms = readFileSync(resolve("llms.txt"), "utf8");
   // Every top-level docs/*.md guide, including docs/README.md itself, is now linked from llms.txt —

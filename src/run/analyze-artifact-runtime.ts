@@ -1,9 +1,8 @@
 /**
  * `analyze-artifact-runtime` — Tier B, the OPTIONAL runtime jsdom confirmer for the Cowork
- * interactive-artifact write-back bug class (see
- * `docs/internal/2026-07-15-harness-improvements-from-skillcreator-plan.md`, Item 1 §B1/§B4, and its
- * working prototype `docs/internal/artifact-roundtrip-prototypes/rt_detect.mjs`, which this module
- * adapts). Tier A (`analyze-artifact.ts`, static AST) is the always-on default; this module CONFIRMS a
+ * interactive-artifact write-back bug class described in `analyze-artifact.ts`. Adapted from a working
+ * prototype that validated the runtime-jsdom detection approach before this module productionized it.
+ * Tier A (`analyze-artifact.ts`, static AST) is the always-on default; this module CONFIRMS a
  * Tier A suspicion (or independently flags dynamic construction / guard-falseness Tier A can't see) by
  * actually driving a materialized `.html` artifact under a headless DOM. It is a fast-follow confirmer,
  * never the primary signal, and (per §B4) does not gate on its own.

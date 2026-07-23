@@ -442,7 +442,7 @@ export interface AssertContext {
    *  It is NOT the complete callable surface: a factory-DEFERRED tool (native or MCP) is loaded on demand
    *  via a ToolSearch `select:` round-trip and surfaces in a system-reminder, not in init.tools — so
    *  tool_available can false-NEGATIVE on a genuinely-available deferred tool (e.g. the skill-discovery
-   *  tools). Capturing the deferred set is WI-1, deferred (docs/internal). Undefined means no context
+   *  tools). Capturing the deferred set is a known gap, not yet implemented. Undefined means no context
    *  telemetry was recorded (an older run that never captured this field) — the evidence-unavailable
    *  signal for tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as undefined. */
   availableTools?: string[];

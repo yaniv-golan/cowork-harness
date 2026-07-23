@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { parseArgs } from "../src/critique/command.js";
 
 // `cowork-harness critique --dotenv <path>` is documented in critique's own `--help` but was UNREACHABLE
-// in two independent ways (docs/internal/2026-07-20-critique-skill-flag-parity-plan.md §G4, Diff 4):
+// in two independent ways:
 //
 //   1. The misplaced-global guard (cli.ts ~711) rejected ANY exact `--dotenv` token appearing after a
 //      known subcommand — including `critique`, where `--dotenv` is a legitimate per-command flag, not a

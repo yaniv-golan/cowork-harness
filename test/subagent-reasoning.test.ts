@@ -245,3 +245,86 @@ describe("captureSubagentReasoning (O — per-sub-agent reasoning from the child
     expect(() => captureSubagentReasoning("/nonexistent", [])).not.toThrow();
   });
 });
+
+describe("sub-agent WebSearch capture (query + paired tool_result, from the same child transcript)", () => {
+  it("captures query + result text, string-content and block-array-content forms alike", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-research-"));
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "a1",
+      { agentType: "general-purpose", description: "research", toolUseId: "toolu_WS", spawnDepth: 1 },
+      [
+        assistantLine([{ type: "tool_use", id: "ws_1", name: "WebSearch", input: { query: "TritonWear funding 2026" } }]),
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "ws_1", content: "Web search results: ~$2M per Tracxn" }],
+          },
+        },
+        assistantLine([{ type: "tool_use", id: "ws_2", name: "WebSearch", input: { query: "CloudHawk sale price" } }]),
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "ws_2",
+                content: [{ type: "text", text: "step-down sale ~$100M" }],
+              },
+            ],
+          },
+        },
+        // a non-WebSearch tool pair must NOT be captured as research
+        assistantLine([{ type: "tool_use", id: "rd_1", name: "Read", input: { file_path: "/x" } }]),
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "rd_1", content: "file body" }] } },
+      ],
+    );
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_WS")];
+    captureSubagentReasoning(configDir, subagents);
+    // Mutation guard: reverting parseChildTranscript to skip tool_use/tool_result entirely reds this —
+    // the field failure it covers is "sub-agent stamps evidence_source:'researched' but nothing records
+    // what it searched or saw".
+    expect(subagents[0].webSearches).toEqual([
+      { query: "TritonWear funding 2026", resultText: "Web search results: ~$2M per Tracxn" },
+      { query: "CloudHawk sale price", resultText: "step-down sale ~$100M" },
+    ]);
+    expect(subagents[0].webSearchesElided).toBeUndefined();
+  });
+
+  it("bounds a huge result (resultTruncated) and elides past the per-dispatch cap (oldest first)", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-research-"));
+    const lines: unknown[] = [];
+    for (let i = 0; i < 12; i++) {
+      lines.push(assistantLine([{ type: "tool_use", id: `ws_${i}`, name: "WebSearch", input: { query: `q${i}` } }]));
+      lines.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: `ws_${i}`, content: i === 0 ? "x".repeat(5000) : `r${i}` }],
+        },
+      });
+    }
+    stageChild(configDir, "-p", "u2", "a2", { agentType: "g", description: "d", toolUseId: "toolu_C", spawnDepth: 1 }, lines);
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_C")];
+    captureSubagentReasoning(configDir, subagents);
+    expect(subagents[0].webSearches).toHaveLength(10);
+    expect(subagents[0].webSearchesElided).toBe(2); // q0 (the truncated one) and q1 slid out
+    expect(subagents[0].webSearches![0].query).toBe("q2");
+    expect(subagents[0].webSearches![9].query).toBe("q11");
+  });
+
+  it("a dispatch with no WebSearch leaves webSearches undefined (not [])", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-research-"));
+    stageChild(configDir, "-p", "u3", "a3", { agentType: "g", description: "d", toolUseId: "toolu_N", spawnDepth: 1 }, [
+      assistantLine([{ type: "text", text: "no research needed" }]),
+    ]);
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_N")];
+    captureSubagentReasoning(configDir, subagents);
+    expect(subagents[0].webSearches).toBeUndefined();
+    expect(subagents[0].reasoning).toEqual([{ kind: "text", text: "no research needed" }]);
+  });
+});
