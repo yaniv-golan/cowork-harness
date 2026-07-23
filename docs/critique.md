@@ -90,6 +90,7 @@ ignored.
 |---|---|
 | `--model <id>` | session model for the agent doing the work *and* reflecting |
 | `--allow-missing-capability` | don't fail either turn when the lean image omits a capability |
+| `--allow-host-writes` | consent to a writable connected folder at `--fidelity hostloop` (native host FS access); forwarded to both turns. No effect off hostloop or without a writable `--folder`. Refused loud otherwise |
 
 **Graded-run tuning** — the task turn only; the reflection turn stays pinned deterministic.
 
@@ -107,7 +108,7 @@ ignored.
 |---|---|
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
-| `--fidelity container` | container tier only — **`[not-built]`, not permanent**; see [Known limitations](#known-limitations) before designing around it |
+| `--fidelity container\|hostloop` | container (default) or hostloop; `microvm`/`protocol`/`cowork` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
 | `--run-dir <path>` | **global, unlike `--dotenv`** — must still PRECEDE the subcommand; a trailing `critique … --run-dir` is rejected |
@@ -142,10 +143,13 @@ It does **not** record their contents — see Known limitations.
 
 ## Cost and prerequisites
 
-- **Four model workloads per critique**: two container runs (task + reflection) and two evaluator passes.
+- **Four model workloads per critique**: two graded runs (task + reflection) at the chosen tier and two
+  evaluator passes.
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
-- Requires the **container tier** (Docker/Lima) and an authenticated `claude` CLI on PATH.
+- **container** needs Docker/Lima; **hostloop** needs Docker (the bash/web_fetch sidecar) **plus** the
+  staged native agent binary, and writes to the real host filesystem — a writable `--folder` there requires
+  `--allow-host-writes`. Both tiers need an authenticated `claude` CLI on PATH.
 
 ## Exit codes
 
@@ -196,17 +200,20 @@ you whether to design around it permanently:
 The same tags appear in `critique --help`, generated from one source (`src/critique/limitations.ts`), so
 the two cannot disagree.
 
-- **`[not-built]` Container tier only** — `--fidelity hostloop|cowork|microvm|protocol` is refused.
-  **This is now a statement about unbuilt work, not evidence or physics.** The resume-continuity proof that
-  was missing has PASSED at hostloop against its *native* agent binary (`test/live-contract.test.ts`,
-  "resume-continuity proof at hostloop"; 4/4 live runs): a resumed turn both recalled a prior-turn-only
-  conversation codeword *and* freshly re-read the mounted skill, so the container proof demonstrably
-  transfers to the native binary. **What remains is only build work:** unpinning three hard-coded container
-  sites, stamping the tier on the session manifest so a cross-tier resume fails loud, and plumbing
-  host-write consent for `skill`/`critique` (the one real design call — hostloop writes to the user's real
-  filesystem, whereas container is throwaway).
-  *If you are deciding whether to build a permanent second test lane for hostloop-only findings: don't —
-  the tier is proven reachable, so the pin is pending work, not a permanent boundary.*
+- **Tiers.** critique runs at `--fidelity container` (default) or `hostloop`. The container→hostloop pin
+  was lifted on 2026-07-23 once hostloop resume-continuity was proven live against the *native* agent
+  binary (`test/live-contract.test.ts`, "resume-continuity proof at hostloop"; 4/4 runs). A cross-tier
+  `--resume` (turn 1 at one tier, turn 2 at another) is blocked fail-loud by the session-manifest fidelity
+  stamp. The three tiers still refused, each for its own reason:
+- **`[unverified]` The microvm tier is refused** — resume-continuity is unproven for the microVM guest (a
+  different Apple-VZ guest and in-guest session store than the proven container/hostloop tiers). A live
+  resume-continuity proof there would lift it.
+- **`[not-built]` The protocol tier is refused** — it never plumbs a session id or `--resume`, so
+  critique's two-turn resume protocol has nothing to resume. Adding session plumbing to the protocol tier
+  (which also runs with no sandbox) would be the work.
+- **`[deliberate]` The cowork tier is refused** — pass the resolved tier (`container`|`hostloop`)
+  explicitly. cowork resolves dynamically to hostloop|container via the synced loop gate; accepting it
+  would make the graded tier baseline-dependent, adding noise to skillHash-paired generation comparisons.
 - **`[deliberate]` SKILL.md is capped at 16KB** in the evidence; a larger one degrades toward "not
   adjudicable". The package is bounded so the evaluator sees a whole record rather than a truncated tail.
   Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —

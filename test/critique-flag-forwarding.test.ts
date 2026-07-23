@@ -21,6 +21,15 @@ describe("source flags reach BOTH turns (the origin-key invariant)", () => {
     }
   });
 
+  it("forwards --allow-host-writes to BOTH turns (consent fires on the reflection resume too)", () => {
+    // checkHostLoopWriteConsent runs on every executeScenario at hostloop, the reflection resume included,
+    // so a task-only forward would refuse every reflection turn of a folder-bearing hostloop critique.
+    const o = P("--allow-host-writes");
+    for (const args of [buildTaskTurnArgs(o, "s1"), buildReflectionTurnArgs(o, "s1")]) {
+      expect(args.filter((a) => a === "--allow-host-writes")).toHaveLength(1);
+    }
+  });
+
   it("emits no forwarded flag more than once on either turn", () => {
     const o = P("--upload", "a.pdf", "--folder", "./d", "--model", "m", "--label", "g1", "--decider-dir", "./gates");
     for (const args of [buildTaskTurnArgs(o, "s1"), buildReflectionTurnArgs(o, "s1")]) {
@@ -85,6 +94,43 @@ describe("critique's pinned flags", () => {
     const o = P("--upload", "x.pdf");
     const args = buildTaskTurnArgs(o, "s1");
     expect(args.indexOf("--upload")).toBeLessThan(args.indexOf("--fidelity"));
+  });
+});
+
+describe("fidelity tier allowlist (container | hostloop)", () => {
+  it("defaults to container and forwards it to both turns", () => {
+    const o = P();
+    expect(o.fidelity).toBe("container");
+    expect(buildTaskTurnArgs(o, "s1").join(" ")).toContain("--fidelity container");
+    expect(buildReflectionTurnArgs(o, "s1").join(" ")).toContain("--fidelity container");
+  });
+
+  it("accepts --fidelity hostloop and forwards it to BOTH turns (the reflection resume must match)", () => {
+    const o = P("--fidelity", "hostloop");
+    expect(o.fidelity).toBe("hostloop");
+    expect(buildTaskTurnArgs(o, "s1").join(" ")).toContain("--fidelity hostloop");
+    expect(buildReflectionTurnArgs(o, "s1").join(" ")).toContain("--fidelity hostloop");
+  });
+
+  it("accepts the --fidelity=hostloop equals form", () => {
+    expect(P("--fidelity=hostloop").fidelity).toBe("hostloop");
+  });
+
+  // Each refused tier states its OWN reason (not a generic "unknown"), so a consumer learns whether it
+  // could lift (microvm: a proof) or is structural-ish (protocol: no resume plumbing) or deliberate (cowork).
+  for (const [tier, needle] of [
+    ["microvm", /microVM guest/i],
+    ["protocol", /never plumbs a session id/i],
+    ["cowork", /baseline-dependent/i],
+  ] as const) {
+    it(`refuses --fidelity ${tier} with its specific reason`, () => {
+      expect(() => P("--fidelity", tier)).toThrow(needle);
+      expect(() => P("--fidelity", tier)).toThrow(/container or hostloop tier only/i);
+    });
+  }
+
+  it("refuses a nonsense tier without pretending it is known", () => {
+    expect(() => P("--fidelity", "banana")).toThrow(/not a fidelity tier/i);
   });
 });
 

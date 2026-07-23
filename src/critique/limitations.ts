@@ -57,24 +57,39 @@ export interface Limitation {
 }
 
 export const CRITIQUE_LIMITATIONS: Limitation[] = [
+  // The container pin was LIFTED on 2026-07-23: hostloop resume-continuity was proven live (native binary,
+  // test/live-contract.test.ts) and critique now accepts `--fidelity container|hostloop`. What remains is
+  // the three tiers still refused — each for its OWN, distinctly-classed reason, which is exactly the
+  // per-limitation provenance this module exists to record. A cross-tier resume is blocked separately by
+  // the session-manifest fidelity stamp (src/run/execute.ts).
   {
-    id: "container-tier-only",
-    summary: "container tier only — `--fidelity hostloop|cowork|microvm|protocol` is refused",
+    id: "microvm-tier-refused",
+    summary: "the microvm tier is refused — resume-continuity is unproven for the microVM guest",
+    provenance: {
+      kind: "unverified",
+      liftedBy:
+        "a live resume-continuity proof at the microvm tier (its Apple-VZ guest and in-guest session store, which the container/hostloop proofs do not cover)",
+    },
+    docsAnchor: "microvm tier is refused",
+  },
+  {
+    id: "protocol-tier-refused",
+    summary: "the protocol tier is refused — it never plumbs a session id or --resume",
     provenance: {
       kind: "not-built",
-      // WAS `unverified` until 2026-07-23. The proof its `liftedBy` named — a live resume-continuity run
-      // at hostloop against the NATIVE agent binary (not the container ELF) — has now PASSED
-      // (test/live-contract.test.ts, "resume-continuity proof at hostloop"; 4/4 live, native+ELF 2.1.217):
-      // a resumed turn BOTH recalled a prior-turn-only conversation codeword (native session store
-      // restored across --resume) AND freshly re-read the mounted skill's reference file (staged tree
-      // survived resume). The container proof demonstrably transfers → the evidence obstacle is cleared, so
-      // this is no longer `unverified`. What remains is BUILD work, not proof: unpin three hard-coded
-      // container sites, stamp the tier on the session manifest so a cross-tier resume fails loud, and plumb
-      // host-write consent for skill/critique — the one real design call, since hostloop writes to the
-      // user's real FS whereas container is throwaway.
-      note: "resume-continuity is PROVEN at hostloop's native binary (test/live-contract.test.ts; 4/4 live) — the tier is reachable, NOT a permanent boundary. The pin now remains only for build work: unpin three container sites, tier-stamp the session manifest so a cross-tier resume fails loud, and plumb host-write consent for skill/critique",
+      note: "protocol's spawn hand-builds its argv and never emits --session-id/--resume, so critique's two-turn resume protocol has nothing to resume; adding session plumbing to the protocol tier (which also runs with no sandbox) is the work",
     },
-    docsAnchor: "Container tier only",
+    docsAnchor: "protocol tier is refused",
+  },
+  {
+    id: "cowork-tier-refused",
+    summary: "the cowork tier is refused — pass the resolved tier (container|hostloop) explicitly",
+    provenance: {
+      kind: "deliberate",
+      rationale:
+        "cowork resolves dynamically to hostloop|container via the synced loop gate; accepting it would make the graded tier baseline-dependent, adding noise to skillHash-paired generation comparisons",
+    },
+    docsAnchor: "cowork tier is refused",
   },
   {
     id: "skill-md-16kb-cap",

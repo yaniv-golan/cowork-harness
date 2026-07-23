@@ -2,17 +2,16 @@
 // self-report against turn-1-only evidence -> print a triaged, human-adjudicated report.
 //
 //   cowork-harness critique <skill-folder> --prompt "<probe>" [--dotenv <path>]
-//                                 [--fidelity container] [--evaluator-model <id>] [--output-format json|text]
+//                                 [--fidelity container|hostloop] [--evaluator-model <id>] [--output-format json|text]
 //
 // This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. FINDINGS never gate — any classification exits 0, including when the graded task
 // run itself errored (that is a finding about the skill). Exit 2 means NO CRITIQUE WAS PRODUCED: a usage
 // error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked or threw) .
-// Container tier only: the resume-continuity behavior this loop depends on (the reflection turn seeing the
-// SAME mounted skill + session as the task turn) is verified for the container fidelity tier specifically,
-// so the tier is pinned rather than left to the caller. That pin is `unverified`, NOT `structural` — see
-// ./limitations.ts, which records what would lift it (a live proof at hostloop against its NATIVE agent
-// binary, which the container ELF's proof does not cover). A consumer read this pin as permanent and built
-// a second test lane around it; the provenance tags exist so that misreading is not available.
+// Container OR hostloop tier: the reflection turn RESUMES the task turn's mounted skill + conversation, and
+// that resume-continuity is proven for BOTH — container (Linux ELF) and hostloop (native binary; see
+// test/live-contract.test.ts). microvm/protocol/cowork stay refused (see ./limitations.ts for why each).
+// A cross-tier resume is blocked fail-loud by the session-manifest fidelity stamp (src/run/execute.ts),
+// and at hostloop a writable connected folder requires --allow-host-writes (forwarded to both turns).
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
@@ -63,7 +62,7 @@ interface ParsedArgs {
   skillFolder: string;
   prompt: string;
   dotenv?: string;
-  fidelity: string;
+  fidelity: "container" | "hostloop";
   evaluatorModel?: string;
   outputFormat: "json" | "text";
   /** argv fragments for BOTH spawned turns — session SOURCES, which must match or the resume throws. */
@@ -103,7 +102,7 @@ Graded-run tuning (shapes the run being graded):
 Critique's own:
   --evaluator-model <id>    the grading model (env: COWORK_HARNESS_EVALUATOR_MODEL)
   --output-format json|text critique's REPORT format (inner turns always speak json internally)
-  --fidelity container      container tier only
+  --fidelity <tier>         container (default) or hostloop; microvm/protocol/cowork refused with a reason
   --keep                    accepted as a no-op — runs are always kept
   --dotenv <path>           credentials
   Global --run-dir <path>   must PRECEDE the subcommand
@@ -120,11 +119,13 @@ Repeating a flag: --upload/--folder/--plugin/--marketplace/--enable/--answer acc
   flags may be repeated harmlessly.
 
 COST AND PREREQUISITES — read before running:
-  * Each critique is FOUR model workloads: two container runs (task + reflection) and two evaluator
-    passes over an evidence package of up to 48KB.
+  * Each critique is FOUR model workloads: two graded runs (task + reflection) at the chosen tier and two
+    evaluator passes over an evidence package of up to 48KB.
   * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier. Override it if
     that is not what you want.
-  * Requires the container tier (Docker/Lima) and an authenticated \`claude\` CLI on PATH.
+  * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
+    agent binary, and writes to the real host FS (a writable --folder requires --allow-host-writes). Both
+    tiers need an authenticated \`claude\` CLI on PATH.
 
 EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself errored — that is a
   finding about the skill, not a broken instrument). 2 = usage error, or an instrument failure (turn
@@ -284,17 +285,39 @@ function parseArgs(argv: string[]): ParsedArgs {
     prompt = readFileSync(promptFile, "utf8");
   }
   if (!prompt || !prompt.trim()) throw new Error(`--prompt "<probe>" or --prompt-file <path> is required\n${usage()}`);
-  if (fidelity !== "container")
-    throw new Error(
-      `skill-critique is container-tier only (the resume-continuity behavior it relies on is only verified there); got --fidelity ${fidelity}`,
-    );
+  if (fidelity !== "container" && fidelity !== "hostloop") {
+    // Two proven tiers. Each refusal states its OWN reason rather than a generic "unknown tier": the
+    // reflection turn RESUMES the task turn's mounted skill + conversation, and that continuity is proven
+    // only for container (Linux ELF) and hostloop (native binary).
+    const reason =
+      fidelity === "microvm"
+        ? "resume-continuity is unproven for the microVM guest (a different guest and session-store location than container/hostloop)"
+        : fidelity === "protocol"
+          ? "the protocol tier never plumbs a session id or --resume, so the reflection turn cannot resume the task turn at all"
+          : fidelity === "cowork"
+            ? "cowork resolves dynamically to hostloop|container via the loop gate, which would make the graded tier baseline-dependent; pass the resolved tier (container or hostloop) explicitly"
+            : "it is not a fidelity tier";
+    throw new Error(`skill-critique runs at the container or hostloop tier only; --fidelity ${fidelity} is refused: ${reason}`);
+  }
   if (outputFormat !== "json" && outputFormat !== "text")
     throw new Error(`--output-format must be "text" or "json" (got "${outputFormat}")`);
   // Fail fast with critique's OWN clear error (mirroring cli.ts's global --dotenv existence check,
   // ~line 627) rather than letting an absent file surface later as a generic instrument-failure
   // diagnostic from the child `skill` invocation's own (differently-worded) rejection.
   if (dotenv !== undefined && !existsSync(dotenv)) throw new Error(`--dotenv file not found: ${dotenv}\n${usage()}`);
-  return { skillFolder: positional[0], prompt, dotenv, fidelity, evaluatorModel, outputFormat, forwardBoth, forwardTask, taskTimeoutMs };
+  // The allowlist guard above proves fidelity is one of the two members; TS can't narrow a `let string`
+  // across a throwing branch, so assert the type the guard guarantees.
+  return {
+    skillFolder: positional[0],
+    prompt,
+    dotenv,
+    fidelity: fidelity as ParsedArgs["fidelity"],
+    evaluatorModel,
+    outputFormat,
+    forwardBoth,
+    forwardTask,
+    taskTimeoutMs,
+  };
 }
 
 interface TurnOutcome {
@@ -847,7 +870,7 @@ export function buildTaskTurnArgs(opts: ParsedArgs, sessionId: string): string[]
     ...opts.forwardBoth,
     ...opts.forwardTask,
     "--fidelity",
-    "container",
+    opts.fidelity,
     "--session-id",
     sessionId,
     "--keep",
@@ -874,7 +897,7 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
     sessionId,
     "--resume",
     "--fidelity",
-    "container",
+    opts.fidelity,
     "--on-unanswered",
     "first",
     "--output-format",

@@ -97,7 +97,7 @@ the run's output there, **not** back in the corresponding host directory.
 At `hostloop` fidelity, connected folders are **bind-mounted** from the real host path — one set of bytes,
 matching production — into both the native process's view and the Docker sidecar's view. A **writable**
 connected folder therefore gives the native process genuine host filesystem access and requires explicit
-consent: `allow_host_writes: true` in the scenario, or `--allow-host-writes` for `chat` (the same consent a
+consent: `allow_host_writes: true` in a `run` scenario, or `--allow-host-writes` for `chat`/`skill`/`critique` (the same consent a
 real user gives by clicking "connect folder" in Desktop). See [boundary.md](./boundary.md) for the
 enforcement mechanism (a PreToolUse hook, not a container wall).
 
