@@ -29,6 +29,10 @@ All notable changes to this project are documented here. The format is based on
 - `critique` evidence caps raised: SKILL.md 16KB→64KB, transcript 16KB→32KB, overall package 48KB→128KB, so
   a flagship-sized (~51KB) SKILL.md no longer grades permanently truncated. Increases per-critique evaluator
   token cost on large skills (~2–2.5×).
+- `sync`'s two code-tripwire warnings (the `getMcpSkillSources` caller-count and MCP-skills-capability
+  checks) now carry a self-contained instruction — re-verify whether MCP servers can contribute skills and
+  whether the harness must model MCP-contributed skill sources — instead of pointing at a reference the
+  published repo does not carry.
 
 ### Docs
 

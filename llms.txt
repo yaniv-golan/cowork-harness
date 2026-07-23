@@ -30,7 +30,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [docs/cowork-spawn-contract-1.12603.1.md](docs/cowork-spawn-contract-1.12603.1.md): the binary-grounded spawn/control contract (cwd, env, mounts, control-protocol fields) the harness implements
 - [docs/subagents.md](docs/subagents.md): what a sub-agent can reach, what tools it gets, and where host-loop vs VM-loop diverge — read before writing/asserting a Task-dispatching skill
 - [docs/chat.md](docs/chat.md): the interactive `chat` command — multi-turn sessions, `--folder`, fidelity tiers
-- [docs/critique.md](docs/critique.md): EXPERIMENTAL `critique` — grounded skill self-critique; how it resists confabulation, cost, exit codes, and running it on a skill you did not write
+- [docs/critique.md](docs/critique.md): EXPERIMENTAL `critique` — grounded skill self-critique (advisory lead, not an attestation); how it resists confabulation, cost, exit codes, and running it on a skill you did not write
 - [docs/debugging.md](docs/debugging.md): debugging a run — `inspect`/`trace`/`verify-run`/`diff`/`chat` for a misbehaving skill, and the false-green hunt
 - [docs/gotchas.md](docs/gotchas.md): troubleshooting FAQ (setup + authoring) — lint/docker/worktree/doctor/scenarioDrift failures and skill-authoring/host-loop footguns
 - [docs/fidelity-gaps.md](docs/fidelity-gaps.md): what the harness deliberately does NOT reproduce vs real Cowork
