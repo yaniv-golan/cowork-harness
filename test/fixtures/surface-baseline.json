@@ -391,6 +391,201 @@
         "type": "string"
       }
     },
+    "critique-report.json": {
+      "": {
+        "type": "object",
+        "closed": true
+      },
+      ".costUsd": {
+        "type": "object",
+        "closed": true
+      },
+      ".costUsd.complete": {
+        "type": "boolean",
+        "required": true
+      },
+      ".costUsd.evaluatorPass1Usd": {
+        "type": "number"
+      },
+      ".costUsd.evaluatorPass2Usd": {
+        "type": "number"
+      },
+      ".costUsd.reflectionTurnUsd": {
+        "type": "number"
+      },
+      ".costUsd.taskTurnUsd": {
+        "type": "number"
+      },
+      ".costUsd.totalUsd": {
+        "type": "number",
+        "required": true
+      },
+      ".droppedEvaluatorItems": {
+        "type": "object",
+        "closed": true
+      },
+      ".droppedEvaluatorItems.pass1": {
+        "type": "number",
+        "required": true
+      },
+      ".droppedEvaluatorItems.pass2": {
+        "type": "number"
+      },
+      ".evaluatorError": {
+        "type": "string"
+      },
+      ".evaluatorIntegrity": {
+        "type": "object",
+        "closed": true
+      },
+      ".evaluatorIntegrity.pass1Canary": {
+        "type": "boolean",
+        "required": true
+      },
+      ".evaluatorIntegrity.pass2Canary": {
+        "type": "boolean"
+      },
+      ".evaluatorModel": {
+        "type": "string"
+      },
+      ".fidelity": {
+        "type": "string",
+        "enum": ["container", "hostloop"],
+        "required": true
+      },
+      ".gateAnswers": {
+        "type": "array"
+      },
+      ".gateAnswers[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".gateAnswers[].answer": {
+        "type": "string",
+        "required": true
+      },
+      ".gateAnswers[].answeredBy": {
+        "type": "string",
+        "required": true
+      },
+      ".gateAnswers[].question": {
+        "type": "string",
+        "required": true
+      },
+      ".gradedBaseline": {
+        "type": "string"
+      },
+      ".gradedEffectiveFidelity": {
+        "type": "string"
+      },
+      ".gradedOutcome": {
+        "type": "string"
+      },
+      ".gradedSkill": {
+        "type": "string"
+      },
+      ".gradedSkillHash": {
+        "type": "string"
+      },
+      ".infraFailure": {
+        "type": "string"
+      },
+      ".items": {
+        "type": "array",
+        "required": true
+      },
+      ".items[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".items[].citationResolved": {
+        "type": "boolean"
+      },
+      ".items[].classification": {
+        "type": "string",
+        "enum": ["grounded-and-actionable", "grounded-but-not-worth-it", "confabulated", "already-covered", "not-adjudicable"],
+        "required": true
+      },
+      ".items[].evidence": {
+        "type": "string",
+        "required": true
+      },
+      ".items[].findingFingerprint": {
+        "type": "string"
+      },
+      ".items[].idea": {
+        "type": "string",
+        "required": true
+      },
+      ".items[].recommendedAction": {
+        "type": "string",
+        "required": true
+      },
+      ".items[].source": {
+        "type": "string",
+        "enum": ["evaluator", "self-report"],
+        "required": true
+      },
+      ".outDir": {
+        "type": "string",
+        "required": true
+      },
+      ".prompt": {
+        "type": "string",
+        "required": true
+      },
+      ".selfReportStatus": {
+        "type": "string",
+        "enum": ["captured", "unavailable"],
+        "required": true
+      },
+      ".sessionId": {
+        "type": "string",
+        "required": true
+      },
+      ".skillFolder": {
+        "type": "string",
+        "required": true
+      },
+      ".skillInvocationObserved": {
+        "type": "boolean"
+      },
+      ".skillMdStatus": {
+        "type": "string",
+        "enum": ["readable", "missing", "unreadable"]
+      },
+      ".skillMdTruncated": {
+        "type": "boolean"
+      },
+      ".taskResult": {
+        "type": "string",
+        "enum": ["success", "error"]
+      },
+      ".turn1ResultDegraded": {
+        "type": "boolean"
+      },
+      ".turn1SliceDegraded": {
+        "type": "boolean"
+      },
+      ".verdictProvenance": {
+        "type": "object",
+        "closed": true,
+        "required": true
+      },
+      ".verdictProvenance.advisory": {
+        "type": "boolean",
+        "required": true
+      },
+      ".verdictProvenance.caveat": {
+        "type": "string",
+        "required": true
+      },
+      ".verdictProvenance.kind": {
+        "type": "string",
+        "enum": ["self-run"],
+        "required": true
+      }
+    },
     "doctor.json": {
       "": {
         "type": "object"
