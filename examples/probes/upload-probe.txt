@@ -1,0 +1,2 @@
+MARKER-UPLOAD-READ-PROBE: uploads are Read-able at the advertised path
+second line, irrelevant

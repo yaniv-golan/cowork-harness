@@ -236,6 +236,9 @@ Beyond stdout, every critique leaves durable artifacts at the run-dir root (best
 | `critique-evidence-package.txt` | when the evaluator ran | the **armored** corpus the evaluator actually graded against — re-grade a disputed finding offline against the exact record |
 | `critique-salvage.json` | exit 2 only | the self-report + each evaluator pass's RAW reply (captured **pre-parse**), so salvage is a file read, not console scraping |
 
+These artifacts (and the report's JSON shape) are part of critique's **EXPERIMENTAL** surface — useful
+and stable in practice, but not yet a frozen SPEC §12 covered surface; field additions are expected.
+
 ## Reproduction — the ≥2-run discipline
 
 `critique --repeat` is refused (fixed two-turn protocol). The supported N-run reproduction recipe:

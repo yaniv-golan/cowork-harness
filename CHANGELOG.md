@@ -18,21 +18,46 @@ All notable changes to this project are documented here. The format is based on
   `checks[].id` set — SPEC §12 — already permits this).
 - `critique` now stamps `verdictProvenance` on every report (JSON key + text "verdict scope" line): the
   verdict is an advisory self-run, not an independent attestation.
-- **`critique` now runs at `--fidelity hostloop` as well as `container` — the container-tier pin is
-  lifted.** The pin existed because the reflection turn *resumes* the task turn and resume-continuity was
-  only proven for the container Linux ELF; a live two-turn proof at hostloop's **native** agent binary
-  (`test/live-contract.test.ts`, "resume-continuity proof at hostloop") cleared it, and a live
-  `critique --fidelity hostloop` e2e validates the full protocol there. `microvm`/`protocol`/`cowork` stay
-  refused, each with its own stated reason: the single `container-tier-only` limitation is replaced by
-  three tagged ones — `microvm-tier-refused` `[unverified]` (a resume-continuity proof at the microVM guest
-  would lift it), `protocol-tier-refused` `[not-built]` (protocol never plumbs a session id/`--resume`),
-  and `cowork-tier-refused` `[deliberate]` (the synced loop gate would make the graded tier
-  baseline-dependent, adding noise to skillHash-paired generation comparisons).
-- **`skill` accepts `--allow-host-writes`** (and `critique` forwards it to BOTH turns) — the
-  hostloop writable-connected-folder consent that previously only `chat` (its own flag) and `run` (the
-  `allow_host_writes: true` scenario field) could grant; a plain `skill --fidelity hostloop --folder X`
-  was refused with no way to consent at all. Folder-less runs (skill dir + uploads) still need no consent —
-  uploads and skill/plugin mounts are read-only.
+- **`critique --skill <name>` — plugin-aware grading.** A multi-skill plugin root (`skills/<name>/SKILL.md`,
+  no root SKILL.md) previously graded a missing file, downgrading every coverage finding to "not
+  adjudicable". `--skill` selects the invoked skill's folder for the packager (selection only — the
+  positional folder is still what both turns mount, and `fingerprint.skillHash` is unchanged: per-plugin,
+  not per-skill); a multi-skill root with no `--skill` is refused **before any model spend**, naming the
+  available skills; a single-skill plugin auto-selects with a notice. The evidence package now also
+  carries the invoked skill's `agents/<name>.md` body and bounded `references/*.md` **content** (not just
+  filenames), and the report carries an advisory `skillInvocationObserved` (false = the graded run's own
+  `skillActivity` never mentions the selected skill).
+- **`critique` persists run-dir artifacts.** Every critique writes `critique-report.json` (the
+  machine-readable report); when the evaluator ran, `critique-evidence-package.txt` (the exact armored
+  corpus it graded against — re-grade a disputed finding offline); on an instrument failure (exit 2),
+  `critique-salvage.json` (the self-report + each evaluator pass's RAW reply captured **pre-parse**).
+  New `--out <path>` also writes the selected-format report to a file. The two `not-built` limitations
+  these close (`evidence-not-persisted`, `report-stdout-only`) are removed from the registry.
+- **Per-critique cost across all four workloads.** The report's `costUsd` sums the task turn, reflection
+  turn, and BOTH evaluator passes (whose usage the transport previously discarded), marked `INCOMPLETE`
+  whenever any workload is unpriced. The header also carries the pinned `fidelity` plus the graded turn's
+  recorded `gradedEffectiveFidelity`/`gradedBaseline`, and the graded run's resolved gate answers are
+  echoed as copy-pasteable `--answer` lines (JSON: `gateAnswers`).
+- **`critique` evaluator parse is per-item tolerant.** One malformed item in an `{"items":[...]}` reply
+  previously discarded the whole document ("no valid JSON found", a broken discovery run). Valid items now
+  survive; malformed ones are dropped AND counted (`droppedEvaluatorItems`, surfaced in both report
+  formats). The integrity canary is recognized by its `idea` alone (a mutated echo still proves
+  instruction-following) and stripped before dedup, so a full-document + canary-only-restatement reply no
+  longer trips the ambiguity throw. Fail-loud preserved: garbage, or all-malformed-with-no-canary, still
+  throws — now naming which field check failed.
+- **Sub-agent research is observable end-to-end.** A sub-agent's WebSearch never enters the main
+  `toolCounts`/`webSearches[]`; its query + result are now captured from the child session transcript as
+  `subagents[].webSearches` (bounded, live/record lane only — absent on replay, and absence is never
+  evidence of no research), surfaced by the new **`trace --view subagent-research`**, and packaged into
+  critique's evidence as a "Sub-agent research" section so "researched" claims are groundable.
+- Each critique item now carries a **`findingFingerprint`** (sha16 over the normalized
+  idea + classification + recommendedAction, deliberately excluding the input-specific evidence excerpt) —
+  clusters the SAME finding across DIFFERENT inputs, complementing `skillHash` (same skill across fixes).
+  docs/critique.md gains a "Reproduction" section documenting the ≥2-run discipline.
+- SKILL.md truncation is now reported distinctly: a readable-but-oversized SKILL.md marks the report
+  `skillMdTruncated` ("the evaluator graded a cut copy") instead of being indistinguishable from a fully
+  packaged one; only missing/unreadable still forces the mechanical "already-covered" downgrade — the
+  `--help`/docs limitation wording now says so.
 
 ### Changed
 
@@ -65,6 +90,39 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **hostloop uploads bullet advertised a non-readable path.** The dynamic "## Shell access" section
+  rendered the uploads mapping's file-tool side as `dirname(upload.hostPath)` — the user's original
+  source dir, which the path-containment gate does not allow — while the base prompt pointed at the
+  correct staged dir. An agent following the bullet got "outside this session's connected folders" and
+  worked around it via copy-into-outputs + `rm`, tripping a spurious `outputs-delete` fail. The bullet
+  now advertises the staged uploads dir — the SAME hoisted value the path gate allows, so the prompt and
+  the gate cannot disagree. (Live-verified: hostloop `--upload` + Read-tool read succeeds at the
+  advertised path.)
+- The task-turn timeout kill message now names `--timeout` and the 10-minute default; a "missing"
+  SKILL.md report note now points at `--skill` / the invoked skill's folder (the multi-skill-plugin-root
+  cause) instead of only stating the symptom.
+- Shipped-doc corrections that induced field misdiagnoses: the cowork-harness skill's gotcha #8 now states
+  that **production enforces** outputs delete-deny (EPERM + approval) and the harness gap is
+  detection-only; docs/critique.md documents that a WebSearch produces **no search-host entries in the
+  container egress.log** (an `api.anthropic.com`-only log is consistent with research working —
+  live-verified with a first-party capture) and that sub-agent searches don't increment the main
+  `toolCounts.WebSearch`; the shipped fidelity reference explains the hostloop Read-vs-bash path split
+  including uploads readability.
+- **`critique` now runs at `--fidelity hostloop` as well as `container` — the container-tier pin is
+  lifted.** The pin existed because the reflection turn *resumes* the task turn and resume-continuity was
+  only proven for the container Linux ELF; a live two-turn proof at hostloop's **native** agent binary
+  (`test/live-contract.test.ts`, "resume-continuity proof at hostloop") cleared it, and a live
+  `critique --fidelity hostloop` e2e validates the full protocol there. `microvm`/`protocol`/`cowork` stay
+  refused, each with its own stated reason: the single `container-tier-only` limitation is replaced by
+  three tagged ones — `microvm-tier-refused` `[unverified]` (a resume-continuity proof at the microVM guest
+  would lift it), `protocol-tier-refused` `[not-built]` (protocol never plumbs a session id/`--resume`),
+  and `cowork-tier-refused` `[deliberate]` (the synced loop gate would make the graded tier
+  baseline-dependent, adding noise to skillHash-paired generation comparisons).
+- **`skill` accepts `--allow-host-writes`** (and `critique` forwards it to BOTH turns) — the
+  hostloop writable-connected-folder consent that previously only `chat` (its own flag) and `run` (the
+  `allow_host_writes: true` scenario field) could grant; a plain `skill --fidelity hostloop --folder X`
+  was refused with no way to consent at all. Folder-less runs (skill dir + uploads) still need no consent —
+  uploads and skill/plugin mounts are read-only.
 - **`critique`'s spaced flag parser no longer silently grabs the next flag as a value.** `critique
   <folder> --prompt --output-format json` (a forgotten `--prompt` value) swallowed `--output-format` as the
   prompt AND dropped the real flag, then ran a four-workload critique on the wrong input. The spaced form

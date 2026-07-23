@@ -806,6 +806,11 @@ interface ReportState {
    *  source; a non-`"readable"` value means presence/coverage classification was refused (see
    *  `runCritique`'s `skillMdUnreadable` option). */
   skillMdStatus?: SkillMdStatus;
+  /** `packageEvidence`'s `skillMdTruncated` — SKILL.md was readable but larger than its cap, so the
+   *  graded copy is CUT (no mechanical downgrade; the truncation caveat prompts claims past the cut
+   *  toward "not adjudicable"). Surfaced so a truncated-source critique is never mistaken for one over
+   *  the whole skill text. */
+  skillMdTruncated?: boolean;
 }
 
 /** critique's verdict is a SELF-RUN graded by a structurally blinded evaluator — a discovery LEAD, NOT an
@@ -895,11 +900,17 @@ export function buildTextReport(state: ReportState): string {
     );
   if (skillMdStatus && skillMdStatus !== "readable")
     out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
+  // Truncated is DISTINCT from missing/unreadable: still readable, still graded, no mechanical
+  // downgrade — but the evaluator saw a cut copy, and the consumer must know that.
+  if (state.skillMdTruncated)
+    out.push(
+      `  SKILL.md: readable but TRUNCATED at the packaging cap — the evaluator graded a cut copy; claims about content past the cut are steered to "not adjudicable" by the truncation caveat, not mechanically downgraded.`,
+    );
   // The dominant real-world cause of a "missing" SKILL.md is pointing critique at a MULTI-SKILL PLUGIN
   // root (skills/<name>/SKILL.md, no root SKILL.md) — name the cause and the fix, not just the symptom.
   if (skillMdStatus === "missing")
     out.push(
-      `  NOTE: if ${skillFolder} is a multi-skill plugin root, point critique at the invoked skill's own folder (e.g. <plugin>/skills/<name>) so its SKILL.md is graded.`,
+      `  NOTE: if ${skillFolder} is a multi-skill plugin root, pass --skill <name> (or point critique at <plugin>/skills/<name> directly) so the invoked skill's SKILL.md is graded.`,
     );
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
@@ -1024,6 +1035,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
+    skillMdTruncated: state.skillMdTruncated,
     verdictProvenance: VERDICT_PROVENANCE,
   };
   if (infraFailure) return { ...base, infraFailure, items: [] };
@@ -1211,7 +1223,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const outDir = extractOutDir(task);
     if (!outDir) {
       // F36: surface WHY there's no envelope/status line when it was the bounded spawn itself that gave up.
-      const diag = [task.timedOut && "task turn timed out", task.truncated && "task turn output exceeded the byte cap"]
+      const diag = [
+        task.timedOut && "task turn timed out (pass --timeout <ms> to raise the budget)",
+        task.truncated && "task turn output exceeded the byte cap",
+      ]
         .filter(Boolean)
         .join("; ");
       process.stderr.write(
@@ -1305,6 +1320,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const boundary = snapshotTurnBoundary(outDir);
 
     // 3. Reflection turn: resume the SAME session.
+    // The reflection turn keeps the FIXED default budget deliberately (a forwarded --timeout stretches
+    // only the task turn): it is a single Q&A resume with no tool fan-out, so a reflection that needs
+    // more than the default is itself an anomaly worth failing loud on, not accommodating.
     const reflect = await runSkillTurn(buildReflectionTurnArgs(opts, sessionId));
 
     // F37: validate the reflection turn at the PROTOCOL level — exit code, envelope shape, and
@@ -1325,6 +1343,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let turn1ResultDegraded: boolean | undefined;
     let turn1SliceDegraded: boolean | undefined;
     let skillMdStatus: SkillMdStatus | undefined;
+    let skillMdTruncated: boolean | undefined;
     // Salvage/cost/evidence capture — populated by the evaluator's callbacks (raw replies land here
     // BEFORE parsing, so a parse throw cannot lose them) and by the per-turn result reads.
     let evidenceText: string | undefined;
@@ -1364,10 +1383,12 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         turn1ResultDegraded: trd,
         turn1SliceDegraded: tsd,
         skillMdStatus: sms,
+        skillMdTruncated: smt,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, { agentsMdPath: resolvedSkill.agentsMdPath });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
+      skillMdTruncated = smt;
       try {
         items = await runCritique(sections, selfReport, {
           onEvaluatorIntegrity: (i) => {
@@ -1439,6 +1460,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,
+      skillMdTruncated,
     };
     if (opts.outputFormat === "json") {
       // writeSync: a long JSON report piped to `jq` truncates past the ~64KB buffer with async write + exit(0)

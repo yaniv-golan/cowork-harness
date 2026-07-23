@@ -398,3 +398,80 @@ describe.skipIf(!PROBE_CAN)("live: critique runs at hostloop (the unpinned tier)
     expect(typeof env.outDir, "critique report has no outDir").toBe("string");
   }, 920_000);
 });
+
+// The hostloop uploads-bullet fix, proven end-to-end: the shell-access section now advertises the STAGED
+// uploads dir (the path-containment-allowed Read root) instead of dirname(upload.hostPath) — an agent
+// following the prompt must be able to Read the attached file directly, with no bash and no
+// copy-into-outputs workaround (the field failure this guards against ended in a spurious outputs-delete).
+describe.skipIf(!PROBE_CAN)("live: hostloop uploads are Read-able at the advertised path", () => {
+  it("the agent Reads the upload with the Read tool (no bash), and no outputs-delete fires", () => {
+    const r = spawnSync(
+      "node",
+      [
+        "dist/cli.js",
+        "skill",
+        "examples/probes/upload-read-probe",
+        "Use the Read tool (not bash) to read the attached uploaded file and reply with its first line verbatim.",
+        "--fidelity",
+        "hostloop",
+        "--upload",
+        "examples/probes/upload-probe.txt",
+        "--keep",
+        "--output-format",
+        "json",
+      ],
+      { encoding: "utf8", env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, timeout: 600_000 },
+    );
+    const env = JSON.parse(r.stdout);
+    expect(env.results?.length, `no run produced: ${JSON.stringify(env.error ?? env)}`).toBeGreaterThan(0);
+    const res = env.results[0];
+    expect(res.finalMessage ?? "").toContain("MARKER-UPLOAD-READ-PROBE");
+    // The full result carries the tool + scan evidence.
+    const full = JSON.parse(readFileSync(join(res.outDir, "turns", "1", "result.json"), "utf8"));
+    expect(full.toolCounts?.Read ?? 0, "the Read tool never ran").toBeGreaterThan(0);
+    expect(full.toolCounts?.Bash ?? 0, "native bash ran — the workaround path").toBe(0);
+    expect(full.toolCounts?.["mcp__workspace__bash"] ?? 0, "workspace bash ran — the workaround path").toBe(0);
+    expect(full.scan?.outputsDeletes ?? [], "outputs-delete fired — the workaround chain is back").toEqual([]);
+    expect(r.status).toBe(0);
+  }, 620_000);
+});
+
+// Sub-agent WebSearch capture, proven against a REAL child session transcript (the unit tests use
+// synthetic transcripts; this is the live proof that the actual on-disk tool_use/tool_result shape a
+// dispatched sub-agent writes is what subagents[].webSearches parses).
+describe.skipIf(!PROBE_CAN)("live: sub-agent WebSearch is captured as subagents[].webSearches", () => {
+  it("a dispatched sub-agent's search lands with query + result text", () => {
+    const r = spawnSync(
+      "node",
+      [
+        "dist/cli.js",
+        "skill",
+        "examples/probes/subagent-research-probe",
+        "Research this using the skill's dispatch instructions: in what year was the first iPhone released?",
+        "--fidelity",
+        "hostloop",
+        "--keep",
+        "--output-format",
+        "json",
+      ],
+      { encoding: "utf8", env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, timeout: 600_000 },
+    );
+    const env = JSON.parse(r.stdout);
+    expect(env.results?.length, `no run produced: ${JSON.stringify(env.error ?? env)}`).toBeGreaterThan(0);
+    const res = env.results[0];
+    const full = JSON.parse(readFileSync(join(res.outDir, "turns", "1", "result.json"), "utf8"));
+    const subs = full.subagents ?? [];
+    expect(subs.length, "no sub-agent was dispatched — the probe prompt failed to trigger a Task").toBeGreaterThan(0);
+    const withSearch = subs.filter((s: { webSearches?: unknown[] }) => (s.webSearches?.length ?? 0) > 0);
+    expect(
+      withSearch.length,
+      `no dispatch captured a WebSearch (subagents: ${JSON.stringify(subs.map((s: { toolsUsed?: unknown }) => s.toolsUsed))})`,
+    ).toBeGreaterThan(0);
+    const ws = (withSearch[0] as { webSearches: Array<{ query: string; resultText: string }> }).webSearches[0];
+    expect(typeof ws.query).toBe("string");
+    expect(ws.query.length).toBeGreaterThan(0);
+    expect(typeof ws.resultText).toBe("string");
+    expect(ws.resultText.length, "a query with EMPTY result text — the tool_result pairing failed").toBeGreaterThan(0);
+    expect(r.status).toBe(0);
+  }, 620_000);
+});

@@ -187,7 +187,11 @@ export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
  *  per-section budget above was individually respected (their sum is deliberately a bit under this, but a
  *  belt-and-suspenders final trim means a future per-section budget change can never silently blow the
  *  evaluator's effective context). */
-export const MAX_PACKAGE_BYTES = 128 * 1024; // overall hard cap; per-section budgets still sum under it (was 48KB)
+/** Overall hard cap. The per-section budgets above sum to ~137KB worst-case (SKILL.md 64 + transcript 32
+ *  + agents 8 + references content ~9 + sub-agent research 8 + the small sections) — this cap sits ABOVE
+ *  that sum so the belt-and-suspenders final trim never fires on a merely fully-loaded package; it exists
+ *  for a future per-section budget change that would otherwise silently blow the evaluator's context. */
+export const MAX_PACKAGE_BYTES = 144 * 1024;
 
 /** Readability of the skill's `SKILL.md` source (F31): distinguishes a legitimately-absent file (no
  *  `SKILL.md` at that path) from an unreadable one (exists, but a permission/OS error prevented reading
@@ -221,6 +225,11 @@ export interface PackageEvidenceResult {
   turn1SliceDegraded: boolean;
   /** F31: see `SkillMdStatus`. */
   skillMdStatus: SkillMdStatus;
+  /** True when SKILL.md was READABLE but larger than its cap, so the packaged copy is cut. Distinct from
+   *  `skillMdStatus` (still `"readable"`) and from the package-wide `truncated` flag: the report needs to
+   *  say specifically "the skill source itself was cut" — coverage claims about content past the cut are
+   *  prompted toward "not adjudicable" (the truncation caveat), never mechanically downgraded. */
+  skillMdTruncated: boolean;
 }
 
 /** Assemble the evidence document for `runCritique`. `runDir` is the KEPT run dir of the task+reflection
@@ -451,5 +460,6 @@ export function packageEvidence(
     truncated = true;
     pkg = renderSections(sections);
   }
-  return { pkg, sections, truncated, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus };
+  const skillMdTruncated = skillMdStatus === "readable" && Buffer.byteLength(skillMd, "utf8") > SKILL_MD_CAP;
+  return { pkg, sections, truncated, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus, skillMdTruncated };
 }

@@ -113,3 +113,37 @@ describe("--skill flag parsing", () => {
     expect(() => parseArgs(["./p", "--prompt", "x", "--skill", "a", "--skill", "b"])).toThrow(/not repeatable/);
   });
 });
+
+describe("skillMdTruncated (readable-but-cut is distinct from missing/unreadable)", () => {
+  it("flags an oversized readable SKILL.md and the report renders the distinction", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "crit-big-skill-"));
+    writeFileSync(join(dir, "SKILL.md"), "# big\n" + "x".repeat(70 * 1024)); // > SKILL_MD_CAP (64KB)
+    const runDir = mkdtempSync(join(tmpdir(), "crit-run-"));
+    const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
+    expect(r.skillMdStatus).toBe("readable"); // NOT missing/unreadable — no mechanical downgrade
+    expect(r.skillMdTruncated).toBe(true);
+    const { buildTextReport, buildJsonReport } = await import("../src/critique/command");
+    const state = {
+      skillFolder: dir,
+      prompt: "p",
+      sessionId: "s",
+      outDir: runDir,
+      fidelity: "container",
+      taskResult: "success" as const,
+      selfReportStatus: "captured" as const,
+      items: [],
+      requestedModel: "m",
+      skillMdTruncated: true,
+    };
+    expect(buildTextReport(state)).toMatch(/SKILL\.md: readable but TRUNCATED/);
+    expect(buildJsonReport(state).skillMdTruncated).toBe(true);
+  });
+
+  it("a small readable SKILL.md is NOT flagged", () => {
+    const dir = mkdtempSync(join(tmpdir(), "crit-small-skill-"));
+    writeFileSync(join(dir, "SKILL.md"), "# small");
+    const runDir = mkdtempSync(join(tmpdir(), "crit-run-"));
+    const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
+    expect(r.skillMdTruncated).toBe(false);
+  });
+});

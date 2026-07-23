@@ -43,6 +43,17 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
   What the ≥ 1.7.0 floor gates, by release:
 
+  - **UNRELEASED (repo HEAD only — not yet on npm; confirm with `critique --help` before relying on
+    these):** `critique --skill <name>` (multi-skill-plugin grading — a plugin root with no `--skill` is
+    refused pre-spend; the evidence package gains the invoked skill's `agents/<name>.md` + bounded
+    `references/*.md` CONTENT), run-dir artifacts (`critique-report.json` always,
+    `critique-evidence-package.txt` when the evaluator ran, `critique-salvage.json` on exit 2) +
+    `--out <path>`, per-critique `costUsd` across all four workloads, `findingFingerprint` per item
+    (cross-INPUT clustering; skillHash stays the cross-FIX key), gate-answer `--answer` echo in the
+    report, per-item-tolerant evaluator parse (`droppedEvaluatorItems`), `subagents[].webSearches` +
+    `trace --view subagent-research` (live/record lane), and the hostloop uploads-bullet fix (Read of an
+    uploaded file at the advertised path works — no copy-into-outputs workaround needed).
+
   - **1.7.0 (per-turn run-directory layout, single shape):** every run dir — `run`/`skill`/`chat`,
     single-turn or multi-turn (any `--session-id` + `--resume`, and **every `critique`**: task turn +
     reflection turn) — writes each turn's `result.json` / `run.jsonl` / `trace.json` / `resources.jsonl`
