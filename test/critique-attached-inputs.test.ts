@@ -7,9 +7,9 @@ import { writeVmPathContextFile } from "../src/run/vm-path-ctx-file.js";
 import type { TurnBoundary } from "../src/critique/evidence.js";
 import type { VmPathContext } from "../src/vm-paths.js";
 
-// Part 3-C of docs/internal/2026-07-20-critique-skill-flag-parity-plan.md: a new "Attached inputs" evidence
-// section so the evaluator can distinguish "the agent said there was no file, and correctly so" from "the
-// agent confabulated that" — the package previously had NO record of what files were attached at all.
+// The "Attached inputs" evidence section exists so the evaluator can distinguish "the agent said there was
+// no file, and correctly so" from "the agent confabulated that" — the package previously had NO record of
+// what files were attached at all.
 //
 // CRITICAL invariant under test throughout: filenames + sizes ONLY, never file CONTENT.
 
