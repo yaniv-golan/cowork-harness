@@ -739,6 +739,12 @@ export function buildTextReport(state: ReportState): string {
     );
   if (skillMdStatus && skillMdStatus !== "readable")
     out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
+  // The dominant real-world cause of a "missing" SKILL.md is pointing critique at a MULTI-SKILL PLUGIN
+  // root (skills/<name>/SKILL.md, no root SKILL.md) — name the cause and the fix, not just the symptom.
+  if (skillMdStatus === "missing")
+    out.push(
+      `  NOTE: if ${skillFolder} is a multi-skill plugin root, point critique at the invoked skill's own folder (e.g. <plugin>/skills/<name>) so its SKILL.md is graded.`,
+    );
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
 

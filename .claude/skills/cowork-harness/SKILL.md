@@ -679,9 +679,15 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 7. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.
 
-8. **Read-only mounts are enforced; delete-deny is not.** `mode:r` mounts get a real `:ro` bind
-   (a write fails in-guest). But `rw` vs `rwd` (write-but-no-delete on `outputs/` / connected folders) is
-   *not* mount-enforced — `rm` succeeds and is only caught post-hoc by `no_delete_in_outputs`.
+8. **Read-only mounts are enforced; delete-deny is a HARNESS gap — production DOES enforce it.**
+   `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
+   (write-but-no-delete on `outputs/` / connected folders) is *not* mount-enforced **in the harness** —
+   `rm` succeeds and is only caught post-hoc by `no_delete_in_outputs`. **Real Cowork enforces it live:**
+   `rm` under `outputs/` fails `Operation not permitted`, and a skill must request approval via
+   `allow_cowork_file_delete` to delete. Two consequences: a skill should not stage disposable scratch
+   under `outputs/` (in production, cleanup there costs an approval prompt), and a skill's
+   "catch-EPERM-then-request-approval" branch cannot be exercised at any harness tier (the `rm` just
+   succeeds here). Do not read this gotcha as "delete-deny may not be real in production" — it is real.
 
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could
    leak. Put it at a working-dir or install root (token resolution: env > `--dotenv` > `./.env` >

@@ -93,7 +93,8 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
   },
   {
     id: "skill-md-size-cap",
-    summary: 'SKILL.md is capped at 64KB in the evidence — a larger one degrades toward "not adjudicable"',
+    summary:
+      'SKILL.md is capped at 64KB in the evidence — an oversized one is truncated but still graded; only a missing/unreadable one forces "not adjudicable"',
     provenance: {
       kind: "deliberate",
       rationale: "the evidence package is bounded so the evaluator sees a whole record rather than a truncated tail",

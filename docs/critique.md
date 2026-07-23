@@ -153,6 +153,22 @@ It does **not** record their contents — see Known limitations.
   staged native agent binary, and writes to the real host filesystem — a writable `--folder` there requires
   `--allow-host-writes`. Both tiers need an authenticated `claude` CLI on PATH.
 
+### Research, egress, and the lean image
+
+- **Reading `egress.log` on a research-heavy critique:** a `WebSearch` does **not** produce search-host
+  entries in the container `egress.log`. An egress log showing only `api.anthropic.com` (plus denied
+  telemetry) is consistent with WebSearch working normally — it is *not* evidence that research was
+  blocked. What **is** container-egress-gated is `web_fetch` (the hostname allowlist); a skill that
+  fetches off-allowlist hosts via `web_fetch` is denied at `container` and host-routed at `hostloop`.
+- **Sub-agent research is not in the main turn's `toolCounts`.** A `WebSearch` issued by a dispatched
+  sub-agent does not increment the main `toolCounts.WebSearch` — a `0` there with researched facts in
+  the output usually means the sub-agents did the searching.
+- **Critiquing a document-analysis skill?** The lean default image omits OCR / LibreOffice / PDF-table
+  tooling (native `Read` handles text PDFs fine). If the skill needs them, pass
+  `--allow-missing-capability`, or point `COWORK_AGENT_IMAGE` at a full-parity build
+  (`--build-arg COWORK_FULL_PARITY=1`). The lean default is deliberate — don't treat a
+  `missing_capability` signal there as a skill defect.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -233,10 +249,11 @@ the two cannot disagree.
   Desktop baseline), so two runs of the same skill could quietly land in different environments — and
   critique's whole value is comparing runs over time, which needs a fixed, known environment. Naming a real
   tier keeps that comparison honest.
-- **`[deliberate]` SKILL.md is capped at 64KB** in the evidence; a larger one degrades toward "not
-  adjudicable". The package is bounded so the evaluator sees a whole record rather than a truncated tail.
-  Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —
-  only an unreadable SKILL.md forces one.
+- **`[deliberate]` SKILL.md is capped at 64KB** in the evidence; an oversized one is **truncated but
+  still graded** (its status stays `readable`) — size alone never forces a downgrade. Only a **missing
+  or unreadable** SKILL.md forces the mechanical `"already-covered"` → `"not adjudicable"` downgrade.
+  The package is bounded so the evaluator sees a whole record rather than a truncated tail; the
+  truncation caveat is a *prompted* nudge toward `not-adjudicable`, never a mechanical one.
 - **`[not-built]` English-only prompts.** No localization has been attempted; nothing blocks it.
 - **`[not-built]` The evidence package is not persisted.** A disputed finding cannot be re-checked
   against the record it was graded on.
