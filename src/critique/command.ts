@@ -657,6 +657,10 @@ interface ReportState {
   /** Mechanical integrity signal from the evaluator's trusted canary — false means that pass stopped
    *  following trusted instructions, so an empty critique may be adversarial silencing, not a clean skill. */
   evaluatorIntegrity?: { pass1Canary: boolean; pass2Canary?: boolean };
+  /** Per-pass count of malformed items the evaluator's PER-ITEM-tolerant parse dropped (see
+   *  `parseCritiqueItems`). Surfaced in BOTH output formats whenever non-zero — a dropped finding the
+   *  report never mentions would be a silent recall loss, the exact shape this tool exists to kill. */
+  droppedEvaluatorItems?: { pass1: number; pass2?: number };
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
    *  when packaging never ran (an infra failure short-circuited before it). */
@@ -748,6 +752,15 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
 
+  const dropped = state.droppedEvaluatorItems;
+  const droppedTotal = dropped ? dropped.pass1 + (dropped.pass2 ?? 0) : 0;
+  if (droppedTotal > 0)
+    out.push(
+      `  evaluator reply: ${droppedTotal} malformed item(s) DROPPED by the per-item-tolerant parse` +
+        ` (pass 1: ${dropped!.pass1}${dropped!.pass2 !== undefined ? `, pass 2: ${dropped!.pass2}` : ""}) — ` +
+        `the findings below are the surviving items, not necessarily the complete reply.`,
+    );
+
   const integ = state.evaluatorIntegrity;
   if (integ && (integ.pass1Canary === false || integ.pass2Canary === false)) {
     const missing = [integ.pass1Canary === false ? "pass 1" : null, integ.pass2Canary === false ? "pass 2" : null].filter(Boolean);
@@ -838,6 +851,9 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     gradedSkillHash,
     selfReportStatus,
     evaluatorIntegrity,
+    // On `base` for the same reason as evaluatorIntegrity: a reply with dropped items is exactly where
+    // the surviving findings under-represent the full reply — every branch must carry the count.
+    droppedEvaluatorItems: state.droppedEvaluatorItems,
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
@@ -1027,6 +1043,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const requestedModel = opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL;
     let items: CritiqueItem[] = [];
     let evaluatorIntegrity: { pass1Canary: boolean; pass2Canary?: boolean } | undefined;
+    let droppedEvaluatorItems: { pass1: number; pass2?: number } | undefined;
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
     let evaluatorModel: string | undefined;
@@ -1066,6 +1083,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
           onEvaluatorIntegrity: (i) => {
             evaluatorIntegrity = i;
           },
+          onDroppedItems: (d) => {
+            droppedEvaluatorItems = d;
+          },
           model: requestedModel,
           packageTruncated: truncated,
           // F31: SKILL.md not confirmed readable → refuse presence/coverage classification (both a soft
@@ -1096,6 +1116,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       evaluatorError,
       infraFailure,
       evaluatorIntegrity,
+      droppedEvaluatorItems,
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,
