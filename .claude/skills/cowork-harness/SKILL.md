@@ -50,9 +50,11 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
     `critique-evidence-package.txt` when the evaluator ran, `critique-salvage.json` on exit 2) +
     `--out <path>`, per-critique `costUsd` across all four workloads, `findingFingerprint` per item
     (cross-INPUT clustering; skillHash stays the cross-FIX key), gate-answer `--answer` echo in the
-    report, per-item-tolerant evaluator parse (`droppedEvaluatorItems`), `subagents[].webSearches` +
-    `trace --view subagent-research` (live/record lane), and the hostloop uploads-bullet fix (Read of an
-    uploaded file at the advertised path works — no copy-into-outputs workaround needed).
+    report, per-item-tolerant evaluator parse (`droppedEvaluatorItems`), `skillMdTruncated` (a
+    readable-but-oversized SKILL.md is flagged "graded a cut copy" — distinct from missing/unreadable),
+    `subagents[].webSearches` + `trace --view subagent-research` (live/record lane), and the hostloop
+    uploads-bullet fix (Read of an uploaded file at the advertised path works — no copy-into-outputs
+    workaround needed).
 
   - **1.7.0 (per-turn run-directory layout, single shape):** every run dir — `run`/`skill`/`chat`,
     single-turn or multi-turn (any `--session-id` + `--resume`, and **every `critique`**: task turn +

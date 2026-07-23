@@ -66,7 +66,8 @@ All notable changes to this project are documented here. The format is based on
   pages render a description, repo link, license, and the "contains no Anthropic binary" provenance note
   instead of appearing bare. The `publish-image` workflow sets the `full` variant's title/description via
   `--label` so its page isn't mislabeled by the base image's baked-in defaults.
-- `critique` evidence caps raised: SKILL.md 16KB→64KB, transcript 16KB→32KB, overall package 48KB→128KB, so
+- `critique` evidence caps raised: SKILL.md 16KB→64KB, transcript 16KB→32KB, overall package 48KB→144KB
+  (the overall cap sits above the worst-case per-section sum, agents/references/research sections included), so
   a flagship-sized (~51KB) SKILL.md no longer grades permanently truncated. Increases per-critique evaluator
   token cost on large skills (~2–2.5×).
 - `sync`'s two code-tripwire warnings (the `getMcpSkillSources` caller-count and MCP-skills-capability

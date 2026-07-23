@@ -223,7 +223,9 @@ mismatch is visible rather than assumed away) and a per-critique **cost** rollup
 workloads — the two graded turns *and* the two evaluator passes — marked `INCOMPLETE` whenever any
 workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFidelity` / `gradedBaseline`
 / `costUsd`, and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
-malformed evaluator items (the surviving findings are then not necessarily the complete reply).
+malformed evaluator items (the surviving findings are then not necessarily the complete reply). A
+readable-but-oversized SKILL.md is flagged **`skillMdTruncated`** ("the evaluator graded a cut copy") —
+distinct from missing/unreadable, which alone force the mechanical `"already-covered"` downgrade.
 
 ### Run-dir artifacts
 
