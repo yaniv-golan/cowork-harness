@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.7.0
-  tracks-harness: cowork-harness 1.7.0 (baseline desktop-1.24012.1)
+  version: 1.8.0
+  tracks-harness: cowork-harness 1.8.0 (baseline desktop-1.24012.1)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.7.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.8.0` (baseline
 > `desktop-1.24012.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,22 +39,30 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.7.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.7.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.7.0"`. **Pin `@>=1.7.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.8.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.8.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.8.0"`. **Pin `@>=1.8.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 1.7.0 floor gates, by release:
+  What the ≥ 1.8.0 floor gates, by release:
 
-  - **UNRELEASED (repo HEAD only — not yet on npm; confirm with `critique --help` before relying on
-    these):** `critique --skill <name>` (multi-skill-plugin grading — a plugin root with no `--skill` is
-    refused pre-spend; the evidence package gains the invoked skill's `agents/<name>.md` + bounded
-    `references/*.md` CONTENT), run-dir artifacts (`critique-report.json` always,
-    `critique-evidence-package.txt` when the evaluator ran, `critique-salvage.json` on exit 2) +
-    `--out <path>`, per-critique `costUsd` across all four workloads, `findingFingerprint` per item
-    (cross-INPUT clustering; skillHash stays the cross-FIX key), gate-answer `--answer` echo in the
-    report, per-item-tolerant evaluator parse (`droppedEvaluatorItems`), `skillMdTruncated` (a
-    readable-but-oversized SKILL.md is flagged "graded a cut copy" — distinct from missing/unreadable),
-    `subagents[].webSearches` + `trace --view subagent-research` (live/record lane), and the hostloop
-    uploads-bullet fix (Read of an uploaded file at the advertised path works — no copy-into-outputs
-    workaround needed).
+  - **1.8.0 (critique hardening + hostloop unpin):** `critique --skill <name>` (multi-skill-plugin
+    grading — a plugin root with no `--skill` is refused pre-spend; the evidence package gains the
+    invoked skill's `agents/<name>.md` + bounded `references/*.md` CONTENT), run-dir artifacts
+    (`critique-report.json` always, `critique-evidence-package.txt` when the evaluator ran,
+    `critique-salvage.json` on exit 2) + `--out <path>`, per-critique `costUsd` across all four
+    workloads, `findingFingerprint` per item (cross-INPUT clustering; skillHash stays the cross-FIX
+    key), gate-answer `--answer` echo in the report, per-item-tolerant evaluator parse
+    (`droppedEvaluatorItems`), `skillMdTruncated` (a readable-but-oversized SKILL.md is flagged
+    "graded a cut copy" — distinct from missing/unreadable), `subagents[].webSearches` +
+    `trace --view subagent-research` (live/record lane), and the hostloop uploads-bullet fix (Read of
+    an uploaded file at the advertised path works — no copy-into-outputs workaround needed). Also:
+    **`critique --fidelity hostloop`** (the container-tier pin is lifted — resume-continuity proven
+    live on the native binary; `microvm`/`protocol`/`cowork` stay refused, each with a tagged reason),
+    **`skill --allow-host-writes`** (hostloop writable-folder consent; `critique` forwards it to both
+    turns), `verdictProvenance` stamped on every critique report (advisory self-run, not an
+    attestation), evidence caps 64KB SKILL.md / 32KB transcript / 144KB package (a flagship-sized
+    SKILL.md grades untruncated; ~2–2.5× evaluator cost on large skills), pinned sessions stamp their
+    fidelity and a cross-tier `--resume` fails loud pre-spawn, and `doctor`'s advisory
+    `image-freshness` check (pulled agent image behind the published GHCR one → warn + re-pull
+    remedy).
 
   - **1.7.0 (per-turn run-directory layout, single shape):** every run dir — `run`/`skill`/`chat`,
     single-turn or multi-turn (any `--session-id` + `--resume`, and **every `critique`**: task turn +
@@ -74,8 +82,9 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   - **1.7.0 (limitation provenance):** every `critique` limitation in `critique --help` and
     docs/critique.md is tagged with WHY it exists — `[structural]` (permanent), `[unverified]` (unproven,
     **not** known-impossible), `[deliberate]`, `[not-built]`. **Read the tag before telling a user to
-    design around a limitation.** In particular `critique`'s container-tier pin is `[unverified]`, not
-    permanent: do not advise building a second hostloop test lane on the assumption it can never lift.
+    design around a limitation.** Worked example of why the tag matters: `critique`'s container-tier pin
+    was tagged `[unverified]`, not permanent — and 1.8.0 lifted it (hostloop allowed, see above) exactly
+    as the tag predicted a proof could.
 
   - **1.6.0 (`critique`'s skill-flag parity):** `critique` accepts most `skill` flags under the same names,
     which is what makes a document-analysis skill (cap table, deck, financial model, transcript)

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-07-23
+
 ### Added
 
 - **`check:versions` closes the stale-pin gap a docs audit found.** Three new enforcement surfaces:
