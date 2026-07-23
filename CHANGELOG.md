@@ -18,6 +18,21 @@ All notable changes to this project are documented here. The format is based on
   `checks[].id` set — SPEC §12 — already permits this).
 - `critique` now stamps `verdictProvenance` on every report (JSON key + text "verdict scope" line): the
   verdict is an advisory self-run, not an independent attestation.
+- **`critique` now runs at `--fidelity hostloop` as well as `container` — the container-tier pin is
+  lifted.** The pin existed because the reflection turn *resumes* the task turn and resume-continuity was
+  only proven for the container Linux ELF; a live two-turn proof at hostloop's **native** agent binary
+  (`test/live-contract.test.ts`, "resume-continuity proof at hostloop") cleared it, and a live
+  `critique --fidelity hostloop` e2e validates the full protocol there. `microvm`/`protocol`/`cowork` stay
+  refused, each with its own stated reason: the single `container-tier-only` limitation is replaced by
+  three tagged ones — `microvm-tier-refused` `[unverified]` (a resume-continuity proof at the microVM guest
+  would lift it), `protocol-tier-refused` `[not-built]` (protocol never plumbs a session id/`--resume`),
+  and `cowork-tier-refused` `[deliberate]` (the synced loop gate would make the graded tier
+  baseline-dependent, adding noise to skillHash-paired generation comparisons).
+- **`skill` accepts `--allow-host-writes`** (and `critique` forwards it to BOTH turns) — the
+  hostloop writable-connected-folder consent that previously only `chat` (its own flag) and `run` (the
+  `allow_host_writes: true` scenario field) could grant; a plain `skill --fidelity hostloop --folder X`
+  was refused with no way to consent at all. Folder-less runs (skill dir + uploads) still need no consent —
+  uploads and skill/plugin mounts are read-only.
 
 ### Changed
 
@@ -33,6 +48,13 @@ All notable changes to this project are documented here. The format is based on
   checks) now carry a self-contained instruction — re-verify whether MCP servers can contribute skills and
   whether the harness must model MCP-contributed skill sources — instead of pointing at a reference the
   published repo does not carry.
+- **Pinned sessions stamp their fidelity tier on `session.json`, and a cross-tier `--resume` fails loud**
+  (pre-spawn, with a "re-run at `--fidelity <stamped>`" remedy). The agent's native conversation store is
+  tier-LOCAL — container persists it under the work tree, hostloop under the host config dir — so resuming
+  a session at a different tier would hand the binary a `--resume` for a conversation its store has never
+  seen. Legacy stampless manifests (pre-dating the stamp) are let through with a warning; every manifest
+  written from now on carries the stamp. `readSessionManifest` gains a required `expectedFidelity`
+  argument.
 
 ### Docs
 
