@@ -207,7 +207,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
   critique <skill-folder>      EXPERIMENTAL — run a skill, ask the agent what confused it, then grade that
-                               self-report against a frozen record of the run (see 'critique --help' for cost)
+                               self-report against a frozen record of the run (see 'critique --help' for cost).
+                               Advisory — a discovery lead, not an independent attestation.
       [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
       [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
       [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage

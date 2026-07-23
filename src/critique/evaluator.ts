@@ -251,9 +251,9 @@ const SELF_REPORT_FENCE = "⟦COWORK-HARNESS-SELF-REPORT-DATA-9f21⟧";
  *  treating it as a third boundary. */
 /** Upper bound on the self-report interpolated into pass 2. The reflection prompt (v2) solicits an
  *  EXHAUSTIVE change list rather than a single item, so replies can be long; the evidence package is
- *  already capped (MAX_PACKAGE_BYTES) and this is the matching bound on the other untrusted input.
- *  Truncation is marked in-band so the evaluator can see the account was cut rather than silently
- *  grading a partial one. */
+ *  already capped (MAX_PACKAGE_BYTES) separately — the two bounds cap different untrusted inputs and
+ *  are independent, not matched. Truncation is marked in-band so the evaluator can see the account was
+ *  cut rather than silently grading a partial one. */
 export const SELF_REPORT_MAX_CHARS = 24_000;
 
 function sanitizeSelfReportForPrompt(selfReport: string): string {

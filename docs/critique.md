@@ -1,7 +1,9 @@
 # `critique` — grounded skill self-critique (EXPERIMENTAL)
 
 > **Experimental surface.** Shape and output may change. It is a **discovery instrument, never a gate**:
-> findings of any classification exit 0.
+> findings of any classification exit 0. Its verdict is **advisory — a discovery lead, not an independent
+> attestation**: the skill under review controls text that enters the evaluator's prompt, so treat the
+> result as something to investigate, not as proof (see [Known limitations](#known-limitations)).
 
 `cowork-harness critique` runs a skill, asks the agent what confused it — and then **does not believe the
 answer**. Agent self-reports confabulate routinely ("there was no documentation about X" when the logs show
@@ -170,6 +172,10 @@ Never gate CI on findings; that is the whole design.
 | `NOT ADJUDICABLE` | The evidence cannot decide — a human judgement call |
 | `DROPPED` | The citation did not resolve. **Not validated** — shown for transparency only |
 
+Every report also carries the advisory scoping machine-readably: a `verdictProvenance` object in
+`--output-format json`, and a "verdict scope:" line in the text report — both marking the verdict as an
+advisory self-run, not an independent attestation.
+
 ## Running it on a skill you did not write
 
 The evidence package carries the skill's own text into the evaluator, so a hostile skill can try to steer
@@ -184,6 +190,9 @@ which is how you should treat it anyway.
 
 Resistance is also **per-model and perishable**: it is verified for the shipped default evaluator model.
 Changing the evaluator model invalidates that verification.
+
+This is the same "advisory, not an attestation" property named under [Known limitations](#known-limitations):
+a skill you did not write can steer the grade, so its output is a lead to run down — never proof.
 
 ## Known limitations
 
@@ -200,6 +209,12 @@ you whether to design around it permanently:
 The same tags appear in `critique --help`, generated from one source (`src/critique/limitations.ts`), so
 the two cannot disagree.
 
+- **`[deliberate]` The verdict is an advisory self-run — a discovery lead, not an independent attestation.**
+  The skill under review controls text (its `SKILL.md`) that enters the evaluator's prompt, so a crafted
+  skill can steer the grade. Treat the output as a lead to investigate — never as trustworthy proof of a
+  skill's quality or safety, and never as a gate. This holds whether you authored the skill or are probing
+  one you did not (see *Running it on a skill you did not write* above). It is a separate point from "never a
+  gate / findings exit 0", which is about not blocking CI on findings.
 - **Tiers.** critique runs at `--fidelity container` (default) or `hostloop`. The container→hostloop pin
   was lifted on 2026-07-23 once hostloop resume-continuity was proven live against the *native* agent
   binary (`test/live-contract.test.ts`, "resume-continuity proof at hostloop"; 4/4 runs). A cross-tier
@@ -214,7 +229,11 @@ the two cannot disagree.
 - **`[deliberate]` The cowork tier is refused** — pass the resolved tier (`container`|`hostloop`)
   explicitly. cowork resolves dynamically to hostloop|container via the synced loop gate; accepting it
   would make the graded tier baseline-dependent, adding noise to skillHash-paired generation comparisons.
-- **`[deliberate]` SKILL.md is capped at 16KB** in the evidence; a larger one degrades toward "not
+  In plain terms: `cowork` lets the *environment pick itself* (from a synced switch that changes with the
+  Desktop baseline), so two runs of the same skill could quietly land in different environments — and
+  critique's whole value is comparing runs over time, which needs a fixed, known environment. Naming a real
+  tier keeps that comparison honest.
+- **`[deliberate]` SKILL.md is capped at 64KB** in the evidence; a larger one degrades toward "not
   adjudicable". The package is bounded so the evaluator sees a whole record rather than a truncated tail.
   Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —
   only an unreadable SKILL.md forces one.
@@ -240,6 +259,7 @@ reach into `turns/1/` yourself:
 Both `*.graded.json` names are written at the moment the graded turn completes, so they are correct
 immediately and survive a reflection turn that never finishes. Prefer them, or `turns/1/` directly, to
 `turns/2/result.json` — which is the reflection turn's numbers, not the graded ones.
+
 - **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a
   guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
   source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived

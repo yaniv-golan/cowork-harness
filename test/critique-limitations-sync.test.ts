@@ -80,6 +80,7 @@ describe("critique limitations ↔ docs parity", () => {
     // orphaned its docs bullet, all green. Adding/removing one should be a deliberate act caught here.
     expect([...CRITIQUE_LIMITATIONS.map((l) => l.id)].sort()).toEqual(
       [
+        "advisory-self-run-verdict",
         "attached-content-may-enter-evidence",
         "citation-seams",
         "cowork-tier-refused",
@@ -88,7 +89,7 @@ describe("critique limitations ↔ docs parity", () => {
         "microvm-tier-refused",
         "protocol-tier-refused",
         "report-stdout-only",
-        "skill-md-16kb-cap",
+        "skill-md-size-cap",
       ].sort(),
     );
   });
