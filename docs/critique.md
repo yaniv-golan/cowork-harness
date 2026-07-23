@@ -214,6 +214,10 @@ the two cannot disagree.
 - **`[deliberate]` The cowork tier is refused** — pass the resolved tier (`container`|`hostloop`)
   explicitly. cowork resolves dynamically to hostloop|container via the synced loop gate; accepting it
   would make the graded tier baseline-dependent, adding noise to skillHash-paired generation comparisons.
+  In plain terms: `cowork` lets the *environment pick itself* (from a synced switch that changes with the
+  Desktop baseline), so two runs of the same skill could quietly land in different environments — and
+  critique's whole value is comparing runs over time, which needs a fixed, known environment. Naming a real
+  tier keeps that comparison honest.
 - **`[deliberate]` SKILL.md is capped at 16KB** in the evidence; a larger one degrades toward "not
   adjudicable". The package is bounded so the evaluator sees a whole record rather than a truncated tail.
   Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —
