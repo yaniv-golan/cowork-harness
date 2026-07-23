@@ -16,9 +16,8 @@
 // move and the new SKILL.md release-note bullet are also NOT automated here — both are content, not
 // mechanical substitution; main() prints a reminder.
 //
-// See docs/internal/2026-07-13-release-process-improvements-plan.md (P3) for the design and the
-// adversarial-review fixes folded in (dry-run-by-default, the README bare `@>=X` floor, the
-// current-version-bullet-survives test).
+// This design folds in adversarial-review hardening: dry-run-by-default (see above), tolerating the
+// README's bare `@>=X` floor, and a test that the current-version release-note bullet survives the bump.
 
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";

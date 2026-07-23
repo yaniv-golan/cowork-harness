@@ -14,8 +14,6 @@
 //   6. --for-tag only, HARD fail: HEAD == origin/main HEAD, and a successful push-event ci.yml run
 //      exists for HEAD — the exact check that would have caught the 0.33.0 mis-tag (tagging a
 //      release-branch head instead of the merge commit).
-//
-// See docs/internal/2026-07-13-release-process-improvements-plan.md (P4 / P4b) for the design.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";

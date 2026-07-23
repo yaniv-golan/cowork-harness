@@ -20,10 +20,10 @@ const REQUEST_COWORK_DIRECTORY = "mcp__cowork__request_cowork_directory";
 // / telemetry `lam_folder_grant_refused_protected`, Desktop 1.22209.0, `.vite/build/index.chunk-B6ZcqAwc.js`).
 //
 // NOT REGISTERED BY THIS HARNESS'S BUILT-IN SERVERS TODAY: request_cowork_directory isn't a tool the
-// hostloop (bash+web_fetch only) or container (present_files only) lanes expose — see
-// docs/internal/2026-07-03-host-vm-bridge-capability-gaps.md, Tier 2, "the tool itself is never
-// invokable. Emulated: no." A scenario CAN reach this path today via a custom `mcp_config` (staged and
-// passed to the spawned agent as --mcp-config, src/runtime/hostloop-stage.ts:58-69) declaring a server
+// hostloop (bash+web_fetch only) or container (present_files only) lanes expose, so the tool itself is
+// never invokable through either built-in lane — it is not emulated. A scenario CAN reach this path
+// today via a custom `mcp_config` (staged and passed to the spawned agent as --mcp-config,
+// src/runtime/hostloop-stage.ts:58-69) declaring a server
 // named `cowork` with a matching tool name — contrived, but not literally impossible. Ported regardless
 // so the refusal semantics are ready the moment a built-in registration lands.
 //

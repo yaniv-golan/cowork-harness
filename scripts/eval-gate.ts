@@ -8,7 +8,7 @@
 //     --allow-unmatched: don't hard-fail on unmatched scenario/claim coverage (F19) — print-only escape hatch
 //     --reps / --concurrency must be positive integers (F24)
 //
-// Regression rule (documented, adjudicated — see docs/internal/2026-07-09-eval-gate-rebuild-plan.md §R2 C1):
+// Regression rule (documented, adjudicated):
 // a DISCRIMINATING claim whose one-sided Fisher-exact drop (baseline pass-rate → candidate pass-rate) is
 // significant at α=0.05 UNADJUSTED. The gate is adjudicated (a red is reviewed by a human, not an auto-merge
 // block), so it must be able to fire on a single-claim collapse — which strict FDR at ~99 claims cannot.
@@ -436,7 +436,12 @@ export function installOrphanCleanupHandlers(): void {
  *  it's dropped and counted toward `errored`, and too many of them trips the existing MIN_VALID loud throw.
  *  A pure spawn wrapper (not baked into `runOnce`) so a unit test can exercise both failure paths against a
  *  trivial `node -e ...` child instead of a real 10-minute hang. Exported for unit tests. */
-export function boundedSpawnJson(cmd: string, args: string[], timeoutMs = RUN_TIMEOUT_MS, maxBytes = RUN_MAX_STDOUT_BYTES): Promise<unknown> {
+export function boundedSpawnJson(
+  cmd: string,
+  args: string[],
+  timeoutMs = RUN_TIMEOUT_MS,
+  maxBytes = RUN_MAX_STDOUT_BYTES,
+): Promise<unknown> {
   return new Promise((resolveJob) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "ignore"], detached: true });
     if (child.pid) outstandingChildPids.add(child.pid); // F23 residual: tracked until settled, below
@@ -713,7 +718,9 @@ async function main(): Promise<void> {
   if (b.hardFail) {
     if (allowUnmatched) lines.push(`(--allow-unmatched: the ${b.unmatched.length} unmatched entrie(s) above did NOT fail the gate)`);
     else {
-      lines.push(`✗ ${b.unmatched.length} unmatched scenario/claim entrie(s) — unverifiable coverage (pass --allow-unmatched to override):`);
+      lines.push(
+        `✗ ${b.unmatched.length} unmatched scenario/claim entrie(s) — unverifiable coverage (pass --allow-unmatched to override):`,
+      );
       for (const u of b.unmatched) lines.push(`  - ${u}`);
     }
   }
