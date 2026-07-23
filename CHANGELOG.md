@@ -65,6 +65,15 @@ All notable changes to this project are documented here. The format is based on
   slipped through, and its `[status]`-recovered run dir was reflected on and graded as a legitimate task.
   It now also flags a nonzero exit with no parseable envelope. Deliberately narrow: a completed run that
   reported a failing verdict (`ok:false` / `result:"error"` with a valid envelope) stays gradeable.
+- **A nested unreadable output subtree no longer persists a partial file list as complete.** The
+  `workspaceFiles` / `artifacts` list was recorded as UNAVAILABLE (`undefined`, the evidence-unavailable
+  convention) only when the workspace ROOT was unobservable; a nested `EACCES`/`EIO` subtree left the walk
+  partial (`walkComplete: false`) but still persisted the incompletely-enumerated list as if complete. An
+  authored file inside the unreadable subtree then vanished with no signal, so an absence-sensitive
+  consumer (`delivered_clean` / `ended_with_question`, the replay `diff`, `scaffold`, `file_exists`) could
+  read it as absent — a silent false-clean. All three RunResult producers (run, partial-salvage, chat) now
+  route through one shared `trustedWorkspaceFiles` gate that collapses a missing root OR any incomplete
+  walk to `undefined`, and the run lanes emit a `::warning::` naming the unreadable subtree.
 
 ## [1.7.0] — 2026-07-22
 

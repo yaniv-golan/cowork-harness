@@ -326,6 +326,19 @@ export function classifyWorkspaceFiles(
   return classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, opts).files;
 }
 
+/** #54: the SINGLE gate every RunResult producer (run success, run partial, chat) uses to decide whether a
+ *  workspace walk is trustworthy enough to persist as the canonical `workspaceFiles`/`artifacts` list.
+ *  Returns the files ONLY when the WHOLE user-visible tree was observed. A missing root (`rootAbsent`, #52)
+ *  OR any nested unreadable subtree (`!walkComplete` — an EACCES/EIO on a subdir) collapses to `undefined`,
+ *  the repo-wide evidence-unavailable convention, so an absence-sensitive consumer (`delivered_clean` /
+ *  `ended_with_question` in verdict.ts, the replay `diff`, `scaffold`, `file_exists`) fails cannot-verify
+ *  instead of trusting a PARTIAL enumeration as complete. Previously the producers gated on `rootAbsent`
+ *  alone, so a partial list read as complete — an authored file inside an unreadable subtree vanished with
+ *  no signal (the #54 silent false-clean). One helper so a producer can't silently regress to that. */
+export function trustedWorkspaceFiles(health: ClassifyWorkspaceFilesResult): WorkspaceFile[] | undefined {
+  return health.rootAbsent || !health.walkComplete ? undefined : health.files;
+}
+
 /** Walk options. `includeHardlinkPaths` lifts the nlink>1 rejection for PATHS-ONLY walks (the
  *  `no_unexpected_files` pre-run baseline): the guard exists to keep hardlinked out-of-root CONTENT out
  *  of committed cassettes, which a path listing never reads. The baseline must include them — the
