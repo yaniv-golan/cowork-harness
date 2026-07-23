@@ -6,7 +6,7 @@ import { runtimeAuthEnv } from "../src/runtime/host-env.js";
 // forward TZ ONLY when the host shell exported it — so a run on a host without TZ set spawned the
 // agent with no timezone, diverging from Cowork (date rendering / "today" resolution in prompts and
 // outputs). runtimeAuthEnv is the single seam all real-agent tiers spread (hostloop/container/microvm).
-describe("runtimeAuthEnv TZ parity (WI-7)", () => {
+describe("runtimeAuthEnv TZ parity", () => {
   const prev = process.env.TZ;
   afterEach(() => {
     if (prev === undefined) delete process.env.TZ;
