@@ -16,6 +16,8 @@ All notable changes to this project are documented here. The format is based on
   custom `COWORK_AGENT_IMAGE` is a quiet skip, never a false "stale"; only a pulled image incurs a network
   probe. The `doctor --output-format json` envelope gains an `image-freshness` entry (the open
   `checks[].id` set — SPEC §12 — already permits this).
+- `critique` now stamps `verdictProvenance` on every report (JSON key + text "verdict scope" line): the
+  verdict is an advisory self-run, not an independent attestation.
 
 ### Changed
 

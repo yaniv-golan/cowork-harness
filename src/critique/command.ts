@@ -671,6 +671,21 @@ interface ReportState {
   skillMdStatus?: SkillMdStatus;
 }
 
+/** critique's verdict is a SELF-RUN graded by a structurally blinded evaluator — a discovery LEAD, NOT an
+ *  independent attestation. The skill under review controls text (its SKILL.md) that enters the evaluator's
+ *  prompt, so a crafted skill can steer the grade. That is why the output is a lead to investigate, never
+ *  trustworthy proof of a skill's quality or safety — and why it must not gate any skill (this holds whether
+ *  you authored the skill or are probing one you did not; see docs/critique.md "Running it on a skill you did
+ *  not write"). Stamped on EVERY report so a downstream harvester cannot promote it into an attestation.
+ *  DISTINCT from "never a gate / findings exit 0" (that is about not blocking CI on findings; this is about
+ *  whether the verdict may be TRUSTED as proof). */
+export const VERDICT_PROVENANCE = {
+  kind: "self-run",
+  advisory: true,
+  caveat:
+    "Advisory self-critique — a discovery lead, NOT an independent attestation. The skill under review controls text that enters the evaluator's prompt, so a crafted skill can steer the grade; treat the verdict as a lead to investigate, never as trustworthy proof of a skill's quality or safety.",
+} as const;
+
 /** Pure report-text builder (no I/O) so it's directly unit-testable. `printTextReport` below just flushes
  *  this to fd 1. */
 export function buildTextReport(state: ReportState): string {
@@ -724,6 +739,7 @@ export function buildTextReport(state: ReportState): string {
     );
   if (skillMdStatus && skillMdStatus !== "readable")
     out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
+  out.push(`  verdict scope: advisory self-run — NOT an independent attestation (do not gate an untrusted skill on it)`);
   out.push("");
 
   const integ = state.evaluatorIntegrity;
@@ -819,6 +835,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
+    verdictProvenance: VERDICT_PROVENANCE,
   };
   if (infraFailure) return { ...base, infraFailure, items: [] };
   if (evaluatorError) return { ...base, evaluatorError, items: [] };
