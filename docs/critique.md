@@ -1,7 +1,9 @@
 # `critique` — grounded skill self-critique (EXPERIMENTAL)
 
 > **Experimental surface.** Shape and output may change. It is a **discovery instrument, never a gate**:
-> findings of any classification exit 0.
+> findings of any classification exit 0. Its verdict is **advisory — a discovery lead, not an independent
+> attestation**: the skill under review controls text that enters the evaluator's prompt, so treat the
+> result as something to investigate, not as proof (see [Known limitations](#known-limitations)).
 
 `cowork-harness critique` runs a skill, asks the agent what confused it — and then **does not believe the
 answer**. Agent self-reports confabulate routinely ("there was no documentation about X" when the logs show
@@ -185,6 +187,9 @@ which is how you should treat it anyway.
 Resistance is also **per-model and perishable**: it is verified for the shipped default evaluator model.
 Changing the evaluator model invalidates that verification.
 
+This is the same "advisory, not an attestation" property named under [Known limitations](#known-limitations):
+a skill you did not write can steer the grade, so its output is a lead to run down — never proof.
+
 ## Known limitations
 
 Each limitation is tagged with **why** it exists, because that — not the limitation itself — is what tells
@@ -250,6 +255,10 @@ reach into `turns/1/` yourself:
 Both `*.graded.json` names are written at the moment the graded turn completes, so they are correct
 immediately and survive a reflection turn that never finishes. Prefer them, or `turns/1/` directly, to
 `turns/2/result.json` — which is the reflection turn's numbers, not the graded ones.
+
+Every report also carries the advisory scoping machine-readably: a `verdictProvenance` object in
+`--output-format json`, and a "verdict scope:" line in the text report — both marking the verdict as an
+advisory self-run, not an independent attestation.
 - **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a
   guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
   source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived
