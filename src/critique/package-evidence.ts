@@ -168,16 +168,16 @@ function safeJson(value: unknown): string {
 const FINAL_MESSAGE_CAP = 4 * 1024;
 const STRUCTURED_CAP = 2 * 1024; // each of: result/toolCounts/skillActivity/subagents
 const REFERENCES_READ_CAP = 1 * 1024;
-const SKILL_MD_CAP = 16 * 1024;
+export const SKILL_MD_CAP = 64 * 1024; // fits the ~51.6KB flagship skill with headroom (was 16KB)
 const REFERENCE_LIST_CAP = 1 * 1024;
-const TRANSCRIPT_CAP = 16 * 1024;
+export const TRANSCRIPT_CAP = 32 * 1024; // the other permanent-`truncated` driver on real runs (was 16KB)
 const ATTACHED_INPUTS_CAP = 1 * 1024;
 
 /** The overall package hard cap — the whole assembled document is trimmed to this even if every
  *  per-section budget above was individually respected (their sum is deliberately a bit under this, but a
  *  belt-and-suspenders final trim means a future per-section budget change can never silently blow the
  *  evaluator's effective context). */
-const MAX_PACKAGE_BYTES = 48 * 1024;
+export const MAX_PACKAGE_BYTES = 128 * 1024; // overall hard cap; per-section budgets still sum under it (was 48KB)
 
 /** Readability of the skill's `SKILL.md` source (F31): distinguishes a legitimately-absent file (no
  *  `SKILL.md` at that path) from an unreadable one (exists, but a permission/OS error prevented reading
