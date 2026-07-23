@@ -48,7 +48,12 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
     invoked skill's `agents/<name>.md` + bounded `references/*.md` CONTENT), run-dir artifacts
     (`critique-report.json` always, `critique-evidence-package.txt` when the evaluator ran,
     `critique-salvage.json` on exit 2) + `--out <path>`, per-critique `costUsd` across all four
-    workloads, `findingFingerprint` per item (cross-INPUT clustering; skillHash stays the cross-FIX
+    workloads, `schema/critique-report.json` (descriptive, test-pinned — parse the report against it, not
+    prose; NOT §12-frozen while critique is EXPERIMENTAL), `gradedSkill` in the report (multi-skill
+    pairing key: pair by `(gradedSkillHash, gradedSkill)` — the hash alone keys the whole plugin and
+    cross-pairs its skills), `findingFingerprint` per item (cross-INPUT clustering; HIGH-precision
+    LOW-recall — a match proves reproduction, a mismatch does NOT prove non-reproduction, the same
+    finding reworded fingerprints differently; skillHash stays the cross-FIX
     key), gate-answer `--answer` echo in the report, per-item-tolerant evaluator parse
     (`droppedEvaluatorItems`), `skillMdTruncated` (a readable-but-oversized SKILL.md is flagged
     "graded a cut copy" — distinct from missing/unreadable), `subagents[].webSearches` +
@@ -436,7 +441,9 @@ cassette — has its own recipe:
    input + result are captured, not just errored ones. When iterating, tag generations with `--label` and
    pair a critique only with a `result.json` whose `fingerprint.skillHash` **matches** the skill that
    produced it (`inspect`/the run-index row surface a short `skillHash` prefix; `verify-run` warns when a
-   kept run predates the current skill). **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
+   kept run predates the current skill). **Multi-skill plugin caveat (post-1.7.0 CLIs with `--skill`):**
+   skillHash keys the whole MOUNTED plugin, so on a multi-skill plugin the hash alone cross-pairs
+   critiques of DIFFERENT skills — pair by the report's `(gradedSkillHash, gradedSkill)` pair. **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
    pairing step there silently groups on an absent key instead of erroring — check the field is present, or
    require ≥ 1.5.0. See `docs/debugging.md`
    (repo-only) for the full loop.

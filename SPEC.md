@@ -793,6 +793,13 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
   (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your
   own risk until they are promoted to a covered surface.
+- **The `critique` report** (`--output-format json` / the `critique-report.json` run-dir artifact) —
+  NOT yet frozen, and — uniquely — it DOES have a schema file: `schema/critique-report.json` is
+  **descriptive** (authoritative field names/shapes, test-pinned against the builder) so automation can
+  parse against a schema rather than prose, but it is NOT this section's compatibility contract —
+  critique is EXPERIMENTAL and additive field changes may land in any minor release (the schema's own
+  `description` says so). Its presence in the surface-drift baseline is for change *visibility*, not
+  coverage. It is the promotion CANDIDATE once critique stabilizes, on the `doctor.json` template.
 - **`docs/internal/**`** — untracked working notes.
 - **The reconstructed system-prompt append text** — a paraphrase by design (see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.

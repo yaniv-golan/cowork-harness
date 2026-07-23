@@ -30,6 +30,11 @@ All notable changes to this project are documented here. The format is based on
 - Evaluator cost share: the two evaluator passes were ~3/4 of a measured e2e total — the
   calibrate-then-`--evaluator-model` strategy is now in the cost section and `critique --help`, with
   the armor-verification-is-default-evaluator-only caveat.
+- SPEC §12 now names the critique report explicitly under **NOT covered**: `schema/critique-report.json`
+  is descriptive (parse against it, not prose) but not the compatibility contract while critique is
+  EXPERIMENTAL — its surface-baseline presence is for change visibility, and it is the promotion
+  candidate on the `doctor.json` template once critique stabilizes. README, llms.txt, and the shipped
+  skill point at the schema and the `(gradedSkillHash, gradedSkill)` pairing rule.
 
 ### Added
 
