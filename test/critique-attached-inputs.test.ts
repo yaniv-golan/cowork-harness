@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { packageEvidence } from "../src/critique/package-evidence.js";
+import { packageEvidence, SKILL_MD_CAP, TRANSCRIPT_CAP, MAX_PACKAGE_BYTES, TRUNCATION_MARKER } from "../src/critique/package-evidence.js";
 import { writeVmPathContextFile } from "../src/run/vm-path-ctx-file.js";
 import type { TurnBoundary } from "../src/critique/evidence.js";
 import type { VmPathContext } from "../src/vm-paths.js";
@@ -25,6 +25,20 @@ function makeSkillDir(): string {
 
 function findSection(sections: { title: string; body: string }[], title: string) {
   return sections.find((s) => s.title === title);
+}
+
+// The per-turn packager reads `turns/1/result.json` and `turns/1/run.jsonl` (via `turnArtifactPath` /
+// `readTurn1Transcript` in package-evidence.ts) — NOT root `result.turn-1.json` / `run.turn-1.jsonl`. A
+// fixture written at the root is silently inert: packageEvidence falls back to empty defaults instead of
+// erroring, so a misplaced fixture makes a test pass for the wrong reason. This helper writes fixtures
+// where the packager actually reads them, and keeps their bodies small enough (well under TRANSCRIPT_CAP
+// and the small structured-section caps) that they never contribute their own truncation.
+function writeTurn1Fixtures(runDir: string, opts: { transcript?: string; result?: Record<string, unknown> } = {}): void {
+  const turnDir = join(runDir, "turns", "1");
+  mkdirSync(turnDir, { recursive: true });
+  const result = opts.result ?? { finalMessage: "ok", referencesRead: [], skillActivity: [], toolCounts: {}, result: "success" };
+  writeFileSync(join(turnDir, "result.json"), JSON.stringify(result));
+  writeFileSync(join(turnDir, "run.jsonl"), JSON.stringify({ t: "transcript", text: opts.transcript ?? "small transcript" }) + "\n");
 }
 
 describe("Attached inputs evidence section", () => {
@@ -165,28 +179,47 @@ describe("Attached inputs evidence section", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  it("the 48KB overall shave loop still terminates with the extra section present", () => {
+  // Was "the 48KB overall shave loop": at 64/32/128KB budgets the per-section sum is under the overall cap,
+  // so the overall trim is unreachable via packageEvidence. What packageEvidence still guarantees is that an
+  // over-cap SKILL.md is cut to its per-section budget and the whole package stays within MAX_PACKAGE_BYTES.
+  it("an over-cap SKILL.md is cut to its per-section budget and the whole package stays within MAX_PACKAGE_BYTES", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
-    // Blow every other section's budget so the shave loop has real work to do, and give the attached-inputs
-    // section itself a large body to shave via a large uploads dir listing.
-    writeFileSync(join(runDir, "result.turn-1.json"), JSON.stringify({ finalMessage: "m".repeat(20_000) }));
-    writeFileSync(join(runDir, "run.turn-1.jsonl"), JSON.stringify({ t: "transcript", text: "t".repeat(40_000) }) + "\n");
-    const uploadsDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-uploads-"));
-    for (let i = 0; i < 200; i++) {
-      writeFileSync(join(uploadsDir, `file-with-a-fairly-long-name-${i}.dat`), "z".repeat(50));
-    }
-    const ctx: VmPathContext = { sessionId: "sess-abc", uploadsHostDir: uploadsDir, folders: new Map() };
-    writeVmPathContextFile(runDir, ctx, "hostloop");
+    writeTurn1Fixtures(runDir); // small turn-1 result + transcript, at the paths the packager actually reads
     const skillDir = makeSkillDir();
-    writeFileSync(join(skillDir, "SKILL.md"), "g".repeat(20_000));
+    const bigSkillMd = "S".repeat(SKILL_MD_CAP + 5_000); // overflow the SKILL.md per-section budget
+    writeFileSync(join(skillDir, "SKILL.md"), bigSkillMd);
 
-    const { pkg, sections, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, true);
-    expect(Buffer.byteLength(pkg, "utf8")).toBeLessThanOrEqual(48 * 1024);
-    expect(truncated).toBe(true);
-    expect(findSection(sections, ATTACHED_INPUTS_TITLE)).toBeDefined();
+    const { pkg, sections, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+
+    const skillSection = sections.find((s) => s.title.startsWith("SKILL.md"))!;
+    const transcriptSection = sections.find((s) => s.title.startsWith("Transcript"))!;
+    // Marker must be in the SKILL.md section specifically, not just somewhere in the flat pkg — anchors this
+    // test to the fixture actually populating the section it claims to overflow (see writeTurn1Fixtures doc).
+    expect(skillSection.body, "the SKILL.md section itself must be cut").toContain(TRUNCATION_MARKER);
+    // The small transcript fixture must stay well under its own cap, so truncation here is driven ONLY by
+    // the oversized SKILL.md, not incidentally by an also-oversized transcript.
+    expect(Buffer.byteLength(transcriptSection.body, "utf8")).toBeLessThan(TRANSCRIPT_CAP);
+    expect(truncated, "an over-cap SKILL.md must report truncation").toBe(true);
+    expect(pkg).toContain(TRUNCATION_MARKER); // the REAL lowercase marker, not "[TRUNCATED"
+    expect(Buffer.byteLength(pkg, "utf8")).toBeLessThanOrEqual(MAX_PACKAGE_BYTES);
 
     rmSync(runDir, { recursive: true, force: true });
-    rmSync(uploadsDir, { recursive: true, force: true });
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it("a flagship-sized (~51KB) SKILL.md now packages untruncated", () => {
+    const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
+    writeTurn1Fixtures(runDir);
+    const skillDir = makeSkillDir();
+    const flagship = "S".repeat(SKILL_MD_CAP - 1_000); // just under the new cap; would have blown the old 16KB one
+    writeFileSync(join(skillDir, "SKILL.md"), flagship);
+
+    const { pkg, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+
+    expect(truncated, "a sub-cap SKILL.md must not be reported as truncated").toBe(false);
+    expect(pkg, "no truncation marker anywhere when nothing was cut").not.toContain(TRUNCATION_MARKER);
+
+    rmSync(runDir, { recursive: true, force: true });
     rmSync(skillDir, { recursive: true, force: true });
   });
 });
