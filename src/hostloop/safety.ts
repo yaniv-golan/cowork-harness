@@ -6,9 +6,10 @@ import type { SessionConfig } from "../session.js";
  * PreToolUse path-containment software check — no OS sandbox. Read-only folders and folder-less/scratch
  * runs need no opt-in (the only writable real-FS surface there is the harness-owned outputs dir).
  *
- * `run`/`skill` scenarios opt in via the top-level `allow_host_writes: true` scenario field (committed
- * YAML, visible in PR diffs); `chat` opts in via its own `--allow-host-writes` CLI flag (ad-hoc sessions
- * aren't committed YAML, so there is no scenario field to set).
+ * A `run` scenario opts in via the top-level `allow_host_writes: true` scenario field (committed YAML,
+ * visible in PR diffs); the ad-hoc lanes — `chat`, `skill`, and `critique` (which forwards it to both of
+ * its turns) — opt in via a `--allow-host-writes` CLI flag, because an ad-hoc session isn't committed YAML
+ * and so has no scenario field to set.
  */
 export function checkHostLoopWriteConsent(session: Pick<SessionConfig, "folders">, allowHostWrites: boolean): void {
   const writableFolders = session.folders.filter((f) => f.mode === "rw" || f.mode === "rwd");
@@ -17,8 +18,8 @@ export function checkHostLoopWriteConsent(session: Pick<SessionConfig, "folders"
       `hostloop fidelity with a writable connected folder (${writableFolders.map((f) => f.from).join(", ")}) ` +
         `gives the agent under test genuine, software-checked-only host filesystem access — no container ` +
         `sandbox (matches production's own host-loop risk model; see docs/boundary.md). This requires ` +
-        `explicit consent: add \`allow_host_writes: true\` to the scenario (run/skill), or pass ` +
-        `--allow-host-writes (chat).`,
+        `explicit consent: for a \`run\` scenario add \`allow_host_writes: true\` to the YAML; for ` +
+        `\`chat\`/\`skill\`/\`critique\` pass --allow-host-writes.`,
     );
   }
 }

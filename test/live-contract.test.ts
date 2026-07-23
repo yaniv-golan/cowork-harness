@@ -364,3 +364,37 @@ describe.skipIf(!PROBE_CAN)("live: resume-continuity proof at hostloop (native b
     ).toBe(true);
   }, 1_260_000);
 });
+
+// End-to-end proof that the unpin works: `critique --fidelity hostloop` runs its full two-turn protocol
+// (task turn -> reflection RESUME at the native binary -> evaluator) and produces a report, not an
+// instrument failure. Folder-less (skill dir + no writable --folder), so no --allow-host-writes needed.
+// Gated on PROBE_CAN like the other hostloop probes; four model workloads, so a generous timeout.
+describe.skipIf(!PROBE_CAN)("live: critique runs at hostloop (the unpinned tier)", () => {
+  it("critique --fidelity hostloop yields a report (exit 0, no instrument failure)", () => {
+    const r = spawnSync(
+      "node",
+      [
+        "dist/cli.js",
+        "critique",
+        RC_SKILL,
+        "--prompt",
+        "Invoke the resume-continuity-probe skill, then reply with exactly: DONE",
+        "--fidelity",
+        "hostloop",
+        "--output-format",
+        "json",
+      ],
+      { encoding: "utf8", env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, timeout: 900_000 },
+    );
+    // critique exits 0 whenever a critique was PRODUCED (any findings); exit 2 = no critique (usage or
+    // instrument failure). The unpin is proven iff the hostloop two-turn protocol produced a report.
+    expect(r.status, `critique exited ${r.status} (2 = no critique produced).\nstderr:\n${r.stderr}`).toBe(0);
+    // A produced critique report carries the graded session and has NEITHER an instrument failure nor an
+    // evaluator error (buildJsonReport's shape — there is no top-level `ok`).
+    const env = JSON.parse(r.stdout);
+    expect(env.infraFailure, `critique hit an instrument failure: ${JSON.stringify(env.infraFailure)}`).toBeUndefined();
+    expect(env.evaluatorError, `evaluator errored: ${JSON.stringify(env.evaluatorError)}`).toBeUndefined();
+    expect(typeof env.sessionId, "critique report has no sessionId").toBe("string");
+    expect(typeof env.outDir, "critique report has no outDir").toBe("string");
+  }, 920_000);
+});

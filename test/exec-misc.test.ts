@@ -20,22 +20,40 @@ describe("execute — readSessionManifest", () => {
 
   it("returns agentSessionId for a valid manifest", () => {
     const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "uuid-123" }));
-    expect(readSessionManifest(f, "s1")).toBe("uuid-123");
+    expect(readSessionManifest(f, "s1", "container")).toBe("uuid-123");
   });
 
   it("throws a friendly corrupt-manifest error on invalid JSON (resume path)", () => {
     const f = write("{ this is not json");
-    expect(() => readSessionManifest(f, "s1")).toThrow(/corrupt manifest/);
+    expect(() => readSessionManifest(f, "s1", "container")).toThrow(/corrupt manifest/);
   });
 
   it("throws a clear error when agentSessionId is missing (resume path)", () => {
     const f = write(JSON.stringify({ sessionId: "s1" }));
-    expect(() => readSessionManifest(f, "s1")).toThrow(/missing agentSessionId/);
+    expect(() => readSessionManifest(f, "s1", "container")).toThrow(/missing agentSessionId/);
   });
 
   it("throws when agentSessionId is present but not a string", () => {
     const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: 42 }));
-    expect(() => readSessionManifest(f, "s1")).toThrow(/missing agentSessionId/);
+    expect(() => readSessionManifest(f, "s1", "container")).toThrow(/missing agentSessionId/);
+  });
+
+  // Fidelity tier stamp: the agent's native session store is tier-local, so a resume at a different tier
+  // must fail loud rather than hand the native binary a --resume its store never saw.
+  it("returns the id when the stamped fidelity matches the resume tier", () => {
+    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "uuid-hl", fidelity: "hostloop" }));
+    expect(readSessionManifest(f, "s1", "hostloop")).toBe("uuid-hl");
+  });
+
+  it("throws naming BOTH tiers when the stamped fidelity differs from the resume tier", () => {
+    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "uuid-ct", fidelity: "container" }));
+    expect(() => readSessionManifest(f, "s1", "hostloop")).toThrow(/created at fidelity "container"/);
+    expect(() => readSessionManifest(f, "s1", "hostloop")).toThrow(/resume is "hostloop"/);
+  });
+
+  it("allows through a legacy manifest with no fidelity field (backward compat)", () => {
+    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "uuid-legacy" }));
+    expect(readSessionManifest(f, "s1", "hostloop")).toBe("uuid-legacy");
   });
 });
 

@@ -570,27 +570,27 @@ describe("execute — readSessionManifest session ID mismatch", () => {
 
   it("returns agentSessionId when sessionId matches", () => {
     const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", createdAt: "2024-01-01T00:00:00.000Z" });
-    expect(readSessionManifest(f, "abc")).toBe("uuid-123");
+    expect(readSessionManifest(f, "abc", "container")).toBe("uuid-123");
   });
   it("throws when manifest sessionId does not match the requested sessionId", () => {
     const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", createdAt: "2024-01-01T00:00:00.000Z" });
-    expect(() => readSessionManifest(f, "xyz")).toThrow(/manifest session ID mismatch/);
-    expect(() => readSessionManifest(f, "xyz")).toThrow(/abc/);
-    expect(() => readSessionManifest(f, "xyz")).toThrow(/xyz/);
+    expect(() => readSessionManifest(f, "xyz", "container")).toThrow(/manifest session ID mismatch/);
+    expect(() => readSessionManifest(f, "xyz", "container")).toThrow(/abc/);
+    expect(() => readSessionManifest(f, "xyz", "container")).toThrow(/xyz/);
   });
   it("allows through a legacy manifest with no sessionId field (backward compat)", () => {
     const f = writeManifest({ agentSessionId: "uuid-legacy" });
-    expect(readSessionManifest(f, "anyid")).toBe("uuid-legacy");
+    expect(readSessionManifest(f, "anyid", "container")).toBe("uuid-legacy");
   });
   it("throws for corrupt JSON", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-manifest-bad-"));
     const f = join(dir, "session.json");
     writeFileSync(f, "not json{{");
-    expect(() => readSessionManifest(f, "abc")).toThrow(/corrupt manifest/);
+    expect(() => readSessionManifest(f, "abc", "container")).toThrow(/corrupt manifest/);
   });
   it("throws when agentSessionId is missing", () => {
     const f = writeManifest({ sessionId: "abc" });
-    expect(() => readSessionManifest(f, "abc")).toThrow(/missing agentSessionId/);
+    expect(() => readSessionManifest(f, "abc", "container")).toThrow(/missing agentSessionId/);
   });
 });
 

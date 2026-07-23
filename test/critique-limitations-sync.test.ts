@@ -76,15 +76,17 @@ describe("critique limitations ↔ docs parity", () => {
   });
 
   it("pins the exact limitation id set, so a silent DELETION reds", () => {
-    // A `length > 4` floor absorbed two deletions from the current seven: removing a limitation dropped
-    // it from --help and orphaned its docs bullet, all green. Deleting one should be a deliberate act.
+    // A `length > 4` floor absorbed deletions silently: removing a limitation dropped it from --help and
+    // orphaned its docs bullet, all green. Adding/removing one should be a deliberate act caught here.
     expect([...CRITIQUE_LIMITATIONS.map((l) => l.id)].sort()).toEqual(
       [
         "attached-content-may-enter-evidence",
         "citation-seams",
-        "container-tier-only",
+        "cowork-tier-refused",
         "english-only",
         "evidence-not-persisted",
+        "microvm-tier-refused",
+        "protocol-tier-refused",
         "report-stdout-only",
         "skill-md-16kb-cap",
       ].sort(),
@@ -126,16 +128,7 @@ describe("critique limitations ↔ docs parity", () => {
     }
   });
 
-  it("the container-tier pin is tagged `not-built`, never `structural`", () => {
-    // `structural` (permanent) is the exact misreading that cost a consumer an architecture decision, so a
-    // retag toward it must be a conscious act caught here, not a quiet edit. Was `unverified` until the
-    // hostloop resume-continuity proof PASSED (2026-07-23, test/live-contract.test.ts) — evidence cleared, so it
-    // is now `not-built`: only the unpin + tier-stamp + host-write-consent WORK remains. It must never be
-    // `structural` — the tier is proven reachable. (When the pin is actually lifted — critique runs at a
-    // non-container tier — delete this test with the limitation.)
-    const pin = CRITIQUE_LIMITATIONS.find((l) => l.id === "container-tier-only");
-    expect(pin, "the container-tier limitation was removed — if the pin genuinely lifted, delete this test too").toBeDefined();
-    expect(pin!.provenance.kind).toBe("not-built");
-    expect(pin!.provenance.kind).not.toBe("structural");
-  });
+  // The container-tier pin was LIFTED on 2026-07-23 (critique now accepts --fidelity container|hostloop),
+  // so its dedicated tag guard was deleted per its own instruction. The three tiers still refused
+  // (microvm/protocol/cowork) are covered by the pinned id-set + tag-agreement guards above.
 });

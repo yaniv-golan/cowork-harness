@@ -177,4 +177,35 @@ describe("execute — pinned-session cross-project guard", () => {
     writeFileSync(join(dir, "session.json"), JSON.stringify({ sessionId: "mx1", agentSessionId: "u" }));
     await expect(executeScenario(scenario, { sessionId: "mx1", resume: true })).rejects.toThrow(/MIXED run dir/);
   });
+
+  // Cross-tier resume fail-loud: a session STAMPED at one fidelity, resumed at another, must throw BEFORE
+  // any runtime spawn (the manifest read precedes buildLaunchPlan). Same-project + valid turns/ layout so
+  // it clears the origin + layout guards above and actually reaches the tier check.
+  it("blocks a cross-tier --resume (manifest stamped container, resume at hostloop) before any spawn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-guard-tier-"));
+    process.env.COWORK_HARNESS_RUNS_DIR = root;
+    // A confirmable same-project source so the cross-project guard passes.
+    const src = mkdtempSync(join(tmpdir(), "cwh-src-tier-"));
+    writeFileSync(join(src, "f.txt"), "x");
+    const scnDir0 = mkdtempSync(join(tmpdir(), "cwh-scn-tier-"));
+    writeFileSync(join(scnDir0, "s.yaml"), `folders:\n  - from: ${src}\n`);
+    writeFileSync(
+      join(scnDir0, "tier.yaml"),
+      `name: tier\nbaseline: latest\nsession: ./s.yaml\nfidelity: hostloop\nprompt: hi\nallow_host_writes: true\n`,
+    );
+    const scenario = parseScenarioFile(join(scnDir0, "tier.yaml"));
+    const session = loadSessionFromFile(scenario.session);
+    const sources = sessionOriginSources(session, scenario.session);
+    const originKey = sessionOriginKey(sources, scenario.session);
+    const dir = join(root, "tier", "sess-tr1");
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(join(dir, "turns", "1", "result.json"), JSON.stringify({ turn: 1, result: "success" }));
+    writeFileSync(join(dir, "turns", "1", "run.jsonl"), "{}\n");
+    writeFileSync(join(dir, ".origin"), JSON.stringify({ originKey, sourceHint: sources[0], createdAt: new Date().toISOString() }));
+    // Stamped at container; the scenario resumes at hostloop → must fail loud.
+    writeFileSync(join(dir, "session.json"), JSON.stringify({ sessionId: "tr1", agentSessionId: "u", fidelity: "container" }));
+    await expect(executeScenario(scenario, { sessionId: "tr1", resume: true })).rejects.toThrow(/created at fidelity "container"/);
+    // The refused resume didn't spawn and didn't destroy the turn evidence.
+    expect(existsSync(join(dir, "turns", "1", "result.json"))).toBe(true);
+  });
 });
