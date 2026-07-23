@@ -118,3 +118,45 @@ describe("cost rollup shape", () => {
     expect(cost.complete).toBe(false);
   });
 });
+
+describe("findingFingerprint (cross-input corroboration key)", () => {
+  it("is stable across whitespace reflow and EXCLUDES the input-specific evidence excerpt", async () => {
+    const { findingFingerprint } = await import("../src/critique/evidence");
+    const a = findingFingerprint({ idea: "add a tier table", classification: "grounded-and-actionable", recommendedAction: "do it" });
+    const b = findingFingerprint({ idea: "add  a\n tier   table", classification: "grounded-and-actionable", recommendedAction: "do  it" });
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{16}$/);
+    const c = findingFingerprint({ idea: "add a tier table", classification: "grounded-but-not-worth-it", recommendedAction: "do it" });
+    expect(c).not.toBe(a); // classification participates
+  });
+
+  it("is stamped on every item validateCitations returns", async () => {
+    const { validateCitations } = await import("../src/critique/evidence");
+    const items = validateCitations(
+      [
+        {
+          source: "evaluator" as const,
+          idea: "x",
+          classification: "not-adjudicable" as const,
+          evidence: "",
+          recommendedAction: "y",
+        },
+      ],
+      "pkg",
+    );
+    expect(items[0].findingFingerprint).toMatch(/^[0-9a-f]{16}$/);
+  });
+});
+
+describe("gate-answer echo (reproduce-deterministically footer)", () => {
+  it("renders copy-pasteable --answer lines and carries gateAnswers in JSON", async () => {
+    const { buildTextReport, buildJsonReport } = await import("../src/critique/command");
+    const state = {
+      ...STATE_BASE,
+      gateAnswers: [{ question: "Which format?", answer: "Markdown", answeredBy: "scripted" }],
+    };
+    const text = buildTextReport(state);
+    expect(text).toContain('--answer "Which format?=Markdown"');
+    expect(buildJsonReport(state).gateAnswers).toEqual(state.gateAnswers);
+  });
+});

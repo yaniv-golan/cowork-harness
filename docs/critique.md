@@ -236,6 +236,28 @@ Beyond stdout, every critique leaves durable artifacts at the run-dir root (best
 | `critique-evidence-package.txt` | when the evaluator ran | the **armored** corpus the evaluator actually graded against — re-grade a disputed finding offline against the exact record |
 | `critique-salvage.json` | exit 2 only | the self-report + each evaluator pass's RAW reply (captured **pre-parse**), so salvage is a file read, not console scraping |
 
+## Reproduction — the ≥2-run discipline
+
+`critique --repeat` is refused (fixed two-turn protocol). The supported N-run reproduction recipe:
+
+```bash
+for i in 1 2 3; do
+  cowork-harness critique ./my-plugin --skill my-skill --prompt "<same probe>" \
+    --label gen1 --output-format json --out "runs/critique-$i.json"
+done
+```
+
+Then pair/cluster across the reports:
+
+- **Same skill generation?** group by `gradedSkillHash` (content-exact — an edited skill changes it).
+- **Same finding across runs/inputs?** cluster by each item's **`findingFingerprint`** (sha over the
+  normalized idea + classification + recommendedAction, deliberately excluding the input-specific
+  `evidence` excerpt — so the same finding matches across different decks/transcripts).
+- A finding that recurs across ≥2 runs with the same `findingFingerprint` meets the reproduction bar;
+  a one-off is a lead, not a conclusion.
+- To make the graded runs deterministic across repeats, copy the report's echoed `--answer` lines
+  (the graded run's resolved gate answers) into the next invocation.
+
 ## Running it on a skill you did not write
 
 The evidence package carries the skill's own text into the evaluator, so a hostile skill can try to steer

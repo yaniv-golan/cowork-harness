@@ -669,7 +669,11 @@ export function validateReflectionTurn(
  *  gradeable outcome, not an infra failure). `main()` itself spawns real processes and isn't directly
  *  testable, so this decision is factored out and exported for the unit test. */
 export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
-  if (task.timedOut) return "task turn timed out and was killed before it could complete";
+  if (task.timedOut)
+    return (
+      "task turn timed out and was killed before it could complete — pass --timeout <ms> to raise the " +
+      "task-turn wall-clock budget (high-fan-out skills routinely need more than the 10-minute default)"
+    );
   if (task.truncated) return "task turn's output exceeded the byte cap and was killed";
   // A task that exited NONZERO without ever printing a parseable result envelope (a `results[0]` with an
   // outDir) crashed before it completed. The task turn is spawned `--output-format json`, so a run that
@@ -753,6 +757,10 @@ interface ReportState {
    *  run's own skillActivity mentions it. `false` = the critique may be grading a run that never invoked
    *  the selected skill. `undefined` = not applicable or no evidence either way. */
   skillInvocationObserved?: boolean;
+  /** The graded run's resolved gate answers (from its result.json's gateProvenance), lifted so a
+   *  follow-up run can be made deterministic — the text report echoes them as copy-pasteable --answer
+   *  lines, mirroring the `skill` lane's footer. */
+  gateAnswers?: Array<{ question: string; answer: string; answeredBy: string }>;
   taskResult: "success" | "error" | undefined;
   /** The GRADED (task) turn's `outcome` and `skillHash`, lifted into the report so a consumer never opens
    *  a turn file to get them.
@@ -950,6 +958,15 @@ export function buildTextReport(state: ReportState): string {
   );
 
   if (items.length === 0) out.push("No findings from either pass.");
+
+  // G2: echo the graded run's resolved gate answers as copy-pasteable flags, so a follow-up run can be
+  // made deterministic without digging them out of result.json (mirrors the `skill` lane's footer).
+  if (state.gateAnswers?.length) {
+    out.push("");
+    out.push("To reproduce the graded run's gates deterministically, pass:");
+    for (const g of state.gateAnswers)
+      out.push(`  --answer ${JSON.stringify(`${g.question}=${g.answer}`)}  # was answered by: ${g.answeredBy}`);
+  }
   return out.join("\n");
 }
 
@@ -993,6 +1010,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     gradedBaseline: state.gradedBaseline,
     costUsd: state.costUsd,
     skillInvocationObserved: state.skillInvocationObserved,
+    gateAnswers: state.gateAnswers,
     taskResult,
     // On `base`, not a branch: a harvester reads these on EVERY outcome, including the infra-failure
     // paths where knowing which skill generation was graded matters most.
@@ -1260,6 +1278,21 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedSkillName !== undefined && taskRaw?.skillActivity !== undefined
         ? JSON.stringify(taskRaw.skillActivity).includes(gradedSkillName)
         : undefined;
+    // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
+    // does this in its footer; critique's report gets the same courtesy). Defensive over the raw shape.
+    const gpGates = (taskRaw?.gateProvenance as { gates?: unknown } | undefined)?.gates;
+    const gateAnswers = Array.isArray(gpGates)
+      ? gpGates
+          .filter(
+            (g): g is { question: string; answer: string; answeredBy: string } =>
+              !!g &&
+              typeof g === "object" &&
+              typeof (g as Record<string, unknown>).question === "string" &&
+              typeof (g as Record<string, unknown>).answer === "string" &&
+              typeof (g as Record<string, unknown>).answeredBy === "string",
+          )
+          .map((g) => ({ question: g.question, answer: g.answer, answeredBy: g.answeredBy }))
+      : undefined;
 
     // Stable-named copy of the GRADED turn's result, written HERE — while `result.json` is still turn 1
     // and before the reflection turn's resume renames it to `result.turn-1.json`. Writing it at this point
@@ -1391,6 +1424,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedBaseline,
       costUsd,
       skillInvocationObserved,
+      gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
       gradedOutcome,
       gradedSkillHash,
