@@ -68,10 +68,10 @@ per-PR path.
   surfaces triaged, evidence-grounded improvement *ideas* for a skill (it never edits anything, always
   exits 0). Its live acceptance test is `scripts/skill-critique-acceptance.ts`
   (`npm run skill-critique-acceptance`).
-  **Limitation:** its evidence packager (`src/critique/package-evidence.ts`) caps `SKILL.md` at 16KB (and
-  the whole evidence package at 48KB), so a large `SKILL.md` (the flagship is ~51KB) is majority-truncated
-  in what the evaluator sees — verify any "missing guidance" finding against the full `SKILL.md` before
-  acting on it, since it may just be content that fell outside the cap.
+  **Limitation:** its evidence packager (`src/critique/package-evidence.ts`) caps `SKILL.md` at 64KB (and
+  the whole evidence package at 128KB) — a `SKILL.md` larger than that still gets truncated in what the
+  evaluator sees, so verify any "missing guidance" finding against the full `SKILL.md` before acting on it,
+  since it may just be content that fell outside the cap.
 - Author-facing `semantic_matches` guidance for skill users lives in the skill itself
   (`.claude/skills/cowork-harness/references/task-recipes.md`, Recipe 5).
 

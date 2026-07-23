@@ -92,13 +92,13 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     docsAnchor: "cowork tier is refused",
   },
   {
-    id: "skill-md-16kb-cap",
-    summary: 'SKILL.md is capped at 16KB in the evidence — a larger one degrades toward "not adjudicable"',
+    id: "skill-md-size-cap",
+    summary: 'SKILL.md is capped at 64KB in the evidence — a larger one degrades toward "not adjudicable"',
     provenance: {
       kind: "deliberate",
       rationale: "the evidence package is bounded so the evaluator sees a whole record rather than a truncated tail",
     },
-    docsAnchor: "capped at 16KB",
+    docsAnchor: "capped at 64KB",
   },
   {
     id: "english-only",

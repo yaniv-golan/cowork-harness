@@ -21,7 +21,7 @@ import { existsSync, readFileSync, copyFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename, join } from "node:path";
-import { packageEvidence } from "./package-evidence.js";
+import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { snapshotTurnBoundary } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
@@ -120,7 +120,7 @@ Repeating a flag: --upload/--folder/--plugin/--marketplace/--enable/--answer acc
 
 COST AND PREREQUISITES — read before running:
   * Each critique is FOUR model workloads: two graded runs (task + reflection) at the chosen tier and two
-    evaluator passes over an evidence package of up to 48KB.
+    evaluator passes over an evidence package of up to ${MAX_PACKAGE_BYTES / 1024}KB.
   * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier. Override it if
     that is not what you want.
   * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
