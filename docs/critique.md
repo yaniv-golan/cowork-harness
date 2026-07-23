@@ -107,7 +107,7 @@ ignored.
 |---|---|
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
-| `--fidelity container` | container tier only — **`[unverified]`, not permanent**; see [Known limitations](#known-limitations) before designing around it |
+| `--fidelity container` | container tier only — **`[not-built]`, not permanent**; see [Known limitations](#known-limitations) before designing around it |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
 | `--run-dir <path>` | **global, unlike `--dotenv`** — must still PRECEDE the subcommand; a trailing `critique … --run-dir` is rejected |
@@ -196,17 +196,17 @@ you whether to design around it permanently:
 The same tags appear in `critique --help`, generated from one source (`src/critique/limitations.ts`), so
 the two cannot disagree.
 
-- **`[unverified]` Container tier only** — `--fidelity hostloop|cowork|microvm|protocol` is refused.
-  **This is a statement about evidence, not about physics.** The resume-continuity proof
-  (`test/live-resume-continuity.test.ts`) was run against the container tier's Linux ELF; hostloop runs a
-  *different* agent binary (the native one), and conversation state lives in that binary's own session
-  store — so the proof does not transfer. Nothing indicates hostloop would fail; nobody has run it.
-  **Lifting it needs BOTH:** (1) a live resume-continuity proof at hostloop against its native agent
-  binary, and (2) the work that proof unblocks — unpinning three hard-coded container sites, stamping the
-  tier on the session manifest so a cross-tier resume fails loud, and plumbing host-write consent. Evidence
-  alone is necessary, not sufficient.
-  *If you are deciding whether to build a permanent second test lane for hostloop-only findings, this is
-  the sentence to weigh — the pin may lift.*
+- **`[not-built]` Container tier only** — `--fidelity hostloop|cowork|microvm|protocol` is refused.
+  **This is now a statement about unbuilt work, not evidence or physics.** The resume-continuity proof that
+  was missing has PASSED at hostloop against its *native* agent binary (`test/live-contract.test.ts`,
+  "resume-continuity proof at hostloop"; 4/4 live runs): a resumed turn both recalled a prior-turn-only
+  conversation codeword *and* freshly re-read the mounted skill, so the container proof demonstrably
+  transfers to the native binary. **What remains is only build work:** unpinning three hard-coded container
+  sites, stamping the tier on the session manifest so a cross-tier resume fails loud, and plumbing
+  host-write consent for `skill`/`critique` (the one real design call — hostloop writes to the user's real
+  filesystem, whereas container is throwaway).
+  *If you are deciding whether to build a permanent second test lane for hostloop-only findings: don't —
+  the tier is proven reachable, so the pin is pending work, not a permanent boundary.*
 - **`[deliberate]` SKILL.md is capped at 16KB** in the evidence; a larger one degrades toward "not
   adjudicable". The package is bounded so the evaluator sees a whole record rather than a truncated tail.
   Note the truncation caveat is a *prompted* nudge toward `not-adjudicable`, not a mechanical downgrade —

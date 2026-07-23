@@ -61,14 +61,18 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     id: "container-tier-only",
     summary: "container tier only — `--fidelity hostloop|cowork|microvm|protocol` is refused",
     provenance: {
-      kind: "unverified",
-      // Deliberately specific: the reason this has not lifted is that hostloop runs a DIFFERENT agent
-      // binary (native, `resolveHostAgentBinary`) than container (the Linux ELF the proof exercised), and
-      // conversation state lives in the agent's own session store — so the container proof does not
-      // transfer. Nothing indicates it would fail; nobody has run it.
-      liftedBy: "a live resume-continuity proof at hostloop (its NATIVE agent binary, not the container ELF)",
-      thenRequires:
-        "unpinning three hard-coded container sites, a tier stamp on the session manifest so a cross-tier resume fails loud, and host-write consent plumbed for skill/critique",
+      kind: "not-built",
+      // WAS `unverified` until 2026-07-23. The proof its `liftedBy` named — a live resume-continuity run
+      // at hostloop against the NATIVE agent binary (not the container ELF) — has now PASSED
+      // (test/live-contract.test.ts, "resume-continuity proof at hostloop"; 4/4 live, native+ELF 2.1.217):
+      // a resumed turn BOTH recalled a prior-turn-only conversation codeword (native session store
+      // restored across --resume) AND freshly re-read the mounted skill's reference file (staged tree
+      // survived resume). The container proof demonstrably transfers → the evidence obstacle is cleared, so
+      // this is no longer `unverified`. What remains is BUILD work, not proof: unpin three hard-coded
+      // container sites, stamp the tier on the session manifest so a cross-tier resume fails loud, and plumb
+      // host-write consent for skill/critique — the one real design call, since hostloop writes to the
+      // user's real FS whereas container is throwaway.
+      note: "resume-continuity is PROVEN at hostloop's native binary (test/live-contract.test.ts; 4/4 live) — the tier is reachable, NOT a permanent boundary. The pin now remains only for build work: unpin three container sites, tier-stamp the session manifest so a cross-tier resume fails loud, and plumb host-write consent for skill/critique",
     },
     docsAnchor: "Container tier only",
   },

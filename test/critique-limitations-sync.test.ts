@@ -126,12 +126,16 @@ describe("critique limitations ↔ docs parity", () => {
     }
   });
 
-  it("the container-tier pin is tagged `unverified`, not `structural`", () => {
-    // Pinned deliberately: this is the exact misreading that cost a consumer an architecture decision.
-    // If someone ever retags it `structural`, that should be a conscious act with a test to update — not
-    // a quiet edit. (If the hostloop proof lands and the pin lifts, delete this test with the limitation.)
+  it("the container-tier pin is tagged `not-built`, never `structural`", () => {
+    // `structural` (permanent) is the exact misreading that cost a consumer an architecture decision, so a
+    // retag toward it must be a conscious act caught here, not a quiet edit. Was `unverified` until the
+    // hostloop resume-continuity proof PASSED (2026-07-23, test/live-contract.test.ts) — evidence cleared, so it
+    // is now `not-built`: only the unpin + tier-stamp + host-write-consent WORK remains. It must never be
+    // `structural` — the tier is proven reachable. (When the pin is actually lifted — critique runs at a
+    // non-container tier — delete this test with the limitation.)
     const pin = CRITIQUE_LIMITATIONS.find((l) => l.id === "container-tier-only");
     expect(pin, "the container-tier limitation was removed — if the pin genuinely lifted, delete this test too").toBeDefined();
-    expect(pin!.provenance.kind).toBe("unverified");
+    expect(pin!.provenance.kind).toBe("not-built");
+    expect(pin!.provenance.kind).not.toBe("structural");
   });
 });
