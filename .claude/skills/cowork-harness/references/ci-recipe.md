@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.7.0` (baseline `desktop-1.20186.1`).
+Self-contained reference. Tracks `cowork-harness 1.7.0` (baseline `desktop-1.24012.1`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):

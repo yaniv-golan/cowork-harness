@@ -34,33 +34,9 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 > `events.jsonl` and `timeline.jsonl` stay cumulative across turns; the harness scopes its own reads of
 > them to the current turn.
 >
-> **A run dir written before this layout existed** — root `result.json`/`run.jsonl`, or a name-mangled
-> `result.turn-<N>.json` archive, no `turns/` — is a different shape. `verify-run`, `inspect`, `scaffold`,
-> `diff`, `status --latest-for` and a resumed `--session-id` all refuse it **by name** rather than
-> silently misreading it, and `stats --reindex` counts it as skipped instead of dropping it from the
-> index. `trace` still reads it fine, which is why every refusal points there: its views come from
-> `events.jsonl`, which never moves.
->
-> **Convert it in place:**
->
-> ```bash
-> cowork-harness migrate-run-dir              # DRY RUN by default — reports, changes nothing
-> cowork-harness migrate-run-dir --write      # apply
-> cowork-harness migrate-run-dir --scenario <name> --write   # one scenario at a time
-> ```
->
-> It renames rather than copies, so the file timestamps `stats` and `status --latest-for` rank by survive
-> untouched. Back up the runs root first, read the dry-run report, and rebuild the index afterwards with
-> `stats --reindex`. Staging one scenario, checking it, then doing the rest is the safer order.
->
-> **What it refuses vs. infers.** A directory it cannot resolve is **refused and named** — an artifact
-> that is neither a duplicate of its slot nor placeable, a turn stamp that disagrees with its destination,
-> two operations targeting one path, telemetry whose turn boundary cannot be dated or whose samples would
-> land in a turn no transcript or result evidences, a directory it cannot read. It never attributes
-> telemetry by guess, and it never creates a `turns/<N>/` that nothing but a resources file vouches for.
-> The one inference it does make is positional: an **empty** file carries no content to attribute, so it
-> follows its position to an **evidenced** turn (a root file to its own turn, an archive to the turn its
-> name states) — never one that nothing else evidences.
+> A run dir with root `result.json`/`run.jsonl` and no `turns/` predates this layout — the tools refuse
+> it by name; see [Old run dirs (pre-`turns/` layout)](#old-run-dirs-pre-turns-layout) at the end of
+> this page for `migrate-run-dir`.
 
 **Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your
@@ -247,6 +223,38 @@ records no fingerprint at all. Group and pair on it;
 key; the label is ergonomics). And `verify-run <run-dir> <scenario.yaml>` is the native staleness guard:
 it **warns** when a kept run predates the current skill, and for a scenario with scripted `answers`
 **hard-fails** rather than vouch for a stale gate snapshot.
+
+---
+
+## Old run dirs (pre-`turns/` layout)
+
+A run dir written before the per-turn layout existed — root `result.json`/`run.jsonl`, or a name-mangled
+`result.turn-<N>.json` archive, no `turns/` — is a different shape. `verify-run`, `inspect`, `scaffold`,
+`diff`, `status --latest-for` and a resumed `--session-id` all refuse it **by name** rather than
+silently misreading it, and `stats --reindex` counts it as skipped instead of dropping it from the
+index. `trace` still reads it fine, which is why every refusal points there: its views come from
+`events.jsonl`, which never moves.
+
+**Convert it in place:**
+
+```bash
+cowork-harness migrate-run-dir              # DRY RUN by default — reports, changes nothing
+cowork-harness migrate-run-dir --write      # apply
+cowork-harness migrate-run-dir --scenario <name> --write   # one scenario at a time
+```
+
+It renames rather than copies, so the file timestamps `stats` and `status --latest-for` rank by survive
+untouched. Back up the runs root first, read the dry-run report, and rebuild the index afterwards with
+`stats --reindex`. Staging one scenario, checking it, then doing the rest is the safer order.
+
+**What it refuses vs. infers.** A directory it cannot resolve is **refused and named** — an artifact
+that is neither a duplicate of its slot nor placeable, a turn stamp that disagrees with its destination,
+two operations targeting one path, telemetry whose turn boundary cannot be dated or whose samples would
+land in a turn no transcript or result evidences, a directory it cannot read. It never attributes
+telemetry by guess, and it never creates a `turns/<N>/` that nothing but a resources file vouches for.
+The one inference it does make is positional: an **empty** file carries no content to attribute, so it
+follows its position to an **evidenced** turn (a root file to its own turn, an archive to the turn its
+name states) — never one that nothing else evidences.
 
 ---
 

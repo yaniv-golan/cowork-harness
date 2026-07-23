@@ -44,7 +44,7 @@ examples/
 
 Answer policies: see [docs/scenario.md § Reusable answer policies](../docs/scenario.md#reusable-answer-policies---answer-policy).
 
-Matrices: the worked matrix config is `matrices/csv-metrics-matrix.yaml` — see the `run --matrix` bullet in README's "Flags worth knowing".
+Matrices: the worked matrix config is `matrices/csv-metrics-matrix.yaml` — see the `run --matrix` bullet under [README → Commands at a glance](../README.md#commands-at-a-glance) ("Flags worth knowing").
 
 `replays/` has its own [README](./replays/README.md) explaining what each committed cassette covers.
 

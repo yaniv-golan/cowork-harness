@@ -104,10 +104,12 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
    `npx "cowork-harness@>=X.Y.Z"`).
 5. `.claude/skills/cowork-harness/references/scenario-schema.md` → the
    "Tracks `cowork-harness X.Y.Z`" line.
-6. `.claude/skills/cowork-harness/references/fidelity-and-answers.md` → the
-   "Tracks `cowork-harness X.Y.Z`" line.
+6. `.claude/skills/cowork-harness/references/fidelity-and-answers.md` and
+   `.claude/skills/cowork-harness/references/task-recipes.md` → the
+   "Tracks `cowork-harness X.Y.Z`" line in each.
 7. The baseline these track (`tracks-harness … (baseline desktop-<ver>)`) — keep in sync with the
-   newest `baselines/desktop-*.json`.
+   newest `baselines/desktop-*.json`. The `check:versions` guard enforces this for SKILL.md, every
+   `references/*.md` baseline pin, and DESIGN.md's current-state sentence — a lagging pin reds CI.
 8. `.claude/skills/cowork-harness/references/ci-recipe.md` → all `npm i -g "cowork-harness@>=X.Y.Z"` floors
    (currently 3 occurrences).
 9. `examples/replays/README.md` → the `npm i -g "cowork-harness@>=X.Y.Z"` floor.
@@ -185,5 +187,5 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
   (`git tag -d vX.Y.Z`), re-create it on the correct commit, and push it.
 - The live `scenario suite` CI stage runs on **same-repo** PRs (where the `ANTHROPIC_API_KEY` secret is
   available) and on pushes to `main`; it is skipped only on **fork** PRs (or when the secret is unset). So
-  a same-repo release-branch PR DOES exercise the live suite and spend API budget — the `unit` + `boundary`
-  stages alone are sufficient to gate a release if you'd rather not.
+  a same-repo release-branch PR DOES exercise the live suite and spend API budget — the `build` + `test` +
+  `boundary` stages alone are sufficient to gate a release if you'd rather not.
