@@ -2591,7 +2591,7 @@ async function cmdSync(args: string[]) {
   // recorded hash; otherwise drop the fields rather than carry a stale hash from a different version.
   // Agent-binary string sentinels: literal-occurrence counts of feature markers whose runtime STATE the
   // sync cannot see (no gate id, no spawn-env key), measured from the staged ELF. tengu_saddle_lantern
-  // gates the skill-discovery tool family's ENABLEMENT at agent >=2.1.217 (docs/internal finding 1); its
+  // gates the skill-discovery tool family's ENABLEMENT at agent >=2.1.217; its
   // count is 2 in the 2.1.215/2.1.217 ELF. A change surfaces as a `sync --diff` agentBinary line — the
   // trigger to re-check whether the discovery-tool wiring moved. Same lifecycle as sha256 below: measured
   // when staged, carried from the base on an offline same-version re-sync, else dropped (never stale).

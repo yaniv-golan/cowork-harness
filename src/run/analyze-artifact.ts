@@ -6,7 +6,7 @@ import type { AnalysisFailure, SkillFinding } from "./analyze-skill.js";
 
 /**
  * `analyze-artifact` — the Tier A static detector for the Cowork interactive-artifact write-back bug
- * class (see `docs/internal/2026-07-15-harness-improvements-from-skillcreator-plan.md`, Item 1 §B2/§B3).
+ * class described below (see `analyze-artifact-runtime.ts` for the optional Tier B runtime confirmer).
  *
  * THE BUG: a skill emits an interactive `.html` artifact (directly, or generated from a `.py`/`.js`
  * template). Under Cowork the artifact is served from Cowork's OWN origin, so a relative write-back —

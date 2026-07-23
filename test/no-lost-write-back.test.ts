@@ -7,7 +7,8 @@ import type { AuthoredFile, AuthoredFilesHealth } from "../src/run/artifacts.js"
 
 // Static Tier A `no_lost_write_back` assertion — runs the shipped `analyze-artifact` analyzer over the
 // files a run authored so a scenario can gate on "the agent didn't emit an interactive artifact whose
-// Submit is lost under Cowork". See docs/internal/2026-07-16-static-tierA-in-run-loop-spec.md.
+// Submit is lost under Cowork". See `analyze-artifact.ts` for the analyzer and
+// `analyze-artifact-runtime.ts` for the optional Tier B runtime confirmer.
 
 const LOST_FORM = `<!DOCTYPE html><html><body><form method="post" action="/submit"><button>Save</button></form></body></html>`;
 const CLEAN_REMOTE = `<!DOCTYPE html><html><body><script>fetch('https://api.example.com/x',{method:'POST'})</script></body></html>`;

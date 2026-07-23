@@ -19,7 +19,7 @@ describe("parseMessage system-subtype catch-all", () => {
     }
   });
 
-  // WI-9 (docs/internal finding 3): the staged agent is 2.1.217, PAST the 2.1.216 VCS-event EMIT
+  // The staged agent is 2.1.217, PAST the 2.1.216 VCS-event EMIT
   // floor, so a hostloop/cowork run now RECEIVES code_change_published / vcs_state_changed on the
   // stream. They are agent-side ungated and git-operation-driven (code_change_published fires on an
   // observed `gh pr create` PR URL; vcs_state_changed per commit/push/merge/rebase — independent
