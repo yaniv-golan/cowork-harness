@@ -739,7 +739,7 @@ export function buildTextReport(state: ReportState): string {
     );
   if (skillMdStatus && skillMdStatus !== "readable")
     out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
-  out.push(`  verdict scope: advisory self-run — NOT an independent attestation (do not gate an untrusted skill on it)`);
+  out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
 
   const integ = state.evaluatorIntegrity;

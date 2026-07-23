@@ -172,6 +172,10 @@ Never gate CI on findings; that is the whole design.
 | `NOT ADJUDICABLE` | The evidence cannot decide — a human judgement call |
 | `DROPPED` | The citation did not resolve. **Not validated** — shown for transparency only |
 
+Every report also carries the advisory scoping machine-readably: a `verdictProvenance` object in
+`--output-format json`, and a "verdict scope:" line in the text report — both marking the verdict as an
+advisory self-run, not an independent attestation.
+
 ## Running it on a skill you did not write
 
 The evidence package carries the skill's own text into the evaluator, so a hostile skill can try to steer
@@ -256,9 +260,6 @@ Both `*.graded.json` names are written at the moment the graded turn completes, 
 immediately and survive a reflection turn that never finishes. Prefer them, or `turns/1/` directly, to
 `turns/2/result.json` — which is the reflection turn's numbers, not the graded ones.
 
-Every report also carries the advisory scoping machine-readably: a `verdictProvenance` object in
-`--output-format json`, and a "verdict scope:" line in the text report — both marking the verdict as an
-advisory self-run, not an independent attestation.
 - **`[deliberate]` Attached-file content usually stays out of the evidence — but that is the common case, not a
   guarantee.** "Attached inputs" lists names and sizes only, never bytes, and the primary transcript
   source is assistant prose. But packaging falls back to a raw slice of `events.jsonl` when the archived

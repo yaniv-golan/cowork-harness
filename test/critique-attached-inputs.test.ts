@@ -207,11 +207,13 @@ describe("Attached inputs evidence section", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  it("a flagship-sized (~51KB) SKILL.md now packages untruncated", () => {
+  it("a just-under-cap (~63KB) SKILL.md packages untruncated", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     writeTurn1Fixtures(runDir);
     const skillDir = makeSkillDir();
-    const flagship = "S".repeat(SKILL_MD_CAP - 1_000); // just under the new cap; would have blown the old 16KB one
+    // Just under the new cap; would have blown the old 16KB one. A flagship-sized (~51KB) SKILL.md
+    // now fits with headroom to spare, so this just-under-cap fixture is the stronger regression.
+    const flagship = "S".repeat(SKILL_MD_CAP - 1_000);
     writeFileSync(join(skillDir, "SKILL.md"), flagship);
 
     const { pkg, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
