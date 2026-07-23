@@ -60,6 +60,12 @@ All notable changes to this project are documented here. The format is based on
   leave the firewall in an unknown state. `vmGatewayIp()` now rejects anything that isn't a canonical IPv4
   literal (digits-and-dots only, octets 0–255, no leading zeros), failing loud instead of reaching the
   shell. Operator-set env var, so this is defense-in-depth; no valid gateway value is affected.
+- **The `agent.stderr.log` sink is now flushed before the teardown secret-scrub reads it.** The stderr sink
+  was piped fire-and-forget and never awaited, so bytes still buffered when `scrubRawRunLogs` read the file
+  could land raw *afterwards* — a persisted-secret leak in a narrow teardown window. `LiveAgentSession` now
+  pipes it with `{ end: false }` and ends+awaits it in the same session-teardown drain that already flushes
+  `events.jsonl` / `control-out.jsonl`, so the session generator resolves only after the sink is fully
+  flushed — the scrub always sees the complete log.
 
 ## [1.8.0] — 2026-07-23
 
