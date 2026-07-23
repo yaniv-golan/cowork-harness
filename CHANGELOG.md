@@ -54,6 +54,12 @@ All notable changes to this project are documented here. The format is based on
   `#<len>·<sha16>` hash of the full canonical string, so the key depends on the entire content while the
   visible prefix stays readable in the hunk; both diff sides canonicalize identically, so the comparison
   stays consistent.
+- **`COWORK_VM_GATEWAY` is now validated as a canonical IPv4 literal.** The L2-microVM gateway override was
+  interpolated verbatim into a root-run guest `iptables -A OUTPUT -d <gateway>` command (via `sh -c`), so a
+  malformed or hostile value could inject shell syntax into privileged provisioning — or, more mundanely,
+  leave the firewall in an unknown state. `vmGatewayIp()` now rejects anything that isn't a canonical IPv4
+  literal (digits-and-dots only, octets 0–255, no leading zeros), failing loud instead of reaching the
+  shell. Operator-set env var, so this is defense-in-depth; no valid gateway value is affected.
 
 ## [1.8.0] — 2026-07-23
 

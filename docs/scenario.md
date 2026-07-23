@@ -952,7 +952,8 @@ with `COWORK_LIMA_INSTANCE`.
 - **A run errors with "not mounted — VM not provisioned for this harness config"** — the VM predates a
   config change (its mounts don't match). Recreate it: `cowork-harness vm delete && cowork-harness vm init`.
 - **Egress allowed/denied looks wrong** — the guest firewall and the proxy URL must point at the same
-  gateway. The default Apple-VZ user-network gateway is `192.168.5.2`; override with `COWORK_VM_GATEWAY`,
+  gateway. The default Apple-VZ user-network gateway is `192.168.5.2`; override with `COWORK_VM_GATEWAY`
+  (a canonical IPv4 literal — an invalid value is rejected, as it feeds the guest iptables rule),
   and the proxy port with `COWORK_VM_PROXY_PORT` (unset, the host binds an OS-assigned free port;
   `8899` is only the guest-config fallback when a VM is spawned without an explicit port — not the
   effective default of a normal run). The harness threads one resolved

@@ -41,6 +41,31 @@ describe("Lima gateway IP is overridable and threaded into the firewall rule", (
     expect(vmGatewayIp()).toBe("10.0.2.2");
   });
 
+  it("#95: rejects a COWORK_VM_GATEWAY that isn't a canonical IPv4 literal (no shell injection into root provisioning)", () => {
+    // The value is interpolated into a root-run `iptables -A OUTPUT -d ${gatewayIp}` via `sh -c`; anything
+    // but a clean IPv4 literal must be refused loud rather than reaching that shell.
+    for (const bad of [
+      "192.168.5.2; rm -rf /", // shell metacharacters
+      "$(reboot)",
+      "10.0.0.1 -j ACCEPT", // extra iptables tokens
+      "10.0.0.256", // octet out of range
+      "192.168.05.2", // non-canonical leading zero
+      "10.0.0", // too few octets
+      "not-an-ip",
+      "", // empty
+    ]) {
+      process.env.COWORK_VM_GATEWAY = bad;
+      expect(() => vmGatewayIp(), `should reject ${JSON.stringify(bad)}`).toThrow(/canonical IPv4/);
+    }
+  });
+
+  it("#95: still accepts ordinary IPv4 overrides unchanged", () => {
+    for (const ok of ["192.168.5.2", "10.0.2.2", "127.0.0.1", "255.255.255.255", "0.0.0.0"]) {
+      process.env.COWORK_VM_GATEWAY = ok;
+      expect(vmGatewayIp()).toBe(ok);
+    }
+  });
+
   it("emits the resolved gateway IP into the iptables allow rule", () => {
     process.env.COWORK_VM_GATEWAY = "10.0.2.2";
     const script = guestFirewallScript(8899, vmGatewayIp());
