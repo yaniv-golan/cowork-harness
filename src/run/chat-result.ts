@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { RunResult } from "../types.js";
 import { infraErrorsForResult, evidenceErrorsForResult, type RunRecord } from "./run.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { classifyWorkspaceFiles } from "./artifacts.js";
+import { classifyWorkspaceFilesWithHealth, trustedWorkspaceFiles } from "./artifacts.js";
 import { readTimeline } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
@@ -56,11 +56,14 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
   // Only trust a CLEAN timeline (parsed header, no malformed entry lines) — a corrupt/partial timeline is
   // evidence-unavailable, not present-empty, so derived tool-duration/skill-activity stay undefined. #43
   const timeline = timelineRaw && timelineRaw.malformedLines === 0 && !timelineRaw.headerCorrupt ? timelineRaw : undefined;
-  // #52: a missing workspace root is UNAVAILABLE (undefined, the replay convention), not a false empty [] —
-  // otherwise a microvm chat (outputs stage into the VM work tree, not outDir) reads as "wrote nothing".
-  const workspaceFiles = existsSync(opts.workRoot)
-    ? classifyWorkspaceFiles(opts.workRoot, opts.userVisibleRoots, opts.readonlyFolderRoots)
+  // #52/#54: a missing workspace root OR a nested unreadable subtree is UNAVAILABLE (undefined, the replay
+  // convention), not a false empty/partial [] — otherwise a microvm chat (outputs stage into the VM work
+  // tree, not outDir) reads as "wrote nothing", or a partial walk reads as a complete list. The shared
+  // `trustedWorkspaceFiles` gate is what the run success/partial lanes use too, so the three can't drift.
+  const wfHealth = existsSync(opts.workRoot)
+    ? classifyWorkspaceFilesWithHealth(opts.workRoot, opts.userVisibleRoots, opts.readonlyFolderRoots)
     : undefined;
+  const workspaceFiles = wfHealth ? trustedWorkspaceFiles(wfHealth) : undefined;
   const resources = foldResources(opts.outDir, opts.fidelity, resolveIntervalMs(), undefined, opts.turn);
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
