@@ -85,10 +85,8 @@ describe("critique limitations ↔ docs parity", () => {
         "citation-seams",
         "cowork-tier-refused",
         "english-only",
-        "evidence-not-persisted",
         "microvm-tier-refused",
         "protocol-tier-refused",
-        "report-stdout-only",
         "skill-md-size-cap",
       ].sort(),
     );

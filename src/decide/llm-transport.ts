@@ -42,7 +42,9 @@ function parseEnvelope(raw: string): CompleteResult {
   if (typeof parsed.result !== "string") throw new Error(`envelope missing "result": ${tail(raw)}`);
   const models = Object.keys(parsed.modelUsage ?? {});
   if (models.length !== 1) throw new Error(`envelope's modelUsage has ${models.length} keys (expected exactly 1): ${tail(raw)}`);
-  return { text: parsed.result, model: models[0]! };
+  // Pass the usage VALUE through too (additive — see CompleteResult.usage): the key alone gives model
+  // provenance, but discarding the value made the evaluator passes' cost unrecoverable.
+  return { text: parsed.result, model: models[0]!, usage: parsed.modelUsage as Record<string, unknown> };
 }
 
 /** Lenient, best-effort extraction of JUST the `result` field for a FAILURE diagnosis message — unlike

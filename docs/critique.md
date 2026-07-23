@@ -110,6 +110,7 @@ ignored.
 |---|---|
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
+| `--out <path>` | **also** write the selected-format report to this file (stdout unchanged) |
 | `--fidelity container\|hostloop` | container (default) or hostloop; `microvm`/`protocol`/`cowork` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
@@ -192,6 +193,24 @@ Every report also carries the advisory scoping machine-readably: a `verdictProve
 `--output-format json`, and a "verdict scope:" line in the text report — both marking the verdict as an
 advisory self-run, not an independent attestation.
 
+The header also reports the pinned **fidelity** (plus the tier/baseline the graded turn *recorded*, so a
+mismatch is visible rather than assumed away) and a per-critique **cost** rollup across all four model
+workloads — the two graded turns *and* the two evaluator passes — marked `INCOMPLETE` whenever any
+workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFidelity` / `gradedBaseline`
+/ `costUsd`, and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
+malformed evaluator items (the surviving findings are then not necessarily the complete reply).
+
+### Run-dir artifacts
+
+Beyond stdout, every critique leaves durable artifacts at the run-dir root (best-effort writes —
+`turns/1/`, `turns/2/` and the `*.graded.json` aliases sit alongside them):
+
+| File | When | What |
+|---|---|---|
+| `critique-report.json` | always | the machine-readable report a harvester reads without shell redirection |
+| `critique-evidence-package.txt` | when the evaluator ran | the **armored** corpus the evaluator actually graded against — re-grade a disputed finding offline against the exact record |
+| `critique-salvage.json` | exit 2 only | the self-report + each evaluator pass's RAW reply (captured **pre-parse**), so salvage is a file read, not console scraping |
+
 ## Running it on a skill you did not write
 
 The evidence package carries the skill's own text into the evaluator, so a hostile skill can try to steer
@@ -255,10 +274,6 @@ the two cannot disagree.
   The package is bounded so the evaluator sees a whole record rather than a truncated tail; the
   truncation caveat is a *prompted* nudge toward `not-adjudicable`, never a mechanical one.
 - **`[not-built]` English-only prompts.** No localization has been attempted; nothing blocks it.
-- **`[not-built]` The evidence package is not persisted.** A disputed finding cannot be re-checked
-  against the record it was graded on.
-- **`[not-built]` The report is written to stdout** only — capture it with shell redirection;
-  `--output-format` changes the format, never the destination.
 
 ### Reading the graded turn's result
 

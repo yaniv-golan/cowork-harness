@@ -436,6 +436,18 @@ export interface RunCritiqueOptions {
    *  count means the evaluator's reply carried malformed items that were dropped rather than sinking the
    *  whole document — the report must surface it (an unreported drop would be a silent recall loss). */
   onDroppedItems?: (dropped: { pass1: number; pass2?: number }) => void;
+  /** Called once per pass, IMMEDIATELY after the transport resolves and BEFORE the reply is parsed — so
+   *  the raw reply is captured structurally even when the parse then throws (the salvage path; the raw
+   *  text previously survived only embedded inside the thrown error's message). */
+  onRawReply?: (pass: 1 | 2, raw: string) => void;
+  /** Called once with the ARMORED evidence text — the exact closed corpus both prompts embed and
+   *  `validateCitations` checks against. The caller persists it so a disputed finding can be re-graded
+   *  offline against the record it was actually graded on. */
+  onArmoredEvidence?: (text: string) => void;
+  /** Called once per pass that ran, with the transport envelope's usage/cost map (absent when the
+   *  transport didn't supply one — e.g. a test double). Lets the caller tally a TRUE per-critique cost:
+   *  the evaluator passes are model workloads too, not just the two graded turns. */
+  onUsage?: (pass: 1 | 2, usage: Record<string, unknown> | undefined) => void;
   /** F35: called ONCE, synchronously, after the resolved model is confirmed (agreeing across every pass
    *  that actually ran) — with the TRANSPORT-RESOLVED model id (e.g. `claude-opus-4-8-20260115`), never the
    *  requested alias (e.g. `"opus"`) `opts.model`/`DEFAULT_EVALUATOR_MODEL` may have been. A callback
@@ -478,6 +490,7 @@ export async function runCritique(
   // string exists per critique. Two corpora would silently move findings into DROPPED.
   const evidence = armorEvidence(sections, opts.nonce);
   const pkg = evidence.text;
+  opts.onArmoredEvidence?.(pkg);
   const model = opts.model ?? DEFAULT_EVALUATOR_MODEL;
   const complete = opts.complete ?? claudeCliComplete;
   const truncated = opts.packageTruncated ?? false;
@@ -486,7 +499,14 @@ export async function runCritique(
   // Pass 1 FIRST, and its own await completes before pass 2's prompt is ever constructed — the
   // self-report is not merely "not mentioned," it does not exist yet in this function's execution when
   // this call is made.
-  const { text: pass1Raw, model: pass1Model } = await complete(buildPass1Prompt(evidence, truncated, skillMdUnreadable), model);
+  const {
+    text: pass1Raw,
+    model: pass1Model,
+    usage: pass1Usage,
+  } = await complete(buildPass1Prompt(evidence, truncated, skillMdUnreadable), model);
+  // Raw reply + usage are handed out BEFORE parsing — a parse throw must not lose either (salvage/cost).
+  opts.onRawReply?.(1, pass1Raw);
+  opts.onUsage?.(1, pass1Usage);
   // The parse strips the canary itself (pre-canonicalization — see parseCritiqueItems) and drops+counts
   // malformed items per-item, so nothing here re-filters.
   const p1 = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)", evidence.nonce);
@@ -501,10 +521,13 @@ export async function runCritique(
     return validateCitations(pass1Items, pkg);
   }
 
-  const { text: pass2Raw, model: pass2Model } = await complete(
-    buildPass2Prompt(evidence, pass1Items, selfReport, truncated, skillMdUnreadable),
-    model,
-  );
+  const {
+    text: pass2Raw,
+    model: pass2Model,
+    usage: pass2Usage,
+  } = await complete(buildPass2Prompt(evidence, pass1Items, selfReport, truncated, skillMdUnreadable), model);
+  opts.onRawReply?.(2, pass2Raw);
+  opts.onUsage?.(2, pass2Usage);
   const p2 = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)", evidence.nonce);
   let pass2Items = p2.items;
   if (skillMdUnreadable) pass2Items = forceSkillMdCoverageNotAdjudicable(pass2Items);
