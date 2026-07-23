@@ -1,5 +1,7 @@
 # Troubleshooting FAQ
 
+> **Start here when stuck:** a run misbehaved, or CI is green and you don't trust it → [debugging.md](./debugging.md) (the investigation loop + the false-green hunt). Skill-*authoring* landmines → the companion skill's gotchas catalog ([SKILL.md](../.claude/skills/cowork-harness/SKILL.md)). This page is the setup + authoring FAQ — symptom-keyed, skimmable.
+
 ## Setup & environment
 
 - **`lint` exits 127.** `python3` isn't on `PATH`. Install it or point `PYTHON` at an interpreter.

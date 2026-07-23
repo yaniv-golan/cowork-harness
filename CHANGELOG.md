@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`check:versions` closes the stale-pin gap a docs audit found.** Three new enforcement surfaces:
+  every companion-skill `references/*.md` `(baseline desktop-X.Y.Z)` pin must match SKILL.md's
+  `tracks-harness` baseline; `task-recipes.md` now carries the same guarded
+  `` Tracks `cowork-harness X.Y.Z` `` stamp as the other references (and is a `bump-version` target);
+  DESIGN.md's one present-tense "currently **X**, per `baselines/desktop-Y.json`" sentence must name the
+  max committed baseline + its `agentVersion` (its dated verification-pass notes stay exempt). A new
+  docs-index sync test keeps README's Documentation table and docs/README.md's Guides table from
+  drifting apart (that drift is how `critique.md` went missing from the README table).
+
 - **`doctor` warns when a *pulled* agent image is behind the published one.** For the
   `container`/`hostloop`/`cowork` tiers, a new advisory `image-freshness` check compares the local agent
   image's registry digest against the current published `ghcr.io/yaniv-golan/cowork-agent-base:2` (or

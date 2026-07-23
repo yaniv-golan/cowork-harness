@@ -618,7 +618,7 @@ sub-agent didn't reason":
   transcript — it is a **request-side display mode**. The API's `thinking.display` is forced to
   `"omitted"` for a sub-agent turn whenever the session is non-interactive (the harness always spawns
   `-p`) and no explicit display was set, so the model returns empty thinking blocks (signature-only)
-  that the child transcript then faithfully records. Binary-verified against the staged 2.1.205 agent;
+  that the child transcript then faithfully records. Binary-verified against the then-staged 2.1.205 agent;
   corpus-corroborated: 230/230 sub-agent thinking blocks were text-empty-but-signature-present, while
   the *same agent binary's* main-loop transcripts — which resolve `display` to the API default
   (`"summarized"` on Sonnet-4.6) — keep 1810/1827 blocks with full text. The signature is opaque (not a

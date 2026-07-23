@@ -12,7 +12,7 @@ npm run format:check  # prettier over src/ + test/ .ts — the most common first
 npm run typecheck     # tsc --noEmit
 npm test              # vitest
 npm run build         # -> dist/
-npm run ci            # typecheck + build + test — the core TS gate (CI's `unit` job runs more; see below)
+npm run ci            # typecheck + build + test — the core TS gate (CI's `build` + `test` jobs run more; see below)
 ```
 
 Before pushing: `npm run format:check` and `npm run ci` (see RELEASING.md's release checklist for the full pre-tag list).
@@ -25,10 +25,11 @@ Extra prerequisites for specific stages:
 - **Docker (arm64)** — required for `boundary-check` and the **L1 `container`** + `hostloop` fidelity tiers (the container sandbox + agent image).
 - **Lima (`limactl`, macOS arm64)** — required only for the **L2 `microvm`** tier and the `vm` commands; the guest runs on Apple Virtualization.framework (`vmType: vz`). `microvm` does **not** use Docker. (`cowork-harness doctor --tier microvm` checks for Lima, not Docker.)
 
-CI Stage 1 (the `unit` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It runs the
-gate steps individually — e.g. `check:versions`, `format:check`, `typecheck`, `npm test`, `build`, a CLI
-smoke (`node dist/cli.js list`), three token-free `replay` gate fixtures, `verify-cassettes`, `lint`, and
-source-guard checks (see `ci.yml` for the authoritative list). Only `release.yml` calls `npm run ci`.
+CI Stage 1 (the `build` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It runs the
+gate steps individually — e.g. `check:versions`, `format:check`, `typecheck`, `build`, a CLI smoke
+(`node dist/cli.js list`), three token-free `replay` gate fixtures, `verify-cassettes`, `lint`, and
+source-guard checks — while the unit suite runs separately as the 4-shard `test` job (see `ci.yml` for
+the authoritative list). Only `release.yml` calls `npm run ci`.
 
 > **Cutting a release?** See [RELEASING.md](./RELEASING.md) for the branch → PR → tag → publish flow.
 
@@ -85,7 +86,7 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
 ## Commit & PR
 
 - Conventional, imperative commit subjects (`add …`, `fix …`, `parity: sync to <ver>`).
-- Open PRs against `main`. CI runs a six-stage pipeline (`unit`, `action-self-test`, `python`, `boundary`, `scenarios`, `parity-drift` — see `ci.yml`) on every PR including forks (no secrets needed) except `scenarios`; live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
+- Open PRs against `main`. CI runs a seven-stage pipeline (`build`, `test`, `action-self-test`, `python`, `boundary`, `scenarios`, `parity-drift` — see `ci.yml`) on every PR including forks (no secrets needed) except `scenarios`; live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
 - Describe *what changed and why*; link issues.
 
 ## Reporting issues

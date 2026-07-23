@@ -16,20 +16,26 @@
 //   5b. SKILL floors === floor: every `@>=X.Y.Z` in SKILL.md (incl. a BARE `Pin `@>=X`` with no
 //                              `cowork-harness` prefix) matches the floor — invariant 3 reads only the
 //                              first prefixed match, so a bare floor drifted silently (stale 0.33.0→1.0.0).
-//   6. ref stamps === tracks:  each `references/*.md` "Tracks `cowork-harness X.Y.Z`" matches tracks-harness.
+//   6. ref stamps === tracks:  each `references/*.md` "Tracks `cowork-harness X.Y.Z`" matches tracks-harness,
+//                              and any `(baseline desktop-X.Y.Z)` pin next to that stamp matches SKILL.md's
+//                              tracks-harness baseline (the refs lagged two Desktop syncs before this check).
 //   7. baseline pins agree:    SKILL.md's `(baseline desktop-X.Y.Z)` and README.md's "latest shipped
 //                              baseline" sentence agree with each other AND are not behind the max
-//                              version present in baselines/desktop-*.json. (DESIGN.md is deliberately
-//                              NOT checked here — its baseline mentions are point-in-time verification
-//                              stamps, not "current" pins, and are allowed to lag until a real
-//                              re-verification pass. docs/cowork-spawn-contract-*.md is likewise NOT a
-//                              pin: it is frozen historical research, not updated per release — see its
-//                              own applicability note.)
+//                              version present in baselines/desktop-*.json. (DESIGN.md's DATED
+//                              verification-pass notes are deliberately NOT checked here — they are
+//                              point-in-time stamps, allowed to lag until a real re-verification pass;
+//                              its one present-tense "currently" sentence IS checked, by invariant 9.
+//                              docs/cowork-spawn-contract-*.md is likewise NOT a pin: it is frozen
+//                              historical research, not updated per release — see its own
+//                              applicability note.)
 //   8. copy-paste CI `V=X.Y.Z` pins match the max baseline's agentVersion: the literal agent-binary
 //      version hardcoded in README.md / ci-recipe.md / docs/maintenance.md's "stage the agent binary"
 //      bash snippets (meant to be copy-pasted into a CONSUMER repo's own CI, which has no baselines/
 //      dir of its own — so these stay literals, not a dynamic `jq` read) must equal the newest
 //      baselines/desktop-*.json's `agentVersion`.
+//   9. DESIGN.md's current-state sentence ("currently **<agent>**, per `baselines/desktop-<ver>.json`")
+//      matches the max baseline + its agentVersion. Unlike DESIGN.md's dated verification notes
+//      (exempt, see 7), this sentence claims the PRESENT, so it must not lag.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -126,17 +132,29 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     for (const f of skillFloors) if (f !== floor) errors.push(`SKILL.md floor "@>=${f}" != SKILL.md bootstrap floor "@>=${floor}" (a bare \`@>=X\` drifted — bump it)`);
   }
 
-  // 6. Each reference doc's "Tracks `cowork-harness X.Y.Z`" stamp must match tracks-harness.
+  // 6. Each reference doc's "Tracks `cowork-harness X.Y.Z`" stamp must match tracks-harness, and any
+  //    `(baseline desktop-X.Y.Z)` pin in the doc must match SKILL.md's tracks-harness baseline. The
+  //    baseline half is what caught the refs pinning desktop-1.20186.1 two Desktop syncs after
+  //    SKILL.md moved on — RELEASING's checklist alone didn't hold.
   const refFiles = [
     ".claude/skills/cowork-harness/references/ci-recipe.md",
     ".claude/skills/cowork-harness/references/scenario-schema.md",
     ".claude/skills/cowork-harness/references/fidelity-and-answers.md",
+    ".claude/skills/cowork-harness/references/task-recipes.md",
   ];
-  if (tracks) {
-    for (const f of refFiles) {
-      const stamp = r(f).match(/Tracks\s+`cowork-harness\s+(\d+\.\d+\.\d+)`/)?.[1];
+  for (const f of refFiles) {
+    const refText = r(f);
+    if (tracks) {
+      const stamp = refText.match(/Tracks\s+`cowork-harness\s+(\d+\.\d+\.\d+)`/)?.[1];
       if (!stamp) errors.push(`${f} has no "Tracks \`cowork-harness X.Y.Z\`" stamp`);
       else if (stamp !== tracks) errors.push(`${f} stamp "${stamp}" != tracks-harness "${tracks}"`);
+    }
+    if (skillBaseline) {
+      for (const m of refText.matchAll(/\(baseline\s+`?desktop-(\d+\.\d+\.\d+)`?\)/g)) {
+        if (m[1] !== skillBaseline) {
+          errors.push(`${f} baseline pin "desktop-${m[1]}" != SKILL.md tracks-harness baseline "desktop-${skillBaseline}"`);
+        }
+      }
     }
   }
 
@@ -187,6 +205,22 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     }
   } else if (maxBaseline) {
     errors.push(`baselines/desktop-${maxBaseline}.json has no "agentVersion" field`);
+  }
+
+  // 9. DESIGN.md's single present-tense current-state sentence must name the max baseline + its
+  //    agentVersion. Scoped to the one `currently **X**, per \`baselines/...\`` sentence — the dated
+  //    verification-pass notes elsewhere in DESIGN.md stay exempt (see invariant 7's note).
+  const design = r("DESIGN.md");
+  const designCurrent = design.match(/currently \*\*(\d+\.\d+\.\d+)\*\*, per `baselines\/desktop-(\d+\.\d+\.\d+)\.json`/);
+  if (!designCurrent) {
+    errors.push('DESIGN.md has no "currently **X.Y.Z**, per `baselines/desktop-X.Y.Z.json`" current-state sentence to verify');
+  } else {
+    if (maxAgentVersion && designCurrent[1] !== maxAgentVersion) {
+      errors.push(`DESIGN.md current-state agent "${designCurrent[1]}" != max baseline's agentVersion "${maxAgentVersion}"`);
+    }
+    if (maxBaseline && designCurrent[2] !== maxBaseline) {
+      errors.push(`DESIGN.md current-state baseline "desktop-${designCurrent[2]}" != max baseline "desktop-${maxBaseline}"`);
+    }
   }
 
   return {
