@@ -111,6 +111,7 @@ ignored.
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged) |
+| `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ its `agents/<name>.md`) instead of a missing plugin-root SKILL.md — see below |
 | `--fidelity container\|hostloop` | container (default) or hostloop; `microvm`/`protocol`/`cowork` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
@@ -129,6 +130,25 @@ ignored.
 so repeating them is how you pass several. Every other value-taking flag is single-valued and repeating it is
 a **usage error** (exit `2`) rather than a silent last-wins — `--prompt a --prompt b` would otherwise discard
 a probe you typed. Boolean flags may be repeated harmlessly.
+
+### Multi-skill plugins (`--skill`)
+
+A multi-skill plugin has `skills/<name>/SKILL.md` and **no root `SKILL.md`** — pointing critique at the
+plugin root used to grade a missing file and downgrade every coverage finding to "not adjudicable".
+Now:
+
+- **`--skill <name>`** makes the packager grade `skills/<name>/SKILL.md`, and also packages the invoked
+  skill's **`agents/<name>.md`** (sub-agent system prompts) plus bounded **`references/*.md` content** —
+  for sub-agent-heavy skills that is where most operative guidance lives.
+- A multi-skill root with **no `--skill` is refused before any model spend**; a single-skill plugin
+  auto-selects with a notice.
+- **Selection only:** the positional folder is still what both turns mount (session identity is
+  unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the *mounted folder*,
+  so it pairs generations per-plugin, not per-skill. Pair per-skill runs by `--label` if you need finer
+  grouping.
+- The report carries an advisory **`skillInvocationObserved`**: `false` means the graded run's own
+  `skillActivity` never mentions the selected skill — the critique may be grading a run that did not
+  actually invoke it.
 
 ### Skills that need an attached file
 

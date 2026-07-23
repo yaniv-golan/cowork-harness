@@ -55,15 +55,17 @@ describe("Attached inputs evidence section", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  it("is positioned between 'references/ available' and 'Transcript'", () => {
+  it("is positioned after BOTH references sections (listing + content) and directly before 'Transcript'", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     const skillDir = makeSkillDir();
     const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
     const refIdx = sections.findIndex((s) => s.title.startsWith("references/ available"));
+    const refContentIdx = sections.findIndex((s) => s.title.startsWith("references/ content"));
     const attachedIdx = sections.findIndex((s) => s.title === ATTACHED_INPUTS_TITLE);
     const transcriptIdx = sections.findIndex((s) => s.title.startsWith("Transcript"));
     expect(refIdx).toBeGreaterThanOrEqual(0);
-    expect(attachedIdx).toBe(refIdx + 1);
+    expect(refContentIdx).toBe(refIdx + 1);
+    expect(attachedIdx).toBe(refContentIdx + 1);
     expect(transcriptIdx).toBe(attachedIdx + 1);
     rmSync(runDir, { recursive: true, force: true });
     rmSync(skillDir, { recursive: true, force: true });

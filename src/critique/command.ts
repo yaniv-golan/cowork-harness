@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
-import { existsSync, readFileSync, copyFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -67,6 +67,9 @@ interface ParsedArgs {
   outputFormat: "json" | "text";
   /** ALSO write the selected-format report to this file (stdout unchanged). */
   out?: string;
+  /** For a MULTI-SKILL PLUGIN target: which `skills/<name>` the packager should grade. Selection only —
+   *  the positional folder is still what both turns mount (session identity must not change). */
+  skillSelector?: string;
   /** argv fragments for BOTH spawned turns — session SOURCES, which must match or the resume throws. */
   forwardBoth: string[];
   /** argv fragments for the GRADED turn only. */
@@ -105,6 +108,11 @@ Critique's own:
   --evaluator-model <id>    the grading model (env: COWORK_HARNESS_EVALUATOR_MODEL)
   --output-format json|text critique's REPORT format (inner turns always speak json internally)
   --out <path>              ALSO write the selected-format report to this file (stdout unchanged)
+  --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ its agents/<name>.md)
+                            instead of a missing plugin-root SKILL.md. Selection only — the positional
+                            folder is still what both turns mount, and fingerprint.skillHash is unchanged
+                            (it keys the mounted folder: per-plugin, not per-skill). A multi-skill root
+                            with no --skill is REFUSED before any model spend.
   --fidelity <tier>         container (default) or hostloop; microvm/protocol/cowork refused with a reason
   --keep                    accepted as a no-op — runs are always kept
   --dotenv <path>           credentials
@@ -189,6 +197,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let evaluatorModel: string | undefined;
   let outputFormat: "json" | "text" = "text";
   let out: string | undefined;
+  let skillSelector: string | undefined;
   let promptFile: string | undefined;
   let taskTimeoutMs: number | undefined;
   const forwardBoth: string[] = [];
@@ -239,6 +248,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       once("--out");
       const { value: v, adv } = flagVal(argv, i, "--out");
       out = v;
+      i += adv;
+    } else if (a === "--skill" || a.startsWith("--skill=")) {
+      once("--skill");
+      const { value: v, adv } = flagVal(argv, i, "--skill");
+      skillSelector = v;
       i += adv;
     } else if (a === "--keep" || a.startsWith("--keep=")) {
       // Match the equals form too so it errors as "takes no value" rather than falling through to the
@@ -329,10 +343,66 @@ function parseArgs(argv: string[]): ParsedArgs {
     evaluatorModel,
     outputFormat,
     out,
+    skillSelector,
     forwardBoth,
     forwardTask,
     taskTimeoutMs,
   };
+}
+
+/** Resolve WHICH folder the packager grades (and, for a plugin, the invoked skill's `agents/<name>.md`).
+ *
+ *  The positional `skillFolder` is what both turns MOUNT — that never changes here (the reflection turn's
+ *  resume recomputes session identity from the same sources, so a selection that changed the mount would
+ *  break the resume). This resolves only the PACKAGER's view:
+ *   - a plain skill folder (root `SKILL.md`) → itself;
+ *   - a multi-skill plugin + `--skill <name>` → `skills/<name>/` (fail loud if absent, naming what exists);
+ *   - a multi-skill plugin, no `--skill`, exactly ONE skill → auto-selected with a stderr notice;
+ *   - a multi-skill plugin, no `--skill`, several skills → REFUSED loud before any model spend — grading
+ *     a plugin root with no SKILL.md silently downgraded every coverage finding to "not adjudicable"
+ *     (observed in the field as a 100% not-adjudicable critique).
+ *  `fingerprint.skillHash` is computed over the MOUNTED folder and is unchanged by `--skill` — same
+ *  folder → same hash — so generation pairing keeps working; it is a per-plugin key, not per-skill.
+ *  Exported for unit tests. */
+export function resolveCritiquedSkillDir(
+  skillFolder: string,
+  skillSelector: string | undefined,
+): { skillDir: string; agentsMdPath?: string; autoSelectedSkill?: string } {
+  const agentsMdFor = (name: string): string | undefined => {
+    const p = join(skillFolder, "agents", `${name}.md`);
+    return existsSync(p) ? p : undefined;
+  };
+  const listPluginSkills = (): string[] => {
+    try {
+      return readdirSync(join(skillFolder, "skills"), { withFileTypes: true })
+        .filter((e) => e.isDirectory() && existsSync(join(skillFolder, "skills", e.name, "SKILL.md")))
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      return [];
+    }
+  };
+  if (skillSelector !== undefined) {
+    const candidate = join(skillFolder, "skills", skillSelector);
+    if (!existsSync(join(candidate, "SKILL.md"))) {
+      const available = listPluginSkills();
+      throw new Error(
+        `--skill ${skillSelector}: no skills/${skillSelector}/SKILL.md under ${skillFolder}` +
+          (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),
+      );
+    }
+    return { skillDir: candidate, agentsMdPath: agentsMdFor(skillSelector) };
+  }
+  if (existsSync(join(skillFolder, "SKILL.md"))) return { skillDir: skillFolder }; // plain skill folder
+  const skills = listPluginSkills();
+  if (skills.length === 1)
+    return { skillDir: join(skillFolder, "skills", skills[0]!), agentsMdPath: agentsMdFor(skills[0]!), autoSelectedSkill: skills[0]! };
+  if (skills.length > 1)
+    throw new Error(
+      `${skillFolder} is a multi-skill plugin root (no root SKILL.md; skills: ${skills.join(", ")}) — ` +
+        `pass --skill <name> so critique grades the INVOKED skill's SKILL.md instead of a missing root one`,
+    );
+  return { skillDir: skillFolder }; // no SKILL.md anywhere — the packager's existing missing/degraded flow reports it
 }
 
 interface TurnOutcome {
@@ -679,6 +749,10 @@ interface ReportState {
   gradedBaseline?: string;
   /** Per-critique cost across all four workloads — see CritiqueCost. Absent when nothing was priceable. */
   costUsd?: CritiqueCost;
+  /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether the graded
+   *  run's own skillActivity mentions it. `false` = the critique may be grading a run that never invoked
+   *  the selected skill. `undefined` = not applicable or no evidence either way. */
+  skillInvocationObserved?: boolean;
   taskResult: "success" | "error" | undefined;
   /** The GRADED (task) turn's `outcome` and `skillHash`, lifted into the report so a consumer never opens
    *  a turn file to get them.
@@ -792,6 +866,10 @@ export function buildTextReport(state: ReportState): string {
     out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
   if (taskResult === "error")
     out.push(`  NOTE: the task run ended in error — recommendations below reflect whatever happened before the failure.`);
+  if (state.skillInvocationObserved === false)
+    out.push(
+      `  NOTE: the graded run's recorded skillActivity never mentions the selected skill — this critique may be grading a run that did not actually invoke it.`,
+    );
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
     out.push(
@@ -914,6 +992,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
     gradedBaseline: state.gradedBaseline,
     costUsd: state.costUsd,
+    skillInvocationObserved: state.skillInvocationObserved,
     taskResult,
     // On `base`, not a branch: a harvester reads these on EVERY outcome, including the infra-failure
     // paths where knowing which skill generation was graded matters most.
@@ -1084,6 +1163,22 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     return;
   }
 
+  // Resolve which folder the PACKAGER grades — fail-fast (usage error, exit 2) BEFORE any model spend:
+  // a multi-skill plugin root with no --skill would burn four workloads to produce a critique whose every
+  // coverage finding is "not adjudicable".
+  let resolvedSkill: ReturnType<typeof resolveCritiquedSkillDir>;
+  try {
+    resolvedSkill = resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector);
+  } catch (e) {
+    process.stderr.write(`${(e as Error).message}\n`);
+    process.exit(2);
+    return;
+  }
+  if (resolvedSkill.autoSelectedSkill)
+    process.stderr.write(
+      `::notice:: [critique] ${opts.skillFolder} is a single-skill plugin — grading skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
+    );
+
   const sessionId = `crit-${randomUUID()}`;
 
   try {
@@ -1156,6 +1251,15 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const taskFp = taskRaw?.fingerprint as { baseline?: unknown } | undefined;
     const gradedBaseline = typeof taskFp?.baseline === "string" ? taskFp.baseline : undefined;
     const taskTurnUsd = sumCostUsd(taskRaw?.modelUsage);
+    // Graded-run validity (advisory): when a specific plugin skill was selected, check the run's own
+    // skillActivity actually mentions it — packaging can be perfectly plugin-aware and still be grading a
+    // run that never invoked the selected skill. Best-effort string scan of the recorded activity;
+    // `undefined` = not applicable (plain skill folder) or no evidence either way (absent result).
+    const gradedSkillName = opts.skillSelector ?? resolvedSkill.autoSelectedSkill;
+    const skillInvocationObserved =
+      gradedSkillName !== undefined && taskRaw?.skillActivity !== undefined
+        ? JSON.stringify(taskRaw.skillActivity).includes(gradedSkillName)
+        : undefined;
 
     // Stable-named copy of the GRADED turn's result, written HERE — while `result.json` is still turn 1
     // and before the reflection turn's resume renames it to `result.turn-1.json`. Writing it at this point
@@ -1227,7 +1331,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         turn1ResultDegraded: trd,
         turn1SliceDegraded: tsd,
         skillMdStatus: sms,
-      } = packageEvidence(outDir, boundary, opts.skillFolder, true);
+      } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, { agentsMdPath: resolvedSkill.agentsMdPath });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
@@ -1286,6 +1390,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedEffectiveFidelity,
       gradedBaseline,
       costUsd,
+      skillInvocationObserved,
       taskResult,
       gradedOutcome,
       gradedSkillHash,
