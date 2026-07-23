@@ -1,0 +1,221 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "critique-report.json",
+  "title": "cowork-harness critique --output-format json report (and critique-report.json run-dir artifact)",
+  "description": "EXPERIMENTAL, descriptive schema — NOT a SPEC §12-frozen surface: additive field changes are expected between minor versions (unlike doctor.json). It exists so automation consumers (budget pacers, harvesters) have authoritative field names/shapes instead of prose. Exactly one of infraFailure / evaluatorError / evaluatorModel-with-findings describes the outcome; items is [] on both failure branches.",
+  "type": "object",
+  "required": ["skillFolder", "prompt", "sessionId", "outDir", "fidelity", "selfReportStatus", "verdictProvenance", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "skillFolder": {
+      "type": "string",
+      "description": "the positional folder BOTH turns mounted (a plain skill, or a plugin root)"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "sessionId": {
+      "type": "string"
+    },
+    "outDir": {
+      "type": "string",
+      "description": "the kept run dir (turns/1 = graded, turns/2 = reflection; critique-* artifacts at its root)"
+    },
+    "fidelity": {
+      "type": "string",
+      "description": "the tier critique pinned for both turns (cowork is refused, so requested == resolved)",
+      "enum": ["container", "hostloop"]
+    },
+    "gradedEffectiveFidelity": {
+      "type": "string",
+      "description": "best-effort: the tier the graded turn's own result.json RECORDS (should equal fidelity; both surfaced so a mismatch is visible)"
+    },
+    "gradedBaseline": {
+      "type": "string",
+      "description": "best-effort: the graded turn's fingerprint.baseline (Desktop appVersion)"
+    },
+    "costUsd": {
+      "type": "object",
+      "description": "per-critique cost across the FOUR model workloads. GATE ON `complete` BEFORE TRUSTING totalUsd: false means one or more workloads were unpriced and the total UNDERCOUNTS true spend.",
+      "required": ["totalUsd", "complete"],
+      "additionalProperties": false,
+      "properties": {
+        "taskTurnUsd": {
+          "type": "number"
+        },
+        "reflectionTurnUsd": {
+          "type": "number"
+        },
+        "evaluatorPass1Usd": {
+          "type": "number"
+        },
+        "evaluatorPass2Usd": {
+          "type": "number"
+        },
+        "totalUsd": {
+          "type": "number"
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gradedSkill": {
+      "type": "string",
+      "description": "the resolved skills/<name> the packager graded (--skill or single-skill auto-selection); ABSENT for a plain skill folder. Multi-skill-plugin pairing key: skillHash keys the whole mounted plugin, so pair by (gradedSkillHash, gradedSkill), never skillHash alone"
+    },
+    "skillInvocationObserved": {
+      "type": "boolean",
+      "description": "advisory: whether the graded run's own skillActivity mentions gradedSkill; false = the critique may be grading a run that never invoked the selected skill"
+    },
+    "gateAnswers": {
+      "type": "array",
+      "description": "the graded run's resolved gate answers, for a deterministic follow-up run",
+      "items": {
+        "type": "object",
+        "required": ["question", "answer", "answeredBy"],
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "answeredBy": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "taskResult": {
+      "type": "string",
+      "description": "the graded turn's own result — error is a GRADEABLE outcome, not an instrument failure",
+      "enum": ["success", "error"]
+    },
+    "gradedOutcome": {
+      "type": "string",
+      "description": "the graded turn's result.json outcome (e.g. delivered_clean)"
+    },
+    "gradedSkillHash": {
+      "type": "string",
+      "description": "content-exact hash of the MOUNTED folder — the cross-FIX pairing key (per-plugin under --skill)"
+    },
+    "selfReportStatus": {
+      "type": "string",
+      "description": "unavailable = pass 2 was skipped; findings are pass-1-only",
+      "enum": ["captured", "unavailable"]
+    },
+    "evaluatorIntegrity": {
+      "type": "object",
+      "description": "mechanical canary check per pass; false = that pass ignored a trusted instruction — an empty critique may be adversarial silencing, not a clean skill",
+      "required": ["pass1Canary"],
+      "additionalProperties": false,
+      "properties": {
+        "pass1Canary": {
+          "type": "boolean"
+        },
+        "pass2Canary": {
+          "type": "boolean"
+        }
+      }
+    },
+    "droppedEvaluatorItems": {
+      "type": "object",
+      "description": "malformed items the per-item-tolerant parse dropped; non-zero means the surviving findings under-represent the full reply",
+      "required": ["pass1"],
+      "additionalProperties": false,
+      "properties": {
+        "pass1": {
+          "type": "number"
+        },
+        "pass2": {
+          "type": "number"
+        }
+      }
+    },
+    "turn1ResultDegraded": {
+      "type": "boolean",
+      "description": "the graded turn's canonical result was corrupted/never archived — result-derived sections are empty DEFAULTS, treat as unknown"
+    },
+    "turn1SliceDegraded": {
+      "type": "boolean",
+      "description": "the turn-1 transcript slice's boundary could not be trusted — treat gaps as unknown"
+    },
+    "skillMdStatus": {
+      "type": "string",
+      "description": "readability of the packaged SKILL.md; missing/unreadable force the mechanical already-covered -> not-adjudicable downgrade",
+      "enum": ["readable", "missing", "unreadable"]
+    },
+    "skillMdTruncated": {
+      "type": "boolean",
+      "description": "SKILL.md was READABLE but over its cap — the evaluator graded a CUT copy. Consequences: claims about past-cut content are steered to not-adjudicable, and a finding QUOTING past-cut text fails citation-resolution and lands in DROPPED"
+    },
+    "verdictProvenance": {
+      "type": "object",
+      "description": "advisory scoping: the verdict is a self-run discovery lead, never an independent attestation",
+      "required": ["kind", "advisory", "caveat"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["self-run"]
+        },
+        "advisory": {
+          "type": "boolean"
+        },
+        "caveat": {
+          "type": "string"
+        }
+      }
+    },
+    "infraFailure": {
+      "type": "string",
+      "description": "instrument failure (task turn killed / reflection protocol broke) — no critique was produced; items is []; process exits 2"
+    },
+    "evaluatorError": {
+      "type": "string",
+      "description": "the evaluator threw (embeds the raw reply) — no critique was produced; items is []; process exits 2; see critique-salvage.json"
+    },
+    "evaluatorModel": {
+      "type": "string",
+      "description": "the transport-RESOLVED evaluator model (never the requested alias); present only when the evaluator completed"
+    },
+    "items": {
+      "type": "array",
+      "description": "the citation-validated findings from both passes. citationResolved:false = the cited excerpt did not resolve verbatim against the evidence package (DROPPED section — transparency only, do not act on as-is)",
+      "items": {
+        "type": "object",
+        "required": ["source", "idea", "classification", "evidence", "recommendedAction"],
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["evaluator", "self-report"]
+          },
+          "idea": {
+            "type": "string"
+          },
+          "classification": {
+            "type": "string",
+            "enum": ["grounded-and-actionable", "grounded-but-not-worth-it", "confabulated", "already-covered", "not-adjudicable"]
+          },
+          "evidence": {
+            "type": "string",
+            "description": "the model's cited excerpt — verbatim-checked against the evidence package"
+          },
+          "recommendedAction": {
+            "type": "string"
+          },
+          "citationResolved": {
+            "type": "boolean"
+          },
+          "findingFingerprint": {
+            "type": "string",
+            "description": "sha256/16 over normalized idea+classification+recommendedAction (evidence excluded). Cross-INPUT clustering key — HIGH-PRECISION, LOW-RECALL: idea is model-authored free text, so a MATCH proves the same finding recurred; a MISMATCH does NOT prove non-reproduction (the same finding reworded fingerprints differently)"
+          }
+        }
+      }
+    }
+  }
+}

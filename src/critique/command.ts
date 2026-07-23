@@ -132,8 +132,10 @@ Repeating a flag: --upload/--folder/--plugin/--marketplace/--enable/--answer acc
 COST AND PREREQUISITES — read before running:
   * Each critique is FOUR model workloads: two graded runs (task + reflection) at the chosen tier and two
     evaluator passes over an evidence package of up to ${MAX_PACKAGE_BYTES / 1024}KB.
-  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier. Override it if
-    that is not what you want.
+  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier — and the two
+    evaluator passes DOMINATE spend (~3/4 of a measured e2e total). For a batch: calibrate with run 1's
+    costUsd (gate on costUsd.complete), then consider a cheaper --evaluator-model for the sweep — noting
+    the armor's injection-resistance is verified for the DEFAULT evaluator only.
   * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
     agent binary, and writes to the real host FS (a writable --folder requires --allow-host-writes). Both
     tiers need an authenticated \`claude\` CLI on PATH.
@@ -753,6 +755,11 @@ interface ReportState {
   gradedBaseline?: string;
   /** Per-critique cost across all four workloads — see CritiqueCost. Absent when nothing was priceable. */
   costUsd?: CritiqueCost;
+  /** The resolved skills/<name> the PACKAGER graded — `--skill` or the single-skill auto-selection;
+   *  absent for a plain skill folder. LOAD-BEARING for multi-skill-plugin pairing: `fingerprint.skillHash`
+   *  keys the MOUNTED folder (per-plugin), so pairing critiques by skillHash alone cross-pairs different
+   *  skills of the same plugin — pair by (gradedSkillHash, gradedSkill). */
+  gradedSkill?: string;
   /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether the graded
    *  run's own skillActivity mentions it. `false` = the critique may be grading a run that never invoked
    *  the selected skill. `undefined` = not applicable or no evidence either way. */
@@ -873,6 +880,8 @@ export function buildTextReport(state: ReportState): string {
   // The GRADED turn's facts, so a consumer never opens result.turn-1.json (and never mistakes the
   // reflection turn's result.json for them).
   if (gradedOutcome) out.push(`  graded outcome: ${gradedOutcome}`);
+  if (state.gradedSkill)
+    out.push(`  graded skill: ${state.gradedSkill} (pair by skillHash + this name — skillHash keys the whole mounted plugin)`);
   if (gradedSkillHash) out.push(`  graded skillHash: ${gradedSkillHash.slice(0, 12)}`);
   if (evaluatorModel) out.push(`  evaluator model (resolved): ${evaluatorModel}`);
   else if (infraFailure || evaluatorError)
@@ -1020,6 +1029,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
     gradedBaseline: state.gradedBaseline,
     costUsd: state.costUsd,
+    gradedSkill: state.gradedSkill,
     skillInvocationObserved: state.skillInvocationObserved,
     gateAnswers: state.gateAnswers,
     taskResult,
@@ -1444,6 +1454,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedEffectiveFidelity,
       gradedBaseline,
       costUsd,
+      gradedSkill: gradedSkillName,
       skillInvocationObserved,
       gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,

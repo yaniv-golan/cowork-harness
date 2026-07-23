@@ -6,7 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [1.8.0] — 2026-07-23
+### Added
+
+- **`schema/critique-report.json`** — a descriptive, test-pinned schema for `critique`'s JSON report /
+  `critique-report.json` artifact, so automation consumers (budget pacers gating on `costUsd.complete`,
+  harvesters) parse field names/shapes from a schema instead of prose. Deliberately **not** a SPEC
+  §12-frozen surface (unlike `doctor.json`) — critique is EXPERIMENTAL and additive field changes are
+  expected; the schema says so in its own description, and a two-way sync test pins it against the
+  actual report builder on every branch (findings / infraFailure / evaluatorError).
+- **`gradedSkill` in the critique report** (text header + JSON): the resolved `skills/<name>` the
+  packager graded under `--skill`/auto-selection. Load-bearing for multi-skill plugins:
+  `gradedSkillHash` keys the whole mounted plugin, so pairing by hash alone cross-pairs critiques of
+  *different* skills — pair by `(gradedSkillHash, gradedSkill)`. Docs updated accordingly.
+
+### Docs
+
+- Truncation→DROPPED mechanics: a finding whose `evidence` quotes SKILL.md text past the packaging cap
+  fails citation-resolution and lands in DROPPED (the check runs against the *cut* copy) — documented
+  next to `skillMdTruncated` so a back-half DROPPED skew on an oversized skill has its cause named.
+- `findingFingerprint` direction-of-inference: high-precision, LOW-RECALL — a match proves
+  reproduction; a mismatch does NOT prove non-reproduction (the same finding reworded fingerprints
+  differently). The Reproduction section says so before anyone concludes "didn't reproduce".
+- Evaluator cost share: the two evaluator passes were ~3/4 of a measured e2e total — the
+  calibrate-then-`--evaluator-model` strategy is now in the cost section and `critique --help`, with
+  the armor-verification-is-default-evaluator-only caveat.
 
 ### Added
 
