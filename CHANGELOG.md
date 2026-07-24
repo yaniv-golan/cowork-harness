@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-07-24
+
 ### Added
 
 - **`schema/critique-report.json`** — a descriptive, test-pinned schema for `critique`'s JSON report /
