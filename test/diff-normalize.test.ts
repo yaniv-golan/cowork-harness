@@ -61,6 +61,19 @@ describe("canonicalizeInput — bounded, key-aware canonicalization for tool-seq
     expect(huge.length).toBeLessThan(2100);
   });
 
+  it("#41: two over-cap inputs sharing the first 2000 chars but differing in the DROPPED tail differ", () => {
+    // Both JSON strings are identical for the first 2000 chars and only diverge in the truncated tail —
+    // before the fix their truncated prefixes were the equality key, so they compared as the SAME tool
+    // call in diffToolSequence (a false "same"). The full-content hash suffix now disambiguates them.
+    const prefix = "x".repeat(5_000);
+    const a = canonicalizeInput({ blob: prefix + "AAAA" });
+    const b = canonicalizeInput({ blob: prefix + "BBBB" });
+    expect(a.slice(0, 2000)).toBe(b.slice(0, 2000)); // visible prefixes are identical (the collision surface)
+    expect(a).not.toBe(b); // ...but the keys differ now, so diffToolSequence won't call them "same"
+    expect(a.length).toBeLessThan(2100); // still bounded
+    expect(canonicalizeInput({ blob: prefix + "AAAA" })).toBe(a); // and stable/deterministic for equal input
+  });
+
   it("two structurally-identical inputs (module the volatile fields) canonicalize identically", () => {
     const a = canonicalizeInput({ path: "outputs/x.md", request_id: "aaaa1111-2222-3333-4444-555566667777" });
     const b = canonicalizeInput({ path: "outputs/x.md", request_id: "bbbb1111-2222-3333-4444-555566667777" });

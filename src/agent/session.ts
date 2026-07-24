@@ -463,6 +463,7 @@ const CONTROL_OUT_MIRROR_CAP = 256 * 1024;
 export class LiveAgentSession implements AgentSession {
   private events: WriteStream;
   private controlOut: WriteStream;
+  private errLog: WriteStream;
   private timeline: TimelineWriter;
   private lineIndex = 0;
   private reqById = new Map<string, DecisionRequest>();
@@ -499,8 +500,11 @@ export class LiveAgentSession implements AgentSession {
     this.events = createWriteStream(join(outDir, "events.jsonl"), { flags: "a" });
     this.controlOut = createWriteStream(join(outDir, "control-out.jsonl"), { flags: "a" });
     this.timeline = new TimelineWriter(outDir);
-    const errLog = createWriteStream(join(outDir, "agent.stderr.log"), { flags: "a" });
-    this.proc.stderr.pipe(errLog);
+    // #60: keep a reference and pipe with `{ end: false }` so WE own the close — the drain in `start()`'s
+    // finally ends this stream and AWAITS its flush before the generator resolves, so a subsequent
+    // `scrubRawRunLogs` can't read the file while bytes are still buffered (a raw-secret-after-scrub leak).
+    this.errLog = createWriteStream(join(outDir, "agent.stderr.log"), { flags: "a" });
+    this.proc.stderr.pipe(this.errLog, { end: false });
     // keep a bounded stderr tail and capture the exit code/signal so a child that dies nonzero
     // (with no structured {type:"result"} error) is surfaced as a typed error event, not a silent stop.
     this.proc.stderr.on("data", (d) => {
@@ -619,11 +623,14 @@ export class LiveAgentSession implements AgentSession {
       this.closing = true; // discard any late write() from translate()'s async hook/mcp paths
       await this.drainAll(); // queue empty + all callbacks confirmed before ending either stream
       // AWAIT the stream flush before the generator resolves. executeScenario reads/scans/scrubs
-      // events.jsonl + control-out.jsonl immediately after `drive()` returns; a fire-and-forget end()
-      // races the final buffered writes. end(cb) fires the callback on 'finish' (fully flushed).
+      // events.jsonl + control-out.jsonl + agent.stderr.log immediately after `drive()` returns; a
+      // fire-and-forget end() races the final buffered writes. end(cb) fires the callback on 'finish'
+      // (fully flushed). #60: agent.stderr.log is ended here too — piped with `{ end: false }` (see the
+      // ctor) so its last buffered bytes flush BEFORE the scrub reads it, never landing raw afterwards.
       await Promise.all([
         new Promise<void>((res) => this.events.end(() => res())),
         new Promise<void>((res) => this.controlOut.end(() => res())),
+        new Promise<void>((res) => this.errLog.end(() => res())),
         new Promise<void>((res) => this.timeline.end(() => res())),
       ]);
     }

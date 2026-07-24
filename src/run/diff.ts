@@ -1,6 +1,7 @@
 // Run/cassette diff engine with normalization. Compares two runs, two cassettes, or a run and a
 // cassette (both reduce to an event stream + result metadata through parseMessage/buildTrace, the same
 // typed model `trace` uses — so this stays correct as the SDK schema evolves).
+import { createHash } from "node:crypto";
 import { DEFAULT_SCAN_PATTERNS } from "../scan.js";
 import { diffFileSigsPaths, type FileSigDiff } from "./cassette.js";
 
@@ -61,7 +62,13 @@ const CANON_CAP = 2000;
 /** Bounded, key-aware canonicalization of a tool's `input` (or any structured value) for tool-sequence
  *  comparison — masks volatile string spans AND volatile key names, then caps the length. The 100-char
  *  `summarize()` in trace-view.ts is display-lossy by design; this needs its own, larger, comparison-safe
- *  cap (still bounded — never an unbounded dump into a diff hunk). */
+ *  cap (still bounded — never an unbounded dump into a diff hunk).
+ *
+ *  #41: when the value exceeds the cap, the truncated prefix ALONE is not a safe equality key — two inputs
+ *  sharing the first `CANON_CAP` chars but differing only in the dropped tail would compare equal (a
+ *  false "same" tool call in `diffToolSequence`). So a truncated key folds in a hash of the FULL canonical
+ *  string: the prefix stays human-readable in a diff hunk, the `#<len>·<sha16>` suffix makes the key
+ *  depend on the entire content. Both diff sides run this identically, so the comparison stays consistent. */
 export function canonicalizeInput(input: unknown, normalize = true): string {
   let s: string;
   try {
@@ -69,7 +76,9 @@ export function canonicalizeInput(input: unknown, normalize = true): string {
   } catch {
     s = String(input);
   }
-  return s.length > CANON_CAP ? s.slice(0, CANON_CAP) + "…" : s;
+  if (s.length <= CANON_CAP) return s;
+  const fullHash = createHash("sha256").update(s).digest("hex").slice(0, 16);
+  return `${s.slice(0, CANON_CAP)}…#${s.length}·${fullHash}`;
 }
 
 export interface NormalizedToolRow {

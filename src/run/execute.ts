@@ -1902,10 +1902,11 @@ function scrubFileInPlace(path: string, secrets: string[]) {
  *  executeScenario's outermost `finally` (and the chat lane's teardown) so every exit path AFTER the
  *  agent session exists scrubs — success, the unanswered-gate salvage rethrow, and any rethrown fault
  *  (agent crash, infra error, hostloop snapshot failure). Deliberately NOT total coverage: a throw
- *  before that try has no raw logs yet; a SIGKILL of the harness process skips any finally; and the
- *  agent.stderr.log write stream is never awaited, so bytes still buffered at scrub time can land raw
- *  afterwards (closing that needs an awaitable stderr-sink close on the session — a follow-up, not
- *  this seam). Exported for tests. */
+ *  before that try has no raw logs yet, and a SIGKILL of the harness process skips any finally. #60: the
+ *  agent.stderr.log sink IS now flushed before this runs — `LiveAgentSession` pipes it with `{ end: false }`
+ *  and ends+awaits it in `start()`'s drain, so no buffered stderr byte lands raw after the scrub reads the
+ *  file (the session generator resolves only after that flush, and this runs after it resolves). Exported
+ *  for tests. */
 export function scrubRawRunLogs(outDir: string, secrets: string[]): void {
   scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
   scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);

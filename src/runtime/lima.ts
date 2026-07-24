@@ -56,7 +56,18 @@ export function instanceName(baseline: PlatformBaseline): string {
  * result of this one helper into both.
  */
 export function vmGatewayIp(): string {
-  return process.env.COWORK_VM_GATEWAY ?? "192.168.5.2";
+  const raw = process.env.COWORK_VM_GATEWAY ?? "192.168.5.2";
+  // #95: this value is interpolated into a root-run iptables command inside the guest
+  // (guestFirewallScript → `iptables -A OUTPUT -d ${gatewayIp}` executed via `sh -c`). Validate it as a
+  // canonical IPv4 literal and reject everything else, so a malformed or hostile override can never inject
+  // shell syntax into privileged provisioning. Defense-in-depth: the var is operator-set, but an
+  // unvalidated string reaching a root `sh -c` should be impossible by construction, not by trust. IPv4
+  // only — the Apple VZ user-network gateway is IPv4, and the digits-and-dots grammar excludes every shell
+  // metacharacter (`;`, `$`, backtick, whitespace, …).
+  const octets = raw.split(".");
+  const canonicalIPv4 = octets.length === 4 && octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255 && String(Number(o)) === o);
+  if (!canonicalIPv4) throw new Error(`COWORK_VM_GATEWAY must be a canonical IPv4 literal (e.g. 192.168.5.2); got ${JSON.stringify(raw)}`);
+  return raw;
 }
 
 export function vmStatus(instance: string): string {

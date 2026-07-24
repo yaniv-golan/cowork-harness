@@ -17,7 +17,8 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
-import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync } from "node:fs";
+import { tildeify } from "../io.js";
+import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -123,6 +124,7 @@ Not accepted (each errors with its reason rather than being silently ignored):
   --repeat + companions     fixed two-turn protocol — loop critique itself; pair by fingerprint.skillHash
   --ablate-skill            grading a skill you removed is incoherent
   --quiet/--verbose/--compact/--demo/--dry-run   inner-turn rendering or preview — no effect on the report
+                                                 (which already collapses host paths to ~)
 
 Repeating a flag: --upload/--folder/--plugin/--marketplace/--enable/--answer accumulate (that is how you
   pass several). Every other value-taking flag is single-valued and repeating it is a USAGE ERROR rather
@@ -132,8 +134,10 @@ Repeating a flag: --upload/--folder/--plugin/--marketplace/--enable/--answer acc
 COST AND PREREQUISITES — read before running:
   * Each critique is FOUR model workloads: two graded runs (task + reflection) at the chosen tier and two
     evaluator passes over an evidence package of up to ${MAX_PACKAGE_BYTES / 1024}KB.
-  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier. Override it if
-    that is not what you want.
+  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier — and the two
+    evaluator passes DOMINATE spend (~3/4 of a measured e2e total). For a batch: calibrate with run 1's
+    costUsd (gate on costUsd.complete), then consider a cheaper --evaluator-model for the sweep — noting
+    the armor's injection-resistance is verified for the DEFAULT evaluator only.
   * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
     agent binary, and writes to the real host FS (a writable --folder requires --allow-host-writes). Both
     tiers need an authenticated \`claude\` CLI on PATH.
@@ -368,6 +372,19 @@ export function resolveCritiquedSkillDir(
   skillFolder: string,
   skillSelector: string | undefined,
 ): { skillDir: string; agentsMdPath?: string; autoSelectedSkill?: string } {
+  // Fail-fast on a typo'd / absent path BEFORE the caller mints a session and spawns the task turn — a
+  // missing folder otherwise only surfaces as a mid-run mount failure that leaves a stray run dir behind.
+  // This lives here (not in parseArgs) on purpose: parseArgs is unit-tested with fictitious paths, whereas
+  // this resolver is only ever called with a real folder. One statSync in a try/catch also covers a broken
+  // symlink; the existsSync guard just gives the common typo the clearer "not found" message.
+  if (!existsSync(skillFolder)) throw new Error(`skill folder not found: ${tildeify(skillFolder)}`);
+  let stat;
+  try {
+    stat = statSync(skillFolder);
+  } catch {
+    throw new Error(`skill folder not found: ${tildeify(skillFolder)}`);
+  }
+  if (!stat.isDirectory()) throw new Error(`not a directory: ${tildeify(skillFolder)}`);
   const agentsMdFor = (name: string): string | undefined => {
     const p = join(skillFolder, "agents", `${name}.md`);
     return existsSync(p) ? p : undefined;
@@ -387,7 +404,7 @@ export function resolveCritiquedSkillDir(
     if (!existsSync(join(candidate, "SKILL.md"))) {
       const available = listPluginSkills();
       throw new Error(
-        `--skill ${skillSelector}: no skills/${skillSelector}/SKILL.md under ${skillFolder}` +
+        `--skill ${skillSelector}: no skills/${skillSelector}/SKILL.md under ${tildeify(skillFolder)}` +
           (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),
       );
     }
@@ -399,7 +416,7 @@ export function resolveCritiquedSkillDir(
     return { skillDir: join(skillFolder, "skills", skills[0]!), agentsMdPath: agentsMdFor(skills[0]!), autoSelectedSkill: skills[0]! };
   if (skills.length > 1)
     throw new Error(
-      `${skillFolder} is a multi-skill plugin root (no root SKILL.md; skills: ${skills.join(", ")}) — ` +
+      `${tildeify(skillFolder)} is a multi-skill plugin root (no root SKILL.md; skills: ${skills.join(", ")}) — ` +
         `pass --skill <name> so critique grades the INVOKED skill's SKILL.md instead of a missing root one`,
     );
   return { skillDir: skillFolder }; // no SKILL.md anywhere — the packager's existing missing/degraded flow reports it
@@ -753,6 +770,11 @@ interface ReportState {
   gradedBaseline?: string;
   /** Per-critique cost across all four workloads — see CritiqueCost. Absent when nothing was priceable. */
   costUsd?: CritiqueCost;
+  /** The resolved skills/<name> the PACKAGER graded — `--skill` or the single-skill auto-selection;
+   *  absent for a plain skill folder. LOAD-BEARING for multi-skill-plugin pairing: `fingerprint.skillHash`
+   *  keys the MOUNTED folder (per-plugin), so pairing critiques by skillHash alone cross-pairs different
+   *  skills of the same plugin — pair by (gradedSkillHash, gradedSkill). */
+  gradedSkill?: string;
   /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether the graded
    *  run's own skillActivity mentions it. `false` = the critique may be grading a run that never invoked
    *  the selected skill. `undefined` = not applicable or no evidence either way. */
@@ -850,10 +872,10 @@ export function buildTextReport(state: ReportState): string {
     skillMdStatus,
   } = state;
   const out: string[] = [];
-  out.push(`skill-critique: ${skillFolder}`);
+  out.push(`critique: ${tildeify(skillFolder)}`);
   out.push(`  probe: ${prompt}`);
   out.push(`  session: ${sessionId}`);
-  out.push(`  run dir: ${outDir}`);
+  out.push(`  run dir: ${tildeify(outDir)}`);
   out.push(
     `  fidelity: ${state.fidelity}` +
       (state.gradedEffectiveFidelity
@@ -873,6 +895,8 @@ export function buildTextReport(state: ReportState): string {
   // The GRADED turn's facts, so a consumer never opens result.turn-1.json (and never mistakes the
   // reflection turn's result.json for them).
   if (gradedOutcome) out.push(`  graded outcome: ${gradedOutcome}`);
+  if (state.gradedSkill)
+    out.push(`  graded skill: ${state.gradedSkill} (pair by skillHash + this name — skillHash keys the whole mounted plugin)`);
   if (gradedSkillHash) out.push(`  graded skillHash: ${gradedSkillHash.slice(0, 12)}`);
   if (evaluatorModel) out.push(`  evaluator model (resolved): ${evaluatorModel}`);
   else if (infraFailure || evaluatorError)
@@ -910,7 +934,7 @@ export function buildTextReport(state: ReportState): string {
   // root (skills/<name>/SKILL.md, no root SKILL.md) — name the cause and the fix, not just the symptom.
   if (skillMdStatus === "missing")
     out.push(
-      `  NOTE: if ${skillFolder} is a multi-skill plugin root, pass --skill <name> (or point critique at <plugin>/skills/<name> directly) so the invoked skill's SKILL.md is graded.`,
+      `  NOTE: if ${tildeify(skillFolder)} is a multi-skill plugin root, pass --skill <name> (or point critique at <plugin>/skills/<name> directly) so the invoked skill's SKILL.md is graded.`,
     );
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
@@ -935,13 +959,15 @@ export function buildTextReport(state: ReportState): string {
   }
   if (infraFailure) {
     out.push(`INFRASTRUCTURE/PROTOCOL FAILURE (reflection turn): ${infraFailure}`);
-    out.push(`The evaluator was NOT invoked — this is a broken discovery run, not a critique. Re-run, or inspect ${outDir} directly.`);
+    out.push(
+      `The evaluator was NOT invoked — this is a broken discovery run, not a critique. Re-run, or inspect ${tildeify(outDir)} directly.`,
+    );
     return out.join("\n");
   }
 
   if (evaluatorError) {
     out.push(`EVALUATOR FAILED: ${evaluatorError}`);
-    out.push(`No critique items were produced. Re-run, or inspect ${outDir} directly.`);
+    out.push(`No critique items were produced. Re-run, or inspect ${tildeify(outDir)} directly.`);
     return out.join("\n");
   }
 
@@ -1020,6 +1046,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
     gradedBaseline: state.gradedBaseline,
     costUsd: state.costUsd,
+    gradedSkill: state.gradedSkill,
     skillInvocationObserved: state.skillInvocationObserved,
     gateAnswers: state.gateAnswers,
     taskResult,
@@ -1084,7 +1111,7 @@ function writeRunArtifact(outDir: string, name: string, content: string): void {
   try {
     writeFileSync(join(outDir, name), content);
   } catch (e) {
-    process.stderr.write(`skill-critique: could not write ${name} under ${outDir}: ${String(e)}\n`);
+    process.stderr.write(`critique: could not write ${name} under ${tildeify(outDir)}: ${String(e)}\n`);
   }
 }
 
@@ -1128,7 +1155,7 @@ function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" 
   try {
     writeFileSync(outPath, content);
   } catch (e) {
-    process.stderr.write(`skill-critique: --out ${outPath} could not be written: ${String(e)}\n`);
+    process.stderr.write(`critique: --out ${tildeify(outPath)} could not be written: ${String(e)}\n`);
   }
 }
 
@@ -1206,7 +1233,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   }
   if (resolvedSkill.autoSelectedSkill)
     process.stderr.write(
-      `::notice:: [critique] ${opts.skillFolder} is a single-skill plugin — grading skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
+      `::notice:: [critique] ${tildeify(opts.skillFolder)} is a single-skill plugin — grading skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
     );
 
   const sessionId = `crit-${randomUUID()}`;
@@ -1230,7 +1257,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         .filter(Boolean)
         .join("; ");
       process.stderr.write(
-        `skill-critique: could not determine the task run's directory (no envelope outDir and no [status] line)${diag ? ` [${diag}]` : ""}.\n` +
+        `critique: could not determine the task run's directory (no envelope outDir and no [status] line)${diag ? ` [${diag}]` : ""}.\n` +
           `--- task stdout ---\n${task.stdout}\n--- task stderr (tail) ---\n${task.stderr.slice(-4000)}\n`,
       );
       process.exit(EXIT_INSTRUMENT_FAILURE);
@@ -1444,6 +1471,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedEffectiveFidelity,
       gradedBaseline,
       costUsd,
+      gradedSkill: gradedSkillName,
       skillInvocationObserved,
       gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
@@ -1478,7 +1506,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // false in practice even after the other three were routed.
     if (state.infraFailure || state.evaluatorError) process.exit(EXIT_INSTRUMENT_FAILURE);
   } catch (e) {
-    process.stderr.write(`skill-critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
+    process.stderr.write(`critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
     process.exit(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
   }
   // FINDINGS never gate: any classification — including a task run that ERRORED, which is itself a

@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.8.0
-  tracks-harness: cowork-harness 1.8.0 (baseline desktop-1.24012.1)
+  version: 1.9.0
+  tracks-harness: cowork-harness 1.9.0 (baseline desktop-1.24012.1)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.8.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.9.0` (baseline
 > `desktop-1.24012.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,16 +39,28 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.8.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.8.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.8.0"`. **Pin `@>=1.8.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.9.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.9.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.9.0"`. **Pin `@>=1.9.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 1.8.0 floor gates, by release:
+  What the ≥ 1.9.0 floor gates, by release:
+
+  - **1.9.0 (critique report schema + shareable, screenshot-safe output):**
+    `schema/critique-report.json` (descriptive, test-pinned — parse the report against it, not prose;
+    NOT §12-frozen while critique is EXPERIMENTAL), `gradedSkill` in the report (text header + JSON;
+    multi-skill pairing key — pair by `(gradedSkillHash, gradedSkill)`, since the hash alone keys the whole
+    plugin and cross-pairs its skills). Critique's text report and stderr diagnostics now **collapse host
+    paths to `~`** (a shared report or screenshot no longer leaks the username + filesystem layout; the JSON
+    report and persisted-artifact paths stay raw for machine consumers), a **missing or non-directory skill
+    folder is refused pre-spawn** (fast exit 2, no stray run dir left behind), and the report header + stderr
+    prefixes now read **`critique:`** (were `skill-critique:`).
 
   - **1.8.0 (critique hardening + hostloop unpin):** `critique --skill <name>` (multi-skill-plugin
     grading — a plugin root with no `--skill` is refused pre-spend; the evidence package gains the
     invoked skill's `agents/<name>.md` + bounded `references/*.md` CONTENT), run-dir artifacts
     (`critique-report.json` always, `critique-evidence-package.txt` when the evaluator ran,
     `critique-salvage.json` on exit 2) + `--out <path>`, per-critique `costUsd` across all four
-    workloads, `findingFingerprint` per item (cross-INPUT clustering; skillHash stays the cross-FIX
+    workloads, `findingFingerprint` per item (cross-INPUT clustering; HIGH-precision
+    LOW-recall — a match proves reproduction, a mismatch does NOT prove non-reproduction, the same
+    finding reworded fingerprints differently; skillHash stays the cross-FIX
     key), gate-answer `--answer` echo in the report, per-item-tolerant evaluator parse
     (`droppedEvaluatorItems`), `skillMdTruncated` (a readable-but-oversized SKILL.md is flagged
     "graded a cut copy" — distinct from missing/unreadable), `subagents[].webSearches` +
@@ -436,7 +448,9 @@ cassette — has its own recipe:
    input + result are captured, not just errored ones. When iterating, tag generations with `--label` and
    pair a critique only with a `result.json` whose `fingerprint.skillHash` **matches** the skill that
    produced it (`inspect`/the run-index row surface a short `skillHash` prefix; `verify-run` warns when a
-   kept run predates the current skill). **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
+   kept run predates the current skill). **Multi-skill plugin caveat (post-1.7.0 CLIs with `--skill`):**
+   skillHash keys the whole MOUNTED plugin, so on a multi-skill plugin the hash alone cross-pairs
+   critiques of DIFFERENT skills — pair by the report's `(gradedSkillHash, gradedSkill)` pair. **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
    pairing step there silently groups on an absent key instead of erroring — check the field is present, or
    require ≥ 1.5.0. See `docs/debugging.md`
    (repo-only) for the full loop.

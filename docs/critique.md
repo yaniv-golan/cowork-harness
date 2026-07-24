@@ -124,7 +124,7 @@ ignored.
 | `--session-id` / `--resume` | critique mints and manages its own session — the reflection turn *is* a resume of it |
 | `--repeat` + companions | fixed two-turn protocol; loop `critique` itself and pair by `fingerprint.skillHash` |
 | `--ablate-skill` | grading a skill you removed is incoherent |
-| `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report |
+| `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report (which already collapses host paths to `~`) |
 
 **Repeating a flag.** `--upload`, `--folder`, `--plugin`, `--marketplace`, `--enable` and `--answer` accumulate,
 so repeating them is how you pass several. Every other value-taking flag is single-valued and repeating it is
@@ -144,8 +144,11 @@ adjudicable". So:
   auto-selects with a notice.
 - **Selection only:** the positional folder is still what both turns mount (session identity is
   unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the *mounted folder*,
-  so it pairs generations per-plugin, not per-skill. Pair per-skill runs by `--label` if you need finer
-  grouping.
+  so it pairs generations per-plugin, not per-skill. **Workflow implication: pairing critiques of a
+  multi-skill plugin by skillHash alone CROSS-PAIRS different skills** — pair by
+  **(`gradedSkillHash`, `gradedSkill`)**; the report's `gradedSkill` field carries the resolved
+  `skills/<name>` (`--skill` or the auto-selection). `--label` remains available for coarser
+  generation tags.
 - The report carries an advisory **`skillInvocationObserved`**: `false` means the graded run's own
   `skillActivity` never mentions the selected skill — the critique may be grading a run that did not
   actually invoke it.
@@ -170,6 +173,12 @@ It does **not** record their contents — see Known limitations.
   evaluator passes.
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
+- **The evaluator passes dominate spend** — on a measured end-to-end (trivial probe, default evaluator)
+  the two evaluator passes were ~3/4 of the total. For a wide batch: calibrate with run 1's `costUsd`
+  (gate on `costUsd.complete` — `false` means the total undercounts), then consider a cheaper
+  `--evaluator-model` for the sweep. Caveat: the armor's injection-resistance is verified for the
+  shipped **default** evaluator model only — changing it voids that specific verification (matters when
+  critiquing skills you did not write).
 - **container** needs Docker/Lima; **hostloop** needs Docker (the bash/web_fetch sidecar) **plus** the
   staged native agent binary, and writes to the real host filesystem — a writable `--folder` there requires
   `--allow-host-writes`. Both tiers need an authenticated `claude` CLI on PATH.
@@ -227,6 +236,14 @@ malformed evaluator items (the surviving findings are then not necessarily the c
 readable-but-oversized SKILL.md is flagged **`skillMdTruncated`** ("the evaluator graded a cut copy") —
 distinct from missing/unreadable, which alone force the mechanical `"already-covered"` downgrade.
 
+**Truncation has a second, sharper consequence than the not-adjudicable steer: DROPPED findings.**
+Citation validation checks each finding's `evidence` excerpt verbatim against the *packaged* (cut)
+copy — so a finding that quotes text past the cut cannot resolve and lands in **DROPPED**, even when
+the quote is a perfectly accurate excerpt of the real file. A skill well over the cap should expect a
+not-adjudicable/DROPPED skew concentrated on its back half; if you see back-half findings in DROPPED
+on a `skillMdTruncated` run, this is why — front-load the operative guidance, split the skill, or
+treat those items as leads to re-check by hand.
+
 ### Run-dir artifacts
 
 Beyond stdout, every critique leaves durable artifacts at the run-dir root (best-effort writes —
@@ -240,6 +257,10 @@ Beyond stdout, every critique leaves durable artifacts at the run-dir root (best
 
 These artifacts (and the report's JSON shape) are part of critique's **EXPERIMENTAL** surface — useful
 and stable in practice, but not yet a frozen SPEC §12 covered surface; field additions are expected.
+The report's field names and shapes are authoritatively described by
+[`schema/critique-report.json`](../schema/critique-report.json) (descriptive + test-pinned against the
+actual builder, unlike the §12-frozen `doctor.json`), so automation consumers — budget pacers gating on
+`costUsd.complete`, harvesters pairing on `gradedSkill` — parse against a schema, not prose.
 
 ## Reproduction — the ≥2-run discipline
 
@@ -258,8 +279,15 @@ Then pair/cluster across the reports:
 - **Same finding across runs/inputs?** cluster by each item's **`findingFingerprint`** (sha over the
   normalized idea + classification + recommendedAction, deliberately excluding the input-specific
   `evidence` excerpt — so the same finding matches across different decks/transcripts).
+- **The fingerprint is high-precision, LOW-RECALL — read the direction correctly.** `idea` is
+  model-authored free text, so the same underlying finding *reworded* across runs fingerprints
+  differently. A **match proves** reproduction; a **mismatch does NOT prove** non-reproduction — before
+  concluding "didn't reproduce", skim the unmatched items for rewordings of the same substance.
 - A finding that recurs across ≥2 runs with the same `findingFingerprint` meets the reproduction bar;
-  a one-off is a lead, not a conclusion.
+  a fingerprint one-off is a lead — possibly a real one-off, possibly a reworded repeat.
+- **Multi-skill plugins: never pair by `gradedSkillHash` alone.** The hash keys the whole mounted
+  plugin, so it cross-pairs critiques of *different* skills in the same plugin — pair by
+  **(`gradedSkillHash`, `gradedSkill`)**; `gradedSkill` is the report's resolved `skills/<name>`.
 - To make the graded runs deterministic across repeats, copy the report's echoed `--answer` lines
   (the graded run's resolved gate answers) into the next invocation.
 
