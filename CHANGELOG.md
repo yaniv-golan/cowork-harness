@@ -66,6 +66,22 @@ All notable changes to this project are documented here. The format is based on
   pipes it with `{ end: false }` and ends+awaits it in the same session-teardown drain that already flushes
   `events.jsonl` / `control-out.jsonl`, so the session generator resolves only after the sink is fully
   flushed — the scrub always sees the complete log.
+- **`critique` no longer prints raw host paths in its report or diagnostics.** The text report's `run dir:`
+  line, the `inspect <dir>` hints, the write-failure diagnostics, and the echoed skill-folder path all
+  printed absolute `$HOME`-rooted paths, so a shared report or screenshot leaked the username + filesystem
+  layout (it landed in a video frame). critique was the one rendering path in the CLI that never called
+  `tildeify`, while `skill`/`run` scrub unconditionally. Every human-facing path is now collapsed to `~`;
+  the JSON report and persisted-artifact paths stay raw (machine data a consumer feeds back to a tool). The
+  `--demo` rejection is unchanged — it was never the fix — but its reason now notes the report already
+  collapses paths.
+- **`critique` fails fast on a missing or non-directory skill folder.** A typo'd/absent positional folder
+  previously minted a session and spawned the task turn before infra-failing (exit 2), leaving a stray run
+  dir behind. `resolveCritiquedSkillDir` now `existsSync`/`isDirectory`-checks the folder up front — before
+  any session is minted or spawned — so a bad path exits 2 immediately with nothing left on disk. A
+  present-but-`SKILL.md`-less folder still defers to the packager's degraded flow, unchanged.
+- **`critique`'s report header and stderr diagnostics now say `critique:` (were `skill-critique:`).** A
+  leftover label from the `scripts/skill-critique.ts` instrument; the invoked command is `critique`.
+  Cosmetic, no schema change.
 
 ## [1.8.0] — 2026-07-23
 
