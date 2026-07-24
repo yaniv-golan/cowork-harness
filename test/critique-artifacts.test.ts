@@ -1,8 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { persistCritiqueArtifacts, sumCostUsd, parseArgs, type CritiqueCost } from "../src/critique/command";
+import {
+  persistCritiqueArtifacts,
+  sumCostUsd,
+  parseArgs,
+  buildTextReport,
+  buildJsonReport,
+  resolveCritiquedSkillDir,
+  type CritiqueCost,
+} from "../src/critique/command";
 import { runCritique } from "../src/critique/evaluator";
 import type { Complete } from "../src/decide/decider";
 
@@ -145,6 +153,55 @@ describe("findingFingerprint (cross-input corroboration key)", () => {
       "pkg",
     );
     expect(items[0].findingFingerprint).toMatch(/^[0-9a-f]{16}$/);
+  });
+});
+
+describe("host-path scrubbing (tildeify) in the human-facing report", () => {
+  it("collapses a $HOME-rooted run dir to ~ in the TEXT report, but leaves the JSON outDir raw", () => {
+    // The text report is screenshot-able (it landed in a video frame); the JSON outDir is machine data a
+    // consumer may feed back to a tool, so it must stay an absolute path. Mutation-tested: dropping the
+    // tildeify() around the run-dir line leaks the absolute $HOME and turns the first assertion red.
+    const home = mkdtempSync(join(tmpdir(), "crit-home-"));
+    const outDir = join(home, "runs", "sess-x");
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const state = { ...STATE_BASE, outDir };
+      const text = buildTextReport(state);
+      expect(text).toContain("run dir: ~/runs/sess-x");
+      expect(text).not.toContain(home); // no absolute home path anywhere in the report
+      expect(buildJsonReport(state).outDir).toBe(outDir); // JSON stays raw/absolute
+    } finally {
+      process.env.HOME = prevHome;
+    }
+  });
+});
+
+describe("report header names the command (critique, not the legacy skill-critique)", () => {
+  it("the text report starts with `critique:` and never says `skill-critique:`", () => {
+    const text = buildTextReport(STATE_BASE);
+    expect(text.startsWith("critique: ")).toBe(true);
+    expect(text).not.toContain("skill-critique:");
+  });
+});
+
+describe("resolveCritiquedSkillDir pre-flight (fail fast, before any session/spawn)", () => {
+  it("throws on a missing folder", () => {
+    expect(() => resolveCritiquedSkillDir(join(tmpdir(), "crit-absent-9f3c1a-does-not-exist"), undefined)).toThrow(
+      /skill folder not found/,
+    );
+  });
+
+  it("throws when the path is a file, not a directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "crit-file-"));
+    const file = join(dir, "SKILL.md");
+    writeFileSync(file, "# a file, not a folder");
+    expect(() => resolveCritiquedSkillDir(file, undefined)).toThrow(/not a directory/);
+  });
+
+  it("a PRESENT dir with no SKILL.md still resolves to { skillDir } — the deferred degraded flow is preserved", () => {
+    const dir = mkdtempSync(join(tmpdir(), "crit-empty-"));
+    expect(resolveCritiquedSkillDir(dir, undefined)).toEqual({ skillDir: dir });
   });
 });
 

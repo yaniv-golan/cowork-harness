@@ -128,7 +128,8 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
     arity: 0,
     critique: {
       kind: "reject",
-      reason: "critique produces its own report; inner-turn rendering flags have no effect on it",
+      reason:
+        "critique produces its own report (host paths in it are already collapsed to ~); inner-turn rendering flags have no effect on it",
     },
   })),
   {

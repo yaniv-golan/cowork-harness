@@ -124,7 +124,7 @@ ignored.
 | `--session-id` / `--resume` | critique mints and manages its own session — the reflection turn *is* a resume of it |
 | `--repeat` + companions | fixed two-turn protocol; loop `critique` itself and pair by `fingerprint.skillHash` |
 | `--ablate-skill` | grading a skill you removed is incoherent |
-| `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report |
+| `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report (which already collapses host paths to `~`) |
 
 **Repeating a flag.** `--upload`, `--folder`, `--plugin`, `--marketplace`, `--enable` and `--answer` accumulate,
 so repeating them is how you pass several. Every other value-taking flag is single-valued and repeating it is
