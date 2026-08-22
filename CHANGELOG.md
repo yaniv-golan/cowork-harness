@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- **[`docs/fidelity-gaps.md`](./docs/fidelity-gaps.md) no longer narrates its own edit history.** Removed a
+  parenthetical describing what a previous draft of the `PostToolUse:WebSearch` note had claimed. A reader
+  arriving fresh has no "before" to contrast against, so being told that a claim absent from the document
+  was wrong costs a parse and says nothing about the harness. The paragraph above it already states current
+  behaviour.
+- **`docs-present-tense` also catches a doc narrating its own revisions.** Its patterns keyed entirely on
+  tense markers (`no longer`, `used to`, `previously`, …), and doc-self-history carries none — "An earlier
+  revision of this section claimed X. That was wrong." passed the guard while being precisely what the
+  guard exists to stop. Three patterns added for that shape; each is covered by a mutation check rather
+  than by matching nothing and being assumed live.
+
 ### Added
 
 - **`lint` warns when `prompt:` names a slash command anywhere but the start** (⚠

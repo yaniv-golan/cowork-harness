@@ -581,9 +581,6 @@ tool result (`src/run/run.ts`), so WebSearch output seeds the set too. The diver
 presence — production uses a structured extractor over the result objects, the harness a regex over the
 rendered text — and `src/hostloop/provenance.ts` documents that trade in its own header.
 
-*(An earlier revision of this section claimed the harness "does not seed it from `WebSearch`", implying a
-behavioural gap. That was wrong — corrected here after tracing the call.)*
-
 **`UserPromptSubmit` — where the slash expansion actually happens.** The agent binary dispatches slash
 commands on stream-json input exactly as it does in the terminal, so a `prompt:` that begins with `/name` is
 expanded here with no hook involved. Measured against agent 2.1.239 in the harness's own spawn shape (`-p

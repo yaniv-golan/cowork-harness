@@ -21,6 +21,13 @@ const HISTORICAL = [
   /\bas of this change\b/i,
   /\bUpdate \(\d{4}-\d{2}-\d{2}\)/,
   /\bnow (writes|shows|holds|lives|means|refuses|includes|carries|emits|is the)\b/i,
+  // A doc narrating its OWN edit history rather than the product's. The tense patterns above cannot see
+  // this shape — "An earlier revision of this section claimed X. That was wrong." contains no tense
+  // marker at all — so it passed the guard while being exactly what the guard exists to stop. A reader
+  // arriving fresh is told that a claim absent from the document they are holding was wrong.
+  /\b(an?|the) (earlier|prior|previous) (revision|version|draft) of (this|the)\b/i,
+  /\bthis (section|paragraph|document|page|file) (once|formerly|originally)\b/i,
+  /\bformerly\b/i,
 ];
 
 /** Occurrences that are NOT product history and must not be "fixed".
