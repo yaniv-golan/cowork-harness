@@ -409,6 +409,67 @@ def _is_positional_choose(choose):
     return any(isinstance(v, str) and (v == "first" or v.isdigit()) for v in vals)
 
 
+# Single-segment absolute paths that legitimately appear in prompt prose. A `/word` from this set is a
+# path, not a slash command, so it never raises the not-leading warning below.
+_SLASH_PATH_WORDS = frozenset(
+    {"outputs", "mnt", "tmp", "home", "users", "var", "etc", "usr", "bin", "dev", "opt", "workspace", "root", "srv"}
+)
+# A `/`-prefixed token at a word start (start-of-string or whitespace), captured WHOLE up to the next
+# space. An opening bracket or quote also counts as a word start, so "(/deck-review)" is seen; `and/or`,
+# `8/22` and `https://x` still cannot match, because their slash follows a letter, digit or colon. The
+# token is then classified in Python rather than by a lookahead: an earlier lookahead-based pattern
+# BACKTRACKED, matching `/mn` inside `/mnt/uploads` because a shorter prefix satisfied the lookahead.
+_SLASH_TOKEN_RE = re.compile(r"""(?:^|[\s(\[{"'])/(\S+)""")
+# What a slash command may look like once trailing sentence punctuation is stripped: a bare name, or a
+# plugin-qualified `plugin:skill`. Anchored, so any residual `/` or `.` disqualifies it as a path/filename.
+_SLASH_CMD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z][A-Za-z0-9_-]*)?$")
+
+
+def _lint_prompt_slash(doc, path):
+    """W: `prompt:` names a slash command somewhere other than position 0.
+
+    The agent binary resolves a slash command only when the TRIMMED prompt starts with `/` — its parser
+    trims, then requires `startsWith("/")` (verified against agent 2.1.239 in the harness's own spawn
+    shape: `-p --input-format stream-json --output-format stream-json --setting-sources user`). A slash
+    named mid-sentence is never expanded. It reaches the model as ordinary prose, and the model may then
+    reach for the `Skill` tool on its own — the model-invocation path, i.e. exactly the unreliable
+    auto-trigger a slash is normally used to bypass. The scenario still runs and can still pass, so the
+    failure mode is a scenario that silently tests something other than what it reads as.
+
+    Deliberately silent when the prompt DOES start with `/`: that is the working case. Registration is not
+    checkable statically (it depends on how the skill is staged), so an unresolvable leading name is left
+    to the run itself, where it shows up as `Unknown command: /x` with `num_turns: 0`.
+    """
+    findings = []
+    prompt = doc.get("prompt")
+    if not isinstance(prompt, str) or prompt.lstrip().startswith("/"):
+        return findings
+    seen = []
+    for m in _SLASH_TOKEN_RE.finditer(prompt):
+        # Trailing sentence punctuation is not part of the name, so "use /deck-review." still counts.
+        name = m.group(1).rstrip(".,;:!?)]}\"'")
+        if not _SLASH_CMD_NAME_RE.match(name):
+            continue  # a path (`/mnt/uploads`), a filename (`/deck.pdf`), or not command-shaped
+        if name.lower() in _SLASH_PATH_WORDS or name in seen:
+            continue
+        seen.append(name)
+    for name in seen:
+        findings.append(
+            Finding(
+                "WARN",
+                "prompt-slash-not-leading",
+                f"`prompt:` names `/{name}` but does not START with it. A slash command is expanded only "
+                "when the trimmed prompt begins with `/`, so here it reaches the model as ordinary prose "
+                "and the skill is NOT preloaded — the model may or may not reach for it on its own, which "
+                "is the auto-trigger path a slash is normally used to bypass.",
+                f'Put the command first — `prompt: "/{name} <args>"` — or drop the slash if the scenario '
+                "means to test auto-triggering from a natural request.",
+                path,
+            )
+        )
+    return findings
+
+
 def lint_doc(doc, path, raw_lines):
     findings = []
     if not isinstance(doc, dict):
@@ -455,6 +516,9 @@ def lint_doc(doc, path, raw_lines):
                     path,
                 )
             )
+
+    # W: a slash command named mid-prompt is never expanded — see _lint_prompt_slash.
+    findings.extend(_lint_prompt_slash(doc, path))
 
     # W: unknown assertion keys inside assert items (e.g. invented file_not_empty, kind, path)
     unknown_assert = sorted(assert_keys - ASSERT_KEYS)

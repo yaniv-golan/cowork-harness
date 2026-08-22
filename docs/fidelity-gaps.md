@@ -570,7 +570,7 @@ Checked one by one, rather than assumed:
 |---|---|
 | `PreToolUse` force-ask | gates `allow_cowork_file_delete` / `request_cowork_directory` / `launch_code_session` / `save_skill` — **none registered by this harness**, so the matcher never fires. Becomes worth serving if `save_skill` is modeled. |
 | `PreToolUse:mcp__.*` | denies *remote* MCP tools; the harness serves none, so nothing to deny. |
-| `UserPromptSubmit` | expands a leading `/slash` command. A scenario `prompt:` is not a slash command, so the hook returns `{}` — exactly what production returns on a non-slash prompt. |
+| `UserPromptSubmit` | layers `additionalContext` **on top of** an expansion the agent binary performs on its own, so the body injection here is identical to production — only Desktop's extra context is missing. See the note below on slash commands in `prompt:`. |
 | `PreToolUse:Skill` | the one genuine blocker: its `additionalContext` is sourced from Desktop's plugin/skill registry, which the harness does not have. Inventing that text would put words in the model's context production never sends — worse than sending none, because it silently changes what the skill under test reacts to. |
 | `PostToolUse:WebSearch` | **already covered by a different path** — see below. |
 
@@ -583,6 +583,25 @@ rendered text — and `src/hostloop/provenance.ts` documents that trade in its o
 
 *(An earlier revision of this section claimed the harness "does not seed it from `WebSearch`", implying a
 behavioural gap. That was wrong — corrected here after tracing the call.)*
+
+**`UserPromptSubmit` — where the slash expansion actually happens.** The agent binary dispatches slash
+commands on stream-json input exactly as it does in the terminal, so a `prompt:` that begins with `/name` is
+expanded here with no hook involved. Measured against agent 2.1.239 in the harness's own spawn shape (`-p
+--input-format stream-json --output-format stream-json --setting-sources user`):
+
+- **A leading `/name` resolves before any model call**, splicing the skill body in as a user message. An
+  unresolved name returns `Unknown command: /x` with `num_turns: 0` and **zero tokens** — the prompt is
+  *not* forwarded to the model as literal text, so the run reads as a silent no-op.
+- **Both staging routes register the name.** `skills.local` copies to `<configDir>/skills/<basename>`
+  (`src/session.ts`), which `--setting-sources user` loads; plugin sources become `--plugin-dir`
+  (`src/runtime/argv.ts`). Skills resolve by their bare frontmatter `name`, not plugin-qualified.
+- **The slash must be at position 0** — the input is trimmed, then must start with `/`. A slash named
+  mid-sentence ("review the deck with /deck-review") is never expanded; it reaches the model as prose, which
+  may then pick the `Skill` tool on its own. That is the model-invocation path, i.e. the auto-trigger a
+  slash is normally used to bypass, so the scenario quietly stops testing what it reads as testing.
+  `lint` reports it as ⚠ `WARN [prompt-slash-not-leading]`.
+
+The gap is therefore the hook's `additionalContext`, not the expansion.
 
 ### What this actually costs you
 

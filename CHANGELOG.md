@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`lint` warns when `prompt:` names a slash command anywhere but the start** (⚠
+  `WARN [prompt-slash-not-leading]`). Writing `/<skill-name>` into a scenario prompt is what an author
+  reaches for when a skill will not auto-trigger, and it works — the harness sends `prompt:` verbatim and the
+  agent expands a **leading** slash before the model is called. Named mid-sentence ("review the deck with
+  `/deck-review`") it is never expanded: the text reaches the model as prose, which may then pick the `Skill`
+  tool on its own — the same auto-trigger path the slash was meant to bypass. The scenario still runs and can
+  still pass, so it silently stops testing what it reads as testing. Paths, URLs, filenames and dates
+  (`/mnt/uploads/x`, `https://…`, `/deck.pdf`, `8/22`) do not trigger it.
+
+### Documentation
+
+- **[`docs/scenario.md`](./docs/scenario.md) — new "Slash commands in `prompt:`" section.** Documents that a
+  slash command must START the prompt; that skills resolve by their bare frontmatter `name:` from either
+  staging route (`skills.local` or a `--plugin-dir` plugin source); that an unregistered name is answered by
+  the **agent**, not the model, ending the run with `Unknown command: /<name>`, `num_turns: 0` and no tokens
+  spent; and that expansion is not enforcement.
+- **[`docs/fidelity-gaps.md`](./docs/fidelity-gaps.md) — corrected the `UserPromptSubmit` rationale.** It
+  previously justified not serving the hook with "a scenario `prompt:` is not a slash command, so the hook
+  returns `{}`" — an assumption about consumer input, not a property of the harness, and one consumers do
+  violate. The gap itself is unchanged and narrower than that framing implied: the agent binary performs the
+  expansion on stream-json input on its own, so the body injection here is identical to production; only
+  Desktop's additional `additionalContext` is missing.
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))

@@ -879,3 +879,72 @@ def test_zero_gate_declaration_switches_the_message_to_drop_it(tmp_path):
     f = _one(RULE, body, tmp_path)
     assert f is not None
     assert "inert" in f.message.lower() or "asserts nothing" in f.message.lower()
+
+
+# --- prompt-slash-not-leading -------------------------------------------------
+# A slash command is expanded only when the TRIMMED prompt starts with `/`; named mid-sentence it reaches
+# the model as prose and the skill is never preloaded. The negative cases are the point of the rule: an
+# earlier lookahead-based pattern backtracked and matched `/mn` inside `/mnt/uploads`.
+
+def _slash_names(prompt):
+    return [
+        f.message.split("`/")[1].split("`")[0]
+        for f in scenario._lint_prompt_slash({"prompt": prompt}, "x")
+    ]
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "/deck-review deck.pdf",  # the working case — leading slash
+        "   /deck-review deck.pdf",  # leading whitespace is trimmed first
+        "Read /mnt/uploads/deck.pdf and summarize",  # a path, not a command
+        "Save the notes to /tmp/scratch.md",  # a path with a filename
+        "Open /deck.pdf",  # a filename
+        "See https://example.com/docs for context",  # a URL
+        "Pick red and/or blue",  # slash mid-word
+        "Due 8/22 at noon",  # a date
+        "Write the report to /outputs",  # a known single-segment path word
+        "hi",  # no slash at all
+    ],
+)
+def test_prompt_slash_quiet(prompt):
+    assert _slash_names(prompt) == []
+
+
+@pytest.mark.parametrize(
+    "prompt,expected",
+    [
+        ("Please use /deck-review on the attached deck.", ["deck-review"]),
+        ("Run /founder-skills:deck-review now", ["founder-skills:deck-review"]),
+        ("Use /deck-review.", ["deck-review"]),  # trailing sentence period is not part of the name
+        ("Wrap it (/deck-review) please", ["deck-review"]),
+        ('Say "/deck-review" first', ["deck-review"]),
+        ("Use /a and /a again", ["a"]),  # deduped
+        ("First /alpha then /beta", ["alpha", "beta"]),
+    ],
+)
+def test_prompt_slash_flagged(prompt, expected):
+    assert _slash_names(prompt) == expected
+
+
+def test_prompt_slash_surfaces_through_lint_file(tmp_path):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        'name: t\nbaseline: latest\nsession: (inline)\nfidelity: container\n'
+        'prompt: "Please use /deck-review on the deck"\n',
+        encoding="utf-8",
+    )
+    found = [x for x in scenario.lint_file(str(f)) if x.rule == "prompt-slash-not-leading"]
+    assert len(found) == 1
+    assert found[0].severity == "WARN"
+
+
+def test_prompt_slash_absent_when_leading(tmp_path):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        'name: t\nbaseline: latest\nsession: (inline)\nfidelity: container\n'
+        'prompt: "/deck-review deck.pdf"\n',
+        encoding="utf-8",
+    )
+    assert [x for x in scenario.lint_file(str(f)) if x.rule == "prompt-slash-not-leading"] == []

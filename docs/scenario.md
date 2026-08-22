@@ -125,6 +125,32 @@ question. Note that a plain `replay` cannot answer it at all — it evaluates th
 cassette (see [What `replay` evaluates](#what-replay-evaluates--the-whole-scenario-frozen)); it does print
 a `::notice::` when the sibling YAML fails to load, but the verdict is unaffected.
 
+### Slash commands in `prompt:` — position matters
+
+Reaching for `/<skill-name>` is what an author does when a skill will not trigger on its own, and it does
+work here: the harness sends `prompt:` verbatim as the user turn, and the agent resolves a slash command
+on that input exactly as it does in the terminal. The skill's `SKILL.md` body is spliced into the
+conversation **before the model is called**, which is what makes the invocation deterministic rather than
+a matter of the model choosing to reach for the `Skill` tool.
+
+Three things decide whether it works:
+
+- **The slash must start the prompt.** The parser trims leading whitespace, then requires the text to begin
+  with `/`. A command named mid-sentence — `Review the deck with /deck-review` — is *not* expanded; it
+  reaches the model as ordinary prose, which may then pick the `Skill` tool on its own. That is the
+  auto-trigger path, so the scenario quietly stops testing what it looks like it tests. `lint` reports this
+  as ⚠ `WARN [prompt-slash-not-leading]`.
+- **The name must be registered.** Skills resolve by their bare frontmatter `name:` (not plugin-qualified),
+  from either staging route — `skills.local` in the session, or a plugin source mounted as `--plugin-dir`.
+  A name that is not registered is answered *by the agent, not the model*: the run ends with result text
+  `Unknown command: /<name>`, `num_turns: 0`, and no tokens spent. If a slash run looks like it did
+  nothing at all, check the result text first — that is this case, not a model that ignored you.
+- **Expansion is not enforcement.** The body lands in context; the model still decides how to follow it.
+  A skill whose `SKILL.md` is a router into `references/` can be expanded and still only partly obeyed.
+
+A skill declaring `user-invocable: false` in its frontmatter refuses the slash path by design and can only
+be reached by the model.
+
 ## Lanes (`lane:`) — which delivery contract the run is held to
 
 Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: **In the
