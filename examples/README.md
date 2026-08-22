@@ -7,12 +7,15 @@ the committed cassettes replay token-free on **every** CI run, fork PRs included
 the workflow (main-repo pushes/PRs) — it's skipped on fork PRs, which never receive the secret.
 See `.github/workflows/ci.yml`.
 
-> **Reading this on npm?** `scenarios/`, `sessions/`, `skills/`, `data/`, `matrices/`,
-> `answer-policies/`, and `probes/` trees described below need a source checkout
-> (`git clone https://github.com/yaniv-golan/cowork-harness`) — from this directory, the npm
-> package ships only this README and `replays/` (the package as a whole ships more — see the
-> what-ships table under
-> [README → Drive it from Claude Code](../README.md#drive-it-from-claude-code-companion-skill)).
+> **Reading this on npm?** The flagship replay works as documented — `replays/`, `scenarios/`,
+> `sessions/`, `skills/` and `data/` all ship, so the zero-token `replay` below runs straight from an
+> install. `matrices/`, `answer-policies/` and `probes/` still need a source checkout
+> (`git clone https://github.com/yaniv-golan/cowork-harness`).
+>
+> One difference to expect: **`replay --strict` reports staleness from an npm install, and that is
+> correct.** The committed cassettes record `fingerprint.mode: "git"` — the file-set boundary of a git
+> work tree — and an extracted tarball is not one. `--strict` treats any staleness as a failure, and "not
+> the boundary I was recorded under" is a real one. The plain command is the documented path.
 
 > These are *examples* of the layout you'd author in your own skill repo. In **your** repo,
 > `scenarios/` + `sessions/` typically live at the root; here they're under `examples/`
