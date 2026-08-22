@@ -598,7 +598,7 @@ expanded here with no hook involved. Measured against agent 2.1.239 in the harne
 - **The slash must be at position 0** — the input is trimmed, then must start with `/`. A slash named
   mid-sentence ("review the deck with /deck-review") is never expanded; it reaches the model as prose, which
   may then pick the `Skill` tool on its own. That is the model-invocation path, i.e. the auto-trigger a
-  slash is normally used to bypass, so the scenario quietly stops testing what it reads as testing.
+  slash normally bypasses, so the scenario quietly stops testing what it reads as testing.
   `lint` reports it as ⚠ `WARN [prompt-slash-not-leading]`.
 
 The gap is therefore the hook's `additionalContext`, not the expansion.
