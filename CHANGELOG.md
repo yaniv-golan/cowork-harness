@@ -11,10 +11,10 @@ All notable changes to this project are documented here. The format is based on
 - **The `sessionFingerprint` field set is now stated completely, and a guard discovers the sites that
   state it.** The hash covers eight session fields; every place that enumerated them named six or fewer.
   `web_fetch` was missing everywhere, `agent_env` was missing everywhere, and `docs/invariants.md`
-  also omitted `skills`. Fourteen enumeration sites existed while the working assumption was three —
-  including four in the retained cassette schemas and two that did not enumerate at all but **denied the
-  fingerprint existed**: `SPEC.md` and `docs/scenario.md` both said the session is "not drift-checked or
-  fingerprinted". `model` genuinely is not hashed; connected folders and plugin/skill/MCP discovery are,
+  also omitted `skills`. Fourteen sites carried the claim while the working assumption was three: **twelve
+  enumerated the set** — four in prose, two in the current cassette schema, six in the retained v9-v11
+  schemas — and **two denied it existed at all**. `SPEC.md` and `docs/scenario.md` both said the session
+  is "not drift-checked or fingerprinted". `model` genuinely is not hashed; connected folders and plugin/skill/MCP discovery are,
   which is the half a reader would have trusted.
 
   The `verify-cassettes` staleness message — the only enumeration a user ever sees — omitted `projects`,
