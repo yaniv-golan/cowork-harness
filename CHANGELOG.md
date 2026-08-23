@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **The copy-pasteable Action steps now pin `version: "^2"`, and a guard requires it.** Bounding every
+  published npm floor last release fixed the *form* of a floor (`>=1.11.0` reads as a bound and silently
+  means "and every future major too") but removed the input from the recipes rather than correcting it —
+  so the shipped snippets carried no `version:` at all and fell back to the input's `latest` default. That
+  reproduced the exact footgun `action.yml`'s own description warns about two lines earlier: a CLI major
+  reaches a workflow the moment it is promoted, even though the `uses:` ref never changed.
+
+  `^2` was not among the alternatives weighed at the time, and it is the form `action.yml` itself
+  recommends: it holds the major, needs no patch number to remember, and only wants a human decision at
+  the next major bump. **Five** steps were unpinned, not the three in the CI recipe — `README.md` carries
+  two more.
+
+  `action-docs-sync` now requires every copy-pasteable step (a `uses:` line inside a fenced block with a
+  `with:`) to pin `^<package major>`; inline prose mentions are excluded, since there is nothing to pin.
+  Verified by mutation: dropping one `version:`, regressing a pin to `^1`, and bumping the package major
+  each fail. The guard also asserts it found the steps at all, because a parser that matches nothing
+  passes every assertion after it. Guarding a floor's FORM does not guarantee a floor is PRESENT — this
+  pins the behaviour instead.
+
 - **The `sessionFingerprint` field set is now stated completely, and a guard discovers the sites that
   state it.** The hash covers eight session fields; every place that enumerated them named six or fewer.
   `web_fetch` was missing everywhere, `agent_env` was missing everywhere, and `docs/invariants.md`

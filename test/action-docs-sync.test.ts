@@ -151,3 +151,43 @@ describe("Action docs: `with:` blocks match action.yml's inputs and command enum
     });
   }
 });
+
+// Every copy-pasteable Action step must PIN the CLI major via `version: "^<major>"`.
+//
+// The `version` input defaults to `latest`, so a step that omits it takes a CLI major the moment one is
+// promoted — even though its `uses:` ref never changed. A release that bounded every published npm floor
+// still shipped recipes with no `version:` at all, which left the one remaining unbounded form in the
+// copy-paste path. Guarding the FORM of a floor (no bare `>=`) does not guarantee a floor is PRESENT;
+// this pins the behaviour instead.
+//
+// A consumer reading these snippets copies them verbatim, so "the prose explains `^2` further down" is
+// not sufficient — the snippet is the artifact.
+describe("copy-pasteable Action steps pin the CLI major", () => {
+  const major = JSON.parse(readFileSync(resolve("package.json"), "utf8")).version.split(".")[0];
+
+  /** Steps = a `uses:` line inside a fenced block, i.e. YAML a reader copies. An inline prose mention
+   *  (backticked, no `with:` block) is excluded: there is nothing to pin. */
+  const steps = DOC_FILES.flatMap((f) => {
+    const lines = readFileSync(resolve(f), "utf8").split("\n");
+    return lines.flatMap((l, i) => {
+      if (!l.includes("uses: yaniv-golan/cowork-harness@") || l.includes("`")) return [];
+      const block: string[] = [];
+      for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
+        const s = lines[j];
+        if (s.trim() === "" || s.trim().startsWith("```") || /^\s*-\s+(uses|name):/.test(s)) break;
+        block.push(s);
+      }
+      return block.some((b) => b.trim().startsWith("with:")) ? [{ file: f, line: i + 1, block }] : [];
+    });
+  });
+
+  it("found the steps (a parser that matches nothing would pass every assertion below)", () => {
+    expect(steps.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each(steps.map((s) => [`${s.file}:${s.line}`, s] as const))('%s pins version: "^%s"', (_label, s) => {
+    const v = s.block.find((b) => b.trim().startsWith("version:"));
+    expect(v, `no \`version:\` input — it would default to \`latest\` and take a CLI major unasked`).toBeTruthy();
+    expect(v!.trim(), `must hold the current major`).toMatch(new RegExp(`^version:\\s*"\\^${major}"`));
+  });
+});

@@ -735,6 +735,7 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
   with:
     command: replay              # replay | lint | lint-skill | analyze-skill | verify-cassettes | run
     path: cassettes/my-skill.cassette.json
+    version: "^2"                # hold the CLI major; the input defaults to `latest`
 ```
 
 | Lane | Commands | Runner requirements | What you get |
@@ -763,10 +764,11 @@ jobs:
         with:
           command: run
           path: scenarios/
+          version: "^2"
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@^2.0.1` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — the recipes above pin `^2` instead, because leaving it at `latest` takes a CLI major the moment it is promoted even though your `uses:` ref never changed; pin an exact version for byte-reproducible CI. The companion skill's `cowork-harness@^2.0.1` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
 
 The provided [GitHub Actions workflow](https://github.com/yaniv-golan/cowork-harness/blob/main/.github/workflows/ci.yml) runs a **nine-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `floor`, `action-self-test`, `python`, `image-recipe`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 

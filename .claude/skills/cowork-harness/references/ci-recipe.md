@@ -10,10 +10,14 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
   with:
     command: replay
     path: cassettes/
+    version: "^2"              # hold the major; see below
 ```
 
-The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "2.0.1"`) for reproducible CI.
+**These recipes pin `version: "^2"`.** The Action's `version` input *defaults* to `latest`, which means a
+CLI major reaches your workflow the moment it is promoted even though your `uses:` ref never changed — so a
+copy-pasted recipe that omits the input takes a major bump with no say in it. `^2` holds the major, needs no
+patch number to remember, and only wants a human decision at the next major. Pin an exact version
+(e.g. `version: "2.0.1"`) instead when you want byte-reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -47,6 +51,7 @@ jobs:
         with:
           command: run
           path: scenarios/
+          version: "^2"
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
@@ -118,13 +123,15 @@ you have a reason:
   with:
     command: lint
     path: scenarios/
-    extra-args: --min-severity WARN     # needs a CLI >= 1.11.0; `latest` satisfies that
+    version: "^2"                       # holds the major
+    extra-args: --min-severity WARN     # needs a CLI >= 1.11.0; any 2.x satisfies that
 ```
 
 **If a flag you pass in `extra-args` landed in a specific release, bound the range — don't write a bare
 floor.** `>=1.11.0` reads as "at least 1.11.0" and silently means "and every future major too", so a
 recipe written that way hands a copy-paster the next major with no say in it. Anchor it at the current
-major instead — `version: "^2"` — which keeps the floor's intent and stops at the major boundary. An exact
+major instead — `version: "^2"`, which is what the steps above use — keeping the floor's intent while
+stopping at the major boundary. An exact
 pin (`version: "2.0.1"`) is the right choice when you want byte-reproducible CI, at the cost of rotting the
 moment a recipe adopts a newer flag.
 
