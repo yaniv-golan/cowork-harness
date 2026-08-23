@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Redaction pattern ORDER is load-bearing, and now says so — plus a warning when it is wrong.** Patterns
+  apply in sequence over the accumulating output, so a bare catch-all placed ahead of a lookahead-anchored
+  rule for the same prefix matches first and eats the `/mnt/` tail the lookahead exists to preserve. The
+  shipped policy depends on that order: with it, a run-dir path redacts to
+  `[REDACTED:local-path:…]/mnt/outputs/report.md` and still resolves; without it the whole path is consumed
+  and `normalizeHostShapedForReplay` returns `null` — **every `computer://` structural-marker resolution
+  silently stops working, with no error and no finding.**
+
+  `loadRedactionPolicy` now warns, naming both pattern indices, when a policy is in the hazardous order.
+  Detection is deliberately conservative — it fires only when a later pattern's source is exactly an
+  earlier one's plus a trailing lookahead (modulo lazy quantifiers) — because regex subsumption is
+  undecidable in general and a false positive would train authors to ignore the warning.
+
+  `docs/cassette.md` states the requirement next to the existing "stop before `/mnt/`" guidance, which had
+  the shape of the rule but not the ordering half. The new test pins the runtime consequence, not just the
+  detector: a reorder must make the link fail to normalize AND be flagged, so the syntactic check cannot
+  drift away from what it is standing in for.
+
 - **The copy-pasteable Action steps now pin `version: "^2"`, and a guard requires it.** Bounding every
   published npm floor last release fixed the *form* of a floor (`>=1.11.0` reads as a bound and silently
   means "and every future major too") but removed the input from the recipes rather than correcting it —

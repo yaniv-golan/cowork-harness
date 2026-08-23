@@ -965,7 +965,12 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   eats a link's closing delimiter destroys the link, and `computer_links_resolve` would then pass
   **vacuously** on replay). Write path patterns to redact only the machine-specific prefix (stop before
   `/mnt/`) and exclude `)`/`]`/backtick from their character classes — see this repo's `.cowork-redact.json`.
-  `--no-redact` skips it for known-synthetic inputs.
+  **Pattern ORDER matters, and it is not cosmetic.** Patterns apply in sequence over the accumulating
+  output, so a bare catch-all placed ahead of a lookahead-anchored rule for the same prefix matches first
+  and eats the `/mnt/` tail the lookahead exists to preserve — after which every `computer://` link stops
+  resolving on replay, with no error and no finding. Keep the `(?=/mnt/)`-anchored rules **before** the bare
+  ones, as the shipped policy does. Loading a policy in the hazardous order prints a warning naming both
+  pattern indices. `--no-redact` skips redaction for known-synthetic inputs.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
   bare-`domain` + `path` + `machine-inventory`) runs over the **whole cassette** — the deliverable (`outputs/`

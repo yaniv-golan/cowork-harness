@@ -41,6 +41,35 @@ function csv(v: string | undefined): string[] {
     .filter(Boolean);
 }
 
+/** Pattern ORDER is load-bearing, and nothing used to say so.
+ *
+ *  `redactText` applies patterns sequentially over the ACCUMULATING output, so an earlier pattern can eat
+ *  the very text a later pattern's lookahead exists to preserve. The shipped policy relies on this: the
+ *  `(?=/mnt/)`-anchored rules are ordered ahead of the bare catch-alls precisely so a run-dir path redacts
+ *  to `[REDACTED:…]/mnt/outputs/f.md` and still resolves. Reverse them and the whole path is eaten:
+ *
+ *    as shipped -> [REDACTED:local-path:…]/mnt/outputs/report.md   -> normalizes to `outputs/report.md`
+ *    reordered  -> [REDACTED:local-path:…]                         -> normalizes to `null`
+ *
+ *  i.e. every `computer_links` structural-marker resolution silently stops working — no error, no finding,
+ *  just links that no longer resolve on replay. This detects the one shape that causes it: a bare pattern
+ *  ordered ahead of an otherwise-identical lookahead-anchored one.
+ *
+ *  Deliberately CONSERVATIVE — regex subsumption is undecidable in general, so this fires only when a
+ *  later pattern's source is exactly an earlier one's plus a trailing lookahead (modulo lazy quantifiers).
+ *  A miss is a missed warning; a false positive would train authors to ignore it. */
+export function findShadowedPatterns(sources: string[]): { shadowed: number; by: number; base: string }[] {
+  const norm = (r: string) => r.replace(/\+\?/g, "+").replace(/\*\?/g, "*");
+  const out: { shadowed: number; by: number; base: string }[] = [];
+  for (let j = 0; j < sources.length; j++) {
+    const m = /^(.*?)(\(\?=[^()]*\))$/.exec(sources[j]);
+    if (!m) continue; // no trailing lookahead -> nothing to shadow
+    const base = norm(m[1]);
+    for (let i = 0; i < j; i++) if (norm(sources[i]) === base) out.push({ shadowed: j, by: i, base });
+  }
+  return out;
+}
+
 /** Assemble a redaction policy from `.cowork-redact.json` (searched in `searchDirs`, e.g. cwd then the
  *  scenario/cassette dir) merged with `COWORK_HARNESS_REDACT_PATTERNS`/`_KEYS`. No config + no env →
  *  an empty policy (the opt-in default; the scanner is the always-on safety net). A malformed regex
@@ -64,6 +93,12 @@ export function loadRedactionPolicy(searchDirs: string[]): RedactionPolicy {
   }
   for (const src of csv(process.env.COWORK_HARNESS_REDACT_PATTERNS)) patterns.push({ re: new RegExp(src, "g"), label: "redacted" });
   for (const k of csv(process.env.COWORK_HARNESS_REDACT_KEYS)) keyNames.push(k);
+  for (const { shadowed, by, base } of findShadowedPatterns(patterns.map((p) => p.re.source)))
+    process.stderr.write(
+      `cowork-harness: WARNING .cowork-redact.json pattern [${by}] (\`${base}\`) is ordered ahead of the ` +
+        `lookahead-anchored pattern [${shadowed}], so it matches first and eats the text that lookahead ` +
+        `preserves. Move [${shadowed}] before [${by}], or computer:// links will stop resolving on replay.\n`,
+    );
   return { patterns, keyNames };
 }
 
