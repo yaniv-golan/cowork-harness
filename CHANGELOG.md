@@ -8,6 +8,32 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **The `sessionFingerprint` field set is now stated completely, and a guard discovers the sites that
+  state it.** The hash covers eight session fields; every place that enumerated them named six or fewer.
+  `web_fetch` was missing everywhere, `agent_env` was missing everywhere, and `docs/invariants.md`
+  also omitted `skills`. Fourteen enumeration sites existed while the working assumption was three —
+  including four in the retained cassette schemas and two that did not enumerate at all but **denied the
+  fingerprint existed**: `SPEC.md` and `docs/scenario.md` both said the session is "not drift-checked or
+  fingerprinted". `model` genuinely is not hashed; connected folders and plugin/skill/MCP discovery are,
+  which is the half a reader would have trusted.
+
+  The `verify-cassettes` staleness message — the only enumeration a user ever sees — omitted `projects`,
+  and `docs/cassette.md` quoted it with `projects` present. Both are fixed and now pinned to each other
+  by test, so the doc cannot drift from the string again.
+
+  New **invariant 14** in `check:versions` derives the field set from `buildSessionFingerprint`'s shape
+  and **discovers** the enumeration sites rather than reading a list, so a new one is covered the day it
+  lands. Two deliberate limitations are recorded as tests rather than left to look covered: it cannot see
+  a flat denial (there is no enumeration to check — the coverage floor is what notices), and it cannot
+  see a deleted "only when set" qualifier. `schema/cassette.v{9,10,11}.json` are allowlisted as frozen
+  history: a retained schema documents the format as it shipped, and rewriting its description would make
+  it describe a shape its own consumers never saw.
+
+  Verified by mutation: run against the previous revision the guard flags all six then-existing sites
+  with the correct missing fields; renaming the shape literal makes it error rather than silently pass;
+  a ninth field invalidates a previously-complete site; and a whole-file token check — which would have
+  passed today and then never failed again — is rejected in favour of span-scoped matching.
+
 - **The documented Action ref is now `@v2`, not `@main`** — 7 references across `README.md`,
   `SKILL.md` and `ci-recipe.md`. `@main` was right when it was written: no alias tag had ever been
   published, so naming one would have sent a copy-pasting reader to a `uses:` that 404s, and the guard's

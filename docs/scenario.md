@@ -803,10 +803,13 @@ paid re-record" loop. Because re-asserting against frozen events is only sound i
 corresponds to the scenario, this path is safe by construction:
 - **Recording-shaping drift hard-fails** — if `prompt`, `answers`, `baseline`, `fidelity`, `lane`, `skills`,
   or `requires_capabilities` differ from the recording, replay refuses (re-record instead).
-- **The `session` is NOT verified** — it's excluded from the drift check (stored relative in the cassette,
-  resolves absolute on disk) and is **not fingerprinted**, so a change to the **model**, data mounts, or
-  discovery in the session between record and re-assert is **undetected**. The notice says so; re-record if the
-  session changed. (Skill *content* under the session IS guarded — next bullet.)
+- **The `session` is not verified on the replay path** — it's excluded from the drift check (stored
+  relative in the cassette, resolves absolute on disk), so a session change between record and re-assert
+  does not move the **replay** verdict. The notice says so; re-record if the session changed. It *is*
+  fingerprinted, and `verify-cassettes` checks that hash: `sessionFingerprint` covers connected
+  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects` and `agent_env` when set. The
+  **model** is in neither, so a model swap is undetected everywhere. (Skill *content* under the session
+  IS guarded — next bullet.)
 - **Skill-content staleness hard-fails** on this path (it implies `--fail-on-skill-drift`), so an edited assert
   can't green against a skill that no longer produces the frozen events.
 - **Sourcing ≠ evaluation:** `expect_denied` and the filesystem/egress keys are read from the on-disk block but

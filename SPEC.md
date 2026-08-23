@@ -485,9 +485,11 @@ token-free assertion-iteration loop. That path is safe by construction: it **har
 drift (`prompt` / `baseline` / `fidelity` / `answers` / `skills` / `requires_capabilities`) and, when a skill
 fingerprint was recorded, on skill-content staleness (it implies `--fail-on-skill-drift`). `expect_denied` and
 the filesystem/egress keys are sourced from on-disk but remain live-only (sourced ≠ evaluated; replay warns on
-such an edit). The `session` (model / data mounts / discovery) is **not** drift-checked or fingerprinted, so a
-model/mount change between record and re-assert is undetected — the notice states this; re-record if the
-session changed.
+such an edit). The `session` is **not drift-checked on the replay path**, so a session change between record and
+re-assert does not move the replay verdict — the notice states this; re-record if the session changed.
+It *is* fingerprinted, but only `verify-cassettes` checks that hash (§11.1): `sessionFingerprint`
+covers the session's connected `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects`
+and `agent_env` when set. `model` is covered by neither, so a model swap is undetected everywhere.
 
 **`replay_protocol_fidelity` (O7 guard):** after the run, `replay` re-serializes each decision
 response via `serializeDecision` and compares to the frozen `controlOut` envelope (canonical

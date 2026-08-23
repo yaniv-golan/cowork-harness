@@ -290,6 +290,108 @@ export function checkDesignScopeNote(opts: {
  *  the rule.
  *
  *  Pure (no disk access) so every branch can be mutation-tested; `checkVersions` supplies the real inputs. */
+/** Session-shape fingerprint field claims (invariant 14).
+ *
+ *  The field set has ONE source of truth — `buildSessionFingerprint`'s `shape` literal in
+ *  `src/run/cassette.ts` — and is re-stated in prose across the shipped corpus. Every re-statement is a
+ *  staleness site, and hand-fixing them has already failed twice: one pass added a field to a single site
+ *  and left it missing from the others, and a later audit of that same line still missed two more fields.
+ *  So the sites are DISCOVERED, not listed. A new enumeration in a new doc is covered the day it lands.
+ *
+ *  A site is a span that (a) names the fingerprint via one of `MARKERS` and (b) contains the anchor token
+ *  `folders`, which every enumeration states first. The span is the marker line plus its continuation
+ *  lines — deliberately NOT the whole file: a file-scoped token check passes the moment an unrelated
+ *  mention of a field name lands anywhere in the file, and would then never fail again.
+ *
+ *  Token matching is strict and case-sensitive against the canonical key names, so the corpus must use
+ *  them verbatim. That is the point: the alternative is a singular/plural/case normalization loose
+ *  enough that a wrong enumeration still satisfies it. */
+const FP_MARKERS = /sessionFingerprint|session-SHAPE|session-shape|content-relevant SHAPE|content-SHAPE/;
+
+/** Paths whose enumeration is deliberately frozen, each with the reason it is exempt. A retained
+ *  historical schema documents the format as it stood at that version; rewriting its description would
+ *  make it describe a shape its own consumers never saw. */
+const FP_FROZEN: Record<string, string> = {
+  "schema/cassette.v9.json": "retained historical schema — describes the v9 shape as shipped",
+  "schema/cassette.v10.json": "retained historical schema — describes the v10 shape as shipped",
+  "schema/cassette.v11.json": "retained historical schema — describes the v11 shape as shipped",
+};
+
+/** Extract the fingerprint shape's top-level keys from source text. Reads the text rather than importing
+ *  `src/run/cassette.ts`: that module is large with side-effectful imports, and this script must stay
+ *  runnable before a build (same rationale as the cassette-version constants). Parse-or-error, never
+ *  parse-and-pass — a regex that stops matching must fail loudly, not silently approve every site. */
+export function fingerprintShapeKeys(cassetteSrc: string): { keys: string[]; error?: string } {
+  const start = cassetteSrc.indexOf("const shape = {");
+  if (start < 0) return { keys: [], error: "could not find `const shape = {` in src/run/cassette.ts" };
+  const end = cassetteSrc.indexOf("\n  };", start);
+  if (end < 0) return { keys: [], error: "could not find the end of the `shape` literal in src/run/cassette.ts" };
+  const block = cassetteSrc.slice(start, end);
+  const literal = [...block.matchAll(/^    ([a-z_]+):/gm)].map((m) => m[1]);
+  const spread = [...block.matchAll(/\?\s*\{\s*([a-z_]+):/g)].map((m) => m[1]);
+  const keys = [...new Set([...literal, ...spread])].sort();
+  if (keys.length < 6)
+    return {
+      keys,
+      error: `extracted only ${keys.length} keys (${keys.join(",")}) from the \`shape\` literal — the extractor is broken, not the docs`,
+    };
+  return { keys };
+}
+
+export function checkFingerprintFieldClaims(opts: {
+  keys: string[];
+  corpus: { path: string; text: string }[];
+  frozen?: Record<string, string>;
+  /** Floor on how many sites the pattern must find. Meaningful only against the whole corpus (a unit case
+   *  legitimately supplies prose with no enumeration), and set by the `check:versions` caller. Guards
+   *  against SILENT EROSION: if a reword stops matching the pattern, the site drops out of coverage and
+   *  everything still reads green. Raise this when a site is deliberately added. */
+  minSites?: number;
+}): string[] {
+  const errors: string[] = [];
+  const { keys, corpus } = opts;
+  const frozen = opts.frozen ?? FP_FROZEN;
+  let sites = 0;
+  for (const { path, text } of corpus) {
+    if (frozen[path]) continue;
+    const lines = text.split("\n");
+    let coveredThrough = -1;
+    for (let i = 0; i < lines.length; i++) {
+      // Anchor on the ENUMERATION, not the marker: `folders` is the field every enumeration states, and
+      // anchoring here keeps the checked span to the text that does the enumerating. Anchoring on the
+      // marker instead forces a forward walk to find the fields, and that walk is what silently turns
+      // into a whole-file check (in JSON no line is blank or starts with a list marker, so it runs to
+      // end-of-file and then passes forever).
+      if (!/\bfolders\b/.test(lines[i]) || i <= coveredThrough) continue;
+      // A marker on the line, or just above it — a JSON key can sit above its own `description`.
+      if (!lines.slice(Math.max(0, i - 2), i + 1).some((l) => FP_MARKERS.test(l))) continue;
+      let span = lines[i];
+      // Prose wraps; JSON does not. The cap bounds a paragraph walk so tokens from an unrelated sentence
+      // cannot satisfy the check.
+      if (!path.endsWith(".json"))
+        for (let j = i + 1; j < lines.length && j - i <= 8; j++) {
+          const l = lines[j];
+          if (l.trim() === "" || /^\s*([-*+]\s|#{1,6}\s|\|)/.test(l)) break;
+          span += "\n" + l;
+          coveredThrough = j;
+        }
+      sites++;
+      const missing = keys.filter((k) => !new RegExp(`\\b${k}\\b`).test(span));
+      if (missing.length)
+        errors.push(
+          `${path}:${i + 1} enumerates the sessionFingerprint field set but omits ${missing.map((m) => `\`${m}\``).join(", ")} ` +
+            `— the shape in src/run/cassette.ts has ${keys.join(", ")}. Add the missing field(s), or add the path to FP_FROZEN with a reason.`,
+        );
+    }
+  }
+  if (opts.minSites !== undefined && sites < opts.minSites)
+    errors.push(
+      `checkFingerprintFieldClaims found ${sites} enumeration sites, expected at least ${opts.minSites} — a reword has ` +
+        `dropped a site out of coverage (or one was removed on purpose, in which case lower the floor deliberately)`,
+    );
+  return errors;
+}
+
 export function checkCassetteVersionClaims(opts: {
   current: number;
   minSupported: number;
@@ -660,6 +762,25 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
       docs: shippedDocs(),
     }),
   );
+
+  // 14. sessionFingerprint field claims (see `checkFingerprintFieldClaims`). The corpus is the shipped
+  //     markdown plus the cassette schemas, whose `description` strings enumerate the same field set.
+  const fpShape = fingerprintShapeKeys(cassetteSrc);
+  if (fpShape.error) errors.push(fpShape.error);
+  else
+    errors.push(
+      ...checkFingerprintFieldClaims({
+        keys: fpShape.keys,
+        corpus: [
+          ...shippedDocs(),
+          ...readdirSync(join(REPO_ROOT, "schema"))
+            .filter((f) => /^cassette\.v\d+\.json$/.test(f))
+            .map((f) => ({ path: `schema/${f}`, text: r(`schema/${f}`) })),
+        ],
+        // 6 prose sites + 2 in schema/cassette.v12.json; v9-v11 are frozen history (see FP_FROZEN).
+        minSites: 8,
+      }),
+    );
 
   return {
     ok: errors.length === 0,

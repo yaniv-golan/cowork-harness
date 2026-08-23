@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildSessionFingerprint, sessionFingerprintDrift, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
@@ -346,5 +346,22 @@ describe("sessionFingerprintDrift — a pre-`projects` recording is UNVERIFIABLE
     const fp = buildSessionFingerprint("s.yaml", d)!;
     const r = sessionFingerprintDrift({ sessionFingerprint: fp, scenario: { session: "s.yaml" } as Cassette["scenario"] }, d);
     expect(r).toEqual({ drifted: false });
+  });
+});
+
+describe("the staleness message and the doc that quotes it", () => {
+  /**
+   * `docs/cassette.md` quotes this message verbatim, and the two had drifted: the doc listed `projects`
+   * while the message did not, so the most user-visible enumeration of the fingerprint's field set was
+   * wrong in one place and misquoted in the other. Human-readable text is explicitly NOT a compatibility
+   * surface (SPEC §12), so this pins the doc to the code for the repo's own sake — not as a contract.
+   */
+  it("docs/cassette.md quotes the message the code actually emits", () => {
+    const flat = (s: string) => s.replace(/\s+/g, " ");
+    const src = readFileSync(join(process.cwd(), "src/run/cassette.ts"), "utf8");
+    const msg = /"(session-shape fingerprint differs[^"]*)"/.exec(src)?.[1];
+    expect(msg, "the staleness message moved or was reworded — update this extractor").toBeTruthy();
+    const doc = flat(readFileSync(join(process.cwd(), "docs/cassette.md"), "utf8"));
+    expect(doc).toContain(flat(msg!));
   });
 });

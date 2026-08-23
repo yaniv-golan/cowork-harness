@@ -5729,7 +5729,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia, vcSessionOverride);
       if (sfd.drifted)
         staleness.push(
-          "session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress config changed since record) — re-record",
+          "session-shape fingerprint differs from the current session file (connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects and agent_env are hashed only when set) — re-record",
         );
       if (sfd.note) notes.push(sfd.note);
     }
