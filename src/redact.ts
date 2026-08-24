@@ -62,10 +62,20 @@ export function findShadowedPatterns(sources: string[]): { shadowed: number; by:
   const norm = (r: string) => r.replace(/\+\?/g, "+").replace(/\*\?/g, "*");
   const out: { shadowed: number; by: number; base: string }[] = [];
   for (let j = 0; j < sources.length; j++) {
-    const m = /^(.*?)(\(\?=[^()]*\))$/.exec(sources[j]);
-    if (!m) continue; // no trailing lookahead -> nothing to shadow
-    const base = norm(m[1]);
-    for (let i = 0; i < j; i++) if (norm(sources[i]) === base) out.push({ shadowed: j, by: i, base });
+    const b = norm(sources[j]);
+    for (let i = 0; i < j; i++) {
+      const a = norm(sources[i]);
+      if (!b.startsWith(a)) continue;
+      // The remainder must be exactly a trailing lookahead. Checked by SHAPE, never by parsing the
+      // lookahead's body: an earlier version matched `\(\?=[^()]*\)`, and the `[^()]*` silently skipped
+      // every lookahead containing a group — so `(?=/mnt(?:/|$|[\s"'\\)\]]))`, the natural way to write
+      // "slash, end, or delimiter" and arguably more correct than a bare `(?=/mnt/)`, went unflagged while
+      // being just as dangerous. Reported against a real third-party policy. Paren-balancing here would
+      // also have to be escape- and char-class-aware (that same policy carries a `\)` inside a class);
+      // not looking inside sidesteps both problems.
+      const rest = b.slice(a.length);
+      if (rest.length > 3 && rest.startsWith("(?=") && rest.endsWith(")")) out.push({ shadowed: j, by: i, base: a });
+    }
   }
   return out;
 }

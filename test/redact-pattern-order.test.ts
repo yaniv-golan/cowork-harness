@@ -75,4 +75,37 @@ describe("findShadowedPatterns", () => {
   it("stays silent when the bases merely overlap rather than match", () => {
     expect(findShadowedPatterns(["/Users/joe/[^/]+", "/Users/[^/]+?(?=/mnt/)"])).toEqual([]);
   });
+
+  /**
+   * REGRESSION — a real third-party policy the first version of this detector missed.
+   *
+   * It matched the lookahead as `\(\?=[^()]*\)`, and that `[^()]*` silently skipped every lookahead
+   * containing a group. `(?=/mnt(?:/|$|[\s"'\\)\]]))` is the natural way to write "slash, end, or
+   * delimiter" — arguably more correct than a bare `(?=/mnt/)`, since it also covers a path ending at
+   * `/mnt` — so the guard missed the shape a careful author is MORE likely to write, and missed it on the
+   * only outside policy available to test against.
+   *
+   * The remainder is now checked by SHAPE, never by parsing the body. That also sidesteps escape- and
+   * char-class-awareness: this same policy carries an escaped `\)` inside a character class, so any
+   * paren-balancing approach would have had to handle it.
+   */
+  const THIRD_PARTY_BARE = "/Users/[^\\s\"'\\\\)\\]`]+";
+  const THIRD_PARTY_LOOKAHEAD = "/Users/[^\\s\"'\\\\)\\]`]+?(?=/mnt(?:/|$|[\\s\"'\\\\)\\]]))";
+
+  it("flags a nested-group lookahead (the case the first version missed)", () => {
+    const f = findShadowedPatterns([THIRD_PARTY_BARE, THIRD_PARTY_LOOKAHEAD]);
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ shadowed: 1, by: 0 });
+  });
+
+  it("stays silent on that same policy in its SAFE order", () => {
+    expect(findShadowedPatterns([THIRD_PARTY_LOOKAHEAD, THIRD_PARTY_BARE])).toEqual([]);
+  });
+
+  it("the nested-group case is genuinely dangerous, not just detectable", () => {
+    const mk = (rs: string[]) => ({ patterns: rs.map((r) => ({ re: new RegExp(r, "g"), label: "local-path" })), keyNames: [] });
+    const link = "/Users/joe/.cowork-harness/runs/r1/work/session/mnt/outputs/report.md";
+    expect(redactText(link, mk([THIRD_PARTY_LOOKAHEAD, THIRD_PARTY_BARE]) as never)).toContain("/mnt/outputs/report.md");
+    expect(redactText(link, mk([THIRD_PARTY_BARE, THIRD_PARTY_LOOKAHEAD]) as never)).not.toContain("/mnt/");
+  });
 });

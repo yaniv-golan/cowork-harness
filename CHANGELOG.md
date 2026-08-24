@@ -21,6 +21,13 @@ All notable changes to this project are documented here. The format is based on
   earlier one's plus a trailing lookahead (modulo lazy quantifiers) — because regex subsumption is
   undecidable in general and a false positive would train authors to ignore the warning.
 
+  The remainder is matched by **shape**, never by parsing the lookahead's body. A first cut used
+  `\(\?=[^()]*\)`, whose `[^()]*` silently skipped every lookahead containing a group — so
+  `(?=/mnt(?:/|$|[\s"'\\)\]]))`, the natural way to write "slash, end, or delimiter" and arguably more
+  correct than a bare `(?=/mnt/)`, went unflagged while being just as dangerous. Caught by a consumer
+  running it against their own policy, which is now a regression fixture. Not looking inside also sidesteps
+  escape- and char-class-awareness, since that policy carries an escaped `\)` inside a character class.
+
   `docs/cassette.md` states the requirement next to the existing "stop before `/mnt/`" guidance, which had
   the shape of the rule but not the ordering half. The new test pins the runtime consequence, not just the
   detector: a reorder must make the link fail to normalize AND be flagged, so the syntactic check cannot
