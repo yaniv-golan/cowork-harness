@@ -358,7 +358,11 @@ Exceptions worth knowing:
 
 - the `boundary-check` **command**'s own probe failures follow the assertion convention and exit `1` (see SPEC.md §11);
 - `verify-cassettes` reuses exit `3` with a different meaning — "could not verify" (vs. a verified failure's `1`); see the command table;
-- exit `4` is reserved on the `run`/`skill` family (SPEC §11).
+- `rehash` uses **exit `4` for PARTIAL success** — some cassettes migrated, some could not. That and a total
+  failure (`1`, nothing migrated) demand opposite responses, so they are separate codes; `0` means all
+  migrated or nothing needed migrating (SPEC §11);
+- exit `4` is otherwise reserved on the `run`/`skill` family, where it is still unused (SPEC §11) — the code
+  space is per-command, so `rehash`'s `4` above does not touch that reservation.
 
 After a run, the footer **echoes every auto-answered
 question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them
