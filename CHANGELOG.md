@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
-## [Unreleased]
+## [2.1.0] — 2026-08-24
 
 ### Changed
 
@@ -153,26 +153,25 @@ All notable changes to this project are documented here. The format is based on
   so that distinction matters more now, not less — it is spelled out in `README.md`'s Action section and in
   `action.yml`'s own input description.
 
-- **The CI recipe no longer pins the Action's `version:` input, and no longer teaches a bare floor.** It
+- **The CI recipe no longer teaches a bare version floor.** It
   carried `version: ">=1.11.0"` — which reads as "at least 1.11.0" and silently means "and every future
   major too", so a copy-paster gets the next major with no say in it. It was **not** broken today
   (`--min-severity` still exists in 2.x, and `lint` reads no cassette, so 2.0.0's hash-format epoch never
   applied to that step) — the defect was latent and in the FORM.
 
-  The pin is dropped rather than corrected. It resolved 2.0.1, exactly as the `latest` default does, so it
-  changed nothing while *looking* like a bound — and the numbered alternatives all rot: `^1.11.0` would
-  have frozen every new copy-paster on 1.25.0, the previous major, and `^2.0.1` needs remembering at each
-  release. The guidance moved to prose instead: if a flag in `extra-args` landed in a specific release,
-  anchor the range at the current major (`^2`), and reach for an exact pin only when you want
-  byte-reproducible CI. [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml)'s own description stops offering `>=1.11.0` and
+  The bare floor was first dropped rather than corrected — `^1.11.0` would have frozen every new
+  copy-paster on the previous major, and `^2.0.1` needs remembering at each release — so the guidance moved
+  to prose. **That went one step too far, and the same release corrects it** (see the `version: "^2"` entry
+  above): dropping the input entirely falls back to `action.yml`'s `latest` default, which is the one
+  remaining unbounded form and the exact footgun the input's own description warns about two lines earlier.
+  `^2` was never among the alternatives weighed at the time, and it is what the recipes now carry. Reach for
+  an exact pin only when you want byte-reproducible CI. [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml)'s own description stops offering `>=1.11.0` and
   `^1.11.0` as interchangeable — they are not, and it had been recommending the unbounded one.
 
   `check:versions` invariant 13 now covers the Action's `version:` input, which it could not see before:
   it keys on `@>=`, and `version: ">=1.11.0"` has no `@` — the same defect in different syntax, with no
   coverage. Only the **unbounded** floor is rejected; verified against each form, `>=1.11.0 <3`, `^2`,
   `2.0.1` and `latest` all pass.
-
-### Fixed
 
 - **`projects[].from` was missing from two places, and the second was a false green.** A connected project
   is a host path exactly like a connected folder, and it was:
@@ -242,6 +241,11 @@ All notable changes to this project are documented here. The format is based on
   every step and was never exposed to the `latest` default at all.
 
 ### Documentation
+
+- **The invariants index said `check-versions.ts` has "no dedicated vitest file — it's a standalone script,
+  not a unit-testable module boundary".** Three exist, for the invariants whose logic is an exported pure
+  function: `check-cassette-version-claims`, `check-fingerprint-field-claims` and
+  `check-design-scope-note`. The claim had already been stale before this release.
 
 - **The `uses:` ref pins the Action; the `version:` input pins the CLI — and only the second one holds a
   major.** Both are documented as if pinning `@v1` bounded what you install. It does not: they move

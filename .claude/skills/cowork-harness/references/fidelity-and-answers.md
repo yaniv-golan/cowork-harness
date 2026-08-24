@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 2.0.1` (baseline `desktop-1.34493.1`).
+Self-contained reference. Tracks `cowork-harness 2.1.0` (baseline `desktop-1.34493.1`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
