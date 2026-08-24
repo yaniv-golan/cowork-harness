@@ -125,26 +125,55 @@ export function batchBudgetTracker(
  *  previously computed and discarded unless it happened to exceed a cap, so the only way to learn what a
  *  batch would cost was to bisect `--max-budget-usd` — reported by a consumer who had to do exactly
  *  that to size a 24-scenario re-record. */
-export function estimateBatchCost(scenarios: string[]): { known: number; unpriced: string[] } {
+export function estimateBatchCost(scenarios: string[]): {
+  known: number;
+  unpriced: string[];
+  /** Total priced runs behind the estimate, and the count for the THINNEST priced scenario. Reported
+   *  because the number alone reads as a bound and is not one: it is a max over whatever this machine
+   *  happens to have run. One prior run on a scenario is a single sample, not a worst case. */
+  pricedRuns: number;
+  thinnest: number | undefined;
+} {
   let known = 0;
+  let pricedRuns = 0;
+  let thinnest: number | undefined;
   const unpriced: string[] = [];
   for (const s of scenarios) {
     const worst = worstObservedCost(s);
-    if (worst === undefined) unpriced.push(s);
-    else known += worst;
+    if (worst === undefined) {
+      unpriced.push(s);
+      continue;
+    }
+    known += worst;
+    const n = pricedRunCount(s);
+    pricedRuns += n;
+    thinnest = thinnest === undefined ? n : Math.min(thinnest, n);
   }
-  return { known, unpriced };
+  return { known, unpriced, pricedRuns, thinnest };
 }
 
 /** The one-line estimate, phrased so a partially-unpriced total can never read as authoritative. An
  *  unqualified "$0.00" over a corpus that has never run is worse than no number at all. */
-export function batchCostEstimateLine(scenarios: string[], est: { known: number; unpriced: string[] }): string {
+export function batchCostEstimateLine(
+  scenarios: string[],
+  est: { known: number; unpriced: string[]; pricedRuns?: number; thinnest?: number | undefined },
+): string {
   const bound = est.unpriced.length ? " — LOWER BOUND" : "";
   const detail = est.unpriced.length
     ? ` (${est.unpriced.length}/${scenarios.length} scenario(s) have no priced run history and contribute $0: ` +
       `${est.unpriced.slice(0, 5).join(", ")}${est.unpriced.length > 5 ? `, +${est.unpriced.length - 5} more` : ""})`
-    : ` (all ${scenarios.length} scenario(s) priced from prior runs)`;
-  return `estimated batch cost: $${est.known.toFixed(4)}${bound}${detail}`;
+    : // The complete case used to read `(all N scenario(s) priced from prior runs)`, which is an active
+      // claim of authority — and the one case where this line said nothing qualifying. It is still
+      // `sum(max(local history))`: a max over whatever THIS machine ran, so at a new baseline or a new
+      // agent binary the history describes a materially different configuration and can UNDER-predict.
+      // A consumer wrote "that is the ceiling, not the scope" into a plan off this line and had to retract.
+      ` (all ${scenarios.length} scenario(s) priced)`;
+  const basis =
+    est.thinnest === undefined
+      ? ""
+      : ` — basis: ${est.pricedRuns} prior run(s) on THIS machine, thinnest scenario has ${est.thinnest}; ` +
+        `a max over that history, NOT a bound`;
+  return `estimated batch cost: $${est.known.toFixed(4)}${bound}${detail}${basis}`;
 }
 
 /**

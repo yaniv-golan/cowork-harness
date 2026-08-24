@@ -596,7 +596,10 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       match are the algorithm-derived values rewritten. Anything unprovable is refused, never migrated.\n" +
     "       --session <file>: for a MOVED cassette, whose recorded session cannot be resolved from its own\n" +
     "       directory. One cassette at a time — each may have been recorded against a different tree, so a\n" +
-    "       directory batch cannot share one override.",
+    "       directory batch cannot share one override.\n" +
+    "       Exit: 0 = all migrated, or nothing needed migrating. 4 = PARTIAL, some migrated and some could not\n" +
+    "       (commit what migrated, budget a re-record for the rest). 1 = nothing migrated and at least one\n" +
+    "       could not. 2 = usage. The JSON envelope carries the same split as migrated/skipped/errors.",
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "migrate-run-dir":

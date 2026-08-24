@@ -668,6 +668,14 @@ verification could NOT complete (any `unverifiable-*`-class staleness finding, a
 newer harness than this one understands, or a per-file read error/crash — including a
 malformed/unreadable cassette, which is tallied there rather than as a `1` finding). A real finding
 always outranks a could-not-verify signal within the same run, so exit `1` wins if both occur.
+**`rehash` uses its own four-way split:** `0` all migrated (or nothing needed migrating) · **`4` PARTIAL —
+some migrated, some could not** · `1` nothing migrated and at least one could not · `2` usage. The partial
+code is distinct because the two failing shapes demand opposite responses — commit what migrated and budget
+a re-record for the rest, versus nothing here is salvageable — and while both were `1` a shell consumer
+reading only the exit code could not tell them apart (the JSON envelope always carried the split as
+`migrated`/`skipped`/`errors`). `4` rather than `3`: the code space is per-command, and `3`'s "could not
+verify" meaning is load-bearing on `verify-cassettes` — a migration that partly succeeded is not a failed
+verification.
 **Collision warning:** the `run`/`skill` family's exit `3` means *boundary/integrity* (§11 above);
 `verify-cassettes`' exit `3` means *could not verify*. These are unrelated per-command meanings that
 happen to share a number — a CI script that branches on exit code across commands must not conflate

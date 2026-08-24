@@ -8,6 +8,62 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`rehash` leads with the split, and PARTIAL success has its own exit code (`4`).** The summary used to
+  print last, after every per-file line had scrolled past — and those two counts *are* the decision:
+  commit what migrated and budget a re-record for the rest, versus nothing here is salvageable. It now
+  prints first, with the per-file lines as the detail behind it.
+
+  **`4 migrated, 18 failed` and `0 migrated, 22 failed` both exited `1`**, which made a shell consumer
+  unable to tell apart two situations demanding opposite responses. The JSON envelope always carried the
+  split as `migrated`/`skipped`/`errors`; a bare terminal run did not. `rehash` now exits `0` (all
+  migrated, or nothing needed migrating) / **`4`** (partial) / `1` (nothing migrated and at least one
+  could not) / `2` (usage).
+
+  **This is a behaviour change for anyone branching on `rehash`'s exit code** — a script testing
+  `rc == 1` for "something failed" will miss the partial case, though `rc != 0` is unaffected. It ships in
+  a minor deliberately: `rehash`'s codes were documented **nowhere** — zero mentions in its `--help`,
+  absent from SPEC §11 — so there was no published contract to break, and a consumer on `rc == 1` was
+  relying on observed behaviour. They are now documented in both places. `4` rather than `3` because the
+  code space is per-command and `3`'s "could not verify" meaning is load-bearing on `verify-cassettes`.
+
+- **The batch cost estimate now reports its basis instead of claiming authority.** `estimatedCostUsd` is
+  `sum(max(local run history))` — a max over whatever *this machine* has run. The line already qualified
+  the partially-priced case with `— LOWER BOUND`, but the fully-priced case said
+  `(all N scenario(s) priced from prior runs)`, which is an active claim of completeness and was the one
+  case that said nothing qualifying. At a new baseline or a new agent binary the history describes a
+  materially different configuration, so the estimate can **under**-predict exactly when it is most
+  consulted — a consumer wrote "that is the ceiling, not the scope" into a plan off this line and had to
+  retract it.
+
+  The line now carries `basis: N prior run(s) on THIS machine, thinnest scenario has M; a max over that
+  history, NOT a bound`, and the JSON payload gains `estimateBasis`
+  (`{source, pricedRuns, thinnestScenarioRuns}`). `thinnest` is the useful half: a scenario with one prior
+  run contributes a single sample, not a worst case. Wired through `pricedRunCount`, which had been
+  exported and doc-commented *"for messages that report their own basis"* with zero callers.
+
+- **Pre-epoch cassettes: we could report ordinary content drift, and chose not to.** When a cassette
+  recorded before the 2.0.0 hash-format epoch is read, `rehash` recomputes the **legacy** digest over the
+  current tree and compares it to the legacy digest in the cassette. On a mismatch that is a positive
+  determination of ordinary content drift — strictly more informative than `unverifiable-skill`, and the
+  same determination 1.25.0 reported as warn-only `skill` drift.
+
+  Replay does not report it, and that is a decision rather than a limit. Reporting it would require
+  keeping a fold of the retired hash algorithm alive in the replay path — the most-run lane — permanently,
+  to soften one release's migration; the population it would help shrinks with every re-record. The
+  runtime cost would be nil (both digests fold from one tree walk); the cost is code that could never be
+  deleted. **"We can compute this and chose not to report it, so the legacy fold can die" is a different
+  claim from "this cannot be known", and the earlier phrasing implied the latter.** The remedy for a
+  pre-epoch cassette is `rehash` where it can prove content unchanged, and a re-record where it cannot.
+
+### Fixed
+
+- **The fast test lane had no global timeout, so 93 subprocess-spawning test files inherited vitest's 5s
+  default.** They measure 167-888ms locally — a fine margin until you remember the lane runs 344 files in
+  parallel across every core, and a CI runner is ~3x slower again. That is how an 888ms test crosses 5s;
+  it cost two red CI runs on unrelated PRs before anyone looked at the failure rather than re-running it.
+  `vitest.config.ts` now sets `testTimeout: 30_000` — ~34x the slowest measured non-e2e case, while a
+  genuine hang still fails ~6x faster than in the live lane (which sets 180s). Per-test values still win.
+
 - **Redaction pattern ORDER is load-bearing, and now says so — plus a warning when it is wrong.** Patterns
   apply in sequence over the accumulating output, so a bare catch-all placed ahead of a lookahead-anchored
   rule for the same prefix matches first and eats the `/mnt/` tail the lookahead exists to preserve. The

@@ -3608,6 +3608,9 @@ export async function cmdRecord(args: string[]) {
             refusals,
             estimatedCostUsd: estimate.known,
             unpricedScenarios: estimate.unpriced,
+            // The basis for `estimatedCostUsd`, so automation need not treat it as a bound. It is
+            // `sum(max(local run history))` — see `batchCostEstimateLine`.
+            estimateBasis: { source: "local-run-index", pricedRuns: estimate.pricedRuns, thinnestScenarioRuns: estimate.thinnest ?? 0 },
             token,
             agent: agentPayload,
           }),
@@ -6182,26 +6185,51 @@ export function cmdRehash(args: string[]): void {
   const skipped = results.filter((r) => r.action === "skipped").length;
   const errors = results.filter((r) => r.action === "error").length;
 
+  const code = rehashExitCode({ migrated, errors });
+
   if (asJson) {
     out(jsonPayloadEnvelope("rehash", errors === 0, { dryRun, migrated, skipped, errors, results }));
   } else {
-    for (const r of results) {
-      const glyph = r.action === "migrated" ? "✓" : r.action === "error" ? "✗" : "·";
-      log(`${glyph} ${r.file}: ${r.reason}`);
-    }
+    // Summary FIRST. It used to print last, after every per-file line had scrolled past — and these two
+    // counts ARE the decision, so a reader had to scroll back up to find them. The per-file lines below
+    // are the detail behind it, not the thing being reported.
     if (migrated > 0 || errors > 0) {
+      const glyph = errors > 0 ? (migrated > 0 ? "!" : "✗") : "✓";
+      const verb = dryRun ? "migratable" : "migrated";
+      // No single target version here — P8 stamps per-scenario (requiredVersionFor), so a batch can
+      // migrate some cassettes to v10 and others to v11; each row's own reason already says which.
       log(
-        errors > 0
-          ? `✗ rehash: ${migrated} migrated, ${skipped} skipped, ${errors} could not migrate${dryRun ? " (dry-run)" : ""}`
-          : // No single target version here — P8 stamps per-scenario (requiredVersionFor), so a batch can
-            // migrate some cassettes to v10 and others to v11; each row's own reason already says which.
-            `✓ rehash: ${migrated} cassette(s) migrated${dryRun ? " (dry-run — nothing written)" : ""}`,
+        `${glyph} rehash: ${migrated} ${verb}` +
+          (errors > 0 ? `, ${errors} require a re-record` : "") +
+          (skipped > 0 ? `, ${skipped} already current` : "") +
+          (dryRun ? " (dry-run — nothing written)" : ""),
       );
     } else {
       log("✓ rehash: nothing to migrate");
     }
+    for (const r of results) {
+      const glyph = r.action === "migrated" ? "✓" : r.action === "error" ? "✗" : "·";
+      log(`${glyph} ${r.file}: ${r.reason}`);
+    }
   }
-  return process.exit(errors > 0 ? 1 : 0);
+  return process.exit(code);
+}
+
+/** `rehash`'s exit code, documented in SPEC §11 and in its `--help`.
+ *
+ *  PARTIAL success gets its own code. `4 migrated, 18 failed` and `0 migrated, 22 failed` demand opposite
+ *  responses — commit the four and budget a re-record for the rest, versus nothing here is salvageable —
+ *  and while both were `1`, a shell consumer reading only the exit code could not tell them apart. The
+ *  JSON envelope always carried the split as `migrated`/`skipped`/`errors`; a bare terminal run did not.
+ *
+ *  `4` rather than `3`: the exit-code space is per-command, and `3`'s "could not verify" meaning is
+ *  load-bearing on `verify-cassettes` — a migration that partly succeeded is not a failed verification.
+ *
+ *  `skipped` is deliberately not an input: an already-current cassette needs no action, so it cannot
+ *  turn a clean run dirty or a total failure partial. */
+export function rehashExitCode(tally: { migrated: number; errors: number }): 0 | 1 | 4 {
+  if (tally.errors === 0) return 0;
+  return tally.migrated > 0 ? 4 : 1;
 }
 
 /** Record-time connected-folder host-path -> resolved-mount-name map (Finding 24), persisted onto a
