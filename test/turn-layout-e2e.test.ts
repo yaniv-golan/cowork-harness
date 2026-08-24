@@ -13,6 +13,22 @@ import { spawnSync } from "node:child_process";
 // the run-driving describes on `claude` being resolvable, exactly like the live lane
 // (test/live-contract.test.ts) — CI runners have no host `claude`, so they skip cleanly. The pure
 // ResourceSampler describe below needs no agent and always runs.
+/** Every test in the agent-gated describes below spawns the host `claude` CLI, so its wall clock is a real
+ *  process launch, not compute. Measured in ISOLATION on a 14-core machine: 11.5s, 12.6s, 12.9s, 16.8s and
+ *  23.4s — the file takes ~79s for 7 tests.
+ *
+ *  The default `npm test` run executes test FILES in parallel across every core alongside ~340 others, and
+ *  nothing serializes or excludes this file (`vitest.config.ts` excludes only `test/live-*.test.ts`). So
+ *  these spawns compete, and the wall clock under contention is a multiple of the isolated figure. At the
+ *  previous 60s the slowest case had a 2.5x margin and timed out intermittently — reproduced twice in eight
+ *  full-suite runs, ALWAYS the clock and never an assertion. CI never saw it: `CLAUDE_AVAILABLE` is false
+ *  there, so the whole file skips.
+ *
+ *  Raised rather than trimmed on purpose: the isolated timings are what they are, so a smaller number just
+ *  buys the flake back. If this ever needs lowering, gate the file like the live lane instead — but note it
+ *  exists because two shipped defects lived in this resume path, so skipping it locally has its own cost. */
+const E2E_TIMEOUT_MS = 180_000;
+
 const CLAUDE_BIN = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude";
 const CLAUDE_AVAILABLE = ((): boolean => {
   try {
@@ -69,38 +85,50 @@ function sourcedProtocolScenario(name: string) {
 }
 
 describe.skipIf(!CLAUDE_AVAILABLE)("a REAL run produces the per-turn layout on disk", () => {
-  it("writes turns/1/ with the per-turn artifacts, and NO root compat copy", async () => {
-    const res = await executeScenario(protocolScenario("e2e-layout"), {});
-    const outDir = res.outDir;
+  it(
+    "writes turns/1/ with the per-turn artifacts, and NO root compat copy",
+    async () => {
+      const res = await executeScenario(protocolScenario("e2e-layout"), {});
+      const outDir = res.outDir;
 
-    const turn1 = join(outDir, "turns", "1");
-    expect(existsSync(turn1), `no turns/1 in a real run dir — root held: ${readdirSync(outDir).join(", ")}`).toBe(true);
-    for (const a of ["result.json", "run.jsonl", "trace.json"]) {
-      expect(existsSync(join(turn1, a)), `turns/1/${a} was not written by a real run`).toBe(true);
-    }
+      const turn1 = join(outDir, "turns", "1");
+      expect(existsSync(turn1), `no turns/1 in a real run dir — root held: ${readdirSync(outDir).join(", ")}`).toBe(true);
+      for (const a of ["result.json", "run.jsonl", "trace.json"]) {
+        expect(existsSync(join(turn1, a)), `turns/1/${a} was not written by a real run`).toBe(true);
+      }
 
-    // The compat copy is gone: turns/1/result.json is the ONLY copy. A resurrected root write would make
-    // every reader that now goes through the seam silently start reading the wrong (root/stale) file again
-    // on the next turn.
-    expect(existsSync(join(outDir, "result.json")), "a root compat copy reappeared — it must not").toBe(false);
-  }, 60_000);
+      // The compat copy is gone: turns/1/result.json is the ONLY copy. A resurrected root write would make
+      // every reader that now goes through the seam silently start reading the wrong (root/stale) file again
+      // on the next turn.
+      expect(existsSync(join(outDir, "result.json")), "a root compat copy reappeared — it must not").toBe(false);
+    },
+    E2E_TIMEOUT_MS,
+  );
 
-  it("leaves the cumulative streams and session state at the ROOT, not inside turns/", async () => {
-    // These must not move: `critique`'s turn-1 isolation proof records byte offsets into events.jsonl and
-    // timeline.jsonl, and `cassette.events` is events.jsonl verbatim.
-    const res = await executeScenario(protocolScenario("e2e-streams"), {});
-    const outDir = res.outDir;
-    for (const f of ["events.jsonl", "timeline.jsonl", "status.json"]) {
-      expect(existsSync(join(outDir, f)), `${f} must stay at the run-dir root`).toBe(true);
-    }
-    expect(existsSync(join(outDir, "turns", "1", "events.jsonl")), "events.jsonl must NOT be per-turn").toBe(false);
-  }, 60_000);
+  it(
+    "leaves the cumulative streams and session state at the ROOT, not inside turns/",
+    async () => {
+      // These must not move: `critique`'s turn-1 isolation proof records byte offsets into events.jsonl and
+      // timeline.jsonl, and `cassette.events` is events.jsonl verbatim.
+      const res = await executeScenario(protocolScenario("e2e-streams"), {});
+      const outDir = res.outDir;
+      for (const f of ["events.jsonl", "timeline.jsonl", "status.json"]) {
+        expect(existsSync(join(outDir, f)), `${f} must stay at the run-dir root`).toBe(true);
+      }
+      expect(existsSync(join(outDir, "turns", "1", "events.jsonl")), "events.jsonl must NOT be per-turn").toBe(false);
+    },
+    E2E_TIMEOUT_MS,
+  );
 
-  it("a single-turn run has exactly one turn dir", async () => {
-    const res = await executeScenario(protocolScenario("e2e-single"), {});
-    const outDir = res.outDir;
-    expect(readdirSync(join(outDir, "turns")).sort()).toEqual(["1"]);
-  }, 60_000);
+  it(
+    "a single-turn run has exactly one turn dir",
+    async () => {
+      const res = await executeScenario(protocolScenario("e2e-single"), {});
+      const outDir = res.outDir;
+      expect(readdirSync(join(outDir, "turns")).sort()).toEqual(["1"]);
+    },
+    E2E_TIMEOUT_MS,
+  );
 });
 
 describe.skipIf(!CLAUDE_AVAILABLE)("a REAL two-turn resume — the actual path both shipped defects lived in", () => {
@@ -109,41 +137,45 @@ describe.skipIf(!CLAUDE_AVAILABLE)("a REAL two-turn resume — the actual path b
   // (2 -> 1) on a resume — are RESUME-path defects, so a single-turn e2e cannot catch either. This drives
   // `executeScenario` twice against the SAME session dir, the only way to exercise beginTurn/currentTurn's
   // resume arithmetic and the seam's addressing of more than one turn for real.
-  it("turns/1 and turns/2 both hold all four artifacts, turn numbers strictly increase, and turn 1's events.jsonl prefix is untouched", async () => {
-    const scenario = sourcedProtocolScenario("e2e-resume");
+  it(
+    "turns/1 and turns/2 both hold all four artifacts, turn numbers strictly increase, and turn 1's events.jsonl prefix is untouched",
+    async () => {
+      const scenario = sourcedProtocolScenario("e2e-resume");
 
-    const first = await executeScenario(scenario, { sessionId: "e2e-resume-1" });
-    const outDir = first.outDir;
-    expect(first.turn, "a fresh single-shot run must be turn 1").toBe(1);
+      const first = await executeScenario(scenario, { sessionId: "e2e-resume-1" });
+      const outDir = first.outDir;
+      expect(first.turn, "a fresh single-shot run must be turn 1").toBe(1);
 
-    const eventsBeforeResume = readFileSync(join(outDir, "events.jsonl"), "utf8");
+      const eventsBeforeResume = readFileSync(join(outDir, "events.jsonl"), "utf8");
 
-    const second = await executeScenario(scenario, { sessionId: "e2e-resume-1", resume: true });
-    expect(second.outDir, "a resume must reuse the same run dir, not mint a new one").toBe(outDir);
-    expect(second.turn, "turn number went backwards or failed to advance on resume").toBe(2);
+      const second = await executeScenario(scenario, { sessionId: "e2e-resume-1", resume: true });
+      expect(second.outDir, "a resume must reuse the same run dir, not mint a new one").toBe(outDir);
+      expect(second.turn, "turn number went backwards or failed to advance on resume").toBe(2);
 
-    for (const turn of [1, 2]) {
-      for (const a of ["result.json", "run.jsonl", "trace.json"]) {
-        const p = join(outDir, "turns", String(turn), a);
-        expect(existsSync(p), `turns/${turn}/${a} missing after a real resume`).toBe(true);
+      for (const turn of [1, 2]) {
+        for (const a of ["result.json", "run.jsonl", "trace.json"]) {
+          const p = join(outDir, "turns", String(turn), a);
+          expect(existsSync(p), `turns/${turn}/${a} missing after a real resume`).toBe(true);
+        }
       }
-    }
 
-    // The critique turn-1 isolation proof (snapshotTurnBoundary/verifyBoundaryIntegrity) depends on this:
-    // turn 1's bytes must be a stable PREFIX of the cumulative events.jsonl after any later turn appends.
-    const eventsAfterResume = readFileSync(join(outDir, "events.jsonl"), "utf8");
-    expect(
-      eventsAfterResume.startsWith(eventsBeforeResume),
-      "turn 1's byte prefix in events.jsonl changed after a resume — this breaks critique's boundary proof",
-    ).toBe(true);
-    expect(eventsAfterResume.length, "a resume must only ever APPEND to events.jsonl").toBeGreaterThan(eventsBeforeResume.length);
+      // The critique turn-1 isolation proof (snapshotTurnBoundary/verifyBoundaryIntegrity) depends on this:
+      // turn 1's bytes must be a stable PREFIX of the cumulative events.jsonl after any later turn appends.
+      const eventsAfterResume = readFileSync(join(outDir, "events.jsonl"), "utf8");
+      expect(
+        eventsAfterResume.startsWith(eventsBeforeResume),
+        "turn 1's byte prefix in events.jsonl changed after a resume — this breaks critique's boundary proof",
+      ).toBe(true);
+      expect(eventsAfterResume.length, "a resume must only ever APPEND to events.jsonl").toBeGreaterThan(eventsBeforeResume.length);
 
-    // The defect this whole removal targets: a resumed dir minting a root compat copy (or any root
-    // artifact) alongside turns/ would make it MIXED — turn 1 unaddressable — right where the bug lived.
-    for (const a of ["result.json", "run.jsonl", "trace.json"]) {
-      expect(existsSync(join(outDir, a)), `a root ${a} reappeared after resume — the dir is now MIXED`).toBe(false);
-    }
-  }, 60_000);
+      // The defect this whole removal targets: a resumed dir minting a root compat copy (or any root
+      // artifact) alongside turns/ would make it MIXED — turn 1 unaddressable — right where the bug lived.
+      for (const a of ["result.json", "run.jsonl", "trace.json"]) {
+        expect(existsSync(join(outDir, a)), `a root ${a} reappeared after resume — the dir is now MIXED`).toBe(false);
+      }
+    },
+    E2E_TIMEOUT_MS,
+  );
 });
 
 describe("the sampler can actually WRITE where beginTurn puts it", () => {
@@ -203,28 +235,32 @@ describe.skipIf(!CLAUDE_AVAILABLE)("resuming a PRE-LAYOUT dir does not destroy t
     rmSync(join(outDir, "turns"), { recursive: true, force: true });
   }
 
-  it("refuses the resume and leaves every byte of the prior turn untouched", async () => {
-    const scn = sourcedProtocolScenario("e2e-prelayout-resume");
-    const first = await executeScenario(scn, { sessionId: "prelayout-1" });
-    const outDir = first.outDir;
+  it(
+    "refuses the resume and leaves every byte of the prior turn untouched",
+    async () => {
+      const scn = sourcedProtocolScenario("e2e-prelayout-resume");
+      const first = await executeScenario(scn, { sessionId: "prelayout-1" });
+      const outDir = first.outDir;
 
-    deShapeToLegacy(outDir);
-    expect(existsSync(join(outDir, "turns")), "fixture is not the pre-layout shape").toBe(false);
-    const artifacts = ["result.json", "run.jsonl", "trace.json"];
-    const before: Record<string, string> = {};
-    for (const a of artifacts) before[a] = readFileSync(join(outDir, a), "utf8");
-    const rootBefore = readdirSync(outDir).sort();
+      deShapeToLegacy(outDir);
+      expect(existsSync(join(outDir, "turns")), "fixture is not the pre-layout shape").toBe(false);
+      const artifacts = ["result.json", "run.jsonl", "trace.json"];
+      const before: Record<string, string> = {};
+      for (const a of artifacts) before[a] = readFileSync(join(outDir, a), "utf8");
+      const rootBefore = readdirSync(outDir).sort();
 
-    await expect(
-      executeScenario(scn, { sessionId: "prelayout-1", resume: true }),
-      "a pre-layout dir must be refused, not silently resumed into a mixed shape",
-    ).rejects.toThrow(/pre-layout|legacy|migrate/i);
+      await expect(
+        executeScenario(scn, { sessionId: "prelayout-1", resume: true }),
+        "a pre-layout dir must be refused, not silently resumed into a mixed shape",
+      ).rejects.toThrow(/pre-layout|legacy|migrate/i);
 
-    // Zero writes: same entries, same bytes, and no turns/ minted by a partially-started turn.
-    expect(readdirSync(outDir).sort(), "the refused resume still modified the run dir").toEqual(rootBefore);
-    expect(existsSync(join(outDir, "turns")), "the refused resume created a turn dir").toBe(false);
-    for (const a of artifacts) {
-      expect(readFileSync(join(outDir, a), "utf8"), `${a} was modified by a resume that was supposed to refuse`).toBe(before[a]);
-    }
-  }, 90_000);
+      // Zero writes: same entries, same bytes, and no turns/ minted by a partially-started turn.
+      expect(readdirSync(outDir).sort(), "the refused resume still modified the run dir").toEqual(rootBefore);
+      expect(existsSync(join(outDir, "turns")), "the refused resume created a turn dir").toBe(false);
+      for (const a of artifacts) {
+        expect(readFileSync(join(outDir, a), "utf8"), `${a} was modified by a resume that was supposed to refuse`).toBe(before[a]);
+      }
+    },
+    E2E_TIMEOUT_MS,
+  );
 });
