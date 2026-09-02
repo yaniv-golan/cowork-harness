@@ -807,6 +807,15 @@
                 "description": "override the run-level pinned judge model for this assert",
                 "type": "string"
               },
+              "evidence_files": {
+                "description": "scope the AUTHORED-FILE evidence this judge grades to these globs, so an unrelated file dropped at the capture budget can no longer refuse the verdict. NOT an existence assertion (that is `file_exists`) — it selects which authored files reach the judge and which omissions are treated as fatal. Paths are `<user-visible root>/<rel>` (e.g. `outputs/report.md`, NOT a bare `report.md`), the same key `no_unexpected_files`/`no_lost_write_back` use; session-root deliverables carry the synthetic `scratchpad/` prefix. Glob syntax is `*`/`?`/`**` (NOT regex), matched over the FULL path. Globs matching NOTHING fail evidence-unavailable rather than grading a rubric against zero authored evidence — the failure message lists the paths the run actually authored. When set, the capture also spends its size budget on these files FIRST and exempts them from the per-file cap, and an in-scope file that is still omitted or truncated fails evidence-unavailable (raise `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES` when a large deliverable legitimately needs more). Omitted = every authored file is judged and any omission refuses the verdict (the default, unchanged)",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
               "include_subagent_text": {
                 "description": "default false: also send each sub-agent's TEXT turns (RunResult.subagents[].reasoning, kind:'text' only) to the judge. Opt-in because it enlarges the judged document, which can re-grade an existing rubric. Use for a fan-out skill whose real work happens in sub-agents — their text is otherwise invisible to the judge. Sub-agent THINKING is excluded: it arrives empty with redacted:true, so including it would pad the document with blanks",
                 "type": "boolean"

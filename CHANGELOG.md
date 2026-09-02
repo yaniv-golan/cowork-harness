@@ -6,7 +6,75 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`semantic_matches.evidence_files` — scope which authored files the judge grades.** A run that authors
+  many files could not pass a `semantic_matches` assert at all: the authored-file capture spends a fixed
+  64 KiB budget prefix-major then alphabetically, so a pipeline staging intermediates under
+  `outputs/_work/` exhausted it before reaching its own deliverable, and any omission refused the verdict —
+  over files no rubric mentioned. Naming the deliverable now (a) sends only those files to the judge,
+  (b) spends the capture budget on them **first**, (c) exempts them from the per-file cap, and (d) narrows
+  the evidence-unavailable refusal to in-scope omissions. A scenario with no `evidence_files` anywhere keeps
+  its previous grading behaviour; note that scoping ONE assert changes the shared capture for its unscoped
+  siblings (they share a single authored-file capture, and a scope exempts its files from the per-file cap),
+  which now warns.
+
+  Guards that come with it, because scoping is a new way to manufacture a vacuous green: globs matching
+  **nothing** fail evidence-unavailable (and the message lists every path the run authored — paths are
+  `<root>/<rel>`, which nothing else in the CLI surfaces); an empty list is a load-time error; an in-scope
+  file that is *truncated* rather than dropped also refuses, since a partial deliverable grades as a partial
+  document; and a scoped **pass** records the files it graded in its `evidence`.
+
+- **`RunResult.assertions[].semanticEvidence`** — the typed reason a `semantic_matches` assert refused
+  (`scope_matched_nothing` | `in_scope_omitted` | `in_scope_truncated` | `evidence_incomplete` |
+  `authored_evidence_truncated`) or what it graded (`graded`, recorded on a substantive fail too — the bug
+  this guards against is a false ABSENCE, so a red is only actionable next to what the judge was shown),
+  with the paths. Five causes with five different fixes previously shared one prose message; a consumer had
+  to regex English to tell them apart.
+
+- **`COWORK_HARNESS_AUTHORED_TOTAL_BYTES`** — raise the total authored-file evidence budget (default
+  65536) when a deliverable legitimately exceeds it. A malformed value throws rather than silently
+  defaulting: a quietly-defaulted evidence budget resurfaces later as an unexplained refusal. Raising it
+  enlarges the document sent to an external judge, so cost, latency and disclosure scale with it.
+
 ### Fixed
+
+- **A `semantic_matches` document could be composed from the wrong evidence when a scenario had two of
+  them.** The judged document was memoized on `include_subagent_text` alone; with per-assert scoping that
+  key is no longer sufficient, so the cache is now keyed on the scope as well.
+
+- **Raising the capture budget could have moved incompleteness from a loud refusal into a silent cut.**
+  Authored evidence sits near the tail of the judged document, so an overflow of the 262144-char aggregate
+  cap can eat it. Any `semantic_matches` — scoped or not — now refuses `authored_evidence_truncated` rather
+  than grading a document whose evidence was cut, and the message names the section that overflowed (a
+  document overflowing on `include_subagent_text` is not fixed by narrowing a file scope). The check
+  measures the offset at which the authored region ends, so a trim that reaches only the trailing
+  evidence-health note is an advisory warning, not a refusal.
+
+  **This changes the verdict of some existing scenarios, and you should expect it.** Affected: any live
+  `semantic_matches` whose composed judge document already exceeded 262144 chars far enough to cut into the
+  authored-file sections — in practice a run with a large deliverable, a long transcript, or
+  `include_subagent_text: true` with several substantial sub-agents. At stock settings a single large
+  deliverable does **not** reach the cap (32768 + 131072 + 65536 = 229376 chars with every section maxed),
+  so the two triggers that do not require raising the budget are **many** authored files — the per-file
+  `## Authored file: <path>` headings are counted, so several hundred small files overflow at the same total
+  — and `include_subagent_text: true`, whose per-dispatch 16 KiB is multiplied by an unbounded dispatch
+  count. Those runs were being graded against a document whose evidence had been silently truncated, and
+  could return a **pass** on a claim the judge never had the text to verify. They now fail `evidence unavailable` with
+  `semanticEvidence.reason: "authored_evidence_truncated"` and a message naming the section that overflowed.
+
+  This is a fix to a false PASS rather than a break in a covered surface — but it is **not** free: the check
+  is a property of the composed document, not of the rubric, and the harness cannot know which sections a
+  given rubric actually depended on. A rubric that was satisfiable from the agent's final message alone (the
+  first section, which is never cut) was being graded correctly and now turns red too. That is a deliberate
+  trade — a conservative refusal you can see and act on, over a silent grade you cannot — but if a newly-red
+  assert was genuinely answerable from the final message, this is why. What to do when you hit it, in order — (1) scope the judge with
+  `semantic_matches.evidence_files: ["outputs/<your deliverable>"]`, which shrinks the document to the files
+  the rubric is about and is the right answer in almost every case; (2) if the graded files themselves do not
+  fit, raise `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` so the capture keeps them whole — but note the composed
+  document is still capped at 262144 chars, so past that point only scoping helps; (3) if the overflow is
+  sub-agent text, set `include_subagent_text: false`. The failure message names which of these applies.
+
 
 - **`agentBinary.manifestChecksumMatch` was cross-checking the wrong release channel, and had been for a
   month.** `sync` hard-coded the *stable* versioned manifest path. Desktop also stages release

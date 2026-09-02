@@ -169,6 +169,10 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    rate. Assert tool use with the structural keys instead (`tool_called`, `present_files_called`,
    `subagent_dispatched`, `hook_blocked`), and reserve `semantic_matches` for what the agent *said* or
    *wrote*. For a fan-out skill whose real work happens in sub-agents, add `include_subagent_text: true`.
+   If the run authors more than a couple of files, add `evidence_files: ["outputs/report.md"]` naming the
+   deliverable — otherwise the 64 KiB capture budget is spent alphabetically and an unrelated intermediate
+   dropped at the cap refuses the whole verdict. Paths are `<root>/<rel>`; a glob that matches nothing
+   fails and prints the paths the run actually authored.
 
 2. **Write DISCRIMINATING claims, and verify each against ground truth — not memory.** A claim that
    contradicts how the tool actually behaves can *never* pass (the correct skill will contradict it), and

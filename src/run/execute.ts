@@ -88,6 +88,7 @@ import {
   collectArtifactPaths,
   captureAuthoredFilesWithHealth,
   authoredFilesHealthNonEmpty,
+  authoredTotalBytes,
 } from "./artifacts.js";
 import {
   readPreRunManifest,
@@ -388,6 +389,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (`run`/`skill` via cli.ts, `record` via cassette.ts), and a library caller gets it too.
   const contradiction = assertContradiction(scenario);
   if (contradiction) throw new UsageError(contradiction);
+  // Validate the authored-evidence budget HERE, not at capture time. `authoredTotalBytes()` throws on a
+  // malformed value and is otherwise first called after the agent has finished — so a typo would cost a
+  // full live run and then lose its result. Same posture as the contradiction check above: fail before
+  // anything is paid for.
+  authoredTotalBytes();
   // mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
   // a confusing `cannot resume "undefined"` error deep inside the resume branch.
   if (opts.resume && !opts.sessionId) throw new Error("resume requires sessionId (--session-id was not provided)");
@@ -1363,12 +1369,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
     // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
     // unavailable is safer than misattribution). #17
+    // Spend the capture's size budget on the files the scenario's judges actually grade. The walk is
+    // prefix-major then alphabetical, so without this an intermediates dir sorting early (`_work/`…)
+    // drains the whole budget before the deliverable is reached — and the judge is then refused over
+    // files no rubric mentions. The union across every `semantic_matches`: one capture serves them all.
+    const priorityGlobs = [...new Set(scenario.assert.flatMap((a) => a.semantic_matches?.evidence_files ?? []))];
     const authored = captureAuthoredFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
       scratchpadRoot,
       resume: plan.resume,
       // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
       // UNCHANGED rather than either mis-attributed as authored or silently dropped from evidence. #15/#12
       preRunStats: readPreRunManifestStats(outDir),
+      ...(priorityGlobs.length ? { priorityGlobs } : {}),
+      totalBytes: authoredTotalBytes(),
     });
 
     const assertCtx: AssertContext = {

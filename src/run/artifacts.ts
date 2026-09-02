@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
+import { anyGlobMatches } from "../glob.js";
 import { warn } from "../io.js";
 
 /** A buffer round-trips losslessly through UTF-8 only if re-encoding the decoded string reproduces the
@@ -559,9 +560,55 @@ export function authoredFilesHealthNonEmpty(h: AuthoredFilesHealth): boolean {
   );
 }
 
+/** Default TOTAL authored-file capture budget. Deliberately small: this content is composed into a
+ *  document sent to an EXTERNAL judge model, so it is a cost, latency and disclosure surface, not just a
+ *  memory bound. A run whose deliverable legitimately exceeds it raises the budget explicitly. */
+export const DEFAULT_AUTHORED_TOTAL_BYTES = 64 * 1024;
+/** Default PER-FILE cap. Internal only — no flag. Once an `evidence_files` scope exists, the file a
+ *  rubric is about is exempt from this cap anyway (see `priorityGlobs`), and tuning the bound on files
+ *  nobody is grading has no use case. */
+export const DEFAULT_AUTHORED_PER_FILE_BYTES = 16 * 1024;
+
+/** Shared positive-integer validator for the authored-file capture budget, used by BOTH the
+ *  `--authored-total-bytes` flag and `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` so the two cannot diverge —
+ *  same shape as `parseMaxArtifactBytes` for the artifact-body cap. Returns null when invalid. */
+export function parseAuthoredTotalBytes(raw: string): number | null {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
+/** The effective total capture budget. THROWS on a malformed env value rather than warning and falling
+ *  back (which is what `envPositiveNumber` does): a silently-defaulted EVIDENCE budget resurfaces much
+ *  later as an unexplained "evidence unavailable" refusal, with nothing pointing at the typo that caused
+ *  it. Mirrors `defaultBodyCap`'s posture for the artifact-body cap. */
+export function authoredTotalBytes(): number {
+  const env = process.env.COWORK_HARNESS_AUTHORED_TOTAL_BYTES;
+  if (env !== undefined && env.trim() !== "") {
+    const n = parseAuthoredTotalBytes(env);
+    if (n === null) throw new Error(`COWORK_HARNESS_AUTHORED_TOTAL_BYTES must be a positive integer (got ${JSON.stringify(env)})`);
+    return n;
+  }
+  return DEFAULT_AUTHORED_TOTAL_BYTES;
+}
+
 export interface CaptureAuthoredFilesOpts {
   perFileBytes?: number;
   totalBytes?: number;
+  /** Globs (full authored-path form, `<root>/<rel>` or `scratchpad/<rel>`) naming the files a
+   *  `semantic_matches.evidence_files` scope will actually grade. Two effects, both only on the size
+   *  budget — NEVER on which files are classified authored:
+   *    1. matching candidates are captured FIRST, so the budget is spent on the evidence the scenario
+   *       asserts over instead of on whatever the walk reaches first (the walk is prefix-major then
+   *       alphabetical, so an `_work/`-style intermediates dir otherwise starves the deliverable);
+   *    2. matching candidates are EXEMPT from `perFileBytes`, bounded only by the remaining total — a
+   *       16 KiB slice of an 87 KB report is not gradable evidence, and capturing a truncated prefix
+   *       while reporting a clean capture is a false green (the judge would grade the tail's absence).
+   *  A matching file that still doesn't fit the TOTAL is captured truncated and flagged `truncated`, which
+   *  the scoped assert treats as evidence-unavailable. Omitted/empty leaves the capture unchanged — but the
+   *  capture is SHARED across a scenario's asserts, so globs contributed by one assert change the byte
+   *  budget every other assert's evidence is drawn from (`evaluate` warns on a mixed scenario). */
+  priorityGlobs?: string[];
   scratchpadRoot?: string;
   /** F17: true when this run is a `--resume`. A resumed session reuses the PRIOR turn's session root with
    *  no per-turn scratchpad manifest, so a scratchpad file from an earlier turn is indistinguishable from
@@ -624,8 +671,8 @@ export function captureAuthoredFilesWithHealth(
     workspaceWalkErrors: [],
   };
   if (preRunHashes === undefined) return { files: [], health }; // no pre-run manifest → can't diff → no capture
-  const perFile = opts.perFileBytes ?? 16 * 1024;
-  const total = opts.totalBytes ?? 64 * 1024;
+  const perFile = opts.perFileBytes ?? DEFAULT_AUTHORED_PER_FILE_BYTES;
+  const total = opts.totalBytes ?? DEFAULT_AUTHORED_TOTAL_BYTES;
   const out: AuthoredFile[] = [];
   let used = 0;
 
@@ -633,14 +680,17 @@ export function captureAuthoredFilesWithHealth(
   // this `readFileSync`'d the WHOLE file before slicing to the cap: the cap bounded only the RETAINED
   // evidence, not the memory spent producing it, so a huge authored file still spiked memory just to keep
   // 16 KiB of it.
-  const pushFile = (absPath: string, relPath: string): void => {
+  const pushFile = (absPath: string, relPath: string, exemptPerFile = false): void => {
     if (used >= total) {
       // F14: record what got skipped once the total budget is gone, instead of a silent drop.
       health.omittedPaths.push(relPath);
       health.totalCapExhausted = true;
       return;
     }
-    const allowed = Math.min(perFile, total - used);
+    // A priority (in-scope) file is bounded by the REMAINING TOTAL only — see `priorityGlobs`. The
+    // per-file cap exists to bound memory on an incidental large file; for the one file a rubric is
+    // actually about, a 16 KiB prefix is worse than useless (it grades as a partial document).
+    const allowed = exemptPerFile ? total - used : Math.min(perFile, total - used);
     let fd: number | undefined;
     try {
       const size = statSync(absPath).size;
@@ -668,6 +718,13 @@ export function captureAuthoredFilesWithHealth(
       }
     }
   };
+
+  // ONE ordered candidate list, workspace THEN scratchpad, built before any byte of budget is spent.
+  // Classification runs exactly once per file (below); this list only decides the ORDER `pushFile` is
+  // called in. Collecting the scratchpad into the same list is what lets a session-root deliverable be
+  // prioritised at all — it is walked last, so a two-pass over the workspace list alone could never
+  // reach it.
+  const candidates: Array<{ absPath: string; relPath: string }> = [];
 
   // health-aware classify — a nested unreadable subtree records walkErrors (an authored file there is
   // never enumerated), so no_lost_write_back fails evidence-unavailable rather than a false clean.
@@ -715,7 +772,7 @@ export function captureAuthoredFilesWithHealth(
       }
     }
     if (!authored) continue;
-    pushFile(join(workRoot, f.path), f.path);
+    candidates.push({ absPath: join(workRoot, f.path), relPath: f.path });
   }
 
   // Scratchpad deliverables (cwd-relative writes outside mnt). Walk the session root, skipping dot-entries
@@ -728,8 +785,21 @@ export function captureAuthoredFilesWithHealth(
     const found = walkScratchpadFiles(opts.scratchpadRoot);
     health.scratchpadWalkErrors.push(...found.errors);
     health.scratchpadSkippedLinks.push(...found.skippedLinks);
-    for (const f of found.files) pushFile(f.absPath, f.relPath);
+    for (const f of found.files) candidates.push({ absPath: f.absPath, relPath: f.relPath });
   }
+
+  // TWO PASSES over the ONE candidate list — in-scope files first (exempt from the per-file cap), then
+  // everything else. Deliberately two passes over an already-built list rather than re-running the
+  // classification loop with a filter: re-running it would re-execute the F15 stat branch and
+  // double-push `health.hashUnknownPaths`, inflating the count the judge's evidence-health note and the
+  // refusal message report.
+  const priority = opts.priorityGlobs ?? [];
+  const inScope = (relPath: string): boolean => priority.length > 0 && anyGlobMatches(priority, relPath);
+  for (const c of candidates) if (inScope(c.relPath)) pushFile(c.absPath, c.relPath, true);
+  for (const c of candidates) if (!inScope(c.relPath)) pushFile(c.absPath, c.relPath, false);
+  // Stable, order-independent bookkeeping: `omittedPaths` is reported to the judge and quoted in the
+  // refusal message, so it must not depend on which pass a file happened to be dropped in.
+  health.omittedPaths.sort();
   return { files: out, health };
 }
 
