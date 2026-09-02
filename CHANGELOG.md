@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-09-02
+
 ### Parity
 
 - **Baseline `desktop-1.40609.1` (agent `2.1.255`).** `sync` wrote on the first attempt — no unknown
@@ -29,6 +31,15 @@ All notable changes to this project are documented here. The format is based on
   zero consumers — including `CLAUDE_PREVIEW_CLASSIFIER_FLOOR`, which remains inert agent-side (the
   rename to `CLAUDE_CHROME_CLASSIFIER_FLOOR` recorded in 2.3.0 still stands, and Desktop still has not
   followed it). No harness change follows from the bump.
+
+### Documentation
+
+- **`RELEASING.md`'s smoke step: `--package=` pins the fetch, but cwd decides which binary runs.**
+  Observed releasing 3.2.0 using the invocation this file prescribed: from the repo root,
+  `npx -y --package=cowork-harness@3.2.0 -- cowork-harness --version` printed **3.1.0** — a stale global on
+  PATH — while the identical command from `/tmp` printed 3.2.0. The step now takes the `--version` reading
+  from outside the repo, then `npm i -g`s the published version so the repo-root `doctor`/`replay` checks
+  run against the artifact under test.
 
 
 ## [3.2.0] — 2026-09-01
