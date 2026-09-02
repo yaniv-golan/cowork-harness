@@ -8,7 +8,7 @@ import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
-import { authoredTotalBytes, collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
+import { DEFAULT_AUTHORED_PER_FILE_BYTES, authoredTotalBytes, collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
@@ -274,8 +274,8 @@ export interface SemanticClaimResult {
  *  resolved judge model id, recorded as provenance (`RunResult.assertions[].judgeModel`); a stub may omit it. */
 export type SemanticJudge = ((rubric: string[], answer: string) => Promise<SemanticClaimResult[]>) & { model?: string };
 /** WHY a `semantic_matches` assert refused, or WHAT a scoped one graded — the typed companion to the
- *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are four distinct
- *  evidence-unavailable causes with four different fixes; a consumer (usually an agent iterating on a
+ *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are FIVE distinct
+ *  evidence-unavailable causes with five different fixes; a consumer (usually an agent iterating on a
  *  skill) must be able to tell them apart without regex-scraping English. Same rationale as `judgeInvalid`.
  *  Kept structurally identical to the `RunResult` field in types.ts — that is the persisted contract. */
 export type SemanticEvidence = NonNullable<RunResult["assertions"][number]["semanticEvidence"]>;
@@ -663,8 +663,9 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
     warn(
       `::warning:: this scenario has ${sem.length} semantic_matches asserts (${scopedCount} scoped) sharing ONE authored-file ` +
         `capture. An evidence_files scope exempts its files from the per-file cap, so it changes how many bytes the OTHER asserts' ` +
-        `evidence gets — one assert can starve another into an omission that assert then refuses on, with nothing in its message ` +
-        `pointing back here. Give each the narrowest scope covering its own rubric, and raise ` +
+        `evidence gets — a scoped assert can consume the budget until an unscoped sibling's file is dropped OR kept only as a ` +
+        `truncated prefix (its per-file allowance is min(16 KiB, whatever is left), which can fall to almost nothing), and that ` +
+        `sibling then refuses with nothing in its message pointing back here. Give each the narrowest scope covering its own rubric, and raise ` +
         `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES so they all fit.\n`,
     );
   return assertions.map((a) => check(a, withWaivers));
@@ -875,13 +876,25 @@ export function composeJudgedDocument(
   // ABSENCE as evidence the skill didn't produce it (#14/#16). The verdict is separately forced to
   // evidence-unavailable in the semantic_matches check; this note keeps a still-produced grade honest.
   const h = ctx.authoredFilesHealth;
-  if (h && (h.omittedPaths.length || h.readErrors.length || h.scratchpadSkippedOnResume)) {
+  // Truncation is an evidence gap the health object does not carry (it lives on the AuthoredFile), so it
+  // has to be derived here from the graded set. Without this the judge saw a bare " (truncated)" suffix in
+  // a heading and no statement of what that implies — while an omitted file got a full "do not infer
+  // absence" paragraph. The two are the same hazard: content the skill produced that the judge cannot see.
+  const truncatedShown = scopeAuthoredEvidence(ctx, scopeGlobs)
+    .files.filter((f) => f.truncated)
+    .map((f) => f.path);
+  if (h?.omittedPaths.length || h?.readErrors.length || h?.scratchpadSkippedOnResume || truncatedShown.length) {
     const notes: string[] = [];
-    if (h.omittedPaths.length)
-      notes.push(`- ${h.omittedPaths.length} authored file(s) OMITTED (capture size budget exhausted): ${s(h.omittedPaths.join(", "))}`);
-    if (h.readErrors.length)
-      notes.push(`- ${h.readErrors.length} authored file(s) could NOT be read back: ${s(h.readErrors.map((e) => e.path).join(", "))}`);
-    if (h.scratchpadSkippedOnResume) notes.push(`- scratchpad deliverables were not captured (this is a --resume turn; #17)`);
+    if (truncatedShown.length)
+      notes.push(
+        `- ${truncatedShown.length} authored file(s) shown only as a TRUNCATED PREFIX — the rest of each was NOT shown; ` +
+          `do not infer absence from the cut: ${s(truncatedShown.join(", "))}`,
+      );
+    if (h?.omittedPaths.length)
+      notes.push(`- ${h!.omittedPaths.length} authored file(s) OMITTED (capture size budget exhausted): ${s(h!.omittedPaths.join(", "))}`);
+    if (h?.readErrors.length)
+      notes.push(`- ${h!.readErrors.length} authored file(s) could NOT be read back: ${s(h!.readErrors.map((e) => e.path).join(", "))}`);
+    if (h?.scratchpadSkippedOnResume) notes.push(`- scratchpad deliverables were not captured (this is a --resume turn; #17)`);
     parts.push(
       `## Evidence health (INCOMPLETE)\nThe authored-file evidence above is NOT complete — do NOT infer content is absent just because it is not shown here:\n${notes.join("\n")}`,
     );
@@ -1218,9 +1231,14 @@ function check(
           `while ${ctx.authoredFilesHealth?.omittedPaths.length} file(s) were dropped at the capture budget — name the deliverable ` +
           `(e.g. "outputs/report.md") rather than a root-wide "**".\n`,
       );
-    // In-scope files are exempt from the per-file cap, so a `truncated` one means even the TOTAL budget
-    // could not hold it — a partial deliverable, which is exactly what the judge must not grade.
-    const truncatedInScope = sc.files.filter((f) => f.truncated).map((f) => f.path);
+    // Every file the judge would actually grade that was kept only as a prefix. For a SCOPED assert the file
+    // is exempt from the per-file cap, so `truncated` means the TOTAL budget could not hold it; for an
+    // UNSCOPED one it usually means the 16 KiB per-file cap bit, which no budget setting lifts — hence the
+    // two different remedies below. Either way the judge is looking at part of a deliverable.
+    const truncatedGraded = sc.files.filter((f) => f.truncated).map((f) => f.path);
+    // Split, because they need different advice: a budget raise recovers an omission, never an unreadable.
+    const omittedGraded = [...sc.omitted].sort();
+    const unreadableGraded = [...sc.unreadable].sort();
     const docInfo = ctx.semanticDocInfo?.get(a);
     const LEVERS = "scope it with semantic_matches.evidence_files, or raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES";
     // Everything missing from the in-scope evidence, in ONE report. These conditions are not mutually
@@ -1261,29 +1279,42 @@ function check(
             `This run authored: ${all.length ? all.join(", ") : "(nothing)"}`,
         ),
       );
-    } else if (scoped && (missing.length || truncatedInScope.length)) {
+    } else if (missing.length || truncatedGraded.length) {
+      // ONE branch for scoped and unscoped alike. It used to be two, and the unscoped one tested only
+      // `omittedPaths`/`readErrors` — so a file kept as a 16 KiB PREFIX at the per-file cap (no omission, no
+      // read error, document well under the aggregate cap) fell straight through to the graded stamp. A
+      // negative rubric then passed over a prefix whose tail was never shown: an 87 KB report graded on its
+      // first 16 KiB, affirmed as `reason: "graded"`. Truncation is exactly as fatal as omission — the judge
+      // cannot tell "absent because the skill did not write it" from "absent because we cut it".
       const bits: string[] = [];
-      if (missing.length) bits.push(`${missing.length} missing (${missing.join(", ")})`);
-      if (truncatedInScope.length) bits.push(`${truncatedInScope.length} TRUNCATED at the total budget (${truncatedInScope.join(", ")})`);
+      const remedies: string[] = [];
+      if (omittedGraded.length) {
+        bits.push(`${omittedGraded.length} dropped at the capture budget (${omittedGraded.join(", ")})`);
+        remedies.push(`raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes)`);
+      }
+      if (unreadableGraded.length) {
+        // NOT a budget problem, and offering the budget lever here sends the operator to turn a knob that
+        // cannot move it. An unreadable file needs the run or the filesystem looked at.
+        bits.push(`${unreadableGraded.length} unreadable at read-back (${unreadableGraded.join(", ")})`);
+        remedies.push(`investigate the unreadable path(s) — no budget setting can recover them`);
+      }
+      if (truncatedGraded.length) {
+        bits.push(`${truncatedGraded.length} kept only as a TRUNCATED prefix (${truncatedGraded.join(", ")})`);
+        remedies.push(
+          scoped
+            ? `raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes) — an in-scope file is already exempt from the per-file cap, so it is the TOTAL that did not fit`
+            : `scope this assert with semantic_matches.evidence_files: ["<the deliverable>"], which exempts it from the ${DEFAULT_AUTHORED_PER_FILE_BYTES}-byte per-file cap (raising the total alone will NOT lift that cap)`,
+        );
+      }
       semanticEvidence = {
-        reason: truncatedInScope.length && !missing.length ? "in_scope_truncated" : "in_scope_omitted",
-        paths: [...new Set([...missing, ...truncatedInScope])].sort(),
+        reason: scoped ? (truncatedGraded.length && !missing.length ? "in_scope_truncated" : "in_scope_omitted") : "evidence_incomplete",
+        paths: [...new Set([...missing, ...truncatedGraded])].sort(),
       };
       results.push(
         fail(
-          `evidence unavailable: the in-scope authored evidence is incomplete — ${bits.join("; ")}. A partial deliverable grades as a ` +
-            `partial document. Raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes), but keep the composed ` +
-            `document under ${JUDGE_DOC_CAP} chars or it is cut at the other end`,
-        ),
-      );
-    } else if (!scoped && ah && (ah.omittedPaths.length || ah.readErrors.length)) {
-      // #14/#16: the judge graded a document missing authored files (dropped at the size cap, or unreadable
-      // at read-back), so a "claim not satisfied" could be a false absence. Refuse the verdict. Distinct
-      // reason from the scoped ones: the remedy here is to ADD a scope, not to fix an existing glob.
-      semanticEvidence = { reason: "evidence_incomplete", paths: [...ah.omittedPaths, ...ah.readErrors.map((e) => e.path)].sort() };
-      results.push(
-        fail(
-          `evidence unavailable: authored-file evidence was incomplete (${ah.omittedPaths.length} omitted at the capture cap, ${ah.readErrors.length} unreadable) — the judge graded a partial document, cannot trust the semantic verdict. To grade anyway, ${LEVERS}`,
+          `evidence unavailable: the ${scoped ? "in-scope " : ""}authored evidence the judge would grade is incomplete — ${bits.join("; ")}. ` +
+            `A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. ` +
+            `To grade it: ${remedies.join("; or ")}${scoped ? `. Keep the composed document under ${JUDGE_DOC_CAP} chars or it is cut at the other end` : ""}`,
         ),
       );
     } else if (docInfo?.evidenceCut) {
@@ -1302,7 +1333,8 @@ function check(
           `evidence unavailable: the composed judge document exceeded its ${JUDGE_DOC_CAP}-char budget and the authored-file evidence was cut ` +
             `(the overflow lands in "${docInfo.overflowSection ?? "an unknown section"}") — ` +
             `${docInfo.overflowSection?.startsWith("Sub-agent output") ? "set include_subagent_text: false, or " : ""}` +
-            `${scoped ? "narrow" : "add"} semantic_matches.evidence_files so only the files the rubric is about reach the judge. ` +
+            `${scoped ? "narrow" : "add"} semantic_matches.evidence_files so only the files the rubric is about reach the judge` +
+            `${sc.files.length === 1 ? ` — but this scope already names a SINGLE file, so it cannot be narrowed further: that deliverable is simply too large to grade whole against a ${JUDGE_DOC_CAP}-char judge document, and the rubric needs to target a smaller artifact` : ""}. ` +
             `(Lowering $COWORK_HARNESS_AUTHORED_TOTAL_BYTES will NOT help — it only drops the evidence at the capture instead.)`,
         ),
       );

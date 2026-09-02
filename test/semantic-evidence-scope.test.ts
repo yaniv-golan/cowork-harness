@@ -13,6 +13,7 @@ import {
   type SemanticJudge,
 } from "../src/assert";
 import { Scenario, type Assertion } from "../src/types";
+import { UsageError } from "../src/errors";
 
 const sha = (s: string) => createHash("sha256").update(Buffer.from(s)).digest("hex");
 
@@ -385,6 +386,39 @@ describe("semantic_matches.evidence_files — scoping the judge's authored-file 
     expect(res[0].semanticEvidence).toEqual({ reason: "graded", paths: ["outputs/report.md"] });
   });
 
+  it("P1: an UNSCOPED assert whose deliverable was kept as a TRUNCATED PREFIX refuses", async () => {
+    // The per-file cap (16 KiB) bites before the total, so an 87 KB deliverable is captured as a prefix
+    // with NO omission, NO read error, and a document far under the aggregate cap. The unscoped branch used
+    // to test only omittedPaths/readErrors, so this fell through to the graded stamp — and a NEGATIVE rubric
+    // ("contains no unmitigated risk line") passed over a prefix whose tail carried exactly that line.
+    writeFileSync(join(root, "outputs", "report.md"), "HEAD-OK\n" + "x".repeat(87_000) + "\nTAIL-RISK-LINE");
+    const cap = capture(); // stock caps, no scope, no priority
+    expect(cap.files[0].truncated).toBe(true);
+    expect(cap.health.omittedPaths).toEqual([]); // the capture looks entirely healthy
+    expect(cap.health.readErrors).toEqual([]);
+    const judge = recordingJudge();
+    const a: Assertion[] = [{ semantic_matches: { rubric: ["the report contains no unmitigated risk line"] } }] as Assertion[];
+    const res = await judgeAndEvaluate(a, ctxFrom(cap), judge);
+    expect(judge.seen[0]).not.toContain("TAIL-RISK-LINE"); // the judge never saw the disconfirming text
+    expect(res[0].pass).toBe(false);
+    expect(res[0].semanticEvidence?.reason).toBe("evidence_incomplete");
+    expect(res[0].semanticEvidence?.paths).toContain("outputs/report.md");
+    // The remedy must be the one that can actually work: scoping exempts the file from the PER-FILE cap,
+    // which raising the total does not lift.
+    expect(res[0].message).toContain("semantic_matches.evidence_files");
+    expect(res[0].message).toMatch(/per-file cap/);
+  });
+
+  it("P1: the judge is TOLD a file was truncated, in the same register as an omission", async () => {
+    writeFileSync(join(root, "outputs", "report.md"), "H\n" + "x".repeat(87_000));
+    const cap = capture({ priorityGlobs: ["outputs/report.md"], totalBytes: 20_000 });
+    expect(cap.files[0].truncated).toBe(true);
+    const doc = buildJudgedDocument(ctxFrom(cap), false, ["outputs/report.md"]);
+    expect(doc).toContain("Evidence health (INCOMPLETE)");
+    expect(doc).toMatch(/TRUNCATED PREFIX/);
+    expect(doc).toContain("outputs/report.md");
+  });
+
   it("F4: ANY multi-assert scenario carrying a scope warns — including two SCOPED asserts", () => {
     writeFileSync(join(root, "outputs", "report.md"), "body");
     const errs: string[] = [];
@@ -476,17 +510,37 @@ describe("evidence_files — schema and budget validator", () => {
     process.env.COWORK_HARNESS_AUTHORED_TOTAL_BYTES = "262144";
     expect(authoredTotalBytes()).toBe(parseAuthoredTotalBytes("262144"));
     expect(authoredTotalBytes()).toBe(262_144);
-    for (const bad of ["0", "-5", "abc"]) {
+    // "0.5" is the one that matters: a `Math.floor` of any positive number accepted it and produced a
+    // budget of ZERO — every authored file omitted, discovered only after a paid live run — while the
+    // message promised an integer. "1e5"/"0x100" are unambiguous to `Number` but are not what the message
+    // asks for, and an evidence budget is not the place to guess at intent.
+    for (const bad of ["0", "-5", "abc", "0.5", "0.9", "1.5", "-0.1", "NaN"]) {
       process.env.COWORK_HARNESS_AUTHORED_TOTAL_BYTES = bad;
       expect(parseAuthoredTotalBytes(bad)).toBeNull();
-      expect(() => authoredTotalBytes()).toThrow(/must be a positive integer/);
+      expect(() => authoredTotalBytes()).toThrow(/whole number of bytes >= 1/);
+    }
+    // …and it must be a UsageError, or the CLI renders the operator's typo as an internal crash with a
+    // stack trace and exit 2.
+    process.env.COWORK_HARNESS_AUTHORED_TOTAL_BYTES = "0.5";
+    expect(() => authoredTotalBytes()).toThrow(UsageError);
+    // Exponential and hex forms ARE accepted: `Number` reads them deterministically, they resolve to the
+    // integer they look like, and the sibling artifact-body validator (`parseMaxArtifactBytes`) accepts the
+    // same forms. Rejecting them would be a stricter rule than either the message or the codebase states.
+    expect(parseAuthoredTotalBytes("1e5")).toBe(100_000);
+    expect(parseAuthoredTotalBytes("0x100")).toBe(256);
+    // An EMPTY or whitespace-only value reads as "unset" and falls back to the default rather than
+    // throwing — the same convention the other env readers use. Only a value that says something and says
+    // it wrongly is an error.
+    for (const blank of ["", "   "]) {
+      process.env.COWORK_HARNESS_AUTHORED_TOTAL_BYTES = blank;
+      expect(authoredTotalBytes()).toBe(64 * 1024);
     }
     delete process.env.COWORK_HARNESS_AUTHORED_TOTAL_BYTES;
   });
 });
 
 describe("buildJudgedDocument — scoping is opt-in", () => {
-  it("an absent scope is byte-identical to the pre-change document", () => {
+  it("an absent scope grades every authored file; a scope removes what it does not name", () => {
     const ctx = {
       transcript: "t",
       finalMessage: "f",
@@ -497,10 +551,15 @@ describe("buildJudgedDocument — scoping is opt-in", () => {
       ],
     } as unknown as AssertContext;
     const doc = buildJudgedDocument(ctx, false);
+    // An absent scope grades EVERY authored file…
     expect(doc).toContain("AAA");
     expect(doc).toContain("BBB");
-    expect(buildJudgedDocument(ctx, false, undefined)).toBe(doc);
-    expect(buildJudgedDocument(ctx, false, ["outputs/a.md"])).not.toContain("BBB");
+    // …and a scope removes the file it does not name. (An earlier version compared
+    // `buildJudgedDocument(ctx, false, undefined)` with `buildJudgedDocument(ctx, false)` — the same call
+    // with the same default, which could not fail.)
+    const scopedDoc = buildJudgedDocument(ctx, false, ["outputs/a.md"]);
+    expect(scopedDoc).toContain("AAA");
+    expect(scopedDoc).not.toContain("BBB");
   });
 });
 
