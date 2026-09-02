@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 3.2.0` (baseline `desktop-1.40609.0`).
+Self-contained reference. Tracks `cowork-harness 3.2.0` (baseline `desktop-1.40609.1`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified against the pinned baseline)
         run: |
-          V=2.1.247   # match your scenario's pinned baseline's agentVersion
+          V=2.1.255   # match your scenario's pinned baseline's agentVersion
           # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here, or
           # read it with jq if you vendor the baseline. An unverified download is an unverified agent:
           # this step FAILS rather than staging one, which is the whole point of naming it "verified".

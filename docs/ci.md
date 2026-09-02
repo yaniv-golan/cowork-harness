@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.247   # match your scenario's pinned baseline's agentVersion
+          V=2.1.255   # match your scenario's pinned baseline's agentVersion
           # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here,
           # or read it with jq if you vendor the baseline. An unverified download is an unverified
           # agent: this step FAILS rather than staging one, which is the point of calling it verified.

@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Parity
+
+- **Baseline `desktop-1.40609.1` (agent `2.1.255`).** `sync` wrote on the first attempt — no unknown
+  deltas. The **`spawn` and `network` blocks are byte-identical** to `desktop-1.40609.0`, as are all 29
+  recorded gate rows, the asar's gate-id set (301, none added or removed), the VM rootfs hash, the Cowork
+  system prompt and both sub-agent appends. The three committed example cassettes were **re-stamped**, not
+  re-recorded: `promptAssetsHash` resolves to the same `491afe2862dc67ea` under both baselines, and with
+  the spawn contract, egress policy, prompt and tool surface all measured unchanged, a re-record would
+  have bought nothing.
+
+- **`agentBinary.manifestChecksumMatch` reads `"unknown"` for this baseline, and that is a limitation of
+  the check, not a finding about the binary.** Agent `2.1.255` is served from a release-candidate path
+  rather than the stable versioned one that `sync` queries, so the cross-check 404s and — by design — is
+  swallowed rather than failing the sync. The recorded `sha256` is still `measured-local`, hashed from the
+  staged ELF, and it does match the checksum the release candidate's own manifest publishes; the baseline
+  simply cannot say so through this field yet. Run-time ELF verification against the recorded hash is
+  unaffected.
+
+- **Agent `2.1.247` → `2.1.255`.** The agent's `CLAUDE_*` env-flag table moved 569 → 588 (+24, −5).
+  **None of the new flags is set by the Cowork spawn**, and no flag the spawn does set changed from or to
+  zero consumers — including `CLAUDE_PREVIEW_CLASSIFIER_FLOOR`, which remains inert agent-side (the
+  rename to `CLAUDE_CHROME_CLASSIFIER_FLOOR` recorded in 2.3.0 still stands, and Desktop still has not
+  followed it). No harness change follows from the bump.
+
+
 ## [3.2.0] — 2026-09-01
 
 ### Changed
