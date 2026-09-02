@@ -86,7 +86,9 @@ All notable changes to this project are documented here. The format is based on
   network; absent on baselines written earlier, all of which were stable-staged or later promoted.
 
 - **`baselines/desktop-1.40609.1.json` re-synced** against the live Desktop 1.40609.1 install to pick up
-  the corrected row. `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
+  the corrected row. (It is no longer the newest baseline — Desktop self-updated later in the same cycle and
+  `desktop-1.44121.1` ships alongside it; see **Parity** below. Both moved, which is why this release
+  touches two baseline files.) `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
   own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 29
   gate rows and every fingerprint are unchanged.
 
