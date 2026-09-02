@@ -16,16 +16,24 @@ agent `2.1.258`, macOS arm64, agent image `cowork-agent-base:2` — on 2026-09-0
 | suite | result |
 |---|---|
 | `boundary-check` | pass (3/3: allowlist-permits, loopback-not-proxied, hostloop-bash-egress) |
-| `npm run test:live` | 4 files, **18 passed, 1 skipped** |
+| `npm run test:live` | 4 files, **19 passed, 0 skipped** |
 | `run examples/scenarios/` | **6/6 success** |
-| 7 e2e scenarios | **7/7 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, canary-hostloop |
+| 8 of 9 e2e scenarios | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, **semantic-evidence-files**, canary-hostloop. `smoke-l2-microvm` is the ninth and was not run. |
 
 Tiers exercised: **`protocol`, `container`, `hostloop`**. **`microvm` was NOT exercised.**
 
-The one skip is reported as a skip, not folded into a pass: `live-outputs-delete`'s
-"a task that touches outputs without deleting" case skipped because the agent issued no Bash call, so its
-guard observed nothing. That is model variance in the fixture, loudly reported by design rather than
-passing vacuously.
+**The `evidence_files` scoped path was exercised live**, by `smoke-semantic-evidence-files` at container
+tier, which is new in this release and exists because the feature had no live or e2e coverage at all: it
+passes scoped (`semanticEvidence.reason "graded"`, `paths ["outputs/report.md"]`) and refuses with the
+`evidence_files` line removed (`reason "evidence_incomplete"`, naming all seven authored files), so the
+scenario is falsifiable rather than decorative. Both readings are quoted in the scenario's own header
+with their run ids. The **truncation refusal** and the **unscoped-starvation** cases remain covered by
+unit tests only.
+
+Nothing was skipped and nothing was gated out. An earlier pass of this same suite reported 18 passed and
+1 skipped — `live-outputs-delete`'s "touches outputs without deleting" case, whose agent issued no Bash
+call, so its guard observed nothing. That case ran and passed here. It is model variance in the fixture,
+and it is recorded because the suite reports such a case as a SKIP rather than a pass, by design.
 
 **CI does not run any of this.** There is no `ANTHROPIC_API_KEY` repository secret, so `ci.yml`'s live
 scenario stage soft-skips in seconds on both the pull request and the merge commit. A green CI run for
@@ -37,11 +45,21 @@ live inference**. The evidence above is one machine and one account, which is no
 - **A `semantic_matches` assert could grade a document containing NO authored files and report it as
   complete.** The authored set is derived by diffing the work tree against a pre-run manifest, and the
   manifest is only captured when a scenario asserts one of `no_unexpected_files`, `input_unmodified`,
-  `no_delete_in_outputs`, `no_delete_in_mounts` or `no_lost_write_back`. `semantic_matches` was not on that
-  list. A scenario whose only evidence-bearing assert is `semantic_matches` therefore never armed the
-  baseline, the capture returned zero files, and the judge was handed the final message and transcript alone
-  — with the result stamped as complete authored evidence. Found on a live run that authored 7 files under
-  `outputs/` and whose assert reported none.
+  `no_delete_in_outputs`, `no_delete_in_mounts` or `no_lost_write_back` — or the run is a `record`.
+  `semantic_matches` was not on that list. A scenario whose asserts include `semantic_matches` but none of
+  those five, and which is not a recording, therefore never armed the baseline: the capture returned zero
+  files, and the judge was handed the final message and transcript alone — with the result stamped as
+  complete authored evidence. Found on a live run that authored 7 files under `outputs/` and whose assert
+  reported none.
+
+  **This is a FALSE GREEN, not a new regression, and it is not new in 3.3.0.** The arming predicate has
+  carried the same five keys since authored-file evidence first reached the judge in `0.29.0`, so every
+  release from `0.29.0` through `3.2.1` graded that shape against no authored evidence at all. It failed
+  silently, which is why it outlived a 404ing recipe that failed loudly.
+
+  **Re-run your affected scenarios.** If a scenario asserts `semantic_matches` without any of the five keys
+  above, a previous green graded no authored files — whatever it was measuring, it was not the run's
+  output. Re-running is the only way to learn what the verdict should have been.
 
   Both halves are fixed: `semantic_matches` now arms the manifest, and an absent manifest is recorded in the
   capture's health so the assert fails `evidence unavailable` with
