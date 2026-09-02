@@ -1012,11 +1012,11 @@ than the tool declaration alone suggests.
 
 **Harness behaviour:** neither tool is declared, at any tier. Both gate rows are still pinned in the
 synced baseline (`provenance.gates.canSaveSkill`, `provenance.gates.canProposeSkills`) and both are
-recorded, not enacted. **As a drift sentinel, `canSaveSkill` is now dead** — the gate it watches was
-removed from the asar at Desktop 1.44121.1, so the row reflects only what the server still sends and a
-"production flip" of it can no longer change Desktop's behaviour. Its baseline row carries a `note`
-saying so. `canProposeSkills` is unaffected. Neither the removal nor the gap changes the harness's
-position: the tool is undeclared either way, and the gap is the tool, never the gate.
+recorded, not enacted. **`canSaveSkill` is not a live drift sentinel.** Its gate id is absent from the
+Desktop 1.44121.1 asar, so the row records what the server sends and nothing more: a flip of it does not
+reach Desktop's behaviour, and the baseline row carries a `note` saying exactly that. `canProposeSkills`
+remains a live sentinel. Either way the harness's position is the same — the tool is undeclared at every
+tier, and the gap is the tool, not the gate.
 
 ### Why it isn't modeled
 
