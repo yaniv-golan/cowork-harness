@@ -526,7 +526,9 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
   default: a quietly-defaulted evidence budget resurfaces later as an unexplained refusal. Raising it enlarges the
   document sent to an external judge — cost, latency and disclosure all scale with it. There IS an upper bound: the
   composed document is capped at 262144 chars, and a budget large enough to push the graded evidence past that fails
-  `authored_evidence_truncated` instead. Between the two, scope the judge rather than raising further.
+  `authored_evidence_truncated` instead. Between the two, scope the judge rather than raising further — and if the scope
+  already names a single file that still does not fit, that deliverable cannot be graded whole and the rubric needs to target a
+  smaller artifact. Note this budget does not lift the 16384-byte PER-FILE cap; only an `evidence_files` scope does.
 - `COWORK_HARNESS_EVALUATOR_MODEL` — the default `critique` grading model (overridden by the `--evaluator-model` flag;
   falls back to the pinned default `claude-opus-4-8`).
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag — a **global** flag that must precede the subcommand — `--dotenv` follows the same rule everywhere except `critique`, which also takes it per-command) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs. `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` overrides the guard that blocks `--resume` onto another project's pinned session.

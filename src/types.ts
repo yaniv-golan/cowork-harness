@@ -832,6 +832,12 @@ export const Assertion = z.strictObject({
       evidence_files: z
         .array(z.string().min(1))
         .min(1)
+        // A REFINE, not a schema-visible constraint: `.min(1)` is satisfied by a single space, so `[" "]`
+        // loaded fine and only surfaced after a paid live run as "matched nothing". Refinements are
+        // invisible to `z.toJSONSchema`, so this rejects at load without changing the published schema.
+        .refine((globs) => globs.every((g) => g.trim().length > 0), {
+          message: "evidence_files entries must not be blank — a whitespace-only glob matches no authored path",
+        })
         .optional()
         .describe(
           "scope the AUTHORED-FILE evidence this judge grades to these globs, so an unrelated file dropped at the capture " +

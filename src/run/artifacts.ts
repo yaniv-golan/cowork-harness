@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
+import { UsageError } from "../errors.js";
 import { anyGlobMatches } from "../glob.js";
 import { warn } from "../io.js";
 
@@ -562,11 +563,13 @@ export function authoredFilesHealthNonEmpty(h: AuthoredFilesHealth): boolean {
 
 /** Default TOTAL authored-file capture budget. Deliberately small: this content is composed into a
  *  document sent to an EXTERNAL judge model, so it is a cost, latency and disclosure surface, not just a
- *  memory bound. A run whose deliverable legitimately exceeds it raises the budget explicitly. */
+ *  memory bound. A run whose deliverable legitimately exceeds it raises the budget explicitly, via
+ *  `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` — there is no CLI flag for it. */
 export const DEFAULT_AUTHORED_TOTAL_BYTES = 64 * 1024;
 /** Default PER-FILE cap. Internal only — no flag. Once an `evidence_files` scope exists, the file a
  *  rubric is about is exempt from this cap anyway (see `priorityGlobs`), and tuning the bound on files
- *  nobody is grading has no use case. */
+ *  nobody is grading has no use case. An UNSCOPED assert has no exemption, so a deliverable larger than
+ *  this is graded as a prefix — which `semantic_matches` now refuses rather than grading. */
 export const DEFAULT_AUTHORED_PER_FILE_BYTES = 16 * 1024;
 
 /** Shared positive-integer validator for the authored-file capture budget, used by BOTH the
@@ -574,8 +577,12 @@ export const DEFAULT_AUTHORED_PER_FILE_BYTES = 16 * 1024;
  *  same shape as `parseMaxArtifactBytes` for the artifact-body cap. Returns null when invalid. */
 export function parseAuthoredTotalBytes(raw: string): number | null {
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.floor(n);
+  // Integer-and->=1, NOT `Math.floor` of anything positive. Flooring accepted "0.5" and silently produced a
+  // budget of ZERO — every authored file omitted, discovered only after a paid live run — while the error
+  // message promised "a positive integer". `Number` also accepts "1e5" and "0x100"; those are unambiguous
+  // but they are not what the message asks for, and a budget is not the place to guess at intent.
+  if (!Number.isInteger(n) || n < 1) return null;
+  return n;
 }
 
 /** The effective total capture budget. THROWS on a malformed env value rather than warning and falling
@@ -586,7 +593,10 @@ export function authoredTotalBytes(): number {
   const env = process.env.COWORK_HARNESS_AUTHORED_TOTAL_BYTES;
   if (env !== undefined && env.trim() !== "") {
     const n = parseAuthoredTotalBytes(env);
-    if (n === null) throw new Error(`COWORK_HARNESS_AUTHORED_TOTAL_BYTES must be a positive integer (got ${JSON.stringify(env)})`);
+    // UsageError, not Error: the CLI routes a bare Error to the "internal" envelope (stack + exit 2), which
+    // frames the operator's typo as a harness crash.
+    if (n === null)
+      throw new UsageError(`COWORK_HARNESS_AUTHORED_TOTAL_BYTES must be a whole number of bytes >= 1 (got ${JSON.stringify(env)})`);
     return n;
   }
   return DEFAULT_AUTHORED_TOTAL_BYTES;

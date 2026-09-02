@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format is based on
   siblings (they share a single authored-file capture, and a scope exempts its files from the per-file cap),
   which now warns.
 
+  The judged document is memoized per assert, and its cache key now includes the scope — keying it on
+  `include_subagent_text` alone was sufficient before scopes existed and is not any more.
+
   Guards that come with it, because scoping is a new way to manufacture a vacuous green: globs matching
   **nothing** fail evidence-unavailable (and the message lists every path the run authored — paths are
   `<root>/<rel>`, which nothing else in the CLI surfaces); an empty list is a load-time error; an in-scope
@@ -39,9 +42,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **A `semantic_matches` document could be composed from the wrong evidence when a scenario had two of
-  them.** The judged document was memoized on `include_subagent_text` alone; with per-assert scoping that
-  key is no longer sufficient, so the cache is now keyed on the scope as well.
+- **A deliverable larger than the 16 KiB per-file capture cap was graded as a PREFIX, and could return a
+  pass on a claim its tail disproved.** With one 87 KB `outputs/report.md` at stock settings the capture
+  keeps the first 16 KiB and flags it `truncated` — but nothing was omitted, nothing was unreadable, and the
+  composed document sits far under the aggregate cap, so the assert graded it and stamped `graded`. A
+  negative rubric ("the report contains no unmitigated risk line") passed over a prefix that never included
+  the line. The only signal was a ` (truncated)` suffix on the file's heading; the evidence-health note,
+  which tells the judge not to read an absence as a negative, never mentioned truncation at all.
+
+  Truncation is now treated exactly like omission: any file the judge would grade that was kept only as a
+  prefix fails `evidence unavailable`, and the health note lists truncated paths in the same "do not infer
+  absence from the cut" register as dropped ones. **This changes the verdict of existing scenarios** — a run
+  whose deliverable exceeded 16 KiB was previously graded on its first 16 KiB and now refuses. The fix is to
+  scope the assert (`semantic_matches.evidence_files: ["outputs/report.md"]`), which exempts the file from
+  the per-file cap; raising `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` alone does **not** lift that cap, and the
+  failure message says so rather than sending you to the wrong knob.
+
+  The feature made this shape more reachable, which is why it is fixed here: a scope on one assert exempts
+  its file from the per-file cap and consumes the shared budget, so an unscoped sibling's per-file allowance
+  is `min(16 KiB, whatever is left)` and can fall to almost nothing. The multi-assert warning now says so.
 
 - **Raising the capture budget could have moved incompleteness from a loud refusal into a silent cut.**
   Authored evidence sits near the tail of the judged document, so an overflow of the 262144-char aggregate
