@@ -55,7 +55,7 @@ All notable changes to this project are documented here. The format is based on
   `sync` now reads the channel out of the asar's own SDK descriptor and queries that, so
   `baselines/desktop-1.40609.1.json` records `manifestChecksumMatch: true`.
 
-  This was not new with `2.1.255`. Of the 24 Desktop builds on record **3 are RC-staged**, and the two
+  This was not new with `2.1.255`. Of the 25 Desktop builds on record **3 are RC-staged**, and the two
   earlier ones (`1.24012.9`/`.11`, agent `2.1.219`) recorded `true` only because that version had *also*
   been promoted to stable — the wrong-channel query happened to resolve. Nothing in the output
   distinguished that lucky pass from a real one, which is the defect this closes.
@@ -89,7 +89,7 @@ All notable changes to this project are documented here. The format is based on
   the corrected row. (It is no longer the newest baseline — Desktop self-updated later in the same cycle and
   `desktop-1.44121.1` ships alongside it; see **Parity** below. Both moved, which is why this release
   touches two baseline files.) `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
-  own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 29
+  own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 28
   gate rows and every fingerprint are unchanged.
 
 - **`semantic_matches.evidence_files` — scope which authored files the judge grades.** A run that authors
@@ -125,9 +125,25 @@ All notable changes to this project are documented here. The format is based on
 
 - **Baseline `desktop-1.44121.1` (agent `2.1.258`).** Desktop self-updated during this release cycle, so
   3.3.0 carries the sync as well as the fix above. Measured unchanged against `desktop-1.40609.1`:
-  `spawn` and `network` **byte-identical**, all 29 recorded gate rows identical, `guest`, `mountLayout`
-  and `settings` identical. The three committed example cassettes are **re-stamped, not re-recorded** —
-  `promptAssetsHash` resolves to the same `491afe2862dc67ea` under both baselines.
+  `spawn` and `network` **byte-identical**, all 28 recorded gate rows identical in value, `guest`,
+  `mountLayout` and `settings` identical. The three committed example cassettes are **re-stamped, not
+  re-recorded** — `promptAssetsHash` resolves to the same `491afe2862dc67ea` under both baselines.
+
+- **The gate-id set moved even though every pinned gate's value held, and one removal matters.**
+  `provenance.asarGateIds` goes **291 → 328 (+43, −6)**. Among the six ids Desktop dropped is
+  **`3246569822`, the `canSaveSkill` gate** — 3 occurrences in the 1.40609.1 asar, **0** in 1.44121.1. As
+  of Desktop 1.44121.1 the skill-saving capability is no longer gate-guarded for a standard session; it
+  rests on the `skillsEnabled` conjunct alone. The baseline still carries the `canSaveSkill:3246569822`
+  row — the server still serves the flag, and that row is fcache provenance, not an asar reading — but it
+  now carries a `note` recording that the id is absent from the asar, so it cannot be mistaken for
+  evidence that a gate still guards the feature. `provenance.spawnEnvSpreadCount` also moves 32 → 33, the
+  new nested conditional spread carrying the third-party key below.
+
+- **Agent `2.1.255` → `2.1.258`.** The agent's `CLAUDE_*` env-flag export table moves **588 → 590**
+  (+3, −1): `CLAUDE_CODE_ARTIFACT_MULTI_FILE`, `CLAUDE_CODE_ARTIFACT_TOOLSET` and
+  `CLAUDE_CODE_MODEL_CATALOG_URL` arrive, `CLAUDE_CODE_PRINT_ENGINE_LOOP` goes. **None is set by the
+  Cowork spawn**, and no flag the spawn does set changed from or to zero consumers, so no harness change
+  follows from the bump.
 
 - **This is the first sync to exercise `agentBinary.releaseBaseUrl`, and it moved in both directions
   within a day.** `1.40609.1` staged a release candidate; `1.44121.1` is back on the stable channel, so

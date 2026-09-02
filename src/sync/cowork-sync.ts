@@ -421,9 +421,12 @@ const RELEASE_BASE_URL_RE = /^https:\/\/downloads\.claude\.ai\/claude-code-relea
  *
  * Two shape hazards this deliberately handles, both measured over that same population:
  *
- *  - THE DELIMITER IS NOT STABLE. `JSON.parse('…')` in 12 of 24 asars (through 1.24012.11) and
- *    `` JSON.parse(`…`) `` in the other 12 (1.25927.0 onward — the same codegen flip that voided 22
- *    literal anchors in this file at once). A backtick-only matcher is blind to half the population.
+ *  - THE DELIMITER IS NOT STABLE, AND NOT MONOTONIC. Both shapes occur and Desktop has gone BACK AND
+ *    FORTH: `JSON.parse('…')` through 1.24012.11, `` JSON.parse(`…`) `` from 1.25927.0 (the same codegen
+ *    flip that voided 22 literal anchors in this file at once) — and single-quoted AGAIN at 1.44121.1
+ *    (measured: 9 `JSON.parse('` at 1.24012.11, 0 at 1.25927.0/1.40609.1, 9 at 1.44121.1). Do NOT
+ *    re-derive this as a version cutoff; there is no "from version X onward" rule to lean on, and a
+ *    matcher accepting only the newest shape is blind to whichever half of the population it excludes.
  *    Note the normalizing tokenizer leaves this blob alone either way: it contains embedded `"`.
  *  - THE TOP-LEVEL `baseUrl` IS NOT THE FIRST ONE. On RC builds the nested `manifest.baseUrl` PRECEDES
  *    it, so a `"baseUrl":"([^"]+)"` first-match reads the wrong key. They agree on both observed RC

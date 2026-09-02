@@ -71,8 +71,9 @@ describe("extractAgentReleaseChannel", () => {
     expect(extractAgentReleaseChannel(bundle)?.baseUrl).toBe(RC);
   });
 
-  // The delimiter flipped at Desktop 1.25927.0 — `JSON.parse('…')` in 12 of 24 backed-up asars and
-  // backticks in the other 12. A backtick-only matcher is blind to half the population.
+  // Both delimiters occur and Desktop has flipped BOTH WAYS: single-quoted through 1.24012.11,
+  // backticks from 1.25927.0, single-quoted again at 1.44121.1. There is no version cutoff to encode —
+  // which is exactly why the extractor accepts both and this case is parameterised over them.
   it.each([
     ["backtick", "`"],
     ["single-quote", "'"],
