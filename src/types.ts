@@ -40,11 +40,24 @@ export const PlatformBaseline = z.looseObject({
     // staging-identity is UNVERIFIED (byte-identity between the staged binary and the official release is
     // confirmed only for versions actually measured; Desktop could in principle repack what it stages).
     // `manifestChecksumMatch`: set ONLY on measured-local rows — whether the measured hash equalled the
-    // official manifest checksum ("unknown" if the manifest was unreachable at sync); omitted on
-    // official-manifest rows (there it would compare the manifest hash to itself → tautological).
+    // official manifest checksum published at `releaseBaseUrl` ("unknown" if that manifest was
+    // unreachable OR not served at sync time — `sync`'s own output distinguishes the two, the field does
+    // not); omitted on official-manifest rows (there it would compare the manifest hash to itself →
+    // tautological). Deliberately still two-valued on the wire: the field has no runtime consumer, and
+    // adding a third literal to a union consumers switch on is a covered-surface change (SPEC.md §12)
+    // bought for a distinction the WARNING/NOTE split already delivers to the human who reads it.
     // NO nativeSha256: the signed+notarized inner Mach-O embeds an LC_CODE_SIGNATURE and never equals any
     // manifest hash, so a manifest-derived native hash would match nothing on the hostloop path.
     sha256: z.string().optional(),
+    // `releaseBaseUrl`: the release channel Desktop staged this agent FROM, read out of the asar's SDK
+    // descriptor at sync time — `https://downloads.claude.ai/claude-code-releases`, or
+    // `…/claude-code-releases/rc/<40-hex commit>` for a release CANDIDATE. Three jobs: it names the
+    // source `manifestChecksumMatch` agreed with (without it the boolean is an unattributed claim); it
+    // makes the ELF-recovery runbook mechanical instead of a guess; and a stable<->RC flip is a real fact
+    // about how Desktop ships, surfaced as a `sync --diff` line. Recomputed every sync (it is derived
+    // from the local asar, so it needs no network and has no carry-forward branch); absent on baselines
+    // written before this field existed, all of which were stable-staged or later promoted.
+    releaseBaseUrl: z.string().optional(),
     shaProvenance: z.enum(["measured-local", "official-manifest"]).optional(),
     manifestChecksumMatch: z.union([z.boolean(), z.literal("unknown")]).optional(),
     // String sentinels: literal-occurrence counts of feature markers in the staged ELF whose runtime

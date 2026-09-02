@@ -2648,18 +2648,35 @@ function cmdBoundary(args: string[]) {
 }
 
 /** Best-effort fetch of the official per-version linux-arm64 release checksum from Anthropic's release
- *  channel. Returns undefined on ANY network/parse error so `sync` stays offline-capable (a missing
- *  manifest never fails the sync — the sha fields just fall back to measured-local or are omitted). */
-async function fetchOfficialElfChecksum(version: string): Promise<string | undefined> {
+ *  channel. NEVER throws: every network/parse failure comes back as a non-`ok` probe so `sync` stays
+ *  offline-capable (a missing manifest never fails the sync — the sha fields just fall back to
+ *  measured-local or are omitted).
+ *
+ *  `baseUrl` is NOT hard-coded: it comes from the asar's own SDK descriptor
+ *  (`extractAgentReleaseChannel`), because Desktop also stages release CANDIDATES served only from
+ *  `…/claude-code-releases/rc/<commit>/`, and that commit is undiscoverable from the network. Hard-coding
+ *  the stable base is what recorded `manifestChecksumMatch:"unknown"` for agent 2.1.255, whose checksum
+ *  IS published and DOES match.
+ *
+ *  The outcome is returned rather than reduced to `string | undefined` so the caller can tell "the
+ *  channel does not serve this version" (a real signal) apart from "we could not reach it" (a rig
+ *  problem). Collapsing those is how a sandbox-blocked fetch was once mistaken for a release finding. */
+type ElfChecksumProbe =
+  | { kind: "ok"; checksum: string; url: string }
+  | { kind: "http"; status: number; url: string }
+  | { kind: "unreachable"; reason: string; url: string };
+
+async function fetchOfficialElfChecksum(version: string, baseUrl: string): Promise<ElfChecksumProbe> {
+  const url = `${baseUrl}/${version}/manifest.json`;
   try {
-    const r = await fetch(`https://downloads.claude.ai/claude-code-releases/${version}/manifest.json`, {
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!r.ok) return undefined;
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return { kind: "http", status: r.status, url };
     const j = (await r.json()) as { platforms?: Record<string, { checksum?: string }> };
-    return j?.platforms?.["linux-arm64"]?.checksum;
-  } catch {
-    return undefined;
+    const checksum = j?.platforms?.["linux-arm64"]?.checksum;
+    if (typeof checksum !== "string") return { kind: "unreachable", reason: "manifest has no platforms[linux-arm64].checksum", url };
+    return { kind: "ok", checksum, url };
+  } catch (e) {
+    return { kind: "unreachable", reason: (e as Error).message, url };
   }
 }
 
@@ -2825,7 +2842,26 @@ async function cmdSync(args: string[]) {
   const AGENT_STRING_SENTINELS = ["tengu_saddle_lantern"] as const;
   const baseSentinels = (baseAgentBinary.stringSentinels ?? undefined) as Record<string, number> | undefined;
 
-  const officialElfChecksum = await fetchOfficialElfChecksum(res.agentVersion);
+  // The channel comes from the LOCAL asar, so it is available offline; only the fetch needs the network.
+  // A null base means the descriptor did not match — `sync()` has already emitted a note about it, and we
+  // SKIP the probe rather than defaulting to the stable path (defaulting is the defect being fixed).
+  const elfProbe: ElfChecksumProbe | null = res.agentReleaseBaseUrl
+    ? await fetchOfficialElfChecksum(res.agentVersion, res.agentReleaseBaseUrl)
+    : null;
+  const officialElfChecksum = elfProbe?.kind === "ok" ? elfProbe.checksum : undefined;
+  // Say WHY the cross-check did not run. Previously a 404 and an unreachable network both wrote
+  // `"unknown"` silently, so nothing distinguished "the channel does not serve this" from "the rig has
+  // no egress" — and nothing distinguished either from a check that actually ran and passed.
+  if (elfProbe?.kind === "http")
+    log(
+      `WARNING: ${elfProbe.url} returned HTTP ${elfProbe.status} — agentBinary.manifestChecksumMatch records "unknown". ` +
+        `The release channel the asar names does not serve this version's manifest; the recorded sha256 is unverified against any independent source.`,
+    );
+  else if (elfProbe?.kind === "unreachable")
+    log(
+      `NOTE: could not reach ${elfProbe.url} (${elfProbe.reason}) — agentBinary.manifestChecksumMatch records "unknown". ` +
+        `sync is offline-capable by design; this says nothing about the release. Re-run with egress to cross-check.`,
+    );
   let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
   let stringSentinels: Record<string, number> | undefined;
   if (existsSync(resolvedDerived)) {
@@ -2863,6 +2899,10 @@ async function cmdSync(args: string[]) {
     ...baseAgentBinary,
     stagedPath: derivedStagedPath,
     nativeStagedPath: derivedNativeStagedPath,
+    // Recomputed from the live asar every sync, never spread from the base: `diffBaselines` is a generic
+    // recursive differ, so this only shows a stable<->RC channel flip if the candidate carries a FRESH
+    // value. A carried-forward one would make the diff silent on exactly the change it exists to catch.
+    releaseBaseUrl: res.agentReleaseBaseUrl ?? undefined,
     sha256: shaFields.sha256,
     shaProvenance: shaFields.shaProvenance,
     manifestChecksumMatch: shaFields.manifestChecksumMatch,

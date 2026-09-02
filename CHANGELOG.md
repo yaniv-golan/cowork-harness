@@ -6,6 +6,47 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`agentBinary.manifestChecksumMatch` was cross-checking the wrong release channel, and had been for a
+  month.** `sync` hard-coded the *stable* versioned manifest path. Desktop also stages release
+  **candidates**, served only from `…/claude-code-releases/rc/<commit>/`, so for agent `2.1.255` the
+  stable path 404s — and because the helper swallows every fetch failure to stay offline-capable, the
+  baseline recorded `"unknown"` for a build whose published checksum matches the staged ELF exactly.
+  `sync` now reads the channel out of the asar's own SDK descriptor and queries that, so
+  `baselines/desktop-1.40609.1.json` records `manifestChecksumMatch: true`.
+
+  This was not new with `2.1.255`. Of the 24 Desktop builds on record **3 are RC-staged**, and the two
+  earlier ones (`1.24012.9`/`.11`, agent `2.1.219`) recorded `true` only because that version had *also*
+  been promoted to stable — the wrong-channel query happened to resolve. Nothing in the output
+  distinguished that lucky pass from a real one, which is the defect this closes.
+
+- **`sync` now says *why* a checksum cross-check did not run.** An HTTP status from the channel is a
+  `WARNING` (it does not serve this version's manifest); a transport failure is a `NOTE` (the rig has no
+  egress, which says nothing about the release). Previously both wrote `"unknown"` silently — and a
+  sandbox-blocked fetch was once mistaken for a finding about the release because of it. The recorded
+  field stays two-valued (`boolean | "unknown"`); the distinction is in the operator-facing output.
+
+- **The documented ELF-download recipes `curl`ed a URL that 404s.** `docs/ci.md`, the companion skill's
+  `references/ci-recipe.md` and `docs/maintenance.md`'s recovery runbook all assumed the stable path
+  while pinning `V=2.1.255`, which is RC-staged — so the copy-paste CI step failed. They now take the
+  base URL from the baseline. `scripts/check-versions.ts` pins it: the invariant that kept `V=` honest
+  had no idea the URL had stopped working, and it is what propagated the broken pin into all three.
+
+### Added
+
+- **`agentBinary.releaseBaseUrl` in the platform baseline** — the release channel Desktop staged the
+  agent from. It names the source `manifestChecksumMatch` agreed with (without it the boolean is an
+  unattributed claim), makes the ELF-recovery runbook work for an RC-staged version, and surfaces a
+  stable↔RC flip as a `sync --diff` line. Recomputed from the local asar every sync, so it needs no
+  network; absent on baselines written earlier, all of which were stable-staged or later promoted.
+
+- **`baselines/desktop-1.40609.1.json` re-synced** against the live Desktop 1.40609.1 install to pick up
+  the corrected row. `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
+  own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 29
+  gate rows and every fingerprint are unchanged.
+
+
 ## [3.2.1] — 2026-09-02
 
 ### Parity

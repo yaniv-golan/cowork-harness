@@ -51,6 +51,11 @@ export interface SyncResult {
   // Cowork system-prompt content fingerprint (H1-H3 prompt-drift guard) — null when the consumption
   // site / constant definition couldn't be found in the asar (itself an unknownDeltas entry).
   promptFingerprint: PromptFingerprint | null;
+  /** The release channel Desktop staged the agent from, from the asar's SDK descriptor (see
+   *  extractAgentReleaseChannel). null = the descriptor did not match, in which case the official
+   *  checksum cross-check is SKIPPED rather than guessed against the stable path. Derived from the
+   *  LOCAL asar, so it is available offline — only the checksum fetch needs the network. */
+  agentReleaseBaseUrl: string | null;
   unknownDeltas: string[];
   notes: string[]; // non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs) — surfaced by the CLI, never a delta
 }
@@ -390,6 +395,123 @@ export function extractAsarGateIds(files: Map<string, string>): string[] {
   return [...out].sort((a, b) => Number(a) - Number(b));
 }
 
+/** The agent release channel Desktop staged from, read out of the asar's SDK descriptor. */
+export interface AgentReleaseChannel {
+  /** `https://downloads.claude.ai/claude-code-releases`, or `…/claude-code-releases/rc/<40-hex commit>`. */
+  baseUrl: string;
+  /** The descriptor's own pinned SDK version. NOT necessarily the STAGED agent version — see
+   *  checkAgentReleaseChannel: Desktop pins the next SDK before it stages it, measured twice. */
+  sdkVersion: string;
+}
+
+/** Matches BOTH channel shapes and nothing else. The `/rc/<sha>` group is optional because a stable
+ *  build's base is the same URL without it — RC is not a special case bolted on, it is one more segment. */
+const RELEASE_BASE_URL_RE = /^https:\/\/downloads\.claude\.ai\/claude-code-releases(?:\/rc\/[0-9a-f]{40})?$/;
+
+/**
+ * Extract the agent release channel from the asar's SDK descriptor — the `JSON.parse(...)` blob shaped
+ * `{"version":"2.1.255","manifest":{…},"baseUrl":"…","sdkWrapperVersion":"…"}`.
+ *
+ * WHY THIS EXISTS: `fetchOfficialElfChecksum` used to hard-code the STABLE versioned path. Desktop also
+ * stages release CANDIDATES, served only from `…/claude-code-releases/rc/<commit>/`, and there is no way
+ * to discover that commit from the network — probed: `rc`, `rc/latest`, `rc/<short-sha>` and
+ * `rc/<sha>/manifest.json` all 404, and the `stable`/`latest` pointers name neither staged version. The
+ * asar is the ONLY source. Measured across all 24 backed-up asars: 21 stable, 3 RC (1.24012.9,
+ * 1.24012.11, 1.40609.1) — RC staging is routine, not a one-off.
+ *
+ * Two shape hazards this deliberately handles, both measured over that same population:
+ *
+ *  - THE DELIMITER IS NOT STABLE. `JSON.parse('…')` in 12 of 24 asars (through 1.24012.11) and
+ *    `` JSON.parse(`…`) `` in the other 12 (1.25927.0 onward — the same codegen flip that voided 22
+ *    literal anchors in this file at once). A backtick-only matcher is blind to half the population.
+ *    Note the normalizing tokenizer leaves this blob alone either way: it contains embedded `"`.
+ *  - THE TOP-LEVEL `baseUrl` IS NOT THE FIRST ONE. On RC builds the nested `manifest.baseUrl` PRECEDES
+ *    it, so a `"baseUrl":"([^"]+)"` first-match reads the wrong key. They agree on both observed RC
+ *    builds, which is exactly why this is latent rather than broken — parse the JSON and read the
+ *    top-level field rather than regexing for the name.
+ *
+ * (`…/claude-ssh-releases` is a DIFFERENT descriptor in every asar, and a first-match never reaches it —
+ * measured 0 of 24. It is wrong in principle, not in observation; the two hazards above are the real ones.)
+ *
+ * Returns null on any miss — no stable-path fallback. Falling back here is precisely what turned a
+ * silent rot into a silent `"unknown"`, which is the defect this closes.
+ */
+export function extractAgentReleaseChannel(bundle: string): AgentReleaseChannel | null {
+  // Anchor on the descriptor's opening shape, then scan to the matching delimiter honouring backslash
+  // escapes, rather than a lazy `.*?` to the next quote — a JSON value containing the delimiter would
+  // truncate the blob and fail the parse for a reason that looks like a shape change.
+  const open = /JSON\.parse\((["'`])(?=\{"version":"\d+\.\d+\.\d+","manifest":\{)/g;
+  const found = new Map<string, AgentReleaseChannel>();
+  for (let m = open.exec(bundle); m !== null; m = open.exec(bundle)) {
+    const delim = m[1];
+    const start = m.index + m[0].length;
+    let i = start;
+    for (; i < bundle.length; i++) {
+      if (bundle[i] === "\\") i++;
+      else if (bundle[i] === delim) break;
+    }
+    if (i >= bundle.length) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(bundle.slice(start, i));
+    } catch {
+      continue;
+    }
+    const d = parsed as { version?: unknown; baseUrl?: unknown; manifest?: { version?: unknown } };
+    // Self-consistency: the descriptor's own two version fields must agree (24/24 do). This is the
+    // check that the blob is what we think it is — NOT a check against the staged agent version, which
+    // legitimately differs and is handled in checkAgentReleaseChannel.
+    if (typeof d.version !== "string" || typeof d.baseUrl !== "string") continue;
+    if (typeof d.manifest?.version !== "string" || d.manifest.version !== d.version) continue;
+    if (!RELEASE_BASE_URL_RE.test(d.baseUrl)) continue;
+    found.set(`${d.version}|${d.baseUrl}`, { baseUrl: d.baseUrl, sdkVersion: d.version });
+  }
+  // Exactly one DISTINCT descriptor, asserted rather than assumed: `asarGateIds` twice under-reported by
+  // silently taking a subset of a population it believed was whole. Picking one of several here would
+  // pin provenance to whichever the bundle happened to order first.
+  if (found.size !== 1) return null;
+  return [...found.values()][0];
+}
+
+/**
+ * Operator-facing checks on the extracted channel. Returns NOTE-class strings ONLY — never an unknown
+ * delta, so this can never block a baseline write.
+ *
+ * WHY NOT A HARD DELTA: `manifestChecksumMatch` has no runtime consumer; it is read by a human during a
+ * parity pass. Every existing unknownDeltas member makes the baseline wrong for RUNNING the agent. And
+ * the anchor above sits on shifting ground (the delimiter has already flipped once), so a blocking
+ * literal anchor is a release-day wedge — the same argument that demoted checkSubagentOverrideGate on
+ * 2026-08-27: a guard that cannot clear itself from its own inputs is a permanent block, not a tripwire.
+ *
+ * A version disagreement is BENIGN on a stable base and load-bearing on an RC one. Measured: Desktop
+ * pins the NEXT SDK in the asar while still staging the previous one (1.20186.0 staged 2.1.202 with the
+ * descriptor reading 2.1.205; 1.20186.9 staged 2.1.205 reading 2.1.209) — 2 of the 21 asars that have a
+ * committed baseline. Both were stable, so `<base>/<stagedVersion>/manifest.json` still resolved and the
+ * recorded `manifestChecksumMatch:true` is correct. On an RC base the commit IS the version's identity,
+ * so the same disagreement means the composed URL will 404 — worth saying out loud, still not a refusal.
+ */
+export function checkAgentReleaseChannel(channel: AgentReleaseChannel | null, agentVersion: string): string[] {
+  if (!channel)
+    return [
+      "agentBinary.releaseBaseUrl: the asar's SDK release-channel descriptor did not match (shape moved, or more than one distinct descriptor). " +
+        'The official-checksum cross-check is SKIPPED and manifestChecksumMatch records "unknown" — deliberately, rather than guessing the stable path, ' +
+        'which is how an RC-staged agent silently recorded "unknown" before. Re-anchor extractAgentReleaseChannel (maintainer).',
+    ];
+  if (channel.sdkVersion === agentVersion) return [];
+  const isRc = channel.baseUrl.includes("/rc/");
+  if (!isRc)
+    return [
+      `agentBinary.releaseBaseUrl: the asar pins SDK ${channel.sdkVersion} while ${agentVersion} is staged. ` +
+        `Benign on the stable channel — Desktop pins the next SDK before staging it (measured at 1.20186.0 and 1.20186.9) — ` +
+        `and the checksum cross-check still resolves against the STAGED version.`,
+    ];
+  return [
+    `agentBinary.releaseBaseUrl: WARNING — the asar pins SDK ${channel.sdkVersion} on a RELEASE-CANDIDATE channel while ${agentVersion} is staged. ` +
+      `On an RC channel the commit is the version's identity, so ${channel.baseUrl}/${agentVersion}/manifest.json is likely to 404 ` +
+      `and manifestChecksumMatch will record "unknown". Verify by hand before trusting this baseline's provenance.`,
+  ];
+}
+
 export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string, GateState> | null {
   if (!existsSync(path)) return null;
   let buf: Buffer;
@@ -527,8 +649,17 @@ export function sync(): SyncResult {
   // first-party deployment the harness models, the VM allowlist is server-delivered per session and
   // absent from the asar (checkEgressContractFacts, run inside extractFromAsar, guards that fact and
   // hard-fails if it stops holding).
-  const { fingerprint, asarGateIds, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } =
-    extractFromAsar(unknown, gates);
+  const {
+    fingerprint,
+    asarGateIds,
+    spawnEnv,
+    spawnEnvKeys,
+    spawnEnvSpreadCount,
+    modelEffortConfig,
+    promptFingerprint,
+    agentReleaseChannel,
+    notes,
+  } = extractFromAsar(unknown, gates);
 
   // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
   // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
@@ -553,6 +684,8 @@ export function sync(): SyncResult {
   // It blocked the write while being unable to distinguish the two states it names; a guard that can
   // never clear itself from its own inputs is a permanent block, not a tripwire.
   notes.push(...checkSubagentOverrideGate(gates));
+  // NOTE-class only, never a delta — see checkAgentReleaseChannel for why this must not block a write.
+  notes.push(...checkAgentReleaseChannel(agentReleaseChannel, agentVersion));
 
   return {
     appVersion,
@@ -569,6 +702,7 @@ export function sync(): SyncResult {
     spawnEnvSpreadCount,
     modelEffortConfig,
     promptFingerprint,
+    agentReleaseBaseUrl: agentReleaseChannel?.baseUrl ?? null,
     unknownDeltas: unknown,
     notes,
   };
@@ -1117,6 +1251,7 @@ function extractFromAsar(
   spawnEnvSpreadCount: number;
   modelEffortConfig: ModelEffortConfig | null;
   promptFingerprint: PromptFingerprint | null;
+  agentReleaseChannel: AgentReleaseChannel | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1129,6 +1264,7 @@ function extractFromAsar(
       spawnEnvSpreadCount: 0,
       modelEffortConfig: null,
       promptFingerprint: null,
+      agentReleaseChannel: null,
       notes: [],
     };
   }
@@ -1200,6 +1336,7 @@ function extractFromAsar(
       spawnEnvSpreadCount: spawn.spreadCount,
       modelEffortConfig,
       promptFingerprint,
+      agentReleaseChannel: extractAgentReleaseChannel(bundle),
       notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
     };
   } catch (e) {
@@ -1212,6 +1349,7 @@ function extractFromAsar(
       spawnEnvSpreadCount: 0,
       modelEffortConfig: null,
       promptFingerprint: null,
+      agentReleaseChannel: null,
       notes: [],
     };
   } finally {

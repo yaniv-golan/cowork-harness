@@ -8,10 +8,11 @@
     "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.255/claude.app/Contents/MacOS/claude",
     "sha256": "31822816a0d92b4b0324d84b99d349f25d3f252aca06edf964d7324f23e1bec7",
     "shaProvenance": "measured-local",
-    "manifestChecksumMatch": "unknown",
+    "manifestChecksumMatch": true,
     "stringSentinels": {
       "tengu_saddle_lantern": 2
-    }
+    },
+    "releaseBaseUrl": "https://downloads.claude.ai/claude-code-releases/rc/aa8f2d981f0481a41774e243a213e29dfe810e1f"
   },
   "guest": {
     "os": "linux",
@@ -576,8 +577,8 @@
     ],
     "spawnEnvSpreadCount": 32,
     "fcache": {
-      "content16": "7cba90e619996290",
-      "embeddedTimestamp": 1788347009597,
+      "content16": "2f689d6bf8c0f0cc",
+      "embeddedTimestamp": 1788354886430,
       "featureCount": 316
     },
     "asarGateIds": [

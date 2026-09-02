@@ -647,7 +647,45 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
         errors.push(`${f} pin "V=${pin}" != max baseline's agentVersion "${maxAgentVersion}" (baselines/desktop-${maxBaseline}.json)`);
       }
     }
-  } else if (maxBaseline) {
+  }
+  // 8b. The same three recipes `curl` the ELF, and the STABLE release path does not serve every version:
+  // Desktop stages release CANDIDATES from `…/claude-code-releases/rc/<commit>/`, and 2.1.255 is one — so
+  // pinning V without pinning the BASE URL is what shipped three `curl`s that 404. Invariant 8 kept the
+  // version honest and had no idea the URL had stopped working; this closes that half.
+  //
+  // The two CI recipes carry a LITERAL base (a CI runner has no repo baseline to read), so they are
+  // checked against the max baseline's recorded channel. `docs/maintenance.md` runs inside the repo, so
+  // it reads the field with jq and only the fallback shape is checked — a literal there would be a third
+  // hand-maintained copy of the same fact.
+  if (maxBaseline) {
+    const STABLE_BASE = "https://downloads.claude.ai/claude-code-releases";
+    const agentBinary = (json(`baselines/desktop-${maxBaseline}.json`).agentBinary ?? {}) as { releaseBaseUrl?: string };
+    const expectedBase = agentBinary.releaseBaseUrl ?? STABLE_BASE;
+    for (const f of ["docs/ci.md", ".claude/skills/cowork-harness/references/ci-recipe.md"]) {
+      const base = r(f).match(/^\s*B=(\S+)\s*$/m)?.[1];
+      if (!base) {
+        errors.push(
+          `${f} has no "B=<release base URL>" pin to verify against baselines/desktop-${maxBaseline}.json's agentBinary.releaseBaseUrl`,
+        );
+      } else if (base !== expectedBase) {
+        errors.push(
+          `${f} pin "B=${base}" != max baseline's release channel "${expectedBase}" (baselines/desktop-${maxBaseline}.json) — the recipe's curl will 404`,
+        );
+      }
+    }
+    const runbook = r("docs/maintenance.md");
+    if (!runbook.includes(`.agentBinary.releaseBaseUrl // "${STABLE_BASE}"`)) {
+      errors.push(
+        `docs/maintenance.md's recovery runbook must read the release base from agentBinary.releaseBaseUrl with the "${STABLE_BASE}" fallback`,
+      );
+    }
+    for (const f of vPinFiles) {
+      if (r(f).includes(`${STABLE_BASE}/$V/`)) {
+        errors.push(`${f} still curls the hard-coded STABLE path "${STABLE_BASE}/$V/" — it 404s for an RC-staged agent; use "$B/$V/"`);
+      }
+    }
+  }
+  if (!maxAgentVersion && maxBaseline) {
     errors.push(`baselines/desktop-${maxBaseline}.json has no "agentVersion" field`);
   }
 

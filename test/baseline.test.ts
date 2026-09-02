@@ -692,6 +692,23 @@ describe("committed baselines carry agent-binary provenance", () => {
     expect(typeof ab.manifestChecksumMatch).toBe("boolean");
     expect(ab.manifestChecksumMatch).toBe(true);
   });
+  // The regression pin for the RC-channel fix. Desktop 1.40609.1 stages agent 2.1.255, a release
+  // CANDIDATE served only from `…/claude-code-releases/rc/<commit>/`. The stable-only checksum fetch
+  // 404'd and recorded `manifestChecksumMatch:"unknown"` for a build whose published checksum matches the
+  // staged ELF exactly. Both fields below come from a real `sync` against the live install — a hand-edit
+  // would make this test assert nothing about the extractor.
+  it("desktop-1.40609.1 (RC-staged) records the RC channel and a TRUE manifest match", () => {
+    const ab = loadBaseline("desktop-1.40609.1").agentBinary;
+    expect(ab.shaProvenance).toBe("measured-local");
+    expect(ab.manifestChecksumMatch).toBe(true);
+    expect(ab.releaseBaseUrl).toMatch(/^https:\/\/downloads\.claude\.ai\/claude-code-releases\/rc\/[0-9a-f]{40}$/);
+  });
+  // Every baseline written before the field existed was stable-staged or later promoted, so the
+  // recovery runbook's stable-path fallback is safe for them. Pinned so that stops being an assumption:
+  // a NEW baseline that omits the field while being RC-staged would leave its ELF unrecoverable.
+  it("a pre-fix baseline has no releaseBaseUrl, and its version is still served from the stable path", () => {
+    expect(loadBaseline("desktop-1.40609.0").agentBinary.releaseBaseUrl).toBeUndefined();
+  });
   it("an absent-version baseline carries an official-manifest sha256 (staging-identity unverified, no match field)", () => {
     const ab = loadBaseline("desktop-1.13576.1").agentBinary;
     expect(ab.sha256).toMatch(/^[0-9a-f]{64}$/);

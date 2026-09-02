@@ -37,11 +37,17 @@ jobs:
       - name: Stage the agent binary (official channel, sha256-verified against the pinned baseline)
         run: |
           V=2.1.255   # match your scenario's pinned baseline's agentVersion
+          # The release channel is NOT always the stable one. Desktop also stages release CANDIDATES,
+          # served only from .../claude-code-releases/rc/<commit>/ — the stable path 404s for those, and
+          # 2.1.255 is one. Take B from your pinned baseline's agentBinary.releaseBaseUrl; baselines
+          # written before that field existed were stable-staged, so their base is the plain
+          # https://downloads.claude.ai/claude-code-releases.
+          B=https://downloads.claude.ai/claude-code-releases/rc/aa8f2d981f0481a41774e243a213e29dfe810e1f
           # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here, or
           # read it with jq if you vendor the baseline. An unverified download is an unverified agent:
           # this step FAILS rather than staging one, which is the whole point of naming it "verified".
           EXPECTED=<paste agentBinary.sha256 for $V>
-          curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
+          curl -fSL "$B/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           echo "$EXPECTED  $RUNNER_TEMP/claude-$V" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/claude-$V"
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"

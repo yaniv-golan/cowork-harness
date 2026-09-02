@@ -97,7 +97,8 @@ If the agent version bumped, there is no image rebuild: the agent ELF is bind-mo
 
 `sync` records the Linux/arm64 ELF's SHA-256 in the baseline's `agentBinary`:
 
-- `sha256` + `shaProvenance: "measured-local"` — hashed from the staged binary on the syncing machine (the trustworthy point-of-truth), plus `manifestChecksumMatch` (whether it equalled Anthropic's official per-version release checksum; `"unknown"` if the manifest was unreachable). `sync` stays offline-capable — a missing manifest never fails it.
+- `sha256` + `shaProvenance: "measured-local"` — hashed from the staged binary on the syncing machine (the trustworthy point-of-truth), plus `manifestChecksumMatch` (whether it equalled Anthropic's official per-version release checksum; `"unknown"` if that manifest was unreachable **or** not served). `sync` stays offline-capable — a missing manifest never fails it, and it now says *which* of the two happened: an HTTP status is a `WARNING` (the channel does not serve this version), a transport failure is a `NOTE` (your rig has no egress, which says nothing about the release).
+- `releaseBaseUrl` — the release channel Desktop staged the agent **from**, read out of the asar at sync time. Usually `https://downloads.claude.ai/claude-code-releases`; for a **release candidate** it is `…/claude-code-releases/rc/<40-hex commit>`. Desktop stages RCs routinely (3 of the 24 builds observed so far), the stable path 404s for them, and the commit **cannot be discovered from the network** — `stable` and `latest` point at other versions, and there is no index — so the asar is the only source. This field is what makes the recovery command above work for an RC-staged version, and a stable↔RC flip shows up as a `sync --diff` line. Absent on baselines written before it existed; all of those were stable-staged or later promoted, which is what the command's fallback relies on.
 - `sha256` + `shaProvenance: "official-manifest"` — for a version **not** staged on this machine (e.g. a back-filled older baseline), copied from Anthropic's release manifest. Staging-identity is **unverified**: it's the official release hash, not confirmed byte-identical to what Cowork stages for that version (byte-identity is confirmed only for versions actually measured).
 
 There is deliberately **no `nativeSha256`**: the signed+notarized native `.app` inner Mach-O embeds an `LC_CODE_SIGNATURE` and never equals any manifest hash.
@@ -112,7 +113,12 @@ Old staged binaries are re-downloadable from Anthropic's own release channel. Fo
 
 ```bash
 V=2.1.255   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
-curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
+# The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
+# from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
+# `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
+# written before `releaseBaseUrl` existed was stable-staged or later promoted, hence the fallback:
+B=$(jq -r '.agentBinary.releaseBaseUrl // "https://downloads.claude.ai/claude-code-releases"' baselines/desktop-<latest>.json)
+curl -fSL "$B/$V/linux-arm64/claude" -o "claude-$V"
 # verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
 shasum -a 256 "claude-$V"
 COWORK_AGENT_BINARY="$PWD/claude-$V" cowork-harness run <scenario>.yaml   # scenario baseline pins $V
