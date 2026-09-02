@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 3.2.1` (baseline `desktop-1.40609.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 3.3.0` (baseline `desktop-1.44121.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -169,6 +169,10 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    rate. Assert tool use with the structural keys instead (`tool_called`, `present_files_called`,
    `subagent_dispatched`, `hook_blocked`), and reserve `semantic_matches` for what the agent *said* or
    *wrote*. For a fan-out skill whose real work happens in sub-agents, add `include_subagent_text: true`.
+   If the run authors more than a couple of files, add `evidence_files: ["outputs/report.md"]` naming the
+   deliverable — otherwise the 64 KiB capture budget is spent alphabetically and an unrelated intermediate
+   dropped at the cap refuses the whole verdict. Paths are `<root>/<rel>`; a glob that matches nothing
+   fails and prints the paths the run actually authored.
 
 2. **Write DISCRIMINATING claims, and verify each against ground truth — not memory.** A claim that
    contradicts how the tool actually behaves can *never* pass (the correct skill will contradict it), and

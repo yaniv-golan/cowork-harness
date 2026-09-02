@@ -707,7 +707,25 @@ describe("committed baselines carry agent-binary provenance", () => {
   // recovery runbook's stable-path fallback is safe for them. Pinned so that stops being an assumption:
   // a NEW baseline that omits the field while being RC-staged would leave its ELF unrecoverable.
   it("a pre-fix baseline has no releaseBaseUrl, and its version is still served from the stable path", () => {
-    expect(loadBaseline("desktop-1.40609.0").agentBinary.releaseBaseUrl).toBeUndefined();
+    const ab = loadBaseline("desktop-1.40609.0").agentBinary;
+    expect(ab.releaseBaseUrl).toBeUndefined();
+    // The name promised two things and asserted one. The second half is the load-bearing half: the
+    // runbook's stable-path fallback for pre-field baselines is only safe if those versions really are
+    // on the stable channel. Asserted from the recorded provenance rather than the network, so the test
+    // stays hermetic: a `measured-local` sha that the official manifest AGREED with (`true`) is exactly
+    // the evidence that the stable manifest served this version at sync time.
+    expect(ab.shaProvenance).toBe("measured-local");
+    expect(ab.manifestChecksumMatch).toBe(true);
+  });
+
+  // The newest baseline must always carry the field, in one of its two legal shapes. This is the pin
+  // that makes check-versions' fail-closed 8b meaningful: without it, an extractor that silently starts
+  // returning null would ship a baseline with no channel and nothing would notice until a consumer's
+  // `curl` 404'd.
+  it("the newest baseline always records a release channel, stable or rc/<40-hex>", () => {
+    expect(loadBaseline("latest").agentBinary.releaseBaseUrl).toMatch(
+      /^https:\/\/downloads\.claude\.ai\/claude-code-releases(\/rc\/[0-9a-f]{40})?$/,
+    );
   });
   it("an absent-version baseline carries an official-manifest sha256 (staging-identity unverified, no match field)", () => {
     const ab = loadBaseline("desktop-1.13576.1").agentBinary;

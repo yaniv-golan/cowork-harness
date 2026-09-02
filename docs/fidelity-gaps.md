@@ -971,8 +971,11 @@ the harness, so the aim is to let a scenario choose which branch to exercise.
 
 **Real Cowork behaviour:** a cowork session on a standard account declares
 `mcp__cowork__save_skill` on the same `cowork` SDK-MCP server that carries `present_files` —
-gated on `canSaveSkill` (`3246569822`, on/force for a standard account) combined with the
-session's `skillsEnabled`. Three properties matter more than the tool's existence:
+gated on the session's `skillsEnabled`. **Through Desktop 1.40609.1 this was combined with a
+`canSaveSkill` GrowthBook gate (`3246569822`, on/force for a standard account); Desktop 1.44121.1
+REMOVED that gate** — the id has 3 occurrences in the 1.40609.1 asar and 0 in 1.44121.1, so for a
+standard session `skillsEnabled` is now the whole condition. Three properties matter more than the
+tool's existence:
 
 - **It uploads; it does not write files.** The tool `POST`s a zipped skill to
   `/api/organizations/{org}/skills/upload-skill`, so a saved skill lands in the user's
@@ -1007,9 +1010,13 @@ tool is declared at no tier — but both raise the cost of the gap. A skill whos
 for next time" cannot be exercised here at all, and that ending sits behind more production machinery
 than the tool declaration alone suggests.
 
-**Harness behaviour:** neither tool is declared, at any tier. Both gates are pinned in the synced
-baseline (`provenance.gates.canSaveSkill`, `provenance.gates.canProposeSkills`) as drift sentinels, so
-a production flip surfaces as a `sync` diff — but the gates are recorded, not enacted.
+**Harness behaviour:** neither tool is declared, at any tier. Both gate rows are still pinned in the
+synced baseline (`provenance.gates.canSaveSkill`, `provenance.gates.canProposeSkills`) and both are
+recorded, not enacted. **`canSaveSkill` is not a live drift sentinel.** Its gate id is absent from the
+Desktop 1.44121.1 asar, so the row records what the server sends and nothing more: a flip of it does not
+reach Desktop's behaviour, and the baseline row carries a `note` saying exactly that. `canProposeSkills`
+remains a live sentinel. Either way the harness's position is the same — the tool is undeclared at every
+tier, and the gap is the tool, not the gate.
 
 ### Why it isn't modeled
 

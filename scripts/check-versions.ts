@@ -660,6 +660,19 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   if (maxBaseline) {
     const STABLE_BASE = "https://downloads.claude.ai/claude-code-releases";
     const agentBinary = (json(`baselines/desktop-${maxBaseline}.json`).agentBinary ?? {}) as { releaseBaseUrl?: string };
+    // FAIL CLOSED. `?? STABLE_BASE` here would undo the extractor's own fail-closed design two hops
+    // later: if a future SDK-descriptor reshape makes the extractor return null, `sync` writes the max
+    // baseline with NO `releaseBaseUrl`, this check would silently expect the STABLE base, and the `B=`
+    // pin would pass on an RC-staged agent — reinstating exactly the 404 this release fixes, with a
+    // green guard on top of it. A missing field on the NEWEST baseline is an extractor failure, not a
+    // stable-channel signal, so it is an error. (Older baselines predate the field; this check only ever
+    // reads the max one, so no back-compat default is owed. If it is ever taught to read older
+    // baselines, default to STABLE only for those written before 1.40609.1.)
+    if (agentBinary.releaseBaseUrl === undefined) {
+      errors.push(
+        `baselines/desktop-${maxBaseline}.json has no agentBinary.releaseBaseUrl — the release-channel extractor returned nothing, so the B= pins below cannot be verified and an RC-staged agent would pass unnoticed. Fix the extractor rather than defaulting to the stable base.`,
+      );
+    }
     const expectedBase = agentBinary.releaseBaseUrl ?? STABLE_BASE;
     for (const f of ["docs/ci.md", ".claude/skills/cowork-harness/references/ci-recipe.md"]) {
       const base = r(f).match(/^\s*B=(\S+)\s*$/m)?.[1];

@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g "cowork-harness@^3.2.1"    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^3.3.0"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -38,7 +38,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@^3.2.1"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@^3.3.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -48,7 +48,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^3.2.1"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^3.3.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -518,6 +518,17 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HARNESS_JUDGE_MODEL` — the default model for `semantic_matches`' LLM judge (overridden by a
   per-assertion `judge_model`; falls back to the pinned default `claude-opus-4-8`). Pin it alongside `judge_model` for a
   reproducible before/after comparison across re-records.
+- `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` — total size budget for the authored-file evidence a `semantic_matches` judge
+  grades (default 65536). Raise it when a run's real deliverable is larger than the default — a pipeline whose
+  intermediates dwarf its output otherwise spends the budget before reaching the file the rubric is about, and the
+  verdict is refused **evidence unavailable**. Pair it with `semantic_matches.evidence_files` so the budget is spent on
+  the graded files first (they are also exempt from the per-file cap). A malformed value is a hard error, not a silent
+  default: a quietly-defaulted evidence budget resurfaces later as an unexplained refusal. Raising it enlarges the
+  document sent to an external judge — cost, latency and disclosure all scale with it. There IS an upper bound: the
+  composed document is capped at 262144 chars, and a budget large enough to push the graded evidence past that fails
+  `authored_evidence_truncated` instead. Between the two, scope the judge rather than raising further — and if the scope
+  already names a single file that still does not fit, that deliverable cannot be graded whole and the rubric needs to target a
+  smaller artifact. Note this budget does not lift the 16384-byte PER-FILE cap; only an `evidence_files` scope does.
 - `COWORK_HARNESS_EVALUATOR_MODEL` — the default `critique` grading model (overridden by the `--evaluator-model` flag;
   falls back to the pinned default `claude-opus-4-8`).
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag — a **global** flag that must precede the subcommand — `--dotenv` follows the same rule everywhere except `critique`, which also takes it per-command) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs. `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` overrides the guard that blocks `--resume` onto another project's pinned session.

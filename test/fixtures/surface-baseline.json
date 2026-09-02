@@ -3285,6 +3285,12 @@
         "type": "object",
         "closed": true
       },
+      ".assert[].semantic_matches.evidence_files": {
+        "type": "array"
+      },
+      ".assert[].semantic_matches.evidence_files[]": {
+        "type": "string"
+      },
       ".assert[].semantic_matches.include_subagent_text": {
         "type": "boolean"
       },
@@ -3864,6 +3870,7 @@
       "COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE",
       "COWORK_HARNESS_ALLOW_FOREIGN_RESUME",
       "COWORK_HARNESS_ALLOW_MISSING_PROMPT",
+      "COWORK_HARNESS_AUTHORED_TOTAL_BYTES",
       "COWORK_HARNESS_CLAUDE_BIN",
       "COWORK_HARNESS_DEBUG",
       "COWORK_HARNESS_DEBUG_SKILLHASH",

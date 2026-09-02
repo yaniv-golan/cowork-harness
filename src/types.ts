@@ -829,6 +829,28 @@ export const Assertion = z.strictObject({
         .optional()
         .describe("how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)"),
       judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
+      evidence_files: z
+        .array(z.string().min(1))
+        .min(1)
+        // A REFINE, not a schema-visible constraint: `.min(1)` is satisfied by a single space, so `[" "]`
+        // loaded fine and only surfaced after a paid live run as "matched nothing". Refinements are
+        // invisible to `z.toJSONSchema`, so this rejects at load without changing the published schema.
+        .refine((globs) => globs.every((g) => g.trim().length > 0), {
+          message: "evidence_files entries must not be blank — a whitespace-only glob matches no authored path",
+        })
+        .optional()
+        .describe(
+          "scope the AUTHORED-FILE evidence this judge grades to these globs, so an unrelated file dropped at the capture " +
+            "budget can no longer refuse the verdict. NOT an existence assertion (that is `file_exists`) — it selects which " +
+            "authored files reach the judge and which omissions are treated as fatal. Paths are `<user-visible root>/<rel>` " +
+            "(e.g. `outputs/report.md`, NOT a bare `report.md`), the same key `no_unexpected_files`/`no_lost_write_back` use; " +
+            "session-root deliverables carry the synthetic `scratchpad/` prefix. Glob syntax is `*`/`?`/`**` (NOT regex), " +
+            "matched over the FULL path. Globs matching NOTHING fail evidence-unavailable rather than grading a rubric " +
+            "against zero authored evidence — the failure message lists the paths the run actually authored. When set, the " +
+            "capture also spends its size budget on these files FIRST and exempts them from the per-file cap, and an " +
+            "in-scope file that is still omitted or truncated fails evidence-unavailable (raise `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES` when a large deliverable legitimately needs more). Omitted = every authored file is " +
+            "judged and any omission refuses the verdict (the default, unchanged)",
+        ),
       include_subagent_text: z
         .boolean()
         .optional()
@@ -1473,6 +1495,33 @@ export interface RunResult {
      *  from a normal fail: an eval aggregator counts this rep as invalid (not a fail, not absent), so a
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
     judgeInvalid?: boolean;
+    /** WHY a `semantic_matches` assert refused its verdict, or WHAT it graded — as a typed reason rather
+     *  than prose. There are FIVE distinct evidence-unavailable causes with five different fixes, and one
+     *  success shape; a consumer (usually an agent iterating on a skill) must be able to tell "your
+     *  `evidence_files` glob matched nothing" from "the deliverable was truncated" without regex-scraping
+     *  an English message. Same rationale as `judgeInvalid` above. `paths` carries the concrete file list
+     *  the reason is about: the run's authored paths for `scope_matched_nothing` (so the fix is IN the
+     *  failure), the offending in-scope paths for the omitted/truncated reasons, and the graded set for
+     *  `graded` — recorded on a substantive FAIL too, since the bug this guards against is a false
+     *  ABSENCE and a red is only actionable next to what the judge was actually shown.
+     *  `evidence_incomplete` is the UNSCOPED counterpart of `in_scope_omitted`: they want different fixes
+     *  (add a scope vs. fix the glob or raise the budget), so they must not share one value.
+     *  `no_pre_run_manifest` means the authored set could not be COMPUTED (no baseline to diff against),
+     *  which is distinct from every other reason: those describe evidence that exists and could not be
+     *  fully shown, this one describes evidence that was never derivable. Grading an empty authored set as
+     *  though it were complete is the vacuous green this value exists to make impossible.
+     *  Present only on the live lane where the judge ran. */
+    semanticEvidence?: {
+      reason:
+        | "graded"
+        | "scope_matched_nothing"
+        | "in_scope_omitted"
+        | "in_scope_truncated"
+        | "evidence_incomplete"
+        | "no_pre_run_manifest"
+        | "authored_evidence_truncated";
+      paths?: string[];
+    };
   }>;
   /** The overall run/asserted-lane verdict — `computeVerdict`'s (src/run/verdict.ts) `Verdict` return
    *  value, persisted VERBATIM (never a second, narrower shape) so a kept run's `result.json` answers "did

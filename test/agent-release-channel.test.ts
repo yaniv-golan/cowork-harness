@@ -38,7 +38,7 @@ function descriptor(opts: { version: string; baseUrl: string; nested?: string; d
   return `function xX(){return JSON.parse(${d}${blob}${d})}`;
 }
 
-/** Every asar also carries an ssh-releases descriptor. Measured 0 of 24 times does it come first, so it
+/** Every asar also carries an ssh-releases descriptor. Measured 0 of 25 times does it come first, so it
  *  is a decoy in principle only — kept as a cheap assertion, NOT as the hazard this defends against. */
 const SSH_DESCRIPTOR = `function yY(){return JSON.parse(\`{"version":"1.0.0","manifest":{"version":"1.0.0"},"baseUrl":"https://downloads.claude.ai/claude-ssh-releases"}\`)}`;
 
@@ -71,8 +71,9 @@ describe("extractAgentReleaseChannel", () => {
     expect(extractAgentReleaseChannel(bundle)?.baseUrl).toBe(RC);
   });
 
-  // The delimiter flipped at Desktop 1.25927.0 — `JSON.parse('…')` in 12 of 24 backed-up asars and
-  // backticks in the other 12. A backtick-only matcher is blind to half the population.
+  // Both delimiters occur and Desktop has flipped BOTH WAYS: single-quoted through 1.24012.11,
+  // backticks from 1.25927.0, single-quoted again at 1.44121.1. There is no version cutoff to encode —
+  // which is exactly why the extractor accepts both and this case is parameterised over them.
   it.each([
     ["backtick", "`"],
     ["single-quote", "'"],

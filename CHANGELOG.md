@@ -6,7 +6,128 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.3.0] — 2026-09-02
+
+### Verification
+
+Verified **locally**, against the Desktop install this baseline was synced from — Desktop `1.44121.1`,
+agent `2.1.258`, macOS arm64, agent image `cowork-agent-base:2` — on 2026-09-02:
+
+| suite | result |
+|---|---|
+| `boundary-check` | pass (3/3: allowlist-permits, loopback-not-proxied, hostloop-bash-egress) |
+| `npm run test:live` | 4 files, **19 passed, 0 skipped** |
+| `run examples/scenarios/` | **6/6 success** |
+| 8 of 9 e2e scenarios | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, **semantic-evidence-files**, canary-hostloop. `smoke-l2-microvm` is the ninth and was not run. |
+
+Tiers exercised: **`protocol`, `container`, `hostloop`**. **`microvm` was NOT exercised.**
+
+**The `evidence_files` scoped path was exercised live**, by `smoke-semantic-evidence-files` at container
+tier, which is new in this release and exists because the feature had no live or e2e coverage at all: it
+passes scoped (`semanticEvidence.reason "graded"`, `paths ["outputs/report.md"]`) and refuses with the
+`evidence_files` line removed (`reason "evidence_incomplete"`, naming all seven authored files), so the
+scenario is falsifiable rather than decorative. Both readings are quoted in the scenario's own header
+with their run ids. The **truncation refusal**, the **unscoped-starvation** case and the
+**`no_pre_run_manifest` refusal** remain covered by unit tests only — the last of those because arming the
+manifest for `semantic_matches` is precisely what stops a scenario reaching it; its live trigger is a
+`--resume` turn.
+
+Nothing was skipped and nothing was gated out. An earlier pass of this same suite reported 18 passed and
+1 skipped — `live-outputs-delete`'s "touches outputs without deleting" case, whose agent issued no Bash
+call, so its guard observed nothing. That case ran and passed here. It is model variance in the fixture,
+and it is recorded because the suite reports such a case as a SKIP rather than a pass, by design.
+
+**CI does not run any of this.** There is no `ANTHROPIC_API_KEY` repository secret, so `ci.yml`'s live
+scenario stage soft-skips in seconds on both the pull request and the merge commit. A green CI run for
+this release therefore covers build, unit tests, the agent-image recipe and the boundary check — **not
+live inference**. The evidence above is one machine and one account, which is not the same guarantee.
+
 ### Fixed
+
+- **A `semantic_matches` assert could grade a document containing NO authored files and report it as
+  complete.** The authored set is derived by diffing the work tree against a pre-run manifest, and the
+  manifest is only captured when a scenario asserts one of `no_unexpected_files`, `input_unmodified`,
+  `no_delete_in_outputs`, `no_delete_in_mounts` or `no_lost_write_back` — or the run is a `record`.
+  `semantic_matches` was not on that list. A scenario whose asserts include `semantic_matches` but none of
+  those five, and which is not a recording, therefore never armed the baseline: the capture returned zero
+  files, and the judge was handed the final message and transcript alone — with the result stamped as
+  complete authored evidence. Found on a live run that authored 7 files under `outputs/` and whose assert
+  reported none.
+
+  **This is a FALSE GREEN, not a new regression, and it is not new in 3.3.0.** The arming predicate has
+  carried the same five keys since authored-file evidence first reached the judge in `0.29.0`, so every
+  release from `0.29.0` through `3.2.1` graded that shape against no authored evidence at all. It failed
+  silently, which is why it outlived a 404ing recipe that failed loudly.
+
+  **Re-run your affected scenarios.** If a scenario asserts `semantic_matches` without any of the five keys
+  above, a previous green graded no authored files — whatever it was measuring, it was not the run's
+  output. Re-running is the only way to learn what the verdict should have been.
+
+  Both halves are fixed: `semantic_matches` now arms the manifest, and an absent manifest is recorded in the
+  capture's health so the assert fails `evidence unavailable` with
+  `semanticEvidence.reason: "no_pre_run_manifest"` instead of grading an empty set. The distinction matters
+  — every other reason describes evidence that exists and could not be fully shown; this one describes
+  evidence that was never derivable.
+
+  **This changes the verdict of existing scenarios**, in the same way as the truncation fix above: a
+  `semantic_matches` that was passing on final-message-and-transcript evidence alone will now either grade
+  against the authored files it should always have seen, or refuse if no baseline can be captured (a
+  `--resume` turn, where the baseline belongs to the first turn — re-run live without `--resume`). A rubric
+  written against the weaker document may need revisiting, and that is the point: it was never being graded
+  against what the skill produced.
+
+- **A deliverable larger than the 16 KiB per-file capture cap was graded as a PREFIX, and could return a
+  pass on a claim its tail disproved.** With one 87 KB `outputs/report.md` at stock settings the capture
+  keeps the first 16 KiB and flags it `truncated` — but nothing was omitted, nothing was unreadable, and the
+  composed document sits far under the aggregate cap, so the assert graded it and stamped `graded`. A
+  negative rubric ("the report contains no unmitigated risk line") passed over a prefix that never included
+  the line. The only signal was a ` (truncated)` suffix on the file's heading; the evidence-health note,
+  which tells the judge not to read an absence as a negative, never mentioned truncation at all.
+
+  Truncation is now treated exactly like omission: any file the judge would grade that was kept only as a
+  prefix fails `evidence unavailable`, and the health note lists truncated paths in the same "do not infer
+  absence from the cut" register as dropped ones. **This changes the verdict of existing scenarios** — a run
+  whose deliverable exceeded 16 KiB was previously graded on its first 16 KiB and now refuses. The fix is to
+  scope the assert (`semantic_matches.evidence_files: ["outputs/report.md"]`), which exempts the file from
+  the per-file cap; raising `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` alone does **not** lift that cap, and the
+  failure message says so rather than sending you to the wrong knob.
+
+  The feature made this shape more reachable, which is why it is fixed here: a scope on one assert exempts
+  its file from the per-file cap and consumes the shared budget, so an unscoped sibling's per-file allowance
+  is `min(16 KiB, whatever is left)` and can fall to almost nothing. The multi-assert warning now says so.
+
+- **Raising the capture budget could have moved incompleteness from a loud refusal into a silent cut.**
+  Authored evidence sits near the tail of the judged document, so an overflow of the 262144-char aggregate
+  cap can eat it. Any `semantic_matches` — scoped or not — now refuses `authored_evidence_truncated` rather
+  than grading a document whose evidence was cut, and the message names the section that overflowed (a
+  document overflowing on `include_subagent_text` is not fixed by narrowing a file scope). The check
+  measures the offset at which the authored region ends, so a trim that reaches only the trailing
+  evidence-health note is an advisory warning, not a refusal.
+
+  **This changes the verdict of some existing scenarios, and you should expect it.** Affected: any live
+  `semantic_matches` whose composed judge document already exceeded 262144 chars far enough to cut into the
+  authored-file sections — in practice a run with a large deliverable, a long transcript, or
+  `include_subagent_text: true` with several substantial sub-agents. At stock settings a single large
+  deliverable does **not** reach the cap (32768 + 131072 + 65536 = 229376 chars with every section maxed),
+  so the two triggers that do not require raising the budget are **many** authored files — the per-file
+  `## Authored file: <path>` headings are counted, so several hundred small files overflow at the same total
+  — and `include_subagent_text: true`, whose per-dispatch 16 KiB is multiplied by an unbounded dispatch
+  count. Those runs were being graded against a document whose evidence had been silently truncated, and
+  could return a **pass** on a claim the judge never had the text to verify. They now fail `evidence unavailable` with
+  `semanticEvidence.reason: "authored_evidence_truncated"` and a message naming the section that overflowed.
+
+  This is a fix to a false PASS rather than a break in a covered surface — but it is **not** free: the check
+  is a property of the composed document, not of the rubric, and the harness cannot know which sections a
+  given rubric actually depended on. A rubric that was satisfiable from the agent's final message alone (the
+  first section, which is never cut) was being graded correctly and now turns red too. That is a deliberate
+  trade — a conservative refusal you can see and act on, over a silent grade you cannot — but if a newly-red
+  assert was genuinely answerable from the final message, this is why. What to do when you hit it, in order — (1) scope the judge with
+  `semantic_matches.evidence_files: ["outputs/<your deliverable>"]`, which shrinks the document to the files
+  the rubric is about and is the right answer in almost every case; (2) if the graded files themselves do not
+  fit, raise `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` so the capture keeps them whole — but note the composed
+  document is still capped at 262144 chars, so past that point only scoping helps; (3) if the overflow is
+  sub-agent text, set `include_subagent_text: false`. The failure message names which of these applies.
+
 
 - **`agentBinary.manifestChecksumMatch` was cross-checking the wrong release channel, and had been for a
   month.** `sync` hard-coded the *stable* versioned manifest path. Desktop also stages release
@@ -16,7 +137,7 @@ All notable changes to this project are documented here. The format is based on
   `sync` now reads the channel out of the asar's own SDK descriptor and queries that, so
   `baselines/desktop-1.40609.1.json` records `manifestChecksumMatch: true`.
 
-  This was not new with `2.1.255`. Of the 24 Desktop builds on record **3 are RC-staged**, and the two
+  This was not new with `2.1.255`. Of the 25 Desktop builds on record **3 are RC-staged**, and the two
   earlier ones (`1.24012.9`/`.11`, agent `2.1.219`) recorded `true` only because that version had *also*
   been promoted to stable — the wrong-channel query happened to resolve. Nothing in the output
   distinguished that lucky pass from a real one, which is the defect this closes.
@@ -33,6 +154,11 @@ All notable changes to this project are documented here. The format is based on
   base URL from the baseline. `scripts/check-versions.ts` pins it: the invariant that kept `V=` honest
   had no idea the URL had stopped working, and it is what propagated the broken pin into all three.
 
+  **If you copied the recipe from `3.2.1` or earlier, re-copy it.** The `curl` now reads its host from a
+  new `B=` line alongside the existing `V=` pin, because the stable path is not always where Desktop
+  staged the agent from. An older copy has no `B=` line and hard-codes the stable URL, so it keeps
+  working only for as long as the agent you pin happens to be a stable-channel build.
+
 ### Added
 
 - **`agentBinary.releaseBaseUrl` in the platform baseline** — the release channel Desktop staged the
@@ -42,9 +168,80 @@ All notable changes to this project are documented here. The format is based on
   network; absent on baselines written earlier, all of which were stable-staged or later promoted.
 
 - **`baselines/desktop-1.40609.1.json` re-synced** against the live Desktop 1.40609.1 install to pick up
-  the corrected row. `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
-  own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 29
+  the corrected row. (It is no longer the newest baseline — Desktop self-updated later in the same cycle and
+  `desktop-1.44121.1` ships alongside it; see **Parity** below. Both moved, which is why this release
+  touches two baseline files.) `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
+  own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 28
   gate rows and every fingerprint are unchanged.
+
+- **`semantic_matches.evidence_files` — scope which authored files the judge grades.** A run that authors
+  many files could not pass a `semantic_matches` assert at all: the authored-file capture spends a fixed
+  64 KiB budget prefix-major then alphabetically, so a pipeline staging intermediates under
+  `outputs/_work/` exhausted it before reaching its own deliverable, and any omission refused the verdict —
+  over files no rubric mentioned. Naming the deliverable now (a) sends only those files to the judge,
+  (b) spends the capture budget on them **first**, (c) exempts them from the per-file cap, and (d) narrows
+  the evidence-unavailable refusal to in-scope omissions. A scenario with no `evidence_files` anywhere keeps
+  its previous grading behaviour; note that scoping ONE assert changes the shared capture for its unscoped
+  siblings (they share a single authored-file capture, and a scope exempts its files from the per-file cap),
+  which now warns.
+
+  Guards that come with it, because scoping is a new way to manufacture a vacuous green: globs matching
+  **nothing** fail evidence-unavailable (and the message lists every path the run authored — paths are
+  `<root>/<rel>`, which nothing else in the CLI surfaces); an empty list is a load-time error; an in-scope
+  file that is *truncated* rather than dropped also refuses, since a partial deliverable grades as a partial
+  document; and a scoped **pass** records the files it graded in its `evidence`.
+
+  The judged document is memoized per assert, and its cache key now includes the scope — keying it on
+  `include_subagent_text` alone was sufficient before scopes existed and is not any more.
+
+- **`RunResult.assertions[].semanticEvidence`** — the typed reason a `semantic_matches` assert refused
+  (`scope_matched_nothing` | `in_scope_omitted` | `in_scope_truncated` | `evidence_incomplete` |
+  `authored_evidence_truncated`) or what it graded (`graded`, recorded on a substantive fail too — the bug
+  this guards against is a false ABSENCE, so a red is only actionable next to what the judge was shown),
+  with the paths. Five causes with five different fixes previously shared one prose message; a consumer had
+  to regex English to tell them apart.
+
+- **`COWORK_HARNESS_AUTHORED_TOTAL_BYTES`** — raise the total authored-file evidence budget (default
+  65536) when a deliverable legitimately exceeds it. A malformed value throws rather than silently
+  defaulting: a quietly-defaulted evidence budget resurfaces later as an unexplained refusal. Raising it
+  enlarges the document sent to an external judge, so cost, latency and disclosure scale with it.
+
+### Parity
+
+- **Baseline `desktop-1.44121.1` (agent `2.1.258`).** Desktop self-updated during this release cycle, so
+  3.3.0 carries the sync as well as the fix above. Measured unchanged against `desktop-1.40609.1`:
+  `spawn` and `network` **byte-identical**, all 28 recorded gate rows identical in value, `guest`,
+  `mountLayout` and `settings` identical. The three committed example cassettes are **re-stamped, not
+  re-recorded** — `promptAssetsHash` resolves to the same `491afe2862dc67ea` under both baselines.
+
+- **The gate-id set moved even though every pinned gate's value held, and one removal matters.**
+  `provenance.asarGateIds` goes **291 → 328 (+43, −6)**. Among the six ids Desktop dropped is
+  **`3246569822`, the `canSaveSkill` gate** — 3 occurrences in the 1.40609.1 asar, **0** in 1.44121.1. As
+  of Desktop 1.44121.1 the skill-saving capability is no longer gate-guarded for a standard session; it
+  rests on the `skillsEnabled` conjunct alone. The baseline still carries the `canSaveSkill:3246569822`
+  row — the server still serves the flag, and that row is fcache provenance, not an asar reading — but it
+  now carries a `note` recording that the id is absent from the asar, so it cannot be mistaken for
+  evidence that a gate still guards the feature. `provenance.spawnEnvSpreadCount` also moves 32 → 33, the
+  new nested conditional spread carrying the third-party key below.
+
+- **Agent `2.1.255` → `2.1.258`.** The agent's `CLAUDE_*` env-flag export table moves **588 → 590**
+  (+3, −1): `CLAUDE_CODE_ARTIFACT_MULTI_FILE`, `CLAUDE_CODE_ARTIFACT_TOOLSET` and
+  `CLAUDE_CODE_MODEL_CATALOG_URL` arrive, `CLAUDE_CODE_PRINT_ENGINE_LOOP` goes. **None is set by the
+  Cowork spawn**, and no flag the spawn does set changed from or to zero consumers, so no harness change
+  follows from the bump.
+
+- **This is the first sync to exercise `agentBinary.releaseBaseUrl`, and it moved in both directions
+  within a day.** `1.40609.1` staged a release candidate; `1.44121.1` is back on the stable channel, so
+  the recorded base flips from `…/claude-code-releases/rc/aa8f2d98…` to `…/claude-code-releases` and
+  `manifestChecksumMatch` reads `true` from the stable manifest. The guard added with the field caught a
+  real error while doing it: the documented `B=` pin still named the RC channel, which would have shipped
+  a `curl` that 404s for anyone on the new agent.
+
+- **A new third-party spawn key, `CLAUDE_STREAM_IDLE_TIMEOUT_MS`, is classified as out-of-scope for the
+  modeled session.** Desktop constructs it only inside the `accountType === "3p"` branch and only when a
+  gateway provider supplies a stream-idle timeout, so a first-party session never receives it and it is
+  absent from the baseline's `spawn.env` (still 24 keys). `sync` refused to write until it was
+  classified, which is the refusal working as intended.
 
 
 ## [3.2.1] — 2026-09-02

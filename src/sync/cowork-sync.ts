@@ -416,14 +416,17 @@ const RELEASE_BASE_URL_RE = /^https:\/\/downloads\.claude\.ai\/claude-code-relea
  * stages release CANDIDATES, served only from `…/claude-code-releases/rc/<commit>/`, and there is no way
  * to discover that commit from the network — probed: `rc`, `rc/latest`, `rc/<short-sha>` and
  * `rc/<sha>/manifest.json` all 404, and the `stable`/`latest` pointers name neither staged version. The
- * asar is the ONLY source. Measured across all 24 backed-up asars: 21 stable, 3 RC (1.24012.9,
+ * asar is the ONLY source. Measured across all 25 backed-up asars: 22 stable, 3 RC (1.24012.9,
  * 1.24012.11, 1.40609.1) — RC staging is routine, not a one-off.
  *
  * Two shape hazards this deliberately handles, both measured over that same population:
  *
- *  - THE DELIMITER IS NOT STABLE. `JSON.parse('…')` in 12 of 24 asars (through 1.24012.11) and
- *    `` JSON.parse(`…`) `` in the other 12 (1.25927.0 onward — the same codegen flip that voided 22
- *    literal anchors in this file at once). A backtick-only matcher is blind to half the population.
+ *  - THE DELIMITER IS NOT STABLE, AND NOT MONOTONIC. Both shapes occur and Desktop has gone BACK AND
+ *    FORTH: `JSON.parse('…')` through 1.24012.11, `` JSON.parse(`…`) `` from 1.25927.0 (the same codegen
+ *    flip that voided 22 literal anchors in this file at once) — and single-quoted AGAIN at 1.44121.1
+ *    (measured: 9 `JSON.parse('` at 1.24012.11, 0 at 1.25927.0/1.40609.1, 9 at 1.44121.1). Do NOT
+ *    re-derive this as a version cutoff; there is no "from version X onward" rule to lean on, and a
+ *    matcher accepting only the newest shape is blind to whichever half of the population it excludes.
  *    Note the normalizing tokenizer leaves this blob alone either way: it contains embedded `"`.
  *  - THE TOP-LEVEL `baseUrl` IS NOT THE FIRST ONE. On RC builds the nested `manifest.baseUrl` PRECEDES
  *    it, so a `"baseUrl":"([^"]+)"` first-match reads the wrong key. They agree on both observed RC
@@ -431,7 +434,7 @@ const RELEASE_BASE_URL_RE = /^https:\/\/downloads\.claude\.ai\/claude-code-relea
  *    top-level field rather than regexing for the name.
  *
  * (`…/claude-ssh-releases` is a DIFFERENT descriptor in every asar, and a first-match never reaches it —
- * measured 0 of 24. It is wrong in principle, not in observation; the two hazards above are the real ones.)
+ * measured 0 of 25. It is wrong in principle, not in observation; the two hazards above are the real ones.)
  *
  * Returns null on any miss — no stable-path fallback. Falling back here is precisely what turned a
  * silent rot into a silent `"unknown"`, which is the defect this closes.
@@ -2434,6 +2437,19 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:
     "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
   CLAUDE_CODE_ATTRIBUTION_HEADER: "3p-provider-only branch; harness models 1p",
+  // Doubly conditional, and TWO traps a future reader will hit in this order:
+  // (1) The managed-settings UI copy for this key names Cowork explicitly ("Raises how long Cowork, Chat
+  //     and Code sessions wait for the next model event…"). That describes which SESSION KINDS an
+  //     admin's setting reaches on a managed deployment — it does NOT put the key on the 1p path. The
+  //     construction is inside the `...accountType==='3p' && {…}` spread; a first-party session cannot
+  //     receive it however the gateway is configured.
+  // (2) This is NOT the MCP_TOOL_TIMEOUT case. That key must never be allowlisted because it ALSO has a
+  //     1p construction site, and resolveInto checks this allowlist BEFORE the pin list, so allowlisting
+  //     it would silently drop a key the 1p spawn really sets. CLAUDE_STREAM_IDLE_TIMEOUT_MS has no 1p
+  //     site — one construction site in the whole asar, in the 3p block — so the allowlist is correct
+  //     here and a pin would bake a 3p-only key into a baseline that describes the 1p spawn.
+  CLAUDE_STREAM_IDLE_TIMEOUT_MS:
+    "3p branch AND gateway-provider streamIdleTimeoutSec-conditional (String(sec*1e3)); single site, inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK; harness models 1p",
   // Doubly conditional: the 3p branch AND `telemetry.disableNonessential`. Its two construction sites
   // sit inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK/DISABLE_TELEMETRY
   // below, so it is allowlisted for the identical reason rather than pinned — pinning would bake a
