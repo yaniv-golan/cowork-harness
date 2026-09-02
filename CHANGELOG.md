@@ -8,6 +8,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [3.3.0] — 2026-09-02
 
+### Verification
+
+Verified **locally**, against the Desktop install this baseline was synced from — Desktop `1.44121.1`,
+agent `2.1.258`, macOS arm64, agent image `cowork-agent-base:2` — on 2026-09-02:
+
+| suite | result |
+|---|---|
+| `boundary-check` | pass (3/3: allowlist-permits, loopback-not-proxied, hostloop-bash-egress) |
+| `npm run test:live` | 4 files, **18 passed, 1 skipped** |
+| `run examples/scenarios/` | **6/6 success** |
+| 7 e2e scenarios | **7/7 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, canary-hostloop |
+
+Tiers exercised: **`protocol`, `container`, `hostloop`**. **`microvm` was NOT exercised.**
+
+The one skip is reported as a skip, not folded into a pass: `live-outputs-delete`'s
+"a task that touches outputs without deleting" case skipped because the agent issued no Bash call, so its
+guard observed nothing. That is model variance in the fixture, loudly reported by design rather than
+passing vacuously.
+
+**CI does not run any of this.** There is no `ANTHROPIC_API_KEY` repository secret, so `ci.yml`'s live
+scenario stage soft-skips in seconds on both the pull request and the merge commit. A green CI run for
+this release therefore covers build, unit tests, the agent-image recipe and the boundary check — **not
+live inference**. The evidence above is one machine and one account, which is not the same guarantee.
+
 ### Fixed
 
 - **A deliverable larger than the 16 KiB per-file capture cap was graded as a PREFIX, and could return a
