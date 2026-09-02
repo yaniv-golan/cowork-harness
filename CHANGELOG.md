@@ -27,8 +27,10 @@ tier, which is new in this release and exists because the feature had no live or
 passes scoped (`semanticEvidence.reason "graded"`, `paths ["outputs/report.md"]`) and refuses with the
 `evidence_files` line removed (`reason "evidence_incomplete"`, naming all seven authored files), so the
 scenario is falsifiable rather than decorative. Both readings are quoted in the scenario's own header
-with their run ids. The **truncation refusal** and the **unscoped-starvation** cases remain covered by
-unit tests only.
+with their run ids. The **truncation refusal**, the **unscoped-starvation** case and the
+**`no_pre_run_manifest` refusal** remain covered by unit tests only — the last of those because arming the
+manifest for `semantic_matches` is precisely what stops a scenario reaching it; its live trigger is a
+`--resume` turn.
 
 Nothing was skipped and nothing was gated out. An earlier pass of this same suite reported 18 passed and
 1 skipped — `live-outputs-delete`'s "touches outputs without deleting" case, whose agent issued no Bash

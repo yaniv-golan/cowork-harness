@@ -416,7 +416,7 @@ const RELEASE_BASE_URL_RE = /^https:\/\/downloads\.claude\.ai\/claude-code-relea
  * stages release CANDIDATES, served only from `…/claude-code-releases/rc/<commit>/`, and there is no way
  * to discover that commit from the network — probed: `rc`, `rc/latest`, `rc/<short-sha>` and
  * `rc/<sha>/manifest.json` all 404, and the `stable`/`latest` pointers name neither staged version. The
- * asar is the ONLY source. Measured across all 24 backed-up asars: 21 stable, 3 RC (1.24012.9,
+ * asar is the ONLY source. Measured across all 25 backed-up asars: 22 stable, 3 RC (1.24012.9,
  * 1.24012.11, 1.40609.1) — RC staging is routine, not a one-off.
  *
  * Two shape hazards this deliberately handles, both measured over that same population:
@@ -434,7 +434,7 @@ const RELEASE_BASE_URL_RE = /^https:\/\/downloads\.claude\.ai\/claude-code-relea
  *    top-level field rather than regexing for the name.
  *
  * (`…/claude-ssh-releases` is a DIFFERENT descriptor in every asar, and a first-match never reaches it —
- * measured 0 of 24. It is wrong in principle, not in observation; the two hazards above are the real ones.)
+ * measured 0 of 25. It is wrong in principle, not in observation; the two hazards above are the real ones.)
  *
  * Returns null on any miss — no stable-path fallback. Falling back here is precisely what turned a
  * silent rot into a silent `"unknown"`, which is the defect this closes.

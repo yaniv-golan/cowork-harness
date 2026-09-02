@@ -38,7 +38,7 @@ function descriptor(opts: { version: string; baseUrl: string; nested?: string; d
   return `function xX(){return JSON.parse(${d}${blob}${d})}`;
 }
 
-/** Every asar also carries an ssh-releases descriptor. Measured 0 of 24 times does it come first, so it
+/** Every asar also carries an ssh-releases descriptor. Measured 0 of 25 times does it come first, so it
  *  is a decoy in principle only — kept as a cheap assertion, NOT as the hazard this defends against. */
 const SSH_DESCRIPTOR = `function yY(){return JSON.parse(\`{"version":"1.0.0","manifest":{"version":"1.0.0"},"baseUrl":"https://downloads.claude.ai/claude-ssh-releases"}\`)}`;
 
