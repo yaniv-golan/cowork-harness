@@ -518,6 +518,15 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HARNESS_JUDGE_MODEL` — the default model for `semantic_matches`' LLM judge (overridden by a
   per-assertion `judge_model`; falls back to the pinned default `claude-opus-4-8`). Pin it alongside `judge_model` for a
   reproducible before/after comparison across re-records.
+- `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` — total size budget for the authored-file evidence a `semantic_matches` judge
+  grades (default 65536). Raise it when a run's real deliverable is larger than the default — a pipeline whose
+  intermediates dwarf its output otherwise spends the budget before reaching the file the rubric is about, and the
+  verdict is refused **evidence unavailable**. Pair it with `semantic_matches.evidence_files` so the budget is spent on
+  the graded files first (they are also exempt from the per-file cap). A malformed value is a hard error, not a silent
+  default: a quietly-defaulted evidence budget resurfaces later as an unexplained refusal. Raising it enlarges the
+  document sent to an external judge — cost, latency and disclosure all scale with it. There IS an upper bound: the
+  composed document is capped at 262144 chars, and a budget large enough to push the graded evidence past that fails
+  `authored_evidence_truncated` instead. Between the two, scope the judge rather than raising further.
 - `COWORK_HARNESS_EVALUATOR_MODEL` — the default `critique` grading model (overridden by the `--evaluator-model` flag;
   falls back to the pinned default `claude-opus-4-8`).
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag — a **global** flag that must precede the subcommand — `--dotenv` follows the same rule everywhere except `critique`, which also takes it per-command) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs. `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` overrides the guard that blocks `--resume` onto another project's pinned session.
