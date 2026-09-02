@@ -383,6 +383,39 @@ export function assertContradiction(scenario: Scenario): string | undefined {
   );
 }
 
+/** Does this scenario need the pre-run baseline captured? Extracted from `executeScenario` so the rule is
+ *  ONE named, testable thing rather than an inline predicate — the list of arming keys is exactly the list
+ *  of assertions that read the baseline, and an assertion added to one without the other is the defect this
+ *  shape exists to prevent (`semantic_matches` was missing here for two releases, so it graded a document
+ *  containing no authored files and reported that as complete).
+ *
+ *  Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs that
+ *  never look at it; absence stays loud, never silently clean. A recording always captures it so a later
+ *  assert-add stays replayable without a re-record. */
+export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = false): boolean {
+  return (
+    scenario.assert.some(
+      (a) =>
+        a.no_unexpected_files !== undefined ||
+        a.input_unmodified !== undefined ||
+        a.no_delete_in_outputs !== undefined ||
+        // Without this the fs-diff backstop never arms for the mount-wide key and it would silently
+        // degrade to regex-only — weaker than its outputs-scoped sibling, with nothing saying so.
+        a.no_delete_in_mounts !== undefined ||
+        // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
+        // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
+        // baseline it can only report evidence-unavailable every run.
+        a.no_lost_write_back !== undefined ||
+        // semantic_matches grades the files the run AUTHORED, and "authored" is defined by diffing against
+        // this baseline. With no manifest the capture returns zero files, so the judge was handed
+        // finalMessage+transcript only — and, before the health signal below, the assert reported that as a
+        // COMPLETE authored document. A scenario whose only evidence-bearing key is semantic_matches never
+        // armed the manifest, so it never received authored-file evidence at all.
+        a.semantic_matches !== undefined,
+    ) || isRecording
+  );
+}
+
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
   // Refuse a scenario no run can satisfy BEFORE the spawn — the whole point is not to pay for it.
   // Sited here rather than in each command because every lane funnels through executeScenario
@@ -658,20 +691,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (cassettes always carry the baseline so a later assert-add stays replayable without re-record).
   // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
   // that never look at it; absence stays loud.
-  plan.capturePreRun =
-    scenario.assert.some(
-      (a) =>
-        a.no_unexpected_files !== undefined ||
-        a.input_unmodified !== undefined ||
-        a.no_delete_in_outputs !== undefined ||
-        // Without this the fs-diff backstop never arms for the mount-wide key and it would silently
-        // degrade to regex-only — weaker than its outputs-scoped sibling, with nothing saying so.
-        a.no_delete_in_mounts !== undefined ||
-        // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
-        // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
-        // baseline it can only report evidence-unavailable every run.
-        a.no_lost_write_back !== undefined,
-    ) || opts.command === "record";
+  plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record");
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity

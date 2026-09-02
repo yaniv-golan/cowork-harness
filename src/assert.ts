@@ -883,8 +883,13 @@ export function composeJudgedDocument(
   const truncatedShown = scopeAuthoredEvidence(ctx, scopeGlobs)
     .files.filter((f) => f.truncated)
     .map((f) => f.path);
-  if (h?.omittedPaths.length || h?.readErrors.length || h?.scratchpadSkippedOnResume || truncatedShown.length) {
+  if (h?.omittedPaths.length || h?.readErrors.length || h?.scratchpadSkippedOnResume || h?.noPreRunManifest || truncatedShown.length) {
     const notes: string[] = [];
+    if (h?.noPreRunManifest)
+      notes.push(
+        `- NO authored files could be identified at all (this run has no pre-run baseline to diff against). ` +
+          `The absence of any "Authored file" section below is NOT evidence that the run produced nothing.`,
+      );
     if (truncatedShown.length)
       notes.push(
         `- ${truncatedShown.length} authored file(s) shown only as a TRUNCATED PREFIX — the rest of each was NOT shown; ` +
@@ -1265,6 +1270,20 @@ function check(
       // `scope_matched_nothing` for a run that authored plenty (verify-run populates `authoredFiles` only
       // when `no_lost_write_back` is asserted) would send an author to fix a glob that is already correct.
       results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
+    } else if (ctx.authoredFilesHealth?.noPreRunManifest) {
+      // BEFORE the scope branches. With no baseline the authored set is empty for a reason that has nothing
+      // to do with the scope, so `scope_matched_nothing` would be a lie that sends the author to fix a glob
+      // that is already correct — and for an UNSCOPED assert the alternative was worse still: zero authored
+      // files, clean health, straight to the graded stamp. The judge saw finalMessage + transcript only and
+      // the result said the evidence was complete.
+      semanticEvidence = { reason: "no_pre_run_manifest" };
+      results.push(
+        fail(
+          `evidence unavailable: no pre-run manifest for this run, so the set of files it AUTHORED could not be computed — ` +
+            `the judge would have graded the final message and transcript alone while reporting complete authored evidence. ` +
+            `This is a --resume turn (the baseline belongs to the first turn), or the run predates the manifest seam; re-run live without --resume.`,
+        ),
+      );
     } else if (scoped && !sc.matchedAny) {
       // A glob matching nothing would grade the rubric against ZERO authored evidence while the capture
       // reports clean — the vacuous pass `evidence_files: []` is banned for, reached by a typo or a

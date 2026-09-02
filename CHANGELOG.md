@@ -42,6 +42,28 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A `semantic_matches` assert could grade a document containing NO authored files and report it as
+  complete.** The authored set is derived by diffing the work tree against a pre-run manifest, and the
+  manifest is only captured when a scenario asserts one of `no_unexpected_files`, `input_unmodified`,
+  `no_delete_in_outputs`, `no_delete_in_mounts` or `no_lost_write_back`. `semantic_matches` was not on that
+  list. A scenario whose only evidence-bearing assert is `semantic_matches` therefore never armed the
+  baseline, the capture returned zero files, and the judge was handed the final message and transcript alone
+  — with the result stamped as complete authored evidence. Found on a live run that authored 7 files under
+  `outputs/` and whose assert reported none.
+
+  Both halves are fixed: `semantic_matches` now arms the manifest, and an absent manifest is recorded in the
+  capture's health so the assert fails `evidence unavailable` with
+  `semanticEvidence.reason: "no_pre_run_manifest"` instead of grading an empty set. The distinction matters
+  — every other reason describes evidence that exists and could not be fully shown; this one describes
+  evidence that was never derivable.
+
+  **This changes the verdict of existing scenarios**, in the same way as the truncation fix above: a
+  `semantic_matches` that was passing on final-message-and-transcript evidence alone will now either grade
+  against the authored files it should always have seen, or refuse if no baseline can be captured (a
+  `--resume` turn, where the baseline belongs to the first turn — re-run live without `--resume`). A rubric
+  written against the weaker document may need revisiting, and that is the point: it was never being graded
+  against what the skill produced.
+
 - **A deliverable larger than the 16 KiB per-file capture cap was graded as a PREFIX, and could return a
   pass on a claim its tail disproved.** With one 87 KB `outputs/report.md` at stock settings the capture
   keeps the first 16 KiB and flags it `truncated` — but nothing was omitted, nothing was unreadable, and the

@@ -3,7 +3,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { captureAuthoredFilesWithHealth, authoredTotalBytes, parseAuthoredTotalBytes } from "../src/run/artifacts";
+import {
+  captureAuthoredFilesWithHealth,
+  authoredFilesHealthNonEmpty,
+  authoredTotalBytes,
+  parseAuthoredTotalBytes,
+} from "../src/run/artifacts";
+import { scenarioArmsPreRunManifest } from "../src/run/execute";
 import {
   runSemanticJudges,
   evaluate,
@@ -452,6 +458,69 @@ describe("semantic_matches.evidence_files — scoping the judge's authored-file 
     );
     spy2.mockRestore();
     expect(errs2.join("")).toMatch(/2 semantic_matches asserts \(2 scoped\)/);
+  });
+});
+
+describe("P0: a scenario whose only evidence-bearing assert is semantic_matches", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "cwh-p0-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  const ctxFrom = (cap: ReturnType<typeof captureAuthoredFilesWithHealth>): AssertContext =>
+    ({
+      transcript: "",
+      finalMessage: "done",
+      workRoot: root,
+      userVisiblePrefixes: ["outputs"],
+      authoredFiles: cap.files,
+      authoredFilesHealth: authoredFilesHealthNonEmpty(cap.health) ? cap.health : undefined,
+    }) as unknown as AssertContext;
+
+  // The exact live shape that stopped a release: 7 files authored under outputs/, and the assert reported
+  // zero. `semantic_matches` was absent from the pre-run-manifest arming predicate, so no baseline was
+  // written; with no baseline the capture cannot diff, returns zero files — and returned them with a CLEAN
+  // health object, so an unscoped assert graded finalMessage+transcript alone and stamped `graded` with
+  // paths []. Both halves are fixed here: arm the manifest, and make its absence loud.
+
+  it("semantic_matches ARMS the pre-run manifest (without it there is no authored evidence at all)", () => {
+    const base = { name: "s", prompt: "p", session: "(inline)", baseline: "latest" };
+    const scoped = Scenario.parse({ ...base, assert: [{ semantic_matches: { rubric: ["x"], evidence_files: ["outputs/r.md"] } }] });
+    const plain = Scenario.parse({ ...base, assert: [{ semantic_matches: { rubric: ["x"] } }] });
+    expect(scenarioArmsPreRunManifest(scoped)).toBe(true);
+    expect(scenarioArmsPreRunManifest(plain)).toBe(true);
+    // Control: a scenario with no baseline-reading key still skips the walk.
+    expect(scenarioArmsPreRunManifest(Scenario.parse({ ...base, assert: [{ result: "success" }] }))).toBe(false);
+    // …unless it is a recording, which always carries the baseline.
+    expect(scenarioArmsPreRunManifest(Scenario.parse({ ...base, assert: [{ result: "success" }] }), true)).toBe(true);
+  });
+
+  it("an ABSENT manifest refuses instead of grading an empty authored set as complete", async () => {
+    // Files really are on disk; `undefined` preRunHashes is the no-manifest signal.
+    writeFileSync(join(root, "outputs", "report.md"), "the deliverable");
+    const cap = captureAuthoredFilesWithHealth(root, ["outputs"], [], undefined, {});
+    expect(cap.files).toEqual([]); // zero files despite a non-empty work tree…
+    expect(cap.health.noPreRunManifest).toBe(true); // …and the reason is now recorded
+    expect(authoredFilesHealthNonEmpty(cap.health)).toBe(true); // so the lanes persist it
+
+    const judge = recordingJudge();
+    const a: Assertion[] = [{ semantic_matches: { rubric: ["names the actor", "carries a risk line"] } }] as Assertion[];
+    const res = await judgeAndEvaluate(a, ctxFrom(cap), judge);
+    expect(res[0].pass).toBe(false);
+    expect(res[0].semanticEvidence?.reason).toBe("no_pre_run_manifest");
+    // The judge is told too, so a grade produced anyway cannot read the absence as "produced nothing".
+    expect(judge.seen[0]).toContain("NO authored files could be identified at all");
+  });
+
+  it("a SCOPED assert with no manifest does not blame the glob", async () => {
+    writeFileSync(join(root, "outputs", "report.md"), "the deliverable");
+    const cap = captureAuthoredFilesWithHealth(root, ["outputs"], [], undefined, {});
+    const a: Assertion[] = [{ semantic_matches: { rubric: ["x"], evidence_files: ["outputs/report.md"] } }] as Assertion[];
+    const res = await judgeAndEvaluate(a, ctxFrom(cap), recordingJudge());
+    // `scope_matched_nothing` here would send the author to fix a glob that is already correct.
+    expect(res[0].semanticEvidence?.reason).toBe("no_pre_run_manifest");
+    expect(res[0].message).not.toContain("matched NONE");
   });
 });
 
