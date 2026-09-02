@@ -2434,6 +2434,19 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:
     "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
   CLAUDE_CODE_ATTRIBUTION_HEADER: "3p-provider-only branch; harness models 1p",
+  // Doubly conditional, and TWO traps a future reader will hit in this order:
+  // (1) The managed-settings UI copy for this key names Cowork explicitly ("Raises how long Cowork, Chat
+  //     and Code sessions wait for the next model event…"). That describes which SESSION KINDS an
+  //     admin's setting reaches on a managed deployment — it does NOT put the key on the 1p path. The
+  //     construction is inside the `...accountType==='3p' && {…}` spread; a first-party session cannot
+  //     receive it however the gateway is configured.
+  // (2) This is NOT the MCP_TOOL_TIMEOUT case. That key must never be allowlisted because it ALSO has a
+  //     1p construction site, and resolveInto checks this allowlist BEFORE the pin list, so allowlisting
+  //     it would silently drop a key the 1p spawn really sets. CLAUDE_STREAM_IDLE_TIMEOUT_MS has no 1p
+  //     site — one construction site in the whole asar, in the 3p block — so the allowlist is correct
+  //     here and a pin would bake a 3p-only key into a baseline that describes the 1p spawn.
+  CLAUDE_STREAM_IDLE_TIMEOUT_MS:
+    "3p branch AND gateway-provider streamIdleTimeoutSec-conditional (String(sec*1e3)); single site, inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK; harness models 1p",
   // Doubly conditional: the 3p branch AND `telemetry.disableNonessential`. Its two construction sites
   // sit inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK/DISABLE_TELEMETRY
   // below, so it is allowlisted for the identical reason rather than pinned — pinning would bake a

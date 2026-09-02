@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.3.0] — 2026-09-02
+
 ### Fixed
 
 - **`agentBinary.manifestChecksumMatch` was cross-checking the wrong release channel, and had been for a
@@ -33,6 +35,11 @@ All notable changes to this project are documented here. The format is based on
   base URL from the baseline. `scripts/check-versions.ts` pins it: the invariant that kept `V=` honest
   had no idea the URL had stopped working, and it is what propagated the broken pin into all three.
 
+  **If you copied the recipe from `3.2.1` or earlier, re-copy it.** The `curl` now reads its host from a
+  new `B=` line alongside the existing `V=` pin, because the stable path is not always where Desktop
+  staged the agent from. An older copy has no `B=` line and hard-codes the stable URL, so it keeps
+  working only for as long as the agent you pin happens to be a stable-channel build.
+
 ### Added
 
 - **`agentBinary.releaseBaseUrl` in the platform baseline** — the release channel Desktop staged the
@@ -45,6 +52,27 @@ All notable changes to this project are documented here. The format is based on
   the corrected row. `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
   own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 29
   gate rows and every fingerprint are unchanged.
+
+### Parity
+
+- **Baseline `desktop-1.44121.1` (agent `2.1.258`).** Desktop self-updated during this release cycle, so
+  3.3.0 carries the sync as well as the fix above. Measured unchanged against `desktop-1.40609.1`:
+  `spawn` and `network` **byte-identical**, all 29 recorded gate rows identical, `guest`, `mountLayout`
+  and `settings` identical. The three committed example cassettes are **re-stamped, not re-recorded** —
+  `promptAssetsHash` resolves to the same `491afe2862dc67ea` under both baselines.
+
+- **This is the first sync to exercise `agentBinary.releaseBaseUrl`, and it moved in both directions
+  within a day.** `1.40609.1` staged a release candidate; `1.44121.1` is back on the stable channel, so
+  the recorded base flips from `…/claude-code-releases/rc/aa8f2d98…` to `…/claude-code-releases` and
+  `manifestChecksumMatch` reads `true` from the stable manifest. The guard added with the field caught a
+  real error while doing it: the documented `B=` pin still named the RC channel, which would have shipped
+  a `curl` that 404s for anyone on the new agent.
+
+- **A new third-party spawn key, `CLAUDE_STREAM_IDLE_TIMEOUT_MS`, is classified as out-of-scope for the
+  modeled session.** Desktop constructs it only inside the `accountType === "3p"` branch and only when a
+  gateway provider supplies a stream-idle timeout, so a first-party session never receives it and it is
+  absent from the baseline's `spawn.env` (still 24 keys). `sync` refused to write until it was
+  classified, which is the refusal working as intended.
 
 
 ## [3.2.1] — 2026-09-02
