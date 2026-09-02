@@ -534,6 +534,12 @@ export interface AuthoredFilesHealth {
    *  subtree, EACCES/EIO). An authored file inside such a subtree is never enumerated, so a dependent
    *  absence-sensitive assertion must treat this as evidence-unavailable, not "nothing authored there". */
   workspaceWalkErrors: { path: string; error: string }[];
+  /** True when there was NO pre-run manifest to diff against, so `files` is empty because nothing could be
+   *  COMPUTED — not because the run authored nothing. Without this the two are indistinguishable
+   *  downstream: the capture returned zero files with an otherwise-clean health object, and a
+   *  `semantic_matches` graded finalMessage+transcript alone while reporting complete authored evidence.
+   *  A manifest is absent when the scenario armed none (see `plan.capturePreRun`) or on `--resume`. */
+  noPreRunManifest?: boolean;
   /** F17: true when the scratchpad walk was skipped because this is a `--resume` (the reused session root
    *  makes prior-turn scratchpad files unattributable). Scratchpad deliverables are absent-by-policy, not
    *  absent-in-fact — informational (does NOT force a semantic verdict to evidence-unavailable). */
@@ -557,7 +563,8 @@ export function authoredFilesHealthNonEmpty(h: AuthoredFilesHealth): boolean {
     h.scratchpadWalkErrors.length ||
     h.scratchpadSkippedLinks.length ||
     h.workspaceWalkErrors.length ||
-    h.scratchpadSkippedOnResume,
+    h.scratchpadSkippedOnResume ||
+    h.noPreRunManifest,
   );
 }
 
@@ -680,7 +687,12 @@ export function captureAuthoredFilesWithHealth(
     scratchpadSkippedLinks: [],
     workspaceWalkErrors: [],
   };
-  if (preRunHashes === undefined) return { files: [], health }; // no pre-run manifest → can't diff → no capture
+  // No baseline ⇒ no diff ⇒ no capture. RECORD it: an empty `files` with clean health reads as "the run
+  // authored nothing", which is a different and much weaker claim than "we could not tell what it authored".
+  if (preRunHashes === undefined) {
+    health.noPreRunManifest = true;
+    return { files: [], health };
+  }
   const perFile = opts.perFileBytes ?? DEFAULT_AUTHORED_PER_FILE_BYTES;
   const total = opts.totalBytes ?? DEFAULT_AUTHORED_TOTAL_BYTES;
   const out: AuthoredFile[] = [];

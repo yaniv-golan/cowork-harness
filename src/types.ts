@@ -1506,6 +1506,10 @@ export interface RunResult {
      *  ABSENCE and a red is only actionable next to what the judge was actually shown.
      *  `evidence_incomplete` is the UNSCOPED counterpart of `in_scope_omitted`: they want different fixes
      *  (add a scope vs. fix the glob or raise the budget), so they must not share one value.
+     *  `no_pre_run_manifest` means the authored set could not be COMPUTED (no baseline to diff against),
+     *  which is distinct from every other reason: those describe evidence that exists and could not be
+     *  fully shown, this one describes evidence that was never derivable. Grading an empty authored set as
+     *  though it were complete is the vacuous green this value exists to make impossible.
      *  Present only on the live lane where the judge ran. */
     semanticEvidence?: {
       reason:
@@ -1514,6 +1518,7 @@ export interface RunResult {
         | "in_scope_omitted"
         | "in_scope_truncated"
         | "evidence_incomplete"
+        | "no_pre_run_manifest"
         | "authored_evidence_truncated";
       paths?: string[];
     };
