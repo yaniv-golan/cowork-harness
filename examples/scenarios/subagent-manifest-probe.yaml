@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# LIVE PROBE — the host-loop sub-agent folder manifest (Desktop >= 1.46388.3).
+#
+# WHY THIS EXISTS. Desktop 1.46388.3 replaced the host-loop sub-agent append and split it into three
+# parts: the overridable `## Cowork environment` section, a host-loop-only folder manifest built from
+# live mount state, and a trailing sentence. The harness composes all three
+# (`src/prompt/subagent-manifest.ts`). Unit tests prove the harness renders what we AUTHORED; they
+# cannot prove a sub-agent can act on it. Nothing in the live lane reads a sub-agent's environment back,
+# so this part of the release shipped with no live coverage.
+#
+# WHAT THIS PROBE MEASURES, AND WHAT IT DELIBERATELY DOES NOT.
+#
+# The manifest's load-bearing claim is a SPLIT: file tools take the HOST path, the shell takes
+# `<vmCwd>/mnt/<name>/`, and relative paths in the file tools resolve at the host cwd.
+#
+# The obvious probe — ask the sub-agent to report the two path strings and assert on them — is
+# WORTHLESS, and an earlier draft of this file made exactly that mistake. Both strings are sitting
+# verbatim in the sub-agent's own system-prompt append, so a sub-agent that reads nothing and copies
+# its environment section passes. That grades the harness's renderer against itself, which is what the
+# unit tests already do. Those assertions were removed rather than weakened.
+#
+# What is asserted instead is CAUSAL — outcomes a recitation cannot fake:
+#   * a sub-agent WRITE with a bare relative filename produced a non-error result AND the file landed
+#     in `outputs/` — that is the "relative paths start at the host cwd" claim, tested by consequence;
+#   * both tool families were actually invoked (`Read`, and hostloop's shell `mcp__workspace__bash`);
+#   * the total is right, so the ledger was really read and summed rather than guessed.
+#
+# HONEST LIMIT, stated so nobody reads more into a green than it carries: this proves the manifest is
+# ACTIONABLE — a sub-agent given it reaches the right files through both tool families. It does not
+# prove our paraphrase matches Desktop's wording. That is the `manifest`/`suffix` fingerprint axes'
+# job (`baselines/prompts/cowork-system-prompt-fingerprints.json`), and they hash production's own text.
+#
+# Run: cowork-harness run examples/scenarios/subagent-manifest-probe.yaml
+# Not recorded as a fixture: host-loop recordings inherit the host environment (docs/maintenance.md).
+baseline: latest
+session: ../sessions/subagent-manifest-probe.yaml
+fidelity: hostloop # the manifest is hostLoopMode-gated in production; no other tier composes it
+
+prompt: |
+  The folder I've attached has a ledger.csv in it. I've been bitten by a bad total before, so I'd like
+  it checked twice over, independently.
+
+  Please hand this to a sub-agent and have it:
+    1. read ledger.csv and add up the amount column;
+    2. re-derive the same total with a shell command, without reusing the first result;
+    3. save a one-line note recording the total, as manifest-probe-check.md.
+
+  Then tell me the total and whether the two methods agreed.
+
+# No `answers:` — deliberately, and this is not an oversight. The latest baseline pre-approves
+# Task/Read/Glob/Grep via `spawn.allowedTools`, and hostloop's shell is the session-wide pre-approved
+# `mcp__workspace__bash` (the `Bash` builtin is in hostloop's `disallowed` list and does not exist at
+# this tier). So no `can_use_tool` gate fires for anything this probe needs, and scripted answers would
+# be inert rules that read as protection while connecting to nothing.
+
+assert:
+  - result: success
+  # The manifest is composed only for a sub-agent, so a run without one grades nothing about it.
+  - subagent_dispatched: "."
+  # Cost guard: Opus at effort:high, and the prompt asks for doubled work.
+  - dispatch_count_max: 3
+
+  # --- CAUSAL: the host-cwd claim, tested by consequence ---
+  # A bare relative filename was written by the SUB-AGENT and the write returned a non-error result…
+  - subagent_file_write: { path_suffix: "manifest-probe-check.md" }
+  # …and it landed in outputs/, which is where the manifest says relative paths resolve. If the file
+  # tools resolved relative paths anywhere else, this pair fails.
+  - file_exists: outputs/manifest-probe-check.md
+
+  # --- CAUSAL: both tool families really ran ---
+  - subagent_tool_used: "Read"
+  - subagent_tool_used: "mcp__workspace__bash"
+
+  # --- CAUSAL: the ledger was really read and summed (12040+9317+15602+11254) ---
+  - subagent_output_contains: { contains: "48213" }

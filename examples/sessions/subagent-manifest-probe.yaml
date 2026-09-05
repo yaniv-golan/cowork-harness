@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../schema/session.schema.json
+# Session for the host-loop sub-agent folder-manifest probe (Desktop >= 1.46388.3).
+#
+# One connected folder is the whole point: the manifest only lists folders, so a session with none
+# takes the manifest's OTHER prose variant and the probe would grade nothing. The folder is mounted
+# READ-ONLY — the probe reads a ledger and shells over it, and a host-loop sub-agent's file tools act
+# on the real host filesystem, so there is no reason to hand it write access to a repo directory.
+model: claude-opus-4-8
+effort: high
+permission_mode: default
+permission_parity: cowork
+
+# `folders:` is what actually mounts. `trusted_folders` / `auto_mount_folders` only land in
+# settings.json and change nothing about this run, so they are omitted rather than carried as
+# decoration that reads like it is doing work.
+folders:
+  - { from: ../data/manifest-probe, mode: r }
