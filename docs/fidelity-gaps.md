@@ -554,16 +554,18 @@ byte-for-byte file parity, consumed via `COWORK_AGENT_IMAGE`.
 
 ## Protocol-tier sub-agents get no Cowork environment append
 
-**Real Cowork behaviour:** every session delivers a per-loop sub-agent environment append
-(`subagent_env_hl` on host-loop, `subagent_env_vm` in the VM loop) via the `initialize`
-control_request; the agent applies it to Task-dispatched children (fork/`useExactTools` dispatches are
-excluded agent-side).
+**Real Cowork behaviour:** every session delivers a per-loop sub-agent environment append via the
+`initialize` control_request; the agent applies it to Task-dispatched children (fork/`useExactTools`
+dispatches are excluded agent-side). Since Desktop 1.46388.3 that append is composed of three parts:
+the overridable section (`subagent_env_hl` on host-loop, `subagent_env_vm` in the VM loop), a
+host-loop-only folder manifest built from live mount state, and a trailing sentence on both branches.
 
 **Harness behaviour:** hostloop delivers the hl branch, container/microvm the vm branch; the
 **protocol** tier deliberately sends none. Protocol runs the CLI over a private `work/` cwd with no VM
 mounts — neither branch's environment description is factually true there, so sending either would
 teach the model false claims about its filesystem. Consequence: protocol sub-agents get no Cowork
-environment framing. This is a decided divergence, not an oversight; use hostloop (the production
+environment framing — and since 1.46388.3 that means no folder manifest and no trailing skills sentence
+either, since the harness composes all three parts together or not at all. This is a decided divergence, not an oversight; use hostloop (the production
 default loop) or container for sub-agent environment fidelity.
 
 ---

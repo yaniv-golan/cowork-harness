@@ -865,7 +865,11 @@ for the `cowork` → `hostloop`/`container` resolution.
 - **`the baseline's committed prompt assets changed since this cassette was recorded (same appVersion) …`**
   (class `prompt-assets`) — prompt identity keyed on `fingerprint.baseline` (appVersion)
   alone cannot see an edited committed prompt asset (`spawn.promptTemplate` / `subagentAppend` /
-  `subagentAppendHostLoop`) under the SAME appVersion silently replayed old-prompt behavior. Non-failing
+  `subagentAppendHostLoop`) under the SAME appVersion silently replayed old-prompt behavior. Since
+  Desktop 1.46388.3 the hash ALSO covers the sub-agent prompt text the harness generates rather than
+  reads from an asset (the host-loop folder manifest and the trailing sentence,
+  `src/prompt/subagent-manifest.ts`) — that text reaches the model exactly as an asset's does, so it
+  must stale a recording the same way. Non-failing
   by default (warns), `--strict` fails, `verify-cassettes` treats it like any other finding — re-record.
 - **`cassette recorded a prompt-asset fingerprint but the live baseline's prompt assets can't be hashed …`**
   (class `unverifiable-prompt-assets`) — a recorded `fingerprint.promptAssetsHash` exists but the live

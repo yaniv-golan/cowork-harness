@@ -371,6 +371,49 @@ Bash-tool subprocess. See [plugin-root.md](./plugin-root.md) for the full author
 staging paths, the host-loop self-heal, and the lint tooling that catches a hardcoded-token footgun in
 a skill's shell steps).
 
+## What a host-loop sub-agent is TOLD about that matrix (Desktop >= 1.46388.3)
+
+The matrix above is what a sub-agent *can* reach. Since Desktop 1.46388.3 the environment append also
+tells it, explicitly and per-session, which is a change worth knowing about when you read a transcript
+and wonder why a child used one path shape over another.
+
+The append is composed of three parts, and only the first is a committed asset:
+
+1. the overridable `## Cowork environment` section (`spawn.subagentAppendHostLoop` /
+   `spawn.subagentAppend`) — the only part a server-delivered `spSectionPrompts` entry can replace;
+2. **host-loop only**, a folder manifest generated from the run's real mounts
+   (`src/prompt/subagent-manifest.ts`);
+3. a trailing sentence about invoking skills, on **both** branches.
+
+The manifest states the split the matrix implies: the file tools take the **host** path, the shell
+takes the `/sessions/<id>/mnt/<name>/` path, and relative paths in the file tools resolve at the host
+cwd. It lists the session's outputs folder and every attached folder with both forms — and a folder the
+shell cannot reach is listed as such rather than omitted, so an unreachable folder is visible to the
+model instead of silently absent. When there is nothing to list at all it takes a different sentence,
+not an empty list.
+
+Rendered, with real mounts, that is:
+
+```
+Read, Write, Edit, Glob, Grep take the first path on each line below, and reject `/sessions/` paths.
+Relative paths in these tools start at `<host outputs dir>`. The shell takes the shell path.
+
+Folders on the user's computer (only read or write inside these; the user can attach more folders,
+so the list can be incomplete):
+- `<host outputs dir>` (this session's outputs folder; shell: `/sessions/<id>/mnt/outputs/`)
+- `<host folder path>` (shell: `/sessions/<id>/mnt/<name>/`)
+```
+
+Two practical consequences. **Folder paths are canonical** (`realpath`), matching what production
+renders — on macOS a `/tmp` or symlinked folder therefore appears under its resolved path, not as you
+declared it in the session. And the **VM loop gets no manifest at all**: it is `hostLoopMode`-gated in
+production, so a container/microvm sub-agent sees only the section plus the trailing sentence. Protocol
+gets none of the three — see [fidelity-gaps.md](./fidelity-gaps.md).
+
+This is exercised live by `examples/scenarios/subagent-manifest-probe.yaml`, which asserts on
+consequences rather than on the sub-agent quoting its own prompt back: a bare relative write must land
+in `outputs/`, both tool families must actually be invoked, and the total must be right.
+
 ## Sub-agent tool composition
 
 A dispatched child's tool set is computed by the agent binary; the harness reproduces that computation
