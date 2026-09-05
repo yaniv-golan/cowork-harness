@@ -112,7 +112,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.258   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.260   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
@@ -202,24 +202,39 @@ committed baseline and say why in that baseline's `$comment`.
    miss, since a deployment-gated placeholder can leave the *rendered* prompt byte-identical while the
    prompt *source* still changed.
 
-   **Includes the two-branch sub-agent append sentinel.** `checkSubagentPromptFacts` pins the
-   `subagent_env_hl`/`subagent_env_vm` key pair, the `hostLoopMode` branch ternary, a normalized
-   two-branch content fingerprint (`subagentAppendVersions` in
-   `baselines/prompts/cowork-system-prompt-fingerprints.json`), the substitution-map keys **and values**
-   (a host/VM cwd swap fails), the `resolveSection` gate shape, and the delivery-call argument list. On a
-   *legitimate* sub-agent append text change the fingerprint drifts and `sync` refuses to write. To
-   re-derive the two `sha16`s, after `npm run build` extract the new asar and feed the **per-file map**
-   (not the joined bundle) through the exported helpers:
+   **Includes the sub-agent append sentinel — FOUR axes since Desktop 1.46388.3, not two.**
+   `checkSubagentPromptFacts` pins the `subagent_env_hl`/`subagent_env_vm` key pair, the `hostLoopMode`
+   branch ternary, the substitution-map keys **and values** (a host/VM cwd swap fails), the
+   `resolveSection` gate shape, the delivery-call argument list (now including `hostOutputsDir` /
+   `userSelectedFolders` / `hostOnlyFolders`, and that `hostOutputsDir` stays `hostLoopMode`-gated), the
+   path-gated builtin tool list the manifest joins, the manifest's own call bindings — and a normalized
+   content fingerprint on FOUR axes (`subagentAppendVersions` in
+   `baselines/prompts/cowork-system-prompt-fingerprints.json`).
+
+   Why four: 1.46388.3 split the append into the overridable `## Cowork environment` section, a
+   host-loop-only folder manifest, and a trailing sentence appended to **both** branches. The old
+   two-branch fingerprint covered only the ternary arms, so that trailing sentence changed the rendered
+   append on both branches while the `vm` fingerprint sat still — reproduced by counterfactual, it would
+   have synced green. `manifest` and `suffix` make the sentinel's subject the append the model receives.
+   Only the NEWEST entry is compared, and only on the axes it declares, so historical entries are not
+   retro-failed; once either composed axis is recorded, both are mandatory.
+
+   On a *legitimate* append text change the fingerprint drifts and `sync` refuses to write. To re-derive
+   all four `sha16`s, after `npm run build` extract the new asar and feed the **per-file map** (not the
+   joined bundle) through the exported helpers:
 
    ```bash
    TMP=$(mktemp -d) && npx --yes @electron/asar extract <path-to>/app.asar "$TMP" \
-   && node -e "import('./dist/sync/cowork-sync.js').then(m => { const f = m.readMainBundleFiles('$TMP'); const s = m.extractSubagentBranchSlices(f); console.log({ hl: m.subagentBranchFingerprint(s.hl), vm: m.subagentBranchFingerprint(s.vm) }); })" \
+   && node -e "import('./dist/sync/cowork-sync.js').then(m => { const f = m.readMainBundleFiles('$TMP'); const s = m.extractSubagentBranchSlices(f); const c = m.extractSubagentComposition(f); console.log({ hl: m.subagentBranchFingerprint(s.hl), vm: m.subagentBranchFingerprint(s.vm), manifest: m.subagentBranchFingerprint(c.manifest), suffix: m.subagentBranchFingerprint(c.suffix) }); })" \
    && rm -rf "$TMP"
    ```
 
-   Update the paraphrase asset(s) if the branch *semantics* moved, append a new `subagentAppendVersions`
-   entry (BOTH `hl` and `vm` are mandatory — a partial entry is itself a hard-fail), then re-run
-   `cowork-harness sync`.
+   Note these are computed over `normalizeBundleQuotes`-NORMALIZED text (which `readMainBundleFiles`
+   applies), as the branch fingerprints always have been — a raw read of the asar gives different values.
+
+   Update the paraphrase if the *semantics* moved, append a new `subagentAppendVersions` entry (`hl` and
+   `vm` always mandatory; `manifest` and `suffix` mandatory together once either is recorded — a partial
+   entry is itself a hard-fail), then re-run `cowork-harness sync`.
 
    > **Then REPOINT the baseline at the new asset** — `spawn.subagentAppendHostLoop` (and/or
    > `spawn.subagentAppend`) in the freshly written `baselines/desktop-<new>.json`. These pointers are
@@ -227,6 +242,13 @@ committed baseline and say why in that baseline's `$comment`.
    > fingerprint entry clears the sentinel whether or not you repoint. Skip this and a host-loop
    > sub-agent silently receives the previous release's paraphrase, with `sync` green. This is the step
    > that was missed on 1.32885.1 and caught by eye.
+   >
+   > **Since 1.46388.3 that asset is only the SECTION.** The folder manifest and the trailing sentence
+   > are GENERATED in `src/prompt/subagent-manifest.ts`, because the manifest is built from live mount
+   > state and no static file can be faithful to it — the same reason the main-loop shell section became
+   > a generator at 1.14271.0. Do **not** "restore" them into the asset: they would render twice. Edit
+   > the generator instead, and note its text is mixed into `promptAssetsHash`, so an edit there stales
+   > recorded cassettes exactly as an asset edit does.
 
    **Includes the prompt-patch channel sentinel.** `checkSyspromptMapFacts` pins Desktop's
    `coworkSyspromptMap` — a channel that can *replace* the computed Cowork prompt section for a named

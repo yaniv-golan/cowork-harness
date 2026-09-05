@@ -916,6 +916,20 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
                 hostCwd: join(hostMnt, "outputs"),
                 hostUploadsDir: join(hostMnt, "uploads"),
                 hostWorkspaceFolder: plan.mounts.find((m) => m.kind === "folder")?.hostPath,
+                hostOutputsDir: join(hostMnt, "outputs"),
+                // The generated sub-agent folder manifest (Desktop >=1.46388.3). Canonical paths, and
+                // the soft-missing drops carried through as unreachable — production lists a
+                // mount-failed folder rather than omitting it.
+                subagentFolders: [
+                  ...plan.mounts
+                    .filter((m) => m.kind === "folder")
+                    .map((m) => ({ hostPath: m.canonicalHostPath ?? m.hostPath, mountPath: m.mountPath, reachable: true })),
+                  ...(plan.hostOnlyFolders ?? []).map((m) => ({
+                    hostPath: m.canonicalHostPath ?? m.hostPath,
+                    mountPath: m.mountPath,
+                    reachable: false,
+                  })),
+                ],
                 hostSkillsDir: skillsStaged ? skillsDir : undefined,
               };
             })()

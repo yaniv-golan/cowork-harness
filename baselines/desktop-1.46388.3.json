@@ -1,0 +1,942 @@
+{
+  "baselineVersion": 1,
+  "appVersion": "1.46388.3",
+  "agentVersion": "2.1.260",
+  "agentBinary": {
+    "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.260/claude",
+    "format": "elf-aarch64",
+    "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.260/claude.app/Contents/MacOS/claude",
+    "sha256": "9811afb5f97224c2c5d3d0ee1e8c316117d298d5ec3e095d5ff0c1dd0e889ca5",
+    "releaseBaseUrl": "https://downloads.claude.ai/claude-code-releases",
+    "shaProvenance": "measured-local",
+    "manifestChecksumMatch": true,
+    "stringSentinels": {
+      "tengu_saddle_lantern": 2
+    }
+  },
+  "guest": {
+    "os": "linux",
+    "arch": "arm64",
+    "baseImage": "ubuntu:22.04"
+  },
+  "spawn": {
+    "configDirInGuest": "mnt/.claude",
+    "settingSources": [
+      "user"
+    ],
+    "permissionMode": "default",
+    "maxThinkingTokens": 31999,
+    "effortDefault": "medium",
+    "effortByModel": {
+      "claude-haiku-4-5": {
+        "modes": [
+          "extended"
+        ]
+      },
+      "claude-sonnet-4-5": {
+        "modes": [
+          "extended"
+        ]
+      },
+      "claude-sonnet-4-6": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "recommended": "low",
+        "modes": [
+          "auto"
+        ]
+      },
+      "claude-sonnet-5": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "recommended": "medium",
+        "modes": [
+          "auto"
+        ]
+      },
+      "claude-opus-4-6": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "recommended": "medium",
+        "modes": [
+          "extended"
+        ]
+      },
+      "claude-opus-4-7": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "recommended": "xhigh",
+        "modes": [
+          "auto"
+        ]
+      },
+      "claude-opus-4-8": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "recommended": "high",
+        "modes": [
+          "auto"
+        ]
+      },
+      "claude-opus-5": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "recommended": "high",
+        "modes": [
+          "auto"
+        ],
+        "disallowThinkingDisabled": true
+      }
+    },
+    "effortRegexDefault": {
+      "pattern": "^(?:claude-)?(?:fable|mythos)(?:-|$)",
+      "effortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "recommended": "high",
+      "modes": [
+        "auto"
+      ],
+      "disallowThinkingDisabled": true
+    },
+    "tools": [
+      "Task",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Read",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList",
+      "TaskStop",
+      "WebSearch",
+      "Skill",
+      "REPL",
+      "JavaScript",
+      "AskUserQuestion",
+      "ToolSearch"
+    ],
+    "allowedTools": [
+      "Task",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Read",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList",
+      "TaskStop",
+      "WebSearch",
+      "Skill",
+      "REPL",
+      "JavaScript",
+      "ToolSearch"
+    ],
+    "env": {
+      "CLAUDE_CODE_IS_COWORK": "1",
+      "CLAUDE_CODE_ENTRYPOINT": "local-agent",
+      "CLAUDE_CODE_TAGS": "lam_session_type:chat",
+      "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
+      "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL": "true",
+      "CLAUDE_CODE_DISABLE_CRON": "1",
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+      "CLAUDE_CODE_DISABLE_AGENTS_FLEET": "1",
+      "CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT": "1",
+      "CLAUDE_CODE_ENABLE_TASKS": "true",
+      "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+      "ENABLE_PROMPT_CACHING_1H": "1",
+      "DISABLE_MICROCOMPACT": "1",
+      "MCP_CONNECTION_NONBLOCKING": "true",
+      "API_TIMEOUT_MS": "900000",
+      "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES": "",
+      "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING": "1",
+      "DISABLE_AUTOUPDATER": "1",
+      "MCP_TOOL_TIMEOUT": "180000",
+      "USE_LOCAL_OAUTH": "",
+      "USE_STAGING_OAUTH": "",
+      "CLAUDE_PREVIEW_CLASSIFIER_FLOOR": "1",
+      "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h",
+      "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "5m"
+    },
+    "promptTemplate": "prompts/desktop-1.18286.0/system-prompt-append.md",
+    "subagentAppend": "prompts/desktop-1.15200.0/subagent-append-vm.md",
+    "subagentAppendHostLoop": "prompts/desktop-1.46388.3/subagent-append-hl.md",
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Task",
+          "note": "blocks run_in_background ('Background agents disabled'); emits subagent_invoked telemetry",
+          "served": true
+        },
+        {
+          "matcher": "Skill",
+          "note": "emits skill_invoked telemetry (plugin name/source/id/marketplace); logs cowork_consolidate_memory_called; injects per-skill additionalContext",
+          "served": false
+        },
+        {
+          "matcher": "COWORK_FORCE_ASK_TOOLS|MCP_{CREATE,UPDATE,DELETE}_SCHEDULED_TASK|MCP_{START,STOP}_WATCHING",
+          "note": "permissionDecision:'ask' regardless of permission mode",
+          "served": false
+        },
+        {
+          "matcher": "mcp__.*",
+          "note": "remote-MCP deny hook (evaluateRemoteMcpDenyHook) -> decision:'block'",
+          "served": false
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "WebSearch",
+          "note": "seeds session.webFetchAllowedUrls from search results (ingestWebSearchResultForProvenance) - a WebSearch WIDENS the web_fetch allowlist",
+          "served": false
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "matcher": null,
+          "note": "expands a leading /slash command into hookSpecificOutput.additionalContext",
+          "served": false
+        }
+      ]
+    },
+    "$comment": "Binary-verified Desktop->agent spawn contract, re-derived per release. spawn.env is GENERATED by deriveSpawnEnv() in src/sync/cowork-sync.ts (windowed enumeration of the asar env construction + gate/const value resolution); the scalar options, tools/allowedTools, and prompt-asset pointers are sentinel-guarded by checkSpawnContractFacts(). Do not hand-edit spawn.env — re-run sync.",
+    "$comment_handPinned": "Why the NON-env spawn fields stay hand-pinned: each is built in the asar as a non-literal expression (a session-path template, a session-type ternary, a const indirection, or a head+spread+tail array), so the windowed-enumeration generator that derives spawn.env cannot construct their VALUES without a full JS evaluator; instead each value was binary-verified once and is drift-guarded by a checkSpawnContractFacts() sentinel (cowork-sync.ts) that re-asserts the asar-side FACT at every sync. Scope caveat: the sentinels make DESKTOP-side drift loud; they do not validate this committed JSON itself — an erroneous hand-edit here is invisible to them.",
+    "$comment_configDirInGuest": "Hand-pinned: the asar builds it as a per-session path template (/sessions/${id}/mnt/.claude), not a constructable literal. Sentinel S1 pins the template shape.",
+    "$comment_settingSources": "Hand-pinned: sentinel S2 pins the settingSources:[\"user\"] literal.",
+    "$comment_permissionMode": "Hand-pinned: the asar computes it via a session ternary whose chat-session branch resolves to \"default\". Sentinel S3 pins the ternary shape.",
+    "$comment_maxThinkingTokens": "Hand-pinned: the asar reaches the value through const indirection. Sentinel S4 VALUE-pins the resolved const to 31999.",
+    "$comment_effortDefault": "Hand-pinned: sentinel S5 pins the .effort … :\"medium\" default.",
+    "$comment_tools": "Hand-pinned: the asar builds tools[] as head-list + Task-tools spread + session-type tail, not one literal. Sentinels S6 (head), S7 (the TaskCreate…TaskStop spread), S8 (tail-guard after ToolSearch) pin all three parts. As of desktop-1.21459.0 the asar head also carries an INERT `...CLAUDE_DESIGN_TOOLS` spread between Task and Bash that resolves to [] (deployment-gated off on first-party), so the rendered list — and this pin — stay 20 entries; S6b asserts it empty and fails loud if a build ever populates it.",
+    "$comment_allowedTools": "Hand-pinned: same head+spread+tail construction as tools[], minus AskUserQuestion (tools-only by design). Sentinels S9 (head) and S10 (the built-in→mcp__ boundary tail-guard) pin it.",
+    "$comment_promptTemplate": "Hand-pinned pointer to a RECONSTRUCTED asset (see $comment_prompts) — the generator cannot extract prose. Sentinel S15 pins the claude_code preset-append delivery site.",
+    "$comment_subagentAppend": "Hand-pinned pointer to a reconstructed asset (see $comment_prompts). Sentinel S16 pins the per-session appendSubagentSystemPrompt generator call shape.",
+    "$comment_subagentAppendHostLoop": "Hand-pinned pointer to a reconstructed (paraphrased) asset for the HOST-LOOP branch of the per-session sub-agent append (section key subagent_env_hl; selected purely on hostLoopMode). Sentinel: checkSubagentPromptFacts (four-axis fingerprint + substitution-value proofs). A hostloop run on a baseline lacking this pointer fails loud rather than falling back to the VM text. This pointer is hand-authored and is NOT re-derived by sync - it carries forward untouched, so it must be repointed by hand whenever the branch fingerprint moves. REPOINTED at 1.46388.3, and its SCOPE NARROWED: the hl branch text was REPLACED at this release (71e028bfa7ce596d -> 464ecc87a6810941), and the append is no longer one asset. Production now composes section + (hostLoopMode ? folder manifest : '') + a trailing skills sentence; this pointer names ONLY the section, which is also the only part a server-delivered spSectionPrompts entry can override. The other two parts are GENERATED in src/prompt/subagent-manifest.ts because the manifest is built from live mount state - the same reason the main-loop shell section became a generator at 1.14271.0 - and are guarded by the manifest/suffix fingerprint axes. Do not restore them into this asset: they would render twice.",
+    "$comment_notSet": "Deliberately NOT set: CLAUDE_CODE_USE_COWORK_PLUGINS (Desktop never sets it; would flip the agent to cowork_settings.json/cowork_plugins — asserted absent by the S17 negative invariant). Enumerated-but-not-pinned keys are enforced by SPAWN_ENV_ALLOWLIST in src/sync/cowork-sync.ts, each with a reason; categories: host-derived (CLAUDE_CONFIG_DIR, TZ, HOST_PLATFORM, OAUTH_TOKEN/BASE_URL/CUSTOM_HEADERS, account UUIDs, WORKSPACE_HOST_PATHS, OTEL), constructed-then-deleted (ANTHROPIC_API_KEY/AUTH_TOKEN via FnA), gate-conditional-off (MCP_CONNECT_TIMEOUT_MS, ENABLE_TOOL_SEARCH, SKIP_PRECOMPACT_LOAD), non-chat/project-session (BRIEF*, PROJECT*), user-settings (SUBAGENT_MODEL, AUTO_COMPACT_WINDOW, ...), and 3p-provider-only branches. The opaque ...g.env/...l session spreads are the known static-extraction blind spot (runtime lane backstop).",
+    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.18286.0 const aui (system prompt; RESTRUCTURED at this release — see the asset header) and 1.15200.0 generator CVr (subagent; verified unchanged in the 1.18286.0 asar, generator Zgn). Not the full base prompt (not cleanly extractable); generic refusal/safety policy elided. Delivered via --append-system-prompt (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT.",
+    "$comment_hooks": "Binary-verified against app.asar 1.24012.9: the Cowork spawn's hooks object, identified by the env block immediately following it (CLAUDE_CODE_IS_COWORK=1, CLAUDE_CODE_ENTRYPOINT=local-agent). Recorded as a DRIFT TRIPWIRE, not an emulation source - `served` marks what this harness actually installs (PreToolUse:Task only). NOT installed at the Cowork spawn: SessionStart, SessionEnd, SubagentStop, PreCompact, Notification, Stop (their asar occurrences are an event-name validation list, a config-error hint, and a UI filter that skips SessionStart hook traffic - that filter implies plugin-supplied hooks.json events DO arrive, via the agent binary's own --plugin-dir channel, which is separate from this spawn bundle)."
+  },
+  "mountLayout": {
+    "sessionRoot": "/sessions/{sessionId}",
+    "cwd": "/sessions/{sessionId}",
+    "mntRoot": "/sessions/{sessionId}/mnt",
+    "mounts": [
+      {
+        "name": "uploads",
+        "mountPath": "uploads",
+        "mode": "r",
+        "purpose": "user-uploaded files (read-only — asar 'ro')"
+      },
+      {
+        "name": "projects",
+        "mountPath": ".projects/{projectId}",
+        "mode": "r",
+        "purpose": "RESERVED namespace (and the separate UUID project-sync feature) — NOT the work-folder path. From Desktop 1.14271.0 selected work folders mount at mnt/<collision-resolved-basename> (dynamic, derived per session by buildLaunchPlan; see MOUNT_BARE_NAME_MIN_VERSION). This decorative row is not consumed for binding (staged paths come from plan.mounts). MODE CORRECTED rw -> r on 2026-08-05, first-party from the asar's mount-set builder (VM-loop runs it at spawn; host-loop recomputes it per bash call): a project ATTACHMENT mounts at `.projects/<uuid>` with `mode:\"ro\"`, and the sibling `.claude/projects` is `\"ro\"` too. Neither passes through the delete-deny resolver, so a project mount is NOT writable-but-delete-denied — it is not writable at all, and therefore correctly outside deleteDeniedRootsFromPlan. checkMountModeFacts pins both. Older baselines still carry `rw` here and are deliberately NOT back-edited: below MOUNT_BARE_NAME_MIN_VERSION (1.14271.0) `.projects/<name>` WAS the connected-folder namespace, which is resolver-driven `rw` — so `rw` is correct there, and a blanket correction would have replaced a right fact with a wrong one. Between that boundary and 1.25927.0 the row is stale rather than meaningful (the namespace is reserved); those files are frozen per-release snapshots and the mode is consumed by nothing — only cwd/sessionRoot/mntRoot are read from mountLayout."
+      },
+      {
+        "name": "local-plugins",
+        "mountPath": ".local-plugins/marketplaces",
+        "mode": "r",
+        "purpose": "marketplace skills/plugins, runtime-discovered"
+      },
+      {
+        "name": "remote-plugins",
+        "mountPath": ".remote-plugins",
+        "mode": "r",
+        "purpose": "org-remote plugins, runtime-discovered"
+      },
+      {
+        "name": "outputs",
+        "mountPath": "outputs",
+        "mode": "rw",
+        "purpose": "session outputs/artifacts — delete denied by default (asar IX); rwd only when approved"
+      },
+      {
+        "name": "skills",
+        "mountPath": ".claude/skills",
+        "mode": "r",
+        "purpose": "personal/saved skill doc bodies (NOT plugin-bundled skills, which live under local-plugins/remote-plugins above) — real VM confirmed via systemd unit sessions-<name>-mnt-.claude-skills.mount in vm_bundles/claudevm.bundle/rootfs.img. Decorative row like 'projects' above (not consumed for binding — resolveMounts()'s mounts[] is destructured away at every call site); the harness reproduces this via CLAUDE_CONFIG_DIR staging (session.ts skill copy + stage.ts cpSync), not a plan.mounts bind — see hostloop-prompt.ts's asar-verified skills bullet."
+      }
+    ]
+  },
+  "network": {
+    "mode": "gvisor",
+    "allowKind": "allowlist",
+    "allowDomains": [
+      "downloads.claude.ai",
+      "api.anthropic.com",
+      "a-cdn.anthropic.com",
+      "a-api.anthropic.com",
+      "assets.claude.ai",
+      "sentry.io",
+      "api-staging.anthropic.com",
+      "api.claude.ai",
+      "preview.claude.ai",
+      "www.anthropic.com",
+      "console.anthropic.com",
+      "support.anthropic.com",
+      "docs.anthropic.com",
+      "mcp-proxy.anthropic.com",
+      "pivot.claude.ai"
+    ],
+    "$comment": "network.allowDomains is a PINNED, hand-curated list — `sync` carries it forward and never re-derives it. On the first-party deployment this harness models, the VM egress allowlist is NOT in the app bundle: the 1p deployment class returns `vmEgressPolicy(){return null}`, so `resolveVmAllowedDomains` falls through to the session's SERVER-DELIVERED `egressAllowedDomains`, and the only host the bundle contributes is the OTLP endpoint appended by the augmenter. The entries below are therefore a curated RECONSTRUCTION, not an extraction — and this field is the allowlist the harness ENFORCES (boundaryAllowList + the session egress plan). UNVERIFIED as VM egress, retained deliberately rather than pruned on a guess because the true 1p list cannot be read from the asar: www.anthropic.com, console.anthropic.com, support.anthropic.com, docs.anthropic.com — these read as Desktop UI/help links swept in by the predecessor's bundle-wide domain regex. Removing one is a deliberate, reviewed act. checkEgressContractFacts in src/sync/cowork-sync.ts fails closed if the construction that justifies pinning moves."
+  },
+  "bgEnvStrip": {
+    "knownVars": [
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_SESSION_KIND",
+      "CLAUDE_CODE_SESSION_ID",
+      "CLAUDE_CODE_SESSION_NAME",
+      "CLAUDE_CODE_SESSION_LOG"
+    ]
+  },
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-09-05 on macOS arm64.",
+  "capturedAt": "2026-09-05",
+  "platform": "darwin-arm64",
+  "settings": {
+    "autoMountFolders": {
+      "key": "autoMountFolders",
+      "default": false
+    },
+    "localAgentModeTrustedFolders": {
+      "key": "localAgentModeTrustedFolders",
+      "default": []
+    }
+  },
+  "provenance": {
+    "asarPath": "/Applications/Claude.app/Contents/Resources/app.asar",
+    "asarFingerprint": "9e61ea2a686e1d09",
+    "gates": {
+      "$comment": "Production GrowthBook gate states decoded from ~/Library/Application Support/Claude/fcache (standard interactive Anthropic account, 2026-06-13; binary-verified app.asar 1.12603.1). Pin per release. Behavior-affecting gates the harness models: 1143815894 (loop), 1648655587 (dispatch cap), 1978029737 (web_fetch routing). Telemetry/auth-internal gates omitted. Also pinned: 2614807392 (skeletonHome), 123929380 (autoMemoryStandardSessions), 1696890383 (memoryGuidelinesEnv), 2860753854 (memoryExtraGuidelines) — dormant drift-sentinels for dark-launched features (host-fs skeleton, auto-memory) the harness deliberately models as OFF (or, for memoryExtraGuidelines, as inert-default: on in production but its served value equals the hardcoded default); pinned so a production flip surfaces as a sync diff instead of silent drift. The skill-family gates are pinned on the same principle but are NOT all dormant: 245679952 (suggestSkillsEnabled) and 1598976391 (proactiveSkillSuggestEnabled) ARE modeled — they gate the skills SDK-MCP tool surface. 3246569822 (canSaveSkill) is served ON/force by a server-side rollout (independent of Desktop version) and is deliberately NOT modeled: ON adds an mcp__cowork__save_skill tool and changes the skills system prompt, so this pin records a known fidelity gap rather than a modeled surface — see docs/fidelity-gaps.md. 1824824999 (canProposeSkills) is present-but-off, pinned so the same class of silent widening cannot land unnoticed. 1598976391 (proactiveSkillSuggestEnabled) flipped off/defaultValue -> ON/force by a SERVER-SIDE rollout observed 2026-08-04 — NOT a Desktop change: the gate id occurs exactly once in both the 1.24012.9 and 1.24012.11 asars and would read ON on .9 today, so this value is Desktop-version-INDEPENDENT despite living in a version-named file (same provenance class as canSaveSkill above). It is read from a SINGLE account's fcache; force rules are server-evaluated and can be segment-targeted, so whether the rollout is global is not determinable from anything on disk. Unlike canSaveSkill this one IS modeled (both branches exist), so the pin changes the emulated suggest_skills surface: proactive description + an optional trigger param + a chained empty-catalog note. Override per-session with skills.proactive_suggest_enabled. 4074604942 (1p-direct-mcp) was NEW in 1.24012.11 and DARK (absent from a standard fcache, hence its DARK_GATES entry); it arms a Desktop-side direct-MCP pool for MDM-managed 1P servers, inert for an unmanaged account, pinned as a sentinel only. Observed 2026-08-05 SERVED rather than absent (source \"force\", value false) — the rollout reached this account with the gate OFF, so nothing it arms is reachable and no modeled surface changes. Same provenance class as canSaveSkill: read from a SINGLE account's fcache, and force rules are server-evaluated and segment-targetable, so its DARK_GATES entry is retained deliberately — another account may still see it absent, and that must stay tolerated rather than hard-failing their sync.",
+      "emitToolUseSummaries:66187241": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "autoMemoryStandardSessions:123929380": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "subagentPromptServerOverride:124685897": {
+        "on": true,
+        "source": "defaultValue",
+        "value": true
+      },
+      "suggestSkillsEnabled:245679952": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "skill-arg-elicitation:286376943": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "mcpConnectionNonblockingOff:434204418": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "bridgeSdkTransport:583857784": {
+        "on": true,
+        "source": "force",
+        "value": true,
+        "note": "— Cowork uses the SDK-based transport (control protocol), confirming the harness's sdkMcpServers/mcp_message path is the production transport."
+      },
+      "fineGrainedToolStreaming:714014285": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "enableToolSearchAuto:1129419822": {
+        "on": false,
+        "source": "absent"
+      },
+      "hostLoop:1143815894": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "scheduledTaskToolsApprovableByAutoMode:1447478638": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "questionExtended:1595132361": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "proactiveSkillSuggestEnabled:1598976391": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "scheduledTaskSessionLimiter:1648655587": {
+        "on": true,
+        "source": "force",
+        "value": {
+          "global": 3,
+          "perTask": 1
+        },
+        "note": "SCHEDULED-TASK (cron) session limiter — NOT an in-conversation Task-tool cap (binary-verified 2026-07-04, asar 1.18286.0 class L9t [ScheduledTasks]). perTask=1: <=1 concurrent session PER SCHEDULED TASK; global=3: <=3 concurrent scheduled-task sessions globally (+_pendingTaskDispatches). Host-side SKIP (recordSkipAndEmit/PerTaskLimit|GlobalLimit — NOT queue/deny). Cowork imposes no cap on Task-tool sub-agent fan-out; the harness has no scheduled-task scheduler, so this gate has no applicable surface — pinned as a sync drift-sentinel only."
+      },
+      "memoryGuidelinesEnv:1696890383": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "canProposeSkills:1824824999": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "oauthScopesEnv:1936081873": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "coworkRuntimeConfig:1978029737": {
+        "on": true,
+        "source": "experiment",
+        "value": {
+          "coworkNativeFilePreview": true,
+          "coworkWebFetchDedup": true,
+          "coworkWebFetchDedupMaxEntries": 100,
+          "coworkWebFetchDedupTtlMs": 3600000,
+          "coworkWebFetchPrompt": true,
+          "coworkWebFetchViaApi": true,
+          "pluginsFullSyncStalenessMs": 3600000,
+          "pluginsSyncIntervalMs": 1200000,
+          "sessionsBridgePollBlockMs": 30,
+          "skillsSyncIntervalMs": 1200000,
+          "workspaceBashWaitLonger": true
+        },
+        "note": "coworkWebFetchViaApi=true coworkWebFetchPrompt=true workspaceBashWaitLonger=true sessionsBridgePollBlockMs=30 — web_fetch is host/API-routed (POST /api/organizations/<org>/cowork/web_fetch), NOT container egress; gated by a separate web-fetch hostname allowlist + URL provenance."
+      },
+      "cicCanUseToolEnabled:2051942385": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "cliPlugin:2307090146": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false,
+        "note": "— the CLI-plugin credential broker is dark-launched off for standard interactive accounts (Ch23/L106)."
+      },
+      "pluginSyncSparkplug:2340532315": {
+        "on": true,
+        "source": "force",
+        "value": true,
+        "note": "— startup syncPlugins(); plugins load via --plugin-dir (registry inert in-VM)."
+      },
+      "skeletonHome:2614807392": {
+        "on": false,
+        "source": "absent"
+      },
+      "memoryExtraGuidelines:2860753854": {
+        "on": true,
+        "source": "defaultValue",
+        "value": "## Sensitive personal information\n\nDo not save the following to memory unless the user explicitly asks you to remember it:\n\n- Protected attributes: race, ethnicity, national origin, religion, age, sex, sexual orientation, gender identity, immigration status, disability, serious illness, union membership\n- Government identifiers: Social Security numbers, driver's license numbers, passport numbers, government ID numbers\n- Financial account details: credit card numbers, bank account numbers\n- Health information: medical conditions, diagnoses, lab results, mental health details, therapy or counseling\n- Home or personal mailing addresses (work addresses are fine)\n- Account passwords, secret tokens, or secret keys\n\nIf any of the above appears in conversation context, complete the task but do not persist it to a memory file. If the user explicitly says \"remember my address is X\", saving it is acceptable — they've given consent."
+      },
+      "coworkArtifacts:2940196192": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "canSaveSkill:3246569822": {
+        "on": true,
+        "source": "force",
+        "value": true,
+        "note": "ID ABSENT FROM THE 1.44121.1 ASAR (3 occurrences at 1.40609.1, 0 here). The row is fcache provenance and is kept as recorded — the server still serves the flag — but Desktop no longer reads it: for a standard session canSaveSkill is now the skillsEnabled conjunct alone. Treat this row as a record of what the server sent, NOT as evidence that a gate still guards the feature."
+      },
+      "automode-permission-rubric:3424551112": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "1p-direct-mcp:4074604942": {
+        "on": false,
+        "source": "force",
+        "value": false
+      },
+      "skipPrecompactLoad:4153934152": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "autoModeOverridesAlwaysAllow:4200321681": {
+        "on": true,
+        "source": "force",
+        "value": true
+      }
+    },
+    "spawnEnvKeys": [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_CUSTOM_HEADERS",
+      "API_TIMEOUT_MS",
+      "CLAUDE_CODE_ACCOUNT_TAGGED_ID",
+      "CLAUDE_CODE_ACCOUNT_UUID",
+      "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD",
+      "CLAUDE_CODE_ATTRIBUTION_HEADER",
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+      "CLAUDE_CODE_BRIEF",
+      "CLAUDE_CODE_BRIEF_UPLOAD",
+      "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS",
+      "CLAUDE_CODE_DIAGNOSTICS_FILE",
+      "CLAUDE_CODE_DISABLE_AGENTS_FLEET",
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+      "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS",
+      "CLAUDE_CODE_DISABLE_CRON",
+      "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL",
+      "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK",
+      "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+      "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES",
+      "CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT",
+      "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL",
+      "CLAUDE_CODE_ENABLE_AUTO_MODE",
+      "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING",
+      "CLAUDE_CODE_ENABLE_TASKS",
+      "CLAUDE_CODE_ENTRYPOINT",
+      "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+      "CLAUDE_CODE_HOST_PLATFORM",
+      "CLAUDE_CODE_IS_COWORK",
+      "CLAUDE_CODE_OAUTH_SCOPES",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_ORGANIZATION_UUID",
+      "CLAUDE_CODE_PROMPT_CACHE_TTL",
+      "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+      "CLAUDE_CODE_QUESTION_EXTENDED",
+      "CLAUDE_CODE_RATE_LIMIT_TIER",
+      "CLAUDE_CODE_SKIP_PRECOMPACT_LOAD",
+      "CLAUDE_CODE_SUBAGENT_MODEL",
+      "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL",
+      "CLAUDE_CODE_SUBSCRIPTION_TYPE",
+      "CLAUDE_CODE_TAGS",
+      "CLAUDE_CODE_USER_EMAIL",
+      "CLAUDE_CODE_WORKSPACE_HOST_PATHS",
+      "CLAUDE_CONFIG_DIR",
+      "CLAUDE_PREVIEW_CLASSIFIER_FLOOR",
+      "CLAUDE_PROJECT_TOOL",
+      "CLAUDE_PROJECT_UUID",
+      "CLAUDE_STREAM_IDLE_TIMEOUT_MS",
+      "DISABLE_AUTOUPDATER",
+      "DISABLE_BRIEF_MODE_STOP_HOOK",
+      "DISABLE_ERROR_REPORTING",
+      "DISABLE_FEEDBACK_COMMAND",
+      "DISABLE_GROWTHBOOK",
+      "DISABLE_MICROCOMPACT",
+      "DISABLE_TELEMETRY",
+      "ENABLE_PROMPT_CACHING_1H",
+      "ENABLE_TOOL_SEARCH",
+      "MCP_CONNECTION_NONBLOCKING",
+      "MCP_CONNECT_TIMEOUT_MS",
+      "MCP_TOOL_TIMEOUT",
+      "TZ",
+      "USE_LOCAL_OAUTH",
+      "USE_STAGING_OAUTH"
+    ],
+    "spawnEnvSpreadCount": 34,
+    "fcache": {
+      "content16": "e70706f6b3ce4843",
+      "embeddedTimestamp": 1788566505527,
+      "featureCount": 322
+    },
+    "asarGateIds": [
+      "17519066",
+      "28927217",
+      "36693946",
+      "40173473",
+      "49458538",
+      "66187241",
+      "96101707",
+      "96832454",
+      "98041341",
+      "108465228",
+      "123929380",
+      "124685897",
+      "133902057",
+      "144158705",
+      "147471044",
+      "151700879",
+      "160242894",
+      "162211072",
+      "180602792",
+      "206750215",
+      "227459766",
+      "232278890",
+      "245679952",
+      "254738541",
+      "262787483",
+      "278625510",
+      "283281522",
+      "286376943",
+      "291584251",
+      "304458538",
+      "371539023",
+      "397125142",
+      "416245092",
+      "434204418",
+      "451382573",
+      "458990115",
+      "476513332",
+      "505512513",
+      "520984675",
+      "541746109",
+      "552157343",
+      "554317356",
+      "570403704",
+      "574905726",
+      "581786799",
+      "583857784",
+      "607406988",
+      "613003975",
+      "629684104",
+      "642265585",
+      "657187776",
+      "693564285",
+      "700397605",
+      "706068684",
+      "714014285",
+      "717163759",
+      "720735283",
+      "721728391",
+      "732695530",
+      "733405693",
+      "743194442",
+      "748063099",
+      "751369921",
+      "762798616",
+      "763725229",
+      "769234850",
+      "790863764",
+      "816856638",
+      "822923030",
+      "848696239",
+      "850702611",
+      "873030668",
+      "879583975",
+      "884132720",
+      "885442848",
+      "890748467",
+      "919579692",
+      "922442190",
+      "939257113",
+      "942840715",
+      "954625922",
+      "959099749",
+      "975112542",
+      "976614668",
+      "982691970",
+      "986399546",
+      "994878011",
+      "999999999",
+      "1004628546",
+      "1028094019",
+      "1061122496",
+      "1085129406",
+      "1101873029",
+      "1109029378",
+      "1111144847",
+      "1126577245",
+      "1129419822",
+      "1131777852",
+      "1143815894",
+      "1144854707",
+      "1179150525",
+      "1183214304",
+      "1197768857",
+      "1215221242",
+      "1239409407",
+      "1263782781",
+      "1265511872",
+      "1278239935",
+      "1284392461",
+      "1287897741",
+      "1291166712",
+      "1294710626",
+      "1294982044",
+      "1310358601",
+      "1323782925",
+      "1340622498",
+      "1346958739",
+      "1395094573",
+      "1403324732",
+      "1410651677",
+      "1412563253",
+      "1434290056",
+      "1441987769",
+      "1447478638",
+      "1477483922",
+      "1480778051",
+      "1544796833",
+      "1549258603",
+      "1569828280",
+      "1588340729",
+      "1595132361",
+      "1603637451",
+      "1607913098",
+      "1629866860",
+      "1645353060",
+      "1648655587",
+      "1677081600",
+      "1695017395",
+      "1696890383",
+      "1701404423",
+      "1703762832",
+      "1707927936",
+      "1710585411",
+      "1743527783",
+      "1748356779",
+      "1754160972",
+      "1776348311",
+      "1781903805",
+      "1824824999",
+      "1825995196",
+      "1836754949",
+      "1868684740",
+      "1875770773",
+      "1893165035",
+      "1904135164",
+      "1923867086",
+      "1924247864",
+      "1925932989",
+      "1928275548",
+      "1936081873",
+      "1942337209",
+      "1942781881",
+      "1947305033",
+      "1972091654",
+      "1978029737",
+      "1992087837",
+      "2004571505",
+      "2016258596",
+      "2023768496",
+      "2048589233",
+      "2049450122",
+      "2051751800",
+      "2051942385",
+      "2062156710",
+      "2067027393",
+      "2071326072",
+      "2079084046",
+      "2096326160",
+      "2099281725",
+      "2114777685",
+      "2115990222",
+      "2129861473",
+      "2140326016",
+      "2143883161",
+      "2153038254",
+      "2192324205",
+      "2214981414",
+      "2216414644",
+      "2216766246",
+      "2216901299",
+      "2220415149",
+      "2229805612",
+      "2294160313",
+      "2307090146",
+      "2309422447",
+      "2339084909",
+      "2340532315",
+      "2345107588",
+      "2345515473",
+      "2358734848",
+      "2365358358",
+      "2369776764",
+      "2371478310",
+      "2392971184",
+      "2393677837",
+      "2394039067",
+      "2427043945",
+      "2431502897",
+      "2464731750",
+      "2464838160",
+      "2486083521",
+      "2529235968",
+      "2537760906",
+      "2547348043",
+      "2576868839",
+      "2605355193",
+      "2614807392",
+      "2654621331",
+      "2685067074",
+      "2688060585",
+      "2719700143",
+      "2720310975",
+      "2722545484",
+      "2725876754",
+      "2726556121",
+      "2745857735",
+      "2755789005",
+      "2767293802",
+      "2768844978",
+      "2795002549",
+      "2795595714",
+      "2798169495",
+      "2800354941",
+      "2806360886",
+      "2833632524",
+      "2848557028",
+      "2857785401",
+      "2860753854",
+      "2864556627",
+      "2877254163",
+      "2893011886",
+      "2895944283",
+      "2906430762",
+      "2906979861",
+      "2921739883",
+      "2938421209",
+      "2940196192",
+      "2941281426",
+      "2961849615",
+      "2971093051",
+      "2973881027",
+      "2974609625",
+      "2979038612",
+      "3007887412",
+      "3018088575",
+      "3019665678",
+      "3023518717",
+      "3025587613",
+      "3043546415",
+      "3045399524",
+      "3046457088",
+      "3046702961",
+      "3070110303",
+      "3093186863",
+      "3123045134",
+      "3142047527",
+      "3150971238",
+      "3163246478",
+      "3166359512",
+      "3183093548",
+      "3229517805",
+      "3269331205",
+      "3300773012",
+      "3302457740",
+      "3353525254",
+      "3356268835",
+      "3366735351",
+      "3368286709",
+      "3371831021",
+      "3372259263",
+      "3377630395",
+      "3414805749",
+      "3424551112",
+      "3436441689",
+      "3444158716",
+      "3448679706",
+      "3491600236",
+      "3527441323",
+      "3531612483",
+      "3531779070",
+      "3547093683",
+      "3555657854",
+      "3558849738",
+      "3559681707",
+      "3572572142",
+      "3577536076",
+      "3586389629",
+      "3602629573",
+      "3633961296",
+      "3635490728",
+      "3640318556",
+      "3646818354",
+      "3671534883",
+      "3691521536",
+      "3705360580",
+      "3723845789",
+      "3724674924",
+      "3728132896",
+      "3758515526",
+      "3764441751",
+      "3778159589",
+      "3783846612",
+      "3796647113",
+      "3807767338",
+      "3920548810",
+      "3927880029",
+      "3931589559",
+      "3946462706",
+      "3961433847",
+      "3976799455",
+      "3982397363",
+      "3990395613",
+      "4034153053",
+      "4039294468",
+      "4041267332",
+      "4044603026",
+      "4055864154",
+      "4066504968",
+      "4074604942",
+      "4083972287",
+      "4085357330",
+      "4108768567",
+      "4112513247",
+      "4114957886",
+      "4116586025",
+      "4141490266",
+      "4153934152",
+      "4156472024",
+      "4160352601",
+      "4185841952",
+      "4200321681",
+      "4202409342",
+      "4217215889",
+      "4272200640",
+      "4282876673",
+      "4293378213"
+    ]
+  },
+  "requireFullVmSandbox": null
+}

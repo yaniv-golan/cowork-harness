@@ -103,6 +103,16 @@ export const PINNED_GATES: Record<string, string> = {
   "1936081873": "oauthScopesEnv", // CLAUDE_CODE_OAUTH_SCOPES (value host-derived; allowlisted)
   "4153934152": "skipPrecompactLoad", // CLAUDE_CODE_SKIP_PRECOMPACT_LOAD:"1"
   "1129419822": "enableToolSearchAuto", // ENABLE_TOOL_SEARCH:"auto" — dark (see DARK_GATES)
+  // CLAUDE_CODE_QUESTION_EXTENDED:"1" in W1 (Desktop >=1.46388.3). Served-and-OFF on a standard
+  // account (`{on:false, source:"defaultValue"}`), NOT dark — so it needs no DARK_GATES entry and the
+  // pin round-trips through the fcache on its own. Behavioural if it flips: the agent reads the key
+  // (0 -> 11 occurrences across 2.1.258 -> 2.1.260, alongside `extendedQuestions` 0 -> 5) and it drives
+  // the AskUserQuestion surface, which this harness DOES model — so a production flip must surface as a
+  // diff rather than silently changing what the modeled question protocol looks like.
+  // NAME CAVEAT: the call site passes the bare id and the flag name appears nowhere in the asar or the
+  // fcache (which keys features by id only), so this is the env key's own shape, not a verified
+  // GrowthBook name. Replace it if the real name ever surfaces.
+  "1595132361": "questionExtended",
   // Dormant drift-sentinels (Desktop 1.22209.0): tool-approval auto-mode gates. Neither is behaviorally
   // modeled — this harness has no persistent per-tool "always allow" concept to model against (no
   // updatedPermissions analog anywhere in src/decide/ or src/session.ts). Pinned so a live flip from
@@ -567,8 +577,13 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "<vmCwd>/mnt/, and shell starting in <vmCwd> with non-mnt writes reaching neither the user nor the " +
       "file tools — so NO override was reaching that account and the committed paraphrase is faithful. " +
       "That is EVIDENCE, NOT PROOF: one account, one session, and a server rule can be segment-targeted. " +
+      "AND IT IS NOW SUPERSEDED: that probe was run against the pre-1.46388.3 hl text, which Desktop " +
+      "1.46388.3 REPLACED. Two of the four claims above (host cwd, folders under <vmCwd>/mnt/) no longer " +
+      "live in the overridable section at all — they moved into the appended folder manifest — so a " +
+      "re-probe cannot be scored against that list. Score a new probe against what the release actually " +
+      "composes: the section, then the folder manifest, then the trailing skills sentence. " +
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
-      "for its environment section verbatim, diff the four claims) rather than trusting this note.",
+      "for its environment section verbatim, diff the three composed parts) rather than trusting this note.",
   ];
 }
 
@@ -2075,12 +2090,17 @@ function readPromptFingerprintsFile(): PromptFingerprintsFile | null {
   }
 }
 
+/** One committed fingerprint entry. `hl`/`vm` are the ternary branch texts; `manifest`/`suffix` are the
+ *  two parts composed AFTER the overridable section (Desktop >=1.46388.3) — absent on older entries,
+ *  which is why only the NEWEST entry is ever compared and only its OWN axes are mandatory. */
+export type SubagentFingerprintEntry = { hl: string; vm: string; manifest?: string; suffix?: string; note?: string };
+
 /** subagentAppendVersions map from cowork-system-prompt-fingerprints.json; null = unreadable/absent
  *  (checkSubagentPromptFacts turns that into a hard-fail flag — never a silent skip). */
 function readSubagentFingerprints(): { versions: Record<string, { hl: string; vm: string }> } | null {
   try {
     const raw = readFileSync(join(BASELINES_DIR, "prompts", "cowork-system-prompt-fingerprints.json"), "utf8");
-    const parsed = JSON.parse(raw) as { subagentAppendVersions?: Record<string, { hl: string; vm: string }> };
+    const parsed = JSON.parse(raw) as { subagentAppendVersions?: Record<string, SubagentFingerprintEntry> };
     if (!parsed?.subagentAppendVersions) return null;
     return { versions: parsed.subagentAppendVersions };
   } catch {
@@ -2190,15 +2210,14 @@ export function checkPromptDrift(
  *  and the value-proof regexes can match), every other escape is preserved verbatim (keeps the
  *  fingerprint stable), and the first UNESCAPED backtick terminates the body. Operates per-module
  *  (never the concatenated bundle) so an unrelated template can't be captured. */
+function openDelimiterBefore(module: string, at: number): number {
+  for (let i = at; i >= 0; i--) if (module[i] === "`" && module[i - 1] !== "\\") return i;
+  return -1;
+}
+
 function templateBodyAt(module: string, at: number): string | null {
   if (at < 0) return null;
-  let open = -1;
-  for (let i = at; i >= 0; i--) {
-    if (module[i] === "`" && module[i - 1] !== "\\") {
-      open = i;
-      break;
-    }
-  }
+  const open = openDelimiterBefore(module, at);
   if (open < 0) return null;
   let out = "";
   for (let i = open + 1; i < module.length; i++) {
@@ -2235,15 +2254,130 @@ export function extractSubagentBranchSlices(files: Map<string, string>): { modul
   // longer identifiable by name. The two BRANCH TEXTS are the real discriminator anyway (they are the
   // thing being fingerprinted), and they are content, not identifiers, so they survive minification.
   // Requiring BOTH still pins a single module: only the generator carries the hl and vm bodies together.
-  const module = [...files.values()].find((c) => c.includes("on the user's machine") && c.includes("exist only in the sandbox"));
+  // B14 (Desktop 1.46388.3): the module and the hl slice are anchored STRUCTURALLY, not on hl prose.
+  // The old hl discriminator ("on the user's machine") LEFT the hl branch at this release, and the
+  // phrase survives in unrelated computer-use prose in the same module — so `lastIndexOf` silently
+  // fingerprinted the WRONG template (reported e22697f4dfcc784c, the computer-use section, in place of
+  // the real hl branch). It failed loud only because the hl value-proofs then missed. The vm
+  // discriminator is 1 occurrence bundle-wide on every build on record, and the ternary shape
+  // (`<hostLoopMode> ? \`hl\` : \`vm\``) is what the product actually guarantees; the wording never was.
+  const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
   const vmAt = module.indexOf("exist only in the sandbox");
-  const hlAt = module.lastIndexOf("on the user's machine", vmAt);
-  if (vmAt < 0 || hlAt < 0) return null;
-  const hl = templateBodyAt(module, hlAt);
+  if (vmAt < 0) return null;
   const vm = templateBodyAt(module, vmAt);
-  if (!hl || !vm) return null;
+  if (!vm) return null;
+  // Walk from the vm template's opening delimiter back over the ternary's `:` to the hl template's
+  // CLOSING delimiter, then slice that template. Any other shape returns null (a loud generic flag)
+  // rather than a neighbouring template.
+  const vmOpen = openDelimiterBefore(module, vmAt);
+  if (vmOpen < 0) return null;
+  let i = vmOpen - 1;
+  while (i >= 0 && /\s/.test(module[i]!)) i--;
+  if (module[i] !== ":") return null;
+  i--;
+  while (i >= 0 && /\s/.test(module[i]!)) i--;
+  if (module[i] !== "`" || module[i - 1] === "\\") return null; // hl's closing delimiter
+  const hl = templateBodyAt(module, i - 1);
+  if (!hl) return null;
   return { module, hl, vm };
+}
+
+/** Slice the body of the function whose `function <ident>(` header most closely precedes `at`,
+ *  brace-matched with a scanner that skips string, template and regex-ish literals so a `}` inside a
+ *  literal cannot terminate the body early. Returns the source from the header to the matching `}`.
+ *  Used to bound the folder-manifest generator; a plain `indexOf("}")` would cut inside its templates. */
+function enclosingFunctionSource(module: string, at: number): string | null {
+  const head = module.lastIndexOf("function ", at);
+  if (head < 0) return null;
+  const open = module.indexOf("{", module.indexOf("(", head));
+  if (open < 0 || open > at) return null;
+  let depth = 0;
+  for (let i = open; i < module.length; i++) {
+    const c = module[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const q = c;
+      for (i++; i < module.length; i++) {
+        if (module[i] === "\\") {
+          i++;
+          continue;
+        }
+        if (module[i] === q) break;
+      }
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return module.slice(head, i + 1);
+    }
+  }
+  return null;
+}
+
+/** Every template-literal body in `src`, in source order, decoded the same way `templateBodyAt`
+ *  decodes one (escaped backticks become literal backticks; other escapes are preserved). */
+function templateBodiesIn(src: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] !== "`" || src[i - 1] === "\\") continue;
+    let body = "";
+    let j = i + 1;
+    for (; j < src.length; j++) {
+      const c = src[j];
+      if (c === "\\") {
+        const next = src[j + 1] ?? "";
+        body += next === "`" ? "`" : c + next;
+        j++;
+        continue;
+      }
+      if (c === "`") break;
+      body += c;
+    }
+    if (j >= src.length) break; // unterminated — stop rather than invent a body
+    out.push(body);
+    i = j;
+  }
+  return out;
+}
+
+/** The two parts of the composed sub-agent append that live OUTSIDE the hl/vm ternary (Desktop
+ *  >=1.46388.3): the hl-only folder manifest and the unconditional trailing sentence. Both are
+ *  appended after `resolveSection`/the substituter, so a `spSectionPrompts` override does NOT replace
+ *  them — and neither is covered by the two branch fingerprints, which is how the trailing sentence
+ *  reached BOTH branches at 1.46388.3 with the vm fingerprint unmoved. Returns null when either shape
+ *  is absent (a loud flag), never a neighbouring construct.
+ *
+ *  `manifest` is the manifest generator's own source with its interpolations canonicalized by the
+ *  caller; `suffix` is the resolved string literal, looked up through the module's own binding rather
+ *  than by a minified name. */
+export function extractSubagentComposition(files: Map<string, string>): { module: string; manifest: string; suffix: string } | null {
+  const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
+  if (!module) return null;
+  // Manifest: anchored on a fragment that is INSIDE the thing being fingerprinted (the lesson of B14 —
+  // an anchor outside its subject can silently select the wrong text).
+  const mAt = module.indexOf("(the shell cannot reach this folder)");
+  if (mAt < 0) return null;
+  const fnSrc = enclosingFunctionSource(module, mAt);
+  if (!fnSrc) return null;
+  // Hash the manifest's TEXT, never its source. The function body is code — its identifiers rotate
+  // every build, so a source hash would report drift on every release and be ignored within two.
+  // Concatenating its template bodies in source order (interpolations canonicalized by the caller's
+  // normalizer) tracks the prose the model actually receives and nothing else.
+  const bodies = templateBodiesIn(fnSrc);
+  if (bodies.length === 0) return null;
+  const manifest = bodies.join("\u0000");
+  // Suffix: read the composition site, then resolve the trailing interpolation's identifier against
+  // this module's own `<ident>="…"` binding. Never matched by name.
+  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\([^)]*\):""\}\$\{([\w$]+)\}`/);
+  if (!comp) return null;
+  const decl = module.match(new RegExp(`\\b${comp[1]}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+  if (!decl) return null;
+  return { module, manifest, suffix: decl[1]! };
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
@@ -2260,11 +2394,20 @@ export function subagentBranchFingerprint(branchText: string): string {
 
 export function checkSubagentPromptFacts(
   files: Map<string, string>,
-  committed: { versions: Record<string, { hl: string; vm: string }> } | null,
+  committed: { versions: Record<string, SubagentFingerprintEntry> } | null,
 ): string[] {
   const flags: string[] = [];
   const bundle = [...files.values()].join(""); // literal anchors below span 3 modules (SP_SECTION_KEYS, generator, delivery) — check them against the join; branch-TEXT slicing is module-scoped
   const miss = (what: string, why: string) => flags.push(`subagent-append: ${what} anchor missing — ${why}`);
+  // Newest committed entry, resolved ONCE. Only the newest is ever compared — historical entries
+  // describe releases whose shapes have since changed and must never be retro-failed.
+  const committedNewest = (() => {
+    const versions = committed ? Object.keys(committed.versions) : [];
+    if (!committed || versions.length === 0) return null;
+    let newest = versions[0]!;
+    for (const v of versions) if (cmpVersionStrings(v, newest) > 0) newest = v;
+    return { version: newest, entry: committed.versions[newest]! };
+  })();
 
   // (1) key-pair literal (verbatim in all backed-up asars).
   if (!/subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"/.test(bundle))
@@ -2282,14 +2425,20 @@ export function checkSubagentPromptFacts(
     //   hl: working directory `${host??vmRoot}`; mounts `${vmRoot}/mnt/` — mount binding MUST equal the
     //       ?? FALLBACK binding (the vm root), never the host binding.
     //   vm: rooted at `${vmRoot}`; mounts `${vmRoot}/mnt/` — root binding MUST equal the mount binding.
-    const hlWd = slices.hl.match(/working directory `\$\{([\w$]+)\?\?([\w$]+)\}`/);
-    const hlMnt = slices.hl.match(/mounted under `?\$\{([\w$]+)\}\/mnt\//);
-    if (!hlWd) miss("hl working-directory interpolation", "expected the `${hostCwd??vmRoot}` shape");
-    if (!hlMnt) miss("hl mounts interpolation", "expected `${vmRoot}/mnt/`");
-    if (hlWd && hlMnt && hlWd[2] !== hlMnt[1])
+    // B14: at Desktop 1.46388.3 the hl branch was REPLACED. It no longer states the host working
+    // directory at all — the `${hostCwd??vmRoot}` binding moved OUT of the overridable section and into
+    // the folder manifest's relative-paths clause, which is proved at the composition site below. What
+    // the branch still asserts, and what must stay coherent, is that the shell STARTS IN the session
+    // root and that the non-visible tree is that SAME root's `/mnt/` — a host/VM swap of those two is
+    // the drift this proof exists to catch.
+    const hlStart = slices.hl.match(/starts in `\$\{([\w$]+)\}`/);
+    const hlMnt = slices.hl.match(/outside `\$\{([\w$]+)\}\/mnt\//);
+    if (!hlStart) miss("hl start-directory interpolation", "expected the `starts in ${vmRoot}` shape");
+    if (!hlMnt) miss("hl mounts interpolation", "expected `outside ${vmRoot}/mnt/`");
+    if (hlStart && hlMnt && hlStart[1] !== hlMnt[1])
       miss(
         "hl substitution values",
-        `hl mounts bind ${hlMnt[1]} but the working-directory ?? fallback (vm root) is ${hlWd[2]} — host/VM swap?`,
+        `hl starts-in binds ${hlStart[1]} but the /mnt/ clause binds ${hlMnt[1]} — the two must be the same session-root binding (host/VM swap?)`,
       );
     const vmRoot = slices.vm.match(/rooted at `?\$\{([\w$]+)\}`?/);
     const vmMnt = slices.vm.match(/mounted under `?\$\{([\w$]+)\}\/mnt\//);
@@ -2306,15 +2455,13 @@ export function checkSubagentPromptFacts(
     // not silently disable a branch). A partial committed entry is itself a hard-fail.
     const hlFp = subagentBranchFingerprint(slices.hl);
     const vmFp = subagentBranchFingerprint(slices.vm);
-    const versions = committed ? Object.keys(committed.versions) : [];
-    if (!committed || versions.length === 0) {
+    if (!committedNewest) {
       flags.push(
         "subagent-append: no committed subagentAppendVersions fingerprints — cannot verify branch-text drift (add them to baselines/prompts/cowork-system-prompt-fingerprints.json)",
       );
     } else {
-      let newest = versions[0];
-      for (const v of versions) if (cmpVersionStrings(v, newest) > 0) newest = v;
-      const want = committed.versions[newest];
+      const newest = committedNewest.version;
+      const want = committedNewest.entry;
       if (typeof want.hl !== "string" || typeof want.vm !== "string")
         flags.push(
           `subagent-append: committed entry ${newest} is missing an hl or vm fingerprint — both are mandatory (a partial entry silently disables a branch)`,
@@ -2339,14 +2486,75 @@ export function checkSubagentPromptFacts(
   // (6) delivery-call argument-list connectivity at the appendSubagentSystemPrompt: site (S16 proves
   //     only that SOME call exists).
   if (
-    !/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{vmProcessName[\s\S]{0,80}hostLoopMode[\s\S]{0,80}hostCwd[\s\S]{0,80}spSectionPrompts/.test(
+    !/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{vmProcessName[\s\S]{0,80}hostLoopMode[\s\S]{0,80}hostCwd[\s\S]{0,120}hostOutputsDir[\s\S]{0,120}userSelectedFolders[\s\S]{0,120}hostOnlyFolders[\s\S]{0,120}spSectionPrompts/.test(
       bundle,
     )
   )
     miss(
       "delivery argument list",
-      "the {vmProcessName, hostLoopMode, hostCwd, spSectionPrompts} argument list at the delivery site changed",
+      "the {vmProcessName, hostLoopMode, hostCwd, hostOutputsDir, userSelectedFolders, hostOnlyFolders, spSectionPrompts} argument list at the delivery site changed",
     );
+  // (6b) hostOutputsDir is hostLoopMode-GATED at the call site (`<hl>?<getOutputsDir>:void 0`). If that
+  //      gating were dropped, a VM-loop sub-agent would start receiving an outputs path it cannot reach.
+  if (!/hostOutputsDir:[\w$]+\?[\w$.]+\([^)]*\):void 0/.test(bundle))
+    miss("hostOutputsDir gating", "hostOutputsDir is no longer `hostLoopMode ? <outputsDir> : void 0` at the delivery site");
+  // (7) The composed parts that live OUTSIDE the ternary (Desktop >=1.46388.3). NOT covered by the two
+  //     branch fingerprints — which is exactly how the trailing sentence reached BOTH branches at
+  //     1.46388.3 while the vm fingerprint stayed 859aa136fc15b38f. Fingerprinting the composition is
+  //     what makes the sentinel's subject the append the model receives rather than the ternary arms.
+  const comp = extractSubagentComposition(files);
+  if (!comp) {
+    miss("composed append parts", "the folder-manifest generator and/or the trailing appended sentence could not be sliced");
+  } else {
+    // The manifest joins the path-gated builtin tool list. Assert the list itself by CONTENT — a tool
+    // added to or removed from it changes what the sub-agent is told its file tools are, and would not
+    // move the manifest's own prose fingerprint.
+    if (!/\["Read","Write","Edit","Glob","Grep"\]/.test(bundle))
+      miss(
+        "manifest tool list",
+        'the ["Read","Write","Edit","Glob","Grep"] path-gated builtin tool list the manifest joins is gone or changed',
+      );
+    if (!/[\w$]+\.[\w$]+\.join\(", "\)/.test(bundle))
+      miss("manifest tool-list join", 'the manifest no longer joins a tool-name list with ", "');
+    // The manifest CALL must pass (vmRoot, hostCwd??vmRoot, …) — this is where the `${hostCwd??vmRoot}`
+    // binding that left the hl branch now lives, and a host/VM swap here would misdirect every relative
+    // path the sub-agent's file tools resolve.
+    if (!/\}\$\{[\w$]+\?[\w$]+\(([\w$]+),([\w$]+)\?\?([\w$]+),/.test(comp.module))
+      miss("manifest call bindings", "the hl-gated manifest call no longer passes (vmRoot, hostCwd??vmRoot, …)");
+    else {
+      const m = /\}\$\{[\w$]+\?[\w$]+\(([\w$]+),([\w$]+)\?\?([\w$]+),/.exec(comp.module)!;
+      if (m[1] !== m[3])
+        miss(
+          "manifest call bindings",
+          `the manifest's vmRoot argument is ${m[1]} but its hostCwd ?? fallback is ${m[3]} — the fallback must be the same vm root`,
+        );
+    }
+    const manifestFp = subagentBranchFingerprint(comp.manifest);
+    const suffixFp = subagentBranchFingerprint(comp.suffix);
+    if (committedNewest) {
+      const want = committedNewest.entry;
+      // Only the newest entry is compared, and only on the axes IT declares — historical entries
+      // predate these parts and must not be retro-failed. An entry that declares one composed axis
+      // must declare both: a half-declared entry silently disables a part.
+      const declares = want.manifest !== undefined || want.suffix !== undefined;
+      if (declares && (typeof want.manifest !== "string" || typeof want.suffix !== "string"))
+        flags.push(
+          `subagent-append: committed entry ${committedNewest.version} declares one of manifest/suffix but not both — both are mandatory once either is recorded (a partial entry silently disables a part)`,
+        );
+      if (typeof want.manifest === "string" && want.manifest !== manifestFp)
+        flags.push(
+          `subagent-append: folder-manifest text fingerprint drifted vs ${committedNewest.version} (${want.manifest} -> ${manifestFp}) — re-derive, update the hl paraphrase generator if semantics moved, then add a new version entry`,
+        );
+      if (typeof want.suffix === "string" && want.suffix !== suffixFp)
+        flags.push(
+          `subagent-append: trailing-sentence fingerprint drifted vs ${committedNewest.version} (${want.suffix} -> ${suffixFp}) — this part reaches BOTH branches; update both paraphrases, then add a new version entry`,
+        );
+      if (!declares)
+        flags.push(
+          `subagent-append: the build carries composed append parts (manifest ${manifestFp}, suffix ${suffixFp}) but the newest committed entry ${committedNewest.version} records neither — record them or a change to either ships unguarded`,
+        );
+    }
+  }
   return flags;
 }
 
@@ -2381,6 +2589,7 @@ const SPAWN_GATES: Record<string, string> = {
   "714014285": "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING:'1' (pinned gate; force-ON live)",
   "4153934152": "CLAUDE_CODE_SKIP_PRECOMPACT_LOAD:'1' (pinned gate)",
   "451382573": "DISABLE_BRIEF_MODE_STOP_HOOK:'1' — brief (non-chat) sessions only; NOT pinned (harness models chat)",
+  "1595132361": "CLAUDE_CODE_QUESTION_EXTENDED:'1' (pinned gate; served-and-off, so WI-4 drops the value)",
 };
 
 /**
@@ -2484,6 +2693,13 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   "CLAUDE_CODE_TAGS",
   "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
   "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL",
+  // Gate 1595132361-conditional (Desktop >=1.46388.3). PINNED, not allowlisted: it has a 1p W1 site
+  // and no host/settings/3p conditionality there. While the gate reads off, WI-4 classifies the key and
+  // DROPS its value (apply=false), so it stays out of spawn.env; if a server rule flips the gate on,
+  // resolveGateInner writes "1" and the flip shows up as a spawn.env diff. Do NOT copy the
+  // ENABLE_TOOL_SEARCH treatment here — that key is ALLOWLISTED because its gate is genuinely dark and
+  // no value can be resolved for it; this gate is served.
+  "CLAUDE_CODE_QUESTION_EXTENDED",
   "CLAUDE_CODE_DISABLE_CRON",
   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
   "CLAUDE_CODE_DISABLE_AGENTS_FLEET",

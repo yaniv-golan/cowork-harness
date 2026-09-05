@@ -13,6 +13,7 @@ import {
   rmSync,
   realpathSync,
 } from "node:fs";
+import { subagentGeneratedPromptText } from "../prompt/subagent-manifest.js";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -766,6 +767,13 @@ export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | u
     .filter((e): e is readonly [PromptAssetKey, string] => typeof e[1] === "string");
   if (entries.length === 0) return undefined;
   const h = createHash("sha256");
+  // Prompt text the harness GENERATES rather than reads from an asset (the sub-agent folder manifest and
+  // the trailing skills sentence, Desktop >=1.46388.3) reaches the model exactly as an asset's text does,
+  // so it must stale a cassette exactly as an asset's text does. Hashing only the pointed-to files would
+  // reproduce, one layer down, the fail-open this release found in the sync sentinel: text that reaches
+  // the model and is hashed by nothing. The generator's OUTPUT varies with live mounts, so what is mixed
+  // in is its constant templates with every interpolation blanked.
+  h.update("subagentGenerated").update("\0").update(subagentGeneratedPromptText()).update("\0");
   for (const [key, rel] of entries) {
     const p = join(BASELINES_DIR, rel);
     if (!existsSync(p)) return undefined; // a dangling pointer already fails test/prompt-assets.test.ts

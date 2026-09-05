@@ -284,6 +284,14 @@ export interface Mount {
    */
   kind: "folder" | "project" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
   /**
+   * The realpath of `hostPath`, set for `folder` mounts. Production's sub-agent folder manifest renders
+   * `resolvedFolders[i].canonical` (`gg()`), NOT the path as the user declared it, so a manifest built
+   * from `hostPath` would name a location production never names — on macOS every `/tmp`, `/var` or
+   * symlinked folder differs. Computed once here beside the naming canonicalization rather than
+   * re-derived at the render site, which would be a second copy of the same rule.
+   */
+  canonicalHostPath?: string;
+  /**
    * Precomputed staging copy filter. When set, the runtime copy sites use it verbatim instead of
    * re-deriving via `gitCpFilter` — so the file count reported at plan-build equals the delivered set
    * (no second `git ls-files`, no TOCTOU). Set for plugin-kind mounts under git mode; undefined for
@@ -333,6 +341,14 @@ export interface LaunchPlan {
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
   mounts: Mount[]; // uploads + projects + plugin roots (mountPath relative to mnt)
+  /**
+   * Folder mounts EXCLUDED from `mounts` because their source was missing and
+   * `COWORK_HARNESS_SOFT_MISSING=1` allowed the run to continue. Production's analogue is a
+   * `mount-failed` host-only folder, which it still LISTS in the sub-agent folder manifest — as
+   * unreachable — rather than dropping silently, so the manifest needs them. Empty in every ordinary
+   * run; nothing else consumes this.
+   */
+  hostOnlyFolders?: Mount[];
   pluginDirs: string[]; // mnt-relative plugin roots for --plugin-dir (incl. marketplace-resolved)
   egressAllow: string[]; // baseline allowlist + session extra (or ["*"] if unrestricted)
   agentSessionId?: string; // the agent's native --session-id (pinned for resume); set by executeScenario
@@ -724,6 +740,7 @@ export function buildLaunchPlan(
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, f.mode, "dir", { softMissing, deferMissing: true, what: `folder "${f.from}"` })!,
       kind: "folder",
+      canonicalHostPath: folderCanon[i],
     });
   }
   for (const proj of session.projects) {
@@ -987,6 +1004,8 @@ export function buildLaunchPlan(
     warn(`::warning:: [mount] ${missing.length} missing source(s) excluded (COWORK_HARNESS_SOFT_MISSING): ${list}\n`);
   }
   const presentMounts = softMissing ? mounts.filter((mt) => existsSync(mt.hostPath)) : mounts;
+  // What soft-missing DROPPED, kept for the sub-agent folder manifest (see LaunchPlan.hostOnlyFolders).
+  const hostOnlyFolders = mounts.filter((mt) => mt.kind === "folder" && !presentMounts.includes(mt));
 
   // Two sources mapping to the same destination would silently overwrite during staging. Fail
   // before staging, naming the collision, so a same-basename upload/plugin pair can't clobber.
@@ -1038,6 +1057,7 @@ export function buildLaunchPlan(
     permissionParity: session.permission_parity,
     baseEnv,
     mounts: presentMounts,
+    hostOnlyFolders,
     pluginDirs,
     egressAllow,
   };

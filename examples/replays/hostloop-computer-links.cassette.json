@@ -95,9 +95,9 @@
   "preRunHashes": {},
   "scenarioSource": "../scenarios/hostloop-computer-links.yaml",
   "fingerprint": {
-    "baseline": "1.44121.1",
+    "baseline": "1.46388.3",
     "hashFormat": "jcs1",
-    "promptAssetsHash": "491afe2862dc67ea"
+    "promptAssetsHash": "94cc15684ac2b074"
   },
   "timeline": [
     {

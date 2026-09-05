@@ -811,8 +811,9 @@ that needs a live `run` (the cassette's staleness fingerprint warns when the ski
 drifted — `baseline`, `skill`/`shared-root`, `format`, `resolved-tier`, `prompt-assets`, plus the
 `unverifiable-*` can't-verify variants of each (`unverifiable-skill` FAILS a bare replay since 2.0.0); `replay --strict` fails on any drift, `--fail-on-skill-drift`
 on skill-source drift only, and every result reports it in `staleness[]` for a JSON gate). `prompt-assets`
-covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`subagentAppendHostLoop`)
-edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
+covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`subagentAppendHostLoop`),
+or the sub-agent prompt text the harness generates rather than reads from an asset (the host-loop folder
+manifest and trailing sentence, Desktop >=1.46388.3), edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
 identity keyed on `appVersion` alone cannot see it.
 
 **Egress + other filesystem** assertions (`file_absent`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`,
