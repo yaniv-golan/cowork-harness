@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.4.1] — 2026-09-05
+
 ### Documentation
 
 - **Which Cowork *lane* the harness models is now stated, in the places a consumer reads.** Every
