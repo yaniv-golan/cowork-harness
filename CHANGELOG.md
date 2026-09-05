@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.4.0] — 2026-09-05
+
+### Upgrade notes
+
+- **`promptAssetsHash` now also covers prompt text the harness GENERATES**, not only the committed
+  prompt-asset files — specifically the host-loop sub-agent folder manifest and the trailing skills
+  sentence added in this release. If you hold a cassette recorded with 3.3.0 against a baseline whose
+  `appVersion` still matches your live one, it will report `prompt-assets` staleness; re-record it. A
+  cassette on an older baseline already reports `baseline` staleness and is unaffected by this change.
+- **A host-loop sub-agent is now told which folders exist and how to address them.** If you assert on a
+  sub-agent's prose, note it now has per-session path information it did not have before.
+- **Sub-agent prompt assets are no longer the whole append.** If you maintain your own baseline,
+  `spawn.subagentAppendHostLoop` now points at the overridable SECTION only; the manifest and trailing
+  sentence are generated. Do not restore them into the asset — they would render twice.
+
 ### Verification
 
 Verified **locally**, against the Desktop install this baseline was synced from — Desktop `1.46388.3`,
