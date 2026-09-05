@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.258   # match your scenario's pinned baseline's agentVersion
+          V=2.1.260   # match your scenario's pinned baseline's agentVersion
           # The release channel is NOT always the stable one. Desktop also stages release CANDIDATES,
           # served only from .../claude-code-releases/rc/<commit>/ — the stable path 404s for those, and
           # 2.1.255 is one. Take B from your pinned baseline's agentBinary.releaseBaseUrl; baselines

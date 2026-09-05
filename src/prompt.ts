@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveMounts } from "./baseline.js";
+import { generateSubagentFolderManifest, SUBAGENT_SKILL_SENTENCE, type SubagentManifestFolder } from "./prompt/subagent-manifest.js";
 import type { PlatformBaseline } from "./types.js";
 import type { SessionConfig } from "./session.js";
 
@@ -53,6 +54,16 @@ export interface RenderPromptOpts {
   /** `{{workspaceFolder}}` -> this, falling back to `hostCwd` (production: the connected folder's host
    *  path `?? hostCwd`). */
   hostWorkspaceFolder?: string;
+  /** The session's outputs folder on the host, for the generated sub-agent folder manifest. Production
+   *  passes this as its OWN parameter (`hostOutputsDir`) alongside `hostCwd`, so it is passed
+   *  separately here too — the generator's signature can then be read straight against production's.
+   *  Today both call sites derive them from the same join; that is a fact about the harness's staging,
+   *  not a reason to collapse two of production's parameters into one. */
+  hostOutputsDir?: string;
+  /** Attached folders for the generated sub-agent folder manifest, in listing order. Paths must be
+   *  CANONICAL (see `SubagentManifestFolder.hostPath`). Host-loop only; ignored on every other tier,
+   *  because production only builds the manifest when hostLoopMode is true. */
+  subagentFolders?: readonly SubagentManifestFolder[];
 }
 
 /** The {{placeholder}} names renderPrompts() substitutes. KEEP IN LOCKSTEP with the `tokens` map below. */
@@ -145,9 +156,27 @@ export function renderPrompts(
     return subst(stripComments(readFileSync(p, "utf8"))).trim();
   };
   const isProtocol = opts.effectiveFidelity === "protocol";
+  /** Mirrors production's composition (Desktop >=1.46388.3):
+   *    section  +  (hostLoopMode ? folderManifest : "")  +  skillSentence
+   *  The section is the only overridable part; the other two are appended after it in code. Before
+   *  1.46388.3 the append WAS just the section, which is why the asset alone used to be the whole
+   *  thing — see the header of the 1.46388.3 hl asset. */
+  const composeSubagentAppend = (section: string | undefined): string | undefined => {
+    if (section === undefined) return undefined; // asset absent and skipping was allowed — do not fabricate a partial append
+    const manifest = isHostLoop
+      ? generateSubagentFolderManifest({
+          vmCwd: sessionRoot,
+          // production: `hostCwd ?? vmCwd`
+          hostCwd: opts.hostCwd ?? sessionRoot,
+          hostOutputsDir: opts.hostOutputsDir,
+          folders: opts.subagentFolders ?? [],
+        })
+      : "";
+    return (section + manifest + SUBAGENT_SKILL_SENTENCE).trim();
+  };
   const readSubagentAppend = (): string | undefined => {
     if (isProtocol) return undefined; // decided divergence: neither branch text is true on protocol topology
-    if (!isHostLoop) return read(spawn.subagentAppend);
+    if (!isHostLoop) return composeSubagentAppend(read(spawn.subagentAppend));
     if (!spawn.subagentAppendHostLoop) {
       // A hostloop run must NEVER silently fall back to the VM branch text — that is exactly the
       // factually-inverted append this selection exists to fix. Same escape hatch as read().
@@ -161,7 +190,7 @@ export function renderPrompts(
       }
       throw new Error(`cowork-harness: ${msg}`);
     }
-    return read(spawn.subagentAppendHostLoop);
+    return composeSubagentAppend(read(spawn.subagentAppendHostLoop));
   };
   return {
     systemPromptAppend: read(spawn.promptTemplate),

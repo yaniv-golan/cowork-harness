@@ -6,6 +6,69 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Parity — Desktop 1.46388.3 (agent 2.1.260)
+
+New baseline `desktop-1.46388.3`. `sync` refused with 7 unknown deltas; all are classified and it now
+runs clean.
+
+#### Fixed — the sub-agent append sentinel could not see part of the append
+
+Desktop 1.46388.3 restructured the per-session sub-agent append into three parts: the overridable
+`## Cowork environment` section, a host-loop-only folder manifest, and one trailing sentence appended to
+**both** branches. The sentinel fingerprinted only the two ternary branch texts, so the trailing sentence
+changed the rendered append on both branches while the VM fingerprint did not move — and the pointer
+coupling guard only demands a repoint on an axis whose fingerprint moved. A counterfactual confirms it:
+Desktop 1.44121.1 with only that sentence added raises **no flags and syncs green**.
+
+Two fingerprint axes now cover the composed parts (`manifest`, `suffix`). Both become mandatory once
+either is recorded, and only the newest entry is compared, so entries predating the restructure are not
+retro-failed.
+
+Related, and separately load-bearing: the host-loop branch extractor was selecting the **wrong template**.
+It anchored on a phrase that left the branch at this release and survives in unrelated prose in the same
+module, so the drift it reported named text that is not the branch. It is now anchored on the ternary's
+structure rather than on wording. The module selector keyed on the same dead phrase and was one chunk
+move away from dropping the entire branch sentinel behind a single generic flag.
+
+#### Added — the host-loop folder manifest is modeled
+
+A host-loop sub-agent is now told the same thing production tells it: which folders exist on the user's
+computer, each with its host path and its shell path, or a different sentence when there is nothing to
+list. It is generated from the run's real mounts rather than read from a static asset — the same reason
+the main-loop shell section became a generator at Desktop 1.14271.0 — and it uses **canonical** folder
+paths, matching what production renders. Folders dropped by `COWORK_HARNESS_SOFT_MISSING=1` are listed as
+unreachable rather than silently disappearing, which is production's behaviour for a folder that fails to
+mount.
+
+The text this generator produces is mixed into `promptAssetsHash`, so editing it stales recorded cassettes
+exactly as editing a committed prompt asset does.
+
+#### Added — `CLAUDE_CODE_QUESTION_EXTENDED`
+
+A new gate-conditional key in the Cowork spawn window, pinned along with its gate. The gate reads
+served-and-off today, so the key stays out of `spawn.env` and an upstream flip will surface as a diff. It
+drives an AskUserQuestion behaviour the harness models, and Desktop and the agent shipped it in the same
+release.
+
+#### Cassettes
+
+`example-pdf-skill` was **re-recorded** at `container`: it embeds the VM sub-agent append in its
+recorded frames, and that text changed, so re-stamping would have left a committed fixture
+contradicting what the harness now sends. Tool calls moved 5 → 4 against the cassette it replaced.
+
+`example-multiselect-gate` (protocol) and `hostloop-computer-links` (hostloop) were **re-stamped**
+rather than re-recorded. No sub-agent was dispatched in either recording, protocol receives no
+sub-agent append at all by design, and neither cassette embeds the changed text — so the prompt change
+provably never entered either recording, while re-recording at those tiers would bake the recording
+machine's own MCP servers and skills into a public fixture.
+
+#### Fixed — a mutation test made ambiguous by the new build
+
+A second `=31999` literal appeared in an unrelated chunk, and the two were in different chunks at
+1.44121.1, so no chunk marker separates them durably. The S4 mutation now changes every occurrence and
+asserts the guard's **resolved value** rather than merely that it flagged, so a mutation that never
+reached the guarded site cannot read as a pass.
+
 ## [3.3.0] — 2026-09-02
 
 ### Verification

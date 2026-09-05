@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 3.3.0` (baseline `desktop-1.44121.1`).
+Self-contained reference. Tracks `cowork-harness 3.3.0` (baseline `desktop-1.46388.3`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified against the pinned baseline)
         run: |
-          V=2.1.258   # match your scenario's pinned baseline's agentVersion
+          V=2.1.260   # match your scenario's pinned baseline's agentVersion
           # The release channel is NOT always the stable one. Desktop also stages release CANDIDATES,
           # served only from .../claude-code-releases/rc/<commit>/ — the stable path 404s for those, and
           # 2.1.255 is one. Take B from your pinned baseline's agentBinary.releaseBaseUrl; baselines

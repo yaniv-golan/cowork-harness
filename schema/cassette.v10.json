@@ -173,7 +173,7 @@
         },
         "promptAssetsHash": {
           "type": "string",
-          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. ABSENT on a cassette recorded before this field existed \u2192 informational note, never a finding."
+          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. Since Desktop 1.46388.3 it ALSO covers the sub-agent prompt text the harness GENERATES rather than reads from an asset (the host-loop folder manifest and the trailing skills sentence, src/prompt/subagent-manifest.ts): that text reaches the model exactly as an asset's does, so it must stale a recording the same way. ABSENT on a cassette recorded before this field existed \u2192 informational note, never a finding."
         }
       }
     },
