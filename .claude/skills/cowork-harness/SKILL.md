@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 3.4.0
-  tracks-harness: cowork-harness 3.4.0 (baseline desktop-1.46388.3)
+  version: 3.4.1
+  tracks-harness: cowork-harness 3.4.1 (baseline desktop-1.46388.3)
 ---
 
 # cowork-harness
@@ -25,7 +25,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 3.4.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 3.4.1` (baseline
 > `desktop-1.46388.3`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -42,7 +42,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 3.4.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^3.4.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^3.4.0"`. **Pin `@^3.4.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 3.4.1**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^3.4.1" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^3.4.1"`. **Pin `@^3.4.1`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -157,6 +157,18 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejects `--fidelity`
 (it's a `skill`/`chat` flag; `run` takes fidelity only from the scenario). See
 `references/fidelity-and-answers.md`.
+
+**Every tier models Cowork's DESKTOP-LOCAL lane** — agent on the user's machine, shell rooted at
+`/sessions/<id>`, folders at `/sessions/<id>/mnt/<name>`, delivery via `present_files`. Cowork's
+**remote** lane runs server-side in a cloud container with a different filesystem (`$HOME/mnt/`),
+different delivery (`/mnt/user-data/outputs/` + `SendUserFile`) and a server-authored prompt; no tier
+reproduces it and none can — that container is not something a local tool can stand up. Which lane a
+real session gets is a Cowork setting ("Only on this computer"), observed **off** on a current install.
+So: behaviour conclusions (triggering, tool sequencing, gate handling) travel between lanes; anything
+asserting a **path, mount or delivery mechanism** is a claim about the local lane only. Declare
+`lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
+rather than passing (see the `delivery_unobservable` WARN and the `lane: remote` load-time rejections
+above).
 
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)
 

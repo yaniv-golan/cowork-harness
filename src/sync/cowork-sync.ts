@@ -577,13 +577,19 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "<vmCwd>/mnt/, and shell starting in <vmCwd> with non-mnt writes reaching neither the user nor the " +
       "file tools — so NO override was reaching that account and the committed paraphrase is faithful. " +
       "That is EVIDENCE, NOT PROOF: one account, one session, and a server rule can be segment-targeted. " +
-      "AND IT IS NOW SUPERSEDED: that probe was run against the pre-1.46388.3 hl text, which Desktop " +
-      "1.46388.3 REPLACED. Two of the four claims above (host cwd, folders under <vmCwd>/mnt/) no longer " +
-      "live in the overridable section at all — they moved into the appended folder manifest — so a " +
-      "re-probe cannot be scored against that list. Score a new probe against what the release actually " +
-      "composes: the section, then the folder manifest, then the trailing skills sentence. " +
+      "RE-PROBED 2026-09-05 against the 1.46388.3 composition, and it holds: a real host-loop sub-agent " +
+      "received all three composed parts byte-identical to this build's fallback text — the overridable " +
+      "section, the folder manifest, and the trailing skills sentence. The two composed parts are the " +
+      "CONTROL that makes this conclusive: they are appended AFTER resolveSection and cannot be " +
+      "server-replaced, so their being verbatim proves the sub-agent quoted faithfully rather than " +
+      "paraphrasing something that merely looked right. So the gate is ON with no payload, and the " +
+      "hardcoded fallback is what reaches the model. " +
+      "Still one account, one session, and still segment-targetable. " +
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
-      "for its environment section verbatim, diff the three composed parts) rather than trusting this note.",
+      "for its environment section verbatim, diff the three composed parts) rather than trusting this note. " +
+      "NOTE the probe now has a PRECONDITION: Cowork's `Only on this computer` setting (localAgentMode) is " +
+      "OFF by default, and with it off a session runs server-side with a server-authored prompt that has no " +
+      "`## Cowork environment` section at all. Turn it ON, or you will probe a lane this harness does not model.",
   ];
 }
 
