@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Verification
+
+Verified **locally**, against the Desktop install this baseline was synced from — Desktop `1.46388.3`,
+agent `2.1.260`, macOS arm64, agent image `cowork-agent-base:2` — on 2026-09-05:
+
+| suite | result |
+|---|---|
+| `boundary-check` | **6/6** (host-fs-sealed, direct-egress-denied, allowlist-enforced, allowlist-permits, loopback-not-proxied, hostloop-bash-egress) |
+| `npm run test:live` | 4 files, **19 passed, 0 skipped** |
+| `run examples/scenarios/` | **7/7 success**, 39 assertions, 0 failed |
+| e2e self-tests | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, semantic-evidence-files, canary-hostloop |
+
+Tiers exercised: **`protocol`, `container`, `hostloop`**. **`microvm` was NOT exercised** (it needs a
+real VM; CI excludes it for the same reason), so `smoke-l2-microvm` did not run.
+
+`subagent-manifest-probe` is new here and is the first live coverage the sub-agent append has ever
+had. It proves the composed append is *actionable* — the sub-agent shelled against
+`/sessions/<id>/mnt/<name>/`, summed the same ledger through its file tools to the same total, and a
+bare relative write landed at the host cwd — not that the paraphrase matches Desktop's wording, which
+is what the `manifest`/`suffix` fingerprint axes are for.
+
 ### Parity — Desktop 1.46388.3 (agent 2.1.260)
 
 New baseline `desktop-1.46388.3`. `sync` refused with 7 unknown deltas; all are classified and it now
