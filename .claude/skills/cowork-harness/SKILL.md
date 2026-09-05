@@ -158,6 +158,18 @@ Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejec
 (it's a `skill`/`chat` flag; `run` takes fidelity only from the scenario). See
 `references/fidelity-and-answers.md`.
 
+**Every tier models Cowork's DESKTOP-LOCAL lane** — agent on the user's machine, shell rooted at
+`/sessions/<id>`, folders at `/sessions/<id>/mnt/<name>`, delivery via `present_files`. Cowork's
+**remote** lane runs server-side in a cloud container with a different filesystem (`$HOME/mnt/`),
+different delivery (`/mnt/user-data/outputs/` + `SendUserFile`) and a server-authored prompt; no tier
+reproduces it and none can — that container is not something a local tool can stand up. Which lane a
+real session gets is a Cowork setting ("Only on this computer"), observed **off** on a current install.
+So: behaviour conclusions (triggering, tool sequencing, gate handling) travel between lanes; anything
+asserting a **path, mount or delivery mechanism** is a claim about the local lane only. Declare
+`lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
+rather than passing (see the `delivery_unobservable` WARN and the `lane: remote` load-time rejections
+above).
+
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)
 
 Default to **deterministic**: scripted `answers:` + `on_unanswered: fail`. Anything that brings a

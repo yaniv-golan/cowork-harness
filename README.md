@@ -215,6 +215,32 @@ L2  microvm parity    Optional. Agent inside a real Linux microVM (Lima/Apple-VZ
                       synced baseline. "Do what real Cowork does."
 ```
 
+### Which Cowork *lane* this models — read this before trusting an environment assertion
+
+Every tier above reproduces Cowork's **desktop-local lane**: the agent runs on your machine, shell
+commands land in a Linux sandbox rooted at `/sessions/<id>`, attached folders appear under
+`/sessions/<id>/mnt/<name>`, and finished files reach the user through `present_files`.
+
+Cowork also has a **remote lane**, where the session runs server-side in an ephemeral cloud container
+that reaches your machine over a link. There the filesystem, the shell tool, and file delivery are all
+different — folders arrive under `$HOME/mnt/`, deliverables go to `/mnt/user-data/outputs/` and are
+handed over with `SendUserFile`, and the environment prompt is authored by the server rather than by
+Desktop. **Which lane you get is a Cowork setting** ("Only on this computer", Settings → Cowork), and
+it has been observed **off** — i.e. remote — on a current install.
+
+The harness **cannot execute the remote lane**: that container is Anthropic's, not something a local
+tool can stand up. What it does instead is refuse to fake it. Declare `lane: remote` on a scenario and
+the assertions that depend on observing a local filesystem degrade honestly — `file_absent` reports
+evidence-unavailable rather than passing, and delivery is reported as unobservable — so a green never
+means more than it should.
+
+**What this means for you.** Behaviour-shaped conclusions travel between lanes: whether your skill
+triggers, how it sequences tools, which questions it asks, whether it respects a permission gate.
+Environment-shaped conclusions do not: anything asserting a path, a mount, or a delivery mechanism is a
+statement about the **local** lane specifically. Scope your claims accordingly, and if you are probing
+real Cowork to compare, turn "Only on this computer" **on** first or you will be measuring a lane this
+tool does not model.
+
 **Decision guide** — `fidelity:` takes exactly one of these five values (`protocol`/`container`/`microvm` vary isolation strength; `hostloop`/`cowork` are overlays that instead pick *where the loop runs* — there's no combining the two groups):
 
 | Question | Choose |
@@ -281,6 +307,7 @@ See [DESIGN.md](./DESIGN.md) for the full parity matrix, the known deltas vs. re
 
 ## Limitations
 
+- **One lane, deliberately.** Every tier models Cowork's desktop-local lane. The remote (cloud) lane runs server-side with a different filesystem, shell tool, delivery mechanism and a server-authored prompt; no tier reproduces it, and `lane: remote` exists to make the resulting blind spots refuse to grade rather than pass. See [Which Cowork lane this models](#which-cowork-lane-this-models--read-this-before-trusting-an-environment-assertion).
 - **Not the full Desktop network transport.** L1 is a container, not a VM; L2 *is* a real Apple-VZ microVM but still does not reproduce Cowork's gVisor netstack — its egress is the same allowlist proxy as L1 (with a guest iptables firewall in front). If your skill depends on VM-kernel specifics, validate at L2; if it depends on packet-level gVisor behavior, no tier reproduces it.
 - **Cowork in-guest context is partial.** Desktop supplies host-loop staging, runtime `mountPath` RPC, and the bridge. We reproduce the *filesystem and cowork mode*, not those host-side services. Skills that call Desktop-only host RPCs won't run here (they wouldn't be portable anyway).
 - **The agent binary is the staged ELF** (`claude-code-vm/<ver>/claude`), **bind-mounted** from your own Claude Desktop install — nothing Anthropic-owned is bundled or installed. There is **no npm path**; override the path with `COWORK_AGENT_BINARY`. Check licensing/ToS for your use.
