@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Verification
+
+- **`microvm` exercised after the 3.4.0 tag** — `smoke-l2-microvm` passed 3/3 against the *published*
+  3.4.0 artifact (real Apple-VZ VM, separate kernel; guest egress reached allowlisted
+  `api.anthropic.com` and denied an off-list telemetry host). That completes all four tiers for the
+  1.46388.3 baseline; DESIGN.md's scope note is re-stamped accordingly. The 3.4.0 entry below is left
+  as the record of what was verified at tag time. This tier is macOS-arm64 only and CI runners are
+  Linux, so it is only ever exercised by hand.
+
 ## [3.4.0] — 2026-09-05
 
 ### Upgrade notes
