@@ -8,6 +8,37 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ---
 
+## Which Cowork LANE this harness models — read first, it scopes everything below
+
+Every fidelity tier reproduces Cowork's **desktop-local** lane. Cowork also runs sessions on a
+**remote** lane, server-side in a cloud container that reaches the user's machine over a device
+bridge, and **which lane a real session gets is a Cowork setting** — "Only on this computer"
+(Settings → Cowork). Measured 2026-09-05 on a current install: that setting was **off**, so an
+otherwise-default Cowork session ran remote.
+
+That matters for how you read the rest of this file. Gaps documented here are gaps against the
+*local* lane. On the remote lane the environment is different in kind, not degree: the cloud
+container's cwd is `/home/claude` with no `mnt/` tree, delivery is `SendUserFile` rather than
+`present_files`, and the session reaches the user's disk through the `device_*` tools into a local
+VM (see "File delivery" and the device-tool section below). Its environment prompt is **authored by
+the server**, not by Desktop — the heading and markers a remote sub-agent reports are 0 occurrences
+in both the app bundle and the agent binary.
+
+**The harness cannot execute the remote lane and does not pretend to.** That container is
+Anthropic's; standing up a local imitation would be authoring an environment rather than reproducing
+one, with no production to verify it against. What exists instead is `lane: remote` on a scenario,
+which makes the affected assertions **refuse to grade** rather than pass — `file_absent` reports
+evidence-unavailable, delivery is reported unobservable.
+
+**Practical consequence.** Behaviour-shaped conclusions travel between lanes: whether a skill
+triggers, how it sequences tools, which questions it asks, whether it honours a permission gate.
+Environment-shaped conclusions do not: any assertion about a path, a mount, or a delivery mechanism
+is a claim about the local lane only. And if you are probing real Cowork to compare against this
+harness, **turn "Only on this computer" on first** — with it off you are measuring a lane this tool
+does not model, which has already cost one wasted probe.
+
+---
+
 ## Mid-session skill/plugin re-sync
 
 Cowork re-syncs skills and plugins from the host into the session **while the session is running** —

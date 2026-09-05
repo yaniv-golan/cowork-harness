@@ -236,6 +236,13 @@ committed baseline and say why in that baseline's `$comment`.
    `vm` always mandatory; `manifest` and `suffix` mandatory together once either is recorded — a partial
    entry is itself a hard-fail), then re-run `cowork-harness sync`.
 
+   > **PRECONDITION for any live probe of real Cowork.** Cowork's "Only on this computer" setting
+   > (Settings → Cowork) selects the lane. With it **off** — observed to be the default state on a
+   > current install — a session runs server-side under a server-authored prompt with no
+   > `## Cowork environment` section at all, and you will be diffing a lane this harness does not
+   > model. Turn it on and start a FRESH session before probing. This cost one wasted probe on
+   > 2026-09-05.
+
    > **Then REPOINT the baseline at the new asset** — `spawn.subagentAppendHostLoop` (and/or
    > `spawn.subagentAppend`) in the freshly written `baselines/desktop-<new>.json`. These pointers are
    > hand-authored, so `sync` carries the PREVIOUS release's value forward untouched; writing the

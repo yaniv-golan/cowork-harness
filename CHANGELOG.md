@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- **Which Cowork *lane* the harness models is now stated, in the places a consumer reads.** Every
+  fidelity tier reproduces the desktop-local lane; Cowork's remote lane runs server-side in a cloud
+  container with a different filesystem, shell tool, delivery mechanism and a server-authored prompt.
+  Which lane a real session gets is a Cowork setting ("Only on this computer"), and it was observed
+  **off** on a current install. README, the companion skill, `docs/fidelity-gaps.md` and
+  `docs/maintenance.md` now say so. The distinction that matters: behaviour conclusions (triggering,
+  tool sequencing, gate handling) travel between lanes; anything asserting a **path, mount or delivery
+  mechanism** is a local-lane claim only. No remote tier is planned — that container is Anthropic's, so
+  emulating it would mean authoring an environment rather than reproducing one; `lane: remote` already
+  makes the affected assertions refuse to grade instead of passing.
+
+### Changed
+
+- **The sub-agent override sentinel's note now carries a current probe.** Gate `124685897` reads ON,
+  which only enables a server-delivered replacement of the `## Cowork environment` section. Re-probed
+  against the 1.46388.3 composition in a real host-loop session: all three composed parts arrived
+  byte-identical to the shipped fallback, so the gate is on with no payload. The two non-overridable
+  parts are the control that makes it conclusive. The note also states the probe's precondition, which
+  it previously lacked.
+
 ### Verification
 
 - **`microvm` exercised after the 3.4.0 tag** — `smoke-l2-microvm` passed 3/3 against the *published*
