@@ -76,14 +76,23 @@ All notable changes to this project are documented here. The format is based on
   reachable from a required check. **Known gap, now documented:** adding the key alone would not make
   the suite run. The job never stages the agent binary, and a run with the key path forced on failed its
   first scenario on the missing binary. `RELEASING.md` now says so, instead of "set the secret to run it".
-- **`vm <subcommand> <name>` crashed with a raw stack trace when `<name>` wasn't a baseline.** The
-  optional argument to `vm init|status|delete|prune` is a baseline, but the natural thing to pass is the
-  `cowork-vm-<hash>` name `vm status` prints. That reached the baseline loader's file read and escaped
-  as an uncaught `ENOENT` — a stack trace in text mode, an `internal` error in JSON mode. It is now a
-  usage error (exit 2) that says the argument is a baseline, lists the committed baselines newest first,
-  and, for a VM name, names the baseline(s) that derive that VM on this machine. A VM name is still not
-  accepted as the argument: several baselines can share one VM, and the name depends on local install
-  paths. The `vm` usage lines now say `<baseline>` means a baseline, defaulting to `latest`.
+- **A baseline name that names no baseline is now a usage error at every entry point, not a stack
+  trace.** The baseline loader read the file with no existence check, so an unknown name escaped as an
+  uncaught `ENOENT`. How that surfaced depended on the entry point:
+  - `boundary-check <name>`, `vm init|status|delete|prune <name>`, and `run` on a scenario whose
+    `baseline:` names nothing: category `internal` in JSON mode, a raw stack trace in text mode.
+  - `record`: the `ENOENT` text, with exit 1.
+  - `diff <a> <b>`: exit 2, but the raw `ENOENT` text as the message.
+  - `run --matrix` with such a `baselines:` entry: the `ENOENT` text as the cell's error.
+
+  The loader now throws a usage error for a name or path that names no baseline. Every entry point
+  reports it as category `usage`, exit 2, with the committed baselines listed newest first in the
+  `hint`. The one exception is `run --matrix`, which reports it on the cell and exits 1, as for any
+  failed cell. `vm` adds a case of its own: the natural thing to pass is the `cowork-vm-<hash>` name
+  `vm status` prints, so a VM-name argument says so and names the baseline(s) that derive that VM on
+  this machine. A VM name is still not accepted as the argument: several baselines can share one VM,
+  and the name depends on local install paths. The `vm` usage lines now say `<baseline>` means a
+  baseline, defaulting to `latest`.
 - **`sync` dated the Desktop install from the wrong clock.** It skips session logs written before the
   synced Desktop was installed, and it took that time from `app.asar`'s mtime. The updater preserves
   the packaged file's timestamps, so that mtime is when the release was built. On Desktop 2.9939.2 it

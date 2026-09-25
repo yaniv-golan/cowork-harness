@@ -33,7 +33,7 @@ import {
   isLiveModelId,
 } from "../types.js";
 import { executeScenario, assertContradiction, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
-import { UsageError, compactSchemaError } from "../errors.js";
+import { UsageError, UnknownBaselineError, compactSchemaError } from "../errors.js";
 import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
 
 /** One wording for the `--max-budget-usd` × `--concurrency` degradation, emitted from the dry-run preview
@@ -4288,6 +4288,9 @@ export async function cmdRecord(args: string[]) {
       if (r.delta) log(`  vs the cassette it replaced: ${r.delta}`);
     }
   } catch (e) {
+    // A scenario naming no baseline is a usage mistake like any other entry point's: exit 2 with the
+    // valid baselines as the hint, not record's general exit 1.
+    if (e instanceof UnknownBaselineError) return fail("record", "usage", `record: ${e.message}`, e.hint, asJson);
     return fail("record", "usage", `record: ${recordErrorText(e)}`, undefined, asJson, 1);
   } finally {
     channel?.close?.();

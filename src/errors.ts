@@ -35,6 +35,21 @@ export class UsageError extends Error {
 }
 
 /**
+ * Thrown by `loadBaseline` when a user-supplied baseline name or path names no baseline (a missing file,
+ * or a name with a path separator). A `UsageError`, so every CLI entry point that lets it escape gets
+ * the clean category-`usage` exit 2 from `main().catch`; `hint` lists the committed baselines. Without
+ * it the bare `readFileSync` ENOENT surfaced as a raw stack trace / category `internal`.
+ */
+export class UnknownBaselineError extends UsageError {
+  readonly baselineName: string;
+  constructor(baselineName: string, message: string, hint?: string) {
+    super(message, hint);
+    this.name = "UnknownBaselineError";
+    this.baselineName = baselineName;
+  }
+}
+
+/**
  * One line from a Zod issue list (or from an already-formatted Zod message).
  *
  * `ZodError.message` is `JSON.stringify(issues, null, 2)` — 13-16 lines per file, mostly punctuation.

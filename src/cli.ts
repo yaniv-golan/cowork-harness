@@ -5056,7 +5056,7 @@ function cmdDiff(args: string[]) {
       a = loadBaseline(aName);
       b = loadBaseline(bName);
     } catch (e) {
-      return void fail("diff", "usage", String((e as Error).message), undefined, json);
+      return void fail("diff", "usage", String((e as Error).message), e instanceof UsageError ? e.hint : undefined, json);
     }
     const entries = diffBaselines(a, b);
     const identical = entries.length === 0;

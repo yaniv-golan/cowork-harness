@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PlatformBaseline } from "./types.js";
 import { safeNamedBaseline } from "./boundary-paths.js";
+import { UnknownBaselineError } from "./errors.js";
 
 /** SHA-256 (hex) of a file's bytes. Reads the whole file — fine for the ~240 MB agent ELF (a one-off at
  *  sync/verify time, never on the hot path). */
@@ -330,18 +331,42 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
  * out-of-tree baseline (the explicit escape hatch).
  */
 export function loadBaseline(name: string): PlatformBaseline {
-  const file =
-    name === "latest"
-      ? latestBaselineFile()
-      : isAbsolute(name)
+  let file: string;
+  if (name === "latest") file = latestBaselineFile();
+  else {
+    // A user-supplied name reaches here from every entry point (a CLI positional, a scenario's
+    // `baseline:`, a matrix axis). One that names no baseline is the caller's mistake, so it throws a
+    // UsageError listing the real ones rather than letting readFileSync's ENOENT escape as a stack trace.
+    try {
+      file = isAbsolute(name)
         ? name
         : // A named (non-absolute) baseline is a BARE FILENAME under BASELINES_DIR. Reject path
           // separators first: a name like `../../etc/hosts` or `../foo.json` (whose `.json` suffix
           // skips the append below) would otherwise read an arbitrary out-of-tree `.json`. Absolute
           // paths remain the explicit escape hatch (handled above).
           join(BASELINES_DIR, withJsonSuffix(safeNamedBaseline(name)));
+    } catch (e) {
+      throw unknownBaseline(name, (e as Error).message);
+    }
+    if (!existsSync(file)) throw unknownBaseline(name);
+  }
   const raw = JSON.parse(readFileSync(file, "utf8"));
   return PlatformBaseline.parse(raw);
+}
+
+function unknownBaseline(name: string, reason?: string): UnknownBaselineError {
+  let names: string[] = [];
+  try {
+    names = listBaselineNames();
+  } catch {
+    /* no baselines dir: the hint says so */
+  }
+  const what = isAbsolute(name) ? `no baseline file at "${name}"` : `no baseline named "${name}"`;
+  return new UnknownBaselineError(
+    name,
+    `${what}${reason ? ` (${reason})` : ""} — a baseline is \`latest\`, a committed name like desktop-<version>, or an absolute path to a baseline file`,
+    names.length ? `valid baselines (newest first): ${names.join(", ")}` : `no committed baselines in ${BASELINES_DIR}`,
+  );
 }
 
 /** Append `.json` to a baseline name unless it already carries the suffix. */

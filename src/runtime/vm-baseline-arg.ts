@@ -1,4 +1,5 @@
 import { loadBaseline, listBaselineNames } from "../baseline.js";
+import { UsageError } from "../errors.js";
 import type { PlatformBaseline } from "../types.js";
 import { instanceName } from "./lima.js";
 
@@ -17,14 +18,13 @@ const defaultDeps: VmBaselineArgDeps = { load: loadBaseline, list: listBaselineN
 
 /**
  * Resolve the optional `<baseline>` positional of `vm init|status|delete|prune` without ever throwing.
- * The positional names a BASELINE; the VM is derived from it. The natural mistake is passing the VM
- * name `vm status` prints, which used to reach loadBaseline's bare readFileSync and crash with a raw
- * ENOENT stack trace. Every failure here is a usage error with a hint listing the valid baselines.
+ * `loadBaseline` already turns an unknown name into a UsageError listing the valid baselines; this adds
+ * the one mistake specific to `vm`: passing the VM name `vm status` prints. That gets its own message,
+ * naming the baseline(s) that derive that VM here.
  *
  * A VM name is deliberately NOT accepted as the argument. The mapping is not a function: one VM serves
  * several baselines (their guest config hashes equal), the hash depends on this machine's staged
- * install paths, and `COWORK_LIMA_INSTANCE` overrides it. So a VM name only earns a pointer to the
- * baseline(s) that derive it here.
+ * install paths, and `COWORK_LIMA_INSTANCE` overrides it.
  */
 export function resolveVmBaselineArg(sub: string, name: string, deps: VmBaselineArgDeps = defaultDeps): VmBaselineArg {
   try {
@@ -55,11 +55,7 @@ export function resolveVmBaselineArg(sub: string, name: string, deps: VmBaseline
         hint: `${owner} ${valid}`,
       };
     }
-    const reason = e instanceof Error && (e as NodeJS.ErrnoException).code === "ENOENT" ? "" : ` (${(e as Error).message})`;
-    return {
-      ok: false,
-      message: `vm ${sub}: no baseline named "${name}"${reason} — the argument is a baseline (e.g. \`latest\` or desktop-<version>), not a VM name`,
-      hint: `${bare}. ${valid}`,
-    };
+    const detail = e instanceof UsageError ? e.message : `failed to load baseline "${name}" (${(e as Error).message})`;
+    return { ok: false, message: `vm ${sub}: ${detail}`, hint: `${bare}. ${valid}` };
   }
 }
