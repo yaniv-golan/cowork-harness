@@ -255,13 +255,86 @@ export function fileChannel(dir: string): DecisionChannel {
   };
 }
 
+// `--decider-cmd` runs under `shell: true`, so the pid we hold is the SHELL's. Killing that pid alone
+// leaves whatever the shell started running: on Linux, where /bin/sh is dash, even a lone `sleep 30`
+// survives a SIGKILL of its shell as an orphan, and a helper that backgrounds work leaks on every shell. So
+// on POSIX the helper is spawned `detached` — its own process-group leader — and every kill targets the
+// whole group. Detaching also takes the helper out of the terminal's foreground group, so a Ctrl-C no
+// longer reaches it on its own: the exit and signal hooks below take the groups down instead.
+const DETACH = process.platform !== "win32";
+const liveHelperGroups = new Set<number>();
+
+/** Signal a helper's whole process group. ESRCH (the group is already gone) is not an error; anything else
+ *  falls back to signalling the direct child, so a kill is never silently skipped. */
+function killHelperGroup(child: ChildProcess, sig: NodeJS.Signals): void {
+  if (DETACH && child.pid) {
+    try {
+      process.kill(-child.pid, sig);
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ESRCH") return;
+    }
+  }
+  try {
+    child.kill(sig);
+  } catch {
+    /* already gone */
+  }
+}
+
+/** Forget a group once nothing in it is left, so the exit hook never signals a pgid the OS has since
+ *  recycled. A pgid can't be reused while any member of the group still exists, so a live probe is safe. */
+function pruneHelperGroup(pgid: number): void {
+  try {
+    process.kill(-pgid, 0);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ESRCH") liveHelperGroups.delete(pgid);
+  }
+}
+
+function killAllHelperGroups(sig: NodeJS.Signals): void {
+  for (const pgid of liveHelperGroups) {
+    try {
+      process.kill(-pgid, sig);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+let helperExitHooksInstalled = false;
+function installHelperExitHooks(): void {
+  if (helperExitHooksInstalled) return;
+  helperExitHooksInstalled = true;
+  // Every exit path that runs JS: normal completion, process.exit() (incl. other SIGINT handlers' exit).
+  process.on("exit", () => killAllHelperGroups("SIGKILL"));
+  // A detached helper no longer gets the terminal's Ctrl-C. Forward it — and when nothing else listens for
+  // that signal, keep Node's default (die by it) by re-raising once our listener is gone.
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    const onSignal = () => {
+      killAllHelperGroups("SIGKILL");
+      if (process.listenerCount(sig) === 1) {
+        process.removeListener(sig, onSignal);
+        process.kill(process.pid, sig);
+      }
+    };
+    process.on(sig, onSignal);
+  }
+}
+
 /** A helper spawned once (`shell:true` so `'python answerer.py'` works). Request→its stdin, answer←its stdout. */
 export function spawnChannel(cmd: string): DecisionChannel {
   // `shell: true` is INTENTIONAL, not an injection surface. `--decider-cmd` is OPERATOR-supplied —
   // the same trust class as the harness process itself (whoever runs the harness wrote this string). Shell
   // interpretation is the documented ergonomic so `'python answerer.py'`, pipelines, and env-var prefixes
   // all work as written. There is no untrusted input here to escape, so we deliberately do NOT parse to argv.
-  const child: ChildProcess = spawn(cmd, { shell: true, stdio: ["pipe", "pipe", "inherit"] });
+  const child: ChildProcess = spawn(cmd, { shell: true, detached: DETACH, stdio: ["pipe", "pipe", "inherit"] });
+  if (DETACH && child.pid) {
+    const pgid = child.pid;
+    installHelperExitHooks();
+    liveHelperGroups.add(pgid);
+    child.on("exit", () => pruneHelperGroup(pgid));
+  }
   const reader = lineReader(child.stdout as Readable);
   // bound the wait on the helper's stdout — a hung-but-alive helper would otherwise block the harness
   // forever (only fileChannel had a deadline; this mirrors its 10-min backstop). On expiry kill the child
@@ -288,12 +361,8 @@ export function spawnChannel(cmd: string): DecisionChannel {
       let timer: NodeJS.Timeout;
       const timeout = new Promise<string | null>((_, reject) => {
         timer = setTimeout(() => {
-          if (!dead)
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              /* already gone */
-            }
+          // The whole group, even when the shell itself has exited: what it started may not have.
+          killHelperGroup(child, "SIGKILL");
           reject(new Error(`--decider-cmd helper timed out before answering after ${timeoutMs}ms`));
         }, timeoutMs);
       });
@@ -301,12 +370,12 @@ export function spawnChannel(cmd: string): DecisionChannel {
     },
     close: () => {
       reader.close();
-      if (!dead)
-        try {
-          child.kill();
-        } catch {
-          /* already gone */
-        }
+      killHelperGroup(child, "SIGTERM");
+      // A helper that ignores SIGTERM must not hold the harness open: release our handles on it. Its group
+      // stays in liveHelperGroups until it is seen empty, so the exit hook still SIGKILLs whatever remains.
+      child.stdin?.destroy();
+      (child.stdout as Readable | null)?.destroy();
+      child.unref();
     },
   };
 }
