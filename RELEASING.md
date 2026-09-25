@@ -18,8 +18,14 @@ tagged commit to conclude `success`, and a skipped job leaves the run `success`.
 ship without live CI validation. The difference is that the check no longer pretends otherwise. (A live
 run that actually executes and FAILS does make the run `failure`, which blocks the release.)
 
-To actually run the live suite in CI, set the `ANTHROPIC_API_KEY` repo secret. There is no
-`SKIP_LIVE_SCENARIOS` override, because the suite never hard-fails on a missing key.
+**Setting the `ANTHROPIC_API_KEY` repo secret is NOT enough to run the live suite in CI.** The
+`scenarios` job never stages the agent binary on the runner. A run with the key path forced on
+(2026-09-25, no real key) built the image and then failed its first scenario with `Staged agent binary
+not found at …/claude-code-vm/<ver>/claude`, before inference was reached. Set the key only together with
+a step that stages and sha256-verifies the agent ELF (see the self-hosted example in
+[docs/ci.md](./docs/ci.md)). Otherwise the job turns red, the `ci.yml` run concludes `failure`, and
+`require-ci-success` blocks the release. There is no `SKIP_LIVE_SCENARIOS` override, because the suite
+never hard-fails on a missing key.
 
 **Do not add `scenario suite` to the branch ruleset's required checks without setting the key first.**
 GitHub counts a job skipped by a conditional as **passing** a required-status rule, so a required but

@@ -443,6 +443,11 @@ jobs:
   # restructured to remove. It is also deliberately NOT in `ci-green.needs`. It does count toward the
   # ci.yml run conclusion that release.yml's `require-ci-success` reads: a skipped job leaves that
   # conclusion `success`, and a real run that FAILS makes it `failure`.
+  #
+  # A key ALONE does not make this job work: nothing below stages the agent binary. With has_key forced on
+  # (2026-09-25, no real key) the first scenario failed with "Staged agent binary not found". Add a
+  # sha256-verified ELF staging step (docs/ci.md) in the same change that adds the secret, or every run
+  # goes red and blocks releases.
   scenarios:
     name: scenario suite (mixed protocol/container, live inference)
     runs-on: ubuntu-24.04-arm
