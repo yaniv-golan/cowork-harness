@@ -140,6 +140,29 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.stderr).toMatch(/usage: vm/);
   });
 
+  // The positional is a BASELINE. Passing the VM name that `vm status` prints used to reach
+  // loadBaseline's bare readFileSync and crash with a raw ENOENT stack trace. Every subcommand must
+  // fail before touching Lima, with a usage envelope that says what the argument is.
+  for (const sub of ["init", "status", "delete", "prune"]) {
+    it.skipIf(process.platform !== "darwin")(`vm ${sub} <vm-name> → usage envelope, exit 2, no stack trace`, () => {
+      const r = run(["vm", sub, "cowork-vm-deadbeef", "--output-format", "json"]);
+      expect(r.code).toBe(2);
+      expect(r.json?.ok).toBe(false);
+      expect(r.json?.error?.category).toBe("usage");
+      expect(r.json?.error?.message).toMatch(/is a VM name, not a baseline/);
+      expect(r.json?.error?.hint).toMatch(/desktop-\d/);
+      expect(r.stderr).not.toMatch(/ENOENT|\n\s+at /);
+    });
+
+    it.skipIf(process.platform !== "darwin")(`vm ${sub} <unknown baseline> (text) → usage message listing baselines, exit 2`, () => {
+      const r = run(["vm", sub, "desktop-0.0.0"]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/no baseline named "desktop-0\.0\.0"/);
+      expect(r.stderr).toMatch(/desktop-\d/);
+      expect(r.stderr).not.toMatch(/ENOENT|\n\s+at /);
+    });
+  }
+
   it("--dotenv with a command name as its value is rejected, exit 2", () => {
     const r = run(["--dotenv", "run", "x.yaml"]);
     expect(r.code).toBe(2);

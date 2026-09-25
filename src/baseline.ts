@@ -381,6 +381,15 @@ export function cmpVersionStrings(a: string, b: string): number {
   return 0;
 }
 
+/** The committed platform baselines by name (`desktop-<version>`, no `.json`), newest first. */
+export function listBaselineNames(): string[] {
+  return readdirSync(BASELINES_DIR)
+    .filter((f) => f.startsWith("desktop-") && f.endsWith(".json"))
+    .sort(compareBaselineVersions)
+    .reverse()
+    .map((f) => f.replace(/\.json$/, ""));
+}
+
 function latestBaselineFile(): string {
   const files = readdirSync(BASELINES_DIR).filter((f) => f.startsWith("desktop-") && f.endsWith(".json"));
   if (files.length === 0) throw new Error(`No baselines in ${BASELINES_DIR}; run \`cowork-harness sync\` first.`);
