@@ -190,12 +190,12 @@ function checkWorkingTreeClean(): CheckResult {
  * Best-effort, WARN-only. `gh secret list` sees ONLY repo-level Actions secrets — an org- or
  * environment-level ANTHROPIC_API_KEY would false-warn here, and the call itself needs admin scope on
  * the repo. If `gh` is unavailable or unauthenticated, print the reminder unconditionally rather than
- * silently skipping. Without the key the live suite soft-skips in CI (it is not a publish gate) — see
+ * silently skipping. Without the key the live suite JOB is skipped in CI (it is not a publish gate) — see
  * RELEASING.md.
  */
 function checkLiveSuiteKeyReminder(): CheckResult {
   const REMINDER =
-    "if ANTHROPIC_API_KEY is not set as a repo secret, the push-to-main live scenario suite soft-skips — " +
+    "if ANTHROPIC_API_KEY is not set as a repo secret, the push-to-main live scenario suite is skipped — " +
     "this release won't be live-validated in CI (set the secret to run it; see RELEASING.md). Note: `gh " +
     "secret list` only sees repo-level Actions secrets — an org/environment secret would false-warn here, " +
     "and the call needs admin scope.";

@@ -113,6 +113,36 @@ CI uses `ANTHROPIC_API_KEY` specifically because there's no interactive browser 
 `claude setup-token`'s OAuth flow in a GitHub Actions runner; locally, the OAuth token is preferred because
 it mirrors what Desktop itself uses (no separate API-billing setup).
 
+**When the key might be absent, skip the live JOB, not its steps.** A job whose steps all skip when
+`ANTHROPIC_API_KEY` is missing still reports **success**, so it reads as a pass that validated nothing.
+Skip the whole job instead. It then shows as **skipped**, which is honest. The `secrets` context is not
+available in a job-level `if:`, so decide in a small job first and gate on its output. This repo's own
+[`ci.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/.github/workflows/ci.yml) (`live-key`
+→ `scenarios`) does exactly this:
+
+```yaml
+jobs:
+  live-key:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - id: check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else echo "::warning::ANTHROPIC_API_KEY not set — live job skipped"; echo "has_key=false" >> "$GITHUB_OUTPUT"; fi
+  live:
+    needs: live-key
+    if: ${{ needs.live-key.outputs.has_key == 'true' }}
+    # ...the live steps, unconditionally
+```
+
+> **Do not make such a job a required status check unless the key is set.** GitHub treats a job skipped
+> by a conditional as **passing** a required-status rule. A required live job without a key would satisfy
+> the rule while validating nothing, which is the same false green in a different place.
+
 ## Versioning: two independent pins
 
 A CI job that uses this Action pins **two different things**, and confusing them is the usual source of

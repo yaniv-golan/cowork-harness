@@ -9,15 +9,27 @@ requires an OTP and is not how this repo ships.
 ## The live scenario suite is best-effort (not a publish gate)
 
 The live scenario suite (the `scenarios` job in `ci.yml`) runs live inference only when
-`ANTHROPIC_API_KEY` is available to the runner. Without the key it **soft-skips (green)** on every
-event — pushes to `main` included — emitting a loud `⚠️ NOT live-validated` marker in the run summary.
-It does **not** block the run and is **not** a publish gate: `release.yml`'s `require-ci-success` still
-requires the `ci.yml` run for the tagged commit to be green, but a green run does not by itself prove
-the scenarios were validated against a real model.
+`ANTHROPIC_API_KEY` is available to the runner. Without the key the whole job is **skipped**, on every
+event, pushes to `main` included. It shows as *skipped*, not green. The small `live-key` job before it
+makes that decision and carries the `⚠️ NOT live-validated` warning and run-summary marker.
 
-To actually run the live suite in CI, set the `ANTHROPIC_API_KEY` repo secret. There is no
-`SKIP_LIVE_SCENARIOS` override — the suite never hard-fails on a missing key, so there is nothing to
-override.
+It is **not** a publish gate. `release.yml`'s `require-ci-success` requires the `ci.yml` run for the
+tagged commit to conclude `success`, and a skipped job leaves the run `success`. So a release can still
+ship without live CI validation. The difference is that the check no longer pretends otherwise. (A live
+run that actually executes and FAILS does make the run `failure`, which blocks the release.)
+
+**Setting the `ANTHROPIC_API_KEY` repo secret is NOT enough to run the live suite in CI.** The
+`scenarios` job never stages the agent binary on the runner. A run with the key path forced on
+(2026-09-25, no real key) built the image and then failed its first scenario with `Staged agent binary
+not found at …/claude-code-vm/<ver>/claude`, before inference was reached. Set the key only together with
+a step that stages and sha256-verifies the agent ELF (see the self-hosted example in
+[docs/ci.md](./docs/ci.md)). Otherwise the job turns red, the `ci.yml` run concludes `failure`, and
+`require-ci-success` blocks the release. There is no `SKIP_LIVE_SCENARIOS` override, because the suite
+never hard-fails on a missing key.
+
+**Do not add `scenario suite` to the branch ruleset's required checks without setting the key first.**
+GitHub counts a job skipped by a conditional as **passing** a required-status rule, so a required but
+key-less live job would satisfy the rule while validating nothing.
 
 > **Ran a live pass? Re-stamp `DESIGN.md`'s "Scope of that claim" note — it is the single authority for
 > the live pin,** naming the baseline, the agent version, which suites and which tiers. Nothing enforces
@@ -37,7 +49,7 @@ branch and opening a PR lets CI prove the exact SHA before anything lands on `ma
 Phase 1: git checkout -b release/X.Y.Z
          git push origin release/X.Y.Z
          gh pr create --base main --head release/X.Y.Z --title "release: X.Y.Z"
-         # CI runs on the PR. The live scenario stage soft-skips whenever ANTHROPIC_API_KEY is
+         # CI runs on the PR. The live scenario job is SKIPPED whenever ANTHROPIC_API_KEY is
          #   unavailable — which is the case today; see "best-effort (not a publish gate)" above.
   ↓  CI passes
 Phase 2: gh pr merge <number> --merge   (or merge via GitHub UI)
@@ -200,7 +212,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       could never change its behaviour. The CHANGELOG is the release record.)
 - [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty,
       tag `vX.Y.Z` not already used, clean tree; warns if the `ANTHROPIC_API_KEY` repo secret is missing so
-      the push-to-main live suite will soft-skip and this release won't be live-validated in CI; warns if a
+      the push-to-main live suite will be skipped and this release won't be live-validated in CI; warns if a
       ruleset **required status check** names no job in `ci.yml`; fails if the newest baseline's
       `provenance.desktopInitSurface` is unobserved — start one Cowork session and re-run `sync`, or pass
       `--allow-unobserved-init-surface` for an emergency release).
@@ -316,13 +328,13 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - Planning notes belong in a gitignored location excluded from the npm tarball; never commit or publish them.
 - If the tag was placed on the wrong commit (e.g. a follow-up fix was needed), delete the local tag
   (`git tag -d vX.Y.Z`), re-create it on the correct commit, and push it.
-- The live `scenario suite` CI stage is skipped on **fork** PRs and, independently, soft-skips whenever
-  `ANTHROPIC_API_KEY` is unset — logging `ANTHROPIC_API_KEY not set — skipping live scenario suite` and
-  exiting 0. **Observed 2026-08-06 on PR #104/#105: the key was not available and the suite skipped** —
-  the job log carries `##[warning]ANTHROPIC_API_KEY not set`, which is the authoritative evidence
-  (`gh secret list` is also empty, but it sees only repo-level Actions secrets, so absence there alone
-  would not prove it). A green check on that job is therefore NOT evidence of live validation —
-  `ci.yml` prints that warning in the job summary itself, and `npm run preflight` raises its own
-  `live-suite key reminder` WARN for the same reason.
+- The live `scenario suite` CI job is skipped on **fork** PRs and, independently, whenever
+  `ANTHROPIC_API_KEY` is unset. In both cases the check shows as **skipped**, never green. The
+  `live-key` job logs `##[warning]ANTHROPIC_API_KEY not set — the live scenario suite is SKIPPED`,
+  which is the authoritative evidence that the key was absent (`gh secret list` sees only repo-level
+  Actions secrets, so absence there alone would not prove it). Until 2026-09 the job instead ran with
+  every real step skipped and reported **success**; a green `scenario suite` check from before then is
+  NOT evidence of live validation. `npm run preflight` raises its own `live-suite key reminder` WARN for
+  the same reason.
   Re-read this bullet if a key is ever added; the `build` + `test` + `image-recipe` + `boundary` stages
   are what actually gate a release today.
