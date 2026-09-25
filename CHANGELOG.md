@@ -13,6 +13,10 @@ All notable changes to this project are documented here. The format is based on
   nothing moved:
   - The Cowork system prompt and all four sub-agent append fingerprints are byte-identical to 2.7032.0.
   - `spawn.env` (24 keys) and the egress allowlist are unchanged, and the VM rootfs origin is unmoved.
+  - The VM rootfs is re-captured at `2.9939.2` and its provisioning is identical: node `v22.23.2`, the
+    same 136 pip packages, the same apt doc stack and the same npm globals (`tsx` included). Only the
+    manifest's `desktopVersion` and `capturedAt` moved, so the docs that cite it no longer carry the
+    "1 baseline has shipped since" clause.
   - The recorded changes: `spawnEnvKeys` gains the 3p-only `CLAUDE_CODE_DISABLE_FAST_MODE`, and
     `asarGateIds` gains 28 ids and loses 1.
   - `network.$comment` now describes the resolver's HIPAA filter.
