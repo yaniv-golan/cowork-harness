@@ -350,7 +350,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `prune [<runs-dir>] [--keep-last <n>] [--pinned-older-than <N>d\|h\|m]` | Prune accumulated run dirs (keeps the N most recent per scenario; pinned `--session-id` runs are never pruned unless `--pinned-older-than` opts in to reclaiming stale ones by last-activity age); the optional positional overrides the runs root; `--dry-run` | the machine-global runs root has grown and you want space back |
 | `rehash <dir/>` | Migrate cassette fingerprints to the current format version when the content is provably unchanged (`--dry-run`); no re-record needed. **Upgrading to 2.0.0 requires this** — the hash-format epoch fails a bare `replay` on every cassette carrying a `skillHash` until it is migrated; use `rehash <file> --session <session.yaml>` if the cassette has moved. See the 2.0.0 entry in [CHANGELOG.md](../CHANGELOG.md) | a cassette-format bump flagged committed fixtures as stale |
 | `init-redact [--force]` | Copy the packaged reference `.cowork-redact.json` (local-path prefixes + a generic email regex) into the cwd; refuses to overwrite without `--force`. Review + tailor before recording | `record` warned that a `hostloop`/`protocol` recording has no redaction policy |
-| `vm <init\|status\|delete\|prune>` | Manage the L2 Apple-VZ / Lima microVM (`prune` removes orphaned VMs left by config/agent-version changes) | running `--fidelity microvm` |
+| `vm <init\|status\|delete\|prune> [<baseline>]` | Manage the L2 Apple-VZ / Lima microVM for a baseline (default `latest`; a baseline name, not the `cowork-vm-<hash>` VM name). `prune` removes orphaned VMs left by config/agent-version changes | running `--fidelity microvm` |
 
 ### Flags worth knowing
 

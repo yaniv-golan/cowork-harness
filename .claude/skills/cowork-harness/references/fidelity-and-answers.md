@@ -68,7 +68,9 @@ cowork-harness vm prune    # remove orphaned cowork-vm-* VMs from past configs
 
 The instance is `cowork-vm-<config-hash>` — a config or agent-version change yields a new name, so a
 stale VM is never silently reused (the old one is orphaned until `vm prune`). Pin a fixed name with
-`COWORK_LIMA_INSTANCE`.
+`COWORK_LIMA_INSTANCE`. The optional argument to every `vm` subcommand is a **baseline**
+(`desktop-<version>`, default `latest`), never the `cowork-vm-<hash>` VM name — passing a VM name is a
+usage error that names the baseline(s) deriving it.
 
 ## Answer paths (resolving gates: AskUserQuestion + tool-permission)
 

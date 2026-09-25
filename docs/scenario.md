@@ -1302,6 +1302,13 @@ image, staged agent version). A config or agent-version change yields a **new** 
 never silently reused; the old one is orphaned until `vm prune` (or `limactl delete`). Pin a fixed name
 with `COWORK_LIMA_INSTANCE`.
 
+Every `vm` subcommand takes an optional **baseline** (`vm delete desktop-<version>`; default `latest`) and
+acts on the VM derived from it. The argument is never the `cowork-vm-<hash>` name `vm status` prints: a
+VM name, or any baseline that doesn't exist, fails with a usage error (exit 2) that lists the committed
+baselines and, for a VM name, which of them derive that VM on this machine. A VM name isn't accepted
+because the mapping isn't one-to-one — several baselines can share a VM, and the hash depends on the
+local install paths. Remove an orphaned VM with `vm prune`.
+
 **Troubleshooting:**
 - **`limactl … failed` / binary not found** — Lima isn't installed or isn't at the expected path. Install
   it (`brew install lima`) or set `COWORK_LIMACTL` to the real `limactl`.

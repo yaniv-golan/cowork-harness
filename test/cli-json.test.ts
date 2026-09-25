@@ -13,9 +13,9 @@ import { CASSETTE_VERSION } from "../src/run/cassette.js";
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 
-function run(args: string[]) {
+function run(args: string[], env?: NodeJS.ProcessEnv) {
   const cwd = mkdtempSync(join(tmpdir(), "cc-cli-")); // isolated cwd so no stray .env is loaded
-  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd });
+  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd, ...(env ? { env: { ...process.env, ...env } } : {}) });
   let json: any = null;
   try {
     json = JSON.parse(r.stdout);
@@ -139,6 +139,88 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/usage: vm/);
   });
+
+  // Every entry point that feeds a user-supplied baseline name to loadBaseline used to let its bare
+  // readFileSync ENOENT escape: category `internal` (a stack trace in text mode), or a usage error whose
+  // message was the raw ENOENT with no list. loadBaseline now throws a UsageError naming the valid
+  // baselines, so each fails as usage, exit 2. All fail before any agent spawn or Docker call.
+  describe("an unknown baseline is a usage error at every entry point", () => {
+    const UNKNOWN = /no baseline named "desktop-0\.0\.0" — a baseline is `latest`/;
+    const scenarioIn = (cwd: string) => {
+      const session = resolve("examples/sessions/protocol-smoke.yaml");
+      writeIn(cwd, "s.yaml", `name: s\nsession: ${session}\nfidelity: protocol\nbaseline: desktop-0.0.0\nprompt: hi\n`);
+      return join(cwd, "s.yaml");
+    };
+    const expectUnknown = (r: ReturnType<typeof run>) => {
+      expect(r.code).toBe(2);
+      expect(r.json?.error?.category).toBe("usage");
+      expect(r.json?.error?.message).toMatch(UNKNOWN);
+      expect(r.json?.error?.hint).toMatch(/^valid baselines \(newest first\): desktop-\d/);
+    };
+
+    it("boundary-check <unknown>", () => expectUnknown(run(["boundary-check", "desktop-0.0.0", "--output-format", "json"])));
+
+    it("boundary-check <unknown> (text) prints the message, not a stack trace", () => {
+      const r = run(["boundary-check", "desktop-0.0.0"]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(UNKNOWN);
+      expect(r.stderr).not.toMatch(/ENOENT|\n\s+at /);
+    });
+
+    it("diff <unknown> <baseline> carries the valid baselines as its hint", () =>
+      expectUnknown(run(["diff", "desktop-0.0.0", "desktop-2.9939.2", "--output-format", "json"])));
+
+    it("run <scenario with an unknown baseline:>", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "cc-bl-"));
+      expectUnknown(run(["run", scenarioIn(cwd), "--output-format", "json"]));
+    });
+
+    it("record <scenario with an unknown baseline:> exits 2, not record's general 1", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "cc-bl-"));
+      // record's auth guard runs before the baseline loads, so give it a token: whether one is present
+      // otherwise depends on the machine (the CLI auto-loads its install dir's .env). Nothing spawns —
+      // the run fails on the baseline first.
+      const r = run(["record", scenarioIn(cwd), "--out", join(cwd, "c.json"), "--output-format", "json"], {
+        CLAUDE_CODE_OAUTH_TOKEN: "test-not-a-real-token",
+      });
+      expect(r.json?.error?.message).toMatch(/^record: no baseline named "desktop-0\.0\.0"/);
+      expect(r.code).toBe(2);
+      expect(r.json?.error?.hint).toMatch(/^valid baselines/);
+      expect(existsSync(join(cwd, "c.json"))).toBe(false);
+    });
+
+    it("run --matrix with an unknown baselines: axis reports the clean message on the cell", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "cc-bl-"));
+      const s = scenarioIn(cwd);
+      writeIn(cwd, "m.yaml", "baselines: [desktop-0.0.0]\n");
+      const r = run(["run", s, "--matrix", join(cwd, "m.yaml"), "--output-format", "json"]);
+      expect(r.code).toBe(1); // a failing cell fails the matrix run — the matrix contract, unchanged
+      expect(r.json?.matrix?.cells?.[0]?.error).toMatch(UNKNOWN);
+    });
+  });
+
+  // The positional is a BASELINE. Passing the VM name that `vm status` prints used to reach
+  // loadBaseline's bare readFileSync and crash with a raw ENOENT stack trace. Every subcommand must
+  // fail before touching Lima, with a usage envelope that says what the argument is.
+  for (const sub of ["init", "status", "delete", "prune"]) {
+    it.skipIf(process.platform !== "darwin")(`vm ${sub} <vm-name> → usage envelope, exit 2, no stack trace`, () => {
+      const r = run(["vm", sub, "cowork-vm-deadbeef", "--output-format", "json"]);
+      expect(r.code).toBe(2);
+      expect(r.json?.ok).toBe(false);
+      expect(r.json?.error?.category).toBe("usage");
+      expect(r.json?.error?.message).toMatch(/is a VM name, not a baseline/);
+      expect(r.json?.error?.hint).toMatch(/desktop-\d/);
+      expect(r.stderr).not.toMatch(/ENOENT|\n\s+at /);
+    });
+
+    it.skipIf(process.platform !== "darwin")(`vm ${sub} <unknown baseline> (text) → usage message listing baselines, exit 2`, () => {
+      const r = run(["vm", sub, "desktop-0.0.0"]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/no baseline named "desktop-0\.0\.0"/);
+      expect(r.stderr).toMatch(/desktop-\d/);
+      expect(r.stderr).not.toMatch(/ENOENT|\n\s+at /);
+    });
+  }
 
   it("--dotenv with a command name as its value is rejected, exit 2", () => {
     const r = run(["--dotenv", "run", "x.yaml"]);

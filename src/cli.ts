@@ -39,6 +39,7 @@ import {
 import { claudeCliComplete } from "./decide/llm-transport.js";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
+import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
 import { sync, canonicalizeEnv, syncedNetworkBlock } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
@@ -536,7 +537,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   sync: "usage: sync [--diff] [--allow-empty|--force]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
-  vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
+  vm: "usage: vm <init|status|delete|prune> [<baseline>] [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove the VM\n  prune   drop all orphaned VMs\n  <baseline> (default: latest) is a baseline name like desktop-<version>, not a VM name — each acts on that baseline's VM",
   chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw] [--allow-host-writes]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity/--allow-host-writes (only --model applies)\n       --allow-host-writes: consent to a writable hostloop connected folder (native host FS access); refused loud otherwise\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   // Single-sourced from src/run/cassette.ts's RECORD_USAGE/REPLAY_USAGE/VERIFY_CASSETTES_USAGE (also each
   // command's own `parseArgs` no-target usage error) so this text and each command's *_BOOLEAN_FLAGS/
@@ -2517,10 +2518,11 @@ function vmStatusEnvelope(baselineName: string, baseline: PlatformBaseline, inst
 }
 
 const VM_SUB_HELP: Record<string, string> = {
-  init: "usage: vm init [<baseline>] [--output-format text|json]   — create the L2 Apple-VZ microVM",
-  status: "usage: vm status [<baseline>] [--output-format text|json] — show running VM state",
-  delete: "usage: vm delete [<baseline>] [--output-format text|json] — remove the named VM",
-  prune: "usage: vm prune [<baseline>] [--output-format text|json]  — drop all orphaned VMs except the current one",
+  init: "usage: vm init [<baseline>] [--output-format text|json]   — create the L2 Apple-VZ microVM for <baseline> (default: latest)",
+  status: "usage: vm status [<baseline>] [--output-format text|json] — show the state of <baseline>'s VM (default: latest)",
+  delete:
+    "usage: vm delete [<baseline>] [--output-format text|json] — remove <baseline>'s VM (default: latest); <baseline> is a baseline name, not a VM name",
+  prune: "usage: vm prune [<baseline>] [--output-format text|json]  — drop all orphaned VMs except <baseline>'s (default: latest)",
 };
 
 function cmdVm(args: string[]) {
@@ -2575,7 +2577,11 @@ function cmdVm(args: string[]) {
     );
   }
   const baselineName = vmParsed.positionals[0] ?? "latest";
-  const baseline = loadBaseline(baselineName);
+  // Resolve the baseline without throwing: a bad name (typically the VM name `vm status` prints) used to
+  // escape as a raw ENOENT stack trace from loadBaseline, before any Lima call.
+  const resolved = resolveVmBaselineArg(sub!, baselineName);
+  if (!resolved.ok) return fail("vm", "usage", resolved.message, resolved.hint, vmJson);
+  const baseline = resolved.baseline;
   // the instance name is derived from the config hash (see lima.ts instanceName) — a config
   // change yields a new name, so a stale VM is never silently reused.
   const instance = instanceName(baseline);
@@ -5050,7 +5056,7 @@ function cmdDiff(args: string[]) {
       a = loadBaseline(aName);
       b = loadBaseline(bName);
     } catch (e) {
-      return void fail("diff", "usage", String((e as Error).message), undefined, json);
+      return void fail("diff", "usage", String((e as Error).message), e instanceof UsageError ? e.hint : undefined, json);
     }
     const entries = diffBaselines(a, b);
     const identical = entries.length === 0;
