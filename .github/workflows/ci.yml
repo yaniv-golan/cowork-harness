@@ -400,15 +400,57 @@ jobs:
         # The lane prints that warning itself now (vitest.config.live.ts's globalSetup).
         run: npm run test:live
 
-  # ── Stage 3: live scenario suite (best-effort live inference; soft-skips without a key) ────
-  scenarios:
-    name: scenario suite (mixed protocol/container, live inference)
-    runs-on: ubuntu-24.04-arm
-    needs: [boundary, test]
-    timeout-minutes: 30
+  # ── Stage 3a: does this run have a live-inference key? ─────────────────────────────────────
+  # The live suite used to run with every real step soft-skipped when ANTHROPIC_API_KEY was absent, and
+  # report SUCCESS — a green check that validated nothing. It is now skipped as a whole JOB instead, so a
+  # key-less run shows `scenarios` as SKIPPED, never green. The decision lives in this separate job
+  # because the `secrets` context is not available in a job-level `if:`.
+  #
+  # This job itself always succeeds: it checks for a key, not for scenario correctness. The warning and
+  # the step-summary marker live here, since a skipped job cannot print anything.
+  live-key:
+    name: live suite key check (skips the live suite without ANTHROPIC_API_KEY)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - name: Check for ANTHROPIC_API_KEY (the key itself never leaves this step)
+        id: check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY not set — the live scenario suite is SKIPPED (no live validation this run)."
+            {
+              echo "## ⚠️ Live scenario suite SKIPPED — NOT live-validated"
+              echo ""
+              echo "No \`ANTHROPIC_API_KEY\` secret is available, so the \`scenarios\` job did not run and shows"
+              echo "as **skipped**. Nothing in this run was validated against a real model."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Stage 3b: live scenario suite (runs only with a key; otherwise SKIPPED as a whole job) ──────
+  # DO NOT make this a REQUIRED status check without first setting ANTHROPIC_API_KEY. GitHub treats a
+  # job skipped by a conditional as PASSING a required-status rule, so a required-but-key-less
+  # `scenarios` would satisfy the rule while validating nothing — the exact false green this job was
+  # restructured to remove. It is also deliberately NOT in `ci-green.needs`. It does count toward the
+  # ci.yml run conclusion that release.yml's `require-ci-success` reads: a skipped job leaves that
+  # conclusion `success`, and a real run that FAILS makes it `failure`.
+  scenarios:
+    name: scenario suite (mixed protocol/container, live inference)
+    runs-on: ubuntu-24.04-arm
+    needs: [boundary, test, live-key]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    if: ${{ needs.live-key.outputs.has_key == 'true' }}
     env:
       # Runs now default to ~/.cowork-harness/runs (outside any working tree). Pin them back into the
       # workspace so `upload-artifact path: runs/` captures them. RELATIVE (not an absolute workspace path)
@@ -420,37 +462,13 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "24", cache: npm }
       - run: npm ci && npm run build
-      - name: Guard — live inference is best-effort (soft-skip without a key)
-        id: guard
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            # Best-effort: without a key the live suite soft-skips (green) on EVERY event, including
-            # push to main and workflow_dispatch. It is NOT a publish gate — release.yml still requires
-            # this ci run to be green, but a green check here is not proof of live validation (loud
-            # marker below). Set the ANTHROPIC_API_KEY repo secret to actually run it.
-            echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (no live validation this run)."
-            {
-              echo "## ⚠️ Live scenario suite SKIPPED — NOT live-validated"
-              echo ""
-              echo "This run did **not** execute live inference. A green check on this job is **not**"
-              echo "proof the scenarios pass against a real model."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "live=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "live=true" >> "$GITHUB_OUTPUT"
-          fi
       - name: Build agent base image (per-run egress sidecar is self-managed)
-        if: steps.guard.outputs.live == 'true'
         run: docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
       - name: Run example scenarios (L1 container — the user-facing worked examples)
-        if: steps.guard.outputs.live == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: node dist/cli.js run examples/scenarios/
       - name: Run e2e self-tests (L0 / L1 / hostloop — microvm excluded; needs a real VM)
-        if: steps.guard.outputs.live == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -458,7 +476,6 @@ jobs:
             node dist/cli.js run "e2e/scenarios/$s.yaml" || exit 1
           done
       - name: Verify run artifacts were produced (guards against a silent empty upload)
-        if: steps.guard.outputs.live == 'true'
         run: |
           if [ -z "$(ls -A runs 2>/dev/null)" ]; then
             echo "::error::runs/ is empty after the scenario suite — COWORK_HARNESS_RUNS_DIR misconfigured (artifact upload would capture nothing)."
@@ -525,7 +542,7 @@ jobs:
   # ── Stage 2: agent image recipe — COMPILE it, on every PR ──────────────────────────
   # `boundary` PULLS the published image (deliberately: it exercises the consumer path) and hard-fails
   # rather than falling back on the canonical repo, and the only other build lives in `scenarios`, which
-  # soft-skips without ANTHROPIC_API_KEY. So before this job, a Dockerfile.agent change could go green
+  # is skipped without ANTHROPIC_API_KEY. So before this job, a Dockerfile.agent change could go green
   # through the merge gate WITHOUT EVER BEING BUILT — `publish-image.yml` compiled it only after the
   # release tag, turning a broken recipe into a failed release instead of a failed PR.
   #

@@ -65,6 +65,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **CI's live `scenario suite` no longer reports a pass when it ran nothing.** Without an
+  `ANTHROPIC_API_KEY` repository secret it used to run with every real step skipped and show **success**.
+  Now a small `live-key` job checks for the key, and without it the whole `scenario suite` job is
+  **skipped**, so it shows as skipped. The warning and the run-summary marker move to `live-key`.
+  Merges and releases are unaffected: the job is not a required check, and a skipped job leaves the
+  `ci.yml` run conclusion `success`. `docs/ci.md` documents the pattern for consumers, including the
+  caveat that GitHub counts a skipped job as passing a required-status rule. A structural test in
+  `test/workflow-structure.test.ts` fails if the live suite is ever gated at step level again, or made
+  reachable from a required check.
 - **`sync` dated the Desktop install from the wrong clock.** It skips session logs written before the
   synced Desktop was installed, and it took that time from `app.asar`'s mtime. The updater preserves
   the packaged file's timestamps, so that mtime is when the release was built. On Desktop 2.9939.2 it

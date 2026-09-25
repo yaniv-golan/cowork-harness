@@ -16,6 +16,7 @@ const WF_DIR = join(".github", "workflows");
 
 interface Job {
   name?: string;
+  if?: string;
   "runs-on"?: string;
   needs?: string | string[];
   steps?: unknown[];
@@ -48,7 +49,8 @@ const REQUIRED_CONTEXTS = ["typecheck · test · build", "pytest helper lane (-m
 const NON_GATING: Record<string, string> = {
   "action-self-test": "exercises the packaged Action end-to-end; informative, not merge-blocking",
   boundary: "arm64 container parity lane; long-running",
-  scenarios: "live-inference suite — skips itself without ANTHROPIC_API_KEY, so it cannot gate",
+  scenarios: "live-inference suite — SKIPPED as a job without ANTHROPIC_API_KEY, and a skipped job passes a gate",
+  "live-key": "decides whether `scenarios` runs; it checks for a key, not for correctness",
   "parity-drift": "watches upstream Desktop; drift is news about the world, not a defect in the PR",
 };
 
@@ -124,5 +126,29 @@ describe("ci.yml concurrency", () => {
     const flag = doc.concurrency?.["cancel-in-progress"];
     expect(String(flag)).not.toBe("true");
     expect(String(flag)).toContain("refs/heads/main");
+  });
+});
+
+describe("ci.yml live suite", () => {
+  // Without a key the live suite used to run with every real step skipped and report SUCCESS — a green
+  // check that validated nothing. It must be skipped as a whole JOB instead, so it shows as skipped.
+  // A step-level `if` over a key guard is exactly the shape that produced the false green.
+  it("is skipped at JOB level on the key-check output, with no step-level key guard", () => {
+    const jobs = ci().jobs ?? {};
+    const scenarios = jobs.scenarios!;
+    expect(needsOf(scenarios)).toContain("live-key");
+    expect(scenarios.if).toMatch(/needs\.live-key\.outputs\.has_key\s*==\s*'true'/);
+    const stepIfs = (scenarios.steps ?? []).map((st) => (st as { if?: string }).if).filter((c): c is string => c !== undefined);
+    expect(stepIfs.filter((c) => c !== "always()")).toEqual([]);
+  });
+
+  it("is not reachable from a required context (a skipped job would PASS a required-status rule)", () => {
+    const jobs = ci().jobs ?? {};
+    const gateNeeds = Object.values(jobs)
+      .filter((j) => j?.name !== undefined && REQUIRED_CONTEXTS.includes(j.name))
+      .flatMap((j) => needsOf(j));
+    expect(gateNeeds).not.toContain("scenarios");
+    expect(gateNeeds).not.toContain("live-key");
+    expect(REQUIRED_CONTEXTS).not.toContain(jobs.scenarios?.name);
   });
 });
