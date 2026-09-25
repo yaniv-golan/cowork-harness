@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, authoring gotchas
 
 Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.8.1`
-(baseline `desktop-2.7032.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
+(baseline `desktop-2.9939.2`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:

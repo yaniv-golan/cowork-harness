@@ -1612,15 +1612,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const gates = decodeFcacheGates();
     if (!gates) return; // no live fcache on this machine
     const { env, flags } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
-    // Allowlist entries classified from a NEWER Desktop's asar before this machine updated: against an
-    // older install they are "no longer constructed", which is the prune NOTE, not a defect. Only that
-    // NOTE, only for these keys. Remove a key once the installed Desktop constructs it.
-    const prestaged = ["CLAUDE_CODE_DISABLE_FAST_MODE"]; // Desktop 2.9939.2
-    const isPrestagedPrune = (f: string) =>
-      prestaged.some(
-        (k) => f === `NOTE: spawn.env allowlist entry ${k} is no longer constructed in the asar — prune it from SPAWN_ENV_ALLOWLIST`,
-      );
-    expect(flags.filter((f) => !isPrestagedPrune(f))).toEqual([]);
+    expect(flags).toEqual([]);
     expect(env).toEqual(golden);
   });
 
