@@ -26,12 +26,27 @@ All notable changes to this project are documented here. The format is based on
   - `desktopInitSurface` is observed from **2 init frames, both from a scheduled task**. The four
     artifact tools now appear in every frame read rather than some. Treat that as a property of those
     two sessions, not as a Desktop change.
-  - No live pass has run against it yet.
-  - **The three committed cassettes are re-stamped, not re-recorded.** Each cassette's
-    `fingerprint.baseline` now names `2.9939.2`, but the recordings are still the ones made against
-    agent 2.1.280. The re-stamp is sound only because the recorded contract (spawn env, system prompt,
-    sub-agent append, prompt assets) is byte-identical between the two releases; `verify-cassettes` is
-    clean and all three replay green. A real re-record is owed.
+  - **Live-validated against `desktop-2.9939.2`** (agent 2.1.281) on 2026-09-25, all four tiers:
+    `boundary-check` 6/6, e2e self-tests 9/9, `test:live` 19/20 on the first run, and
+    `run examples/scenarios/` 6/7 on its first run. Both reds were model variance and passed on
+    re-runs:
+    - `live-matrix` asked its A-or-B question in plain text instead of calling `AskUserQuestion`. It
+      runs at the protocol tier, which uses the host `claude` CLI (2.1.282 here), not the staged agent.
+    - `example-pdf-skill` wrote its file one directory too high.
+
+    Details are in `DESIGN.md`'s scope note. CI still does not live-validate: its live scenario suite
+    soft-skips without an `ANTHROPIC_API_KEY` secret.
+  - **All three committed cassettes are re-recorded against `desktop-2.9939.2`**, each at its own tier:
+    - `example-multiselect-gate` at `protocol`, on the sealed managed config dir and the same
+      `claude-opus-5-5[1m]` model. It records host CLI 2.1.282, since the protocol tier runs the host
+      CLI by design.
+    - `example-pdf-skill` at `container`, agent 2.1.281.
+    - `hostloop-computer-links` at `hostloop`, agent 2.1.281. It was first recorded outside the
+      repository and its captured inventory compared: the same 4 product MCP servers, agents and
+      skills. The only additions (the `focus` command and the built-in `agents-md` plugin) come from the
+      new agent build and appear in the sealed recordings too.
+
+    `verify-cassettes` is clean and all three replay green.
 - **`check:versions` accepts "1 baseline has shipped since"** in the rootfs-manifest lag clause, as its
   DESIGN.md check already does. Its error message also suggests wording that passes: the previous
   suggestion, "1 baseline(s) have…", ended the citation match at the `)` in "(s)", so following it
