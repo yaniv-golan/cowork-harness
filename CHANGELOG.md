@@ -8,6 +8,31 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Baseline `desktop-2.9939.2`** (agent **2.1.281**, staged from the **stable** release channel, not an
+  RC build). This is what `baseline: latest` now resolves to. From a first-party session's point of view
+  nothing moved:
+  - The Cowork system prompt and all four sub-agent append fingerprints are byte-identical to 2.7032.0.
+  - `spawn.env` (24 keys) and the egress allowlist are unchanged, and the VM rootfs origin is unmoved.
+  - The recorded changes: `spawnEnvKeys` gains the 3p-only `CLAUDE_CODE_DISABLE_FAST_MODE`, and
+    `asarGateIds` gains 28 ids and loses 1.
+  - `network.$comment` now describes the resolver's HIPAA filter.
+  - Gate `4202409342` (`builtinToolsApprovableByAutoMode`) is still on. It is now served by default
+    rather than forced, so a server rule can flip it. The harness does not read it, because auto mode
+    is unreachable here.
+  - `desktopInitSurface` is observed from **2 init frames, both from a scheduled task**. The four
+    artifact tools now appear in every frame read rather than some. Treat that as a property of those
+    two sessions, not as a Desktop change.
+  - No live pass has run against it yet.
+  - **The three committed cassettes are re-stamped, not re-recorded.** Each cassette's
+    `fingerprint.baseline` now names `2.9939.2`, but the recordings are still the ones made against
+    agent 2.1.280. The re-stamp is sound only because the recorded contract (spawn env, system prompt,
+    sub-agent append, prompt assets) is byte-identical between the two releases; `verify-cassettes` is
+    clean and all three replay green. A real re-record is owed.
+- **`check:versions` accepts "1 baseline has shipped since"** in the rootfs-manifest lag clause, as its
+  DESIGN.md check already does. Its error message also suggests wording that passes: the previous
+  suggestion, "1 baseline(s) have…", ended the citation match at the `)` in "(s)", so following it
+  could never pass.
+
 - **`sync` records the tool surface real Cowork sessions declared** for Desktop's own `cowork`, `plugins`
   and `skills` servers, as `provenance.desktopInitSurface`, so a production change such as `save_skill`
   turning on or off shows up in `sync --diff`. It is read from the synced Desktop's own session logs,

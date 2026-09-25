@@ -859,11 +859,13 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
         if (m[1] !== manifestDesktop)
           errors.push(`${path} cites the rootfs manifest as captured at Desktop ${m[1]}, but the manifest says ${manifestDesktop}`);
         const lagText = m[2];
-        const said = lagText.match(/(\d+) baselines? have shipped since/);
+        // `has|have`: a single-baseline lag reads "1 baseline has shipped since", as the DESIGN.md check allows.
+        const said = lagText.match(/(\d+) baselines? (?:has|have) shipped since/);
         if (newerBaselines.length > 0) {
           if (!said)
             errors.push(
-              `${path}: the rootfs manifest (Desktop ${manifestDesktop}) lags ${newerBaselines.length} newer baseline(s) (${newerBaselines.join(", ")}) — the citation must say "; ${newerBaselines.length} baseline(s) have shipped since without a re-capture"`,
+              // The suggested text must itself pass: a "(s)" inside it would end the citation match at its ")".
+              `${path}: the rootfs manifest (Desktop ${manifestDesktop}) lags ${newerBaselines.length} newer baseline(s) (${newerBaselines.join(", ")}) — the citation must say "; ${newerBaselines.length === 1 ? "1 baseline has" : `${newerBaselines.length} baselines have`} shipped since without a re-capture"`,
             );
           else if (Number(said[1]) !== newerBaselines.length)
             errors.push(

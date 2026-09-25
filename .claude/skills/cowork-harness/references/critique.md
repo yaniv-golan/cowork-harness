@@ -1,6 +1,6 @@
 # Critique — the facts a plugin install can't otherwise reach
 
-Tracks `cowork-harness 3.8.1` (baseline `desktop-2.7032.0`). This is **not** a trim of the full
+Tracks `cowork-harness 3.8.1` (baseline `desktop-2.9939.2`). This is **not** a trim of the full
 [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only —
 flags, cost, reproduction discipline, known limitations all live there). This file covers exactly what a
 plugin install cannot otherwise discover: the run-dir artifact a harvester actually reads, the report's
