@@ -34,10 +34,19 @@ All notable changes to this project are documented here. The format is based on
     at the protocol tier, which uses the host `claude` CLI (2.1.282 here), not the staged agent.
   - `example-pdf-skill` wrote its file one directory too high.
 
-  Details are in `DESIGN.md`'s scope note. Code landed after that pass (the decider process-group fix,
-  the baseline-name usage errors, and a `zod` patch), so a reduced live re-pass on the release commit
-  follows (e2e, examples, and a microVM `vm` check). CI does not live-validate: without an
-  `ANTHROPIC_API_KEY` secret its live scenario suite is skipped (see Fixed).
+  Details are in `DESIGN.md`'s scope note. Code that landed after that pass (the decider process-group
+  fix, the baseline-name usage errors and a `zod` patch) was re-verified live on the release code
+  (`f395d07`), again across all four tiers:
+  - e2e self-tests 8/8, and `run examples/scenarios/` 7/7. `subagent-manifest-probe` first went 8/9,
+    because the sub-agent's first write used a VM path, which the hook refused. It passed 9/9 on a
+    re-run.
+  - `smoke-l2-microvm` passed.
+  - A VM-name argument to `vm` is a usage error (exit 2, category `usage`).
+  - A `--decider-cmd` timeout leaves no surviving process group.
+  - Ctrl-C at the container tier exits 130 and reaps the containers, the proxy and the network.
+
+  CI does not live-validate: without an `ANTHROPIC_API_KEY` secret its live scenario suite is skipped
+  (see Fixed).
 
 ### Added
 
