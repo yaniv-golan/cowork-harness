@@ -65,6 +65,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A `--decider-cmd` helper no longer leaves processes running after the harness kills it.** The helper
+  runs under `shell: true`, so the harness held the shell's pid and killed only the shell, on a timeout
+  and on close. Anything the shell had started kept running. On Linux, where `/bin/sh` is dash, that
+  includes a plain `sleep 30`; on any shell it includes work the helper puts in the background. On POSIX
+  the helper now runs in its own process group, and a timeout, `close()`, a normal exit and Ctrl-C/SIGTERM
+  all kill the whole group. The helper's own process group means Ctrl-C from the terminal no longer
+  reaches it directly, so the harness forwards it. Windows is unchanged. New tests in
+  `test/decider-cmd-process-group.test.ts` fail on the old code on both macOS and Linux (dash). Under
+  vitest 5, the old code also made the pool print `Timeout terminating forks worker` for
+  `test/decider-extra.test.ts`; that warning is gone.
 - **CI's live `scenario suite` no longer reports a pass when it ran nothing.** Without an
   `ANTHROPIC_API_KEY` repository secret it used to run with every real step skipped and show **success**.
   Now a small `live-key` job checks for the key, and without it the whole `scenario suite` job is
