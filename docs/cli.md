@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g "cowork-harness@^3.8.1"    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^3.9.0"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -38,7 +38,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@^3.8.1"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@^3.9.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -48,7 +48,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^3.8.1"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^3.9.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -124,7 +124,7 @@ The parts people ask about. **`package.json`'s `files[]` is the exhaustive, mach
 this table is the readable summary of it, and deliberately omits the infrastructure that always ships
 (`baselines/`, `schema/`, `fixtures/`, `scripts/`, `docker/`).
 
-| What ships | npm global (`npm install -g "cowork-harness@^3.8.1"`) | Source checkout (`git clone` + `npm ci`) |
+| What ships | npm global (`npm install -g "cowork-harness@^3.9.0"`) | Source checkout (`git clone` + `npm ci`) |
 |---|---|---|
 | CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
@@ -139,7 +139,7 @@ since a global install puts nothing in your working directory. The matrix, answe
 examples are the only ones that still need a source checkout. The **marketplace skill install** is
 narrower again — it pulls only `.claude/skills/cowork-harness/` (SKILL.md + `references/` +
 `scenario.py`/assertion keys, per `.claude-plugin/marketplace.json`'s `source`); everything in the npm column
-arrives when the skill's first command self-bootstraps `npx "cowork-harness@^3.8.1"` — the last row stays
+arrives when the skill's first command self-bootstraps `npx "cowork-harness@^3.9.0"` — the last row stays
 ✗ either way, since `matrices/`, `answer-policies/` and `probes/` are not published at all. See
 [docs/companion-skill.md](./companion-skill.md) for that install path.
 

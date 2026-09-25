@@ -6,65 +6,92 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.9.0] — 2026-09-25
+
+### Upgrade notes
+
+- **Your own cassettes go stale against `latest`.** `baseline: latest` now resolves to
+  `desktop-2.9939.2`, so a cassette recorded against `desktop-2.7032.0` reports `[stale] baseline moved`
+  in `verify-cassettes`. From a first-party session's point of view the contract did not move: the
+  spawn environment, the Cowork system prompt, the sub-agent append and the egress allowlist are all
+  byte-identical. So re-stamping `fingerprint.baseline` is sound. Re-record instead if you want the
+  recording itself to come from agent 2.1.281.
+- **The three committed cassettes are re-recorded against `desktop-2.9939.2`**, each at its own tier:
+  - `example-multiselect-gate` at `protocol`, on the sealed managed config dir and the same
+    `claude-opus-5-5[1m]` model. It records host CLI 2.1.282, since the protocol tier runs the host CLI
+    by design.
+  - `example-pdf-skill` at `container`, agent 2.1.281.
+  - `hostloop-computer-links` at `hostloop`, agent 2.1.281. It was first recorded outside the repository
+    and its captured inventory compared: the same 4 product MCP servers, agents and skills. The only
+    additions (the `focus` command and the built-in `agents-md` plugin) come from the new agent build and
+    appear in the sealed recordings too.
+
+  `verify-cassettes` is clean and all three replay green.
+- **Live-validated against `desktop-2.9939.2`** (agent 2.1.281) on 2026-09-25, all four tiers:
+  `boundary-check` 6/6, e2e self-tests 9/9, `test:live` 19/20 on the first run, and
+  `run examples/scenarios/` 6/7 on its first run. Both reds were model variance and passed on re-runs:
+  - `live-matrix` asked its A-or-B question in plain text instead of calling `AskUserQuestion`. It runs
+    at the protocol tier, which uses the host `claude` CLI (2.1.282 here), not the staged agent.
+  - `example-pdf-skill` wrote its file one directory too high.
+
+  Details are in `DESIGN.md`'s scope note. Code landed after that pass (the decider process-group fix,
+  the baseline-name usage errors, and a `zod` patch), so a reduced live re-pass on the release commit
+  follows (e2e, examples, and a microVM `vm` check). CI does not live-validate: without an
+  `ANTHROPIC_API_KEY` secret its live scenario suite is skipped (see Fixed).
+
 ### Added
 
-- **Baseline `desktop-2.9939.2`** (agent **2.1.281**, staged from the **stable** release channel, not an
-  RC build). This is what `baseline: latest` now resolves to. From a first-party session's point of view
+- **`sync` records the tool surface real Cowork sessions declared** for Desktop's own `cowork`, `plugins`
+  and `skills` servers, as `provenance.desktopInitSurface`. A production change such as `save_skill`
+  turning on or off then shows up in `sync --diff`.
+  - It is read from the synced Desktop's own session logs, limited to that release's agent version and
+    install time.
+  - No other server name is recorded, and a strict schema over every committed baseline enforces that.
+  - When no Cowork session has run since the install, `sync` records `observed: false` with a warning,
+    instead of reusing the previous release's surface.
+  - `desktop-2.7032.0` carries the first recorded block (`save_skill` declared in every session read).
+- **`npm run preflight` refuses to release an unobserved Desktop init surface.** New check: the newest
+  baseline's `desktopInitSurface` must be observed. `--allow-unobserved-init-surface` downgrades it to a
+  warning for an emergency release; `--allow-empty` does not.
+
+### Parity — Desktop 2.9939.2 (agent 2.1.281)
+
+- **Baseline `desktop-2.9939.2`**, with the agent staged from the **stable** release channel, not an RC
+  build. This is what `baseline: latest` now resolves to. From a first-party session's point of view
   nothing moved:
   - The Cowork system prompt and all four sub-agent append fingerprints are byte-identical to 2.7032.0.
-  - `spawn.env` (24 keys) and the egress allowlist are unchanged, and the VM rootfs origin is unmoved.
+  - `spawn.env` (24 keys) and the egress allowlist are unchanged.
   - The VM rootfs is re-captured at `2.9939.2` and its provisioning is identical: node `v22.23.2`, the
-    same 136 pip packages, the same apt doc stack and the same npm globals (`tsx` included). Only the
-    manifest's `desktopVersion` and `capturedAt` moved, so the docs that cite it no longer carry the
-    "1 baseline has shipped since" clause.
+    same 136 pip packages, the same apt doc stack and the same npm globals (`tsx` included).
   - The recorded changes: `spawnEnvKeys` gains the 3p-only `CLAUDE_CODE_DISABLE_FAST_MODE`, and
     `asarGateIds` gains 28 ids and loses 1.
-  - `network.$comment` now describes the resolver's HIPAA filter.
+  - `network.$comment` now describes the resolver's HIPAA filter (see Fixed).
   - Gate `4202409342` (`builtinToolsApprovableByAutoMode`) is still on. It is now served by default
     rather than forced, so a server rule can flip it. The harness does not read it, because auto mode
     is unreachable here.
   - `desktopInitSurface` is observed from **2 init frames, both from a scheduled task**. The four
     artifact tools now appear in every frame read rather than some. Treat that as a property of those
     two sessions, not as a Desktop change.
-  - **Live-validated against `desktop-2.9939.2`** (agent 2.1.281) on 2026-09-25, all four tiers:
-    `boundary-check` 6/6, e2e self-tests 9/9, `test:live` 19/20 on the first run, and
-    `run examples/scenarios/` 6/7 on its first run. Both reds were model variance and passed on
-    re-runs:
-    - `live-matrix` asked its A-or-B question in plain text instead of calling `AskUserQuestion`. It
-      runs at the protocol tier, which uses the host `claude` CLI (2.1.282 here), not the staged agent.
-    - `example-pdf-skill` wrote its file one directory too high.
-
-    Details are in `DESIGN.md`'s scope note. CI still does not live-validate: its live scenario suite
-    soft-skips without an `ANTHROPIC_API_KEY` secret.
-  - **All three committed cassettes are re-recorded against `desktop-2.9939.2`**, each at its own tier:
-    - `example-multiselect-gate` at `protocol`, on the sealed managed config dir and the same
-      `claude-opus-5-5[1m]` model. It records host CLI 2.1.282, since the protocol tier runs the host
-      CLI by design.
-    - `example-pdf-skill` at `container`, agent 2.1.281.
-    - `hostloop-computer-links` at `hostloop`, agent 2.1.281. It was first recorded outside the
-      repository and its captured inventory compared: the same 4 product MCP servers, agents and
-      skills. The only additions (the `focus` command and the built-in `agents-md` plugin) come from the
-      new agent build and appear in the sealed recordings too.
-
-    `verify-cassettes` is clean and all three replay green.
-- **`check:versions` accepts "1 baseline has shipped since"** in the rootfs-manifest lag clause, as its
-  DESIGN.md check already does. Its error message also suggests wording that passes: the previous
-  suggestion, "1 baseline(s) have…", ended the citation match at the `)` in "(s)", so following it
-  could never pass.
-
-- **`sync` records the tool surface real Cowork sessions declared** for Desktop's own `cowork`, `plugins`
-  and `skills` servers, as `provenance.desktopInitSurface`, so a production change such as `save_skill`
-  turning on or off shows up in `sync --diff`. It is read from the synced Desktop's own session logs,
-  limited to that release's agent version and install time. No other server name is recorded, and a strict
-  schema over every committed baseline enforces that. When no Cowork session has run since the install,
-  `sync` records `observed: false` with a warning instead of reusing the previous release's surface.
-  `desktop-2.7032.0` carries the first recorded block (`save_skill` declared in every session read).
-- **`npm run preflight` refuses to release an unobserved Desktop init surface.** New check: the newest
-  baseline's `desktopInitSurface` must be observed. `--allow-unobserved-init-surface` downgrades it to a
-  warning for an emergency release; `--allow-empty` does not.
 
 ### Fixed
 
+- **A baseline name that names no baseline is now a usage error at every entry point, not a stack
+  trace.** The baseline loader read the file with no existence check, so an unknown name escaped as an
+  uncaught `ENOENT`. How that surfaced depended on the entry point:
+  - `boundary-check <name>`, `vm init|status|delete|prune <name>`, and `run` on a scenario whose
+    `baseline:` names nothing: category `internal` in JSON mode, a raw stack trace in text mode.
+  - `record`: the `ENOENT` text, with exit 1.
+  - `diff <a> <b>`: exit 2, but the raw `ENOENT` text as the message.
+  - `run --matrix` with such a `baselines:` entry: the `ENOENT` text as the cell's error.
+
+  The loader now throws a usage error for a name or path that names no baseline. Every entry point
+  reports it as category `usage`, exit 2, with the committed baselines listed newest first in the
+  `hint`. The one exception is `run --matrix`, which reports it on the cell and exits 1, as for any
+  failed cell. `vm` adds a case of its own: the natural thing to pass is the `cowork-vm-<hash>` name
+  `vm status` prints, so a VM-name argument says so and names the baseline(s) that derive that VM on
+  this machine. A VM name is still not accepted as the argument: several baselines can share one VM,
+  and the name depends on local install paths. The `vm` usage lines now say `<baseline>` means a
+  baseline, defaulting to `latest`.
 - **A `--decider-cmd` helper no longer leaves processes running after the harness kills it.** The helper
   runs under `shell: true`, so the harness held the shell's pid and killed only the shell, on a timeout
   and on close. Anything the shell had started kept running. On Linux, where `/bin/sh` is dash, that
@@ -86,47 +113,13 @@ All notable changes to this project are documented here. The format is based on
   reachable from a required check. **Known gap, now documented:** adding the key alone would not make
   the suite run. The job never stages the agent binary, and a run with the key path forced on failed its
   first scenario on the missing binary. `RELEASING.md` now says so, instead of "set the secret to run it".
-- **A baseline name that names no baseline is now a usage error at every entry point, not a stack
-  trace.** The baseline loader read the file with no existence check, so an unknown name escaped as an
-  uncaught `ENOENT`. How that surfaced depended on the entry point:
-  - `boundary-check <name>`, `vm init|status|delete|prune <name>`, and `run` on a scenario whose
-    `baseline:` names nothing: category `internal` in JSON mode, a raw stack trace in text mode.
-  - `record`: the `ENOENT` text, with exit 1.
-  - `diff <a> <b>`: exit 2, but the raw `ENOENT` text as the message.
-  - `run --matrix` with such a `baselines:` entry: the `ENOENT` text as the cell's error.
-
-  The loader now throws a usage error for a name or path that names no baseline. Every entry point
-  reports it as category `usage`, exit 2, with the committed baselines listed newest first in the
-  `hint`. The one exception is `run --matrix`, which reports it on the cell and exits 1, as for any
-  failed cell. `vm` adds a case of its own: the natural thing to pass is the `cowork-vm-<hash>` name
-  `vm status` prints, so a VM-name argument says so and names the baseline(s) that derive that VM on
-  this machine. A VM name is still not accepted as the argument: several baselines can share one VM,
-  and the name depends on local install paths. The `vm` usage lines now say `<baseline>` means a
-  baseline, defaulting to `latest`.
-- **`sync` dated the Desktop install from the wrong clock.** It skips session logs written before the
-  synced Desktop was installed, and it took that time from `app.asar`'s mtime. The updater preserves
-  the packaged file's timestamps, so that mtime is when the release was built. On Desktop 2.9939.2 it
-  read 17:40 on the release day, while the install and first launch were at 00:37 the next day. Any
-  session in between would have been attributed to the new release whenever the two releases share an
-  agent version, which 22 of 36 committed baselines do. `sync` now uses the file's ctime, which the
-  kernel sets when the file is renamed into place.
-- **`subagent-manifest-probe` tests what the sub-agent manifest says now.** Since Desktop 2.7032.0
-  the manifest tells a sub-agent to pass absolute paths to the file tools; it no longer says where a
-  relative path resolves. The probe still graded a relative write, and it passed without one. It now
-  asserts that a sub-agent write reaches the outputs folder through its host path
-  (`subagent_file_write` with a `/`-anchored suffix) and that no file tool was sent a `/sessions/` path
-  (`no_vm_path_file_op`). Both assertions go red on a relative, wrong-folder or VM-path write, which
-  the old pair did not. The prompt now asks for the outputs folder by name. Re-run live against
-  `desktop-2.7032.0` (agent 2.1.280): passed. `docs/subagents.md` and `DESIGN.md`'s scope note are
-  updated to match.
-- **`sync` no longer refuses a healthy Desktop 2.9939.2 asar**, and its guards stay armed on it. Checked
-  against a downloaded copy of that asar before any install; no baseline is written here.
+- **`sync` admits Desktop 2.9939.2's asar without disarming its guards.** It would otherwise have
+  refused the healthy build:
   - **Egress:** the resolver now passes the session allowlist through a HIPAA filter. For a
     HIPAA-restricted org whose list holds `*`, the filter drops `*` and appends four fixed hosts; any
     other list is returned unchanged. The fall-through check accepts that wrapper only after resolving
-    it and confirming its first statement returns the list unchanged unless both conditions hold.
-    A wrapper that adds hosts unconditionally, or that drops either condition, is still an unknown
-    delta.
+    it and confirming its first statement returns the list unchanged unless both conditions hold. A
+    wrapper that adds hosts unconditionally, or that drops either condition, is still an unknown delta.
   - **Minified names containing `$`:** eight dynamic regexes interpolated a captured name without
     escaping it. In a regex, `$` is an end-of-input anchor, so the lookup could never match.
     - Six sites refused a healthy build. The sub-agent trailing sentence is one: Desktop named it `$D`.
@@ -137,11 +130,47 @@ All notable changes to this project are documented here. The format is based on
     RegExp in `src/sync/`.
   - **`CLAUDE_CODE_DISABLE_FAST_MODE`** is new in the 3p-only spawn branch. It is allowlisted, not
     pinned, and a default first-party session never receives it.
-  - **`network.$comment`:** `sync` used to copy it forward from the previous baseline. It is now
-    generated in code, and it describes the HIPAA filter instead of saying the OTLP endpoint is the only
-    host the bundle adds.
+  - **`network.$comment`** used to be copied forward from the previous baseline. It is now generated in
+    code, and it describes the HIPAA filter instead of saying the OTLP endpoint is the only host the
+    bundle adds.
+- **`sync` dated the Desktop install from the wrong clock.** It skips session logs written before the
+  synced Desktop was installed, and it took that time from `app.asar`'s mtime. The updater preserves the
+  packaged file's timestamps, so that mtime is when the release was built. On Desktop 2.9939.2 it read
+  17:40 on the release day, while the install and first launch were at 00:37 the next day. Any session in
+  between would have been attributed to the new release whenever the two releases share an agent
+  version, which 22 of 36 committed baselines do. `sync` now uses the file's ctime, which the kernel
+  sets when the file is renamed into place.
+- **`subagent-manifest-probe` tests what the sub-agent manifest says now.** Since Desktop 2.7032.0 the
+  manifest tells a sub-agent to pass absolute paths to the file tools; it no longer says where a
+  relative path resolves. The probe still graded a relative write, and it passed without one. It now
+  asserts that a sub-agent write reaches the outputs folder through its host path (`subagent_file_write`
+  with a `/`-anchored suffix) and that no file tool was sent a `/sessions/` path (`no_vm_path_file_op`).
+  Both assertions go red on a relative, wrong-folder or VM-path write, which the old pair did not. The
+  prompt now asks for the outputs folder by name. It passes live against both `desktop-2.7032.0` and
+  `desktop-2.9939.2`.
+- **A committed-cassette guard contributed no tests in a fresh checkout.** The tool-assertion
+  satisfiability test listed the gitignored `cassettes/` directory by hand. In a fresh checkout it threw
+  at module load and ran nothing. In CI it passed only because an earlier test in the same worker had
+  created that directory and left it behind, and on a developer machine it scanned private, uncommitted
+  recordings. It now takes the committed cassettes from git, and the test that created the directory
+  removes it again.
+- **`check:versions` accepts "1 baseline has shipped since"** in the rootfs-manifest lag clause, as its
+  `DESIGN.md` check already did. Its error message now suggests wording that passes: the old
+  suggestion, "1 baseline(s) have…", ended the citation match at the `)` in "(s)", so following it could
+  never pass.
+
+### Changed
+
+- **Dependencies.** Runtime: `zod` 4.6.2 → 4.6.5 (patch, via the lockfile). Dev toolchain: `vitest` 4 → 5,
+  plus patch bumps to `prettier`, `tsx`, `jsdom` and `@types/node`. Under vitest 5 the old decider code
+  printed a pool warning; the process-group fix above removes its cause.
+
+### Documentation
+
 - `docs/fidelity-gaps.md` said `save_skill`, being ToolSearch-deferred, does not appear in
   `system/init.tools`. Only its schema is deferred: real init frames list it by name.
+- `docs/maintenance.md` documents reading `provenance.desktopInitSurface`: which sessions count, the
+  unobserved remedy, how to read a `toolsAll`/`toolsSome` move, and what it records about the operator.
 
 ## [3.8.1] — 2026-09-24
 
