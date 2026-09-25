@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 3.8.1` (baseline `desktop-2.9939.2`).
+Self-contained reference. Tracks `cowork-harness 3.9.0` (baseline `desktop-2.9939.2`).
 
 > **This page vs. the repo docs.** This is the **offline snapshot** that ships inside the installed
 > plugin — it is self-contained on purpose. The repo carries four other fidelity views, each answering a
