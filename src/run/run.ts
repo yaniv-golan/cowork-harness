@@ -1346,7 +1346,7 @@ export class Run {
     //
     // The fallback is a PROXY, and only a correct one where the agent runs at the session root — true in a
     // VM/container (`/sessions/<id>`), false at hostloop, where cwd is the outputs dir several levels
-    // inside `mnt/`. Measured from there, a legitimately delivered file looks like an un-promoted
+    // inside `mnt/` (before Desktop 2.7032.0; from it, `/var/empty`, outside the tree altogether). Measured from there, a legitimately delivered file looks like an un-promoted
     // scratchpad file and gets recorded `leaked: true` — the exact inverse of the truth, since hostloop's
     // handler passes paths through and never promotes at all. Supplying `sessionRoot` is what makes the
     // judgement correct on every tier; the fallback is kept only so callers that never set it (tests,

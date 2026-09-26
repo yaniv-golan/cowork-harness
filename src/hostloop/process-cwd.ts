@@ -111,8 +111,9 @@ export function cwdDenyRules(cwd: string, deps: SpellingDeps = {}): { cwdSpellin
 /** The agent argv additions for a process cwd off outputs. Deny rules join `--disallowedTools` — the copy
  *  Desktop itself keeps when its argv budget forces it to drop the duplicate `--settings` copy, with `(`/`)`
  *  inside a rule rewritten to `?` as Desktop does for that copy. Outputs is added back as a working
- *  directory through `--settings` `permissions.additionalDirectories`, Desktop's own channel for it; without
- *  it every write to outputs would be a request to leave the working directory. */
+ *  directory through `--settings` `permissions.additionalDirectories`, mirroring Desktop's own channel for it.
+ *  Whether the agent honours that channel is NOT measured: `spawn.allowedTools` pre-approves the file tools,
+ *  so no recorded run shows what an outputs write would do without it. */
 export function hostLoopPermissionArgs(opts: {
   processCwd: string;
   hostOutputsDir: string;
