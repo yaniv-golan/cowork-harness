@@ -186,9 +186,20 @@ adjudicable". So:
   forms, the measured reason the whole tree is rejected, and `evidenceBudget.corpusOmitted`).
 - A multi-skill root with **no `--skill` is refused before any model spend**; a single-skill plugin
   auto-selects with a notice.
-- **Selection only:** the positional folder is still what both turns mount (session identity is
-  unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the *mounted folder*,
-  so it pairs generations per-plugin, not per-skill. **Workflow implication: pairing critiques of a
+- **`critique <plugin>/skills/<name>` is the same run as `critique <plugin> --skill <name>`.** Cowork
+  installs plugins, never a bare skill folder, so a skill-folder positional inside a plugin is *promoted*:
+  critique mounts the enclosing plugin and grades `<name>`, with a `::notice::` saying so. Same mount, same
+  packaged corpus, same `skillHash` (the whole plugin's), same `gradedSkill`. It falls back to mounting the
+  skill folder alone — with a notice naming why — only when `--skill` cannot reach the skill from the
+  plugin: the folder is not at exactly `skills/<name>` (say `tools/x`), it is a git submodule or nested
+  repo the plugin's index never descends into, or its spelling's case differs from the tracked path. A
+  fallback run lacks everything the plugin provides outside that folder (agents, shared references), and
+  its corpus lacks them too. A skill folder that carries its **own** plugin manifest is a plugin in its own
+  right: it is mounted as one, never promoted, and a notice says the plugin around it is not mounted.
+- **Selection only:** with a plugin-root positional, `--skill` does not change what both turns mount
+  (session identity is unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the
+  *mounted plugin* (for a promoted `<plugin>/skills/<name>` spelling too), so it pairs generations
+  per-plugin, not per-skill. **Workflow implication: pairing critiques of a
   multi-skill plugin by skillHash alone CROSS-PAIRS different skills** — pair by
   **(`gradedSkillHash`, `gradedSkill`)**; the report's `gradedSkill` field carries the resolved
   `skills/<name>` (`--skill` or the auto-selection). `--label` remains available for coarser
@@ -447,19 +458,14 @@ when you cannot tell from the static number alone. `--corpus-only` closes (1) an
 (it runs the real staging filter and the real containment rule) and states (2) as the floor rather than
 guessing at it.
 
-**Known gap — a skill that is a git submodule of its plugin, or any `--skill` subdirectory with nothing
-tracked under it.** Staging never delivers a gitlink's contents (nor an untracked subdirectory), so the
-mount carries an empty `skills/<name>/`; a LIVE critique's packager consults that directory's OWN git
-index (`corpusAcceptFor(skillDir)`) and packages `SKILL.md` anyway — grading a skill the agent never
-received. `--corpus-only` refuses both cases up front, in staging's terms (exit 2, "`skills/<name>/` has
-0 git-tracked files under …"). A second shape of the same gap is NOT caught by the preview: `critique
-<plugin>/skills/<name>` mounts only that folder, yet the packager walks up to the enclosing plugin and
-packages its `agents/**.md` — sub-agent prompts the mounted agent could never dispatch — so `--corpus-only`
-on that positional reports a floor that already over-counts. Both shapes have one cause (the packager
-reads a git-tracked set per class from that class's own directory, where staging reads one at the mount
-root) and one fix, tracked as
-[#182](https://github.com/yaniv-golan/cowork-harness/issues/182); the live-packager side is pre-existing,
-pinned by a test, and not fixed here. Until then, run `critique` on the plugin root with `--skill`.
+**The corpus is a subset of the mount.** Every file the evaluator receives is one staging delivered:
+every corpus class — `SKILL.md`, skill `references/**`, `agents/**.md`, plugin-root `references/` — is
+checked against ONE git-tracked set, read at the folder the graded turn mounts, exactly as staging reads
+it. A skill that is a git submodule of its plugin (staging delivers an empty `skills/<name>/`), or a
+`--skill` subdirectory with nothing tracked under it, is therefore never packaged — and both a paid
+critique and `--corpus-only` refuse such a target **before any spend**, in staging's terms (exit 2,
+"`skills/<name>/` has 0 git-tracked files under …"), as they do a target with no readable, tracked
+`SKILL.md`.
 
 **`--dry-run` is refused on `critique`** with a reason pointing here: there is no meaningful two-turn
 preview, so `--corpus-only` answers the no-spend evidence-corpus question and `skill --dry-run` answers
@@ -594,8 +600,8 @@ the two cannot disagree.
 - **`[not-built]` The protocol tier is refused** — it never plumbs a session id or `--resume`, so
   critique's two-turn resume protocol has nothing to resume. Adding session plumbing to the protocol tier
   (which also runs with no sandbox) would be the work.
-- **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — SKILL.md, the skill's own
-  `references/**`, and every dispatchable `agents/**.md` are packaged in full, up to a **512 KiB combined
+- **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — of what the mount carries: SKILL.md,
+  the skill's own `references/**`, and every dispatchable `agents/**.md` are packaged in full, up to a **512 KiB combined
   corpus ceiling** covering all three together. For a multi-skill plugin, a **fourth** class joins the
   ceiling: plugin-root `references/` files that the skill's own text, a packaged agent body, or the graded
   agent's own read of it actually points at. Recognized link forms are `${CLAUDE_PLUGIN_ROOT}/references/x.md`,

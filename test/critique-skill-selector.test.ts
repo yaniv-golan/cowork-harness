@@ -81,6 +81,7 @@ describe("packageEvidence: agents/references content sections", () => {
     const { sections } = packageEvidence(runDir, snapshotTurnBoundary(runDir), join(root, "skills", "ms"), false, {
       agents: [{ name: "ms", absPath: join(root, "agents", "ms.md"), rel: "agents/ms.md", via: "skill-named" }],
       pluginRoot: root,
+      mountRoot: root,
     });
     const rendered = renderSections(sections);
     expect(rendered).toContain("system prompt for ms sub-agents");
@@ -93,7 +94,7 @@ describe("packageEvidence: agents/references content sections", () => {
     mkdirSync(join(dir, "references"));
     writeFileSync(join(dir, "references", "rubric.md"), "score exhaustively on 28 dimensions");
     const runDir = runDirStub();
-    const { sections } = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
+    const { sections } = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir, false, { mountRoot: dir });
     const rendered = renderSections(sections);
     // Mutation guard: reverting to filenames-only drops the body text and reds this.
     expect(rendered).toContain("### rubric.md");
@@ -111,7 +112,7 @@ describe("packageEvidence: agents/references content sections", () => {
     writeFileSync(join(dir, "references", "a-big.md"), "x".repeat(9 * 1024)); // > the OLD 8KB shared budget alone
     writeFileSync(join(dir, "references", "b-late.md"), "the late file's content");
     const runDir = runDirStub();
-    const { sections, truncated } = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
+    const { sections, truncated } = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir, false, { mountRoot: dir });
     const rendered = renderSections(sections);
     expect(truncated).toBe(false);
     expect(rendered).toContain("### a-big.md\n" + "x".repeat(9 * 1024));
@@ -139,7 +140,7 @@ describe("corpus-ceiling accounting (replaces the deleted skillMdTruncated flag)
     const bigBody = "x".repeat(70 * 1024); // > the OLD 64KB per-file cap; well under the 512KB ceiling
     writeFileSync(join(dir, "SKILL.md"), "# big\n" + bigBody);
     const runDir = mkdtempSync(join(tmpdir(), "crit-run-"));
-    const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
+    const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir, false, { mountRoot: dir });
     expect(r.skillMdStatus).toBe("readable"); // NOT missing/unreadable — no mechanical downgrade
     expect(r.corpusCuts).toHaveLength(0); // nothing to cut below the ceiling
     expect(r.truncated).toBe(false);
@@ -151,7 +152,7 @@ describe("corpus-ceiling accounting (replaces the deleted skillMdTruncated flag)
     const dir = mkdtempSync(join(tmpdir(), "crit-small-skill-"));
     writeFileSync(join(dir, "SKILL.md"), "# small");
     const runDir = mkdtempSync(join(tmpdir(), "crit-run-"));
-    const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
+    const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir, false, { mountRoot: dir });
     expect(r.corpusCuts).toHaveLength(0);
     expect(r.truncated).toBe(false);
   });

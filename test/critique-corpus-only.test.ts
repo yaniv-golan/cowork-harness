@@ -361,16 +361,12 @@ describe.skipIf(!can)("critique --corpus-only", () => {
     expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual(JSON.parse(out.stdout.trim()));
   });
 
-  // SUBMODULE SKILL — two facts pinned, in opposite directions. Staging's `gitCpFilter(root)` walks the
-  // SUPERPROJECT's tracked set, where a submodule is one gitlink entry and never its contents — so a real
-  // mount carries an EMPTY `skills/x/`. (1) `--corpus-only` REFUSES it, in staging's terms: the gitlink
-  // `skills/x` is not a tracked file under `skills/x/`, so the untracked-subdirectory guard fires — a
-  // preview must not print a number for a skill the agent will never receive. (2) The LIVE packager still
-  // packages it: `corpusAcceptFor(skillDir)` runs `git ls-files` with cwd = the submodule and reads the
-  // SUBMODULE'S OWN index. Pre-existing, not introduced here, and pinned so that the fix (keying the
-  // accept on the plugin root's tracked set) turns (2) RED and its author knows to update this test,
-  // rather than the divergence staying silent.
-  it("submodule skill: the preview refuses it in staging's terms; the live packager still packages it (KNOWN)", (ctx) => {
+  // SUBMODULE SKILL. Staging's `gitCpFilter(root)` walks the SUPERPROJECT's tracked set, where a submodule
+  // is one gitlink entry and never its contents — so a real mount of the plugin carries an EMPTY
+  // `skills/x/`. (1) The pre-spend check REFUSES `--skill x`, in staging's terms. (2) The packager, keyed on
+  // the MOUNT root's tracked set, agrees: SKILL.md is not delivered, so it is not evidence. Before the
+  // packager was keyed on the mount it read the submodule's OWN index and packaged SKILL.md anyway.
+  it("submodule skill: the pre-spend check refuses it and the packager does not package it", (ctx) => {
     const skillRepo = tmp("cwh-corpus-subskill-");
     writeFileSync(join(skillRepo, "SKILL.md"), "---\nname: x\n---\n# X\n");
     gitInitAdd(skillRepo);
@@ -396,14 +392,15 @@ describe.skipIf(!can)("critique --corpus-only", () => {
     expect(out.code).toBe(2);
     expect(out.stderr).toContain("skills/x/ has 0 git-tracked files under");
 
-    // (2) the live packager, called the way a paid critique calls it, still packages SKILL.md.
+    // (2) the packager, called the way a paid critique calls it for this mount, does not package SKILL.md.
     const runDir = tmp("cwh-corpus-subrun-");
     const pkg = packageEvidence(runDir, { events: { size: 0 }, timeline: { size: 0 } }, join(root, "skills", "x"), false, {
       agents: [],
       pluginRoot: root,
+      mountRoot: root,
     });
-    expect(pkg.skillMdStatus).toBe("readable");
-    expect(pkg.corpusPackaged).toContain("SKILL.md");
-    expect(pkg.corpusExcluded).toEqual([]);
+    expect(pkg.skillMdStatus).toBe("untracked");
+    expect(pkg.corpusPackaged).not.toContain("SKILL.md");
+    expect(pkg.corpusExcluded).toContain("SKILL.md");
   });
 });

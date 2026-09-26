@@ -45,7 +45,7 @@ describe("Attached inputs evidence section", () => {
   it("appears in sections[] AND in the rendered pkg even with nothing attached", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     const skillDir = makeSkillDir();
-    const { sections, pkg } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { sections, pkg } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const section = findSection(sections, ATTACHED_INPUTS_TITLE);
     expect(section).toBeDefined();
     expect(section!.body).toBe("(none)");
@@ -58,7 +58,7 @@ describe("Attached inputs evidence section", () => {
   it("is positioned after BOTH references sections (listing + content) and directly before 'Transcript'", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     const skillDir = makeSkillDir();
-    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const refIdx = sections.findIndex((s) => s.title.startsWith("references/ available"));
     const refContentIdx = sections.findIndex((s) => s.title.startsWith("references/ content"));
     const attachedIdx = sections.findIndex((s) => s.title === ATTACHED_INPUTS_TITLE);
@@ -83,7 +83,7 @@ describe("Attached inputs evidence section", () => {
     };
     writeVmPathContextFile(runDir, ctx, "hostloop");
     const skillDir = makeSkillDir();
-    const { sections, pkg } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { sections, pkg } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
     expect(section.body).toContain("cap-table.xlsx");
     expect(section.body).toContain("1234");
@@ -109,7 +109,7 @@ describe("Attached inputs evidence section", () => {
     };
     writeVmPathContextFile(runDir, ctx, "hostloop");
     const skillDir = makeSkillDir();
-    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
     expect(section.body).toContain("ProjectDocs");
     // The mount NAME is fine; the host source path is not something to leak into evidence.
@@ -131,7 +131,7 @@ describe("Attached inputs evidence section", () => {
     const ctx: VmPathContext = { sessionId: "sess-abc", uploadsHostDir: notADir, folders: new Map() };
     writeVmPathContextFile(runDir, ctx, "hostloop");
     const skillDir = makeSkillDir();
-    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
     expect(section.body).toMatch(/could not be read|UNKNOWN/);
     expect(section.body).not.toBe("(none)"); // must NOT read as "correctly no attachments"
@@ -145,7 +145,7 @@ describe("Attached inputs evidence section", () => {
     const ctx: VmPathContext = { sessionId: "sess-abc", uploadsHostDir: uploadsDir, folders: new Map() };
     writeVmPathContextFile(runDir, ctx, "hostloop");
     const skillDir = makeSkillDir();
-    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
     expect(section.body).toBe("(none)");
     rmSync(runDir, { recursive: true, force: true });
@@ -161,8 +161,8 @@ describe("Attached inputs evidence section", () => {
     const skillDir = makeSkillDir();
     // No mounts.json written at all — loadVmPathContext must return null and packageEvidence must fall back,
     // never throw.
-    expect(() => packageEvidence(runDir, EMPTY_BOUNDARY, skillDir)).not.toThrow();
-    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    expect(() => packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir })).not.toThrow();
+    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
     expect(section.body).toContain("financials.csv");
     rmSync(runDir, { recursive: true, force: true });
@@ -178,8 +178,8 @@ describe("Attached inputs evidence section", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     writeFileSync(join(runDir, "mounts.json"), "{ this is not valid json");
     const skillDir = makeSkillDir();
-    expect(() => packageEvidence(runDir, EMPTY_BOUNDARY, skillDir)).not.toThrow();
-    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    expect(() => packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir })).not.toThrow();
+    const { sections } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
     const section = findSection(sections, ATTACHED_INPUTS_TITLE)!;
     expect(section.body).toMatch(/could not be read|UNKNOWN/);
     expect(section.body).not.toBe("(none)"); // must NOT read as "correctly no connected folders"
@@ -199,7 +199,7 @@ describe("Attached inputs evidence section", () => {
     const bigSkillMd = "# big skill\n" + "S".repeat(200 * 1024);
     writeFileSync(join(skillDir, "SKILL.md"), bigSkillMd);
 
-    const { pkg, sections, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { pkg, sections, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
 
     const skillSection = sections.find((s) => s.title.startsWith("SKILL.md"))!;
     // The section body must be the FULL text, byte-for-byte — not merely "not truncated" but genuinely whole.
@@ -223,7 +223,7 @@ describe("Attached inputs evidence section", () => {
     const flagship = "S".repeat(51 * 1024);
     writeFileSync(join(skillDir, "SKILL.md"), flagship);
 
-    const { pkg, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
+    const { pkg, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, false, { mountRoot: skillDir });
 
     expect(truncated, "a flagship-sized SKILL.md must not be reported as truncated").toBe(false);
     expect(pkg, "no truncation marker anywhere when nothing was cut").not.toContain(TRUNCATION_MARKER);

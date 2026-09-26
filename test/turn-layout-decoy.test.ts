@@ -166,7 +166,7 @@ describe("no reader falls back to the run-dir root", () => {
     const d = poisonedDir();
     const skillDir = mkdtempSync(join(tmpdir(), "decoy-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "---\nname: d\ndescription: d\n---\nbody\n");
-    const pkg = packageEvidence(d, snapshotTurnBoundary(d), skillDir, true);
+    const pkg = packageEvidence(d, snapshotTurnBoundary(d), skillDir, true, { mountRoot: skillDir });
     expect(JSON.stringify(pkg), "a root/archived file surfaced through critique's evidence package").not.toContain(SENTINEL);
     rmSync(skillDir, { recursive: true, force: true });
   });
@@ -271,7 +271,7 @@ describe("no reader falls back to the run-dir root", () => {
       const d = legitimatelyPlanted();
       const skillDir = mkdtempSync(join(tmpdir(), "decoy-skill-obs-"));
       writeFileSync(join(skillDir, "SKILL.md"), "---\nname: d\ndescription: d\n---\nbody\n");
-      expect(JSON.stringify(packageEvidence(d, snapshotTurnBoundary(d), skillDir, true))).toContain(SENTINEL);
+      expect(JSON.stringify(packageEvidence(d, snapshotTurnBoundary(d), skillDir, true, { mountRoot: skillDir }))).toContain(SENTINEL);
       rmSync(skillDir, { recursive: true, force: true });
     });
 

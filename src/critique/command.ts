@@ -24,11 +24,11 @@ import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
 import { jsonPayloadEnvelope } from "../run/envelope.js";
-import { gitModeEnabled, gitStageStats } from "../run/skill-files.js";
+import { checkMountDelivers } from "./mount-check.js";
 import { binaryPluginIdentity } from "../session.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
@@ -75,7 +75,7 @@ you while you worked:
 
 Answer plainly, in prose. Do not restate the task's final answer.`;
 
-interface ParsedArgs {
+export interface ParsedArgs {
   skillFolder: string;
   /** The probe. Present on every spending invocation — parseArgs enforces it — and absent ONLY under
    *  `--corpus-only`, where no turn runs and a prompt would be a value with nothing to consume it. */
@@ -142,10 +142,14 @@ Critique's own:
   --out <path>              ALSO write the selected-format report to this file (stdout unchanged)
   --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ every agents/**.md it dispatches,
                             + the plugin-root references/ files it points at)
-                            instead of a missing plugin-root SKILL.md. Selection only — the positional
-                            folder is still what both turns mount, and fingerprint.skillHash is unchanged
-                            (it keys the mounted folder: per-plugin, not per-skill). A multi-skill root
-                            with no --skill is REFUSED before any model spend.
+                            instead of a missing plugin-root SKILL.md. Selection only — with a plugin-root
+                            positional, --skill does not change what both turns mount, so
+                            fingerprint.skillHash keys the mounted plugin (per-plugin, not per-skill). A
+                            multi-skill root with no --skill is REFUSED before any model spend.
+                            <plugin>/skills/<name> as the positional IS <plugin> --skill <name>: critique
+                            mounts the plugin (as Cowork does) and grades <name>, with a notice. It mounts
+                            the skill folder alone only when --skill cannot reach it (not at skills/<name>,
+                            a submodule, or a case mismatch), and says why.
   --fidelity <tier>         container (default), hostloop, or cowork — which resolves via the baseline's
                             loop gate to one of the two and pins BOTH turns to it; microvm/protocol refused
   --keep                    accepted as a no-op — runs are always kept
@@ -158,9 +162,10 @@ Critique's own:
                             is still parsed and type-checked as a critique line, but a run-shaping one is not
                             acted on and is named in ignoredFlags — a PATH value (--upload, --folder,
                             --plugin) is only checked when a turn stages, so a missing one does not fail here. Applies staging's git rules: a work
-                            tree with 0 tracked files, or a --skill subdirectory with nothing tracked under
-                            it, is refused in staging's terms; a non-git folder is measured raw, as staging
-                            copies it.
+                            tree with 0 tracked files, a --skill subdirectory with nothing tracked under it,
+                            or no readable tracked SKILL.md is refused in staging's terms — and a paid
+                            critique refuses the same targets before any spend; a non-git folder is measured
+                            raw, as staging copies it.
   --dotenv <path>           credentials
   Global --run-dir <path>   must PRECEDE the subcommand
 
@@ -507,12 +512,133 @@ function parseArgs(
   };
 }
 
+/** How a skill-dir positional inside a plugin is treated. `null` when the positional is not that shape (a
+ *  plugin root, a plain skill folder with no enclosing manifest, or `--skill` was passed). */
+export type TargetPromotion =
+  | { kind: "promoted"; enclosing: string; name: string }
+  | { kind: "fallback"; enclosing: string; name: string; reason: string }
+  /** The skill folder carries its OWN plugin manifest, so it is a plugin in its own right and is mounted as
+   *  one — but it also sits inside another plugin, which is therefore not mounted. Announced, not promoted:
+   *  which plugin the author meant is not decidable from the tree. `addressable` says whether
+   *  `critique <enclosing> --skill <name>` would reach it. */
+  | { kind: "own-manifest"; enclosing: string; name: string; addressable: boolean };
+
+/** `critique <plugin>/skills/<name>` IS `critique <plugin> --skill <name>`: Cowork installs plugins, never a
+ *  bare skill folder, so the faithful mount for a skill inside a plugin is the plugin. Promoted whenever
+ *  `--skill` could address the skill and staging would deliver it from the plugin's mount — regardless of
+ *  whether the plugin contributes anything the skill uses, so the two spellings are the same run (same
+ *  mount, corpus, `skillHash`, graded skill) rather than two runs that agree only sometimes.
+ *
+ *  Falls back to mounting the positional alone when `--skill` cannot reach the skill from the plugin:
+ *   - it is not at exactly `skills/<name>` (`findEnclosingPluginDir` is a plain walk-up, so `tools/x` or
+ *     `skills/group/x` inside a plugin land here too, and `--skill x` would grade a DIFFERENT skill);
+ *   - the plugin's mount would not deliver it (a submodule or nested repo — the plugin's index never
+ *     descends into it — a path whose case differs from the tracked one, or an unreadable index).
+ *  The reason is staging's own diagnosis, not a guess. */
+export function promoteSkillDirTarget(skillFolder: string, skillSelector: string | undefined): TargetPromotion | null {
+  if (skillSelector !== undefined || !existsSync(join(skillFolder, "SKILL.md"))) return null;
+  const positional = resolve(skillFolder);
+  let enclosing = findEnclosingPluginDir(positional);
+  if (enclosing === null) return null;
+  let ownManifest = false;
+  if (enclosing === positional) {
+    // `findEnclosingPluginDir` is INCLUSIVE of its start: a skill folder with its own manifest is its own
+    // plugin. Look for one around it only to say so.
+    enclosing = findEnclosingPluginDir(dirname(positional));
+    if (enclosing === null) return null;
+    ownManifest = true;
+  }
+  const rel = relative(enclosing, positional).split(sep).join("/");
+  const at = /^skills\/([^/]+)$/.exec(rel);
+  if (ownManifest) return { kind: "own-manifest", enclosing, name: at ? at[1]! : basename(positional), addressable: at !== null };
+  // The name comes from the path RELATIVE to the plugin, never from `basename(skillFolder)` — that is "."
+  // for a spelling like `p/skills/x/.`.
+  const name = at ? at[1]! : basename(positional);
+  if (!at) return { kind: "fallback", enclosing, name, reason: `--skill addresses only skills/<name>/; this skill lives at ${rel}` };
+  const delivered = checkMountDelivers(enclosing, join(enclosing, "skills", name));
+  if (!delivered.ok) return { kind: "fallback", enclosing, name, reason: delivered.diagnosis };
+  return { kind: "promoted", enclosing, name };
+}
+
+/** Apply `promoteSkillDirTarget` to the ONE `opts` binding `main` hands to every consumer — the resolver,
+ *  the preview, both turns' argv (and so the mount, the resume identity and `skillHash`), and every report
+ *  field. Written as a reassignment on purpose: a second binding would let the preview show the promotion
+ *  while a paid turn mounted the original folder. Announces the decision on stderr. */
+export function applyTargetPromotion(opts: ParsedArgs): ParsedArgs {
+  const p = promoteSkillDirTarget(opts.skillFolder, opts.skillSelector);
+  if (p === null) return opts;
+  if (p.kind === "promoted") {
+    process.stderr.write(
+      `::notice:: [critique] ${p.name} is a skill inside plugin ${tildeify(p.enclosing)} — mounting the plugin as Cowork does, grading skill '${p.name}'\n`,
+    );
+    // Report the plugin in the form the user typed the skill folder — relative stays relative — so the
+    // promoted spelling's `skillFolder`, `skillDir` and turn argv read exactly as `critique <plugin> --skill
+    // <name>` typed the same way would.
+    const skillFolder = isAbsolute(opts.skillFolder) ? p.enclosing : relative(process.cwd(), p.enclosing) || ".";
+    return { ...opts, skillFolder, skillSelector: p.name };
+  }
+  if (p.kind === "own-manifest") {
+    process.stderr.write(
+      `::notice:: [critique] ${tildeify(opts.skillFolder)} has its own plugin manifest, so it is mounted as a plugin in its own right — the plugin ${tildeify(p.enclosing)} around it is not mounted, and nothing it provides outside this folder is graded` +
+        (p.addressable
+          ? `; to grade it as skill '${p.name}' of that plugin, run critique ${tildeify(p.enclosing)} --skill ${p.name}`
+          : "") +
+        `\n`,
+    );
+    return opts;
+  }
+  process.stderr.write(
+    `::notice:: [critique] ${tildeify(opts.skillFolder)} is skill '${p.name}' inside plugin ${tildeify(p.enclosing)}, but critique ${tildeify(p.enclosing)} --skill ${p.name} is not available: ${p.reason} — ` +
+      `mounting only this folder, so anything the plugin provides outside it (agents, shared references) is absent from the graded run\n`,
+  );
+  return opts;
+}
+
+/** The pre-spend check, shared by `--corpus-only` and a paid critique so both refuse the same targets:
+ *  staging would not deliver the skill from this mount, or there is no readable SKILL.md to grade. Runs
+ *  the same `packageEvidence` call the graded run makes, over an EMPTY run dir (measured: ~40 ms, no
+ *  writes) — `"preview"` mode for `--corpus-only`, which then renders that result; `"preflight"` (silent)
+ *  on the live path, whose real packaging pass after the turns emits every warning once. */
+export function preflightCritique(
+  resolved: ResolvedCritiqueTarget,
+  mode: "preview" | "preflight",
+): { ok: true; pkg: ReturnType<typeof packageEvidence> } | { ok: false; message: string } {
+  const delivered = checkMountDelivers(resolved.mountRoot, resolved.skillDir);
+  if (!delivered.ok) return { ok: false, message: `${delivered.diagnosis}.${delivered.action ? ` ${delivered.action}` : ""}` };
+  const runDir = mkdtempSync(join(tmpdir(), "cwh-critique-corpus-"));
+  let pkg: ReturnType<typeof packageEvidence>;
+  try {
+    pkg = packageEvidence(runDir, { events: { size: 0 }, timeline: { size: 0 } }, resolved.skillDir, false, {
+      agents: resolved.agents,
+      pluginRoot: resolved.pluginRoot,
+      mountRoot: resolved.mountRoot,
+      mode,
+    });
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+  if (pkg.skillMdStatus !== "readable") {
+    const hint =
+      pkg.skillMdStatus === "untracked"
+        ? "It is on the host but not git-tracked, so staging would never deliver it: 'git add' it."
+        : pkg.skillMdStatus === "missing"
+          ? "A multi-skill plugin root needs --skill <name>; a plain skill folder needs a root SKILL.md."
+          : "It exists but could not be read — check permissions, or whether SKILL.md is a regular file.";
+    return {
+      ok: false,
+      message: `no readable SKILL.md at ${tildeify(resolved.skillDir)} (${pkg.skillMdStatus}) — nothing to ${mode === "preview" ? "measure" : "grade"}. ${hint}`,
+    };
+  }
+  return { ok: true, pkg };
+}
+
 /** Resolve WHICH folder the packager grades (and, for a plugin, every `agents/**.md` the invoked skill
  *  can dispatch).
  *
- *  The positional `skillFolder` is what both turns MOUNT — that never changes here (the reflection turn's
- *  resume recomputes session identity from the same sources, so a selection that changed the mount would
- *  break the resume). This resolves only the PACKAGER's view:
+ *  `skillFolder` is what both turns MOUNT — already promoted by `applyTargetPromotion` when it named a
+ *  skill inside a plugin — and nothing here changes it (the reflection turn's resume recomputes session
+ *  identity from the same sources). This resolves only the PACKAGER's view, and only from content that
+ *  mount carries:
  *   - a plain skill folder (root `SKILL.md`) → itself;
  *   - a multi-skill plugin + `--skill <name>` → `skills/<name>/` (fail loud if absent, naming what exists);
  *   - a multi-skill plugin, no `--skill`, exactly ONE skill → auto-selected with a stderr notice;
@@ -522,10 +648,21 @@ function parseArgs(
  *  `fingerprint.skillHash` is computed over the MOUNTED folder and is unchanged by `--skill` — same
  *  folder → same hash — so generation pairing keeps working; it is a per-plugin key, not per-skill.
  *  Exported for unit tests. */
-export function resolveCritiquedSkillDir(
-  skillFolder: string,
-  skillSelector: string | undefined,
-): { skillDir: string; agents: ResolvedAgent[]; pluginRoot?: string; autoSelectedSkill?: string } {
+export interface ResolvedCritiqueTarget {
+  skillDir: string;
+  agents: ResolvedAgent[];
+  /** The folder both turns MOUNT (the positional, after any promotion). The packager keys every corpus
+   *  class on its git-tracked set — the one staging reads. */
+  mountRoot: string;
+  /** Always the mount root: the packager may only resolve agents / shared references from content the
+   *  mount carries. */
+  pluginRoot: string;
+  autoSelectedSkill?: string;
+  /** The skill whose invocation the advisory checks, or undefined for a plain skill folder. */
+  gradedSkillName?: string;
+}
+
+export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: string | undefined): ResolvedCritiqueTarget {
   // Fail-fast on a typo'd / absent path BEFORE the caller mints a session and spawns the task turn — a
   // missing folder otherwise only surfaces as a mid-run mount failure that leaves a stray run dir behind.
   // This lives here (not in parseArgs) on purpose: parseArgs is unit-tested with fictitious paths, whereas
@@ -542,9 +679,11 @@ export function resolveCritiquedSkillDir(
   // Agent files are tracked relative to the PLUGIN ROOT, not to skillDir (they live at
   // <root>/agents/**.md while skillDir is <root>/skills/<name>), so the packager needs the root to check
   // each one against the same tracked set staging used.
+  const mountRoot = resolve(skillFolder);
   const agentsFor = (pluginRoot: string, skillDir: string, name: string | undefined) => ({
     agents: resolveDispatchableAgents(pluginRoot, skillDir, name),
     pluginRoot,
+    mountRoot,
   });
   const listPluginSkills = (): string[] => {
     try {
@@ -564,29 +703,38 @@ export function resolveCritiquedSkillDir(
     safePathSegment(skillSelector, "--skill name");
     const candidate = join(skillFolder, "skills", skillSelector);
     if (!existsSync(join(candidate, "SKILL.md"))) {
+      // The positional is ITSELF a skill folder — `--skill` selects a skill inside a plugin ROOT, so the
+      // two conflict. Say that, rather than "no skills/<name>/SKILL.md", which reads as "create a skill".
       const available = listPluginSkills();
+      if (available.length === 0 && existsSync(join(skillFolder, "SKILL.md"))) {
+        const enclosing = findEnclosingPluginDir(dirname(resolve(skillFolder)));
+        throw new Error(
+          `--skill ${skillSelector}: ${tildeify(skillFolder)} is itself a skill folder (it has a SKILL.md), and --skill selects a skill inside a plugin root. ` +
+            `Drop --skill to critique this folder` +
+            (enclosing !== null ? `, or pass the plugin root: critique ${tildeify(enclosing)} --skill ${skillSelector}` : "") +
+            `.`,
+        );
+      }
       throw new Error(
         `--skill ${skillSelector}: no skills/${skillSelector}/SKILL.md under ${tildeify(skillFolder)}` +
           (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),
       );
     }
-    return { skillDir: candidate, ...agentsFor(skillFolder, candidate, skillSelector) };
+    return { skillDir: candidate, ...agentsFor(skillFolder, candidate, skillSelector), gradedSkillName: skillSelector };
   }
-  // A plain skill folder. TWO distinct shapes hide here, and conflating them is what made
-  // `critique <plugin>/skills/<name>` — an invocation both docs/critique.md and the multi-skill hint below
-  // recommend — package ZERO agents while `scenario.py` sized them: the root was always the positional
-  // folder, and a skill dir has no `agents/` of its own.
+  // A plain skill folder. Two shapes hide here:
   //   1. the dir IS the plugin root (manifest + top-level SKILL.md; this repo's own
   //      .claude/skills/cowork-harness/ is one) — the skill's name is the manifest name; or
-  //   2. the dir is a skill INSIDE a plugin, targeted directly rather than via `--skill`. Walk UP for the
-  //      enclosing manifest, exactly as analyze-skill does for the same shape — its `findEnclosingPluginDir`
-  //      is REUSED, not re-derived; this rule already had one copy too many across TS and Python, and that
-  //      divergence is what let the packager and the linter disagree about the same tree.
+  //   2. the dir is a skill INSIDE a plugin that `applyTargetPromotion` could not promote. Detected with the
+  //      same `findEnclosingPluginDir` analyze-skill uses — REUSED, not re-derived.
   if (existsSync(join(skillFolder, "SKILL.md"))) {
     const enclosing = findEnclosingPluginDir(skillFolder);
     // `findEnclosingPluginDir` is INCLUSIVE of its start, so an equal path is shape 1, not shape 2.
-    if (enclosing !== null && enclosing !== resolve(skillFolder))
-      return { skillDir: skillFolder, ...agentsFor(enclosing, skillFolder, basename(skillFolder)) };
+    // Shape 2 reaches here only when `applyTargetPromotion` could NOT promote it to the enclosing plugin
+    // (see there): the mount is this folder alone, so the plugin's agents and shared references are not in
+    // it and must not be in the corpus. The skill still has a name — its directory's.
+    if (enclosing !== null && enclosing !== mountRoot)
+      return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: basename(mountRoot) };
     return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder)) };
   }
   const skills = listPluginSkills();
@@ -595,6 +743,7 @@ export function resolveCritiquedSkillDir(
       skillDir: join(skillFolder, "skills", skills[0]!),
       ...agentsFor(skillFolder, join(skillFolder, "skills", skills[0]!), skills[0]!),
       autoSelectedSkill: skills[0]!,
+      gradedSkillName: skills[0]!,
     };
   if (skills.length > 1)
     throw new Error(
@@ -603,7 +752,7 @@ export function resolveCritiquedSkillDir(
     );
   // no SKILL.md anywhere — the packager's existing missing/degraded flow reports it. No skill to resolve
   // dispatches FOR, so no agents either.
-  return { skillDir: skillFolder, agents: [] };
+  return { skillDir: skillFolder, agents: [], mountRoot, pluginRoot: mountRoot };
 }
 
 interface TurnOutcome {
@@ -1507,7 +1656,7 @@ export function buildTextReport(state: ReportState): string {
   // root (skills/<name>/SKILL.md, no root SKILL.md) — name the cause and the fix, not just the symptom.
   if (skillMdStatus === "missing")
     out.push(
-      `  NOTE: if ${tildeify(skillFolder)} is a multi-skill plugin root, pass --skill <name> (or point critique at <plugin>/skills/<name> directly) so the invoked skill's SKILL.md is graded.`,
+      `  NOTE: if ${tildeify(skillFolder)} is a multi-skill plugin root, pass --skill <name> (or, equivalently, point critique at <plugin>/skills/<name>) so the invoked skill's SKILL.md is graded.`,
     );
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
@@ -1850,89 +1999,11 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
  *  `corpusBytes` is a FLOOR: a paid run's is equal or larger, and a `corpusOmitted` reason can change
  *  (`not-linked` → `ambiguous-read`). Said in the output rather than left for the reader to discover.
  *
- *  WHAT IT REFUSES. Staging throws on a plugin with 0 git-tracked files ("would mount EMPTY") before any
- *  spend; the packager instead treats an empty tracked set as "not ours" and walks raw. A preview that
- *  printed a number there would green a critique that exits 2 — so the same check runs here first, with
- *  staging's own message. Likewise a target with no readable SKILL.md is exit 2, not `corpusBytes: 0`: a
- *  measurement of nothing is not a measurement, and a mistyped-but-existing path must not green a CI
- *  pre-check. */
-function runCorpusPreview(opts: ParsedArgs, resolved: ReturnType<typeof resolveCritiquedSkillDir>): number {
-  // Mirror staging's hard-fail on the MOUNTED folder — the positional, exactly what `stageFilterFor` is
-  // handed — not on the resolved skill dir, which for a multi-skill plugin is a subdirectory whose tracked
-  // set staging never consults on its own.
-  if (gitModeEnabled()) {
-    let stats: ReturnType<typeof gitStageStats>;
-    try {
-      stats = gitStageStats(opts.skillFolder);
-    } catch (e) {
-      process.stderr.write(
-        `critique --corpus-only: could not read the git-tracked set for ${tildeify(opts.skillFolder)}: ${(e as Error).message}\n`,
-      );
-      return 2;
-    }
-    if (stats.tracked && stats.tracked.size === 0) {
-      process.stderr.write(
-        `critique --corpus-only: ${tildeify(opts.skillFolder)} has 0 git-tracked files — staging delivers tracked files only, so a critique would mount EMPTY and refuse to run. ` +
-          `Fix: 'git add' it, or set COWORK_HARNESS_GITSET=0 to copy untracked files.\n`,
-      );
-      return 2;
-    }
-    // The graded skill is a SUBDIRECTORY of the mount (multi-skill plugin + --skill) with nothing tracked
-    // under it: staging mounts the plugin WITHOUT that skill and succeeds, so the mount-root check above
-    // passes — while the packager's own `corpusAcceptFor(skillDir)` sees an empty tracked set inside the
-    // subdir, takes its "empty is staging's hard-fail, not ours" branch and walks raw, packaging a SKILL.md
-    // the agent will never receive. That comment is true only when the dir IS the mount root. Measured:
-    // a brand-new `skills/b/` created after `git add` — the most likely thing a consumer pre-checks —
-    // previewed as 28 B, `corpusExcluded: []`, exit 0. Refuse here, in staging's terms, with the same
-    // remedy; the packager-side root-keyed fix is a separate, deferred change.
-    if (stats.tracked) {
-      // POSIX keys, like the tracked set (`skill-files.ts` splits on `sep` and joins with "/").
-      const rel = relative(resolve(opts.skillFolder), resolve(resolved.skillDir)).split("\\").join("/");
-      if (rel.startsWith("..")) {
-        // Unreachable after `safePathSegment` on the selector, kept as the closed default: a skill dir
-        // OUTSIDE the mount is never measurable, and a guard that exempts the one shape it cannot vouch
-        // for is the unsafe-default pattern.
-        process.stderr.write(
-          `critique --corpus-only: ${tildeify(resolved.skillDir)} is outside the mounted folder ${tildeify(opts.skillFolder)} — never measurable.\n`,
-        );
-        return 2;
-      }
-      if (rel !== "" && ![...stats.tracked].some((t) => t.startsWith(`${rel}/`))) {
-        // A case-insensitive filesystem lets `--skill Alpha` find `skills/alpha`; git does not. Name the
-        // real cause rather than prescribing a `git add` that would change nothing.
-        const lower = `${rel.toLowerCase()}/`;
-        const caseHit = [...stats.tracked].find((t) => t.toLowerCase().startsWith(lower));
-        const why = caseHit
-          ? `its case differs from the tracked path (${caseHit.slice(0, caseHit.indexOf("/", rel.length))}) — pass --skill with the name exactly as tracked`
-          : `staging would mount the plugin WITHOUT this skill, so a critique would grade a skill the agent never received. Fix: 'git add' it, or set COWORK_HARNESS_GITSET=0 to copy untracked files`;
-        process.stderr.write(`critique --corpus-only: ${rel}/ has 0 git-tracked files under ${tildeify(opts.skillFolder)} — ${why}.\n`);
-        return 2;
-      }
-    }
-  }
-  const runDir = mkdtempSync(join(tmpdir(), "cwh-critique-corpus-"));
-  let pkg: ReturnType<typeof packageEvidence>;
-  try {
-    pkg = packageEvidence(runDir, { events: { size: 0 }, timeline: { size: 0 } }, resolved.skillDir, false, {
-      agents: resolved.agents,
-      pluginRoot: resolved.pluginRoot,
-      mode: "preview",
-    });
-  } finally {
-    rmSync(runDir, { recursive: true, force: true });
-  }
-  if (pkg.skillMdStatus !== "readable") {
-    const hint =
-      pkg.skillMdStatus === "untracked"
-        ? "It is on the host but not git-tracked, so staging would never deliver it: 'git add' it."
-        : pkg.skillMdStatus === "missing"
-          ? "A multi-skill plugin root needs --skill <name>; a plain skill folder needs a root SKILL.md."
-          : "It exists but could not be read — check permissions, or whether SKILL.md is a regular file.";
-    process.stderr.write(
-      `critique --corpus-only: no readable SKILL.md at ${tildeify(resolved.skillDir)} (${pkg.skillMdStatus}) — nothing to measure. ${hint}\n`,
-    );
-    return 2;
-  }
+ *  WHAT IT REFUSES — nothing itself: `preflightCritique` has already refused, with a paid critique's own
+ *  pre-spend check, every target staging would not deliver or that has no readable SKILL.md, so a preview
+ *  that prints a number is a promise the paid run will not die on the target. This renders that check's
+ *  packaged result. */
+function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pkg: ReturnType<typeof packageEvidence>): number {
   const corpus: CorpusFields = {
     corpusBytes: pkg.corpusBytes,
     corpusCeiling: pkg.corpusCeiling,
@@ -1941,7 +2012,7 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ReturnType<typeof resolveC
     corpusPackaged: pkg.corpusPackaged,
     corpusOmitted: pkg.corpusOmitted,
   };
-  const skill = opts.skillSelector ?? resolved.autoSelectedSkill ?? null;
+  const skill = gradedSkillNameFor(opts.skillSelector, resolved) ?? null;
   const note =
     "lower bound — plugin-root references the agent READS during the graded turn are added at critique time, so a paid run's corpusBytes is >= this";
   if (opts.ignoredFlags.length)
@@ -1991,18 +2062,14 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ReturnType<typeof resolveC
 }
 
 /** The skill whose invocation the advisory checks, or undefined when there is no single named skill to
- *  check (a plain skill folder). `--skill` wins; then a single-skill plugin's auto-selection; then the
- *  shape-2 positional (`critique <plugin>/skills/<name>`) — its name is the directory's, and the
- *  resolver already found the enclosing plugin, so leaving the advisory off for the recommended
- *  invocation form was an omission, not a decision. */
+ *  check (a plain skill folder). `--skill` wins; otherwise the resolver's own answer — ONE derivation,
+ *  shared with the `--corpus-only` preview's `skill` field. Inferring it here from `pluginRoot !==
+ *  skillDir` stopped working the moment the fallback shape-2 mount made the two equal. */
 export function gradedSkillNameFor(
   skillSelector: string | undefined,
-  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "skillDir" | "pluginRoot" | "autoSelectedSkill">,
+  resolved: Pick<ResolvedCritiqueTarget, "gradedSkillName">,
 ): string | undefined {
-  if (skillSelector !== undefined) return skillSelector;
-  if (resolved.autoSelectedSkill !== undefined) return resolved.autoSelectedSkill;
-  if (resolved.pluginRoot !== undefined && resolve(resolved.pluginRoot) !== resolve(resolved.skillDir)) return basename(resolved.skillDir);
-  return undefined;
+  return skillSelector ?? resolved.gradedSkillName;
 }
 
 /** A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md registers ONE identical slash command,
@@ -2082,6 +2149,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (opts.requestedFidelity === "cowork" && !opts.corpusOnly)
     process.stderr.write(`[loop] cowork → ${opts.fidelity} (per gate 1143815894)\n`);
 
+  // A skill inside a plugin is critiqued the way Cowork runs it: as part of its plugin. Reassigns `opts`
+  // itself — every consumer below reads this one binding.
+  opts = applyTargetPromotion(opts);
+
   // Resolve which folder the PACKAGER grades — fail-fast (usage error, exit 2) BEFORE any model spend:
   // a multi-skill plugin root with no --skill would burn four workloads to produce a critique whose every
   // coverage finding is "not adjudicable".
@@ -2098,10 +2169,20 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       `::notice:: [critique] ${tildeify(opts.skillFolder)} is a single-skill plugin — ${opts.corpusOnly ? "measuring" : "grading"} skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
     );
 
-  // --corpus-only stops HERE: after target resolution (so the multi-skill-root refusal above still applies,
-  // now for free) and before a session id is minted — nothing under --run-dir, no index row, no spawn.
+  // Refuse, before any spend, a target staging would not deliver or that has no readable SKILL.md — the
+  // same check for the preview and a paid run, so `--corpus-only` greening a target means a critique of it
+  // will not die on it after paying for two turns.
+  const preflight = preflightCritique(resolvedSkill, opts.corpusOnly ? "preview" : "preflight");
+  if (!preflight.ok) {
+    process.stderr.write(`critique${opts.corpusOnly ? " --corpus-only" : ""}: ${preflight.message}\n`);
+    process.exit(2);
+    return;
+  }
+
+  // --corpus-only stops HERE: after target resolution and the pre-spend check, and before a session id is
+  // minted — nothing under --run-dir, no index row, no spawn.
   if (opts.corpusOnly) {
-    process.exit(runCorpusPreview(opts, resolvedSkill));
+    process.exit(runCorpusPreview(opts, resolvedSkill, preflight.pkg));
     return;
   }
   // Past this point a turn WILL run. parseArgs guarantees a probe on every non-corpus-only line; the
@@ -2325,6 +2406,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
         agents: resolvedSkill.agents,
         pluginRoot: resolvedSkill.pluginRoot,
+        mountRoot: resolvedSkill.mountRoot,
       });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;

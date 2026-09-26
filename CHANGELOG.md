@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
+  folder, so a skill-folder positional inside a plugin is the same run as `critique <plugin> --skill
+  <name>`: same mount, same packaged corpus, same graded skill, announced with a `::notice::`. Its
+  `fingerprint.skillHash` is therefore the whole plugin's (as `--skill`'s always was), so it no longer pairs
+  with critiques recorded from the skill-folder spelling before this release — a pairing-key change, which
+  is why this ships in a minor release. A relative skill-folder spelling reports the plugin relative too.
+  A skill folder with its own plugin manifest is still mounted as its own plugin, now with a notice; and
+  `--skill` on a positional that is itself a skill folder now says to drop `--skill` or pass the plugin
+  root, instead of reporting a missing skill. Critique mounts the skill
+  folder alone, with a notice naming why, only when `--skill` cannot reach it: the folder is not at exactly
+  `skills/<name>`, it is a git submodule or nested repo, or its spelling's case differs from the tracked
+  path.
+- **A paid critique refuses, before any spend, every target `--corpus-only` refuses**: a mount with 0
+  git-tracked files, a `--skill` subdirectory with nothing tracked under it, and a target with no readable,
+  tracked `SKILL.md`. Previously these ran both turns and failed or degraded afterwards.
+
+### Fixed
+
+- **The critique corpus no longer contains files the graded agent never received.** Every corpus class was
+  checked against a git-tracked set read from that class's own directory, while staging reads one set at the
+  mount root. A skill that is a git submodule of its plugin was graded from the submodule's own index although
+  the mount carried an empty `skills/<name>/`, and a skill-folder positional packaged the enclosing plugin's
+  agents and shared references although only the folder was mounted. The packager now reads the mount
+  root's tracked set, once, for every class.
+
 ## [3.9.0] — 2026-09-25
 
 ### Upgrade notes

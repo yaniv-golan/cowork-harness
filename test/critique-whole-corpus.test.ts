@@ -53,7 +53,7 @@ function makeSkillDir(): string {
 }
 
 function pkgOf(runDir: string, skillDir: string) {
-  return packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, true, {});
+  return packageEvidence(runDir, EMPTY_BOUNDARY, skillDir, true, { mountRoot: skillDir });
 }
 
 describe("whole-corpus evidence packaging", () => {

@@ -4,7 +4,7 @@ import { listSkillFilesRecursive } from "./corpus-walk.js";
 import { resolveRootReferences, type OmissionReason } from "./resolve-references.js";
 import { flattenTitle } from "./armor.js";
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, type Dirent } from "node:fs";
-import { join, basename, sep } from "node:path";
+import { join, basename, relative, resolve, sep, isAbsolute } from "node:path";
 import { warn } from "../io.js";
 import { gitAccept, gitModeEnabled, gitTrackedSet } from "../run/skill-files.js";
 import { turnArtifactPath } from "../run/turn-layout.js";
@@ -240,7 +240,7 @@ function sec(title: string, body: string): EvidenceSection {
  *  same `COWORK_HARNESS_GITSET=0` escape hatch, same not-a-git-worktree fallback — so the two can never
  *  drift. Returns `null` when no filtering applies (gitMode off, or not a work tree), meaning "accept
  *  everything", which is exactly what staging does in those cases. */
-function corpusAcceptFor(dir: string): ((rel: string) => boolean) | null {
+function corpusAcceptFor(dir: string, quiet = false): ((rel: string) => boolean) | null {
   if (!gitModeEnabled()) return null;
   // `gitTrackedSet` THROWS on a listable-repo-but-failed-`ls-files` state. Packaging must never die there:
   // it runs after both graded turns have been paid for, and an exception escapes to `main` as exit 2 with
@@ -252,13 +252,17 @@ function corpusAcceptFor(dir: string): ((rel: string) => boolean) | null {
   } catch (err) {
     // Loud: this silently disables the corpus==mount guarantee, and a silent degradation of a correctness
     // guarantee is exactly what this instrument exists to surface.
-    warn(
-      `::warning:: [critique] could not read the git-tracked set for ${dir} (${err instanceof Error ? err.message : String(err)}) — ` +
-        `packaging every file found on the host, so the evidence may include files staging would not deliver.\n`,
-    );
+    if (!quiet)
+      warn(
+        `::warning:: [critique] could not read the git-tracked set for ${dir} (${err instanceof Error ? err.message : String(err)}) — ` +
+          `packaging every file found on the host, so the evidence may include files staging would not deliver.\n`,
+      );
     return null;
   }
-  if (!tracked || tracked.size === 0) return null; // not a work tree (raw copy); empty is staging's hard-fail, not ours
+  // Not a work tree → staging copies raw. Empty → staging refuses to mount at all (`stageFilterFor`), which
+  // critique's pre-spend check reports first; both callers pass the MOUNT root, so this is staging's
+  // answer, not a guess about a subdirectory.
+  if (!tracked || tracked.size === 0) return null;
   return gitAccept(tracked);
 }
 
@@ -470,14 +474,33 @@ export function packageEvidence(
      *  Named for what it is, not for its first consumer — an `agentsRoot` reused for references is how a
      *  single rule ends up with several derivations. */
     pluginRoot?: string;
+    /** The folder the graded turn MOUNTED — the one staging read its git-tracked set from. Every corpus
+     *  class is checked against THAT set, with keys relative to it. Required: keying each class on its own
+     *  directory (`skillDir`, `pluginRoot`) is how a submodule's own index, or a plugin the mount never
+     *  carried, put files in the evidence that the agent never received. `skillDir` and `pluginRoot` must
+     *  lie inside it (lexically); anything else is a caller bug and throws. */
+    mountRoot: string;
     /** `"preview"` when called by `critique --corpus-only` over an EMPTY run dir: the same corpus
      *  computation, no graded turn. Changes ONE thing — the tense of the over-ceiling warning ("would be
      *  cut", not "was cut before grading") — so a CI annotation never describes a grading that did not
-     *  happen. It must not change any corpus field: the preview's whole value is that it IS this
-     *  function's answer, and a mode that computed differently would be a second derivation. */
-    mode?: "preview";
-  } = {},
+     *  happen. `"preflight"` is critique's pre-spend check on the live path: the same computation, SILENT —
+     *  the real packaging pass after the turns emits every warning once, in the right tense. Neither mode
+     *  may change any corpus field: the preview's whole value is that it IS this function's answer, and a
+     *  mode that computed differently would be a second derivation. */
+    mode?: "preview" | "preflight";
+  },
 ): PackageEvidenceResult {
+  // Keys for the ONE tracked set staging read (see `mountRoot`). Lexical on both sides: `realpathSync` on
+  // one side only would call a macOS tmpdir (`/var/…` vs `/private/var/…`) "outside".
+  const mountRoot = resolve(opts.mountRoot);
+  const prefixInsideMount = (label: string, p: string): string => {
+    const r = relative(mountRoot, resolve(p));
+    if (r.startsWith("..") || isAbsolute(r)) throw new Error(`packageEvidence: ${label} ${p} is not inside mountRoot ${opts.mountRoot}`);
+    return r === "" ? "" : `${r.split(sep).join("/")}/`;
+  };
+  const skillPrefix = prefixInsideMount("skillDir", skillDir);
+  const pluginPrefix = opts.pluginRoot !== undefined ? prefixInsideMount("pluginRoot", opts.pluginRoot) : "";
+  const mountAccept = corpusAcceptFor(mountRoot, opts.mode === "preflight");
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
   // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
   let truncated = false;
@@ -613,7 +636,7 @@ export function packageEvidence(
   // layout and failed silently, which is the one thing this packager must never do. Names are
   // forward-slash-joined relative paths so a citation still identifies its source file.
   const referenceRoot = join(skillDir, "references");
-  const accept = corpusAcceptFor(skillDir);
+  const accept = mountAccept ? (rel: string) => mountAccept(`${skillPrefix}${rel}`) : null;
   const allReferenceFiles = listSkillFilesRecursive(referenceRoot);
   const referenceFiles = accept ? allReferenceFiles.filter((rel) => accept(`references/${rel}`)) : allReferenceFiles;
   // Files on the host that the AGENT never received. Reported, never silently dropped: an author who left a
@@ -652,16 +675,15 @@ export function packageEvidence(
   // this replaced was unambiguous only while exactly one agent could ever be packaged; at N>1 an
   // over-ceiling cut could not have named the file it cut, which is the whole point of "cut loudly".
   //
-  // Same corpus==mount rule as SKILL.md/references, but keyed off the PLUGIN ROOT: agent files live at
-  // <root>/agents/**.md while `skillDir` is <root>/skills/<name>, so skillDir's tracked-set key space
-  // cannot express them and they would otherwise ship unfiltered. The check is PER FILE — one agent being
-  // untracked must not suppress the others.
+  // Same corpus==mount rule as SKILL.md/references, against the same mount-root tracked set; agent keys
+  // carry the plugin root's prefix within the mount. The check is PER FILE — one agent being untracked must
+  // not suppress the others.
   // Declared here, not beside the root-reference pass: an UNREADABLE AGENT is recorded into it below,
   // and a corpus file that reaches the evaluator as a placeholder must not be silent in every field.
   const corpusOmitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }> = [];
   const agentBodies: Array<{ key: string; title: string; body: string; isPlaceholder: boolean }> = [];
   {
-    const rootAccept = opts.pluginRoot !== undefined ? corpusAcceptFor(opts.pluginRoot) : null;
+    const rootAccept = opts.pluginRoot !== undefined && mountAccept ? (rel: string) => mountAccept(`${pluginPrefix}${rel}`) : null;
     for (const agent of opts.agents ?? []) {
       if (rootAccept && !rootAccept(agent.rel)) {
         corpusExcluded.push(agent.rel);
@@ -709,7 +731,7 @@ export function packageEvidence(
   // real gap. Files left out are REPORTED (`corpusOmitted`), which is what makes the narrow rule safe.
   const rootRefBodies: Array<{ key: string; title: string; body: string; isPlaceholder: boolean }> = [];
   if (opts.pluginRoot !== undefined) {
-    const rootAccept = corpusAcceptFor(opts.pluginRoot);
+    const rootAccept = mountAccept ? (rel: string) => mountAccept(`${pluginPrefix}${rel}`) : null;
     const resolved = resolveRootReferences({
       pluginRoot: opts.pluginRoot,
       skillDir,
@@ -806,12 +828,13 @@ export function packageEvidence(
       left--;
     }
     truncated = true;
-    warn(
-      `::warning:: [critique] skill corpus is ${corpusBytes.toLocaleString()} B, over the ${SKILL_CORPUS_CEILING.toLocaleString()} B evidence ceiling — ` +
-        (opts.mode === "preview"
-          ? `content WOULD BE cut before grading; see corpusCuts in the preview for which files and how much.\n`
-          : `content was cut before grading; see corpusCuts in the report for which files and how much.\n`),
-    );
+    if (opts.mode !== "preflight")
+      warn(
+        `::warning:: [critique] skill corpus is ${corpusBytes.toLocaleString()} B, over the ${SKILL_CORPUS_CEILING.toLocaleString()} B evidence ceiling — ` +
+          (opts.mode === "preview"
+            ? `content WOULD BE cut before grading; see corpusCuts in the preview for which files and how much.\n`
+            : `content was cut before grading; see corpusCuts in the report for which files and how much.\n`),
+      );
   }
   /** Apply the ceiling's per-file allowance, recording what each file actually contributed.
    *
