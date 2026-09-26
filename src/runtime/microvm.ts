@@ -195,6 +195,8 @@ export function spawnMicroVm(
  * survives SIGTERM and SIGKILL of the client, still holding its stdin through the ssh session, and keeps
  * working. Pure and exported so the targeting is testable without a VM.
  */
+// UNVERIFIED: the guest kill (this script, microvmGuestKillArgv and microvmAgent below) is unit-tested
+// against a fake /proc and injected spawn/kill only; it has not been exercised against a live microVM.
 export function microvmGuestKillScript(configVm: string, sig: "TERM" | "KILL", procRoot = "/proc"): string {
   const want = shQuote(`CLAUDE_CONFIG_DIR=${configVm}`);
   return (
