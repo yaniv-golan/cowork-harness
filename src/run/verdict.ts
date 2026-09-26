@@ -2,7 +2,7 @@ import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
-import { outputsDeleteTier, outputsDeleteEntries } from "./outputs-delete-tier.js";
+import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified } from "./outputs-delete-tier.js";
 
 export interface VerdictSignal {
   code:
@@ -109,7 +109,7 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
       ? "na"
       : odTier !== "none"
         ? "fired"
-        : result.scan === undefined || result.fsDiff?.status === "unavailable"
+        : result.scan === undefined || outputsDiffUnverified(result.fsDiff)
           ? "unverified"
           : "ok",
   });
@@ -510,12 +510,12 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       });
     // A diff that could not verify is never silent: with a text hit it already failed above; without one,
     // a delete by a script file or a non-bash tool would go unseen, so say so.
-    if (result.fsDiff?.status === "unavailable" && outputsTier === "none" && !optInOutputsDelete)
+    if (outputsDiffUnverified(result.fsDiff) && outputsTier === "none" && !optInOutputsDelete)
       signals.push({
         code: "outputs_diff_unavailable",
         severity: "warn",
         message:
-          `the outputs filesystem diff could not verify this turn (${result.fsDiff.reason ?? "unavailable"}) — ` +
+          `the outputs filesystem diff could not verify this turn (${result.fsDiff?.reason ?? (result.fsDiff?.status === "unavailable" ? "unavailable" : "malformed diff in result.json")}) — ` +
           `a delete made without a bash command (a script file, another tool) would not have been detected`,
       });
     // Deletes in a delete-denied mount OTHER than outputs. WARN, not fail, on purpose: production

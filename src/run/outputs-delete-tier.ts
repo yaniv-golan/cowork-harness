@@ -41,6 +41,19 @@ export function outputsDeleteTier(scan: OutputsDeleteEvidence | undefined, fsDif
   return "warn";
 }
 
+/** True when a PRESENT diff could not verify the turn: the producer said `unavailable`, or the persisted
+ *  object contradicts itself (no findings array, an unknown status, `findings` with nothing in it) — a
+ *  hand-edited or truncated result.json. An ABSENT diff (legacy results, replay, chat) is not "unverified"
+ *  here: those results keep the verdict they always had. Drives the `outputs_diff_unavailable` warn and the
+ *  roster's `unverified`, so a diff that proves nothing is never read as a clean one. */
+export function outputsDiffUnverified(fsDiff: OutputsFsDiff | undefined): boolean {
+  if (fsDiff === undefined) return false;
+  if (!Array.isArray(fsDiff.findings)) return true;
+  if (fsDiff.status === "clean") return false;
+  if (fsDiff.status === "findings") return fsDiff.findings.length === 0;
+  return true;
+}
+
 /** The evidence strings behind a tier, fs-diff findings first, de-duplicated (a finding is also merged
  *  into `scan.outputsDeletes` when the scan exists). */
 export function outputsDeleteEntries(scan: OutputsDeleteEvidence | undefined, fsDiff: OutputsFsDiff | undefined): string[] {

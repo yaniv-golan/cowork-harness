@@ -271,3 +271,19 @@ describe("outputs-delete: roster and mixed evidence", () => {
     expect(codes(waived)).not.toContain("outputs_diff_unavailable:warn");
   });
 });
+
+describe("outputs-delete: a persisted diff that contradicts itself is never silent", () => {
+  // Both need a hand-edited or truncated result.json. With no text hit the tier is `none`, so the diff's own
+  // state is the only evidence left — and it proves nothing, so it must read as "could not verify".
+  const status = (v: ReturnType<typeof computeVerdict>) => v.guards.find((g) => g.name === "outputs-delete")?.status;
+  const noHits = { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
+  it.each([
+    ["status findings with an empty findings list", { status: "findings", findings: [] }],
+    ["no findings array", { status: "clean" }],
+    ["an unknown status", { status: "weird", findings: [] }],
+  ])("%s ⇒ outputs_diff_unavailable warn, roster unverified", (_label, fsDiff) => {
+    const v = computeVerdict(rr({ scan: noHits, fsDiff } as unknown as Partial<RunResult>), "live");
+    expect(codes(v)).toContain("outputs_diff_unavailable:warn");
+    expect(status(v)).toBe("unverified");
+  });
+});

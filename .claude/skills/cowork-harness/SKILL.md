@@ -640,13 +640,24 @@ Recognize these before "fixing" a non-bug:
   suspiciously empty.
 - **`outputs_delete_unconfirmed`** (`WARN`) — a delete-shaped command near `mnt/outputs` that nothing
   confirms: the per-turn filesystem diff shows no output present at turn start was deleted, and no flagged
-  delete has an `outputs/` path as its own operand (the classic case: a Python variable named `rm` in a
-  `python3 -c` body that also reads a report from outputs — `rm = json.load(open(".../outputs/r.json"))`). A file the turn created and then deleted is
-  invisible to the diff, so real deletes land here too — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)` — so read the command before
-  dismissing it. A literal-path delete (`rm -f
-  mnt/outputs/x`, `os.remove(".../outputs/x")`) still fails `outputs_delete`, as do quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line); waive either with
-  `allow_outputs_delete`. Raised even when `no_delete_in_outputs` is
-  authored (the assertion passes; this warn is how the hit stays visible in text output).
+  delete has an `outputs/` path as its own operand. The classic case is a Python variable named `rm` in a
+  `python3 -c` body that also reads a report from outputs: `rm = json.load(open(".../outputs/r.json"))`.
+  A file the turn created and then deleted is invisible to the diff, so real deletes land here too:
+  - a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`);
+  - a `cd` then a relative path;
+  - chained variables (`A=…; B=$A/x; rm "$B"`);
+  - a Python path held in a variable set on another line (`p = …` then `os.remove(p)`);
+  - wrapper flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`);
+  - calls outside the modelled set, such as Node's `fs.promises.rm(…)`.
+
+  Read the command before dismissing it. A literal-path delete (`rm -f mnt/outputs/x`,
+  `os.remove(".../outputs/x")`) still fails `outputs_delete`. So do two non-deletes: quoted text where a
+  delete command with an outputs operand follows a separator, subshell or keyword
+  (`echo 'note; rm mnt/outputs/x'` — the classifier does not track quotes), and a heredoc that *writes* a
+  script instead of running it. A statement over 4 KiB or a command over 16 KiB is judged by the stricter
+  original rule, so a huge one-line body with a variable named `rm` fails again. Waive any of these with
+  `allow_outputs_delete`. The warn is raised even when `no_delete_in_outputs` is authored (the assertion
+  passes; this warn is how the hit stays visible in text output).
 - **`outputs_diff_unavailable`** (`WARN`) — the outputs filesystem diff could not verify this turn and the
   text scan saw nothing, so a delete by a script file or a non-bash tool would have gone unseen.
 - **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so

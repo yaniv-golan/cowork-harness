@@ -40,9 +40,12 @@ All notable changes to this project are documented here. The format is based on
   still raised so the hit stays visible in the run output (it is also the assertion's evidence in the JSON
   envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
   quote-blind, after whole-line comments are dropped and same-command `VAR=value` assignments expanded one
-  level; a trailing ` # comment` is not counted as a delete's operand. A statement longer than 4 KiB skips
-  the operand analysis and is judged by the original rule (a delete word and an outputs path anywhere in
-  it), which can only be stricter, so the classifier stays linear-time on huge one-liners. Two
+  level; a trailing ` # comment` is not counted as a delete's operand. **Size caps:** a statement longer than
+  4 KiB, or a command longer than 16 KiB, skips the operand analysis and is judged by the original rule (a
+  delete word, or `mv`, and an outputs path anywhere in it). That can only be stricter, and it bounds the
+  cost — the worst shapes measured, up to 160 KB, classify in under 10 ms — but it means the false positive
+  this change fixes comes back on a huge one-liner: a single-line `python3 -c` body over 4 KiB with a
+  variable named `rm` next to an outputs path still fails. Two
   consequences to know: **real deletes can land in the warn**, because the diff cannot see a file created and
   deleted within one turn — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)`; and **a false positive can still fail**: quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line). An outputs path that only shares a statement with the word — a Python
   variable (`rm = json.load(open(".../outputs/r.json"))`), quoted prose, a `sed`/`grep` pattern, a trailing
@@ -75,6 +78,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The outputs-delete scanner no longer takes seconds on a long command.** A `shred` or `find` without its
+  delete flag, an unclosed `$(mktemp`, or thousands of `VAR=` assignments made the scan quadratic: an 81 KB
+  `shred -a …` line took 1.2 s, a 54 KB command using 4000 variables 3.2 s. The same decisions are now made
+  in one pass, so those shapes take a few milliseconds; what is flagged is unchanged. One shape stays
+  superlinear in the scanner (not the classifier): a single statement that references thousands of distinct
+  variables, about 0.2 s at 4000.
 - **A resumed turn no longer re-reports an earlier turn's outputs delete.** The outputs diff compared every
   turn against the first turn's baseline, so a delete in turn 1 failed turn 2 again on scenarios that armed
   the manifest; it now compares against the turn's own start, matching the text scan's current-turn scope.

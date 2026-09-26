@@ -2488,8 +2488,33 @@ export function hostPathLeaked(text: string): boolean {
 //     handled separately by `mvDeletesOutputs` (a move OUT of outputs fails, so it stays flagged).
 // A skill that empties a deliverable is a content bug, catchable with content assertions — not a
 // containment violation, and asserting it here would red runs the real product would allow.
-const DELETE_TOKEN =
-  /\b(rm|unlink|rmdir)\b|\bshred\b[^\n;|&]*[ \t](?:-[a-zA-Z]*u\b|--remove\b)|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+//
+// Semantically this is ONE regex:
+//   /\b(rm|unlink|rmdir)\b|\bshred\b[^\n;|&]*[ \t](?:-[a-zA-Z]*u\b|--remove\b)|\bfind\b[^\n]*-delete\b|
+//    \bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/
+// but the `shred` and `find` arms, run as a regex, re-scan to the end of the segment for EVERY occurrence of
+// the word when the flag is absent — quadratic (`shred -a ` ×9000 took over a second). `test` below decides
+// the same thing in one pass: the first occurrence of the word in a segment sees the longest remainder, so
+// testing only that remainder is exactly equivalent to trying every occurrence.
+const DELETE_TOKEN_SIMPLE = /\b(rm|unlink|rmdir)\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+const SHRED_REMOVE_FLAG = /[ \t](?:-[a-zA-Z]*u\b|--remove\b)/;
+const firstRemainderMatches = (text: string, segmentSep: RegExp, word: RegExp, tail: RegExp): boolean => {
+  if (!word.test(text)) return false; // the common case: the word is absent, one linear scan
+  for (const seg of text.split(segmentSep)) {
+    const at = seg.search(word);
+    if (at !== -1 && tail.test(seg.slice(at + seg.slice(at).match(word)![0].length))) return true;
+  }
+  return false;
+};
+const DELETE_TOKEN = {
+  test(text: string): boolean {
+    return (
+      DELETE_TOKEN_SIMPLE.test(text) ||
+      firstRemainderMatches(text, /[\n;|&]/, /\bshred\b/, SHRED_REMOVE_FLAG) ||
+      firstRemainderMatches(text, /\n/, /\bfind\b/, /-delete\b/)
+    );
+  },
+};
 /** Per-mount matchers. Production denies `unlink`/`rmdir` on EVERY writable Cowork FUSE mount, not just
  *  `outputs` — a connected folder shows the identical default, and approval is strictly per-mount. So the
  *  three matchers below are built per mount NAME rather than hardcoding the literal `outputs`.
@@ -2584,6 +2609,9 @@ function stripCommentLines(cmd: string): string {
 function expandSimpleVars(rawCmd: string): string {
   const cmd = joinLineContinuations(rawCmd);
   const vars = new Map<string, string>();
+  // First-insertion position of each var = its position in `vars`' iteration order (a re-`set` keeps it).
+  const order = new Map<string, number>();
+  const names: string[] = []; // names[order.get(k)] === k
   const assign = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/g;
   const record = (part: string): void => {
     assign.lastIndex = 0;
@@ -2591,14 +2619,80 @@ function expandSimpleVars(rawCmd: string): string {
     while ((m = assign.exec(part))) {
       const v = m[3].replace(/^['"]|['"]$/g, "");
       if (/\$\(|`/.test(v)) continue;
+      if (!order.has(m[2])) {
+        order.set(m[2], order.size);
+        names.push(m[2]);
+      }
       vars.set(m[2], v);
     }
   };
   const expand = (part: string): string => {
+    // Semantically: for each known var IN INSERTION ORDER, replace every `${k}` / `$k\b` in the text so far,
+    // so a value inserted for one var can be expanded by a var LATER in that order (never an earlier one).
+    // Done literally that is one regex per var per segment — quadratic on a long run of assignments. Instead
+    // only the vars the text references are visited, in the same order. The referenced names are exactly the
+    // identifiers after `$` / inside `${…}` (`\b` means `$k` only ever matches a whole identifier). A
+    // replacement can create a NEW reference only if the value contains `$`, or it lands right after a `$`
+    // (or a `$name` run it then extends); in that case the text is rescanned, so the visit set stays exact.
+    // `() => v` (function replacer) inserts the value literally — a raw `String.replace` string would treat
+    // `$&`/`$1` in an agent-controlled value as special and corrupt the expansion.
+    if (vars.size === 0 || !part.includes("$")) return part;
+    const heap: number[] = [];
+    const queued = new Set<number>();
+    const push = (at: number): void => {
+      if (queued.has(at)) return;
+      queued.add(at);
+      heap.push(at);
+      for (let i = heap.length - 1; i > 0;) {
+        const p = (i - 1) >> 1;
+        if (heap[p] <= heap[i]) break;
+        [heap[p], heap[i]] = [heap[i], heap[p]];
+        i = p;
+      }
+    };
+    const pop = (): number => {
+      const top = heap[0];
+      const last = heap.pop()!;
+      if (heap.length) {
+        heap[0] = last;
+        for (let i = 0; ;) {
+          const l = 2 * i + 1;
+          const r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l] < heap[m]) m = l;
+          if (r < heap.length && heap[r] < heap[m]) m = r;
+          if (m === i) break;
+          [heap[m], heap[i]] = [heap[i], heap[m]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    const scan = (text: string, after: number): void => {
+      for (const r of text.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) {
+        const at = order.get(r[1]);
+        if (at !== undefined && at > after) push(at);
+      }
+    };
+    scan(part, -1);
     let s = part;
-    // `() => v` (function replacer) inserts the value literally — a raw `String.replace` string would
-    // treat `$&`/`$1` in an agent-controlled value as special and corrupt the expansion.
-    for (const [k, v] of vars) s = s.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), () => v);
+    while (heap.length) {
+      const current = pop();
+      const k = names[current];
+      const v = vars.get(k)!;
+      const valueMayJoin = v.includes("$") || /^[\w{]/.test(v);
+      let mayCreateRef = v.includes("$");
+      s = s.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), (match: string, offset: number, str: string) => {
+        if (!mayCreateRef && valueMayJoin) {
+          // does the text just before this match end in `$`, `${`, or a `$name` run the value would extend?
+          let j = offset - 1;
+          while (j >= 0 && /\w/.test(str[j])) j--;
+          if (j >= 0 && (str[j] === "$" || (str[j] === "{" && str[j - 1] === "$"))) mayCreateRef = true;
+        }
+        return v;
+      });
+      if (mayCreateRef) scan(s, current);
+    }
     return s;
   };
   // Expand in SOURCE ORDER so a later reassignment cannot retroactively change an earlier `$NAME`
@@ -2619,7 +2713,9 @@ function expandSimpleVars(rawCmd: string): string {
   return out;
 }
 
-const MKTEMP_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b([^)]*)\)/g;
+// `NAME=$(mktemp ARGS)`. The `ARGS)` tail is found with a moving cursor rather than `[^)]*\)` in the regex:
+// on an unclosed paren the regex form re-scanned to the end once per `=$(mktemp` — quadratic.
+const MKTEMP_ASSIGN_HEAD = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b/g;
 const ANY_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=/g;
 const MKTEMP_SAFE_PLACEHOLDER = "/tmp/.mktemp-safe";
 
@@ -2663,13 +2759,24 @@ function resolveMktempVars(cmd: string): string {
       continue;
     }
     let part = parts[i];
-    for (const v of safeVars) {
-      part = part.replace(new RegExp(`\\$\\{${v}\\}|\\$${v}\\b`, "g"), () => MKTEMP_SAFE_PLACEHOLDER);
-    }
-    MKTEMP_ASSIGN.lastIndex = 0;
+    // Only the safe vars this segment references (the placeholder contains no `$`, so order cannot matter).
+    if (safeVars.size && part.includes("$"))
+      for (const r of new Set([...part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((x) => x[1])))
+        if (safeVars.has(r)) part = part.replace(new RegExp(`\\$\\{${r}\\}|\\$${r}\\b`, "g"), () => MKTEMP_SAFE_PLACEHOLDER);
+    MKTEMP_ASSIGN_HEAD.lastIndex = 0;
     const mktempHere = new Set<string>();
     let m: RegExpExecArray | null;
-    while ((m = MKTEMP_ASSIGN.exec(part))) if (!mktempIsDirDirected(m[3])) mktempHere.add(m[2]);
+    let close = -1; // index of the next `)` at or after the cursor; -2 once none remains
+    while ((m = MKTEMP_ASSIGN_HEAD.exec(part))) {
+      const from = MKTEMP_ASSIGN_HEAD.lastIndex;
+      if (close !== -2 && close < from) close = part.indexOf(")", from);
+      if (close < 0) {
+        close = -2;
+        break; // no `)` after here, so no later assignment can close either
+      }
+      if (!mktempIsDirDirected(part.slice(from, close))) mktempHere.add(m[2]);
+      MKTEMP_ASSIGN_HEAD.lastIndex = close + 1;
+    }
     ANY_ASSIGN.lastIndex = 0;
     while ((m = ANY_ASSIGN.exec(part))) {
       if (mktempHere.has(m[2])) safeVars.add(m[2]);
@@ -2917,23 +3024,33 @@ export function isOutputsDelete(cmd: string): boolean {
  *  body (`do rm -f "$f"`), after a `cd`, through a chained or computed variable, or as `p = …` then
  *  `os.remove(p)` classifies `inferred` even when real.
  *
- *  Size cap: a statement longer than `BASIS_STATEMENT_CAP` (4 KiB) skips this analysis and is `named` iff the
- *  ORIGINAL statement rule holds (a delete token and an outputs path anywhere in it) — a superset of what the
- *  operand rule names, so the cap can only make a verdict stricter. Argument, operand and receiver scans
- *  stop `BASIS_SCAN_CAP` (4096) characters from their anchor. Together they keep the classifier linear-time.
+ *  Size caps: a command longer than `BASIS_COMMAND_CAP` (16 KiB) skips the whole analysis, pre-split passes
+ *  included, and a statement longer than `BASIS_STATEMENT_CAP` (4 KiB) skips the operand analysis. Either way
+ *  it is `named` iff the ORIGINAL rule holds — a delete token (or `mv`) and an outputs path anywhere in the
+ *  raw text — a superset of what the operand rule names, so a cap can only make a verdict stricter. The
+ *  flip side: over a cap the false positives this rule exists to clear come back, e.g. a one-line
+ *  `python3 -c` body over 4 KiB with a variable named `rm` next to an outputs path is `named` again.
+ *  Argument, operand and receiver scans stop `BASIS_SCAN_CAP` (4096) characters from their anchor. The cost
+ *  is therefore linear above the caps and bounded below them; the child-process probes in
+ *  test/outputs-delete-basis-linear.test.ts pin the worst known shapes under 50 ms.
  *
  *  Why "can't tell" may resolve to `inferred`: the basis only matters when the filesystem diff ran on
  *  complete walks and found nothing. If the diff did not verify the turn, any flagged hit fails regardless
  *  of basis (`outputsDeleteTier`), so this classifier cannot turn an unverifiable turn into a pass. */
 export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
   const mm = mountMatchers("outputs");
+  // Whole-command cap: the pre-split passes (variable expansion, `mktemp` resolution) are superlinear in the
+  // worst case, so a command over the cap skips them and is judged by the original rule over its RAW text —
+  // a delete token (or `mv`) and an outputs path anywhere. The raw text contains every literal the expanded
+  // text does (and comments too), so this names a superset of the operand rule: only ever stricter.
+  if (cmd.length > BASIS_COMMAND_CAP) return mm.touches.test(cmd) && (DELETE_TOKEN.test(cmd) || /\bmv\b/.test(cmd)) ? "named" : "inferred";
   const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
   return splitStatements(code).some(
     (stmt) =>
       mvDeletesOutputs(stmt, mm) ||
       // Over the cap, fall back to the original statement rule — a delete word and an outputs path anywhere
       // in the statement — which names a superset of what the operand rule names, so a huge statement can
-      // only get STRICTER, never turn a real delete into a warn. Keeps the classifier linear-time.
+      // only get STRICTER, never turn a real delete into a warn. Bounds the operand analysis's cost.
       (stmt.length > BASIS_STATEMENT_CAP ? DELETE_TOKEN.test(stmt) && mm.touches.test(stmt) : statementDeletesNamedOutputs(stmt, mm)),
   )
     ? "named"
@@ -2944,6 +3061,9 @@ export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
  *  matching is quadratic in the worst case — every `(`, `{`, backtick or `$(` is a candidate start — and a
  *  minified-JSON `echo` is a realistic 80 KB statement. 4 KiB keeps the worst measured shape well under 50 ms. */
 export const BASIS_STATEMENT_CAP = 4 * 1024;
+/** Commands longer than this skip the whole operand-level classifier, pre-split passes included (see
+ *  `outputsDeleteBasis`). */
+export const BASIS_COMMAND_CAP = 16 * 1024;
 /** How far an argument / operand / receiver scan looks from its anchor. */
 const BASIS_SCAN_CAP = 4096;
 /** `[os.remove(p) for p in <iterable>]` — the `for … in` right after a delete call. Words and whitespace

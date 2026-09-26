@@ -3,7 +3,7 @@
 // test can SIGKILL a catastrophic regex instead of blocking its own worker: a synchronous hang cannot be
 // pre-empted by a vitest timeout.
 import { pathToFileURL } from "node:url";
-import { outputsDeleteBasis } from "../../src/run/execute.js";
+import { outputsDeleteBasis, isOutputsDelete } from "../../src/run/execute.js";
 
 const O = "/sessions/s/mnt/outputs";
 const R = (s: string, n: number) => s.repeat(n);
@@ -24,6 +24,22 @@ export const PROBES: Record<string, () => string> = {
   // quadratic in the command-position regex itself (each `eval "` is a start); only the per-statement cap
   // keeps it fast — the probe that fails if the cap goes
   'eval " repeated, 40k': () => R('eval "', 6700) + `rmx ${O}/x; rm "$Q"`,
+  // detector token arms and pre-split passes: once quadratic on a missing flag / unclosed paren / long runs
+  // of assignments. Each ends in `; rm "$Q"` so it is flagged and the classifier runs on it.
+  "shred -a repeated, 81k": () => R("shred -a ", 9000) + `${O}/x; rm "$Q"`,
+  "shred -a repeated, 162k": () => R("shred -a ", 18000) + `${O}/x; rm "$Q"`,
+  "4000 vars, one segment referencing them all": () =>
+    Array.from({ length: 4000 }, (_, i) => `v${i}=1`).join("\n") +
+    "\n" +
+    Array.from({ length: 4000 }, (_, i) => `$v${i}`).join("") +
+    ` ${O}/x; rm "$Q"`,
+  "find -x repeated, 80k": () => R("find -x ", 10000) + `${O}/x; rm "$Q"`,
+  "a=$(mktemp repeated, 77k": () => R("a=$(mktemp ", 7000) + ` ${O}/x; rm "$Q"`,
+  "4000 assignments then 80k echo": () => R("v=1 ", 4000) + "\n" + "echo " + R("x", 80000) + ` ${O}/x; rm "$Q"`,
+  // the same shapes just under the whole-command cap, where the pre-split passes DO run
+  "under the command cap: a=$(mktemp × 1400": () => R("a=$(mktemp ", 1400) + ` ${O}/x; rm "$Q"`,
+  "under the command cap: 2000 assignment lines using a var": () => R("v=1 $w\n", 2000) + `${O}/x; rm "$Q"`,
+  "under the command cap: shred -a × 1700": () => R("shred -a ", 1700) + `${O}/x; rm "$Q"`,
   // just under the per-statement cap, so the operand-level analysis itself runs on them
   "under the cap: $( × 2000": () => R("$(", 2000) + `rm "$Q" ${O}/x`,
   "under the cap: os.remove( × 400": () => R("os.remove(", 400) + `${O}/x; rm "$Q"`,
@@ -41,11 +57,16 @@ if (isEntry && name !== undefined) {
   }
   const cmd = build();
   let best = Infinity;
+  let bestDetector = Infinity;
   let basis = "";
+  let flagged = false;
   for (let i = 0; i < 3; i++) {
-    const t = performance.now();
+    let t = performance.now();
+    flagged = isOutputsDelete(cmd);
+    bestDetector = Math.min(bestDetector, performance.now() - t);
+    t = performance.now();
     basis = outputsDeleteBasis(cmd);
     best = Math.min(best, performance.now() - t);
   }
-  console.log(JSON.stringify({ ms: best, basis, chars: cmd.length }));
+  console.log(JSON.stringify({ ms: best, detectorMs: bestDetector, flagged, basis, chars: cmd.length }));
 }
