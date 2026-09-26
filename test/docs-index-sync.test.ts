@@ -27,9 +27,13 @@ describe("COWORK_* env vars ↔ docs", () => {
   // Dot-access alone misses the helper-read STATUS_* / DECIDER_DIR_* / LLM_* / GITSET /
   // VM_PROXY_PORT families and the aliased NO_HYPERLINKS read.
   const names = scrapeCoworkEnvVars();
-  // Intentionally-internal vars go here, each with a stated reason. Empty today: every env knob
-  // the harness reads is documented somewhere in README.md or docs/*.md.
-  const ALLOWLIST = new Set<string>([]);
+  // Intentionally-internal vars go here, each with a stated reason.
+  const ALLOWLIST = new Set<string>([
+    // The `cowork-harness lint` wrapper → bundled scenario.py handoff of scenario-loader findings. Set by
+    // the wrapper for one child process, scrubbed from anything inherited; not a user knob (SPEC.md lists
+    // it as not covered).
+    "COWORK_HARNESS_LINT_EXTRA_FINDINGS",
+  ]);
 
   it("scraped a sane env-var set", () => {
     // 53 names at time of writing; the floor must sit ABOVE the 41 that dot-access alone yields,

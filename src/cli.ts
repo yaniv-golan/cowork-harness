@@ -233,6 +233,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
+                               and that each one loads: the run/record loader's schema, regex and named-baseline
+                               checks are ERRORs (scenario-invalid / baseline-unknown)
       [--strict]               fail on any lint finding (WARN/INFO), not just ERROR
       [--min-severity <S>]     drop findings below ERROR|WARN|INFO before printing AND before the exit
                                computation (default INFO = unchanged); applies to --output-format json too
@@ -426,8 +428,8 @@ const RUN_HELP = `cowork-harness run <scenario.yaml | dir/>
 
   Run one authored scenario, or every *.yaml/*.yml in a directory, with assertions and a CI-ready exit
   code. Verdict-first: on FAIL the failing transcript is printed inline (no spelunking runs/…).
-  ('run' takes no --dry-run: 'record <file.yaml> --dry-run' checks that a scenario LOADS without
-   spending; 'lint <file.yaml>' checks the assertion invariants. Both are token-free.)
+  ('run' takes no --dry-run: 'lint <file.yaml>' checks that a scenario LOADS plus the assertion
+   invariants; 'record <file.yaml> --dry-run' adds the pre-spend refusals. Both are token-free.)
 
 Model:
   --model <id>                     pin the model, overriding the session's 'model:' for this run
@@ -1636,7 +1638,7 @@ async function cmdRun(rawArgs: string[]) {
       // terminates on `(=|$)`, misplacedGlobalHint on `(=|$|[\s,])`). A hint here would silently swallow the
       // "put it before the subcommand" answer for exactly those tokens.
       `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag. ` +
-        `To check a scenario without spending: \`record <file.yaml> --dry-run\` (does it load) or \`lint <file.yaml>\` (assertion invariants).`,
+        `To check a scenario without spending: \`lint <file.yaml>\` (does it load, and are the assertions sane) or \`record <file.yaml> --dry-run\` (also the pre-spend refusals).`,
       undefined,
       flags.output === "json",
     );

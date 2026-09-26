@@ -218,6 +218,14 @@ describe("schema/run-result.json", () => {
     // the published (permissive) schema does NOT catch this — that's exactly the gap the strict pass closes
     expect(validatePublished(withExtra)).toBe(true);
   });
+
+  it("every errorSource the type allows validates, including decider_timeout (an unanswered-gate partial whose decider channel timed out)", () => {
+    const partial: RunResult = { ...full, result: "error", partial: true, errorSource: "decider_timeout" };
+    expect(validatePublished(partial), JSON.stringify(validatePublished.errors)).toBe(true);
+    expect(validateStrict(partial)).toBe(true);
+    const unknownSource = { ...full, errorSource: "not_a_source" };
+    expect(validatePublished(unknownSource)).toBe(false);
+  });
 });
 
 // Pins the two hand-written PROSE descriptions of the verdict shape (SPEC.md §11, docs/cli.md's

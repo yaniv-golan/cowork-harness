@@ -119,16 +119,17 @@ const TARGETS = [
     // STRUCTURAL-ONLY label (plus the mirrored `not`). Without it the schema reads as the authority on
     // what runs, and it is not: a `{}` answer rule validates here and is refused by the loader (exit 2),
     // and `lane: remote` with a delivery-shaped assertion validates here and is refused at load too.
-    // Measured: `lint` catches the lane case and NOT the empty rule; `record --dry-run` catches the empty
-    // rule. Neither alone covers both, which is why the text names both commands.
+    // `cowork-harness lint` runs the real loader as well as the authoring checks, so it catches both; the
+    // text still names `record --dry-run`, which additionally applies the pre-spend refusals lint does not
+    // model. (Direct `python3 scenario.py lint` does not run the loader — the CLI is what to point at.)
     description:
       "cowork-harness scenario YAML — prompt + scripted answers + assert:. STRUCTURAL validation only, " +
       "plus the mutually-exclusive delete-assertion rules mirrored as a top-level `not`. The loader and the " +
       "runner enforce cross-field rules this schema cannot express, so a file that validates here can still " +
       "be refused: an `answers:` entry with no matcher is rejected at load, and delivery-shaped assertion " +
-      "keys are rejected on `lane: remote`. Neither tool alone covers those — run `cowork-harness lint " +
-      "<file>` for the authoring checks AND `cowork-harness record <file> --dry-run` for the real loader. " +
-      "See docs/scenario.md.",
+      "keys are rejected on `lane: remote`. Run `cowork-harness lint <file>` — it runs the real loader as " +
+      "well as the authoring checks — and `cowork-harness record <file> --dry-run` for the pre-spend " +
+      "refusals on top. See docs/scenario.md.",
   },
   {
     file: "session.schema.json",

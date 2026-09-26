@@ -54,8 +54,8 @@ own — it resolves to `hostloop` or `container` at run time. Both are covered i
 
 > **Egress-network lifecycle (operational).** On `container`/`hostloop`, each run creates a **per-run** pair
 > of Docker networks (`cowork-int-<id>` / `cowork-out-<id>`) plus an egress-proxy container, and **reaps all
-> three on every exit** — success, exception, agent crash, or unanswered gate — and on **Ctrl-C** (a
-> `SIGINT`/`SIGTERM` handler reaps in-flight runs before exiting). The only path that can orphan them is a
+> three on every exit** — success, exception, agent crash, or unanswered gate — and on **Ctrl-C** (the
+> harness's `SIGINT`/`SIGTERM` handler stops the agent, then reaps in-flight runs before exiting 130/143). The only path that can orphan them is a
 > hard `SIGKILL`/`kill -9`; clean those with `docker network prune` (or `docker network rm cowork-int-*
 > cowork-out-*`). There is **no hard concurrency ceiling**, but each concurrent run consumes one internal +
 > one external network from Docker's address pool, so very high parallelism can hit `all predefined address

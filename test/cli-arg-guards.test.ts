@@ -801,9 +801,9 @@ describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
 // A rejected flag on a PAID command should answer the question the rejection raises: "then how do I check
 // this without spending?" `run` takes no --dry-run (skill/record/rehash/prune do, and critique rejects it
 // WITH its reason), so reaching for it there is consistent with the tool's own surface rather than user
-// error — and the bare rejection left the user with nowhere to go. Two different checks, deliberately both
-// named: `record --dry-run` answers "does it LOAD" (the strict loader), `lint` answers "are the assertions
-// sane" (lenient — a WARN there still may not run).
+// error — and the bare rejection left the user with nowhere to go. Two checks, deliberately both named:
+// `lint` answers "does it LOAD, and are the assertions sane" (it runs the real loader too), `record
+// --dry-run` additionally applies the pre-spend refusals a real record would.
 describe.skipIf(!can)("run: the leftover-positional rejection points at the token-free checks", () => {
   it("names both `record --dry-run` and `lint`", () => {
     const d = mkdtempSync(join(tmpdir(), "g-dryrun-"));

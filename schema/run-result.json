@@ -224,8 +224,8 @@
     },
     "errorSource": {
       "type": "string",
-      "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout"],
-      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
+      "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout"],
+      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), 'timeout' when the harness wall-clock limit killed the run, or 'decider_timeout' when an external decider channel (--decider-cmd helper, --decider-dir rendezvous) did not answer a gate within its backstop (the run is an unanswered-gate partial). Additive diagnostic alongside resultErrorKind; not read by the verdict."
     },
     "resultSubtype": {
       "type": "string",

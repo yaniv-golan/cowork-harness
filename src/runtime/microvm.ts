@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import type { TerminableAgent } from "../termination.js";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
@@ -91,6 +92,11 @@ export function microvmGuestSessionRoot(baseline: PlatformBaseline, sessionId: s
   return sessionVm;
 }
 
+/** The agent's `CLAUDE_CONFIG_DIR` in the guest — also the identity the guest-side kill targets. */
+export function microvmGuestConfigDir(baseline: PlatformBaseline, sessionVm: string): string {
+  return `${sessionVm}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
+}
+
 export function spawnMicroVm(
   _scenario: Scenario,
   baseline: PlatformBaseline,
@@ -102,7 +108,7 @@ export function spawnMicroVm(
   const { instance } = vmInit(baseline);
   const sessionVm = microvmGuestSessionRoot(baseline, sessionId);
   const mntVm = `${sessionVm}/mnt`; // the staged tree — see GUEST_MNT_SEGMENT
-  const configVm = `${sessionVm}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
+  const configVm = microvmGuestConfigDir(baseline, sessionVm);
 
   // Stage into the lima-mounted work dir (host VM_WORK_HOST -> guest /cowork-work) via the shared
   // helper. It honors plan.resume for ALL of .claude + mounts + mcp.json (the .claude guard
@@ -174,7 +180,114 @@ export function spawnMicroVm(
   // script shape is unit-tested.)
   for (const [k, v] of secretPairs) child.stdin.write(`${k}=${v}\n`);
   child.stdin.write(`${MICROVM_SECRET_SENTINEL}\n`);
-  return child;
+  return { child, agent: microvmAgent(child, instance, configVm) };
+}
+
+/**
+ * The guest-side kill for ONE session's agent: signal every guest process whose environment carries this
+ * session's `CLAUDE_CONFIG_DIR`. That variable is set on the agent (`env KEY=… claude`, see
+ * `spawnMicroVm`) and inherited by everything it starts (MCP servers, Bash-tool children), and its value
+ * embeds the session id — so the match is exactly this session's process tree and never another session's
+ * agent or the VM's own processes. The agent's argv is NOT a usable target: it only carries the session
+ * path when plugins are mounted. The killing shell itself is excluded (it runs without that variable, and
+ * it skips its own pid regardless). `|| true`-style: a process that exits mid-scan is not an error.
+ *
+ * Needed because killing the host `limactl shell` client does not reach the guest: the guest process
+ * survives SIGTERM and SIGKILL of the client, still holding its stdin through the ssh session, and keeps
+ * working. Pure and exported so the targeting is testable without a VM.
+ *
+ * Residual: `/proc/<pid>/environ` is readable only for the same user, so an agent run under another user
+ * (e.g. via sudo) would silently match nothing — the agent runs as the `limactl shell` user today.
+ */
+// Verified live (2026-09-26): an interrupted run whose guest agent was running a `sleep` left no guest
+// agent, guest `sleep` or host `limactl` client behind; the unit tests pin targeting and ordering.
+export function microvmGuestKillScript(configVm: string, sig: "TERM" | "KILL", procRoot = "/proc"): string {
+  const want = shQuote(`CLAUDE_CONFIG_DIR=${configVm}`);
+  return (
+    `want=${want}; ` +
+    `for d in ${shQuote(procRoot)}/[0-9]*; do p="\${d##*/}"; [ "$p" = "$$" ] && continue; ` +
+    `if tr '\\0' '\\n' < "$d/environ" 2>/dev/null | grep -Fqx -- "$want"; then kill -${sig} "$p" 2>/dev/null; fi; ` +
+    `done; true`
+  );
+}
+
+/** The host command that runs {@link microvmGuestKillScript} in the instance. `--workdir /` so limactl does
+ *  not try to mirror the host cwd into the guest. */
+export function microvmGuestKillArgv(instance: string, configVm: string, sig: "TERM" | "KILL"): string[] {
+  return ["shell", "--workdir", "/", instance, "sh", "-c", microvmGuestKillScript(configVm, sig)];
+}
+
+/** Host pids whose parent is `pid` (`pgrep -P`), for the `ssh` session `limactl shell` runs under it. */
+export function hostChildPids(pid: number, run: typeof spawnSync = spawnSync): number[] {
+  const r = run("pgrep", ["-P", String(pid)], { encoding: "utf8", timeout: 5000 });
+  return String(r.stdout ?? "")
+    .split(/\s+/)
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/**
+ * The microvm agent as the termination handler (and the normal teardown) sees it. `child` is the host
+ * `limactl shell` client; the real agent is in the guest. Terminating it means:
+ *  - `terminate()`: note the client's host `ssh` child FIRST (killing the client orphans it, after which it
+ *    can no longer be found by parent), then send the guest kill with TERM;
+ *  - `forceKill()`: the guest kill with KILL, then SIGKILL the noted `ssh` children and the client itself.
+ * `exited()` follows the client, which exits once the guest process is gone and the ssh session closes.
+ * `deps` is injectable so the command construction and ordering are testable without a VM.
+ */
+export function microvmAgent(
+  child: ChildProcess,
+  instance: string,
+  configVm: string,
+  deps: { run?: typeof spawnSync; kill?: (pid: number, sig: NodeJS.Signals) => void } = {},
+): TerminableAgent {
+  const run = deps.run ?? spawnSync;
+  const kill =
+    deps.kill ??
+    ((pid: number, sig: NodeJS.Signals) => {
+      try {
+        process.kill(pid, sig);
+      } catch {
+        /* already gone */
+      }
+    });
+  const running = () => child.exitCode === null && child.signalCode === null;
+  const exited = new Promise<void>((res) => {
+    if (!running()) return res();
+    child.once("exit", () => res());
+  });
+  const noted = new Set<number>();
+  const note = () => {
+    if (child.pid && running()) for (const p of hostChildPids(child.pid, run)) noted.add(p);
+  };
+  // Residual: these `limactl`/`pgrep` calls are synchronous and run INSIDE the signal handler. On an
+  // unresponsive VM each guest call can block for its full 5 s timeout (once in terminate, once in
+  // forceKill), and a second Ctrl-C is not processed while one blocks — so "a second signal skips the wait"
+  // does not hold inside those windows. Bounded (spawnSync SIGTERMs limactl at the timeout); a stopped VM
+  // fails at once.
+  const guest = (sig: "TERM" | "KILL") => {
+    try {
+      run(limaPath(), microvmGuestKillArgv(instance, configVm, sig), { stdio: "ignore", timeout: 5000 });
+    } catch {
+      /* best-effort: the client-side kills below still run */
+    }
+  };
+  return {
+    alive: running,
+    exited: () => exited,
+    terminate: () => {
+      note();
+      guest("TERM");
+    },
+    forceKill: () => {
+      note();
+      guest("KILL");
+      // Residual: these pids were noted up to the grace period earlier and are killed by number; a pid
+      // reused in that window is theoretically possible (re-checking the parent before the kill would close it).
+      for (const p of noted) kill(p, "SIGKILL");
+      if (child.pid && running()) kill(child.pid, "SIGKILL");
+    },
+  };
 }
 
 /**

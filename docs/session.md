@@ -20,10 +20,11 @@ The full schema below documents every field.
 > **Machine-readable:** [`schema/session.schema.json`](../schema/session.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate sessions against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/session.schema.json` hint.
 
 > **`lint` does not validate a session file.** `cowork-harness lint` is a *scenario* linter: pointing it
-> at a `sessions/*.yaml` file produces a wall of spurious `unknown-top-key` warnings — one per session
-> field, each asking "typo or hallucination?" — and still exits 0, since every top-level session key is,
-> correctly, not a scenario key. The `$schema` hint above (editor-side YAML-language-server validation)
-> is the session-authoring validation path; `lint` has no session-shaped counterpart.
+> at a `sessions/*.yaml` file — directly, or through a directory that holds one — reports it as an ERROR
+> `scenario-invalid` (the scenario loader rejects it, exit 1), plus a wall of `unknown-top-key` warnings,
+> since every top-level session key is, correctly, not a scenario key. Keep session files out of the
+> linted set. The `$schema` hint above (editor-side YAML-language-server validation) is the
+> session-authoring validation path; `lint` has no session-shaped counterpart.
 
 ```yaml
 # ── model & reasoning (Cowork model picker + toggles) ──────────────────────────

@@ -50,6 +50,15 @@ lint-skill flags (skill bodies + any sibling hooks.json):
                                live-verified) but has no assertion key, so a scenario can't gate on it
   W  `${CLAUDE_PLUGIN_ROOT}` in a VM bash step / host-side hook seeding (host-loop footguns)
 
+Through the `cowork-harness lint` CLI wrapper (not when this script is run directly), lint ALSO reports
+every file the harness's own scenario loader rejects -- the check `run`/`record` apply before anything
+runs:
+  E  `scenario-invalid`   the loader refuses the file (schema, value types, unknown keys, bad regex,
+                          reserved values) -- including a non-scenario YAML in a linted directory
+  E  `baseline-unknown`   `baseline:` names no baseline this installed cowork-harness ships
+Run directly, this script stays offline and never parses with the loader, so prefer the CLI wrapper
+when it is installed.
+
 Designed for agents and CI: non-interactive, --help, --json, meaningful exit codes,
 idempotent. `lint` exits 1 on any ERROR (or any finding with --strict); else 0.
 
@@ -1322,6 +1331,55 @@ def _print_findings(findings, n_files, kind="scenario", clean_suffix=" — no si
     print(f"\n{n_err} error(s), {n_warn} warning(s), {n_info} info across {n_files} file(s).")
 
 
+_EXTRA_FINDINGS_ENV = "COWORK_HARNESS_LINT_EXTRA_FINDINGS"
+
+
+def _wrapper_loader_findings():
+    """Findings from the harness's own scenario loader, handed over by the `cowork-harness lint` wrapper.
+
+    The wrapper runs the loader `run`/`record` use before spawning this script and writes what it rejects
+    (`scenario-invalid`, `baseline-unknown`) to a JSON file named by COWORK_HARNESS_LINT_EXTRA_FINDINGS.
+    Merged here so ONE renderer, ONE --min-severity filter and ONE exit rule apply to both sets.
+
+    Honoured only together with COWORK_HARNESS_PROG, which the wrapper always sets: a direct
+    `python3 scenario.py lint` never reads the variable, even if the shell happens to carry it. A blank
+    value is unset. A file that can't be read or doesn't have the expected shape is an ERROR, never a
+    silent drop -- a dropped loader finding would be a false green."""
+    path = (os.environ.get(_EXTRA_FINDINGS_ENV) or "").strip()
+    if not path or not os.environ.get("COWORK_HARNESS_PROG"):
+        return []
+
+    def bad(why):
+        return [
+            Finding(
+                "ERROR",
+                "linter-extra-findings-invalid",
+                f"could not read the scenario-loader findings handed over by cowork-harness: {why}",
+                "This is a harness bug, not a scenario problem -- please report it. "
+                "`cowork-harness record <file> --dry-run` checks that a scenario loads.",
+                "(scenario.py)",
+            )
+        ]
+
+    try:
+        entries = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return bad(str(e))
+    if not isinstance(entries, list):
+        return bad("expected a JSON array")
+    out = []
+    for i, x in enumerate(entries):
+        if (
+            not isinstance(x, dict)
+            or x.get("severity") not in SEV_ORDER
+            or not all(isinstance(x.get(k), str) for k in ("rule", "message", "fix", "file"))
+            or not (x.get("line") is None or (isinstance(x.get("line"), int) and not isinstance(x.get("line"), bool)))
+        ):
+            return bad(f"entry {i} is not a finding")
+        out.append(Finding(x["severity"], x["rule"], x["message"], x["fix"], x["file"], x.get("line")))
+    return out
+
+
 def cmd_lint(args):
     all_findings = []
     # Expand directory args to their scenario files — mirrors src/run/inputs.ts `resolveInputs`: a SINGLE
@@ -1363,6 +1421,7 @@ def cmd_lint(args):
         )
     for f in args.files:
         all_findings.extend(lint_file(f))
+    all_findings.extend(_wrapper_loader_findings())
     # Filter BEFORE rendering AND before the exit computation — deliberately, so --min-severity narrows
     # what the run actually cares about. Filtering at render only would make `--strict --min-severity ERROR`
     # print "0 findings" and still exit 1 (because --strict keys off the unfiltered set), which is

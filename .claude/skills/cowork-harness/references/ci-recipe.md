@@ -208,7 +208,7 @@ no live filesystem and no network — and it verifies an artifact's *content* on
 carries an `artifacts` manifest (recorded `outputs/` + connected folders; then `file_exists` /
 `user_visible_artifact` / `artifact_json` evaluate on replay). On a manifest-less cassette the
 deliverable is invisible to the gate. Don't let a green replay gate convince you the deliverable is correct.
-Run `cowork-harness lint` (the bundled `scenario.py lint`) in CI to catch a scenario that put a
+Run `cowork-harness lint` (the bundled `scenario.py lint` plus the harness's own loader) in CI to catch a scenario that put a
 filesystem/egress-only check on the replay lane (a silent no-op). Author new scenarios with
 `scenario.py scaffold` so they start from a valid, self-linted skeleton.
 
@@ -307,14 +307,15 @@ cowork-harness verify-cassettes cassettes/ --skip-privacy        # staleness onl
 A typical skill repo runs four stages, fastest/cheapest first:
 
 1. **Unit** — your skill's own tests (pytest/vitest of its scripts). Not the harness's job.
-2. **Boundary / lint** — `cowork-harness lint scenarios/*.yaml` (no-silent-false-green invariants; needs
-   python3 — PyYAML is bundled) + `cowork-harness verify-cassettes cassettes/` (privacy scan + staleness) +
+2. **Boundary / lint** — `cowork-harness lint scenarios/*.yaml` (no-silent-false-green invariants, and
+   every scenario the loader would refuse is an ERROR; needs python3 — PyYAML is bundled) + `cowork-harness verify-cassettes cassettes/` (privacy scan + staleness) +
    `cowork-harness boundary-check` where relevant. Token-free, agent-free. **Don't `|| true` the lint
    step** — a missing python3 (exit 127) or a lint error makes `scenario.py` exit non-zero, and swallowing
    that turns the false-green guard itself into a silent no-op.
 
-   **Add a load gate next to `lint`** — they answer different questions, and `lint` is the more permissive
-   of the two (it *warns* on an unknown key; the runtime *refuses* to load one):
+   **Optionally add a load gate next to `lint`** — `lint` already runs the loader (an unknown key, a wrong
+   value type or an unknown `baseline:` name is an ERROR), and `record --dry-run` adds the pre-spend
+   refusals a real record would apply:
 
    ```bash
    cowork-harness record scenarios/ --dry-run --quiet   # does every scenario LOAD? no tokens, writes nothing
@@ -324,8 +325,8 @@ A typical skill repo runs four stages, fastest/cheapest first:
    failure** — `--quiet` suppresses the readiness preview but never the `✗ broken:` lines, which name the
    offending file *and* the rejected key, one line per file, and the step still exits 1. (Silent is
    literal only when your scenarios name a `fidelity:`; one still in the deprecation window prints one
-   defaulted-fidelity notice per scenario.) A scenario that lints with only
-   warnings can still be unloadable, so a green `lint` is not evidence the suite runs.
+   defaulted-fidelity notice per scenario.) Point `lint` at scenarios only: a session or matrix YAML in
+   the linted set is reported as a file that does not load.
 
    **If the repo pays for `critique`, gate the evidence corpus here first, for free:**
 
