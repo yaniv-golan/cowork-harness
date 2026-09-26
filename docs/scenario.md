@@ -415,9 +415,15 @@ without actually running the agent. For **content correctness**, match the asser
   > version of this bullet said a model told to write `outputs/foo` writes `mnt/<folder>/outputs/foo`. That
   > was wrong about production *and* about both harness tiers.
   >
-  > On the **desktop-local** lane the file tools resolve a relative path against **`outputs/`**, and they do
-  > so **regardless of whether a folder is connected** — a connected folder sits *beside* `outputs`, it does
-  > not become the file-tool base. Three consequences a skill author has to know:
+  > **From Desktop 2.7032.0 none of the relative forms below lands anywhere:** the agent runs at
+  > `/var/empty`, so a relative `Read`/`Write`/`Edit` is **refused** ("File is in a directory that is denied
+  > by your permission settings.") and only a relative `Grep`/`Glob` is re-anchored to outputs. Give the
+  > file tools an absolute path under outputs.
+  >
+  > **Before Desktop 2.7032.0**, on the **desktop-local** lane the file tools resolved a relative path
+  > against **`outputs/`**, **regardless of whether a folder was connected** — a connected folder sat
+  > *beside* `outputs`, it did not become the file-tool base. Three consequences a skill author had to know
+  > on those Desktops:
   >
   > | written as | lands at | visible? |
   > |---|---|---|
@@ -426,9 +432,10 @@ without actually running the agent. For **content correctness**, match the asser
   > | `outputs/foo.md` | `outputs/outputs/foo.md` | **no** — the prefix DOUBLES |
   > | `<folder>/foo.md` | `outputs/<folder>/foo.md` | **no** — a same-named DECOY inside outputs |
   >
-  > The last row is the nastiest: addressing a connected folder by name never reaches it, the write
-  > succeeds, and nothing signals the miss. **No relative path from the file tools can reach a connected
-  > folder** — that needs an absolute path.
+  > The last row was the nastiest: addressing a connected folder by name never reached it, the write
+  > succeeded, and nothing signalled the miss. In both eras **no relative path from the file tools reaches
+  > a connected folder** — that needs an absolute path (from 2.7032.0 the attempt is refused rather than
+  > silently decoyed).
   >
   > **The right guidance is LANE-DEPENDENT — there is no single answer.**
   >
@@ -457,7 +464,8 @@ without actually running the agent. For **content correctness**, match the asser
   > files as "wrote to"/"viewed" regardless of where they landed, so a file appearing there is NOT evidence
   > it is undelivered.
   >
-  > **A bare `Write` is user-visible the moment it lands** on the desktop-local lane, so `present_files`
+  > **A `Write` under outputs is user-visible the moment it lands** on the desktop-local lane (before
+  > Desktop 2.7032.0 a bare `Write` landed there; from it the path must be absolute), so `present_files`
   > on it is a no-op promotion rather than the step that delivers it.
 
   Reserve `file_exists` for a known fixed sandbox path.
@@ -560,7 +568,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `compaction_occurred: true` | a context-compaction boundary occurred during the run (a `compact_boundary` system event was recorded); **only `true` is valid** — omit the key to not require one |
 | `no_mcp_error: true` | no MCP round-trip failed during the run (`RunResult.mcpErrors` is empty) — **live lane only** (excluded on replay); **only `true` is valid** |
-| `hook_blocked: <regex>` | a `PreToolUse` hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay-checkable only when the cassette carries `controlOut` |
+| `hook_blocked: <regex>` | a `PreToolUse` hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay-checkable only when the cassette carries `controlOut`. **Does not see the agent's own refusal**: on `hostloop` against Desktop 2.7032.0+, a relative `Read`/`Write`/`Edit` is denied by the agent's permission rules before any hook runs, so neither this key nor `path_denied` records it — assert it with `tool_result_contains: "denied by your permission settings"` |
 | `no_hook_blocked: true` | no tool was hook-blocked during the run — distinguishes a genuine tool crash from an intentional block; replay-checkable only when the cassette carries `controlOut`; **only `true` is valid** — **Mutually exclusive** with `hook_blocked` (one requires a block to exist, the other requires none — `run`/`skill`/`record` refuse the pair) |
 | `hook_event_fired: <HookEvent>` | a **command hook** for this event (a plugin's `hooks/hooks.json` or manifest hook — `Stop`, `SessionStart`, `PostToolUse`, …) ran: a `hook_response` system frame with that `hook_event` was recorded (`RunResult.contextEvents`). Any outcome counts. The harness passes `--include-hook-events` whenever a staged plugin declares hooks — that is what puts events other than SessionStart/Setup on the stream — so a recording made without it reports "never fired". Content-class, grades on replay. Recorded end-to-end for `Stop` (`examples/probes/stop-hook-probe.scenario.yaml`); the other names match the same frame but have not each been recorded |
 | `hook_event_blocked: <HookEvent>` | that command hook **blocked** at least once — a `hook_response` frame for the event carried `exit_code: 2`. Fails naming the exit codes seen when it fired without blocking (a frame with no `exit_code` is reported as such, never counted); fails "never fired" otherwise; cannot-verify when the run has no context events. Content-class |

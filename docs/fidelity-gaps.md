@@ -1410,9 +1410,10 @@ purpose" — and collapsing them into one value is the mistake this arrangement 
 > 2.7032.0: same cwd rule, same deny rules (on `--disallowedTools`), outputs as a working directory (via
 > `--settings`), the same re-anchoring, and — as a second line in case the deny rules ever fail to load —
 > the hook's own *"needs an absolute path here"* block for a relative `Read`/`Write`/`Edit`/`MultiEdit`.
-> A re-anchored `Grep`/`Glob` keeps its new path in the run's control log (the hook reply's
-> `updatedInput`), surfaced as `rewritten` on the derived `hook_event`, because the agent's transcript
-> keeps only the model's original input. Older baselines keep the outputs-dir cwd they had.
+> A re-anchored `Grep`/`Glob` keeps its new path only in the run's control log (`control-out.jsonl`, the
+> hook reply's `updatedInput`); the agent's transcript keeps only the model's original input. A relative
+> `Read`/`Write`/`Edit` refused by the agent's own deny rules is visible only in its tool result — not in
+> `hook_blocked` or `path_denied`. Older baselines keep the outputs-dir cwd they had.
 >
 > **Not modeled:** the host's scoped allow rules (per-root `Edit`/`Read` allows); the harness's
 > `spawn.allowedTools` pre-approval covers the same calls. The host also write-denies a shared plugin-cache
@@ -1453,10 +1454,11 @@ or an assertion against these tools:
    one is reading something production does not emit. Cowork's own chat-surface prompt asserts the
    opposite ("Write's result shows the file's full path"), so the product's documentation of its own tool
    is wrong here — do not take it as a spec.
-3. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
-   invisible), and **`<folder>/x` builds a same-named decoy inside `outputs`** rather than reaching the
-   connected folder — silently, with a success result. No relative path from the file tools reaches a
-   connected folder. See [scenario.md](./scenario.md), "Where a relative path actually lands".
+3. **Before Desktop 2.7032.0, the literal prefix `outputs/` DOUBLED on the desktop-local lane**
+   (`outputs/x` → `outputs/outputs/x`, invisible), and **`<folder>/x` built a same-named decoy inside
+   `outputs`** rather than reaching the connected folder — silently, with a success result. From 2.7032.0
+   both are refused outright (the agent runs at `/var/empty`). In both eras no relative path from the file
+   tools reaches a connected folder. See [scenario.md](./scenario.md), "Where a relative path actually lands".
 
 The **cloud** lane shares none of this: cwd is `/home/claude`, there is no `/sessions/<id>/mnt` tree (see "The
 remote lane, measured from inside" above for what `/mnt/user-data` holds), and the shell and

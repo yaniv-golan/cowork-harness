@@ -23,8 +23,9 @@ All notable changes to this project are documented here. The format is based on
   directory. The path gate re-anchors a pathless or relative `Grep`/`Glob` to outputs, as Desktop's hook
   does, and blocks a relative `Read`/`Write`/`Edit`/`MultiEdit` with Desktop's "needs an absolute path here"
   message if the agent's own refusal ever fails to fire. The re-anchored path is kept in the run's control log
-  (the hook reply's `updatedInput`) and surfaces as `rewritten` on the derived `hook_event`, since the
-  agent's transcript keeps only the model's original input. Previously the
+  (`control-out.jsonl`, the hook reply's `updatedInput`); the agent's transcript keeps only the model's
+  original input. The agent's own refusal of a relative path shows in its tool result, not in
+  `hook_blocked` or `path_denied` — assert it with `tool_result_contains`. Previously the
   harness ran the agent in outputs, so a relative write that production refuses passed here.
 
 - **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
