@@ -52,6 +52,23 @@ function extractHeadings(text: string): string[] {
   return headings;
 }
 
+/** Every anchor a page offers: its heading slugs plus any explicit `<a id="…"></a>` (outside fences).
+ *  An explicit id is how a page keeps an old slug alive after a heading is reworded — GitHub scrolls to
+ *  it like any heading — so a link to it is not broken. */
+function pageAnchors(text: string): Set<string> {
+  const out = new Set(extractHeadings(text).map(githubSlug));
+  let inFence = false;
+  for (const line of text.split("\n")) {
+    if (/^(```|~~~)/.test(line.trim())) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    for (const m of line.matchAll(/<a\s+id="([^"]+)"\s*>\s*<\/a>/g)) out.add(m[1]);
+  }
+  return out;
+}
+
 function readmeSlugSet(): Set<string> {
   const text = readFileSync(README_PATH, "utf8");
   return new Set(extractHeadings(text).map(githubSlug));
@@ -156,7 +173,7 @@ describe("docs' sibling-doc anchors resolve to real headings in the target doc",
     const slugsFor = (target: string): Set<string> | null => {
       if (!slugCache.has(target)) {
         if (!existsSync(target)) return null;
-        slugCache.set(target, new Set(extractHeadings(readFileSync(target, "utf8")).map(githubSlug)));
+        slugCache.set(target, pageAnchors(readFileSync(target, "utf8")));
       }
       return slugCache.get(target) ?? null;
     };
@@ -194,7 +211,7 @@ function allMarkdownPages(): string[] {
 describe("same-page (#slug) anchors resolve to a heading on that same page", () => {
   const dangling = allMarkdownPages().flatMap((file) => {
     const text = readFileSync(file, "utf8");
-    const own = new Set(extractHeadings(text).map(githubSlug));
+    const own = pageAnchors(text);
     // `](#slug)` only — a link with any path before the `#` is another suite's job.
     return [...text.matchAll(/\]\(#([^)\s]+)\)/g)]
       .map((m) => ({ file: relative(resolve("."), file), slug: m[1], raw: m[0] }))

@@ -372,7 +372,8 @@ python3 "$S" scaffold --name report-check --skill ./skills/report-gen \
 ```
 
 Then lint every scenario — it encodes the no-silent-false-green invariants. Use the CLI wrapper
-`cowork-harness lint` (it runs the same bundled `scenario.py lint`):
+`cowork-harness lint`: it runs the bundled `scenario.py lint` **and** the harness's own scenario loader,
+so a file `run`/`record` would refuse fails lint too (running `scenario.py lint` directly skips the loader):
 
 ```bash
 cowork-harness lint scenarios/*.yaml
@@ -391,11 +392,17 @@ and hallucinated schema (`assertions:` vs `assert:`, unknown keys). Exit code is
 (CI-friendly). `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never
 emits a scenario `lint` would reject.
 
-**`lint` is the LENIENT check — the loader is the strict one.** An unknown top-level key is a ⚠ WARN in
-`lint` (exit 0) but a **hard error** in the runtime (`Unrecognized key: "<k>"`, exit 2) — so a scenario
-that lints with warnings may still not run. To check whether a scenario actually loads, without spending:
-`cowork-harness record <file.yaml> --dry-run` (exit 2 on a schema error; a directory reports each
-`✗ broken:` file and exits 1). **Read the exit code, not just its sign:** `record <file>` — with or without
+**`cowork-harness lint` runs the loader: a file it calls clean is one `run`/`record` will load.** Anything
+the loader refuses — an unknown key, a wrong value type (a scalar `semantic_matches.rubric`), a bad regex,
+a reserved value — is ✗ ERROR `scenario-invalid` (exit 1, with or without `--strict`), and a `baseline:`
+naming no baseline this installed CLI ships is ✗ ERROR `baseline-unknown` (`latest` always resolves). It
+does not check what depends on the machine the run happens on (the session file and its mounts, an
+absolute `baseline:` path, environment variables). A session or matrix YAML in a linted directory is not
+a scenario and is reported as one that does not load — keep those out of the linted set. `python3
+scenario.py lint` run directly stays offline and lenient: there an unknown key is only a ⚠ WARN (exit 0).
+`cowork-harness record <file.yaml> --dry-run` also runs the loader and adds the pre-spend refusals (exit 2
+on a schema error; a directory reports each `✗ broken:` file and exits 1). **Read the exit code, not just
+its sign:** `record <file>` — with or without
 `--dry-run` — answers `2` for "did not load" and `1` for "loaded fine, but this record is refused" (a
 pre-spend policy refusal; `--max-budget-usd` is the one refusal that keeps exit 2). Treating any non-zero
 as "scenario broken" mis-reports every refused-but-valid scenario. Corollary: **the loader** fails LOUD on an unknown key (never silently) —
