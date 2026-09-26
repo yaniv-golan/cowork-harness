@@ -473,7 +473,8 @@ export async function cmdChat(args: string[]) {
         },
       };
       const run = new Run(agent, decider, [renderer, tripwireHook], sessionId);
-      run.setSessionRoot(hl.sessionRoot); // HOST tree — without it cwd (mnt/outputs) stands in for the root
+      run.setSessionRoot(hl.sessionRoot); // HOST tree — without it the agent's cwd would stand in for the root
+      if (hl.agentProcessCwd !== undefined) run.setExpectedAgentCwd(hl.agentProcessCwd); // from Desktop 2.7032.0, outside the tree
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       if (viaApiOn) {
         run.enableWebFetchGate();

@@ -42,6 +42,9 @@ export function baseAgentArgs(
     disallowed?: string[];
     extraTools?: string[];
     extraAllowedTools?: string[];
+    /** Fixed flags a tier adds for itself (host-loop's `--settings` from Desktop 2.7032.0). Emitted before
+     *  the plugin dirs and the variadic tail; absent → argv unchanged. */
+    extraArgs?: string[];
   },
 ): string[] {
   const spawn = baseline.spawn;
@@ -119,6 +122,7 @@ export function baseAgentArgs(
     // Session persistence: pin the agent's native session id (so we can resume it), or resume a prior
     // one. Only emitted when a stable session was requested — default omits both → goldens unchanged.
     ...(plan.agentSessionId ? (plan.resume ? ["--resume", plan.agentSessionId] : ["--session-id", plan.agentSessionId]) : []),
+    ...(opts.extraArgs ?? []),
     ...pluginDirArgs(plan, opts.mntRoot),
     // variadic flags LAST so they don't swallow other options
     ...(tools.length ? ["--tools", ...tools] : []),

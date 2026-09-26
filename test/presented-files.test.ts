@@ -170,7 +170,7 @@ describe("presentedFiles classification is measured from the session root", () =
   };
 
   it("hostloop: a file delivered from the outputs dir is NEITHER promoted nor leaked", async () => {
-    // The agent's cwd IS the outputs dir here — several levels inside mnt/, not the session root.
+    // Before Desktop 2.7032.0 the agent's cwd IS the outputs dir here — several levels inside mnt/, not the session root.
     const outputs = `${SESSION}/mnt/outputs`;
     const file = `${outputs}/report.html`;
     const r = await driveWithRoot([initEv(outputs), presentFilesUse("t1", [file]), presentFilesResult("t1", [file])], SESSION);

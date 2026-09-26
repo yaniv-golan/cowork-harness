@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Run } from "../src/run/run.js";
 import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
@@ -24,9 +25,10 @@ class MockSession implements AgentSession {
   close() {}
 }
 
-const driveWithRoot = (events: AgentEvent[], root?: string) => {
+const driveWithRoot = (events: AgentEvent[], root?: string, expectedAgentCwd?: string) => {
   const run = new Run(new MockSession(events), new ScriptedDecider([]));
   if (root !== undefined) run.setSessionRoot(root);
+  if (expectedAgentCwd !== undefined) (run as unknown as { setExpectedAgentCwd(c: string): void }).setExpectedAgentCwd(expectedAgentCwd);
   return run.drive("go");
 };
 const initEv = (cwd: string): AgentEvent => ({ type: "init", tools: [], mcpServers: [], skills: [], cwd });
@@ -80,6 +82,24 @@ describe("container geometry: a copy-failure leak is visible", () => {
 });
 
 describe("hostloop geometry stays correct", () => {
+  it("from 2.7032.0 the agent runs outside the tree: the expected process cwd is accepted (by realpath), not counted malformed", async () => {
+    // Production: the harness spawns the agent at /var/empty and the agent reports its realpath
+    // (/private/var/empty on macOS). The space check exists to catch a root in the WRONG path space; the
+    // harness knows where it spawned the agent, so it accepts that one cwd, compared by realpath, and
+    // still rejects any other outside cwd. Built on a symlink this test creates, so the realpath step is
+    // exercised the same way on every OS (a literal /var/empty only realpaths to /private/var/empty on macOS).
+    const real = realpathSync(mkdtempSync(join(tmpdir(), "cwh-agentcwd-real-")));
+    const link = join(realpathSync(mkdtempSync(join(tmpdir(), "cwh-agentcwd-link-"))), "empty");
+    symlinkSync(real, link);
+    const OUT = `${HOST_ROOT}/mnt/outputs/report.html`;
+    const events = [initEv(real), presentUse("t1", [OUT]), presentResult("t1", [OUT])];
+    const rec = await driveWithRoot(events, HOST_ROOT, link);
+    expect(rec.evidenceErrors.presentFilesMalformed).toBe(0);
+    expect(rec.presentedFiles).toEqual([{ from: OUT, to: OUT, promoted: false, leaked: false }]);
+    const other = await driveWithRoot([initEv("/elsewhere"), presentUse("t1", [OUT]), presentResult("t1", [OUT])], HOST_ROOT, link);
+    expect(other.evidenceErrors.presentFilesMalformed).toBeGreaterThan(0);
+  });
+
   const OUTPUTS = `${HOST_ROOT}/mnt/outputs`;
   const FILE = `${OUTPUTS}/report.html`;
 

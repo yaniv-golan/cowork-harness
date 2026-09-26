@@ -126,6 +126,10 @@ export type AgentEvent =
       reason?: string;
       tool?: string;
       paths?: { file_path?: string; path?: string }; // BOTH keys the VM path-gate scans (pretooluse-path-hook.ts) — never first-match-only
+      /** The path the hook REPLACED the model's with (`updatedInput`), e.g. a pathless Glob re-anchored to
+       *  outputs. The agent's transcript keeps only the model's original input, so this is the one record
+       *  of where the call actually looked. */
+      rewritten?: { file_path?: string; path?: string };
       toolUseId?: string; // msg.request.tool_use_id — a SIBLING of `input` on the hook_callback request, NOT inside it
       agentId?: string; // input.agent_id — present only when the hook fired inside a sub-agent
     }; // a PreToolUse hook fired
@@ -482,6 +486,7 @@ export function hookEventFrom(
   reason?: string;
   tool?: string;
   paths?: { file_path?: string; path?: string };
+  rewritten?: { file_path?: string; path?: string };
   toolUseId?: string;
   agentId?: string;
 } {
@@ -503,6 +508,10 @@ export function hookEventFrom(
   if (typeof ti.file_path === "string") paths.file_path = ti.file_path;
   if (typeof ti.path === "string") paths.path = ti.path;
   const agentId = typeof input?.agent_id === "string" ? input.agent_id : undefined; // inside the hook input, present only within a sub-agent
+  const upd = (nested.updatedInput ?? undefined) as Record<string, unknown> | undefined;
+  const rewritten: { file_path?: string; path?: string } = {};
+  if (upd && typeof upd.file_path === "string" && upd.file_path !== ti.file_path) rewritten.file_path = upd.file_path;
+  if (upd && typeof upd.path === "string" && upd.path !== ti.path) rewritten.path = upd.path;
   return {
     type: "hook_event",
     callbackId,
@@ -510,6 +519,7 @@ export function hookEventFrom(
     reason,
     tool,
     paths: paths.file_path !== undefined || paths.path !== undefined ? paths : undefined,
+    ...(rewritten.file_path !== undefined || rewritten.path !== undefined ? { rewritten } : {}),
     toolUseId,
     agentId,
   };

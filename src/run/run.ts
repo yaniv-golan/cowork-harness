@@ -26,6 +26,7 @@ import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { posix as posixPath } from "node:path";
+import { realpathSync } from "node:fs";
 
 /** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
  *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). Exported so the replay
@@ -625,6 +626,9 @@ export class Run {
    *  as a proxy silently inverts that judgement wherever the two differ. Optional so the 90-odd
    *  construction sites that don't care (tests, chat) keep today's cwd-derived behaviour exactly. */
   private sessionRoot?: string;
+  /** Where the harness spawned the agent process, when that is deliberately OUTSIDE the session tree
+   *  (hostloop from Desktop 2.7032.0: `/var/empty`). See `setExpectedAgentCwd`. */
+  private expectedAgentCwd?: string;
   // TaskCreate's tool_use carries no id (only subject/description) — the real id only appears in the
   // paired tool_result text ("Task #<N> created successfully: <subject>"). Keyed by toolUseId so the
   // eventual tool_result can look up which pending create it resolves, mirroring toolNameByUseId's pattern.
@@ -1345,7 +1349,7 @@ export class Run {
     //
     // The fallback is a PROXY, and only a correct one where the agent runs at the session root — true in a
     // VM/container (`/sessions/<id>`), false at hostloop, where cwd is the outputs dir several levels
-    // inside `mnt/`. Measured from there, a legitimately delivered file looks like an un-promoted
+    // inside `mnt/` (before Desktop 2.7032.0; from it, `/var/empty`, outside the tree altogether). Measured from there, a legitimately delivered file looks like an un-promoted
     // scratchpad file and gets recorded `leaked: true` — the exact inverse of the truth, since hostloop's
     // handler passes paths through and never promotes at all. Supplying `sessionRoot` is what makes the
     // judgement correct on every tier; the fallback is kept only so callers that never set it (tests,
@@ -1357,14 +1361,18 @@ export class Run {
     // worse failure.
     const root = this.sessionRoot !== undefined ? posixPath.normalize(this.sessionRoot) : cwd;
     // SPACE CHECK, before any classification: the agent's cwd must sit AT or INSIDE the session root. That
-    // holds on every tier that serves present_files — at container cwd IS the root, at hostloop it is
-    // `<root>/mnt/<outputs|folder>` — so a cwd outside the root means the two are in different path spaces
+    // holds on every tier that serves present_files — at container cwd IS the root, at hostloop before
+    // Desktop 2.7032.0 it is `<root>/mnt/outputs` — so a cwd outside the root means the two are in different path spaces
     // (a host root against VM-reported paths, say) and every containment test below is meaningless. Count
     // the batch malformed instead of grading it: nothing would be under the root, so the classification
     // would silently read `leaked: false` for a genuine leak, which is exactly the vacuous pass
     // `no_scratchpad_leak` exists to prevent. Deliberately NOT "no presented path is under the root" —
     // a hostloop delivery out of a connected folder legitimately sits outside the session tree.
-    if (root !== undefined && cwd !== undefined && cwd !== root && !cwd.startsWith(`${root}/`)) {
+    // One legitimate exception: the cwd the harness itself spawned the agent at (hostloop from Desktop
+    // 2.7032.0 runs it at /var/empty, reported as its realpath). Known exactly, compared by realpath, so it
+    // cannot mask a root in the wrong space.
+    const atExpectedCwd = cwd !== undefined && this.expectedAgentCwd !== undefined && sameRealPath(cwd, this.expectedAgentCwd);
+    if (root !== undefined && cwd !== undefined && !atExpectedCwd && cwd !== root && !cwd.startsWith(`${root}/`)) {
       this.rec.evidenceErrors.presentFilesMalformed += froms.length;
       return;
     }
@@ -1634,6 +1642,13 @@ export class Run {
     this.sessionRoot = root;
   }
 
+  /** Tell this run the agent process's cwd when it is intentionally outside the session root, so the
+   *  present_files space check accepts it. Live only: replay never sets a session root, so the check cannot
+   *  fire there. Call before `drive()`. */
+  setExpectedAgentCwd(cwd: string): void {
+    this.expectedAgentCwd = cwd;
+  }
+
   seedApprovedDomains(domains: string[]): void {
     for (const d of domains) {
       const v = validateBareDomain(d); // throws on empty / scheme / path / port / whitespace
@@ -1772,4 +1787,17 @@ function denyLike(req: DecisionRequest): any {
 
 async function* oneShot(s: string): AsyncGenerator<string> {
   yield s;
+}
+
+/** Two paths name the same directory once symlinks are resolved (`/var/empty` vs `/private/var/empty`). */
+function sameRealPath(a: string, b: string): boolean {
+  if (a === b) return true;
+  const canon = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  return canon(a) === canon(b);
 }

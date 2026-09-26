@@ -1949,7 +1949,8 @@ describe("prompt drift guard (H1-H3)", () => {
 // two releases while believing it faithful. All three values are pinned in one place so a future edit
 // cannot move one and leave the others.
 //
-// MEASURED on desktop-local Cowork 2026-08-27:
+// MEASURED on desktop-local Cowork 2026-08-27 (a Desktop before 2.7032.0; from 2.7032.0 the agent
+// process runs at /var/empty and a bare `Write` is refused — see test/hostloop-agent-cwd.test.ts):
 //   agent process / bare `Write` base : mnt/outputs      (Probes A, A2, B)
 //   mcp__workspace__bash cwd          : /sessions/<id>   (Probes A and B — with AND without a folder)
 //   {{cwd}} prompt token at hostloop  : mnt/outputs      (src/prompt.ts)
@@ -2045,21 +2046,32 @@ describe("defaulted fidelity — the deprecation notice", () => {
   });
 });
 
-describe("host-loop cwd split (agent at outputs, shell at the session root)", () => {
+// The split has three values since Desktop 2.7032.0: the agent PROCESS cwd (outputs before 2.7032.0,
+// `/var/empty` from it — see test/hostloop-agent-cwd.test.ts), the shell cwd (the session root in both
+// eras), and the base a relative file-tool path resolves against (outputs in both eras: before, because
+// the agent ran there; from 2.7032.0, because the hook re-anchors a relative Grep/Glob there).
+describe("host-loop cwd split (agent vs shell)", () => {
   const ROOT = "/sessions/abc";
   const OUT = "/run/work/session/mnt/outputs";
 
-  it("the agent process resolves relative file-tool paths at OUTPUTS", () => {
+  it("before Desktop 2.7032.0 the agent process runs at OUTPUTS", () => {
     expect(hostLoopCwds(ROOT, OUT).agentProcessCwd).toBe(OUT);
+  });
+
+  it("from Desktop 2.7032.0 the agent process runs at /var/empty, while relative paths still resolve at OUTPUTS", () => {
+    const c = hostLoopCwds(ROOT, OUT, "/var/empty");
+    expect(c.agentProcessCwd).toBe("/var/empty");
+    expect(c.pathResolverBase).toBe(OUT);
+    expect(c.workspaceBashCwd).toBe(ROOT);
   });
 
   it("mcp__workspace__bash starts at the bare SESSION ROOT — not outputs, not a connected folder", () => {
     expect(hostLoopCwds(ROOT, OUT).workspaceBashCwd).toBe(ROOT);
   });
 
-  it("the two are DIFFERENT — collapsing them is the defect, so assert the split itself", () => {
-    const { agentProcessCwd, workspaceBashCwd } = hostLoopCwds(ROOT, OUT);
-    expect(agentProcessCwd).not.toBe(workspaceBashCwd);
+  it("the two are DIFFERENT in both eras — collapsing them is the defect, so assert the split itself", () => {
+    for (const c of [hostLoopCwds(ROOT, OUT), hostLoopCwds(ROOT, OUT, "/var/empty")])
+      expect(c.agentProcessCwd).not.toBe(c.workspaceBashCwd);
   });
 
   // The pre-2026-08-27 value. Pinned as a NEGATIVE so a revert cannot pass quietly: it was derived from
@@ -2071,9 +2083,10 @@ describe("host-loop cwd split (agent at outputs, shell at the session root)", ()
     expect(hostLoopCwds(ROOT, `${ROOT}/mnt/project`).workspaceBashCwd).toBe(ROOT);
   });
 
-  // The third value. `{{cwd}}` must track the AGENT cwd, not the shell — a swap is the sentinel-failing
-  // drift the sub-agent asset calls out explicitly.
-  it("the {{cwd}} prompt token tracks the AGENT cwd at hostloop, not the shell", () => {
+  // `{{cwd}}` names the outputs dir at hostloop, never the shell's root — a swap is the sentinel-failing
+  // drift the sub-agent asset calls out. From 2.7032.0 it deliberately does NOT follow the process cwd:
+  // Desktop still feeds the prompt's working directory from the outputs dir.
+  it("the {{cwd}} prompt token names the outputs dir at hostloop, not the shell (and not /var/empty)", () => {
     const rendered = renderPrompts(loadBaseline("latest") as never, { model: "claude-opus-4-8" } as never, "abc", undefined, {
       effectiveFidelity: "hostloop",
       hostCwd: OUT,
