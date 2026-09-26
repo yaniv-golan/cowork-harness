@@ -27,17 +27,21 @@ All notable changes to this project are documented here. The format is based on
 - **`cowork-harness lint` can newly fail — including plain `lint` without `--strict`, and the packaged
   Action's `command: lint` lane, whose `ok` output turns `false`.** It now reports every file the scenario
   loader rejects as an ERROR (see Fixed). That red lands on three kinds of input:
-  - a scenario that could never have run: `run`/`record` already refused it;
+  - a scenario that could never have run: `run`/`record` already refused it, as an ERROR `scenario-invalid`;
   - **a session, matrix or answer-policy YAML sitting in a linted directory**. It is not a scenario, and
     `lint` previously let such a file through with warnings and exit 0; move it out of the linted set;
   - **a `baseline:` naming a baseline this installed CLI does not ship**, for example a pinned
     `desktop-<version>` in a repo whose CI installs an older CLI. A token-free replay of a
     non-`cowork`-tier cassette never looks the name up, so that pipeline could be green today and red
-    after this. Use `latest`, or install a CLI that ships the pinned baseline.
+    after this. Use `latest`, or install a CLI that ships the pinned baseline (ERROR `baseline-unknown`).
 
-  No flag and no exit-code meaning changed: `1` still means "an ERROR finding", and the scenario schema is
-  not tightened. This is the same class of change as the `enum-value-invalid` rule that shipped in 3.2.0,
-  so it ships in a minor release. Running `python3 scenario.py lint` directly is unchanged.
+  A failure of the loader pre-pass's own machinery (rather than the scenario) — an unexpected throw while
+  running the loader on a file, or while expanding a directory argument — is reported as its own ERROR
+  `lint-loader-internal`, instead of silently falling back to a lint that skipped the loader. No flag and no
+  exit-code meaning changed: `1` still means "an ERROR finding", and the scenario
+  schema is not tightened. This is the same class of change as the `enum-value-invalid` rule that shipped in
+  3.2.0, so it ships in a minor release. Running `python3 scenario.py lint` directly stays behaviourally
+  unchanged.
 
 ### Added
 
@@ -53,83 +57,6 @@ All notable changes to this project are documented here. The format is based on
   `inferred` per entry.
 - **Verdict signal codes `outputs_delete_unconfirmed` and `outputs_diff_unavailable`** (both **warn**).
 
-### Changed
-
-- **An outputs delete the harness only infers from a command's text no longer fails the run by itself.**
-  Previously any command the delete scanner flagged near `mnt/outputs` failed the verdict (`outputs_delete`)
-  or an authored `no_delete_in_outputs` — including a `python3 -c` body whose variable is named `rm`
-  (`rm = data.get("body","")`) next to an outputs path, where nothing was deleted. Now a flag
-  fails only when something confirms it: a filesystem diff of `outputs/` for the turn proves a path present
-  at turn start is gone; a delete in command or call position whose own operand is an `outputs/` path; or the
-  diff could not verify the turn. "Command or call position" covers `rm`/`rmdir`/`unlink`/`shred -u` as a
-  command (including after a pipe, `&`, `!`, `if`/`while`/`then`/`do`, a `case` label, inside `$(…)`,
-  backticks, `sh -c`/`bash -lc`/`eval` strings, behind `sudo`/`env`/`nice`/`ionice`/`timeout`/`xargs`/
-  `parallel`/`git`/`busybox` and leading `VAR=…` or redirects, and launched from Python through
-  `os.system`/`subprocess`), `find`/`fd` with `-delete` or an `-exec`/`-ok` of `rm`/`unlink`/`shred -u`,
-  `os.remove`/`os.unlink`/`shutil.rmtree`/bare `unlink(…)`/`map(os.remove, …)`/Perl `unlink` with an outputs
-  argument, a `.unlink()`/`.rmdir()` method whose receiver names outputs (`Path(".../outputs/x").unlink()`),
-  and a move out of outputs. A flag resting only on the scanner's inference —
-  an unprovable target, or a `cd` into outputs followed by a relative path — with a clean diff becomes the new
-  `outputs_delete_unconfirmed` **warn**; an authored `no_delete_in_outputs` passes on it, and the warn is
-  still raised so the hit stays visible in the run output (it is also the assertion's evidence in the JSON
-  envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
-  quote-blind, after whole-line comments are dropped and same-command `VAR=value` assignments expanded one
-  level; a trailing ` # comment` is not counted as a delete's operand. **Size caps:** a statement longer than
-  4 KiB, or a command longer than 16 KiB, skips the operand analysis and is judged by the original rule (a
-  delete word, or `mv`, and an outputs path anywhere in it). For any outputs path that appears literally in
-  the command that can only be stricter (a mount name assembled from two variables is the exception), and it bounds the
-  cost — the worst shapes measured, up to 160 KB, classify in under 10 ms — but it means the false positive
-  this change fixes comes back on a huge one-liner: a single-line `python3 -c` body over 4 KiB with a
-  variable named `rm` next to an outputs path still fails. Two
-  consequences to know: **real deletes can land in the warn**, because the diff cannot see a file created and
-  deleted within one turn — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)`; and **a false positive can still fail**: quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line). An outputs path that only shares a statement with the word — a Python
-  variable (`rm = json.load(open(".../outputs/r.json"))`), quoted prose, a `sed`/`grep` pattern, a trailing
-  comment — is not a delete's operand and warns. `allow_outputs_delete` waives `outputs_delete` and
-  `outputs_delete_unconfirmed`, and also silences `outputs_diff_unavailable`. `verify-run` over a
-  `result.json` written before this release reaches the same verdict as before (it carries no diff, which
-  reads as unverified and keeps the old strictness). A run whose only outputs evidence is unconfirmed can
-  now be `record`ed.
-- **The outputs filesystem diff now runs on every live turn**, not only when the scenario asserted one of
-  the baseline keys. It reads its own outputs-only snapshot taken at the start of each turn, resumed turns
-  included, so the full pre-run manifest (and with it authored-file attribution, `no_unexpected_files`,
-  `input_unmodified`) still appears only on runs that arm it. A delete of a file that existed at turn start
-  now fails every scenario, however it was made (a script file, a non-bash tool) — previously only on
-  scenarios that armed the manifest.
-- **`hostloop` runs the agent where Desktop 2.7032.0+ does.** From that Desktop, the host-loop agent process
-  runs at `/var/empty` (or, when that directory is not root-owned and locked down, a per-run `host-cwd`
-  directory), with deny rules for every spelling of it and the outputs dir added back as a working
-  directory. The path gate re-anchors a pathless or relative `Grep`/`Glob` to outputs, as Desktop's hook
-  does, and blocks a relative `Read`/`Write`/`Edit`/`MultiEdit` with Desktop's "needs an absolute path here"
-  message if the agent's own refusal ever fails to fire. The re-anchored path is kept in the run's control log
-  (`control-out.jsonl`, the hook reply's `updatedInput`); the agent's transcript keeps only the model's
-  original input. The agent's own refusal of a relative path shows in its tool result, not in
-  `hook_blocked` or `path_denied` — assert it with `tool_result_contains`. Previously the harness ran the
-  agent in outputs, so a relative write that production refuses passed here.
-  - The model sees one prompt change on these baselines: the Shell access section's outputs line no longer
-    calls outputs the working directory ("(your outputs directory)" instead of "(your outputs directory —
-    cwd)").
-  - A baseline whose `appVersion` is not a version number now warns that it gets the pre-2.7032.0
-    behaviour, instead of taking it silently.
-  - The committed `hostloop-computer-links` cassette is re-recorded against this behaviour (agent at
-    `/var/empty`); its scenario is unchanged. The `subagent-write-probe` live probe is pinned to
-    `desktop-2.2553.1`, and a new `subagent-write-refused-probe` asserts the refusal on `latest`.
-
-- **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
-  folder, so a skill-folder positional inside a plugin is the same run as `critique <plugin> --skill
-  <name>`: same mount, same packaged corpus, same graded skill, announced with a `::notice::`. Its
-  `fingerprint.skillHash` is therefore the whole plugin's (as `--skill`'s always was), so it no longer pairs
-  with critiques recorded from the skill-folder spelling before this release — a pairing-key change, which
-  is why this ships in a minor release. A relative skill-folder spelling reports the plugin relative too.
-  A skill folder with its own plugin manifest is still mounted as its own plugin, now with a notice; and
-  `--skill` on a positional that is itself a skill folder now says to drop `--skill` or pass the plugin
-  root, instead of reporting a missing skill. Critique mounts the skill
-  folder alone, with a notice naming why, only when `--skill` cannot reach it: the folder is not at exactly
-  `skills/<name>`, it is a git submodule or nested repo, or its spelling's case differs from the tracked
-  path.
-- **A paid critique refuses, before any spend, every target `--corpus-only` refuses**: a mount with 0
-  git-tracked files, a `--skill` subdirectory with nothing tracked under it, and a target with no readable,
-  tracked `SKILL.md`. Previously these ran both turns and failed or degraded afterwards.
-
 ### Fixed
 
 - **The outputs-delete scanner no longer takes seconds on a long command.** A `shred` or `find` without its
@@ -140,9 +67,11 @@ All notable changes to this project are documented here. The format is based on
   line): past it the scanner does not expand, and every mount the command names literally counts as
   deleted in — stricter, never looser, for any mount named in the command. The regression guard holds the
   whole scan of each flagged command (scanner, finding text and classifier together) under 150 ms on every
-  shape it probes. No hangs are known; the slowest known shapes take about 0.16–0.25 s per flagged command at
-  ~160 KB — thousands of distinct `$(mktemp)` variables referenced across several segments, or ~50 000 tiny
-  segments. No command in the kept run corpus comes within 1% of the budget; below it, what is flagged is
+  shape it probes (1 s for the two hang-class shapes). No hangs are known; the slowest known shapes take
+  about 0.16–0.25 s per flagged command when scaled up to ~160 KB — thousands of distinct `$(mktemp)`
+  variables referenced across several segments, or ~50 000 tiny segments — but the committed regression
+  probes for these shapes are smaller (roughly 6–30 KB) and run well under the guard. No command in the
+  kept run corpus comes near the budget (about 1% of it, at most); below it, what is flagged is
   unchanged, except that an operand joined through an empty variable (`$B${A}C` with `A=""`) is no longer
   read as the joined variable's value: bash expands the two halves separately, so the harness keeps it
   unprovable — flagged, never cleared as safe.
@@ -151,7 +80,12 @@ All notable changes to this project are documented here. The format is based on
   the manifest; it now compares against the turn's own start, matching the text scan's current-turn scope.
 - **An unreadable post-run walk no longer reports every output as deleted.** The diff now reports that it
   could not verify (`outputs_diff_unavailable`, **warn**, plus a `::warning::`), a text-scan hit on that turn
-  still fails, and an authored `no_delete_in_outputs` fails as evidence-unavailable.
+  still fails, and an authored `no_delete_in_outputs` fails as evidence-unavailable only when the **post-run**
+  walk itself was incomplete; when instead the **turn-start** snapshot is incomplete, or the diff itself is
+  malformed, the key passes with the `outputs_diff_unavailable` warn instead, since the text scan still ran
+  and found nothing — only the pre-existing-file check is missing. The `guards[]` roster's `outputs-delete`
+  entry is `unverified` whenever the filesystem diff could not verify the turn too, not only when `scan`
+  itself is absent.
 - **A filesystem-proven outputs delete survives a missing or corrupt `events.jsonl`.** The diff's result is
   the new top-level `RunResult.fsDiff` rather than living only inside `scan` (which is absent in that case),
   so the delete still fails the run instead of surfacing only as `scan_unavailable`, whose message now says
@@ -169,7 +103,10 @@ All notable changes to this project are documented here. The format is based on
   identical. Nothing that depends on the machine the run happens on is checked: the session file and the
   paths it mounts, an absolute `baseline:` path, environment variables, and the tier-dependent pre-spend
   refusals. If lint cannot hand its loader findings over (an unwritable temp directory), it exits 1 rather
-  than report the file clean.
+  than report the file clean. The handoff runs through `COWORK_HARNESS_LINT_EXTRA_FINDINGS`, an internal
+  channel the bundled script reads only when the CLI wrapper spawned it, never a knob for a direct
+  invocation; a handoff file the script itself cannot read is reported as its own ERROR,
+  `linter-extra-findings-invalid`, never a silent drop.
 - **Interrupting a run (SIGINT/SIGTERM) now stops the agent and records the run** (on `microvm`
   too — see the next entry). On
   `protocol` and `microvm` nothing handled the signal, so the harness died by it: no exit hook ran,
@@ -207,6 +144,12 @@ All notable changes to this project are documented here. The format is based on
   the mount carried an empty `skills/<name>/`, and a skill-folder positional packaged the enclosing plugin's
   agents and shared references although only the folder was mounted. The packager now reads the mount
   root's tracked set, once, for every class.
+- **The privacy scan does not flag the host-loop agent's own working directory.** From Desktop 2.7032.0 the
+  host-loop agent's realpath'd cwd is `/private/var/empty` — a macOS system constant, not anyone's username
+  — so the widened `/private/var/` rule below does not flag it or a path under it; a `..` segment that walks
+  back out of that directory is still flagged as before. The reference `.cowork-redact.json`'s
+  `/private/var/` rule still redacts it, which is safe but means the two layers now disagree on this one
+  path.
 - **A recording made from a temp directory no longer publishes the operator's username unnoticed.** A run
   dir under `/private/tmp`, `/var/folders` or `/tmp` records its host path into tool results and
   `computer://` links, and that path usually carries the username in a slugged segment (a Claude session
@@ -218,7 +161,8 @@ All notable changes to this project are documented here. The format is based on
   `/mnt/` tail so links still resolve on replay. Its local-path rules are now case-insensitive, so every
   path the scanner flags, the policy can fix; its root rules skip a segment inside an http(s) URL, and
   `/Volumes/` must start a path, so `https://api.example.com/users/…` and a Docker `…/volumes/…` path are
-  left alone. The scanner's `path` class flags the same roots and segments, and now also flags a host path
+  left alone — but not a host path passed as a URL query value (`http://localhost:3000/open?f=/Users/…` is
+  still redacted). The scanner's `path` class flags the same roots and segments, and now also flags a host path
   inside a `computer://` or `file://` link (including `file://localhost/…`), after a backtick (a path quoted
   in the model's reply), and after a newline inside a raw event line (a one-path-per-line tool result) —
   all shapes its boundary check had skipped. Bare `/tmp/` is still not flagged: it is the in-VM home and appears
@@ -229,13 +173,103 @@ All notable changes to this project are documented here. The format is based on
   committed cassette, so one that now fails must be re-recorded or reviewed and cleared with
   `--allow-path`. Still covered by neither layer: a run dir under an unlisted root whose username is not in
   a slugged segment (a Linux `/tmp/<name>/…`, `/scratch/…`, a custom `$TMPDIR` — keep the run dir under
-  `$HOME`, or add a policy rule), percent-encoded or JSON-escaped paths (`%2FUsers%2F`, `\/Users\/`), and
-  a bare (non-markdown) `computer://` link, which stops resolving on replay once its prefix is redacted. By
+  `$HOME`, or add a policy rule), percent-encoded or JSON-escaped paths (`%2FUsers%2F`, `\/Users\/`),
+  Windows-style paths (`C:\Users\…`), and a bare (non-markdown) `computer://` link, which stops resolving on
+  replay once its prefix is redacted. The widened, case-insensitive slug match can also produce a false
+  positive — a directory literally named `-home-…` inside the VM, a prose line that begins `-home-…`, or a
+  quoted route literal like `'/users/:id'` — clear a reviewed one with `--allow-path`. By
   design a slugged segment after a space or tab — as `ls -l`, `tree` or `du` print it — is not flagged.
 - **`transcript_no_host_path` now sees a host path inside a `computer://` link, in backticks, and under
   `/private/tmp/`.** The live host-path check accepted a `file://` prefix but not `computer://` or a
   backtick, so a delivered-file link to a host path, or one quoted as "Saved to `/Users/…`" — the usual ways
   one reaches the model's reply — was not detected at the sealed tiers.
+
+### Changed
+
+- **An outputs delete the harness only infers from a command's text no longer fails the run by itself.**
+  Previously any command the delete scanner flagged near `mnt/outputs` failed the verdict (`outputs_delete`)
+  or an authored `no_delete_in_outputs` — including a `python3 -c` body whose variable is named `rm`
+  (`rm = data.get("body","")`) next to an outputs path, where nothing was deleted. Now a flag
+  fails only when something confirms it: a filesystem diff of `outputs/` for the turn proves a path present
+  at turn start is gone; a delete in command or call position whose own operand is an `outputs/` path; or the
+  diff could not verify the turn. "Command or call position" covers `rm`/`rmdir`/`unlink`/`shred -u` as a
+  command (including after a pipe, `&`, `!`, `if`/`while`/`then`/`do`, a `case` label, inside `$(…)`,
+  backticks, `sh -c`/`bash -lc`/`eval` strings, behind `sudo`/`env`/`nice`/`ionice`/`timeout`/`xargs`/
+  `parallel`/`git`/`busybox` and leading `VAR=…` or redirects, and launched from Python through
+  `os.system`/`subprocess`), `find`/`fd` with `-delete` or an `-exec`/`-ok` of `rm`/`unlink`/`shred -u`,
+  `os.remove`/`os.unlink`/`shutil.rmtree`/bare `unlink(…)`/`map(os.remove, …)`/Perl `unlink` with an outputs
+  argument, a `.unlink()`/`.rmdir()` method whose receiver names outputs (`Path(".../outputs/x").unlink()`),
+  and a move out of outputs. A flag resting only on the scanner's inference —
+  an unprovable target, or a `cd` into outputs followed by a relative path — with a clean diff becomes the new
+  `outputs_delete_unconfirmed` **warn**; an authored `no_delete_in_outputs` passes on it, and the warn is
+  still raised so the hit stays visible in the run output (it is also the assertion's evidence in the JSON
+  envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
+  quote-blind, after whole-line comments are dropped and same-command `VAR=value` assignments expanded one
+  level; a trailing ` # comment` is not counted as a delete's operand. **Size caps:** a statement longer than
+  4 KiB, or a command longer than 16 KiB, skips the operand analysis and is judged by the original rule (a
+  delete word, or `mv`, and an outputs path anywhere in it). This fallback can only be stricter for any
+  outputs path that appears literally in the command (a mount name assembled from two variables is the
+  exception), and it bounds the cost — the worst shapes measured, up to 160 KB, classify in under 10 ms —
+  but it means the false positive this change fixes comes back on a huge one-liner: a single-line
+  `python3 -c` body over 4 KiB with a variable named `rm` next to an outputs path still fails.
+
+  Two consequences to know: **real deletes can land in the warn**, because the diff cannot see a file
+  created and deleted within one turn — a loop body whose operand is the loop variable (`for f in …; do rm
+  "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held
+  in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`),
+  wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and
+  calls outside the modelled set such as Node's `fs.promises.rm(…)`; and **a false positive can still
+  fail**: quoted text in which a delete command with an outputs operand follows a shell separator, subshell
+  or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm
+  …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with
+  an `rm …/outputs/x` line). An outputs path that only shares a statement with the word — a Python
+  variable (`rm = json.load(open(".../outputs/r.json"))`), quoted prose, a `sed`/`grep` pattern, a trailing
+  comment — is not a delete's operand and warns. `allow_outputs_delete` waives `outputs_delete` and
+  `outputs_delete_unconfirmed`, and also silences `outputs_diff_unavailable`. `verify-run` over a
+  `result.json` written before this release reaches the same verdict as before (it carries no diff, which
+  reads as unverified and keeps the old strictness). A run whose only outputs evidence is unconfirmed can
+  now be `record`ed.
+- **The outputs filesystem diff now runs on every live turn**, not only when the scenario asserted one of
+  the baseline keys. It reads its own outputs-only snapshot taken at the start of each turn, resumed turns
+  included, so the full pre-run manifest (and with it authored-file attribution, `no_unexpected_files`,
+  `input_unmodified`) still appears only on runs that arm it. A delete of a file that existed at turn start
+  now fails every scenario, however it was made (a script file, a non-bash tool) — previously only on
+  scenarios that armed the manifest.
+- **`hostloop` runs the agent where Desktop 2.7032.0+ does.** From that Desktop, the host-loop agent process
+  runs at `/var/empty` (or, when that directory is not root-owned and locked down, a per-run `host-cwd`
+  directory), with deny rules for every spelling of it and the outputs dir added back as a working
+  directory. The path gate re-anchors a pathless or relative `Grep`/`Glob` to outputs, as Desktop's hook
+  does, and blocks a relative `Read`/`Write`/`Edit`/`MultiEdit` with Desktop's "needs an absolute path here"
+  message if the agent's own refusal ever fails to fire. The re-anchored path is kept in the run's control log
+  (`control-out.jsonl`, the hook reply's `updatedInput`); the agent's transcript keeps only the model's
+  original input. The agent's own refusal of a relative path shows in its tool result, not in
+  `hook_blocked` or `path_denied` — assert it with `tool_result_contains`. Previously the harness ran the
+  agent in outputs, so a relative write that production refuses passed here.
+  - The model sees one prompt change on these baselines: the Shell access section's outputs line no longer
+    calls outputs the working directory ("(your outputs directory)" instead of "(your outputs directory —
+    cwd)").
+  - A baseline whose `appVersion` is set but not a version number now warns that it gets the pre-2.7032.0
+    behaviour, instead of taking it silently; a baseline with no `appVersion` at all still takes that
+    behaviour silently, as before.
+  - The committed `hostloop-computer-links` cassette is re-recorded against this behaviour (agent at
+    `/var/empty`); its scenario is unchanged. The `subagent-write-probe` live probe is pinned to
+    `desktop-2.2553.1`, and a new `subagent-write-refused-probe` asserts the refusal on `latest`.
+- **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
+  folder, so a skill-folder positional inside a plugin is the same run as `critique <plugin> --skill
+  <name>`: same mount, same packaged corpus, same graded skill, announced with a `::notice::`. Its
+  `fingerprint.skillHash` is therefore the whole plugin's (as `--skill`'s always was), so it no longer pairs
+  with critiques recorded from the skill-folder spelling before this release — a pairing-key change, which
+  is why this ships in a minor release. A relative skill-folder spelling reports the plugin relative too.
+  A skill folder with its own plugin manifest is still mounted as its own plugin, now with a notice; and
+  `--skill` on a positional that is itself a skill folder now says to drop `--skill` or pass the plugin
+  root, instead of reporting a missing skill. Critique mounts the skill
+  folder alone, with a notice naming why, only when `--skill` cannot reach it: the folder is not at exactly
+  `skills/<name>`, it is a git submodule or nested repo, or its spelling's case differs from the tracked
+  path.
+- **A paid critique refuses, before any spend, every target `--corpus-only` refuses**: a mount with 0
+  git-tracked files, a `--skill` subdirectory with nothing tracked under it, a target with no readable,
+  tracked `SKILL.md`, and a target whose git-tracked set could not be read at all. Previously these ran both
+  turns and failed or degraded afterwards.
 
 ## [3.9.0] — 2026-09-25
 
