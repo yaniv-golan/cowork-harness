@@ -1010,7 +1010,9 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   The reference policy covers `/Users/`, `/home/`, `/root/`, the macOS temp and volume roots
   (`/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`, `/Volumes/`), in any letter case,
   and a **slugged home segment** (`-Users-<user>-…`, `-home-<user>-…`, `-root-…`) under any root, at the
-  start of a string or line, or after a `/` or a quote. That last rule is what catches a run dir inside a
+  start of a string or line, or after a `/` or a quote. Root rules skip a path segment inside an http(s) URL
+  (`https://api.example.com/users/…`), and `/Volumes/` must start a path, so a Docker or kubelet
+  `…/volumes/…` segment is left alone. That last rule is what catches a run dir inside a
   Claude session scratchpad — `/tmp/claude-<uid>/-Users-<user>-<project>/…` — where the username is not in a
   `/Users/<user>/` segment at all. A policy copied by an earlier `init-redact` does not have these rules:
   re-run `init-redact --force` (after saving any tailoring) or add them by hand. That fixes **future**
@@ -1022,6 +1024,9 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
     which the policy and the scanner both cover;
   - encoded spellings: percent-encoded (`%2FUsers%2F…`) or JSON-escaped (`\/Users\/…`) paths, and Windows
     paths (`C:\Users\…`);
+  - a slugged segment after a space or tab — the way `ls -l`, `tree` and `du` print a directory name — is not
+    flagged or redacted, by design: accepting a space would flag ordinary prose. (`ls -l` also prints the
+    owner column, which no rule covers.) If a recording can carry such a listing, add a policy rule for it;
   - a **bare** `computer://` link (not inside markdown `[…](…)` or backticks) stops resolving on replay once
     its host prefix is redacted, because the redaction token's own `]` ends the bare link. `record` refuses to
     write if that flips a `computer_links_resolve` verdict; write links in markdown form to avoid it.
@@ -1046,11 +1051,13 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   this machine: …") is never legitimate catalog boilerplate either; none of the three share the ambiguity that
   gets `currency`/`domain` excluded there. The `path` class matches the recording machine's own roots
   (`/Users/`, `/home/`, `/root/`, `/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`,
-  `/Volumes/`, any case) — including inside a `computer://` or `file://` URI, `file://localhost/…` too —
+  `/Volumes/`, any case) after whitespace, a quote, a backtick, `(`, `[`, `=`, `:`, `>` or a newline (raw or
+  JSON-escaped) — including inside a `computer://` or `file://` URI, `file://localhost/…` too —
   plus a slugged home segment (`-Users-<user>-…`, `-home-<user>-…`, `-root-…`) under any root or on its own
   line or JSON key, so a temp-dir run path carrying a username is flagged. Bare `/tmp/` alone is not a root:
   it is the in-VM home and appears in clean recordings. A slug-shaped segment in an http(s) URL is not
-  flagged; a directory literally named `-home-…` inside the VM is (clear it with `--allow-path`). `--allow <regex>` suppresses synthetic / public reference names
+  flagged; a directory literally named `-home-…` inside the VM, a prose line that begins `-home-…`, and a
+  quoted route literal like `'/users/:id'` are (clear a reviewed one with `--allow-path`). `--allow <regex>` suppresses synthetic / public reference names
   (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
   path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
   clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /

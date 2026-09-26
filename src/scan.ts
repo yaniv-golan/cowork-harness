@@ -68,12 +68,20 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // sits under. Its segment start is string-start, `/`, a quote, or a newline (raw or the two-char JSON
     // escape, since this scans raw event lines): `ls ~/.claude/projects` prints one slug per line and
     // `~/.claude.json` keys projects by slug, with no path in front. NOT a space — ` -Users-only` in prose
-    // stays clean. A slug-shaped segment inside an http(s) URL is not a host path and is skipped. Known
+    // stays clean — and so, by design, does a slug after a space or tab in `ls -l`, `tree` or `du` output. A slug-shaped segment inside an http(s) URL is not a host path and is skipped (the URL ends at
+    // whitespace, a quote, `,` or `;`, so a path comma-joined after a URL is still seen). That look-back is
+    // capped at 256 chars to keep the scan linear on a long unbroken run; past the cap a URL segment is
+    // flagged, which fails safe. Known
     // false positive: a directory literally named `-home-…` inside the VM (clear it with `--allow-path`).
     // The segment stops at a backslash too, so a JSON-escaped `\n` ends it and the next line's slug is
     // its own finding. Under a listed root the first alternative already consumes the whole
     // path, slug included, so the slug arm only fires on an unlisted root such as bare `/tmp/`. Its sample
     // is just the segment, so a whole-token `--allow-path` can still clear it.
+    //
+    // The root boundary is whitespace, a quote, a backtick, `(`, `[`, `=`, `:` or `>` — a model reply
+    // quotes a path in backticks ("Saved to `/Users/…`") — or a JSON-escaped `\n`/`\t`: this scans RAW
+    // event lines, where a one-path-per-line tool result puts the two characters `\n` before each root.
+    // For the same reason a path stops at a backslash, so each listed path is its own finding.
     //
     // The boundary also accepts a `://` prefix: in `computer:///Users/alice/…` or `file:///home/…` the
     // char before the root is the URI's own third slash, which the plain lookbehind rejects — so a host
@@ -85,7 +93,7 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // The run-level `hostPathLeaked` detector (src/run/execute.ts) shares the zero-false-positive arms
     // (`/private/tmp/`, a `computer://`/`file://` prefix) but NOT the slug arm or `/System/Volumes/`: it
     // is a live verdict signal, and a slug-shaped name is a weaker signal than a root prefix.
-    re: /(?:(?<![^\s"'(=:])|(?<=:\/\/|file:\/\/[^\s\/"']*))(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/System\/Volumes\/|\/Volumes\/)[^\s"')]+|(?<!https?:\/\/[^\s"']*)(?<=^|\/|"|'|\n|\\n)-(?:Users|home|root)-[^/\s"'\\)]+/gi,
+    re: /(?:(?<![^\s"'(=:`\[>])|(?<=:\/\/|file:\/\/[^\s\/"']*|\\[nt]))(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/System\/Volumes\/|\/Volumes\/)[^\s"'\\)]+|(?<!https?:\/\/[^\s"',;]{0,256})(?<=^|\/|"|'|\n|\\n)-(?:Users|home|root)-[^/\s"'\\)]+/gi,
     cls: "path",
   },
   {

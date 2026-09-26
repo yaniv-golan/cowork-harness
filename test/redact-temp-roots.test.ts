@@ -241,3 +241,98 @@ describe("hostPathLeaked (live transcript_no_host_path signal)", () => {
     expect(hostPathLeaked("socket /tmp/cc-socks/1.sock and HOME=/tmp")).toBe(false);
   });
 });
+
+/**
+ * The two commonest ways a host path appears in a transcript: the model's reply quotes it in backticks
+ * ("Saved to `/Users/…`"), and a tool result lists one path per line. In a RAW event line — what
+ * `scanCassette` reads — that newline is the two characters `\n`, so the char before the root is `n`.
+ */
+describe("scanner root boundary — backtick and raw-line newline", () => {
+  const raw = (content: string) => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content }] } });
+
+  it("flags a backtick-quoted host path, plain and raw", () => {
+    const reply = "wrote `/Users/alice/proj/f.md` ok";
+    expect(pathFindings(reply).some((f) => f.sample.includes("alice"))).toBe(true);
+    expect(pathFindings(JSON.stringify({ type: "result", result: reply })).some((f) => f.sample.includes("alice"))).toBe(true);
+  });
+
+  it("flags every path of a one-per-line listing in a raw event line", () => {
+    const f = pathFindings(raw("Found:\n/Users/alice/x\n/Users/alice/y"));
+    expect(f.filter((x) => x.sample.includes("alice")).length).toBe(2);
+    expect(pathFindings(raw("HOME=/tmp\n/var/folders/ab/xyz/T/cowork-run-alice/f")).some((x) => x.sample.includes("alice"))).toBe(true);
+  });
+
+  it("still leaves backtick-quoted in-VM paths alone", () => {
+    for (const s of ["HOME=/tmp `/tmp/x`", "see `/sessions/local_x/mnt/outputs/f.md`"]) {
+      expect(pathFindings(s)).toEqual([]);
+      expect(pathFindings(raw(s))).toEqual([]);
+    }
+  });
+});
+
+describe("reference policy — no rewrite of URL paths or non-host `volumes` segments", () => {
+  for (const s of [
+    "GET https://api.github.com/users/octocat/repos",
+    "see https://example.com/home/index.html and https://cdn.test/root/app.js",
+    "/var/lib/docker/volumes/abc/_data",
+    "/var/lib/kubelet/pods/x/volumes/kubernetes.io~secret/y",
+  ])
+    it(`leaves ${s.split(" ").find((w) => w.includes("/"))} alone`, () => {
+      expect(redactText(s, POLICY)).toBe(s);
+      expect(pathFindings(s)).toEqual([]);
+    });
+
+  it("a quoted `/users/…` route IS flagged by the case-insensitive scanner, so the policy rewrites it too", () => {
+    // Documented consequence of keeping the two layers in parity: whatever the scanner flags, the policy
+    // can fix. Clear a reviewed route literal with --allow-path instead.
+    const s = "app.get('/users/:id', h)";
+    expect(pathFindings(s).length).toBe(1);
+    expect(pathFindings(redactText(s, POLICY))).toEqual([]);
+  });
+
+  it("still redacts a host path that merely follows a URL elsewhere in the text", () => {
+    const red = redactText("see https://x.test/a and /Users/alice/b", POLICY);
+    expect(red).toContain("https://x.test/a");
+    expect(red).not.toContain("alice");
+  });
+
+  it("still redacts a /Volumes/ link and keeps it resolvable", () => {
+    const red = redactText("[v](computer:///Volumes/Ext/alice/mnt/outputs/f.md)", POLICY);
+    expect(red).not.toContain("alice");
+    expect(normalizeHostShapedForReplay(red.slice(red.indexOf("computer://") + 11, -1), undefined)).toBe("outputs/f.md");
+  });
+
+  it("redacts /System/Volumes/Data/Users/… to ONE token, with no stray `]`", () => {
+    const red = redactText("[v](computer:///System/Volumes/Data/Users/alice/p/mnt/outputs/f.md)", POLICY);
+    expect(red.match(/\[REDACTED:/g)?.length).toBe(1);
+    expect(red).not.toContain("]]");
+    expect(red).toContain("/mnt/outputs/f.md)");
+  });
+});
+
+describe("edge shapes", () => {
+  it("a temp path comma-joined after a URL is still caught by both layers", () => {
+    const s = "got https://x.test/a,/tmp/claude-501/-Users-alice-x/f";
+    expect(pathFindings(s).some((f) => f.sample.includes("alice"))).toBe(true);
+    expect(redactText(s, POLICY)).not.toContain("alice");
+  });
+
+  it("documented false positive: a line starting `-home-…` in prose is flagged; --allow-path clears it", () => {
+    const s = "notes\n-home-grown fix";
+    expect(pathFindings(s).map((f) => f.sample)).toEqual(["-home-grown"]);
+    expect(scanText(s, "t", [{ cls: "path", re: /-home-grown/ }]).filter((f) => f.cls === "path")).toEqual([]);
+  });
+
+  it("by design, a slug after a space or tab (ls -l, tree, du output) is NOT flagged", () => {
+    expect(pathFindings("drwxr-xr-x  3 u  staff  96 Sep 26 10:00 -Users-alice-code-x")).toEqual([]);
+    expect(pathFindings("4.0K\t-Users-alice-code-x")).toEqual([]);
+  });
+});
+
+describe("hostPathLeaked — backtick-quoted host path", () => {
+  it("catches `Saved to `/Users/…``, ignores backtick-quoted in-VM paths", () => {
+    expect(hostPathLeaked("Saved to `/Users/alice/f`")).toBe(true);
+    expect(hostPathLeaked("HOME=/tmp `/tmp/x`")).toBe(false);
+    expect(hostPathLeaked("see `/sessions/local_x/mnt/outputs/f.md`")).toBe(false);
+  });
+});

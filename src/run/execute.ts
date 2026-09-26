@@ -2450,9 +2450,10 @@ export function hostPathLeaked(text: string): boolean {
   // the Linux VM) and `/Volumes/…` (mounted disks). Bare `/tmp` is deliberately NOT here — it is the
   // in-VM HOME, so it legitimately appears in agent-visible text and would false-positive.
   // `computer://` is accepted beside `file://`: a delivered-file link to a host path
-  // (`computer:///Users/…`) is exactly how a host path reaches the model's own reply.
+  // (`computer:///Users/…`) is exactly how a host path reaches the model's own reply, and so is a
+  // backtick-quoted one ("Saved to `/Users/…`").
   const re =
-    /(^|[\s"'(=:]|(?:file|computer):\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/Volumes\/)/;
+    /(^|[\s"'(=:`]|(?:file|computer):\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/Volumes\/)/;
   if (re.test(text)) return true;
   // also catch URL-encoded (%2FUsers%2F) and backslash (file:\\host\Users) forms by testing a
   // decoded + backslash-normalized copy. Decode each `%`-escape RUN independently rather than the
