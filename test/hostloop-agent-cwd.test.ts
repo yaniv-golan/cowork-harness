@@ -1,8 +1,8 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { cmpVersionStrings, loadBaseline } from "../src/baseline.js";
+import { loadBaseline } from "../src/baseline.js";
 import * as baselineMod from "../src/baseline.js";
 import * as processCwdMod from "../src/hostloop/process-cwd.js";
 import { hostLoopCwds, hostLoopProcessContract } from "../src/runtime/hostloop.js";
@@ -35,15 +35,15 @@ describe("the version gate", () => {
     expect(MIN).toBe("2.7032.0");
   });
 
-  it("every committed baseline takes the branch its appVersion implies", () => {
-    const names = readdirSync("baselines")
-      .filter((f) => /^desktop-\d+\.\d+\.\d+\.json$/.test(f))
-      .map((f) => f.replace(/\.json$/, ""));
-    expect(names.length).toBeGreaterThan(5);
-    for (const n of names) {
-      const b = loadBaseline(n);
-      expect(pc.hostLoopUsesSystemEmptyCwd(b), n).toBe(cmpVersionStrings(b.appVersion, "2.7032.0") >= 0);
-    }
+  it("real baselines on each side of the boundary, stated literally (not via the comparison under test)", () => {
+    const expected: Record<string, boolean> = {
+      "desktop-1.46388.4": false,
+      "desktop-2.2553.1": false,
+      "desktop-2.7032.0": true,
+      "desktop-2.9939.2": true,
+    };
+    for (const [n, want] of Object.entries(expected)) expect(pc.hostLoopUsesSystemEmptyCwd(loadBaseline(n)), n).toBe(want);
+    expect(pc.hostLoopUsesSystemEmptyCwd({ appVersion: "2.7031.99" } as never)).toBe(false);
     expect(pc.hostLoopUsesSystemEmptyCwd({ appVersion: undefined } as never)).toBe(false);
   });
 });

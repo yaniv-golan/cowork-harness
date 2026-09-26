@@ -135,12 +135,17 @@ function relativePathDecision(
   const key = TOOL_PATH_KEY[toolName];
   if (key === undefined) return undefined;
   const given = typeof input[key] === "string" ? (input[key] as string) : undefined;
-  if (toolName === "Glob" && given === undefined && typeof input.pattern === "string" && isAbsolute(expandTilde(input.pattern)))
-    return undefined;
+  // Desktop's guard keys on the Glob PATTERN alone: an absolute pattern is never re-anchored, whatever
+  // its `path`.
+  if (toolName === "Glob" && typeof input.pattern === "string" && isAbsolute(expandTilde(input.pattern))) return undefined;
   const raw = given ?? (toolName === "Grep" || toolName === "Glob" ? "." : undefined);
   if (raw === undefined) return undefined;
   const expanded = expandTilde(raw.trim());
   if (!isAbsolute(expanded)) return { rel: expanded, key, raw };
+  // An absolute path under a process-cwd spelling is treated as relative to it. For Grep/Glob that is
+  // Desktop's re-anchor. For Write/Edit/MultiEdit Desktop instead skips the re-anchor and lets containment
+  // deny it with the generic wording; the harness blocks with "needs an absolute path here". Unobservable
+  // live — the agent's own deny rule refuses such a write before any hook runs — so kept for one message.
   for (const sp of cfg.processCwdSpellings) {
     if (expanded === sp) return { rel: ".", key, raw };
     if (expanded.startsWith(`${sp}/`)) return { rel: relative(sp, expanded), key, raw };

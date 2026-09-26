@@ -133,6 +133,13 @@ export function hostLoopProcessContract(
   permission: ReturnType<typeof hostLoopPermissionArgs> | undefined;
   cwds: ReturnType<typeof hostLoopCwds>;
 } {
+  // A hand-authored baseline with a typo'd appVersion would otherwise take the older contract (agent at
+  // outputs, no deny rules) silently — the permissive direction. Say so rather than fail closed: the
+  // version is the only evidence of which contract the baseline's Desktop had, so neither guess is safe.
+  if (typeof baseline.appVersion === "string" && !/^\d+(\.\d+)*$/.test(baseline.appVersion))
+    warn(
+      `::warning:: [hostloop] baseline appVersion "${baseline.appVersion}" is not a version number — using the host-loop contract of Desktops before 2.7032.0 (agent at the outputs dir, no deny rules for relative paths)\n`,
+    );
   const processCwd = hostLoopUsesSystemEmptyCwd(baseline)
     ? resolveHostProcessCwd({ fallbackDir: join(resolve(outDir), "work", "host-cwd"), stat: deps.stat })
     : undefined;
@@ -609,6 +616,7 @@ function hostLoopShellSection(
       skillsConfigDir: skillsPresent ? plan.configDir : undefined,
       hostOutputsDir,
       hostUploadsDir,
+      processCwdOffOutputs: hostLoopUsesSystemEmptyCwd(baseline),
     });
   }
 

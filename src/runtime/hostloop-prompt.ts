@@ -25,6 +25,9 @@ interface HostLoopFolder {
 }
 
 export interface HostLoopShellInputs {
+  /** True from Desktop 2.7032.0, where the agent process runs at `/var/empty` rather than the outputs dir:
+   *  the outputs bullet then must not call outputs the cwd — a relative path is refused there. */
+  processCwdOffOutputs?: boolean;
   /** Session root, e.g. "/sessions/<id>". */
   sessionRoot: string;
   /** Mount root, e.g. "/sessions/<id>/mnt". */
@@ -71,7 +74,7 @@ export function generateHostLoopShellSection(inp: HostLoopShellInputs): string {
 
   // Outputs bullet (asar `CA`): the file-tool side is production's `q = Ct ?? me` — the HOST outputs
   // dir, never the VM sessionRoot. Outputs is NOT in plan.mounts; synthesize it.
-  const outputsBullet = `- ${inp.hostOutputsDir} → ${mntRoot}/outputs/  (your outputs directory — cwd)`;
+  const outputsBullet = `- ${inp.hostOutputsDir} → ${mntRoot}/outputs/  (your outputs directory${inp.processCwdOffOutputs ? "" : " — cwd"})`;
 
   // Per-folder bullets (asar `te`): `- <hostPath> → <mntRoot>/<name>/`. We render the folder's REAL
   // resolved mount path. For Desktop >= 1.14271.0 that's the bare collision-resolved basename (matching

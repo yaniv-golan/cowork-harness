@@ -120,6 +120,10 @@ export function hostLoopPermissionArgs(opts: {
   realpath?: (p: string) => string;
 }): { disallowed: string[]; extraArgs: string[]; cwdSpellings: string[] } {
   const { cwdSpellings: spellings, rules } = cwdDenyRules(opts.processCwd, opts);
+  // Known limit: a fallback dir whose path contains `(`/`)` gets `[?]` here, which matches a literal `?`,
+  // so that rule no longer covers it. Desktop keeps an unmangled `--settings` copy as well; the harness
+  // relies on the path gate's own relative-path block as the second line. Reachable only when /var/empty
+  // fails the check AND the run dir contains parentheses.
   const escaped = rules.map((r) => {
     const open = r.indexOf("(");
     return `${r.slice(0, open + 1)}${r.slice(open + 1, -1).replace(/[()]/g, "?")})`;

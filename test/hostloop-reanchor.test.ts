@@ -3,7 +3,6 @@ import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkHostLoopPathGate, type HostLoopPathGateConfig } from "../src/hostloop/pretooluse-path-hook.js";
-import { hookEventFrom } from "../src/agent/session.js";
 
 // From Desktop 2.7032.0 the agent runs at /var/empty, so a relative path means nothing useful. Desktop's
 // PreToolUse hook then: re-anchors a pathless or relative Grep/Glob to the outputs dir (returning
@@ -82,15 +81,4 @@ describe("hostloop path gate — cwd off the outputs dir (baselines from 2.7032.
   });
 });
 
-describe("hook_event records a re-anchor", () => {
-  it("an updatedInput reply is recorded as allowed, with the rewritten path", () => {
-    const ev = hookEventFrom(
-      "cb",
-      { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { pattern: "*.md", path: "/S/mnt/outputs" } } },
-      { tool_name: "Glob", tool_input: { pattern: "*.md" } },
-      "t1",
-    ) as Record<string, unknown>;
-    expect(ev.decision).toBe("allow");
-    expect(ev.rewritten).toEqual({ path: "/S/mnt/outputs" });
-  });
-});
+// hookEventFrom over a re-anchor is tested on the gate's OWN reply in hostloop-review-fixes.test.ts.
