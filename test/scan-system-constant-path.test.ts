@@ -9,6 +9,10 @@ describe("privacy scan — the host-loop agent cwd", () => {
     expect(scanText('{"cwd":"/private/var/empty"}', "x", []).filter((f) => f.cls === "path")).toEqual([]);
     expect(scanText("denied: /private/var/empty/probe.md", "x", []).filter((f) => f.cls === "path")).toEqual([]);
   });
+  it("does not let a `..` segment walk out of the exemption", () => {
+    expect(scanText('{"p":"/private/var/empty/../folders/ab/T/x"}', "x", []).filter((f) => f.cls === "path").length).toBe(1);
+    expect(scanText('{"p":"/private/var/empty/.."}', "x", []).filter((f) => f.cls === "path").length).toBe(1);
+  });
   it("still flags other /private/var paths", () => {
     expect(scanText('{"p":"/private/var/folders/ab/T/x"}', "x", []).filter((f) => f.cls === "path").length).toBe(1);
     expect(scanText('{"p":"/private/var/emptyish/x"}', "x", []).filter((f) => f.cls === "path").length).toBe(1);

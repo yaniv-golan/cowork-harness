@@ -6,6 +6,7 @@ import { loadBaseline } from "../src/baseline.js";
 import * as baselineMod from "../src/baseline.js";
 import * as processCwdMod from "../src/hostloop/process-cwd.js";
 import { hostLoopCwds, hostLoopProcessContract } from "../src/runtime/hostloop.js";
+import { baseAgentArgs } from "../src/runtime/argv.js";
 
 // From Desktop 2.7032.0 the host-loop agent process no longer runs at the outputs dir. Desktop spawns it at
 // `/var/empty` when that passes a stat check (a directory, owned by root, not group- or world-writable),
@@ -170,4 +171,66 @@ describe("spawnHostLoop uses the contract for the spawn, the argv and the gate",
     "cwd: cwds.agentProcessCwd,",
     "pathGateCwdMismatch(input.cwd, cwds.agentProcessCwd)",
   ])("%s", (anchor) => expect(SRC.split(anchor).length - 1).toBe(1));
+});
+
+describe("the final agent argv (baseAgentArgs) with the host-loop permission args", () => {
+  const plan = {
+    configDir: "/HOST/CFG",
+    mcpConfig: null,
+    permissionMode: "default",
+    permissionParity: "cowork",
+    baseEnv: {},
+    mounts: [],
+    pluginDirs: ["plug"],
+    egressAllow: [],
+  } as never;
+  const b = loadBaseline("latest");
+  const perm = pc.hostLoopPermissionArgs({
+    processCwd: "/var/empty",
+    hostOutputsDir: "/S/mnt/outputs",
+    platform: "darwin",
+    realpath: (p: string) => (p === "/var/empty" ? "/private/var/empty" : p),
+  });
+  const base = ["Bash", "WebFetch", "NotebookEdit"];
+  const args = baseAgentArgs(b, plan, { mntRoot: "/M", disallowed: [...base, ...perm.disallowed], extraArgs: perm.extraArgs });
+  const plain = baseAgentArgs(b, plan, { mntRoot: "/M", disallowed: base });
+
+  it("the deny rules follow --disallowedTools, after the three disallowed tools", () => {
+    const i = args.indexOf("--disallowedTools");
+    expect(args.slice(i + 1, i + 1 + base.length + perm.disallowed.length)).toEqual([...base, ...perm.disallowed]);
+  });
+
+  it("--settings comes before --plugin-dir and before the variadic --tools/--allowedTools tail", () => {
+    const s = args.indexOf("--settings");
+    expect(s).toBeGreaterThan(-1);
+    expect(s).toBeLessThan(args.indexOf("--plugin-dir"));
+    expect(s).toBeLessThan(args.indexOf("--tools"));
+    expect(JSON.parse(args[s + 1]!)).toEqual({ permissions: { additionalDirectories: ["/S/mnt/outputs"] } });
+  });
+
+  it("with neither passed, the argv is exactly the older one", () => {
+    const withoutPerm = args.filter((a) => a !== "--settings" && !perm.extraArgs.includes(a) && !perm.disallowed.includes(a));
+    expect(withoutPerm).toEqual(plain);
+    expect(plain).not.toContain("--settings");
+  });
+});
+
+describe("the process cwd is stable for a run", () => {
+  it("two contracts for the same outDir give the same cwd (a resume keys the agent's transcript on it)", () => {
+    const out = tmp("cwh-stable-");
+    const bad = () => statOf(true, 0, 0o40777);
+    const a = hostLoopProcessContract(loadBaseline("latest"), out, "/S", "/S/mnt/outputs", { stat: bad });
+    const b = hostLoopProcessContract(loadBaseline("latest"), out, "/S", "/S/mnt/outputs", { stat: bad });
+    expect(a.processCwd).toBe(b.processCwd);
+    const stock = () => statOf(true, 0, 0o40755);
+    expect(hostLoopProcessContract(loadBaseline("latest"), out, "/S", "/S/mnt/outputs", { stat: stock }).processCwd).toBe(
+      hostLoopProcessContract(loadBaseline("latest"), out, "/S", "/S/mnt/outputs", { stat: stock }).processCwd,
+    );
+  });
+
+  it("the fallback dir is created private (0700), as Desktop creates it", () => {
+    const fb = join(tmp("cwh-mode-"), "host-cwd");
+    pc.resolveHostProcessCwd({ fallbackDir: fb, stat: () => statOf(true, 0, 0o40777) });
+    expect(statSync(fb).mode & 0o777).toBe(0o700);
+  });
 });

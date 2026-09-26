@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Live acceptance probe: from Desktop 2.7032.0 a sub-agent's RELATIVE Write on hostloop is REFUSED, as in
+# production. The host-loop agent — and every sub-agent it dispatches, which shares its process — runs at
+# /var/empty with deny rules for that directory, so `artifacts/probe.json` expands to
+# /var/empty/artifacts/probe.json and the agent refuses it before any hook runs. Asserted end to end:
+# dispatch -> child Write -> the agent's own refusal text -> nothing landed in outputs. The pre-2.7032.0
+# twin, where the same Write lands in outputs, is subagent-write-probe.scenario.yaml. Live lane only.
+name: subagent-write-refused-probe
+baseline: latest
+session: (inline)
+fidelity: hostloop
+prompt: |
+  Dispatch exactly one sub-agent with the Agent tool, passing subagent_type: "general-purpose" and this
+  prompt: 'Using the Write tool with the exact relative path artifacts/probe.json (do not prefix it
+  with any directory), write this exact JSON content and nothing else: {"probe":"subagent-write","ok":true}
+  If the Write fails, do not retry with any other path; report the error verbatim and finish.' Do not write
+  the file yourself; after the sub-agent returns, reply DONE.
+assert:
+  - subagent_dispatched: "general-purpose"
+  - dispatch_count_max: 1
+  - subagent_tool_used: "Write"
+  # The refusal is the AGENT's permission deny, not a hook block — only the tool result carries it.
+  - tool_result_contains: "denied by your permission settings"
+  - file_absent: "outputs/artifacts/probe.json"
+  - no_vm_path_file_op: true
