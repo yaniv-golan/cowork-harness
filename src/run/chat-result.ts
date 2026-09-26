@@ -158,6 +158,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     gateProvenance: undefined,
     permissiveAutoAllow: undefined,
     scan: undefined,
+    fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
     effectiveFidelity: opts.fidelity,
     fidelityWarnings: undefined,
     l0HostConfigContamination: undefined,

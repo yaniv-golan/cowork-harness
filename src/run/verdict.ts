@@ -2,6 +2,7 @@ import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
+import { outputsDeleteTier, outputsDeleteEntries } from "./outputs-delete-tier.js";
 
 export interface VerdictSignal {
   code:
@@ -11,6 +12,8 @@ export interface VerdictSignal {
     | "usage_limit"
     | "permissive_auto_allow"
     | "outputs_delete"
+    | "outputs_delete_unconfirmed"
+    | "outputs_diff_unavailable"
     | "mount_delete"
     | "host_path_leak"
     | "non_deterministic"
@@ -96,9 +99,19 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
   // scenario authored `no_delete_in_outputs` (it fails there instead) or waived via
   // `allow_outputs_delete` — in both cases `fired(code)` is false while a delete WAS detected, and
   // reporting `ok` would be a false ✓ for a guard that did catch its failure mode.
+  // `fired` for ANY outputs-delete evidence, warn-tier included — the roster reports what the guard saw,
+  // the signals say what it weighs. A filesystem-proven delete is `fired` even when the text scan is
+  // missing; a diff that could not verify is `unverified`, never `ok`.
+  const odTier = outputsDeleteTier(result.scan, result.fsDiff);
   roster.push({
     name: "outputs-delete",
-    status: !live ? "na" : result.scan === undefined ? "unverified" : result.scan.outputsDeletes.length ? "fired" : "ok",
+    status: !live
+      ? "na"
+      : odTier !== "none"
+        ? "fired"
+        : result.scan === undefined || result.fsDiff?.status === "unavailable"
+          ? "unverified"
+          : "ok",
   });
   return roster;
 }
@@ -464,14 +477,42 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // `allow_outputs_delete` accepts the detection for this scenario. It is a WAIVER of the harness's
     // post-hoc scan, not a model of production's `allow_cowork_file_delete` approval handshake — the
     // agent never saw an EPERM here, so a skill that would have caught one and escalated still diverges.
+    //
+    // The evidence is tiered (see outputsDeleteTier): a delete the filesystem diff proved, a delete statement
+    // that itself names an outputs path, or any text hit on a turn whose diff could not verify ⇒ `fail`; a
+    // text hit resting only on the detector's inference, with a clean diff ⇒ the `outputs_delete_unconfirmed`
+    // warn. Both are suppressed by the waiver, and by an authored `no_delete_in_outputs` (it owns the verdict).
     const optInOutputsDelete = authored.some((a) => a.allow_outputs_delete === true);
-    if (result.scan?.outputsDeletes.length && !authored.some((a) => a.no_delete_in_outputs !== undefined) && !optInOutputsDelete)
+    const authoredOutputsDelete = authored.some((a) => a.no_delete_in_outputs !== undefined);
+    const outputsTier = outputsDeleteTier(result.scan, result.fsDiff);
+    const outputsEvidence = outputsDeleteEntries(result.scan, result.fsDiff).join("; ");
+    if (outputsTier === "fail" && !authoredOutputsDelete && !optInOutputsDelete)
       signals.push({
         code: "outputs_delete",
         severity: "fail",
         message:
-          `unauthorized delete touched mnt/outputs: ${result.scan.outputsDeletes.join("; ")} ` +
+          `unauthorized delete touched mnt/outputs: ${outputsEvidence} ` +
           `(assert no_delete_in_outputs to make this explicit, or allow_outputs_delete if the deletion is intended)`,
+      });
+    if (outputsTier === "warn" && !authoredOutputsDelete && !optInOutputsDelete)
+      signals.push({
+        code: "outputs_delete_unconfirmed",
+        severity: "warn",
+        message:
+          `delete-shaped command(s) near mnt/outputs, not confirmed: ${outputsEvidence} — no output that existed at ` +
+          `turn start was deleted, and no flagged delete statement names an outputs path. A file created AND ` +
+          `deleted within this turn is invisible to the filesystem diff, so inspect the command; waive with ` +
+          `allow_outputs_delete if the deletion is intended`,
+      });
+    // A diff that could not verify is never silent: with a text hit it already failed above; without one,
+    // a delete by a script file or a non-bash tool would go unseen, so say so.
+    if (result.fsDiff?.status === "unavailable" && outputsTier === "none" && !optInOutputsDelete)
+      signals.push({
+        code: "outputs_diff_unavailable",
+        severity: "warn",
+        message:
+          `the outputs filesystem diff could not verify this turn (${result.fsDiff.reason ?? "unavailable"}) — ` +
+          `a delete made without a bash command (a script file, another tool) would not have been detected`,
       });
     // Deletes in a delete-denied mount OTHER than outputs. WARN, not fail, on purpose: production
     // ENFORCES this (EPERM) while we only DETECT it after the fact, so by the time we see it the run has

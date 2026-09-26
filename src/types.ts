@@ -675,7 +675,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not mount-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
+      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, the flagged delete statement names an outputs path, or the diff could not verify; a hit resting only on inference with a clean diff passes as advisory. Only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
     ),
   no_unexpected_files: z
     .array(z.string().min(1))
@@ -1320,6 +1320,13 @@ interface ModelUsageEntry {
  *  differently instead of collapsing both into one fatal class. */
 export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar";
 
+/** See `RunResult.fsDiff`. `findings` are `[fs-diff] output file removed post-run: <path>` strings. */
+export interface OutputsFsDiff {
+  status: "clean" | "findings" | "unavailable";
+  reason?: "baseline-incomplete" | "post-walk-incomplete";
+  findings: string[];
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -1650,6 +1657,8 @@ export interface RunResult {
         | "usage_limit"
         | "permissive_auto_allow"
         | "outputs_delete"
+        | "outputs_delete_unconfirmed"
+        | "outputs_diff_unavailable"
         | "mount_delete"
         | "host_path_leak"
         | "non_deterministic"
@@ -1885,10 +1894,18 @@ export interface RunResult {
   nonDeterministicTerminal?: boolean;
   /** tools auto-allowed by cowork parity for unscripted, off-registry permission requests — real Cowork BLOCKS these for the user. A non-empty list means a green is NOT a faithful pass (pin with --answer or permission_parity: strict). */
   permissiveAutoAllow?: string[];
-  /** Post-run scan signals (live lane only). computeVerdict default-fails on `outputsDeletes`/`hostPathLeaked`
-   *  when the scenario did NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */
+  /** Post-run scan signals (live lane only). computeVerdict default-fails on `hostPathLeaked`, and on
+   *  `outputsDeletes` as tiered by `outputsDeleteTier` (src/run/outputs-delete-tier.ts), when the scenario did
+   *  NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */
   scan?: {
+    /** Delete ops that touched `mnt/outputs`: text-scan hits, plus `[fs-diff] `-prefixed entries the
+     *  filesystem diff proved (those are also in the top-level `fsDiff.findings`). */
     outputsDeletes: string[];
+    /** POSITIONAL companion of `outputsDeletes` (same length, same order): why each entry is there.
+     *  `fs-diff` = proven by the filesystem diff; `named` = the flagged delete statement itself names an
+     *  outputs path; `inferred` = flagged by the detector's inference (unprovable target, relative `cd`).
+     *  Absent on results written before it existed — read as "unknown", which fails closed. */
+    outputsDeleteBasis?: ("fs-diff" | "named" | "inferred")[];
     /** Per-mount delete detections across every delete-denied (`rw`) user-visible mount, including
      *  `outputs`. A SUPERSET of `outputsDeletes`, which is unchanged: production denies unlink/rmdir on
      *  every such mount, so a delete in a connected folder is a real detection that used to produce no
@@ -1897,6 +1914,14 @@ export interface RunResult {
     hostPathLeaked: boolean;
     selfHealRan: boolean;
   };
+  /** The outputs-delete FILESYSTEM diff for this turn (live lane only): `outputs/` snapshotted at turn start
+   *  vs. after the turn. A top-level sibling of `scan`, not a member, so a filesystem-proven delete survives
+   *  a missing/corrupt events.jsonl (which leaves `scan` undefined). `clean` means no path present at turn
+   *  start was deleted — a file created AND deleted within the turn is invisible to it. `unavailable` means
+   *  it could not verify (no/incomplete baseline, incomplete post-run walk): text hits then keep full
+   *  fail-authority and the `outputs_diff_unavailable` warn is raised. Absent on replay, chat, a salvaged
+   *  partial run, and results written before it existed. */
+  fsDiff?: OutputsFsDiff;
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;
   /** Run-identity metadata for the iterate-across-fixes loop. `runLabel`: the user's `--label` generation

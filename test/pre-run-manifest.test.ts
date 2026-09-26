@@ -332,3 +332,37 @@ describe("pre-run-manifest origin", () => {
     expect(readPreRunManifestOrigin(outDir)).toBe("remote-unavailable");
   });
 });
+
+// The outputs-only baseline the outputs-delete filesystem diff reads. Written on EVERY turn start —
+// armed or not, first turn or resumed — into its own file, so it never makes `pre-run-manifest.json`
+// (and with it the authored-file attribution and no_unexpected_files) appear on a run that did not arm it.
+describe("outputs baseline (pre-run-outputs.json)", () => {
+  const OUTPUTS_FILE = "pre-run-outputs.json";
+  const seeded = () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-outbase-"));
+    const workRoot = join(outDir, "work", "session", "mnt");
+    mkdirSync(join(workRoot, "outputs"), { recursive: true });
+    writeFileSync(join(workRoot, "outputs", "seed.txt"), "x");
+    return { outDir, workRoot };
+  };
+
+  it("is written on an unarmed run, and pre-run-manifest.json still is not", () => {
+    const { outDir, workRoot } = seeded();
+    capturePreRunManifest({ ...minimalPlan([]), capturePreRun: false }, workRoot, outDir, "container");
+    expect(existsSync(join(outDir, OUTPUTS_FILE))).toBe(true);
+    const parsed = JSON.parse(readFileSync(join(outDir, OUTPUTS_FILE), "utf8"));
+    expect(parsed.paths).toContain("outputs/seed.txt");
+    expect(parsed.complete).toBe(true);
+    expect(existsSync(join(outDir, "pre-run-manifest.json"))).toBe(false);
+  });
+
+  it("is re-taken at the start of a resumed turn, so turn N's diff sees only turn N's deletes", () => {
+    const { outDir, workRoot } = seeded();
+    capturePreRunManifest({ ...minimalPlan([]), capturePreRun: false }, workRoot, outDir, "container");
+    writeFileSync(join(workRoot, "outputs", "turn1.txt"), "y"); // written during turn 1
+    capturePreRunManifest({ ...minimalPlan([], true), capturePreRun: false }, workRoot, outDir, "container");
+    const parsed = JSON.parse(readFileSync(join(outDir, OUTPUTS_FILE), "utf8"));
+    expect(parsed.paths).toContain("outputs/turn1.txt");
+    expect(existsSync(join(outDir, "pre-run-manifest.json"))).toBe(false);
+  });
+});

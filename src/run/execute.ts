@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
-import type { RunResult, InfraErrorSource, Assertion } from "../types.js";
+import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff } from "../types.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 import { deriveModelProvenance, unpinnedModelWarning, resolvePinnedModel } from "./model-provenance.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
@@ -85,7 +85,7 @@ import {
   classifyWorkspaceFilesWithHealth,
   trustedWorkspaceFiles,
   scratchpadEvidenceComplete,
-  collectArtifactPaths,
+  collectArtifactPathsWithHealth,
   captureAuthoredFilesWithHealth,
   authoredFilesHealthNonEmpty,
   authoredTotalBytes,
@@ -96,6 +96,8 @@ import {
   readPreRunManifestLinkAware,
   readPreRunManifestOrigin,
   readPreRunManifestStats,
+  readOutputsBaseline,
+  type OutputsBaseline,
 } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { computeVerdict } from "./verdict.js";
@@ -399,8 +401,8 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
         a.no_unexpected_files !== undefined ||
         a.input_unmodified !== undefined ||
         a.no_delete_in_outputs !== undefined ||
-        // Without this the fs-diff backstop never arms for the mount-wide key and it would silently
-        // degrade to regex-only — weaker than its outputs-scoped sibling, with nothing saying so.
+        // Arms the full manifest for the mount-wide key, as it always has. The outputs filesystem diff no
+        // longer depends on this manifest (it reads the per-turn outputs snapshot, captureOutputsBaseline).
         a.no_delete_in_mounts !== undefined ||
         // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
         // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
@@ -684,11 +686,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         .map((mt) => mt.hostPath),
       warn,
     );
-  // Pre-run baseline capture: only when something will consume it — the scenario asserts
-  // no_unexpected_files, input_unmodified, or no_delete_in_outputs (the filesystem pre/post outputs
-  // diff below needs this SAME baseline to catch a delete that never shows up as a Bash/mcp__workspace__bash
-  // command in events.jsonl — a script file, a renamed binary, a non-bash tool), or this is a recording
-  // (cassettes always carry the baseline so a later assert-add stays replayable without re-record).
+  // Pre-run baseline capture (the full manifest): only when something will consume it — the scenario
+  // asserts one of the keys scenarioArmsPreRunManifest lists, or this is a recording (cassettes always carry
+  // the baseline so a later assert-add stays replayable without re-record). The outputs-delete filesystem
+  // diff does NOT depend on this: it reads its own outputs-only snapshot, taken on every turn.
   // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
   // that never look at it; absence stays loud.
   plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record");
@@ -1246,37 +1247,37 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // incomplete baseline. Read from the SAME single manifest read the paths/hashes came from.
     const preRunOrigin = readPreRunManifestOrigin(outDir);
 
-    // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
-    // scanEvents' regex (which only inspects Bash/mcp__workspace__bash tool_use commands and so misses a
-    // delete via a script file, a renamed binary, or any non-bash tool). If the pre-run baseline captured
-    // outputs (it always does when captured at all — see pre-run-manifest.ts), any path recorded there
-    // under outputs/ that is no longer present in the post-run walk is a real deletion regardless of HOW
-    // it happened. Fed into the SAME `scan.outputsDeletes` array the regex populates — one signal, two
-    // detectors — so `no_delete_in_outputs` (src/assert.ts) needs no changes to see it. Skipped when there
-    // is no baseline (preRunPaths undefined — the scenario asserted neither key that triggers capture, or a
-    // tier that can't capture); the regex backstop still runs in that case, same as before this change.
-    if (preRunPaths) {
-      // Path walk (matching the pre-run baseline): it emits symlink/hardlink paths too, so a pre-existing
-      // link under outputs that survives is present on BOTH sides and is not falsely reported as removed.
-      const postOutputs = collectArtifactPaths(workRoot, ["outputs"]).map((e) => e.path);
-      scan.outputsDeletes.push(
-        ...outputsRemovedByFsDiff(preRunPaths, postOutputs, {
-          preRunHashes,
-          // sha256 hex, matching the pre-run manifest's format so the two sides are comparable. Only
-          // called for paths that are NEW under outputs, and only when something actually vanished, so
-          // the ordinary run pays nothing. Unreadable ⇒ null ⇒ no rename proven ⇒ the removal reports.
-          hashPostPath: (rel) => {
-            try {
-              return createHash("sha256")
-                .update(readFileSync(join(workRoot, rel)))
-                .digest("hex");
-            } catch {
-              return null;
-            }
-          },
-        }),
+    // Filesystem diff of outputs/ for THIS turn — the ground-truth detector for `no_delete_in_outputs` and
+    // the default outputs-delete signal, INDEPENDENT of scanEvents' text scan (which only reads Bash /
+    // mcp__workspace__bash commands, so misses a delete via a script file, a renamed binary, or any non-bash
+    // tool). The baseline is the outputs-only snapshot taken at the start of every turn, armed or not
+    // (captureOutputsBaseline), so this runs on every live turn. Both walks' health is folded in: a walk that
+    // could not see everything is `unavailable`, never "everything was deleted".
+    //
+    // Findings go to the top-level `fsDiff` (so they survive a missing events.jsonl, which drops `scan`) and
+    // are ALSO merged into `scan.outputsDeletes` with basis `fs-diff`, so every reader of that array keeps
+    // seeing filesystem-proven deletes exactly as before.
+    const outputsPostWalk = collectArtifactPathsWithHealth(workRoot, ["outputs"]);
+    const fsDiff = outputsFsDiff(readOutputsBaseline(outDir), outputsPostWalk, (rel) => {
+      // sha256 hex, matching the baseline's format. Only called for paths NEW under outputs, and only when
+      // something vanished, so the ordinary run pays nothing. Unreadable ⇒ null ⇒ no rename proven.
+      try {
+        return createHash("sha256")
+          .update(readFileSync(join(workRoot, rel)))
+          .digest("hex");
+      } catch {
+        return null;
+      }
+    });
+    scan.outputsDeletes.push(...fsDiff.findings);
+    scan.outputsDeleteBasis.push(...fsDiff.findings.map(() => "fs-diff" as const));
+    if (fsDiff.status === "unavailable")
+      warn(
+        `::warning:: [scan] the outputs filesystem diff could not verify this turn (${fsDiff.reason}) — ` +
+          `a delete made without a bash command would go undetected\n`,
       );
-    }
+    if (scanUnavailable && fsDiff.findings.length)
+      warn(`::warning:: [scan] filesystem-proven outputs delete(s), kept despite the missing scan: ${fsDiff.findings.join("; ")}\n`);
 
     // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
     // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
@@ -1442,6 +1443,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       preRunHashes,
       preRunOrigin,
       outputsDeletes: scan.outputsDeletes,
+      outputsDeleteBasis: scan.outputsDeleteBasis,
+      fsDiff,
       mountDeletes: scan.mountDeletes,
       questions: record.questions,
       gateOptions: record.gateOptions,
@@ -1790,11 +1793,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         ? undefined
         : {
             outputsDeletes: scan.outputsDeletes,
+            // Positional with outputsDeletes; omitted when there is nothing to explain.
+            ...(scan.outputsDeletes.length ? { outputsDeleteBasis: scan.outputsDeleteBasis } : {}),
             // Omitted when empty so an unchanged run's result.json is byte-identical to before.
             ...(scan.mountDeletes.length ? { mountDeletes: scan.mountDeletes } : {}),
             hostPathLeaked: scan.hostPathLeaked,
             selfHealRan: scan.selfHealRan,
           },
+      // The outputs filesystem diff — a sibling of `scan`, so a proven delete survives a missing events.jsonl.
+      fsDiff,
       effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
       fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
       l0HostConfigContamination: l0HostConfigContamination || undefined, // failing fidelity signal for protocol+plugins
@@ -2354,6 +2361,7 @@ export function buildPartialResult(args: {
     nonDeterministicTerminal,
     permissiveAutoAllow: undefined,
     scan: undefined,
+    fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
     fidelityWarnings: undefined,
     l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
@@ -2778,6 +2786,31 @@ export function outputsRemovedByFsDiff(
   return vanished.filter((p) => !(preRunHashes[p] && newContent.has(preRunHashes[p] as string))).map(say);
 }
 
+/** The outputs-delete filesystem diff, with the health of BOTH walks folded in. The ground-truth detector:
+ *  a path present in the turn-start snapshot and absent after the turn was deleted, however it happened.
+ *  Its blind spot is equally structural — a file created AND deleted within the turn is in neither
+ *  snapshot — which is why an empty result is `clean`, not "nothing was deleted".
+ *
+ *  A walk that could not see everything is `unavailable`, never `clean` and never a finding: an
+ *  unreadable post-run walk used to report every baseline output as deleted, and a subtree skipped for
+ *  containment is unobserved rather than proven empty. Callers treat `unavailable` as "the diff did not
+ *  run" — text hits then keep full fail-authority, and a warn says the diff could not verify. */
+export function outputsFsDiff(
+  baseline: OutputsBaseline | undefined,
+  post: { entries: { path: string }[]; complete: boolean; containmentSkips: string[] },
+  hashPostPath: (relPath: string) => string | null,
+): OutputsFsDiff {
+  const skipsOutputs = (skips: string[]) => skips.some((p) => p === "outputs" || p.startsWith("outputs/"));
+  if (!baseline || !baseline.complete) return { status: "unavailable", reason: "baseline-incomplete", findings: [] };
+  if (!post.complete || skipsOutputs(post.containmentSkips)) return { status: "unavailable", reason: "post-walk-incomplete", findings: [] };
+  const findings = outputsRemovedByFsDiff(
+    baseline.paths,
+    post.entries.map((e) => e.path),
+    { preRunHashes: baseline.hashes, hashPostPath },
+  );
+  return findings.length ? { status: "findings", findings } : { status: "clean", findings: [] };
+}
+
 /** Which of `mounts` a command deletes in. Same logic per mount as the original outputs-only detector —
  *  `detectMountDeletes(cmd, ["outputs"])` is byte-equivalent to the old `isOutputsDelete(cmd)`, pinned by
  *  test. Returns the matching mount NAMES so a finding can say which mount, since production's approval
@@ -2838,6 +2871,28 @@ export function isOutputsDelete(cmd: string): boolean {
   return detectMountDeletes(cmd, ["outputs"]).length > 0;
 }
 
+/** WHY `isOutputsDelete` flagged a command — the input to the outputs-delete tiering. Only meaningful for a
+ *  command that IS flagged; it never changes what is flagged.
+ *
+ *  `named`: some flagged delete STATEMENT itself names an outputs path (`DELETE_TOKEN` and the mount matcher
+ *  both hit that one statement), or moves something out of outputs. `inferred`: the flag rests on the
+ *  detector's inference instead — an unprovable target (`rm "$UNSET"`, or a Python identifier named `rm`
+ *  next to an outputs path elsewhere in the command), or a relative `cd` into outputs.
+ *
+ *  A "statement" is a `splitStatements` fragment — split on newline, `;`, `&&`, `||`, QUOTE-BLIND (a single
+ *  `|` is not a separator) — of the comment-stripped, continuation-joined text with simple same-command
+ *  `VAR=value` assignments expanded one level (no chains) and the `mktemp` idiom resolved: the exact view
+ *  `detectMountDeletes` decides on. That is why a delete in a loop body, after a `cd`, through a chained
+ *  or computed variable, or inside a multi-line `python3 -c` body classifies `inferred` even when real,
+ *  and why `rm = open(".../outputs/r.md")` or quoted prose `echo 'rm outputs/x' >> …` classifies `named`
+ *  even though nothing is deleted. */
+export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
+  const mm = mountMatchers("outputs");
+  const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
+  const namesOutputs = (stmt: string): boolean => mvDeletesOutputs(stmt, mm) || (DELETE_TOKEN.test(stmt) && mm.touches.test(stmt));
+  return splitStatements(code).some(namesOutputs) ? "named" : "inferred";
+}
+
 /** the operative delete statement(s) within a command that `isOutputsDelete` flagged — for a readable
  *  finding. The raw `cmd.slice(0,120)` truncated away the actual `rm` when a long `VAR=…` assignment prefix
  *  preceded it (the finding then showed only the assignment block). This surfaces the delete/mv itself, with
@@ -2869,6 +2924,10 @@ export function scanEvents(
   rwMounts: string[] = ["outputs"],
 ): {
   outputsDeletes: string[];
+  /** POSITIONAL companion of `outputsDeletes` — same length, same order — saying why each entry was
+   *  flagged (see `outputsDeleteBasis`). Positional rather than keyed by entry text because identical
+   *  commands produce identical entries. */
+  outputsDeleteBasis: ("fs-diff" | "named" | "inferred")[];
   /** Per-mount delete detections across ALL writable mounts, including `outputs`. A superset of
    *  `outputsDeletes`, which stays exactly as it was because `no_delete_in_outputs`, its verdict signal
    *  and every committed cassette are defined in terms of it. */
@@ -2885,6 +2944,7 @@ export function scanEvents(
   const mounts = rwMounts.includes("outputs") ? rwMounts : ["outputs", ...rwMounts];
   const out = {
     outputsDeletes: [] as string[],
+    outputsDeleteBasis: [] as ("fs-diff" | "named" | "inferred")[],
     mountDeletes: [] as { mount: string; command: string }[],
     hostPathLeaked: false,
     selfHealRan: false,
@@ -2939,7 +2999,10 @@ export function scanEvents(
         for (const m of hits) out.mountDeletes.push({ mount: m, command: outputsDeleteSnippet(cmd, m) });
         // `outputsDeletes` is the `outputs` slice of THIS command's hits — one detection pass feeds both,
         // so they cannot disagree about outputs the way two separate passes could.
-        if (hits.includes("outputs")) out.outputsDeletes.push(outputsDeleteSnippet(cmd));
+        if (hits.includes("outputs")) {
+          out.outputsDeletes.push(outputsDeleteSnippet(cmd));
+          out.outputsDeleteBasis.push(outputsDeleteBasis(cmd));
+        }
         if (selfHealRe.test(cmd)) out.selfHealRan = true;
       }
       if (block.type === "text" && typeof block.text === "string" && hostPathLeaked(block.text)) out.hostPathLeaked = true;

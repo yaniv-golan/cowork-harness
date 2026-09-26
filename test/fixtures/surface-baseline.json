@@ -2105,6 +2105,26 @@
       ".fingerprint.skillSources[]": {
         "type": "string"
       },
+      ".fsDiff": {
+        "type": "object",
+        "closed": true
+      },
+      ".fsDiff.findings": {
+        "type": "array",
+        "required": true
+      },
+      ".fsDiff.findings[]": {
+        "type": "string"
+      },
+      ".fsDiff.reason": {
+        "type": "string",
+        "enum": ["baseline-incomplete", "post-walk-incomplete"]
+      },
+      ".fsDiff.status": {
+        "type": "string",
+        "enum": ["clean", "findings", "unavailable"],
+        "required": true
+      },
       ".gateDeliveries": {
         "type": "array"
       },
@@ -2472,6 +2492,13 @@
       ".scan.mountDeletes[].mount": {
         "type": "string",
         "required": true
+      },
+      ".scan.outputsDeleteBasis": {
+        "type": "array"
+      },
+      ".scan.outputsDeleteBasis[]": {
+        "type": "string",
+        "enum": ["fs-diff", "named", "inferred"]
       },
       ".scan.outputsDeletes": {
         "type": "array"
@@ -2911,7 +2938,9 @@
           "scan_unavailable",
           "ended_with_question",
           "undelivered_deliverables",
-          "delivery_unobservable"
+          "delivery_unobservable",
+          "outputs_delete_unconfirmed",
+          "outputs_diff_unavailable"
         ],
         "required": true
       },

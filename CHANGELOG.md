@@ -8,6 +8,31 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **An outputs delete the harness only infers from a command's text no longer fails the run by itself.**
+  Previously any command the delete scanner flagged near `mnt/outputs` failed the verdict (`outputs_delete`)
+  or an authored `no_delete_in_outputs` — including a `python3 -c` body whose variable is named `rm`
+  (`rm = data.get("body","")`) next to an outputs path, where nothing was deleted. Now a flag
+  fails only when something confirms it: a filesystem diff of `outputs/` for the turn proves a path present
+  at turn start is gone; the flagged delete statement itself names an `outputs/` path (or moves something
+  out of outputs); or the diff could not verify the turn. A flag resting only on the scanner's inference —
+  an unprovable target, or a relative `cd` into outputs — with a clean diff becomes the new
+  `outputs_delete_unconfirmed` **warn**, and an authored `no_delete_in_outputs` passes with the hit kept as
+  advisory evidence. A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
+  quote-blind, after comments are stripped and same-command `VAR=value` assignments expanded one level. Two
+  consequences to know: **real deletes can land in the warn** — in a loop body, after a `cd` then a relative
+  path, through chained or computed variables, or inside a multi-line `python3 -c` body — because the diff
+  cannot see a file created and deleted within one turn; and **some false positives still fail** —
+  `rm = open(".../outputs/r.md").read()`, or quoted prose such as `echo 'rm outputs/x' >> log`, since that
+  statement names an outputs path. `allow_outputs_delete` waives both codes. `verify-run` over a
+  `result.json` written before this release reaches the same verdict as before (it carries no diff, which
+  reads as unverified and keeps the old strictness). A run whose only outputs evidence is unconfirmed can
+  now be `record`ed.
+- **The outputs filesystem diff now runs on every live turn**, not only when the scenario asserted one of
+  the baseline keys. It reads its own outputs-only snapshot taken at the start of each turn, resumed turns
+  included, so the full pre-run manifest (and with it authored-file attribution, `no_unexpected_files`,
+  `input_unmodified`) still appears only on runs that arm it. A delete of a file that existed at turn start
+  now fails every scenario, however it was made (a script file, a non-bash tool) — previously only on
+  scenarios that armed the manifest.
 - **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
   folder, so a skill-folder positional inside a plugin is the same run as `critique <plugin> --skill
   <name>`: same mount, same packaged corpus, same graded skill, announced with a `::notice::`. Its
@@ -26,12 +51,30 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A resumed turn no longer re-reports an earlier turn's outputs delete.** The outputs diff compared every
+  turn against the first turn's baseline, so a delete in turn 1 failed turn 2 again on scenarios that armed
+  the manifest; it now compares against the turn's own start, matching the text scan's current-turn scope.
+- **An unreadable post-run walk no longer reports every output as deleted.** The diff now reports that it
+  could not verify (`outputs_diff_unavailable`, **warn**, plus a `::warning::`), a text-scan hit on that turn
+  still fails, and an authored `no_delete_in_outputs` fails as evidence-unavailable.
+- **A filesystem-proven outputs delete survives a missing or corrupt `events.jsonl`.** The diff's result is
+  the new top-level `RunResult.fsDiff` rather than living only inside `scan` (which is absent in that case),
+  so the delete still fails the run instead of surfacing only as `scan_unavailable`.
 - **The critique corpus no longer contains files the graded agent never received.** Every corpus class was
   checked against a git-tracked set read from that class's own directory, while staging reads one set at the
   mount root. A skill that is a git submodule of its plugin was graded from the submodule's own index although
   the mount carried an empty `skills/<name>/`, and a skill-folder positional packaged the enclosing plugin's
   agents and shared references although only the folder was mounted. The packager now reads the mount
   root's tracked set, once, for every class.
+
+### Added
+
+- **`RunResult.fsDiff`** — the per-turn outputs filesystem diff: `status` (`clean` / `findings` /
+  `unavailable`), `reason` when unavailable, and `findings`. `clean` means no path present at turn start was
+  deleted; it cannot see a file created and deleted within the turn.
+- **`RunResult.scan.outputsDeleteBasis`** — positional with `scan.outputsDeletes`: `fs-diff`, `named` or
+  `inferred` per entry.
+- **Verdict signal codes `outputs_delete_unconfirmed` and `outputs_diff_unavailable`** (both **warn**).
 
 ## [3.9.0] — 2026-09-25
 

@@ -4318,6 +4318,10 @@ async function cmdVerifyRun(args: string[]) {
     authoredFilesHealth:
       recomputedAuthored && authoredFilesHealthNonEmpty(recomputedAuthored.health) ? recomputedAuthored.health : undefined,
     outputsDeletes: scan.outputsDeletes,
+    // read from the persisted result, never recomputed — a result written before these existed has neither,
+    // which the tiering reads as unknown and fails closed.
+    outputsDeleteBasis: result.scan?.outputsDeleteBasis,
+    fsDiff: result.fsDiff,
     mountDeletes: scan.mountDeletes ?? [],
     questions: sidecarQuestions ?? [],
     gateOptions: vrGateOptions,

@@ -92,11 +92,16 @@ describe("verdict-signals docs ↔ code", () => {
   // which the binary emits only when a turn actually falls off the requested model — so a user who never
   // hits a retired pin or an overload never sees it, and one who does is being told the run measured a
   // model their scenario does not name. Zero added volume on every currently-green run.
-  it('the docs\' "only nine warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 11 as of `outputs_delete_unconfirmed` + `outputs_diff_unavailable`. The first adds no noise: it can
+  // only fire where the fail-severity `outputs_delete` used to, so every run that shows it was a red run
+  // before. The second cannot fire on a healthy run: it needs the per-turn outputs diff to have been
+  // unable to verify (missing/incomplete snapshot or an unreadable post-run walk) — and silence there was
+  // the thing wrong with it.
+  it('the docs\' "only eleven warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(9);
-    expect(scenarioMdText).toMatch(/Only nine codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(11);
+    expect(scenarioMdText).toMatch(/Only eleven codes are \*\*warn\*\*-severity/);
   });
 });
 

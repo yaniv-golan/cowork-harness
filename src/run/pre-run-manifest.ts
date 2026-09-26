@@ -96,11 +96,15 @@ function statCapture(baseDir: string, relPath: string): { mtimeMs: number; size:
  *  manifest it stays authoritative ("state before run 1"); if it didn't (run 1 predates the seam),
  *  the manifest stays absent and the key fails loud evidence-unavailable — never a shifted baseline.
  *
- *  microvm does NOT call this: it stages into VM_WORK_HOST/<id>/mnt, a different tree from the
- *  outDir/work/session/mnt the post-run walk reads (a pre-existing artifact-collection gap), so a
- *  pre/post diff there would be vacuously empty — a silent false-green. No manifest ⇒ the
- *  assertion fails LOUD as evidence-unavailable at that tier instead. */
+ *  Every tier calls this (container, hostloop, protocol, microvm) after staging and before spawn. microvm
+ *  walks the staged tree at its host path; the post-run walk reads the session snapshot copied back from
+ *  the VM, which preserves the relative layout, so the two path spaces line up.
+ *
+ *  The OUTPUTS-ONLY baseline (`captureOutputsBaseline`) is taken FIRST and UNCONDITIONALLY — armed or not,
+ *  first turn or resumed. It lives in its own file and is read only by the outputs-delete filesystem
+ *  diff, so taking it never makes this manifest appear on a run that did not arm it. */
 export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir: string, tier: string): void {
+  captureOutputsBaseline(workRoot, outDir);
   if (!plan.capturePreRun || plan.resume) return;
   const folderMounts = plan.mounts.filter(isConnectedContent); // a read-only project is still an input `input_unmodified` should baseline
   const cap = preRunHashCap();
@@ -283,6 +287,59 @@ export function readPreRunManifestOrigin(outDir: string): "local-walk" | "remote
     return parsed.origin === "local-walk" || parsed.origin === "remote-unavailable" || parsed.origin === "local-unreadable"
       ? parsed.origin
       : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ── The outputs-only baseline ──────────────────────────────────────────────────────────────────────────
+// Read ONLY by the outputs-delete filesystem diff. Kept out of pre-run-manifest.json on purpose: that file's
+// mere presence switches on authored-file attribution and the no_unexpected_files / input_unmodified
+// baselines, none of which an unarmed run asked for. Placed at outDir (above workRoot) like the manifest,
+// so no artifact walk can ever see it.
+const OUTPUTS_FILE = "pre-run-outputs.json";
+const OUTPUTS_BASELINE_VERSION = 1;
+
+/** The `outputs/` tree at turn start: paths (link-aware, like the manifest) plus a capped sha256 per
+ *  regular file (for the rename check), and whether the walk saw everything. */
+export interface OutputsBaseline {
+  complete: boolean;
+  paths: string[];
+  hashes: Record<string, string | null>;
+}
+
+/** Snapshot `outputs/` at the start of EVERY turn, resume included, overwriting the previous turn's file.
+ *  Unlike the full manifest (which must stay as-of turn 1 so no_unexpected_files never absorbs turn-1
+ *  strays), this baseline is SUPPOSED to move with the turn: the text scan it corroborates is
+ *  current-turn-only, and a diff against turn 1 would re-report a turn-1 delete on every later turn.
+ *  Cost: one walk of a directory that is empty or near-empty at spawn, plus a capped hash per file. */
+export function captureOutputsBaseline(workRoot: string, outDir: string): void {
+  const cap = preRunHashCap();
+  const walked = collectArtifactPathsWithHealth(workRoot, ["outputs"]);
+  const paths: string[] = [];
+  const hashes: Record<string, string | null> = {};
+  for (const e of walked.entries) {
+    paths.push(e.path);
+    if (e.linkKind === "symlink") continue; // path-only, never dereferenced (same rule as the manifest)
+    hashes[e.path] = hashFileCapped(workRoot, e.path, cap).hash;
+  }
+  paths.sort();
+  // A subtree skipped for containment was not observed, so the baseline is not complete.
+  const complete = walked.complete && !walked.containmentSkips.some((p) => p === "outputs" || p.startsWith("outputs/"));
+  writeFileSync(join(outDir, OUTPUTS_FILE), JSON.stringify({ version: OUTPUTS_BASELINE_VERSION, complete, paths, hashes }, null, 2));
+}
+
+/** undefined = no baseline file, or one that does not parse to the expected shape. The diff then reports
+ *  `unavailable`, never `clean`. */
+export function readOutputsBaseline(outDir: string): OutputsBaseline | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(outDir, OUTPUTS_FILE), "utf8")) as Record<string, unknown>;
+    const { complete, paths, hashes } = parsed;
+    if (typeof complete !== "boolean") return undefined;
+    if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string")) return undefined;
+    if (hashes === null || typeof hashes !== "object" || Array.isArray(hashes)) return undefined;
+    for (const v of Object.values(hashes as Record<string, unknown>)) if (v !== null && typeof v !== "string") return undefined;
+    return { complete, paths, hashes: hashes as Record<string, string | null> };
   } catch {
     return undefined;
   }
