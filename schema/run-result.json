@@ -1067,7 +1067,7 @@
         },
         "outputsDeleteBasis": {
           "type": "array",
-          "description": "Positional with outputsDeletes (same length and order): why each entry was flagged. fs-diff = proven by the filesystem diff; named = the flagged delete statement itself names an outputs path; inferred = flagged by the detector's inference. Absent on results written before it existed (read as unknown, which fails closed).",
+          "description": "Positional with outputsDeletes (same length and order): why each entry was flagged. fs-diff = proven by the filesystem diff; named = a delete in command/call position has an outputs path as its own operand; inferred = flagged by the detector's inference. Absent on results written before it existed (read as unknown, which fails closed).",
           "items": {
             "type": "string",
             "enum": ["fs-diff", "named", "inferred"]

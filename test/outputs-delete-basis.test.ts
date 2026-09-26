@@ -7,38 +7,91 @@ import { outputsDeleteBasis, outputsFsDiff, scanEvents, isOutputsDelete } from "
 /**
  * The two inputs the outputs-delete tiering reads, tested as pure functions.
  *
- * `outputsDeleteBasis` says WHY the text scan flagged a command: `named` when a flagged delete statement
- * itself names an outputs path (or moves something out of outputs), `inferred` when the flag rests on the
- * detector's inference — an unprovable target, or a relative `cd` into outputs. A "statement" is one
- * fragment of the command split on newline, `;`, `&&` and `||` — quote-blind, after comments are stripped
- * and simple same-command `VAR=value` assignments expanded one level. That definition is what makes every
- * multi-line `python3 -c` body, loop, `cd`-then-relative delete and chained variable land `inferred`.
+ * `outputsDeleteBasis` says WHY the text scan flagged a command: `named` when a delete is in COMMAND or CALL
+ * position and its own operand names an outputs path (or something is moved out of outputs); `inferred`
+ * otherwise — an unprovable target, a relative `cd` into outputs, or an outputs path that merely appears in
+ * the same statement as a word like `rm` (a Python variable, quoted prose, a sed pattern, a trailing
+ * comment). A "statement" is one fragment of the command split on newline, `;`, `&&` and `||` —
+ * quote-blind, after whole-line comments are stripped and simple same-command `VAR=value` assignments
+ * expanded one level. That definition is what makes a loop body, a `cd`-then-relative delete, a chained
+ * variable and a `p = …` then `os.remove(p)` land `inferred`.
  */
 
+const O = "/sessions/s/mnt/outputs";
+
+// Every real single-command delete whose operand is a literal outputs path must stay `named` (fail).
 const named = [
-  `rm -f "/sessions/s/mnt/outputs/artifacts/deck.pdf"`,
-  // the relative-cd branch fires first here, but the rm statement itself names outputs
+  `rm -f "${O}/artifacts/deck.pdf"`,
+  `rm -f '${O}/deck.pdf'`,
+  `rm -f ${O}/deck.pdf`,
+  `rm -f -- "${O}/deck.pdf"`,
+  `rm -f "${O}/my deck.pdf"`,
+  `rm -f ${O}/*.tmp`,
+  `rm -f ${O}/{a,b}.md`,
+  `rm -f ${O}/a.md 2>/dev/null || true`,
+  `rm -f ${O}/a.md \\\n  ${O}/b.md`,
+  `ls && rm -f ${O}/a.md; echo done`,
+  // the relative-cd branch fires first here, but the rm's own operand names outputs
   `rm -rf mnt/outputs/pkg && cp -r pkg mnt/outputs/ && cd mnt/outputs/pkg && ls`,
+  `sudo rm -f ${O}/a.md`,
+  `command rm -f ${O}/a.md`,
+  `/bin/rm -f ${O}/a.md`,
+  `env rm -f ${O}/a.md`,
+  `nice -n 10 rm -f ${O}/a.md`,
+  `timeout 5 rm -f ${O}/a.md`,
+  `x=1 rm -f ${O}/a.md`,
+  `if [ -f ${O}/a.md ]; then rm -f ${O}/a.md; fi`,
+  `yes | rm -i ${O}/a.md`,
+  `rm -v $(ls ${O}/*.tmp)`,
+  `ls ${O}/*.tmp | xargs rm -f`,
+  `find ${O} -name '*.tmp' -print0 | xargs -0 rm -f`,
   `find mnt/outputs -name '*.tmp' -delete`,
+  `find ${O} -name '*.tmp' -exec rm -f {} \;`,
+  `find ${O} -name '*.tmp' -exec rm -f {} +`,
+  `rmdir ${O}/empty`,
+  `unlink ${O}/a.md`,
+  `shred -u ${O}/a.md`,
   `mv mnt/outputs/a.md /tmp/`,
-  `REVIEW_DIR="/sessions/s/mnt/outputs/r"\nrm -f "$REVIEW_DIR/deck.pdf"`,
-  // kept false positives — a Python identifier or quoted prose in a statement that names outputs
-  `python3 -c 'rm = open("/sessions/s/mnt/outputs/r.md").read(); print(rm[:50])'`,
-  `echo 'rm outputs/ghost' >> /sessions/s/mnt/outputs/log.md`,
-  // kept false positives the docs name: a trailing comment (only whole-line comments are stripped) and a
-  // sed/grep pattern containing a delete word, each in a statement that names outputs
-  `rm -rf build # clean before writing to /sessions/s/mnt/outputs`,
-  `sed -i '/rm/d' /sessions/s/mnt/outputs/x.md`,
+  `rm -rf "${O}"/*`,
+  `bash -c 'rm -f ${O}/a.md'`,
+  `(cd /tmp && rm -f ${O}/a.md)`,
+  `echo $(rm -f ${O}/a.md)`,
+  `OUT="${O}/b"\nrm -rf "$OUT"`,
+  `OUT=${O}/b; rm -rf "$OUT"`,
+  `REVIEW_DIR="${O}/r"\nrm -f "$REVIEW_DIR/deck.pdf"`,
+  `python3 -c 'import os; os.remove("${O}/a.md")'`,
+  `python3 -c 'import os\nos.remove("${O}/a.md")'`,
+  `python3 - <<'EOF'\nimport os\nos.remove("${O}/a.md")\nEOF`,
+  `python3 -c 'import os; os.remove(os.path.join("${O}", "a.md"))'`,
+  `python3 -c 'from pathlib import Path; Path("${O}/a.md").unlink()'`,
+  `python3 -c 'import shutil; shutil.rmtree("${O}/pkg")'`,
+  `python3 -c 'import os; os.unlink("${O}/a.md")'`,
+  `python3 -c 'import os, glob; [os.remove(p) for p in glob.glob("${O}/*.tmp")]'`,
 ];
 const inferred = [
-  // the reported false positive
-  `python3 -c 'import json\ndata = json.load(open("/sessions/s/mnt/outputs/a/doc.json"))\nrm = data.get("body","")\nprint(rm.find("x"))'`,
-  `cd /tmp && rm -rf scratch && unzip -o -q /sessions/s/mnt/outputs/x.skill -d scratch`,
-  `cp -r d /sessions/s/mnt/outputs/ && rm -rf /sessions/s/d`,
-  // real deletes the classifier cannot name — documented false-negative classes
-  `for f in /sessions/s/mnt/outputs/*.tmp; do rm -f "$f"; done`,
+  // A Python variable named rm next to an outputs path — nothing is deleted. The first is the exact shape
+  // a live container run produced; the rest are its heredoc / multi-line variants.
+  `python3 -c 'import json; rm = json.load(open("${O}/report.json"))["report_markdown"]; print(rm.find("COACHING"))'`,
+  `python3 - <<'EOF'\nimport json\nrm = json.load(open("${O}/report.json"))["report_markdown"]\nprint(rm.find("COACHING"))\nEOF`,
+  `python3 <<EOF\nimport json\nrm = json.load(open("${O}/report.json"))["report_markdown"]\nprint(rm.find("COACHING"))\nEOF`,
+  `python3 -c 'import json\ndata = json.load(open("${O}/a/doc.json"))\nrm = data.get("body","")\nprint(rm.find("x"))'`,
+  `python3 -c 'rm = open("${O}/r.md").read(); print(rm[:50])'`,
+  `python3 -c 'rm: str = open("${O}/r.md").read()'`,
+  `python3 -c 'print(len(open("${O}/r.md").read())); rm = 1'`,
+  // quoted prose, a sed/grep pattern, a trailing comment — the outputs path is not the delete's operand
+  `echo 'rm outputs/ghost' >> ${O}/log.md`,
+  `sed -i '/rm/d' ${O}/x.md`,
+  `grep -rn "rm " ${O}`,
+  `rm -rf build # clean before writing to ${O}`,
+  // unprovable targets
+  `cd /tmp && rm -rf scratch && unzip -o -q ${O}/x.skill -d scratch`,
+  `cp -r d ${O}/ && rm -rf /sessions/s/d`,
+  // real deletes the classifier cannot name — documented false-negative classes (warn, not fail)
+  `for f in ${O}/*.tmp; do rm -f "$f"; done`,
   `cd mnt/outputs && rm -rf scratch`,
-  `A=/sessions/s/mnt/outputs; B=$A/sub; rm -rf "$B"`,
+  `cd ${O} && rm -rf scratch`,
+  `A=${O}; B=$A/sub; rm -rf "$B"`,
+  `python3 - <<'EOF'\nimport os\np = "${O}/a.md"\nos.remove(p)\nEOF`,
 ];
 
 describe("outputsDeleteBasis", () => {
@@ -52,13 +105,15 @@ describe("outputsDeleteBasis", () => {
   });
 });
 
+const UNPROVABLE = `cd /tmp && rm -rf scratch && unzip -o -q ${O}/x.skill -d scratch`;
+
 describe("scanEvents carries a POSITIONAL basis alongside outputsDeletes", () => {
   it("one basis per entry, in order — duplicates included", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-basis-"));
     const f = join(dir, "events.jsonl");
     const use = (command: string) =>
       JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] } });
-    writeFileSync(f, [use(inferred[1]), use(named[0]), use(inferred[1])].join("\n"));
+    writeFileSync(f, [use(UNPROVABLE), use(named[0]), use(UNPROVABLE)].join("\n"));
     const s = scanEvents(f);
     expect(s.outputsDeletes.length).toBe(3);
     expect(s.outputsDeleteBasis).toEqual(["inferred", "named", "inferred"]);

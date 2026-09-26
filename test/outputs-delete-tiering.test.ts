@@ -10,7 +10,7 @@ import type { RunResult, Assertion } from "../src/types.js";
  * of the agent's bash commands (a heuristic that over-flags by design — it cannot tell a Python variable
  * named `rm` from the `rm` command) and a filesystem diff of `outputs/` taken before and after the turn
  * (ground truth, but blind to a file the turn both created and deleted). A text hit is fail-authority only
- * when the filesystem confirms it, when the flagged delete statement itself names an outputs path, or when
+ * when the filesystem confirms it, when a delete in command/call position has an outputs path as its own operand, or when
  * the diff could not run; otherwise it is the `outputs_delete_unconfirmed` warn.
  *
  * Everything here drives `computeVerdict` / `evaluate` over PERSISTED shapes — the same data `verify-run`

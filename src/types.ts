@@ -675,7 +675,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, the flagged delete statement names an outputs path, or the diff could not verify; a hit resting only on inference with a clean diff passes (the outputs_delete_unconfirmed warn is still raised). Only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
+      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, a delete in command/call position has an outputs path as its own operand, or the diff could not verify; a hit resting only on inference with a clean diff passes (the outputs_delete_unconfirmed warn is still raised). Only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
     ),
   no_unexpected_files: z
     .array(z.string().min(1))
@@ -1902,8 +1902,8 @@ export interface RunResult {
      *  filesystem diff proved (those are also in the top-level `fsDiff.findings`). */
     outputsDeletes: string[];
     /** POSITIONAL companion of `outputsDeletes` (same length, same order): why each entry is there.
-     *  `fs-diff` = proven by the filesystem diff; `named` = the flagged delete statement itself names an
-     *  outputs path; `inferred` = flagged by the detector's inference (unprovable target, relative `cd`).
+     *  `fs-diff` = proven by the filesystem diff; `named` = a delete in command/call position has an
+     *  outputs path as its own operand; `inferred` = flagged by the detector's inference (unprovable target, relative `cd`).
      *  Absent on results written before it existed — read as "unknown", which fails closed. */
     outputsDeleteBasis?: ("fs-diff" | "named" | "inferred")[];
     /** Per-mount delete detections across every delete-denied (`rw`) user-visible mount, including

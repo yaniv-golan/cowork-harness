@@ -480,7 +480,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // agent never saw an EPERM here, so a skill that would have caught one and escalated still diverges.
     //
     // The evidence is tiered (see outputsDeleteTier): a delete the filesystem diff proved, a delete statement
-    // that itself names an outputs path, or any text hit on a turn whose diff could not verify ⇒ `fail`; a
+    // whose own operand is an outputs path, or any text hit on a turn whose diff could not verify ⇒ `fail`; a
     // text hit resting only on the detector's inference, with a clean diff ⇒ the `outputs_delete_unconfirmed`
     // warn. The waiver suppresses both. An authored `no_delete_in_outputs` suppresses only the FAIL (the
     // assertion owns the verdict); the warn is still raised, because a passing assertion's advisory evidence
@@ -503,7 +503,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         severity: "warn",
         message:
           `delete-shaped command(s) near mnt/outputs, not confirmed: ${outputsEvidence} — no output that existed at ` +
-          `turn start was deleted, and no flagged delete statement names an outputs path. A file created AND ` +
+          `turn start was deleted, and no flagged delete has an outputs path as its own operand. A file created AND ` +
           `deleted within this turn is invisible to the filesystem diff, so inspect the command; waive with ` +
           `allow_outputs_delete if the deletion is intended`,
       });

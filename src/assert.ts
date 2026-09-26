@@ -2243,7 +2243,7 @@ function check(
     );
   if (a.no_delete_in_outputs !== undefined) {
     // Same tiering as the default verdict signal (outputsDeleteTier): a filesystem-proven delete, a delete
-    // statement that names an outputs path, or a text hit the diff could not check ⇒ fail; a hit resting
+    // whose own operand is an outputs path, or a text hit the diff could not check ⇒ fail; a hit resting
     // only on the detector's inference with a clean diff ⇒ pass, with the evidence kept as an advisory.
     const scanLike = { outputsDeletes: ctx.outputsDeletes, outputsDeleteBasis: ctx.outputsDeleteBasis };
     const tier = outputsDeleteTier(ctx.scanMissing ? undefined : scanLike, ctx.fsDiff);
@@ -2260,7 +2260,7 @@ function check(
             : tier === "warn"
               ? ok(
                   `advisory — unconfirmed delete-shaped command(s), not failed: ${entries.slice(0, 3).join("; ")} ` +
-                    `(no output that existed at turn start was deleted and no flagged statement names an outputs path; ` +
+                    `(no output that existed at turn start was deleted and no flagged delete has an outputs path as its own operand; ` +
                     `a file created and deleted within the turn is invisible to the filesystem diff)`,
                 )
               : ok(),

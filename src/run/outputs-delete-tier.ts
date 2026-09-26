@@ -14,7 +14,7 @@ export type OutputsDeleteTier = "none" | "warn" | "fail";
  *
  * `fail` when:
  *   - the filesystem diff proved a deletion (a path present at turn start is gone); or
- *   - a flagged delete statement itself names an outputs path, or moves something out of outputs
+ *   - a delete in command/call position has an outputs path as its own operand, or something is moved out of outputs
  *     (`named` — covers a file the turn created and deleted, which the diff cannot see); or
  *   - the diff did not run or could not verify (`unavailable`, or absent — every result written before
  *     it existed), so a text hit is all there is; or

@@ -2881,23 +2881,97 @@ export function isOutputsDelete(cmd: string): boolean {
 /** WHY `isOutputsDelete` flagged a command — the input to the outputs-delete tiering. Only meaningful for a
  *  command that IS flagged; it never changes what is flagged.
  *
- *  `named`: some flagged delete STATEMENT itself names an outputs path (`DELETE_TOKEN` and the mount matcher
- *  both hit that one statement), or moves something out of outputs. `inferred`: the flag rests on the
- *  detector's inference instead — an unprovable target (`rm "$UNSET"`, or a Python identifier named `rm`
- *  next to an outputs path elsewhere in the command), or a relative `cd` into outputs.
+ *  `named`: some statement carries a delete whose OWN OPERAND names an outputs path — the delete is the
+ *  thing being run, and outputs is what it removes:
+ *    - shell: `rm` / `rmdir` / `unlink` / `shred -u` in COMMAND position (the start of a simple command:
+ *      statement start, after `|`, `(`, `$(`, a backtick or `{`, after `then`/`do`/`else`, after a
+ *      `sudo` / `command` / `exec` / `env` / `nohup` / `time` / `nice` / `ionice` / `timeout N` / `xargs` prefix, or first inside a
+ *      `sh -c '…'` body; an optional path prefix such as `/bin/` is allowed), with an outputs path among its
+ *      arguments — a trailing ` # comment` is not an argument. Under `xargs` the operands come from the
+ *      pipe, so the whole statement is the operand;
+ *    - `find … -delete` / `find … -exec rm …` with an outputs path among `find`'s arguments;
+ *    - `mv` out of outputs (`mvDeletesOutputs`);
+ *    - Python: `os.remove(` / `os.unlink(` / `os.rmdir(` / `shutil.rmtree(` whose argument text names
+ *      outputs (or, in a comprehension, whose `for … in <iterable>` does), or a `.unlink(` / `.rmdir(` method call in a statement that names outputs (the receiver
+ *      is typically a `Path(...)` literal or a comprehension over one).
+ *  `inferred`: everything else the detector flagged — an unprovable target (`rm "$UNSET"`), a relative
+ *  `cd` into outputs, or an outputs path that merely shares a statement with the word `rm`: a Python
+ *  identifier (`rm = …`, `rm.find(…)`, `rm[…]`, `rm: str`), quoted prose (`echo 'rm outputs/x'`), a
+ *  `sed`/`grep` pattern, a trailing comment.
  *
- *  A "statement" is a `splitStatements` fragment — split on newline, `;`, `&&`, `||`, QUOTE-BLIND (a single
- *  `|` is not a separator) — of the comment-stripped, continuation-joined text with simple same-command
- *  `VAR=value` assignments expanded one level (no chains) and the `mktemp` idiom resolved: the exact view
- *  `detectMountDeletes` decides on. That is why a delete in a loop body, after a `cd`, through a chained
- *  or computed variable, or inside a multi-line `python3 -c` body classifies `inferred` even when real,
- *  and why `rm = open(".../outputs/r.md")` or quoted prose `echo 'rm outputs/x' >> …` classifies `named`
- *  even though nothing is deleted. */
+ *  A "statement" is a `splitStatements` fragment — split on newline, `;`, `&&`, `||`, QUOTE-BLIND — of the
+ *  comment-stripped, continuation-joined text with simple same-command `VAR=value` assignments expanded one
+ *  level and the `mktemp` idiom resolved: the view `detectMountDeletes` decides on. So a delete in a loop
+ *  body (`do rm -f "$f"`), after a `cd`, through a chained or computed variable, or as `p = …` then
+ *  `os.remove(p)` classifies `inferred` even when real.
+ *
+ *  Why "can't tell" may resolve to `inferred`: the basis only matters when the filesystem diff ran on
+ *  complete walks and found nothing. If the diff did not verify the turn, any flagged hit fails regardless
+ *  of basis (`outputsDeleteTier`), so this classifier cannot turn an unverifiable turn into a pass. */
 export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
   const mm = mountMatchers("outputs");
   const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
-  const namesOutputs = (stmt: string): boolean => mvDeletesOutputs(stmt, mm) || (DELETE_TOKEN.test(stmt) && mm.touches.test(stmt));
-  return splitStatements(code).some(namesOutputs) ? "named" : "inferred";
+  return splitStatements(code).some((stmt) => mvDeletesOutputs(stmt, mm) || statementDeletesNamedOutputs(stmt, mm)) ? "named" : "inferred";
+}
+
+// A command-start anchor, then optional `VAR=value` prefixes and an optional path prefix, then the command
+// word. The prefix-keyword arm captures which prefix it was, so `xargs` can widen the operand to the pipe.
+const CMD_ANCHOR =
+  String.raw`(?:^|[|({` +
+  "`" +
+  String.raw`]|\$\(|\b(?:then|do|else)\s+|\b(sudo|command|exec|nohup|time|nice|ionice)(?:\s+-\S+(?:\s+-?\d+)?)*\s+|\btimeout(?:\s+-\S+)*\s+\S+\s+|\b(xargs)(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+|\benv(?:\s+-\S+)*(?:\s+\w+=\S*)*\s+|\b(?:ba|z|da)?sh\s+-c\s+['"]?)\s*(?:\w+=\S*\s+)*(?:\S*\/)?`;
+// The command word must not be a Python-style identifier use: `rm = …`, `rm.x`, `rm(…)` as a call is
+// excluded too (not a shell form), `rm[…]`, `rm: T`, `rm,`, `rm)`, `rm}`, augmented assignments.
+const NOT_IDENT_USE = String.raw`(?=\s|$)(?!\s*(?:=|\.|\(|\[|:|,|\)|\}|\+=|-=|\*=|\/=))`;
+const SHELL_DELETE_CMD = new RegExp(CMD_ANCHOR + String.raw`(rm|rmdir|unlink|shred)` + NOT_IDENT_USE, "g");
+const FIND_CMD = new RegExp(CMD_ANCHOR + String.raw`find` + NOT_IDENT_USE, "g");
+const PY_DELETE_CALL = /\b(?:os\.(?:remove|unlink|rmdir)|shutil\.rmtree)\s*\(/g;
+const PY_DELETE_METHOD = /\.(?:unlink|rmdir)\s*\(/;
+
+/** The operand text of a simple command starting at `from`: up to the next `|` or backtick, minus a trailing
+ *  ` # comment`. Quote-blind like everything else here; a `#` inside quotes only ever SHORTENS the operand,
+ *  which can move a delete to `inferred` (a warn), never to `named`. */
+function operandText(stmt: string, from: number): string {
+  const rest = stmt.slice(from);
+  const end = rest.search(/[|`]/);
+  const simple = end === -1 ? rest : rest.slice(0, end);
+  const comment = simple.search(/\s#/);
+  return comment === -1 ? simple : simple.slice(0, comment);
+}
+
+/** The text inside the parentheses opened just before `from` — balanced, falling back to the rest of the
+ *  statement when they do not close within it (a quote-blind split can cut a call in half). */
+function callArgText(stmt: string, from: number): string {
+  let depth = 1;
+  for (let i = from; i < stmt.length; i++) {
+    if (stmt[i] === "(") depth++;
+    else if (stmt[i] === ")" && --depth === 0) return stmt.slice(from, i);
+  }
+  return stmt.slice(from);
+}
+
+function statementDeletesNamedOutputs(stmt: string, mm: MountMatchers): boolean {
+  for (const m of stmt.matchAll(SHELL_DELETE_CMD)) {
+    const [, , viaXargs, word] = m;
+    const operands = viaXargs ? stmt : operandText(stmt, m.index + m[0].length);
+    if (word === "shred" && !/(^|\s)(-[a-zA-Z]*u\b|--remove\b)/.test(operands)) continue;
+    if (mm.touches.test(operands)) return true;
+  }
+  for (const m of stmt.matchAll(FIND_CMD)) {
+    const args = operandText(stmt, m.index + m[0].length);
+    if (/(^|\s)-delete\b|-exec(dir)?\s+(\S*\/)?rm\b/.test(args) && mm.touches.test(args)) return true;
+  }
+  for (const m of stmt.matchAll(PY_DELETE_CALL)) {
+    const from = m.index + m[0].length;
+    const arg = callArgText(stmt, from);
+    if (mm.touches.test(arg)) return true;
+    // A comprehension / generator: `[os.remove(p) for p in glob.glob(".../outputs/*.tmp")]` — the operand
+    // is the loop variable, bound by the `for … in <iterable>` right after the call.
+    const after = stmt.slice(from + arg.length + 1);
+    if (/^\s*for\s+[\w\s,()]+?\s+in\s/.test(after) && mm.touches.test(after)) return true;
+  }
+  if (PY_DELETE_METHOD.test(stmt) && mm.touches.test(stmt)) return true;
+  return false;
 }
 
 /** the operative delete statement(s) within a command that `isOutputsDelete` flagged — for a readable
