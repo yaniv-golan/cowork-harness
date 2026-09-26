@@ -4,7 +4,8 @@
  * fails the build. A finding means "the redactor's policy has a gap (or wasn't configured)".
  *
  * Default classes (chosen for a low false-positive rate): email, currency, bare domain, local
- * absolute path (the recording machine's own filesystem — /Users, /home, /root — not the in-VM
+ * absolute path (the recording machine's own filesystem — /Users, /home, /root, the macOS temp and
+ * volume roots, and a slugged home segment like `-Users-<user>-…` under any root — not the in-VM
  * /sessions mount tree), machine-inventory (the sentinel boilerplate a tool emits when it has
  * LIVE-ENUMERATED local environment state — installed apps, running processes — into its
  * schema/description/output; matches the introducer phrase only, never app names or list shapes).
@@ -52,12 +53,47 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // over structured JSON at scan time (a deliberate design decision: structured extraction beats
     // a boolean over free-form text here). Unix-only by scope — a Windows path (C:\Users\...) does not match; this repo
     // records via Docker/Lima on macOS/Linux.
-    // macOS-host-only prefixes (/private/var, /var/folders, /Volumes) are included alongside the
-    // universal /Users//home//root so a leaked temp-dir or external-volume host path is caught too —
-    // matching the (deliberately separate, encoding-aware) run-level `hostPathLeaked` detector's prefix
-    // set. `/opt/cowork/` is intentionally NOT here: the microvm tier legitimately mounts the agent at
-    // /opt/cowork/agent (src/runtime/lima.ts), so its appearance in a recording is expected, not a leak.
-    re: /(?<![^\s"'(=:])(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/var\/folders\/|\/Volumes\/)[^\s"')]+/gi,
+    // macOS-host-only prefixes (/private/var, /var/folders, /private/tmp, /Volumes) are included alongside
+    // the universal /Users//home//root so a leaked temp-dir or external-volume host path is caught too.
+    // `/private/tmp/` is the realpath of macOS `/tmp` and does not exist in the Linux VM/container, so it
+    // is a host path by construction. `/opt/cowork/` is intentionally NOT here: the microvm tier
+    // legitimately mounts the agent at /opt/cowork/agent (src/runtime/lima.ts), so its appearance in a
+    // recording is expected, not a leak.
+    //
+    // Bare `/tmp/` is deliberately NOT a root: the in-VM HOME is `/tmp`, and clean recordings carry
+    // host-neutral paths like `/tmp/cc-socks/<n>.sock`. What makes a temp path sensitive is the USERNAME
+    // in it, and that usually sits in a SLUGGED segment — a Claude session scratchpad lives at
+    // `/tmp/claude-<uid>/-Users-<user>-<project>/…` (macOS) or `/tmp/claude-<uid>/-home-<user>-…` (Linux).
+    // The second alternative flags that one segment (`-Users-…`/`-home-…`/`-root-…`), whatever root it
+    // sits under. Its segment start is string-start, `/`, a quote, or a newline (raw or the two-char JSON
+    // escape, since this scans raw event lines): `ls ~/.claude/projects` prints one slug per line and
+    // `~/.claude.json` keys projects by slug, with no path in front. NOT a space — ` -Users-only` in prose
+    // stays clean — and so, by design, does a slug after a space or tab in `ls -l`, `tree` or `du` output. A slug-shaped segment inside an http(s) URL is not a host path and is skipped (the URL ends at
+    // whitespace, a quote, `,` or `;`, so a path comma-joined after a URL is still seen). That look-back is
+    // capped at 256 chars to keep the scan linear on a long unbroken run; past the cap a URL segment is
+    // flagged, which fails safe. Known
+    // false positive: a directory literally named `-home-…` inside the VM (clear it with `--allow-path`).
+    // The segment stops at a backslash too, so a JSON-escaped `\n` ends it and the next line's slug is
+    // its own finding. Under a listed root the first alternative already consumes the whole
+    // path, slug included, so the slug arm only fires on an unlisted root such as bare `/tmp/`. Its sample
+    // is just the segment, so a whole-token `--allow-path` can still clear it.
+    //
+    // The root boundary is whitespace, a quote, a backtick, `(`, `[`, `=`, `:` or `>` — a model reply
+    // quotes a path in backticks ("Saved to `/Users/…`") — or a JSON-escaped `\n`/`\t`: this scans RAW
+    // event lines, where a one-path-per-line tool result puts the two characters `\n` before each root.
+    // For the same reason a path stops at a backslash, so each listed path is its own finding.
+    //
+    // The boundary also accepts a `://` prefix: in `computer:///Users/alice/…` or `file:///home/…` the
+    // char before the root is the URI's own third slash, which the plain lookbehind rejects — so a host
+    // path inside a link was never flagged. A `file://` URI may also carry a host part
+    // (`file://localhost/Users/…`); that is accepted for `file:` only, so an http(s) URL whose path
+    // happens to start `/home/` is not a host path. `/System/Volumes/` is the macOS data-volume spelling
+    // of the same tree (`/System/Volumes/Data/Users/…`), as `df`/`mount`/`realpath` print it.
+    //
+    // The run-level `hostPathLeaked` detector (src/run/execute.ts) shares the zero-false-positive arms
+    // (`/private/tmp/`, a `computer://`/`file://` prefix) but NOT the slug arm or `/System/Volumes/`: it
+    // is a live verdict signal, and a slug-shaped name is a weaker signal than a root prefix.
+    re: /(?:(?<![^\s"'(=:`\[>])|(?<=:\/\/|file:\/\/[^\s\/"']*|\\[nt]))(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/System\/Volumes\/|\/Volumes\/)[^\s"'\\)]+|(?<!https?:\/\/[^\s"',;]{0,256})(?<=^|\/|"|'|\n|\\n)-(?:Users|home|root)-[^/\s"'\\)]+/gi,
     cls: "path",
   },
   {
@@ -317,6 +353,15 @@ function allowed(sample: string, cls: string, allow: AllowPattern[]): boolean {
   });
 }
 
+/** macOS system paths that identify no one and appear in ordinary recordings: from Desktop 2.7032.0 the
+ *  host-loop agent runs at `/var/empty` and reports its realpath. Exact directory, or a path under it with
+ *  no `..` segment (which could walk out of it into a path that does identify someone). */
+const SYSTEM_CONSTANT_PATHS = ["/private/var/empty"];
+function isSystemConstantPath(p: string): boolean {
+  if (p.split("/").includes("..")) return false;
+  return SYSTEM_CONSTANT_PATHS.some((c) => p === c || p.startsWith(`${c}/`));
+}
+
 /** Scan one string for PII matches, suppressing anything the (class-scoped, whole-token) allowlist covers. */
 export function scanText(text: string, where: string, allow: AllowInput[], patterns = DEFAULT_SCAN_PATTERNS): ScanFinding[] {
   const out: ScanFinding[] = [];
@@ -325,6 +370,7 @@ export function scanText(text: string, where: string, allow: AllowInput[], patte
     const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
     for (const m of text.matchAll(g)) {
       const sample = m[0];
+      if (cls === "path" && isSystemConstantPath(sample)) continue;
       if (!allowed(sample, cls, norm)) out.push({ where, cls, sample });
     }
   }

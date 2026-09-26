@@ -56,7 +56,7 @@ function shippedPolicy(): RedactionPolicy {
   };
 }
 
-// A hostloop run dir, in the real shape: the agent's cwd IS the outputs dir, several levels inside mnt/.
+// A hostloop run dir, in the pre-Desktop-2.7032.0 shape: the agent's cwd IS the outputs dir, several levels inside mnt/.
 const HOST_CWD = "/Users/someone/.cowork-harness/runs/deliver/local_1/work/session/mnt/outputs";
 const HOST_FILE = `${HOST_CWD}/report.html`;
 

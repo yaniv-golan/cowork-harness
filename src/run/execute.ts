@@ -960,6 +960,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // user-visible workspace, in the same path space the agent reports its own paths in. Only the two
       // tiers that serve present_files supply one; the others keep the cwd fallback (see setSessionRoot).
       let spawnedSessionRoot: string | undefined;
+      let spawnedAgentCwd: string | undefined; // set only when the agent runs deliberately outside the session tree
       if (effectiveFidelity === "hostloop") {
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -980,7 +981,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         hostloopPathGateFired = hl.pathGateFired;
         hostloopInfraErrors = hl.infraErrors;
         hostloopMarkTearingDown = hl.markTearingDown;
-        spawnedSessionRoot = hl.sessionRoot; // HOST tree — the native agent runs there
+        spawnedSessionRoot = hl.sessionRoot; // HOST tree — the native agent's file paths live there
+        spawnedAgentCwd = hl.agentProcessCwd; // from Desktop 2.7032.0: /var/empty (or a per-run dir), outside it
         logHostWriteNotice(
           plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
           warn,
@@ -1069,6 +1071,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Unset on the tiers that serve no present_files (`protocol`, `microvm`), where the cwd fallback is
       // already the session root and there is no delivery to classify.
       if (spawnedSessionRoot !== undefined) run.setSessionRoot(spawnedSessionRoot);
+      if (spawnedAgentCwd !== undefined) run.setExpectedAgentCwd(spawnedAgentCwd);
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
@@ -1394,12 +1397,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
     // added/modified files. (`[]` when there's no manifest, e.g. a --resume run.)
     // F12, CORRECTED 2026-08-27: the old text said "at container/hostloop the agent's cwd is the SESSION
-    // ROOT". True at CONTAINER only. At hostloop the agent process sits at `mnt/outputs` (see
-    // `hostLoopCwds` in src/runtime/hostloop.ts), so a bare `Write` there lands INSIDE `workRoot` and needs
-    // no scratchpad walk to be seen. The branch is still right, but for two different reasons per tier:
+    // ROOT". True at CONTAINER only. At hostloop the agent's file tools write inside `mnt` (before Desktop
+    // 2.7032.0 a bare `Write` landed in `mnt/outputs`; from it a relative `Write` is refused outright — see
+    // `hostLoopCwds` in src/runtime/hostloop.ts), so they need no scratchpad walk to be seen. The branch is
+    // still right, but for two different reasons per tier:
     //   container — agent cwd IS the session root, so a relative `Write` lands outside `workRoot`;
-    //   hostloop  — the agent writes inside `mnt`, but `mcp__workspace__bash` starts at the session root,
-    //               so a relative SHELL write lands outside `workRoot`.
+    //   hostloop  — the file tools write inside `mnt`, but `mcp__workspace__bash` starts at the session
+    //               root, so a relative SHELL write lands outside `workRoot`.
     // Either way `workRoot` ends `/session/mnt` and its parent is the root, so passing it captures what the
     // run actually authored.
     //
@@ -2518,9 +2522,14 @@ export function scrubRawRunLogs(outDir: string, secrets: string[]): void {
  */
 export function hostPathLeaked(text: string): boolean {
   // macOS temp/volume roots are host paths too: `/var/folders/…` (the OS temp dir, and the realpath
-  // target of `/private/var/…`) and `/Volumes/…` (mounted disks). `/tmp` is deliberately NOT here — it is
-  // the in-VM HOME, so it legitimately appears in agent-visible text and would false-positive.
-  const re = /(^|[\s"'(=:]|file:\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/|\/private\/var\/|\/var\/folders\/|\/Volumes\/)/;
+  // target of `/private/var/…`), `/private/tmp/…` (the realpath of macOS `/tmp`, which does not exist in
+  // the Linux VM) and `/Volumes/…` (mounted disks). Bare `/tmp` is deliberately NOT here — it is the
+  // in-VM HOME, so it legitimately appears in agent-visible text and would false-positive.
+  // `computer://` is accepted beside `file://`: a delivered-file link to a host path
+  // (`computer:///Users/…`) is exactly how a host path reaches the model's own reply, and so is a
+  // backtick-quoted one ("Saved to `/Users/…`").
+  const re =
+    /(^|[\s"'(=:`]|(?:file|computer):\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/Volumes\/)/;
   if (re.test(text)) return true;
   // also catch URL-encoded (%2FUsers%2F) and backslash (file:\\host\Users) forms by testing a
   // decoded + backslash-normalized copy. Decode each `%`-escape RUN independently rather than the

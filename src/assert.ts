@@ -2005,8 +2005,8 @@ function check(
     // THE HARNESS now serves present_files at BOTH container and hostloop (closing the prior coverage
     // gap — see present_files_called below). But this key's promotion/leak semantics stay genuinely
     // container-shaped, not a harness gap: production's own
-    // `isHostLoopMode` branch validates a path and passes it through WITHOUT promoting — the agent's cwd
-    // at hostloop already IS the outputs dir, so there is no scratch→outputs copy that could ever leak.
+    // `isHostLoopMode` branch validates a path and passes it through WITHOUT promoting — a delivered file
+    // under the outputs dir is already user-visible, so there is no scratch→outputs copy that could leak.
     // So a hostloop run reports cannot-verify here, never a false claim that the tool is absent or that
     // nothing leaked.
     //

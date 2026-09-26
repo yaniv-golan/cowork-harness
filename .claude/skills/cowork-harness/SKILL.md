@@ -603,11 +603,15 @@ Recognize these before "fixing" a non-bug:
   **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
   scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
   **The fix is lane-dependent — and so is the PATH.** On `lane: local`, write deliverables where the user
-  can see them, but do **not** hardcode the literal prefix `outputs/`: on the desktop-local host-loop lane
-  (what production runs) the file tools are ALREADY rooted at `outputs/`, so `outputs/x.md` doubles to
-  `outputs/outputs/x.md` and the user never sees it — a **bare filename** is correct there. At
-  `fidelity: container`/`microvm` (VM-loop, the harness default) the base is the session root instead, so a
-  bare name lands in the scratchpad and you want `{{workspaceFolder}}` or an explicit delivery. Addressing
+  can see them, and give the file tools an **absolute** path under the outputs directory the agent's prompt
+  names. On the desktop-local host-loop lane (what production runs), against Desktop **2.7032.0 and later**,
+  the agent process runs outside the session (`/var/empty`), so a relative `Read`/`Write`/`Edit` — a bare
+  filename or `outputs/x.md` alike — is **refused** ("File is in a directory that is denied by your
+  permission settings."); only a pathless or relative `Grep`/`Glob` is redirected to outputs. (Before
+  2.7032.0 the file tools were rooted at `outputs/`, so a bare filename landed there and `outputs/x.md`
+  doubled to `outputs/outputs/x.md`.) At `fidelity: container`/`microvm` (VM-loop, the harness default) the
+  base is the session root, so a bare name lands in the scratchpad and you want `{{workspaceFolder}}` or an
+  explicit delivery. Addressing
   a connected folder by name (`<folder>/x.md`) never reaches it on either lane — it builds a same-named
   decoy inside `outputs`, reports success, and gives no signal. Measured 2026-08-27; see
   [docs/scenario.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md), "Where a relative path actually lands". **On `lane: remote`, moving a file under `outputs/` does NOT help** —

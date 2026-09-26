@@ -18,6 +18,12 @@ All notable changes to this project are documented here. The format is based on
 - **The outputs filesystem diff runs on every live turn**, not only on scenarios that assert a baseline key,
   so a scenario that never armed it can now fail on a deleted pre-existing output — including a file an
   earlier turn of a `--resume` session wrote.
+- **`hostloop` against Desktop 2.7032.0 or later: file tools need absolute paths.** The agent no longer runs
+  in the outputs dir, so a skill that gives `Read`/`Write`/`Edit` a relative path — a bare `report.md`, or
+  `outputs/report.md` — now gets the refusal production gives ("File is in a directory that is denied by
+  your permission settings.") instead of a file quietly written to outputs. Write the absolute outputs path
+  the agent's prompt names. A pathless or relative `Grep`/`Glob` still searches outputs. Baselines before
+  2.7032.0 are unchanged, and so are `container` and `microvm`.
 - **`cowork-harness lint` can newly fail — including plain `lint` without `--strict`, and the packaged
   Action's `command: lint` lane, whose `ok` output turns `false`.** It now reports every file the scenario
   loader rejects as an ERROR (see Fixed). That red lands on three kinds of input:
@@ -89,6 +95,25 @@ All notable changes to this project are documented here. The format is based on
   `input_unmodified`) still appears only on runs that arm it. A delete of a file that existed at turn start
   now fails every scenario, however it was made (a script file, a non-bash tool) — previously only on
   scenarios that armed the manifest.
+- **`hostloop` runs the agent where Desktop 2.7032.0+ does.** From that Desktop, the host-loop agent process
+  runs at `/var/empty` (or, when that directory is not root-owned and locked down, a per-run `host-cwd`
+  directory), with deny rules for every spelling of it and the outputs dir added back as a working
+  directory. The path gate re-anchors a pathless or relative `Grep`/`Glob` to outputs, as Desktop's hook
+  does, and blocks a relative `Read`/`Write`/`Edit`/`MultiEdit` with Desktop's "needs an absolute path here"
+  message if the agent's own refusal ever fails to fire. The re-anchored path is kept in the run's control log
+  (`control-out.jsonl`, the hook reply's `updatedInput`); the agent's transcript keeps only the model's
+  original input. The agent's own refusal of a relative path shows in its tool result, not in
+  `hook_blocked` or `path_denied` — assert it with `tool_result_contains`. Previously the harness ran the
+  agent in outputs, so a relative write that production refuses passed here.
+  - The model sees one prompt change on these baselines: the Shell access section's outputs line no longer
+    calls outputs the working directory ("(your outputs directory)" instead of "(your outputs directory —
+    cwd)").
+  - A baseline whose `appVersion` is not a version number now warns that it gets the pre-2.7032.0
+    behaviour, instead of taking it silently.
+  - The committed `hostloop-computer-links` cassette is re-recorded against this behaviour (agent at
+    `/var/empty`); its scenario is unchanged. The `subagent-write-probe` live probe is pinned to
+    `desktop-2.2553.1`, and a new `subagent-write-refused-probe` asserts the refusal on `latest`.
+
 - **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
   folder, so a skill-folder positional inside a plugin is the same run as `critique <plugin> --skill
   <name>`: same mount, same packaged corpus, same graded skill, announced with a `::notice::`. Its
@@ -182,6 +207,35 @@ All notable changes to this project are documented here. The format is based on
   the mount carried an empty `skills/<name>/`, and a skill-folder positional packaged the enclosing plugin's
   agents and shared references although only the folder was mounted. The packager now reads the mount
   root's tracked set, once, for every class.
+- **A recording made from a temp directory no longer publishes the operator's username unnoticed.** A run
+  dir under `/private/tmp`, `/var/folders` or `/tmp` records its host path into tool results and
+  `computer://` links, and that path usually carries the username in a slugged segment (a Claude session
+  scratchpad lives at `/tmp/claude-<uid>/-Users-<user>-<project>/…`). The reference `.cowork-redact.json`
+  covered only `/Users/`, `/home/` and `/root/`, and `verify-cassettes` reported such a cassette clean. The
+  reference policy now also redacts `/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`,
+  `/Volumes/` and any `-Users-<user>-…` / `-home-<user>-…` / `-root-…` segment — after a `/`, a quote, or at
+  the start of a string or line, as `ls ~/.claude/projects` and `~/.claude.json` print them — keeping the
+  `/mnt/` tail so links still resolve on replay. Its local-path rules are now case-insensitive, so every
+  path the scanner flags, the policy can fix; its root rules skip a segment inside an http(s) URL, and
+  `/Volumes/` must start a path, so `https://api.example.com/users/…` and a Docker `…/volumes/…` path are
+  left alone. The scanner's `path` class flags the same roots and segments, and now also flags a host path
+  inside a `computer://` or `file://` link (including `file://localhost/…`), after a backtick (a path quoted
+  in the model's reply), and after a newline inside a raw event line (a one-path-per-line tool result) —
+  all shapes its boundary check had skipped. Bare `/tmp/` is still not flagged: it is the in-VM home and appears
+  in clean recordings. **`verify-cassettes` can now fail on a cassette it previously passed**; the finding
+  class (`path`), the redaction token format, the JSON schema and the exit codes are unchanged. A
+  `.cowork-redact.json` copied by an earlier `init-redact` lacks the new rules — re-run `init-redact
+  --force` or add them. That only protects future recordings: there is no command that re-redacts a
+  committed cassette, so one that now fails must be re-recorded or reviewed and cleared with
+  `--allow-path`. Still covered by neither layer: a run dir under an unlisted root whose username is not in
+  a slugged segment (a Linux `/tmp/<name>/…`, `/scratch/…`, a custom `$TMPDIR` — keep the run dir under
+  `$HOME`, or add a policy rule), percent-encoded or JSON-escaped paths (`%2FUsers%2F`, `\/Users\/`), and
+  a bare (non-markdown) `computer://` link, which stops resolving on replay once its prefix is redacted. By
+  design a slugged segment after a space or tab — as `ls -l`, `tree` or `du` print it — is not flagged.
+- **`transcript_no_host_path` now sees a host path inside a `computer://` link, in backticks, and under
+  `/private/tmp/`.** The live host-path check accepted a `file://` prefix but not `computer://` or a
+  backtick, so a delivered-file link to a host path, or one quoted as "Saved to `/Users/…`" — the usual ways
+  one reaches the model's reply — was not detected at the sealed tiers.
 
 ## [3.9.0] — 2026-09-25
 

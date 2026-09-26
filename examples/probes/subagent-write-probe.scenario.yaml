@@ -1,9 +1,13 @@
 # yaml-language-server: $schema=../../schema/scenario.schema.json
-# Live acceptance probe: a sub-agent's RELATIVE Write lands in outputs on hostloop (the production
-# default loop), with the full causal chain asserted — dispatch -> child-origin Write -> paired
-# non-error result -> artifact content — plus zero VM-path attempts. Run on the live lane only.
+# Live acceptance probe: a sub-agent's RELATIVE Write lands in outputs on hostloop, with the full causal
+# chain asserted — dispatch -> child-origin Write -> paired non-error result -> artifact content — plus
+# zero VM-path attempts. Run on the live lane only.
+#
+# Pinned to a Desktop BEFORE 2.7032.0, where the host-loop agent ran at the outputs dir. From 2.7032.0 it
+# runs at /var/empty and the same relative Write is refused — that contract is probed by
+# subagent-write-refused-probe.scenario.yaml against `latest`.
 name: subagent-write-probe
-baseline: latest
+baseline: desktop-2.2553.1
 session: (inline)
 fidelity: hostloop
 prompt: |
@@ -19,8 +23,8 @@ assert:
       # Matches the RAW recorded path — which is what the model passed, NOT a resolved absolute path.
       # The prompt above pins the exact relative spelling `artifacts/probe.json` and tells the child not
       # to prefix it, so demanding a `/mnt/outputs/` prefix here contradicted this scenario's own
-      # instruction and failed against a run that behaved correctly. Cwd-relative `artifacts/…` IS the
-      # documented host-loop contract (docs/subagents.md).
+      # instruction and failed against a run that behaved correctly. Cwd-relative `artifacts/…` was the
+      # host-loop contract before Desktop 2.7032.0 (docs/subagents.md).
       #
       # The outputs anchor is not lost, it just lives in the right assertion: a stray
       # `foo/artifacts/probe.json` would satisfy this suffix but then FAIL the exact-path `artifact_json`

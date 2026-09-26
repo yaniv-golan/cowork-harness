@@ -85,7 +85,7 @@ async function isContained(candidate: string, roots: string[]): Promise<boolean>
 }
 
 export interface HostLoopPathGateConfig {
-  hostCwd: string; // production: hostCwd = getOutputsDir(e)
+  hostCwd: string; // the outputs dir: the base a relative path resolves against (production: getOutputsDir(e))
   allowedRoots: string[]; // containment universe (reads incl. uploads/spool/plugins; writes reach here only past the read-only guard)
   /** mode:"r" folder mounts — HARNESS EXTENSION (consented, not product drift): readable by
    *  non-mutating tools only; production has no ro folders. Preserved across the 1.20186.1 re-port. */
@@ -98,13 +98,66 @@ export interface HostLoopPathGateConfig {
   uploadsRoots: string[];
   spooledProjectsRoots: string[];
   readOnlyPluginRoots: string[];
+  /** Set from Desktop 2.7032.0, where the agent PROCESS runs off outputs (at `/var/empty` or a per-session
+   *  dir): every spelling of that directory. Its presence switches on Desktop's handling of relative paths
+   *  — see `relativePathDecision`. Absent → the older behaviour, where a relative path resolved against
+   *  `hostCwd` because the agent ran there. */
+  processCwdSpellings?: string[];
+}
+
+/** The path key each gated tool carries (production's `{Read,Write,Edit:"file_path", Glob,Grep:"path"}`). */
+const TOOL_PATH_KEY: Record<string, "file_path" | "path"> = {
+  Read: "file_path",
+  Write: "file_path",
+  Edit: "file_path",
+  MultiEdit: "file_path",
+  Glob: "path",
+  Grep: "path",
+};
+
+type GateReply =
+  | { decision: "block"; reason: string }
+  | { hookSpecificOutput: { hookEventName: "PreToolUse"; updatedInput: Record<string, unknown> } }
+  | Record<string, never>;
+
+/** Desktop's hook, from 2.7032.0, for a path that is relative or sits under the process cwd: `Grep`/`Glob`
+ *  (including a pathless call, taken as `.`) are re-anchored to the outputs dir and returned as
+ *  `updatedInput`; `Read`/`Write`/`Edit`/`MultiEdit` are blocked with "<Tool> needs an absolute path here".
+ *  In production the agent's own deny rules refuse a relative Read/Write/Edit before this hook runs, so the
+ *  block is a second line — which is what keeps a relative write from quietly landing in outputs if the
+ *  deny rules ever fail to load. Returns `undefined` when the path is absolute and elsewhere (ordinary
+ *  gating applies). */
+function relativePathDecision(
+  toolName: string,
+  input: Record<string, unknown>,
+  cfg: HostLoopPathGateConfig & { processCwdSpellings: string[] },
+): { rel: string; key: "file_path" | "path"; raw: string } | undefined {
+  const key = TOOL_PATH_KEY[toolName];
+  if (key === undefined) return undefined;
+  const given = typeof input[key] === "string" ? (input[key] as string) : undefined;
+  // Desktop's guard keys on the Glob PATTERN alone: an absolute pattern is never re-anchored, whatever
+  // its `path`.
+  if (toolName === "Glob" && typeof input.pattern === "string" && isAbsolute(expandTilde(input.pattern))) return undefined;
+  const raw = given ?? (toolName === "Grep" || toolName === "Glob" ? "." : undefined);
+  if (raw === undefined) return undefined;
+  const expanded = expandTilde(raw.trim());
+  if (!isAbsolute(expanded)) return { rel: expanded, key, raw };
+  // An absolute path under a process-cwd spelling is treated as relative to it. For Grep/Glob that is
+  // Desktop's re-anchor. For Write/Edit/MultiEdit Desktop instead skips the re-anchor and lets containment
+  // deny it with the generic wording; the harness blocks with "needs an absolute path here". Unobservable
+  // live — the agent's own deny rule refuses such a write before any hook runs — so kept for one message.
+  for (const sp of cfg.processCwdSpellings) {
+    if (expanded === sp) return { rel: ".", key, raw };
+    if (expanded.startsWith(`${sp}/`)) return { rel: relative(sp, expanded), key, raw };
+  }
+  return undefined;
 }
 
 export async function checkHostLoopPathGate(
   toolName: string,
   input: Record<string, unknown>,
   cfg: HostLoopPathGateConfig,
-): Promise<{ decision: "block"; reason: string } | Record<string, never>> {
+): Promise<GateReply> {
   if (!PATH_GATE_TOOLS.has(toolName) && toolName !== "MultiEdit") return {};
   // Production's /sessions guard loops BOTH ["file_path","path"] keys — it is a SEPARATE mechanism from
   // the main path extraction below, which is first-match-only. Gated on PATH_GATE_TOOLS specifically (not
@@ -122,6 +175,26 @@ export async function checkHostLoopPathGate(
           `at their real locations), or use the \`bash\` tool — which runs inside the VM — to operate on ` +
           `\`/sessions/...\` paths.`,
       };
+  }
+  if (cfg.processCwdSpellings) {
+    const rel = relativePathDecision(toolName, input, cfg as HostLoopPathGateConfig & { processCwdSpellings: string[] });
+    if (rel !== undefined) {
+      const anchored = resolve(cfg.hostCwd, rel.rel);
+      if (toolName === "Grep" || toolName === "Glob") {
+        // Re-anchor, then gate the re-anchored path exactly as an absolute one.
+        const updatedInput = { ...input, [rel.key]: anchored };
+        const inner = await checkHostLoopPathGate(toolName, updatedInput, cfg);
+        if ("decision" in inner) return inner;
+        return { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } };
+      }
+      const underOutputs = !relative(cfg.hostCwd, anchored).startsWith("..") && !isAbsolute(relative(cfg.hostCwd, anchored));
+      return {
+        decision: "block",
+        reason: underOutputs
+          ? `${toolName} needs an absolute path here — use \`${anchored}\` for \`${rel.raw}\`.`
+          : `${toolName} needs an absolute path here — use an absolute path under ${cfg.hostCwd}.`,
+      };
+    }
   }
   // Production takes the FIRST string among ["file_path","path"] for the MAIN extraction/containment
   // check that follows (`.map(...).find(...)`) — a genuinely different, first-match-only mechanism.

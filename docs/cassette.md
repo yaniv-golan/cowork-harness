@@ -533,7 +533,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `path_denied` | **`fidelity: hostloop` only** — a path denial matched all given matchers (`tool`/`path_matches`/`source`/`agent_scope`) — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
 | `no_path_denied` | **`fidelity: hostloop` only** — no path denial was recorded at all — replay: needs `controlOut`. **Only `true` is valid**; any other tier FAILS "cannot verify" |
 | `result` | run ended with `success` or `error` |
-| `no_scratchpad_leak` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuous pass if nothing was presented; content-class: both the tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives on replay at container, where the agent's cwd IS the session root the live lane measures from; at hostloop the live lane measures from the session root while a re-drive has only the recorded cwd (`mnt/outputs`, inside it), so the promoted/leaked booleans there are not equivalent — immaterial to this key, which evaluates at container only; evidence-unavailable only when `presentedFiles` is absent (an older run predating the feature); **container tier only** — `present_files` *is* served on hostloop, but that branch passes a validated path through without promoting, so there is no scratch→outputs copy to leak; `microvm`/`protocol` do not serve the tool at all |
+| `no_scratchpad_leak` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuous pass if nothing was presented; content-class: both the tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives on replay at container, where the agent's cwd IS the session root the live lane measures from; at hostloop the live lane measures from the session root while a re-drive has only the recorded cwd (`mnt/outputs` before Desktop 2.7032.0, `/private/var/empty` from it), so the promoted/leaked booleans there are not equivalent — immaterial to this key, which evaluates at container only; evidence-unavailable only when `presentedFiles` is absent (an older run predating the feature); **container tier only** — `present_files` *is* served on hostloop, but that branch passes a validated path through without promoting, so there is no scratch→outputs copy to leak; `microvm`/`protocol` do not serve the tool at all |
 | `present_files_called` | at least one file was delivered via `present_files` (`RunResult.presentFilesCalls` > 0 — the invocation count, which a host-path redaction policy cannot alter) — the presence companion to `no_scratchpad_leak`; content-class (re-derives identically on replay); **container + hostloop tiers** |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
@@ -1007,6 +1007,30 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   resolving on replay, with no error and no finding. Keep the `(?=/mnt/)`-anchored rules **before** the bare
   ones, as the shipped policy does. Loading a policy in the hazardous order prints a warning naming both
   pattern indices. `--no-redact` skips redaction for known-synthetic inputs.
+  The reference policy covers `/Users/`, `/home/`, `/root/`, the macOS temp and volume roots
+  (`/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`, `/Volumes/`), in any letter case,
+  and a **slugged home segment** (`-Users-<user>-…`, `-home-<user>-…`, `-root-…`) under any root, at the
+  start of a string or line, or after a `/` or a quote. Root rules skip a path segment inside an http(s) URL
+  (`https://api.example.com/users/…`) but not a host path passed as a query value
+  (`http://localhost:3000/open?f=/Users/…` is still redacted), and `/Volumes/` must start a path, so a Docker or kubelet
+  `…/volumes/…` segment is left alone. That last rule is what catches a run dir inside a
+  Claude session scratchpad — `/tmp/claude-<uid>/-Users-<user>-<project>/…` — where the username is not in a
+  `/Users/<user>/` segment at all. A policy copied by an earlier `init-redact` does not have these rules:
+  re-run `init-redact --force` (after saving any tailoring) or add them by hand. That fixes **future**
+  recordings only — there is no command that re-applies a policy to a cassette already committed, so one
+  that now fails `verify-cassettes` must be re-recorded, or reviewed and cleared with `--allow-path`.
+  **Not covered by either layer** (add a policy rule of your own if your recordings can carry them):
+  - a run dir under a root outside the list whose username is not in a slugged segment — a Linux
+    `/tmp/<name>/…`, `/scratch/<user>/…`, a custom `$TMPDIR`. Simplest fix: keep the run dir under `$HOME`,
+    which the policy and the scanner both cover;
+  - encoded spellings: percent-encoded (`%2FUsers%2F…`) or JSON-escaped (`\/Users\/…`) paths, and Windows
+    paths (`C:\Users\…`);
+  - a slugged segment after a space or tab — the way `ls -l`, `tree` and `du` print a directory name — is not
+    flagged or redacted, by design: accepting a space would flag ordinary prose. (`ls -l` also prints the
+    owner column, which no rule covers.) If a recording can carry such a listing, add a policy rule for it;
+  - a **bare** `computer://` link (not inside markdown `[…](…)` or backticks) stops resolving on replay once
+    its host prefix is redacted, because the redaction token's own `]` ends the bare link. `record` refuses to
+    write if that flips a `computer_links_resolve` verdict; write links in markdown form to avoid it.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
   bare-`domain` + `path` + `machine-inventory`) runs over the **whole cassette** — the deliverable (`outputs/`
@@ -1026,7 +1050,15 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives, and a
   live-enumerated app/process inventory sentinel (e.g. a computer-use tool schema's "Available applications on
   this machine: …") is never legitimate catalog boilerplate either; none of the three share the ambiguity that
-  gets `currency`/`domain` excluded there. `--allow <regex>` suppresses synthetic / public reference names
+  gets `currency`/`domain` excluded there. The `path` class matches the recording machine's own roots
+  (`/Users/`, `/home/`, `/root/`, `/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`,
+  `/Volumes/`, any case) after whitespace, a quote, a backtick, `(`, `[`, `=`, `:`, `>` or a newline (raw or
+  JSON-escaped) — including inside a `computer://` or `file://` URI, `file://localhost/…` too —
+  plus a slugged home segment (`-Users-<user>-…`, `-home-<user>-…`, `-root-…`) under any root or on its own
+  line or JSON key, so a temp-dir run path carrying a username is flagged. Bare `/tmp/` alone is not a root:
+  it is the in-VM home and appears in clean recordings. A slug-shaped segment in an http(s) URL is not
+  flagged; a directory literally named `-home-…` inside the VM, a prose line that begins `-home-…`, and a
+  quoted route literal like `'/users/:id'` are (clear a reviewed one with `--allow-path`). `--allow <regex>` suppresses synthetic / public reference names
   (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
   path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
   clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /

@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Live acceptance probe: from Desktop 2.7032.0 a sub-agent's RELATIVE Write on hostloop is REFUSED, as in
+# production. The host-loop agent — and every sub-agent it dispatches, which shares its process — runs at
+# /var/empty with deny rules for that directory, so `artifacts/probe.json` expands to
+# /var/empty/artifacts/probe.json and the agent refuses it before any hook runs. Asserted end to end:
+# dispatch -> child Write -> the agent's own refusal text -> nothing landed in outputs. The pre-2.7032.0
+# twin, where the same Write lands in outputs, is subagent-write-probe.scenario.yaml. Live lane only.
+#
+# The child's prompt explicitly overrides the sub-agent manifest's "Pass absolute paths to these tools.":
+# without that, a child that obeys the manifest writes the absolute outputs path, which is allowed here and
+# in production, and never exercises the refusal (observed live). Model-dependent by construction: a child
+# that writes an absolute path anyway fails `tool_result_contains` and `file_absent` — a loud red, never a
+# silent green.
+name: subagent-write-refused-probe
+baseline: latest
+session: (inline)
+fidelity: hostloop
+prompt: |
+  Dispatch exactly one sub-agent with the Agent tool, passing subagent_type: "general-purpose" and this
+  prompt: 'This is a test of how the Write tool handles a RELATIVE path, so an absolute path would defeat
+  it: even though your instructions say to pass absolute paths, call the Write tool with file_path set to
+  the literal string artifacts/probe.json (no directory prefix, not absolute) and this exact content:
+  {"probe":"subagent-write","ok":true} If the Write fails, do not retry with any other path; report the
+  error verbatim and finish.' Do not write the file yourself; after the sub-agent returns, reply DONE.
+assert:
+  - subagent_dispatched: "general-purpose"
+  - dispatch_count_max: 1
+  - subagent_tool_used: "Write"
+  # The refusal is the AGENT's permission deny, not a hook block — only the tool result carries it.
+  - tool_result_contains: "denied by your permission settings"
+  - file_absent: "outputs/artifacts/probe.json"
+  - no_vm_path_file_op: true

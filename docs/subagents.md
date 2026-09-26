@@ -24,10 +24,11 @@ reference for what a sub-agent can reach, what tools it ends up with, and where 
 ## Canonical outputs addressing — TIER-QUALIFIED (there is no single cross-tier literal form)
 
 **Host-loop (production default; `fidelity: hostloop`):**
-1. cwd-relative `artifacts/<...>` — the stable skill-author contract. The sub-agent's file-tool cwd
-   IS the host outputs dir, so a relative path resolves against it directly.
-2. A host-absolute staged path also works, but it is private/session-specific — never present it as a
-   portable contract.
+1. Desktop **2.7032.0+**: an **absolute** path under the host outputs dir the prompt names — the
+   sub-agent manifest says so ("Pass absolute paths to these tools."). The agent runs at `/var/empty`, so a
+   relative `Read`/`Write`/`Edit` is refused; describe the outcome in skill text rather than hard-coding the
+   session-specific path.
+2. Before 2.7032.0: cwd-relative `artifacts/<...>` — the file-tool cwd was the host outputs dir.
 
 Never `/sessions/...` on this tier — the path gate denies it unconditionally (a byte-faithful port of
 production's own host-loop resolver), steering shell work to the `bash` tool, which runs inside the VM
@@ -371,7 +372,7 @@ gate; the naive first-reach invocation without `--strict` is a silent rubber-sta
 
 | Path class | host-loop (file tools) | host-loop (workspace bash) | VM loop (file tools = bash view) |
 |---|---|---|---|
-| outputs | rw — IS the agent cwd (`artifacts/...` relative) | rw at the host outputs dir bind-mounted at `/sessions/<id>/mnt/outputs` | rw at `mnt/outputs` (cwd `/sessions/<id>`) |
+| outputs | rw — absolute paths only from Desktop 2.7032.0 (agent cwd `/var/empty`; relative Read/Write/Edit refused); before it, the agent cwd (`artifacts/...` relative) | rw at the host outputs dir bind-mounted at `/sessions/<id>/mnt/outputs` | rw at `mnt/outputs` (cwd `/sessions/<id>`) |
 | uploads | read-only (write attempt denied: a task-session upload is a hardlink to the user's original file, so edit the working copy or write under outputs) | read-only mount | read-only mount |
 | plugin/skill content | read-only (write attempt denied as "plugin, skill, or knowledge content") | read-only mount | read-only mount |
 | spooled tool results (`projects`) | read-only (blocked by the same category guard) | mounted read-only at `mnt/.claude/projects` | staged into the VM's own `.claude` dir |
@@ -402,8 +403,9 @@ The append is composed of three parts, and only the first is a committed asset:
 3. a trailing sentence about invoking skills, on **both** branches.
 
 The manifest states the split the matrix implies: the file tools take the **host** path, the shell
-takes the `/sessions/<id>/mnt/<name>/` path, and relative paths in the file tools resolve at the host
-cwd. It lists the session's outputs folder and every attached folder with both forms — and a folder the
+takes the `/sessions/<id>/mnt/<name>/` path, and — from Desktop 2.7032.0 — the file tools take absolute
+paths only ("Pass absolute paths to these tools."; before 2.7032.0 relative paths resolved at the host
+cwd, the outputs dir). It lists the session's outputs folder and every attached folder with both forms — and a folder the
 shell cannot reach is listed as such rather than omitted, so an unreachable folder is visible to the
 model instead of silently absent. When there is nothing to list at all it takes a different sentence,
 not an empty list.
@@ -459,8 +461,9 @@ rather than re-deriving its own. What determines a child's tools:
   permission gate ever fires for it); VM tiers bind the literal `Bash` tool instead.
 - **Path gate.** Host-loop only. VM tiers have no path gate — containment there comes from the mount
   topology, not a PreToolUse check.
-- **Environment append.** Host-loop children get the host-loop sub-agent environment text (host cwd
-  framing for file tools, VM root framing for the bash mount); VM children get the VM-loop equivalent
+- **Environment append.** Host-loop children get the host-loop sub-agent environment text (the file-tool
+  folder manifest, which from Desktop 2.7032.0 says "Pass absolute paths to these tools.", and VM root
+  framing for the bash mount); VM children get the VM-loop equivalent
   text; the `protocol` tier sends neither — see
   [fidelity-gaps.md](./fidelity-gaps.md#protocol-tier-sub-agents-get-no-cowork-environment-append) for
   why, and for the excluded fork/`useExactTools` dispatch path (excluded on the agent's own side; the

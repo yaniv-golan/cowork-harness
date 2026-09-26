@@ -16,6 +16,9 @@ import { resolveAgentBinary, resolveHostAgentBinary } from "../src/baseline.js";
  * Run in CI on `sync`, or locally: CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.cowork-harness-token) vitest run live-contract
  */
 
+// The sub-agent probes below span two Desktop eras (one pinned to 2.2553.1, one on `latest`); gating on
+// `latest`'s binaries is enough because an older pin resolves to a patch-newer staged build when its own
+// was pruned (with a stderr note), exactly as a scenario run does.
 // F: derive agent path from the baseline so the suite doesn't silently self-skip when the Desktop
 // binary advances (a hardcoded version would make binOk false → describe.skipIf skips the whole
 // suite, self-disabling the binary-drift guard).
@@ -258,21 +261,33 @@ try {
 const nativeOk = !!NATIVE_AGENT && existsSync(NATIVE_AGENT);
 const PROBE_CAN = dockerOk && imageOk && binOk && nativeOk && !!TOKEN; // hostloop needs BOTH agents + image + token
 
-describe.skipIf(!PROBE_CAN)("live: sub-agent relative-Write acceptance probe (hostloop)", () => {
-  it("the causal chain holds: dispatch -> child Write -> non-error result -> artifact content, zero VM paths", () => {
-    const r = spawnSync("node", ["dist/cli.js", "run", "examples/probes/subagent-write-probe.scenario.yaml", "--output-format", "json"], {
-      encoding: "utf8",
-      env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN },
-      timeout: 600_000,
-    });
-    const out = JSON.parse(r.stdout);
-    const assertions = (out.results ?? []).flatMap(
-      (res: { assertions?: { pass: boolean; assertion?: unknown; message?: string }[] }) => res.assertions ?? [],
-    );
-    const failed = assertions.filter((a: { pass: boolean }) => !a.pass);
-    expect(assertions.length, "no assertions evaluated — did the run reach the assert phase?").toBeGreaterThan(0);
-    expect(failed, JSON.stringify(failed, null, 2)).toEqual([]);
-    expect(r.status).toBe(0);
+// Two eras of the same sub-agent relative Write. Before Desktop 2.7032.0 the host-loop agent ran at the
+// outputs dir and the write landed there (pinned to 2.2553.1 — its native agent is resolved like any
+// other, a patch-newer staged build substituted with a stderr note when the pin was pruned). From 2.7032.0
+// the agent runs at /var/empty and the same write is refused by the agent's own deny rules.
+function runProbe(file: string) {
+  const r = spawnSync("node", ["dist/cli.js", "run", file, "--output-format", "json"], {
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN },
+    timeout: 600_000,
+  });
+  const out = JSON.parse(r.stdout);
+  const assertions = (out.results ?? []).flatMap(
+    (res: { assertions?: { pass: boolean; assertion?: unknown; message?: string }[] }) => res.assertions ?? [],
+  );
+  const failed = assertions.filter((a: { pass: boolean }) => !a.pass);
+  expect(assertions.length, "no assertions evaluated — did the run reach the assert phase?").toBeGreaterThan(0);
+  expect(failed, JSON.stringify(failed, null, 2)).toEqual([]);
+  expect(r.status).toBe(0);
+}
+
+describe.skipIf(!PROBE_CAN)("live: sub-agent relative-Write acceptance probes (hostloop)", () => {
+  it("before 2.7032.0 the causal chain holds: dispatch -> child Write -> non-error result -> artifact content, zero VM paths", () => {
+    runProbe("examples/probes/subagent-write-probe.scenario.yaml");
+  }, 620_000);
+
+  it("from 2.7032.0 the same child Write is refused by the agent and nothing lands in outputs", () => {
+    runProbe("examples/probes/subagent-write-refused-probe.scenario.yaml");
   }, 620_000);
 });
 
