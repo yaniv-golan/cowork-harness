@@ -64,19 +64,28 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // host-neutral paths like `/tmp/cc-socks/<n>.sock`. What makes a temp path sensitive is the USERNAME
     // in it, and that usually sits in a SLUGGED segment — a Claude session scratchpad lives at
     // `/tmp/claude-<uid>/-Users-<user>-<project>/…` (macOS) or `/tmp/claude-<uid>/-home-<user>-…` (Linux).
-    // The second alternative flags that one segment (`-Users-…`/`-home-…`/`-root-…` directly after a `/`),
-    // whatever root it sits under. Under a listed root the first alternative already consumes the whole
+    // The second alternative flags that one segment (`-Users-…`/`-home-…`/`-root-…`), whatever root it
+    // sits under. Its segment start is string-start, `/`, a quote, or a newline (raw or the two-char JSON
+    // escape, since this scans raw event lines): `ls ~/.claude/projects` prints one slug per line and
+    // `~/.claude.json` keys projects by slug, with no path in front. NOT a space — ` -Users-only` in prose
+    // stays clean. A slug-shaped segment inside an http(s) URL is not a host path and is skipped. Known
+    // false positive: a directory literally named `-home-…` inside the VM (clear it with `--allow-path`).
+    // The segment stops at a backslash too, so a JSON-escaped `\n` ends it and the next line's slug is
+    // its own finding. Under a listed root the first alternative already consumes the whole
     // path, slug included, so the slug arm only fires on an unlisted root such as bare `/tmp/`. Its sample
     // is just the segment, so a whole-token `--allow-path` can still clear it.
     //
     // The boundary also accepts a `://` prefix: in `computer:///Users/alice/…` or `file:///home/…` the
     // char before the root is the URI's own third slash, which the plain lookbehind rejects — so a host
-    // path inside a link was never flagged.
+    // path inside a link was never flagged. A `file://` URI may also carry a host part
+    // (`file://localhost/Users/…`); that is accepted for `file:` only, so an http(s) URL whose path
+    // happens to start `/home/` is not a host path. `/System/Volumes/` is the macOS data-volume spelling
+    // of the same tree (`/System/Volumes/Data/Users/…`), as `df`/`mount`/`realpath` print it.
     //
-    // This set now DIVERGES from the run-level `hostPathLeaked` detector (src/run/execute.ts), which has
-    // no `/private/tmp/` and no slug arm. That one is a verdict signal over model-visible text, not a
-    // publication gate, and widening it would change live verdicts; it is left as is on purpose.
-    re: /(?:(?<![^\s"'(=:])|(?<=:\/\/))(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/Volumes\/)[^\s"')]+|(?<=\/)-(?:Users|home|root)-[^/\s"')]+/gi,
+    // The run-level `hostPathLeaked` detector (src/run/execute.ts) shares the zero-false-positive arms
+    // (`/private/tmp/`, a `computer://`/`file://` prefix) but NOT the slug arm or `/System/Volumes/`: it
+    // is a live verdict signal, and a slug-shaped name is a weaker signal than a root prefix.
+    re: /(?:(?<![^\s"'(=:])|(?<=:\/\/|file:\/\/[^\s\/"']*))(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/System\/Volumes\/|\/Volumes\/)[^\s"')]+|(?<!https?:\/\/[^\s"']*)(?<=^|\/|"|'|\n|\\n)-(?:Users|home|root)-[^/\s"'\\)]+/gi,
     cls: "path",
   },
   {

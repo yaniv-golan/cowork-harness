@@ -84,7 +84,8 @@ the transcript and would be committed inside the cassette. Set the policy up **b
 record — retrofitting means re-recording:
 
 1. `cowork-harness init-redact` — copies the reference `.cowork-redact.json` (host-path +
-   email patterns) into the current directory. Version-control it.
+   email patterns) into the current directory. Version-control it. Re-run with `--force` after an
+   upgrade to pick up new rules (save your tailoring first).
 2. **Search set:** record looks for `.cowork-redact.json` in the **cwd, the scenario's directory,
    and the cassette's output directory** — every distinct file found is MERGED (plus
    `COWORK_HARNESS_REDACT_PATTERNS`/`_KEYS` from the env). Repo root (= cwd in CI) is the

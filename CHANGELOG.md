@@ -37,14 +37,25 @@ All notable changes to this project are documented here. The format is based on
   `computer://` links, and that path usually carries the username in a slugged segment (a Claude session
   scratchpad lives at `/tmp/claude-<uid>/-Users-<user>-<project>/…`). The reference `.cowork-redact.json`
   covered only `/Users/`, `/home/` and `/root/`, and `verify-cassettes` reported such a cassette clean. The
-  reference policy now also redacts `/private/tmp/`, `/private/var/`, `/var/folders/`, `/Volumes/` and any
-  `-Users-<user>-…` / `-home-<user>-…` / `-root-…` path segment, keeping the `/mnt/` tail so links still
-  resolve on replay. The scanner's `path` class flags the same roots and segments, and now also flags a
-  host path inside a `computer://` or `file://` URI, which its boundary check had skipped. Bare `/tmp/` is
-  still not flagged: it is the in-VM home and appears in clean recordings. **`verify-cassettes` can now
-  fail on a cassette it previously passed**; the finding class (`path`), the redaction token format, the
-  JSON schema and the exit codes are unchanged. A `.cowork-redact.json` copied by an earlier `init-redact`
-  lacks the new rules — re-run `init-redact --force` or add them.
+  reference policy now also redacts `/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`,
+  `/Volumes/` and any `-Users-<user>-…` / `-home-<user>-…` / `-root-…` segment — after a `/`, a quote, or at
+  the start of a string or line, as `ls ~/.claude/projects` and `~/.claude.json` print them — keeping the
+  `/mnt/` tail so links still resolve on replay. Its local-path rules are now case-insensitive, so every
+  path the scanner flags, the policy can fix. The scanner's `path` class flags the same roots and segments,
+  and now also flags a host path inside a `computer://` or `file://` link (including `file://localhost/…`),
+  which its boundary check had skipped. Bare `/tmp/` is still not flagged: it is the in-VM home and appears
+  in clean recordings. **`verify-cassettes` can now fail on a cassette it previously passed**; the finding
+  class (`path`), the redaction token format, the JSON schema and the exit codes are unchanged. A
+  `.cowork-redact.json` copied by an earlier `init-redact` lacks the new rules — re-run `init-redact
+  --force` or add them. That only protects future recordings: there is no command that re-redacts a
+  committed cassette, so one that now fails must be re-recorded or reviewed and cleared with
+  `--allow-path`. Still covered by neither layer: a run dir under an unlisted root whose username is not in
+  a slugged segment (a Linux `/tmp/<name>/…`, `/scratch/…`, a custom `$TMPDIR` — keep the run dir under
+  `$HOME`, or add a policy rule), percent-encoded or JSON-escaped paths (`%2FUsers%2F`, `\/Users\/`), and
+  a bare (non-markdown) `computer://` link, which stops resolving on replay once its prefix is redacted.
+- **`transcript_no_host_path` now sees a host path inside a `computer://` link and under `/private/tmp/`.**
+  The live host-path check accepted a `file://` prefix but not `computer://`, so a delivered-file link to a
+  host path — the usual way one reaches the model's reply — was not detected at the sealed tiers.
 
 ## [3.9.0] — 2026-09-25
 

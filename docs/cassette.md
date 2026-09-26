@@ -1008,11 +1008,23 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   ones, as the shipped policy does. Loading a policy in the hazardous order prints a warning naming both
   pattern indices. `--no-redact` skips redaction for known-synthetic inputs.
   The reference policy covers `/Users/`, `/home/`, `/root/`, the macOS temp and volume roots
-  (`/private/tmp/`, `/private/var/`, `/var/folders/`, `/Volumes/`), and a **slugged home segment**
-  (`-Users-<user>-…`, `-home-<user>-…`) under any root. That last rule is what catches a run dir inside a
+  (`/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`, `/Volumes/`), in any letter case,
+  and a **slugged home segment** (`-Users-<user>-…`, `-home-<user>-…`, `-root-…`) under any root, at the
+  start of a string or line, or after a `/` or a quote. That last rule is what catches a run dir inside a
   Claude session scratchpad — `/tmp/claude-<uid>/-Users-<user>-<project>/…` — where the username is not in a
   `/Users/<user>/` segment at all. A policy copied by an earlier `init-redact` does not have these rules:
-  re-run `init-redact --force` (after saving any tailoring) or add them by hand.
+  re-run `init-redact --force` (after saving any tailoring) or add them by hand. That fixes **future**
+  recordings only — there is no command that re-applies a policy to a cassette already committed, so one
+  that now fails `verify-cassettes` must be re-recorded, or reviewed and cleared with `--allow-path`.
+  **Not covered by either layer** (add a policy rule of your own if your recordings can carry them):
+  - a run dir under a root outside the list whose username is not in a slugged segment — a Linux
+    `/tmp/<name>/…`, `/scratch/<user>/…`, a custom `$TMPDIR`. Simplest fix: keep the run dir under `$HOME`,
+    which the policy and the scanner both cover;
+  - encoded spellings: percent-encoded (`%2FUsers%2F…`) or JSON-escaped (`\/Users\/…`) paths, and Windows
+    paths (`C:\Users\…`);
+  - a **bare** `computer://` link (not inside markdown `[…](…)` or backticks) stops resolving on replay once
+    its host prefix is redacted, because the redaction token's own `]` ends the bare link. `record` refuses to
+    write if that flips a `computer_links_resolve` verdict; write links in markdown form to avoid it.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
   bare-`domain` + `path` + `machine-inventory`) runs over the **whole cassette** — the deliverable (`outputs/`
@@ -1033,10 +1045,12 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   live-enumerated app/process inventory sentinel (e.g. a computer-use tool schema's "Available applications on
   this machine: …") is never legitimate catalog boilerplate either; none of the three share the ambiguity that
   gets `currency`/`domain` excluded there. The `path` class matches the recording machine's own roots
-  (`/Users/`, `/home/`, `/root/`, `/private/tmp/`, `/private/var/`, `/var/folders/`, `/Volumes/`) —
-  including inside a `computer://` or `file://` URI — plus a slugged home segment (`/-Users-<user>-…`,
-  `/-home-<user>-…`) under any root, so a temp-dir run path carrying a username is flagged. Bare `/tmp/`
-  alone is not a root: it is the in-VM home and appears in clean recordings. `--allow <regex>` suppresses synthetic / public reference names
+  (`/Users/`, `/home/`, `/root/`, `/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`,
+  `/Volumes/`, any case) — including inside a `computer://` or `file://` URI, `file://localhost/…` too —
+  plus a slugged home segment (`-Users-<user>-…`, `-home-<user>-…`, `-root-…`) under any root or on its own
+  line or JSON key, so a temp-dir run path carrying a username is flagged. Bare `/tmp/` alone is not a root:
+  it is the in-VM home and appears in clean recordings. A slug-shaped segment in an http(s) URL is not
+  flagged; a directory literally named `-home-…` inside the VM is (clear it with `--allow-path`). `--allow <regex>` suppresses synthetic / public reference names
   (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
   path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
   clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /
