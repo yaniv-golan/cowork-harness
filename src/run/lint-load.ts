@@ -11,7 +11,7 @@
 // session file (and the mounts it names), an absolute `baseline:` path, environment knobs read at run time,
 // and the tier-dependent pre-spawn refusals. A consumer's token-free lint lane often runs where the scenario
 // never will.
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { loadBaseline as realLoadBaseline } from "../baseline.js";
 import { UsageError, renderIssuePath } from "../errors.js";
@@ -54,16 +54,25 @@ function pyPathJoin(dir: string, name: string): string {
  *  skipped, so nothing is reported twice and an unrecognised token can only ever be skipped. */
 export function expandLintInputs(paths: string[]): string[] {
   const out: string[] = [];
+  // `statSync` follows links, so a dangling `*.yaml` symlink throws. Such an entry is skipped rather than
+  // allowed to crash the wrapper: python reports it (`not-found`), and nothing is reported twice.
+  const kind = (p: string): "dir" | "file" | undefined => {
+    try {
+      const st = statSync(p);
+      return st.isDirectory() ? "dir" : st.isFile() ? "file" : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   for (const p of paths) {
-    if (!existsSync(p)) continue;
-    const st = statSync(p);
-    if (st.isDirectory()) {
+    const k = kind(p);
+    if (k === "dir") {
       const entries = readdirSync(p)
         .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
         .map((f) => pyPathJoin(p, f))
         .sort();
-      for (const e of entries) if (statSync(e).isFile()) out.push(e);
-    } else if (st.isFile()) out.push(p);
+      for (const e of entries) if (kind(e) === "file") out.push(e);
+    } else if (k === "file") out.push(p);
   }
   return out;
 }
@@ -84,6 +93,11 @@ export function lintPositionals(args: string[]): string[] {
   return out;
 }
 
+/** POSIX single-quoting, so a suggested command survives a path with spaces or shell metacharacters. */
+function shellQuote(p: string): string {
+  return `'${p.replace(/'/g, `'\\''`)}'`;
+}
+
 function zodIssues(e: unknown): { message: string; path: unknown }[] | undefined {
   if (!(e instanceof UsageError) || typeof e.hint !== "string") return undefined;
   try {
@@ -101,7 +115,7 @@ function zodIssues(e: unknown): { message: string; path: unknown }[] | undefined
 
 function loadRefusalFindings(file: string, e: unknown): LintFinding[] {
   const who = "the loader (`run`/`record`) rejects this file";
-  const dryRun = `\`cowork-harness record ${file} --dry-run\` reports the same error.`;
+  const dryRun = `\`cowork-harness record ${shellQuote(file)} --dry-run\` reports the same error.`;
   const issues = zodIssues(e);
   if (!issues) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -196,4 +210,33 @@ export function loaderFindings(files: string[], deps: LoaderDeps = {}): LintFind
     }
   }
   return out;
+}
+
+/** The whole pre-pass for a `lint` command line (flags already stripped of `--output-format`): pick the
+ *  path arguments, expand them like python does, run the loader on each. Never throws — a failure in the
+ *  expansion itself becomes one ERROR `lint-loader-internal` finding, so the wrapper neither crashes before
+ *  python runs nor falls back to a lint that skipped the loader. `deps` is a test seam. */
+export function lintPrepass(args: string[], deps: LoaderDeps & { expand?: (paths: string[]) => string[] } = {}): LintFinding[] {
+  let files: string[];
+  try {
+    files = (deps.expand ?? expandLintInputs)(lintPositionals(args));
+  } catch (e) {
+    let detail: string;
+    try {
+      detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    } catch {
+      detail = "(unprintable error)";
+    }
+    return [
+      {
+        severity: "ERROR",
+        rule: "lint-loader-internal",
+        message: `cowork-harness could not list the files to run its loader check on: ${detail}`,
+        fix: "This is a harness bug, not a scenario problem — please report it. Until then, `cowork-harness record <file> --dry-run` checks that a file loads.",
+        file: "(cowork-harness)",
+        line: null,
+      },
+    ];
+  }
+  return loaderFindings(files, deps);
 }

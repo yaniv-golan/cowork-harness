@@ -881,8 +881,9 @@ mismatch. So there is no flag that makes a plain `replay` honour an edited `lane
 `baseline:`: those reach a replay only by re-recording.
 
 > **Authoring a scenario for a newer harness?** The frozen copy is why a `replay` gate can look happy
-> while the YAML is unloadable. Check the file against the real loader with
-> `cowork-harness record <file.yaml> --dry-run` — see
+> while the YAML is unloadable. Check the file against the real loader with `cowork-harness lint
+> <file.yaml>` (it also resolves a named `baseline:`), or `cowork-harness record <file.yaml> --dry-run`
+> for the pre-spend refusals on top — see
 > [Unknown keys: the loader is strict, and `cowork-harness lint` runs it](#unknown-keys-the-loader-is-strict-lint-is-lenient).
 
 The rest of this section is the `assert:`-specific detail.

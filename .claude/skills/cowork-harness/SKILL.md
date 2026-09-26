@@ -428,8 +428,9 @@ When the scenario declares `answers:`, verify-run **also** checks they still mat
 reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
-`run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
-`cowork-harness record <file.yaml> --dry-run` — it runs the real loader AND the same scenario-level
+`run` takes no `--dry-run`: to check that a scenario **loads** without spending, `cowork-harness lint
+<file.yaml>` runs the real loader (and resolves a named `baseline:`); `cowork-harness record <file.yaml>
+--dry-run` runs the real loader too AND the same scenario-level
 refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing) **plus the
 cassette-portability pre-flight below**, so it cannot green something a paid run would reject. **That binding
 guarantee is the SINGLE-FILE form only** — it takes the real `--out` and the real flags, so its verdict is the

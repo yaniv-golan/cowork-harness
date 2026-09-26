@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loaderFindings } from "../src/run/lint-load.js";
+import { expandLintInputs, lintPrepass, loaderFindings } from "../src/run/lint-load.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 
 // Unit tests for the loader pre-pass `cowork-harness lint` runs before the python linter. The CLI-level
@@ -18,9 +18,13 @@ const HEAD = ["baseline: latest", "fidelity: container", "prompt: hello"];
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("loaderFindings agrees with parseScenarioFile", () => {
-  // The oracle is the loader `run`/`record` use. loaderFindings adds input expansion, the error-to-finding
-  // mapping and the named-baseline check on top, so agreement over a table is not a tautology.
+describe("loaderFindings turns every load outcome into the right finding (a table over parseScenarioFile)", () => {
+  // What this can catch: the error-to-finding mapping — a load failure that maps to NO ERROR (a silent
+  // drop), or a successful load that still yields one. What it cannot catch: a regression inside the
+  // loader itself. Both sides call the same `loadScenarioPure` (`parseScenarioFile` is a thin wrapper that
+  // only adds the stderr notice), so a loader bug moves both together. That sharing is the design — lint
+  // and `run`/`record` cannot drift — and the loader's own behaviour is exercised end to end by the CLI
+  // tests in lint-loads-scenario.test.ts.
   const d = mkdtempSync(join(tmpdir(), "cwh-lint-unit-"));
   const cases: [string, string[]][] = [
     ["clean", [...HEAD, "assert:", "  - result: success"]],
@@ -126,5 +130,26 @@ describe("loaderFindings output", () => {
     expect(fs).toHaveLength(1);
     expect(fs[0].rule).toBe("lint-loader-internal");
     expect(fs[0].severity).toBe("ERROR");
+  });
+});
+
+describe("the pre-pass never throws", () => {
+  it("expandLintInputs skips a dangling *.yaml symlink (python reports it) instead of throwing", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-unit-"));
+    const good = file(d, "good.yaml", [...HEAD]);
+    symlinkSync(join(d, "nowhere.yaml"), join(d, "gone.yaml"));
+    expect(expandLintInputs([d])).toEqual([good]);
+  });
+
+  it("any throw while expanding the inputs is an ERROR lint-loader-internal finding", () => {
+    const fs = lintPrepass(["x.yaml"], {
+      expand: () => {
+        throw new Error("readdir exploded");
+      },
+    });
+    expect(fs).toHaveLength(1);
+    expect(fs[0].rule).toBe("lint-loader-internal");
+    expect(fs[0].severity).toBe("ERROR");
+    expect(fs[0].message).toMatch(/readdir exploded/);
   });
 });

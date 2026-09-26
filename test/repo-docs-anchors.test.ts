@@ -52,19 +52,23 @@ function extractHeadings(text: string): string[] {
   return headings;
 }
 
-/** Every anchor a page offers: its heading slugs plus any explicit `<a id="…"></a>` (outside fences).
- *  An explicit id is how a page keeps an old slug alive after a heading is reworded — GitHub scrolls to
- *  it like any heading — so a link to it is not broken. */
+/** Every anchor a page offers: its heading slugs plus any explicit `<a id="…"></a>` that GitHub would
+ *  actually render — so NOT one inside a fenced block, an HTML comment or an inline code span, each of
+ *  which would make a dead link look alive. An explicit id is how a page keeps an old slug alive after a
+ *  heading is reworded — GitHub scrolls to it like any heading — so a link to it is not broken. */
 function pageAnchors(text: string): Set<string> {
   const out = new Set(extractHeadings(text).map(githubSlug));
   let inFence = false;
-  for (const line of text.split("\n")) {
+  // Comments can span lines; blank them out first, keeping the line structure the fence scan relies on.
+  const uncommented = text.replace(/<!--[\s\S]*?-->/g, (c) => c.replace(/[^\n]/g, " "));
+  for (const line of uncommented.split("\n")) {
     if (/^(```|~~~)/.test(line.trim())) {
       inFence = !inFence;
       continue;
     }
     if (inFence) continue;
-    for (const m of line.matchAll(/<a\s+id="([^"]+)"\s*>\s*<\/a>/g)) out.add(m[1]);
+    const prose = line.replace(/(`+)[\s\S]*?\1/g, " ");
+    for (const m of prose.matchAll(/<a\s+id="([^"]+)"\s*>\s*<\/a>/g)) out.add(m[1]);
   }
   return out;
 }
@@ -260,5 +264,24 @@ describe("cross-page links don't claim a same-page position", () => {
 
   it("the pattern actually matches when the defect is present (guards against a dead regex)", () => {
     expect("see [x](./docs/cli.md#y) below".match(SPATIAL)).not.toBeNull();
+  });
+});
+
+describe("explicit `<a id>` anchors count only where GitHub would render them", () => {
+  it("a plain explicit anchor outside any fence, comment or code span is accepted", () => {
+    expect(pageAnchors('Text\n\n<a id="kept-slug"></a>\n\n### New heading\n').has("kept-slug")).toBe(true);
+  });
+
+  it("an anchor inside an HTML comment is NOT accepted (single- or multi-line)", () => {
+    expect(pageAnchors('<!-- <a id="dead-one"></a> -->\n').has("dead-one")).toBe(false);
+    expect(pageAnchors('<!--\nold:\n<a id="dead-two"></a>\n-->\n').has("dead-two")).toBe(false);
+  });
+
+  it("an anchor inside an inline code span is NOT accepted", () => {
+    expect(pageAnchors('Write `<a id="dead-three"></a>` above the heading.\n').has("dead-three")).toBe(false);
+  });
+
+  it("an anchor inside a fenced block is NOT accepted", () => {
+    expect(pageAnchors('```html\n<a id="dead-four"></a>\n```\n').has("dead-four")).toBe(false);
   });
 });

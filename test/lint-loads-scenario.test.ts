@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -172,6 +172,36 @@ describe.skipIf(!can || !havePython)("lint reports what the scenario loader reje
     const f = scenario(d, "s.yaml", RUBRIC_SCALAR);
     const r = spawnSync(py, [resolveScenarioScript(), "lint", f], { encoding: "utf8" });
     expect(r.status).toBe(0);
+  });
+});
+
+describe.skipIf(!can || !havePython)("lint input edge cases never crash the wrapper", () => {
+  it("a dangling *.yaml symlink in a linted dir is python's not-found, not a node stack trace", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-load-"));
+    scenario(d, "good.yaml", CLEAN);
+    symlinkSync(join(d, "nowhere", "target.yaml"), join(d, "gone.yaml"));
+    const r = runCli(["lint", d]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/not-found/);
+    expect(r.stderr).not.toMatch(/\bat \S+ \(|statSync|ENOENT/);
+  });
+
+  it("with python missing, a loader rejection is still named rather than silently dropped", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-load-"));
+    const f = scenario(d, "s.yaml", RUBRIC_SCALAR);
+    const r = runCli(["lint", f], { PYTHON: "/does/not/exist" });
+    expect(r.code).toBe(127);
+    expect(r.stderr).toMatch(/not found/i);
+    expect(r.stderr).toMatch(/loader rejected 1 file/);
+    expect(r.stderr).toContain(f);
+  });
+
+  it("the fix text quotes the path so the suggested command survives a space", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh lint load "));
+    const f = scenario(d, "s.yaml", RUBRIC_SCALAR);
+    const r = runCli(["lint", f, "--output-format", "json"]);
+    const hit = jsonFindings(r.stdout).find((x) => x.rule === "scenario-invalid");
+    expect(hit!.fix).toContain(`record '${f}' --dry-run`);
   });
 });
 
