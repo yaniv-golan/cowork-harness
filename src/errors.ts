@@ -49,6 +49,14 @@ export class UnknownBaselineError extends UsageError {
   }
 }
 
+/** A Zod issue path rendered the way a YAML author can locate it: `assert[0].path_denied.source`, never
+ *  `assert.0`; an empty or non-array path is `(root)`. Shared by `compactSchemaError` and `lint`'s loader
+ *  findings so the two never spell the same location differently. Never throws. */
+export function renderIssuePath(path: unknown): string {
+  if (!Array.isArray(path) || path.length === 0) return "(root)";
+  return path.reduce<string>((acc, seg) => (typeof seg === "number" ? `${acc}[${seg}]` : acc ? `${acc}.${seg}` : String(seg)), "");
+}
+
 /**
  * One line from a Zod issue list (or from an already-formatted Zod message).
  *
@@ -68,10 +76,7 @@ export class UnknownBaselineError extends UsageError {
 export function compactSchemaError(messageOrIssues: string | unknown[], limit = 200, maxIssues = 3): string {
   const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
   const truncate = (s: string) => (s.length > limit ? s.slice(0, limit - 1) + "…" : s);
-  const renderPath = (path: unknown): string => {
-    if (!Array.isArray(path) || path.length === 0) return "(root)";
-    return path.reduce<string>((acc, seg) => (typeof seg === "number" ? `${acc}[${seg}]` : acc ? `${acc}.${seg}` : String(seg)), "");
-  };
+  const renderPath = renderIssuePath;
   try {
     let issues: unknown = messageOrIssues;
     if (typeof messageOrIssues === "string") {

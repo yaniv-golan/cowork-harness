@@ -13,6 +13,19 @@ it read the docs). This grades every claim against a frozen record of what actua
 cowork-harness critique ./my-skill --prompt "<a task that exercises the skill>"
 ```
 
+## On this page
+
+- [How it resists confabulation](#how-it-resists-confabulation)
+- [How it works](#how-it-works)
+- [If you came from "loop engineering"](#if-you-came-from-loop-engineering)
+- [Flags](#flags)
+- [Cost and prerequisites](#cost-and-prerequisites)
+- [Exit codes](#exit-codes)
+- [Reading the report](#reading-the-report)
+- [Reproduction — the ≥2-run discipline](#reproduction--the-2-run-discipline)
+- [Running it on a skill you did not write](#running-it-on-a-skill-you-did-not-write)
+- [Known limitations](#known-limitations)
+
 ## How it resists confabulation
 
 Three mechanisms, all code rather than prompt instructions:
