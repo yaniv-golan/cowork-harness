@@ -44,7 +44,7 @@ on_unanswered: fail                      # optional: policy for unscripted quest
                                          # ("agent" is retired — no longer a valid value)
 
 prompt: |                                # the user turn
-  Summarize report.pdf and write action items to actions.md   # bare name: host-loop. See the lane table below.
+  Summarize report.pdf and write action items to actions.md in my outputs folder   # describe the outcome, not a path: the right path differs by lane and Desktop — see the lane table below.
 
 timeout_ms: 600000                       # OPTIONAL wall-clock budget; on expiry the harness kills the agent
                                          # and the run ends result:error / errorSource:timeout. Omit = no timeout.

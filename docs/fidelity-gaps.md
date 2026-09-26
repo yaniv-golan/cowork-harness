@@ -1448,7 +1448,8 @@ or an assertion against these tools:
    half is now faithful on both tiers; the survival half is not, and removing it would mean unpicking a
    bind-mount every tier's artifact capture, `--resume` and the microvm snapshot depend on.
 2. **`Write`'s tool result echoes the RAW path it was given — it never absolutizes.** Structural, read
-   from the agent binary. A bare `Write foo.md` comes back as `foo.md`, not
+   from the agent binary. Where a bare `Write foo.md` succeeds (the VM loop, or host-loop before Desktop
+   2.7032.0 — from 2.7032.0 host-loop refuses it) it comes back as `foo.md`, not
    `/sessions/<id>/mnt/outputs/foo.md`. Nothing in the harness parses a path out of a `Write` result
    today, and this note exists so nothing starts: an assertion or doc that reads an absolute path out of
    one is reading something production does not emit. Cowork's own chat-surface prompt asserts the

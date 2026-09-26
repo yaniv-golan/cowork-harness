@@ -403,8 +403,9 @@ The append is composed of three parts, and only the first is a committed asset:
 3. a trailing sentence about invoking skills, on **both** branches.
 
 The manifest states the split the matrix implies: the file tools take the **host** path, the shell
-takes the `/sessions/<id>/mnt/<name>/` path, and relative paths in the file tools resolve at the host
-cwd. It lists the session's outputs folder and every attached folder with both forms — and a folder the
+takes the `/sessions/<id>/mnt/<name>/` path, and — from Desktop 2.7032.0 — the file tools take absolute
+paths only ("Pass absolute paths to these tools."; before 2.7032.0 relative paths resolved at the host
+cwd, the outputs dir). It lists the session's outputs folder and every attached folder with both forms — and a folder the
 shell cannot reach is listed as such rather than omitted, so an unreachable folder is visible to the
 model instead of silently absent. When there is nothing to list at all it takes a different sentence,
 not an empty list.

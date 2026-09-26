@@ -25,7 +25,15 @@ All notable changes to this project are documented here. The format is based on
   message if the agent's own refusal ever fails to fire. The re-anchored path is kept in the run's control log
   (`control-out.jsonl`, the hook reply's `updatedInput`); the agent's transcript keeps only the model's
   original input. The agent's own refusal of a relative path shows in its tool result, not in
-  `hook_blocked` or `path_denied` — assert it with `tool_result_contains`. Previously the
+  `hook_blocked` or `path_denied` — assert it with `tool_result_contains`.
+  - The model sees one prompt change on these baselines: the Shell access section's outputs line no longer
+    calls outputs the working directory ("(your outputs directory)" instead of "(your outputs directory —
+    cwd)").
+  - A baseline whose `appVersion` is not a version number now warns that it gets the pre-2.7032.0
+    behaviour, instead of taking it silently.
+  - The committed `hostloop-computer-links` cassette is re-recorded against this behaviour (agent at
+    `/var/empty`); its scenario is unchanged. The `subagent-write-probe` live probe is pinned to
+    `desktop-2.2553.1`, and a new `subagent-write-refused-probe` asserts the refusal on `latest`. Previously the
   harness ran the agent in outputs, so a relative write that production refuses passed here.
 
 - **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
