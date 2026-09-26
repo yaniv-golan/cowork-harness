@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Outputs-delete verdicts loosen.** A delete the scanner only infers from a command's text — no
+  filesystem evidence, and no delete command whose own operand is an outputs path — now warns
+  (`outputs_delete_unconfirmed`) instead of failing, for the default check and for an authored
+  `no_delete_in_outputs`. A CI gate on `ok` / exit code passes runs it used to fail; watch
+  `verdict.signals` for the warn. Some real deletes land there (see Changed).
+- **`record` accepts warn-tier runs.** A recording whose only outputs evidence is unconfirmed is no longer
+  refused.
+- **The outputs filesystem diff runs on every live turn**, not only on scenarios that assert a baseline key,
+  so a scenario that never armed it can now fail on a deleted pre-existing output — including a file an
+  earlier turn of a `--resume` session wrote.
+
 ### Changed
 
 - **An outputs delete the harness only infers from a command's text no longer fails the run by itself.**
@@ -19,17 +32,22 @@ All notable changes to this project are documented here. The format is based on
   backticks, `sh -c`/`bash -lc`/`eval` strings, behind `sudo`/`env`/`nice`/`ionice`/`timeout`/`xargs`/
   `parallel`/`git`/`busybox` and leading `VAR=…` or redirects, and launched from Python through
   `os.system`/`subprocess`), `find`/`fd` with `-delete` or an `-exec`/`-ok` of `rm`/`unlink`/`shred -u`,
-  `os.remove`/`os.unlink`/`shutil.rmtree`/`Path(…).unlink()`/bare `unlink(…)`/`map(os.remove, …)`/Perl
-  `unlink`, and a move out of outputs. A flag resting only on the scanner's inference —
-  an unprovable target, or a relative `cd` into outputs — with a clean diff becomes the new
+  `os.remove`/`os.unlink`/`shutil.rmtree`/bare `unlink(…)`/`map(os.remove, …)`/Perl `unlink` with an outputs
+  argument, a `.unlink()`/`.rmdir()` method whose receiver names outputs (`Path(".../outputs/x").unlink()`),
+  and a move out of outputs. A flag resting only on the scanner's inference —
+  an unprovable target, or a `cd` into outputs followed by a relative path — with a clean diff becomes the new
   `outputs_delete_unconfirmed` **warn**; an authored `no_delete_in_outputs` passes on it, and the warn is
   still raised so the hit stays visible in the run output (it is also the assertion's evidence in the JSON
   envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
-  quote-blind, after comments are stripped and same-command `VAR=value` assignments expanded one level. Two
+  quote-blind, after whole-line comments are dropped and same-command `VAR=value` assignments expanded one
+  level; a trailing ` # comment` is not counted as a delete's operand. A statement longer than 4 KiB skips
+  the operand analysis and is judged by the original rule (a delete word and an outputs path anywhere in
+  it), which can only be stricter, so the classifier stays linear-time on huge one-liners. Two
   consequences to know: **real deletes can land in the warn**, because the diff cannot see a file created and
   deleted within one turn — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)`; and **a false positive can still fail**: quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line). An outputs path that only shares a statement with the word — a Python
   variable (`rm = json.load(open(".../outputs/r.json"))`), quoted prose, a `sed`/`grep` pattern, a trailing
-  comment — is not a delete's operand and warns. `allow_outputs_delete` waives both codes. `verify-run` over a
+  comment — is not a delete's operand and warns. `allow_outputs_delete` waives `outputs_delete` and
+  `outputs_delete_unconfirmed`, and also silences `outputs_diff_unavailable`. `verify-run` over a
   `result.json` written before this release reaches the same verdict as before (it carries no diff, which
   reads as unverified and keeps the old strictness). A run whose only outputs evidence is unconfirmed can
   now be `record`ed.

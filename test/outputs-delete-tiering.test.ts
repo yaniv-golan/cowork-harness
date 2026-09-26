@@ -194,3 +194,80 @@ describe("scan_unavailable no longer claims the whole outputs-delete guard did n
     },
   );
 });
+
+describe("outputs-delete: the authored key on the diff's own evidence states", () => {
+  const baseCtx = (over: Partial<AssertContext>): AssertContext =>
+    ({
+      transcript: "",
+      toolsCalled: new Set(),
+      subagentTools: new Set(),
+      egress: [],
+      result: "success",
+      workRoot: "/nonexistent",
+      userVisiblePrefixes: ["outputs"],
+      outputsDeletes: [],
+      mountDeletes: [],
+      questions: [],
+      hostPathLeaked: false,
+      selfHealRan: false,
+      subagents: [],
+      gateDeliveries: [],
+      toolResultTexts: [],
+      skillsInvoked: [],
+      skillToolAvailable: true,
+      ...over,
+    }) as unknown as AssertContext;
+  const run = (over: Partial<AssertContext>) => evaluate([{ no_delete_in_outputs: true }], baseCtx(over))[0];
+
+  it("an incomplete post-run walk with no text hit fails as evidence-unavailable", () => {
+    const r = run({ fsDiff: { status: "unavailable", reason: "post-walk-incomplete", findings: [] } });
+    expect(r.pass).toBe(false);
+    expect(String(r.message)).toMatch(/evidence unavailable.*post-run outputs walk/);
+  });
+
+  it("an incomplete baseline with no text hit passes (the verdict warns instead)", () => {
+    expect(run({ fsDiff: { status: "unavailable", reason: "baseline-incomplete", findings: [] } }).pass).toBe(true);
+  });
+
+  it("a missing text scan plus a filesystem-proven delete fails, naming the finding", () => {
+    const finding = "[fs-diff] output file removed post-run: outputs/a.md";
+    const r = run({ scanMissing: true, fsDiff: { status: "findings", findings: [finding] } });
+    expect(r.pass).toBe(false);
+    expect(String(r.message)).toContain(finding);
+  });
+});
+
+describe("outputs-delete: roster and mixed evidence", () => {
+  const status = (v: ReturnType<typeof computeVerdict>) => v.guards.find((g) => g.name === "outputs-delete")?.status;
+
+  it("the roster reads `unverified` when the diff could not verify and nothing was flagged", () => {
+    const fsDiff = { status: "unavailable" as const, reason: "post-walk-incomplete" as const, findings: [] as string[] };
+    const v = computeVerdict(
+      rr({ scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false }, fsDiff } as Partial<RunResult>),
+      "live",
+    );
+    expect(status(v)).toBe("unverified");
+  });
+
+  it("a filesystem-proven delete beside an inferred text hit fails — the fs-diff basis wins", () => {
+    const finding = "[fs-diff] output file removed post-run: outputs/a.md";
+    const scan = {
+      outputsDeletes: [PY_RM_VAR, finding],
+      outputsDeleteBasis: ["inferred", "fs-diff"] as ("inferred" | "fs-diff")[],
+      hostPathLeaked: false,
+      selfHealRan: false,
+    };
+    const v = computeVerdict(rr({ scan, fsDiff: { status: "findings", findings: [finding] } } as Partial<RunResult>), "live");
+    expect(v.pass).toBe(false);
+    expect(codes(v)).toContain("outputs_delete:fail");
+    expect(codes(v)).not.toContain("outputs_delete_unconfirmed:warn");
+  });
+
+  it("allow_outputs_delete also silences outputs_diff_unavailable", () => {
+    const fsDiff = { status: "unavailable" as const, reason: "baseline-incomplete" as const, findings: [] as string[] };
+    const scan = { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
+    expect(codes(computeVerdict(rr({ scan, fsDiff } as Partial<RunResult>), "live"))).toContain("outputs_diff_unavailable:warn");
+    const waived = computeVerdict(rr({ scan, fsDiff, assertions: [assn({ allow_outputs_delete: true })] } as Partial<RunResult>), "live");
+    expect(codes(waived)).not.toContain("outputs_diff_unavailable:warn");
+  });
+});

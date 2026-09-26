@@ -1919,8 +1919,9 @@ export interface RunResult {
    *  a missing/corrupt events.jsonl (which leaves `scan` undefined). `clean` means no path present at turn
    *  start was deleted — a file created AND deleted within the turn is invisible to it. `unavailable` means
    *  it could not verify (no/incomplete baseline, incomplete post-run walk): text hits then keep full
-   *  fail-authority and the `outputs_diff_unavailable` warn is raised. Absent on replay, chat, a salvaged
-   *  partial run, and results written before it existed. */
+   *  fail-authority and the `outputs_diff_unavailable` warn is raised. Kept on a partial run salvaged from
+   *  an unanswered gate (the diff runs before salvage). Absent on replay, chat, and results written before it
+   *  existed. */
   fsDiff?: OutputsFsDiff;
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;

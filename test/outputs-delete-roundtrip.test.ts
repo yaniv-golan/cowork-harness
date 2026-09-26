@@ -2,11 +2,9 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, renameSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { captureOutputsBaseline, readOutputsBaseline } from "../src/run/pre-run-manifest.js";
 import { collectArtifactPathsWithHealth } from "../src/run/artifacts.js";
-import { outputsFsDiff } from "../src/run/execute.js";
+import { outputsFsDiff, outputsPathHasher } from "../src/run/execute.js";
 
 /**
  * The outputs-delete filesystem diff through its REAL producers, end to end: the turn-start snapshot
@@ -24,16 +22,8 @@ function turn(mutate: (outputs: string) => void) {
   writeFileSync(join(outputs, "dir", "b.md"), "beta\n");
   captureOutputsBaseline(workRoot, outDir);
   mutate(outputs);
-  const hash = (rel: string) => {
-    try {
-      return createHash("sha256")
-        .update(readFileSync(join(workRoot, rel)))
-        .digest("hex");
-    } catch {
-      return null;
-    }
-  };
-  return outputsFsDiff(readOutputsBaseline(outDir), collectArtifactPathsWithHealth(workRoot, ["outputs"]), hash);
+  // the SAME hash function the live assembler uses — a drift in its format would break the rename exemption
+  return outputsFsDiff(readOutputsBaseline(outDir), collectArtifactPathsWithHealth(workRoot, ["outputs"]), outputsPathHasher(workRoot));
 }
 
 describe("outputs filesystem diff — real producer round trip", () => {

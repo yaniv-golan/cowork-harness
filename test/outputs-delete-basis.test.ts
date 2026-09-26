@@ -92,6 +92,12 @@ const inferred = [
   `cd ${O} && rm -rf scratch`,
   `A=${O}; B=$A/sub; rm -rf "$B"`,
   `python3 - <<'EOF'\nimport os\np = "${O}/a.md"\nos.remove(p)\nEOF`,
+  // wrapper flag combinations the classifier does not model — documented false negatives
+  `sudo -Hu user rm -f ${O}/x`,
+  `git -C /repo rm -f ${O}/x`,
+  // a method delete decides on its RECEIVER, not on an outputs path elsewhere in the statement
+  `python3 -c 'from pathlib import Path; Path("/tmp/x.txt").unlink() if Path("${O}/r.md").exists() else None'`,
+  `python3 -c 'import shutil; from pathlib import Path; shutil.copy("${O}/r.md", "/tmp/r.md") or Path("/tmp/old.md").unlink()'`,
 ];
 
 describe("outputsDeleteBasis", () => {

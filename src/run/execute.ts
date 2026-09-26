@@ -386,8 +386,9 @@ export function assertContradiction(scenario: Scenario): string | undefined {
 }
 
 /** Does this scenario need the pre-run baseline captured? Extracted from `executeScenario` so the rule is
- *  ONE named, testable thing rather than an inline predicate — the list of arming keys is exactly the list
- *  of assertions that read the baseline, and an assertion added to one without the other is the defect this
+ *  ONE named, testable thing rather than an inline predicate — the list of arming keys covers every
+ *  assertion that reads the baseline (plus two that no longer do, kept deliberately — see the inline note at
+ *  `no_delete_in_mounts`), and an assertion that reads it without arming it is the defect this
  *  shape exists to prevent (`semantic_matches` was missing here for two releases, so it graded a document
  *  containing no authored files and reported that as complete).
  *
@@ -1209,7 +1210,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
     if (scan.sidecarMissing)
       warn(
-        `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`,
+        `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / outputs-delete text scan / self-heal cannot be verified; the outputs filesystem diff still runs)\n`,
       );
     else if (scan.malformedLines > 0)
       warn(
@@ -1261,17 +1262,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // are ALSO merged into `scan.outputsDeletes` with basis `fs-diff`, so every reader of that array keeps
     // seeing filesystem-proven deletes exactly as before.
     const outputsPostWalk = collectArtifactPathsWithHealth(workRoot, ["outputs"]);
-    const fsDiff = outputsFsDiff(readOutputsBaseline(outDir), outputsPostWalk, (rel) => {
-      // sha256 hex, matching the baseline's format. Only called for paths NEW under outputs, and only when
-      // something vanished, so the ordinary run pays nothing. Unreadable ⇒ null ⇒ no rename proven.
-      try {
-        return createHash("sha256")
-          .update(readFileSync(join(workRoot, rel)))
-          .digest("hex");
-      } catch {
-        return null;
-      }
-    });
+    const fsDiff = outputsFsDiff(readOutputsBaseline(outDir), outputsPostWalk, outputsPathHasher(workRoot));
     scan.outputsDeletes.push(...fsDiff.findings);
     scan.outputsDeleteBasis.push(...fsDiff.findings.map(() => "fs-diff" as const));
     if (fsDiff.status === "unavailable")
@@ -2818,6 +2809,23 @@ export function outputsFsDiff(
   return findings.length ? { status: "findings", findings } : { status: "clean", findings: [] };
 }
 
+/** The post-run side of the outputs diff's rename check: sha256 hex of a path under `workRoot`, the same format
+ *  `captureOutputsBaseline` records, so a renamed file's content matches its turn-start hash. Only called for
+ *  paths NEW under outputs, and only when something vanished, so the ordinary run pays nothing. Unreadable ⇒
+ *  null ⇒ no rename proven ⇒ the removal reports. Exported so the producer round-trip test uses this exact
+ *  function rather than a copy of it. */
+export function outputsPathHasher(workRoot: string): (relPath: string) => string | null {
+  return (rel) => {
+    try {
+      return createHash("sha256")
+        .update(readFileSync(join(workRoot, rel)))
+        .digest("hex");
+    } catch {
+      return null;
+    }
+  };
+}
+
 /** Which of `mounts` a command deletes in. Same logic per mount as the original outputs-only detector —
  *  `detectMountDeletes(cmd, ["outputs"])` is byte-equivalent to the old `isOutputsDelete(cmd)`, pinned by
  *  test. Returns the matching mount NAMES so a finding can say which mount, since production's approval
@@ -2896,7 +2904,8 @@ export function isOutputsDelete(cmd: string): boolean {
  *    - calls: `os.remove(` / `os.unlink(` / `os.rmdir(` / `shutil.rmtree(` / a bare `unlink(` (Python
  *      `from os import unlink`, PHP, Perl) whose argument text names outputs — or, in a comprehension, whose
  *      `for … in <iterable>` does; `map(os.remove, <iterable naming outputs>)`; Perl `unlink "…"`; a
- *      `.unlink(` / `.rmdir(` method call in a statement that names outputs (typically `Path(...)`).
+ *      `.unlink(` / `.rmdir(` method call whose RECEIVER names outputs (`Path("…/outputs/x").unlink()`), whose
+ *      argument does (Ruby's `File.unlink("…")`), or that sits in a comprehension over an iterable that does.
  *  `inferred`: everything else the detector flagged — an unprovable target (`rm "$UNSET"`), a relative
  *  `cd` into outputs, or an outputs path that merely shares a statement with the word `rm`: a Python
  *  identifier (`rm = …`, `rm.find(…)`, `rm[…]`), quoted prose (`echo 'rm outputs/x'`), a `sed`/`grep`
@@ -2908,14 +2917,39 @@ export function isOutputsDelete(cmd: string): boolean {
  *  body (`do rm -f "$f"`), after a `cd`, through a chained or computed variable, or as `p = …` then
  *  `os.remove(p)` classifies `inferred` even when real.
  *
+ *  Size cap: a statement longer than `BASIS_STATEMENT_CAP` (4 KiB) skips this analysis and is `named` iff the
+ *  ORIGINAL statement rule holds (a delete token and an outputs path anywhere in it) — a superset of what the
+ *  operand rule names, so the cap can only make a verdict stricter. Argument, operand and receiver scans
+ *  stop `BASIS_SCAN_CAP` (4096) characters from their anchor. Together they keep the classifier linear-time.
+ *
  *  Why "can't tell" may resolve to `inferred`: the basis only matters when the filesystem diff ran on
  *  complete walks and found nothing. If the diff did not verify the turn, any flagged hit fails regardless
  *  of basis (`outputsDeleteTier`), so this classifier cannot turn an unverifiable turn into a pass. */
 export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
   const mm = mountMatchers("outputs");
   const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
-  return splitStatements(code).some((stmt) => mvDeletesOutputs(stmt, mm) || statementDeletesNamedOutputs(stmt, mm)) ? "named" : "inferred";
+  return splitStatements(code).some(
+    (stmt) =>
+      mvDeletesOutputs(stmt, mm) ||
+      // Over the cap, fall back to the original statement rule — a delete word and an outputs path anywhere
+      // in the statement — which names a superset of what the operand rule names, so a huge statement can
+      // only get STRICTER, never turn a real delete into a warn. Keeps the classifier linear-time.
+      (stmt.length > BASIS_STATEMENT_CAP ? DELETE_TOKEN.test(stmt) && mm.touches.test(stmt) : statementDeletesNamedOutputs(stmt, mm)),
+  )
+    ? "named"
+    : "inferred";
 }
+
+/** Statements longer than this skip the operand-level analysis (see `outputsDeleteBasis`). Command-position
+ *  matching is quadratic in the worst case — every `(`, `{`, backtick or `$(` is a candidate start — and a
+ *  minified-JSON `echo` is a realistic 80 KB statement. 4 KiB keeps the worst measured shape well under 50 ms. */
+export const BASIS_STATEMENT_CAP = 4 * 1024;
+/** How far an argument / operand / receiver scan looks from its anchor. */
+const BASIS_SCAN_CAP = 4096;
+/** `[os.remove(p) for p in <iterable>]` — the `for … in` right after a delete call. Words and whitespace
+ *  strictly alternate, so no two quantifiers compete for the same characters (the earlier
+ *  `for\s+[\w\s,()]+?\s+in\s` was super-quadratic on a long run of spaces). */
+const COMPREHENSION_FOR = /^\s*for\s+(?:[\w,()]+\s+)+?in\s/;
 
 // Where a simple command can START: the statement start; after `|`, `(`, `)` (a `case` label), `{`, `$(` or a
 // backtick; after a background `&` (not `&&`, `>&`, `&>`); after a standalone `!`; after `then` / `do` / `else` /
@@ -2960,7 +2994,15 @@ const NOT_IDENT_USE = String.raw`(?=\s|$)(?!\s*(?:=|\+=|-=|\*=|\/=))`;
 // chain the lookahead picks is the one that leaves the command word next.
 const COMMAND_WORD = (words: string) =>
   new RegExp(
-    CMD_START + String.raw`\s*(?=(?<chain>` + PREFIX + String.raw`))\k<chain>\\?(?:\S*\/)?(?<word>` + words + ")" + NOT_IDENT_USE,
+    // The lookahead after the start rejects, in O(1), the long runs of `(`, `{`, backticks that are each a
+    // candidate start but can never begin a command word.
+    CMD_START +
+      String.raw`(?=\s*[\w\\/.~$<>"'])\s*(?=(?<chain>` +
+      PREFIX +
+      String.raw`))\k<chain>\\?(?:[\w.~$\/-]*\/)?(?<word>` +
+      words +
+      ")" +
+      NOT_IDENT_USE,
     "g",
   );
 const SHELL_DELETE_CMD = COMMAND_WORD("rm|rmdir|unlink|shred");
@@ -2968,7 +3010,7 @@ const FIND_CMD = COMMAND_WORD("find|fd");
 const FIND_DELETES =
   /(^|\s)-delete\b|-(?:exec|execdir|ok|okdir)\s+\\?(?:\S*\/)?(?:rm|unlink)\b|-(?:exec|execdir|ok|okdir)\s+\\?(?:\S*\/)?shred\b[^;+]*?(?:\s-[a-zA-Z]*u\b|\s--remove\b)|(^|\s)(?:-x|-X|--exec|--exec-batch)\s+\\?(?:\S*\/)?(?:rm|unlink)\b/;
 const PY_DELETE_CALL = /\b(?:os\.(?:remove|unlink|rmdir)|shutil\.rmtree)\s*\(/g;
-const PY_DELETE_METHOD = /\.(?:unlink|rmdir)\s*\(/;
+const PY_DELETE_METHOD = /\.(?:unlink|rmdir)\s*\(/g;
 // `subprocess.run(['rm', '-rf', path])` — the argv form of a shell delete.
 const PY_ARGV_DELETE = /\bsubprocess\.\w+\(\s*\[\s*['"](?:\S*\/)?(?:rm|rmdir|unlink)['"]/g;
 // `map(os.remove, paths)` — the delete function passed by name.
@@ -2982,7 +3024,7 @@ const PERL_UNLINK = /(?<![\w.$>])unlink\s+(?:glob\s+)?["']/g;
  *  ` # comment`. Quote-blind like everything else here; a `#` inside quotes only ever SHORTENS the operand,
  *  which can move a delete to `inferred` (a warn), never to `named`. */
 function operandText(stmt: string, from: number, insideBackticks = false): string {
-  const rest = stmt.slice(from);
+  const rest = stmt.slice(from, from + BASIS_SCAN_CAP);
   const end = rest.search(insideBackticks ? /[|`]/ : /\|/);
   const simple = end === -1 ? rest : rest.slice(0, end);
   const comment = simple.search(/\s#/);
@@ -2993,11 +3035,40 @@ function operandText(stmt: string, from: number, insideBackticks = false): strin
  *  statement when they do not close within it (a quote-blind split can cut a call in half). */
 function callArgText(stmt: string, from: number): string {
   let depth = 1;
-  for (let i = from; i < stmt.length; i++) {
+  const end = Math.min(stmt.length, from + BASIS_SCAN_CAP);
+  for (let i = from; i < end; i++) {
     if (stmt[i] === "(") depth++;
     else if (stmt[i] === ")" && --depth === 0) return stmt.slice(from, i);
   }
-  return stmt.slice(from);
+  return stmt.slice(from, end);
+}
+
+/** The receiver expression just before a `.method(` at `dot`: walks back over identifiers, dots, quoted
+ *  strings and balanced `(…)` / `[…]` groups — `Path("…/x")`, `Path("…").joinpath("x")`, `(Path("…") / "x")`,
+ *  `p`. Bounded by `BASIS_SCAN_CAP`. */
+function receiverText(stmt: string, dot: number): string {
+  const stop = Math.max(0, dot - BASIS_SCAN_CAP);
+  let i = dot;
+  while (i > stop) {
+    const c = stmt[i - 1];
+    if (c === ")" || c === "]") {
+      const open = c === ")" ? "(" : "[";
+      let depth = 0;
+      let j = i - 1;
+      for (; j >= stop; j--) {
+        if (stmt[j] === c) depth++;
+        else if (stmt[j] === open && --depth === 0) break;
+      }
+      if (j < stop) break;
+      i = j;
+    } else if (c === '"' || c === "'") {
+      const j = stmt.lastIndexOf(c, i - 2);
+      if (j < stop) break;
+      i = j;
+    } else if (/[\w.]/.test(c)) i--;
+    else break;
+  }
+  return stmt.slice(i, dot);
 }
 
 function statementDeletesNamedOutputs(stmt: string, mm: MountMatchers): boolean {
@@ -3022,8 +3093,8 @@ function statementDeletesNamedOutputs(stmt: string, mm: MountMatchers): boolean 
     if (mm.touches.test(arg)) return true;
     // A comprehension / generator: `[os.remove(p) for p in glob.glob(".../outputs/*.tmp")]` — the operand
     // is the loop variable, bound by the `for … in <iterable>` right after the call.
-    const after = stmt.slice(end + arg.length + 1);
-    if (/^\s*for\s+[\w\s,()]+?\s+in\s/.test(after) && mm.touches.test(after)) return true;
+    const after = stmt.slice(end + arg.length + 1, end + arg.length + 1 + BASIS_SCAN_CAP);
+    if (COMPREHENSION_FOR.test(after) && mm.touches.test(after)) return true;
   }
   for (const re of [PY_MAP_DELETE, BARE_UNLINK_CALL]) if (callArgs(re).some(({ arg }) => mm.touches.test(arg))) return true;
   for (const m of stmt.matchAll(PY_ARGV_DELETE)) {
@@ -3031,7 +3102,16 @@ function statementDeletesNamedOutputs(stmt: string, mm: MountMatchers): boolean 
     if (mm.touches.test(callArgText(stmt, open + 1))) return true;
   }
   for (const m of stmt.matchAll(PERL_UNLINK)) if (mm.touches.test(operandText(stmt, m.index + m[0].length))) return true;
-  if (PY_DELETE_METHOD.test(stmt) && mm.touches.test(stmt)) return true;
+  // `.unlink(` / `.rmdir(` as a method: the path is the RECEIVER (`Path("…").unlink()`), an argument (Ruby's
+  // `File.unlink("…")`), or — in a comprehension — the `for … in <iterable>` after the call. Not merely
+  // somewhere in the statement: `Path("/tmp/x").unlink() if Path("…/outputs/r").exists()` deletes /tmp/x.
+  for (const m of stmt.matchAll(PY_DELETE_METHOD)) {
+    const from = m.index + m[0].length;
+    const arg = callArgText(stmt, from);
+    if (mm.touches.test(receiverText(stmt, m.index)) || mm.touches.test(arg)) return true;
+    const after = stmt.slice(from + arg.length + 1, from + arg.length + 1 + BASIS_SCAN_CAP);
+    if (COMPREHENSION_FOR.test(after) && mm.touches.test(after)) return true;
+  }
   return false;
 }
 

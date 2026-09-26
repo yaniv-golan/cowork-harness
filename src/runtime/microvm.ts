@@ -115,7 +115,8 @@ export function spawnMicroVm(
   // post-run walk reads execute.ts's SESSION-ROOT snapshot (snapshotMicroVmWorkspace), which preserves
   // relative structure, so the pre (walked at mntHost) and post (walked at outDir/work/session) path
   // spaces line up — un-killing no_unexpected_files / no_lost_write_back / input_unmodified on microvm.
-  // Internally gated on plan.capturePreRun|record and !plan.resume, so it's zero-cost when unneeded.
+  // The full manifest is internally gated on plan.capturePreRun|record and !plan.resume; the small
+  // outputs-only baseline the outputs-delete diff reads is taken first, on every turn.
   capturePreRunManifest(plan, mntHost, outDir, "microvm");
   const mcpVm = mcpStaged ? `${configVm}/mcp.json` : undefined;
   // (Local marketplaces are resolved to --plugin-dir in buildLaunchPlan; the registry

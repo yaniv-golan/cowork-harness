@@ -461,7 +461,8 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           "or set `allow_undelivered_deliverables: true` to acknowledge the gap for this scenario.",
       });
 
-    // absent scan evidence means host-path/outputs-delete did NOT run — a silent ✓ there would be its own
+    // absent scan evidence means the host-path guard and the outputs-delete TEXT scan did NOT run (the outputs
+    // filesystem diff still did — see `fsDiff`) — a silent ✓ there would be its own
     // false-green. Warn, not fail: matches the capability-probe `unverified` precedent, and a hard-fail would
     // fail every verify-run over a pre-scan-era result.json. An authored scan assertion still hard-fails via
     // scanMissing regardless of this signal.
