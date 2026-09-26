@@ -41,7 +41,8 @@ namespace.
    sends SIGTERM and SIGKILLs after 2 s; on `container`/`hostloop` the agent is killed at once, with the
    container reap. On `microvm` the kill is sent inside the VM, because killing the host `limactl` client
    does not reach the guest process (verified against a live microVM). A second signal skips the wait. An interrupt while the run waits on a
-   `--decider-cmd` gate is recorded as an interrupt, not as an unanswered gate.
+   `--decider-cmd` gate is not reported as an unanswered gate: the run ends like any other interrupt
+   (exit 130/143, `status.json` `"error"`, no `result.json`).
 5. **Staleness detection (the `SIGKILL` case):** an exit handler cannot run on `SIGKILL`/OOM-kill/a
    segfault — nothing in Node runs on those, by design of the OS signal itself, so `status.json` is left
    sitting at whatever it last said, frozen, with no terminal write ever coming. **Neither the crash

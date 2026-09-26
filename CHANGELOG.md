@@ -47,7 +47,8 @@ All notable changes to this project are documented here. The format is based on
   `--decider-cmd` helper cleanup no longer re-raises the signal, which had bypassed all of this. A
   multi-scenario `run` interrupted mid-batch starts no further scenario, and an interrupted `record` never
   writes a cassette, even with `--allow-failing`. An interrupt while the run waits on a `--decider-cmd` gate
-  is recorded as an interrupt, not as an unanswered gate. (Runs that `critique` starts are child processes it stops
+  is no longer reported as an unanswered gate: the run ends like any other interrupt (exit 130/143,
+  `status.json` `"error"`, no `result.json`). (Runs that `critique` starts are child processes it stops
   itself, and are not covered by this.)
 - **`microvm`: stopping a run now stops the agent inside the VM.** Killing the host `limactl shell`
   client never reached the guest agent — it kept running with its input still open — and orphaned the
