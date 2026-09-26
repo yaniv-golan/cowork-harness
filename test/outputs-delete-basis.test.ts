@@ -196,23 +196,28 @@ describe("the live assembler actually WIRES the tiering inputs (position checks)
   });
 });
 
-describe("variable expansion: an empty value can join identifiers", () => {
-  // Expansion replaces variables one at a time in assignment order, so an EMPTY value can join the text on
-  // both sides into a new reference: `$B${A}C` with A="" becomes `$BC`, which the later `BC` then expands.
-  it("the joined reference is expanded: a delete of the joined path under outputs is named", () => {
+describe("variable expansion: an operand joined through an empty variable is never cleared", () => {
+  // `$B${A}C` with A="": the harness's single-pass expansion could join `$B` and `C` into `$BC` and expand
+  // THAT — but bash expands `$B` and `C` separately (`rm zzzC`, or `rm C` with B unset, a cwd-relative path).
+  // Neither reading is provable, so the join is kept apart and the operand stays unprovable: flagged, and
+  // `inferred` at most, whatever `BC` holds.
+  it("a joined operand that would read as an outputs path is flagged, inferred (not named)", () => {
     const cmd = `A=""; BC=${O}/f; B=zzz; rm $B\${A}C`;
     expect(isOutputsDelete(cmd)).toBe(true);
-    expect(outputsDeleteBasis(cmd)).toBe("named");
+    expect(outputsDeleteBasis(cmd)).toBe("inferred");
   });
-  it("…and a joined path that is provably safe is not a delete at all", () => {
-    expect(isOutputsDelete(`A=''; BC=/tmp/x; echo ${O}/log; rm $B\${A}C`)).toBe(false);
+  it("a joined operand that would read as a safe path is still flagged — never cleared as safe", () => {
+    const cmd = `A=''; BC=/tmp/x; echo ${O}/log; rm $B\${A}C`;
+    expect(isOutputsDelete(cmd)).toBe(true);
+    expect(outputsDeleteBasis(cmd)).toBe("inferred");
   });
 });
 
 describe("variable expansion has a work budget; over it the scanner decides strictly", () => {
   // Exact expansion costs (distinct variables referenced) × (statement length). Past EXPANSION_BUDGET the
   // scanner does not expand: every mount the command names literally counts as deleted in, and the
-  // classifier answers `named`. Stricter only — for any mount named literally in the command.
+  // classifier answers `named` when its own expansion (of the comment-stripped text) is over too; otherwise it
+  // runs its normal analysis. Stricter only — for any mount named literally in the command.
   const many = Array.from({ length: 4000 }, (_, i) => `v${i}=$v${i + 1}`).join(" ");
   const refs = Array.from({ length: 4000 }, (_, i) => `$v${i}`).join("");
   it("a provably safe delete in a command over the budget is flagged, named", () => {

@@ -2674,9 +2674,12 @@ function stripCommentLines(cmd: string): string {
  *  resolved (and therefore never "provably safe"). */
 /** Upper bound on the work variable expansion may do for one command, in characters scanned. Exact expansion
  *  replaces referenced variables one at a time, each pass over the segment, so a statement that references
- *  thousands of distinct variables costs (variables × segment length) — seconds at 4000. Real commands use
+ *  many distinct variables costs (variables × segment length) — seconds at 4000 on the release code. Real commands use
  *  a few dozen variables; the budget allows about a hundred distinct ones referenced in one 10 KB line. */
 export const EXPANSION_BUDGET = 1_000_000;
+/** Inserted where an empty variable sits between a reference and more identifier text, so the two are never
+ *  joined into a new reference. Not a word character and not a statement separator; stripped from findings. */
+const EMPTY_JOIN_GUARD = "\u0000";
 class ExpansionBudgetExceeded extends Error {}
 
 /** `expandSimpleVars`, or `undefined` when the command would exceed `EXPANSION_BUDGET`. Callers that DECIDE
@@ -2775,15 +2778,24 @@ function expandSimpleVarsUnbounded(rawCmd: string, budget: { left: number }): st
       const v = vars.get(k)!;
       // An EMPTY value joins the text on both sides (`$B${A}C` with A="" becomes `$BC`), so it can create a
       // reference too.
-      const valueMayJoin = v === "" || v.includes("$") || /^[\w{]/.test(v);
+      const valueMayJoin = v.includes("$") || /^[\w{]/.test(v);
       let mayCreateRef = v.includes("$");
+      // does the text just before `offset` end in `$`, `${`, or a `$name` run a value placed there would extend?
+      const afterRefStart = (str: string, offset: number): boolean => {
+        let j = offset - 1;
+        while (j >= 0 && /\w/.test(str[j])) j--;
+        return j >= 0 && (str[j] === "$" || (str[j] === "{" && str[j - 1] === "$"));
+      };
       s = s.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), (match: string, offset: number, str: string) => {
-        if (!mayCreateRef && valueMayJoin) {
-          // does the text just before this match end in `$`, `${`, or a `$name` run the value would extend?
-          let j = offset - 1;
-          while (j >= 0 && /\w/.test(str[j])) j--;
-          if (j >= 0 && (str[j] === "$" || (str[j] === "{" && str[j - 1] === "$"))) mayCreateRef = true;
+        // An EMPTY value between a reference and more identifier text (`$B${A}C`, `$${A}B`) would JOIN them
+        // into a new reference. Bash never does that (`$B${A}C` is `$B` then `C`), so the join is kept apart
+        // with a separator: the operand stays unprovable — flagged, never cleared as safe, and `inferred` at
+        // most, whatever the joined name happens to hold.
+        if (v === "") {
+          const next = str[offset + match.length];
+          return next !== undefined && /[\w{]/.test(next) && afterRefStart(str, offset) ? EMPTY_JOIN_GUARD : "";
         }
+        if (!mayCreateRef && valueMayJoin && afterRefStart(str, offset)) mayCreateRef = true;
         return v;
       });
       charge(s.length); // the replace scanned the whole segment
@@ -3045,7 +3057,8 @@ export function detectMountDeletes(cmd: string, mounts: string[]): string[] {
   // itself be the operative delete.
   const expandedVars = tryExpandSimpleVars(cmd);
   const codeVars = tryExpandSimpleVars(stripCommentLines(cmd));
-  // Over the expansion budget (thousands of distinct variables in one statement): decide without expanding,
+  // Over the expansion budget (about a hundred distinct variables referenced in one 10 KB line, fewer in a
+  // longer one): decide without expanding,
   // strictly — every mount the command names literally anywhere counts as deleted in. The expanded text
   // could only name a mount the raw text does not if the name itself were assembled from variables.
   if (expandedVars === undefined || codeVars === undefined) return mounts.filter((m) => cmd.includes(m));
@@ -3365,7 +3378,7 @@ function outputsDeleteSnippet(cmd: string, mount = "outputs"): string {
   }
   const mm = mountMatchers(mount);
   const ops = splitStatements(expanded).filter((s) => mvDeletesOutputs(s, mm) || DELETE_TOKEN.test(s));
-  return (ops.length ? ops.join("; ") : expanded).trim().slice(0, 160);
+  return (ops.length ? ops.join("; ") : expanded).split(EMPTY_JOIN_GUARD).join("").trim().slice(0, 160);
 }
 
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */

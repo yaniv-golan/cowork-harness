@@ -665,7 +665,9 @@ Recognize these before "fixing" a non-bug:
   delete command with an outputs operand follows a separator, subshell or keyword
   (`echo 'note; rm mnt/outputs/x'` — the classifier does not track quotes), and a heredoc that *writes* a
   script instead of running it. A statement over 4 KiB or a command over 16 KiB is judged by the stricter
-  original rule, so a huge one-line body with a variable named `rm` fails again. Waive any of these with
+  original rule, so a huge one-line body with a variable named `rm` fails again, and a command whose variable
+  expansion would exceed the scanner's work budget (about a hundred distinct variables in one 10 KB line) is
+  not expanded — every mount it names literally counts as deleted in. Waive any of these with
   `allow_outputs_delete`. The warn is raised even when `no_delete_in_outputs` is authored (the assertion
   passes; this warn is how the hit stays visible in text output).
 - **`outputs_diff_unavailable`** (`WARN`) — the outputs filesystem diff could not verify this turn and the

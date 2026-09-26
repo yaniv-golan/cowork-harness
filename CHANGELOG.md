@@ -109,13 +109,18 @@ All notable changes to this project are documented here. The format is based on
 
 - **The outputs-delete scanner no longer takes seconds on a long command.** A `shred` or `find` without its
   delete flag, an unclosed `$(mktemp`, or one statement referencing thousands of variables made the scan
-  quadratic: an 81 KB `shred -a …` line took 1.2 s, and a 4000-variable statement 3.2 s, or 5.4 s per flagged
-  command when each variable's value references the next. The token and `mktemp` checks now run in one pass,
+  quadratic: an 81 KB `shred -a …` line took 1.2 s, and a 4000-variable statement 3.2 s, or about 1.3–1.6 s per
+  flagged command when each variable's value references the next. The token and `mktemp` checks now run in one pass,
   and variable expansion has a work budget (about a hundred distinct variables referenced in one 10 KB
   line): past it the scanner does not expand, and every mount the command names literally counts as
-  deleted in — stricter, never looser, for any mount named in the command. Measured per flagged command
-  (scanner, finding text and classifier together), the worst shapes now take under 25 ms up to 160 KB. No
-  command in the kept run corpus comes near the budget; below it, what is flagged is unchanged.
+  deleted in — stricter, never looser, for any mount named in the command. The regression guard holds the
+  whole scan of each flagged command (scanner, finding text and classifier together) under 150 ms on every
+  shape it probes. No hangs are known; the slowest known shapes take about 0.16–0.25 s per flagged command at
+  ~160 KB — thousands of distinct `$(mktemp)` variables referenced across several segments, or ~50 000 tiny
+  segments. No command in the kept run corpus comes within 1% of the budget; below it, what is flagged is
+  unchanged, except that an operand joined through an empty variable (`$B${A}C` with `A=""`) is no longer
+  read as the joined variable's value: bash expands the two halves separately, so the harness keeps it
+  unprovable — flagged, never cleared as safe.
 - **A resumed turn no longer re-reports an earlier turn's outputs delete.** The outputs diff compared every
   turn against the first turn's baseline, so a delete in turn 1 failed turn 2 again on scenarios that armed
   the manifest; it now compares against the turn's own start, matching the text scan's current-turn scope.

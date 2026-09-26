@@ -50,6 +50,16 @@ export const PROBES: Record<string, () => string> = {
     "\nw=x\n" +
     Array.from({ length: 4000 }, (_, i) => `$v${i}`).join("") +
     ` ${O}/x; rm "$Q"`,
+  // Two shapes the expansion budget does not bound tightly: distinct `$(mktemp)` variables referenced across
+  // several segments (their resolution is one pass per variable per segment, outside the budget), and tens of
+  // thousands of tiny segments (each costs more than it is charged). Sized well under the guard's bound; at
+  // ~160 KB they measure ~0.16–0.25 s per flagged command.
+  "mktemp: 1000 distinct $(mktemp) vars × 3 segments": () =>
+    Array.from({ length: 1000 }, (_, i) => `m${i}=$(mktemp)`).join(" ") +
+    ";" +
+    Array.from({ length: 3 }, () => Array.from({ length: 1000 }, (_, i) => `$m${i}`).join("")).join(";") +
+    `; echo ${O}/x; rm "$Q"`,
+  "tiny segments: $a; × 2000": () => "a=1; " + "$a;".repeat(2000) + ` echo ${O}/x; rm "$Q"`,
   "under the expansion budget: cascade × 150": () =>
     Array.from({ length: 150 }, (_, i) => `v${i}=$v${i + 1}`).join(" ") +
     "\n" +
