@@ -1351,3 +1351,90 @@ def test_resolve_corpus_root_references_matches_shared_fixture(case, tmp_path):
     resolved = scenario._resolve_corpus_root_references(skill_dir, agents)
     got = sorted(p.relative_to(root).as_posix() for p in resolved)
     assert got == sorted(case["expected"])
+
+
+# ── Loader findings handed over by the `cowork-harness lint` wrapper ──────────────────────────────
+#
+# The CLI wrapper runs the harness's own scenario loader before spawning this linter and passes what it
+# rejects through a JSON file named by COWORK_HARNESS_LINT_EXTRA_FINDINGS. They must flow through the
+# same --min-severity filter, renderer and exit rule as this linter's own findings. The variable is
+# honoured only together with COWORK_HARNESS_PROG (which the wrapper always sets), so a direct
+# `python3 scenario.py lint` never reads it.
+
+EXTRA_VAR = "COWORK_HARNESS_LINT_EXTRA_FINDINGS"
+
+
+def _extra_file(tmp_path, entries):
+    p = tmp_path / "extra.json"
+    p.write_text(entries if isinstance(entries, str) else json.dumps(entries), encoding="utf-8")
+    return str(p)
+
+
+def _loader_entry(file, severity="ERROR", rule="scenario-invalid"):
+    return {"severity": severity, "rule": rule, "message": "the loader rejects this", "fix": "fix it", "file": file, "line": None}
+
+
+def test_extra_findings_are_merged_filtered_and_gate(tmp_path, monkeypatch):
+    sc = tmp_path / "sc.yaml"
+    extra = _extra_file(tmp_path, [_loader_entry(str(sc)), _loader_entry(str(sc), severity="INFO", rule="loader-info")])
+    monkeypatch.setenv("COWORK_HARNESS_PROG", "cowork-harness")
+    monkeypatch.setenv(EXTRA_VAR, extra)
+    code, out = _lint_cli(tmp_path, body="assert:\n  - result: success\n")
+    assert code == 1
+    assert "scenario-invalid" in out and "loader-info" in out
+    code, out = _lint_cli(tmp_path, "--min-severity", "WARN", body="assert:\n  - result: success\n")
+    assert code == 1
+    assert "scenario-invalid" in out and "loader-info" not in out
+    code, out = _lint_cli(tmp_path, "--json", body="assert:\n  - result: success\n")
+    rules = {x["rule"] for x in json.loads(out)}
+    assert {"scenario-invalid", "loader-info"} <= rules
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["{not json", json.dumps({"not": "a list"}), json.dumps([{"severity": "FATAL", "rule": "x", "message": "m", "fix": "f", "file": "a"}])],
+    ids=["bad-json", "not-a-list", "bad-severity"],
+)
+def test_malformed_extra_findings_is_an_error_not_a_crash(tmp_path, monkeypatch, payload):
+    monkeypatch.setenv("COWORK_HARNESS_PROG", "cowork-harness")
+    monkeypatch.setenv(EXTRA_VAR, _extra_file(tmp_path, payload))
+    code, out = _lint_cli(tmp_path, body="assert:\n  - result: success\n")
+    assert code == 1
+    assert "linter-extra-findings-invalid" in out
+
+
+def test_unreadable_extra_findings_is_an_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("COWORK_HARNESS_PROG", "cowork-harness")
+    monkeypatch.setenv(EXTRA_VAR, str(tmp_path / "missing.json"))
+    code, out = _lint_cli(tmp_path, body="assert:\n  - result: success\n")
+    assert code == 1
+    assert "linter-extra-findings-invalid" in out
+
+
+def test_extra_findings_ignored_on_direct_invocation(tmp_path, monkeypatch):
+    """Without COWORK_HARNESS_PROG this is a direct `python3 scenario.py lint`: the variable is not read."""
+    monkeypatch.delenv("COWORK_HARNESS_PROG", raising=False)
+    monkeypatch.setenv(EXTRA_VAR, _extra_file(tmp_path, [_loader_entry("x.yaml")]))
+    code, out = _lint_cli(tmp_path, body="assert:\n  - result: success\n")
+    assert code == 0
+    assert "scenario-invalid" not in out
+
+
+def test_blank_extra_findings_value_is_unset(tmp_path, monkeypatch):
+    monkeypatch.setenv("COWORK_HARNESS_PROG", "cowork-harness")
+    monkeypatch.setenv(EXTRA_VAR, "   ")
+    code, out = _lint_cli(tmp_path, body="assert:\n  - result: success\n")
+    assert code == 0
+
+
+def test_lint_skill_ignores_extra_findings(tmp_path, monkeypatch):
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# Clean\n\nNothing to see.\n", encoding="utf-8")
+    monkeypatch.setenv("COWORK_HARNESS_PROG", "cowork-harness")
+    monkeypatch.setenv(EXTRA_VAR, _extra_file(tmp_path, [_loader_entry("x.yaml")]))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = scenario.main(["lint-skill", str(skill)])
+    assert code == 0
+    assert "scenario-invalid" not in buf.getvalue()
