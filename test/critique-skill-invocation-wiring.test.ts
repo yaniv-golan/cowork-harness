@@ -2,7 +2,14 @@ import { describe, it, expect, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { computeSkillInvocationVerdict, gradedSkillNameFor, commandShadowsSkillFor } from "../src/critique/command.js";
+import {
+  applyTargetPromotion,
+  computeSkillInvocationVerdict,
+  gradedSkillNameFor,
+  commandShadowsSkillFor,
+  resolveCritiquedSkillDir,
+  type ParsedArgs,
+} from "../src/critique/command.js";
 import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 import { binaryPluginIdentity } from "../src/session.js";
 
@@ -61,7 +68,7 @@ const frame = (parent: string | null, skill: string) =>
 
 function verdict(pluginRoot: string, skill: string, result: Record<string, unknown>, events: string[] = []) {
   const outDir = makeRun(result, events);
-  const resolved = { skillDir: join(pluginRoot, "skills", skill), pluginRoot, autoSelectedSkill: undefined };
+  const resolved = { skillDir: join(pluginRoot, "skills", skill), pluginRoot, autoSelectedSkill: undefined, gradedSkillName: skill };
   const gradedSkillName = gradedSkillNameFor(skill, resolved);
   return computeSkillInvocationVerdict({ outDir, boundary: snapshotTurnBoundary(outDir), taskRaw: result, resolved, gradedSkillName });
 }
@@ -135,16 +142,39 @@ describe("computeSkillInvocationVerdict over real file shapes", () => {
   });
 });
 
+// Through the REAL resolver (and promotion) on on-disk trees — never a fabricated `resolved`: a hand-built
+// `{ skillDir, pluginRoot }` kept this block green while the shape-2 name derivation it claimed to pin had
+// stopped reaching the live path.
 describe("gradedSkillNameFor", () => {
-  it("--skill wins; then a single-skill plugin's auto-selection", () => {
-    expect(gradedSkillNameFor("a", { skillDir: "/p/skills/b", pluginRoot: "/p", autoSelectedSkill: "b" })).toBe("a");
-    expect(gradedSkillNameFor(undefined, { skillDir: "/p/skills/b", pluginRoot: "/p", autoSelectedSkill: "b" })).toBe("b");
+  const graded = (skillFolder: string, skillSelector?: string) => {
+    const opts = applyTargetPromotion({ skillFolder, skillSelector } as ParsedArgs);
+    return { opts, name: gradedSkillNameFor(opts.skillSelector, resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector)) };
+  };
+  it("--skill names the skill", () => {
+    const root = makePlugin("fx", "deck-review", "dot-claude-plugin", "fx");
+    expect(graded(root, "deck-review").name).toBe("deck-review");
   });
-  it("a `<plugin>/skills/<name>` positional (shape 2) names the skill by its directory", () => {
-    expect(gradedSkillNameFor(undefined, { skillDir: "/p/skills/c", pluginRoot: "/p", autoSelectedSkill: undefined })).toBe("c");
+  it("a single-skill plugin's auto-selection names it", () => {
+    const root = makePlugin("fx", "deck-review", "dot-claude-plugin", "fx");
+    expect(graded(root).name).toBe("deck-review");
+  });
+  it("a `<plugin>/skills/<name>` positional is promoted to the plugin and graded by name", () => {
+    const root = makePlugin("fx", "deck-review", "dot-claude-plugin", "fx");
+    const { opts, name } = graded(join(root, "skills", "deck-review"));
+    expect(opts.skillFolder).toBe(root);
+    expect(name).toBe("deck-review");
+  });
+  it("a skill inside a plugin that cannot be promoted (not at skills/<name>) is named by its directory", () => {
+    const root = makePlugin("fx", "deck-review", "dot-claude-plugin", "fx");
+    mkdirSync(join(root, "tools", "c"), { recursive: true });
+    writeFileSync(join(root, "tools", "c", "SKILL.md"), "---\nname: c\n---\n# c\n");
+    const { opts, name } = graded(join(root, "tools", "c"));
+    expect(opts.skillFolder).toBe(join(root, "tools", "c"));
+    expect(name).toBe("c");
   });
   it("a plain skill folder (root IS the skill) has no single named skill to check", () => {
-    expect(gradedSkillNameFor(undefined, { skillDir: "/s", pluginRoot: "/s", autoSelectedSkill: undefined })).toBe(undefined);
-    expect(gradedSkillNameFor(undefined, { skillDir: "/s", pluginRoot: undefined, autoSelectedSkill: undefined })).toBe(undefined);
+    const s = tmp("cwh-inv-plain-");
+    writeFileSync(join(s, "SKILL.md"), "---\nname: s\n---\n# s\n");
+    expect(graded(s).name).toBe(undefined);
   });
 });

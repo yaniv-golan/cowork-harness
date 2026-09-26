@@ -194,7 +194,11 @@ describe("packageEvidence — rendering, keys and the tracked-set filter", () =>
       mkdirSync(turnDir, { recursive: true });
       writeFileSync(join(turnDir, "result.json"), JSON.stringify({ finalMessage: "ok", referencesRead: [], referencesAccessed: [] }));
     }
-    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
   }
 
   it("renders the body in a section and keys it by the DISPLAY key", () => {
@@ -386,7 +390,11 @@ describe("section TITLES are sanitized — they interpolate third-party bytes", 
     });
     const r = resolveCritiquedSkillDir(root, "ms");
     const outDir = mkdtempSync(join(tmpdir(), "cwh-out-"));
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     const armored = armorEvidence(res.sections).text;
     expect(armored).not.toMatch(/^### \[E-0{16}\]/m); // no forged heading at line start
     expect(res.sections.every((s) => !s.title.includes("\n"))).toBe(true); // a title is ONE line
@@ -405,7 +413,11 @@ describe("section TITLES are sanitized — they interpolate third-party bytes", 
     });
     const r = resolveCritiquedSkillDir(root, "ms");
     const outDir = mkdtempSync(join(tmpdir(), "cwh-out-"));
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     const title = res.sections.find((s) => s.title.startsWith(ROOT_REFERENCE_SECTION_PREFIX))!.title;
     expect(title).toContain("in corpus via");
     expect(title).not.toContain(marker);
@@ -424,7 +436,11 @@ describe("corpusPackaged reports what CONTENT actually shipped", () => {
   it("a file the ceiling ZEROED is absent from corpusPackaged (it shipped no content)", () => {
     const { root, outDir } = bigTree(300, 3 * 1024);
     const r = resolveCritiquedSkillDir(root, "ms");
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     const zeroed = res.corpusCuts.filter((c) => c.omitted).map((c) => c.name);
     expect(zeroed.length).toBeGreaterThan(0); // the fixture really does breach the ceiling
     for (const name of zeroed) expect(res.corpusPackaged).not.toContain(name);
@@ -433,7 +449,11 @@ describe("corpusPackaged reports what CONTENT actually shipped", () => {
   it("REGRESSION GUARD (passes today): a PARTIALLY cut file is still listed — content did ship", () => {
     const { root, outDir } = bigTree(300, 3 * 1024);
     const r = resolveCritiquedSkillDir(root, "ms");
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     const partial = res.corpusCuts.filter((c) => !c.omitted).map((c) => c.name);
     expect(partial.length).toBeGreaterThan(0);
     for (const name of partial) expect(res.corpusPackaged).toContain(name);
@@ -449,7 +469,11 @@ describe("corpusPackaged reports what CONTENT actually shipped", () => {
     expect(r.agents).toHaveLength(1);
     rmSync(join(root, "agents", "ms.md")); // resolved, then vanishes before packaging
     const outDir = mkdtempSync(join(tmpdir(), "cwh-ph-"));
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     expect(res.corpusPackaged).not.toContain("agents/ms.md");
     expect(res.corpusCuts).toEqual([]); // a placeholder is never CUT, so subtraction alone could not do this
     // ...but it must not vanish from EVERY field either: trading a wrong "packaged" label for total
@@ -464,7 +488,11 @@ describe("corpusOmitted distinguishes 'not linked' from 'not linked AND not deli
     writeFileSync(join(root, "references", "untracked.md"), "U\n"); // written AFTER `git add`
     const r = resolveCritiquedSkillDir(root, "ms");
     const outDir = mkdtempSync(join(tmpdir(), "cwh-u-"));
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     const by = Object.fromEntries(res.corpusOmitted.map((o) => [o.name, o]));
     expect(by["plug/references/tracked.md"]).toEqual({ name: "plug/references/tracked.md", reason: "not-linked", alsoUntracked: false });
     expect(by["plug/references/untracked.md"]).toEqual({
@@ -485,7 +513,11 @@ describe("corpusOmitted distinguishes 'not linked' from 'not linked AND not deli
     writeFileSync(join(root, "references", "font.bin"), Buffer.from([0x00, 0xff, 0xfe, 0x41])); // linked, binary, untracked
     const r = resolveCritiquedSkillDir(root, "ms");
     const outDir = mkdtempSync(join(tmpdir(), "cwh-ru-"));
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     expect(res.corpusOmitted).toEqual([{ name: "plug/references/font.bin", reason: "not-utf8", alsoUntracked: true }]);
   });
 
@@ -552,7 +584,11 @@ describe("corpusOmitted distinguishes 'not linked' from 'not linked AND not deli
     const root = tree({ "plugin.json": '{"name": "plug"}', "skills/ms/SKILL.md": "# ms\n", "references/a.md": "A\n" });
     const r = resolveCritiquedSkillDir(root, "ms");
     const outDir = mkdtempSync(join(tmpdir(), "cwh-nogit-"));
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     expect(res.corpusOmitted).toEqual([{ name: "plug/references/a.md", reason: "not-linked" }]);
     expect("alsoUntracked" in res.corpusOmitted[0]!).toBe(false);
   });
@@ -578,7 +614,11 @@ describe("a plugin named `agents` shares a DISPLAY key with an agent file", () =
     const root = tree(files);
     const r = resolveCritiquedSkillDir(root, "ms");
     const outDir = mkdtempSync(join(tmpdir(), "cwh-coll-"));
-    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
     // Both are present under the same display key — intended, and visible to the reader.
     expect(res.corpusPackaged.filter((k) => k === "agents/references/x.md")).toHaveLength(2);
     // Weak by construction, and labelled so: this sums only the CUT files, a strict subset of an

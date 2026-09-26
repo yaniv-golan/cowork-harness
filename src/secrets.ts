@@ -13,7 +13,7 @@ const MIN_SECRET_LENGTH = 1;
 // The known secret-bearing env keys to scrub. Beyond the three auth tokens, `ANTHROPIC_CUSTOM_HEADERS`
 // can carry a bearer/proxy credential. Users add more (proxy creds, MCP server tokens) via
 // COWORK_HARNESS_SCRUB_KEYS (comma-separated env-var names), or literal values via COWORK_HARNESS_SCRUB_VALUES.
-const KNOWN_SECRET_KEYS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"];
+export const KNOWN_SECRET_KEYS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"];
 
 function csv(v: string | undefined): string[] {
   return (v ?? "")

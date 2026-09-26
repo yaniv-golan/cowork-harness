@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { resolveDispatchableAgents } from "../src/critique/resolve-agents.js";
-import { resolveCritiquedSkillDir } from "../src/critique/command.js";
+import { applyTargetPromotion, resolveCritiquedSkillDir, type ParsedArgs } from "../src/critique/command.js";
 import { packageEvidence } from "../src/critique/package-evidence.js";
 import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 
@@ -73,11 +73,11 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
     expect(r.agents.map((a) => a.rel)).toEqual(["agents/helper.md"]);
   });
 
-  it("a skill dir targeted DIRECTLY resolves the same agents as --skill (walks up for the plugin root)", () => {
-    // `critique <plugin>/skills/<name>` is an invocation docs/critique.md's "Multi-skill plugins" section recommends, and it packaged
-    // ZERO agents while scenario.py sized them — the root was the positional folder, and a skill dir
-    // has no agents/ of its own. The two spellings must agree or the packager and the linter describe
-    // different corpora for the same tree.
+  it("a skill dir targeted DIRECTLY is promoted to its plugin and resolves the same agents as --skill", () => {
+    // `critique <plugin>/skills/<name>` and `critique <plugin> --skill <name>` must describe the same corpus.
+    // They agree because the first is PROMOTED to the second (same mount), not because the resolver walks
+    // up from a skill-folder mount to package agents that mount never carries — which is what it did through
+    // 3.9.0. Without promotion (the fallback shape), a skill folder resolves no agents: none are mounted.
     const root = materialize({
       "plugin.json": '{"name": "plug"}',
       "skills/ms/SKILL.md": '# ms\nsubagent_type: "plug:ms-redteam"\n',
@@ -85,10 +85,16 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
       "agents/ms-redteam.md": "red team\n",
     });
     const viaSelector = resolveCritiquedSkillDir(root, "ms");
-    const viaSkillDir = resolveCritiquedSkillDir(join(root, "skills", "ms"), undefined);
+    const promoted = applyTargetPromotion({ skillFolder: join(root, "skills", "ms"), skillSelector: undefined } as ParsedArgs);
+    const viaSkillDir = resolveCritiquedSkillDir(promoted.skillFolder, promoted.skillSelector);
     expect(viaSkillDir.agents.map((a) => a.rel)).toEqual(["agents/ms-redteam.md", "agents/ms.md"]);
     expect(viaSkillDir.agents.map((a) => a.rel)).toEqual(viaSelector.agents.map((a) => a.rel));
     expect(viaSkillDir.pluginRoot).toBe(root);
+    expect(viaSkillDir.mountRoot).toBe(root);
+
+    const unpromoted = resolveCritiquedSkillDir(join(root, "skills", "ms"), undefined);
+    expect(unpromoted.agents).toEqual([]);
+    expect(unpromoted.pluginRoot).toBe(join(root, "skills", "ms"));
   });
 
   it("a dir with no SKILL.md anywhere resolves no agents", () => {
@@ -101,7 +107,11 @@ describe("packageEvidence — one section and one corpus key per agent", () => {
   function pkg(root: string, skill: string) {
     const r = resolveCritiquedSkillDir(root, skill);
     const outDir = mkdtempSync(join(tmpdir(), "cwh-out-"));
-    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, {
+      agents: r.agents,
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
   }
 
   it("packages BOTH agent bodies, each keyed by its own path, with provenance in the title", () => {

@@ -84,7 +84,7 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
   {
     id: "skill-corpus-ceiling",
     summary:
-      "skill-authored content (SKILL.md, references/**, every agents/**.md the skill can dispatch, and every plugin-root references/ file the skill points at) ships WHOLE up to a 512 KiB combined corpus ceiling; the transcript is bounded separately at 128 KiB with a head+tail cut and an elided middle",
+      "skill-authored content the mount carries (SKILL.md, references/**, every agents/**.md the skill can dispatch, and every plugin-root references/ file the skill points at) ships WHOLE up to a 512 KiB combined corpus ceiling; the transcript is bounded separately at 128 KiB with a head+tail cut and an elided middle",
     provenance: {
       kind: "deliberate",
       rationale:

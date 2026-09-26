@@ -92,7 +92,7 @@ describe("F28 — a stat error is distinguishable from a real zero-byte boundary
     const boundary: TurnBoundary = { events: { size: null }, timeline: { size: 0 } };
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.turn1SliceDegraded).toBe(true);
     expect(result.pkg).toMatch(/DEGRADED/);
     rmSync(skillDir, { recursive: true, force: true });
@@ -131,7 +131,7 @@ describe("F29 — append-only prefix tamper detection (defense-in-depth)", () =>
     writeFileSync(path, '{"t":"init"}\n{"t":"read","path":"Z.md"}\n'); // same length, different bytes
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.turn1SliceDegraded).toBe(true);
     rmSync(skillDir, { recursive: true, force: true });
   });
@@ -166,7 +166,7 @@ describe("F29 residual — truncation BELOW the captured boundary is detected, n
     // so packageEvidence falls back to the events.jsonl slice, which must now be flagged degraded.
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.turn1SliceDegraded).toBe(true);
     expect(result.pkg).toMatch(/DEGRADED/);
     rmSync(skillDir, { recursive: true, force: true });
@@ -210,7 +210,7 @@ describe("a captured non-empty boundary whose file later vanishes is an integrit
     // to the events.jsonl slice, which must now be flagged degraded rather than silently reporting "(none)".
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.turn1SliceDegraded).toBe(true);
     expect(result.pkg).toMatch(/DEGRADED/);
     rmSync(skillDir, { recursive: true, force: true });
@@ -228,7 +228,7 @@ describe("a captured non-empty boundary whose file later vanishes is an integrit
 
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.turn1SliceDegraded).toBe(false);
     rmSync(skillDir, { recursive: true, force: true });
   });
@@ -244,7 +244,7 @@ describe("a captured non-empty boundary whose file later vanishes is an integrit
 
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.turn1SliceDegraded).toBe(false);
     rmSync(skillDir, { recursive: true, force: true });
   });
@@ -253,6 +253,10 @@ describe("a captured non-empty boundary whose file later vanishes is an integrit
 describe("a partly-corrupt archived turn-1 transcript degrades, never reads as clean ground truth", () => {
   let dir: string;
   beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "cwh-crit-arch-"))));
+  const packageEvidenceOnSkill = (d: string, b: typeof BENIGN) => {
+    const s = skill();
+    return packageEvidence(d, b, s, false, { mountRoot: s });
+  };
   const skill = () => {
     const s = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(s, "SKILL.md"), "# a skill\nguidance");
@@ -269,7 +273,7 @@ describe("a partly-corrupt archived turn-1 transcript degrades, never reads as c
       join(dir, "turns", "1", "run.jsonl"),
       '{"t":"init"}\n{ this is not valid json\n' + JSON.stringify({ t: "transcript", text: "the agent read the file" }) + "\n",
     );
-    const result = packageEvidence(dir, BENIGN, skill());
+    const result = packageEvidenceOnSkill(dir, BENIGN);
     expect(result.turn1SliceDegraded).toBe(true); // corruption surfaced, not silently clean
     const transcript = result.sections.find((s) => s.title.startsWith("Transcript"));
     expect(transcript?.body).toContain("the agent read the file"); // still resilient — the transcript is delivered
@@ -278,7 +282,7 @@ describe("a partly-corrupt archived turn-1 transcript degrades, never reads as c
   it("a clean archive (exactly one transcript record, no corruption) is NOT degraded", () => {
     mkdirSync(join(dir, "turns", "1"), { recursive: true });
     writeFileSync(join(dir, "turns", "1", "run.jsonl"), '{"t":"init"}\n' + JSON.stringify({ t: "transcript", text: "clean" }) + "\n");
-    expect(packageEvidence(dir, BENIGN, skill()).turn1SliceDegraded).toBe(false);
+    expect(packageEvidenceOnSkill(dir, BENIGN).turn1SliceDegraded).toBe(false);
   });
 
   it("an ambiguous archive with TWO transcript records degrades (completeness unknown)", () => {
@@ -287,7 +291,7 @@ describe("a partly-corrupt archived turn-1 transcript degrades, never reads as c
       join(dir, "turns", "1", "run.jsonl"),
       JSON.stringify({ t: "transcript", text: "first" }) + "\n" + JSON.stringify({ t: "transcript", text: "second" }) + "\n",
     );
-    expect(packageEvidence(dir, BENIGN, skill()).turn1SliceDegraded).toBe(true);
+    expect(packageEvidenceOnSkill(dir, BENIGN).turn1SliceDegraded).toBe(true);
   });
 });
 
@@ -319,7 +323,7 @@ describe("F30 — a corrupt canonical turn-1 result surfaces a typed degradation
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.turn1ResultDegraded).toBe(true);
     expect(result.pkg).toMatch(/DEGRADED/);
     expect(result.pkg).not.toContain("TURN-2-ONLY-SENTINEL-TEXT"); // no silent turn-2 substitution
@@ -352,7 +356,7 @@ describe("F30 residual — a MISSING (not corrupt) turn-1 result on a validated 
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir, true); // isResume:true
+    const result = packageEvidence(dir, boundary, skillDir, true, { mountRoot: skillDir }); // isResume:true
     expect(result.turn1ResultDegraded).toBe(true);
     expect(result.pkg).toMatch(/DEGRADED/);
     expect(result.pkg).not.toContain("TURN-2-ONLY-SENTINEL-TEXT"); // never substituted a later turn's data for turn-1
@@ -364,7 +368,7 @@ describe("F30 residual — a MISSING (not corrupt) turn-1 result on a validated 
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
-    const result = packageEvidence(dir, boundary, skillDir); // isResume defaults to false
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir }); // isResume defaults to false
     expect(result.turn1ResultDegraded).toBe(false);
     expect(result.pkg).toContain("single-shot turn-1 result");
     rmSync(skillDir, { recursive: true, force: true });
@@ -375,7 +379,7 @@ describe("F31 — SKILL.md missing vs. unreadable produce distinct, typed status
   it("reports 'missing' when SKILL.md legitimately does not exist", () => {
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.skillMdStatus).toBe("missing");
     expect(result.pkg).toMatch(/no SKILL\.md found/);
     rmSync(skillDir, { recursive: true, force: true });
@@ -385,7 +389,7 @@ describe("F31 — SKILL.md missing vs. unreadable produce distinct, typed status
     const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance text here");
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.skillMdStatus).toBe("readable");
     expect(result.pkg).toContain("guidance text here");
     rmSync(skillDir, { recursive: true, force: true });
@@ -397,7 +401,7 @@ describe("F31 — SKILL.md missing vs. unreadable produce distinct, typed status
     writeFileSync(skillMdPath, "# a skill\nguidance");
     armed.readFileThrow.add(skillMdPath);
     const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
-    const result = packageEvidence(dir, boundary, skillDir);
+    const result = packageEvidence(dir, boundary, skillDir, false, { mountRoot: skillDir });
     expect(result.skillMdStatus).toBe("unreadable");
     expect(result.skillMdStatus).not.toBe("missing");
     expect(result.pkg).not.toMatch(/no SKILL\.md found/); // must not be misreported as absent
@@ -433,7 +437,7 @@ describe("critique evidence: nested sub-agent research is labeled with its prove
         ],
       },
     ]);
-    const result = packageEvidence(dir, snapshotTurnBoundary(dir), skillDir);
+    const result = packageEvidence(dir, snapshotTurnBoundary(dir), skillDir, false, { mountRoot: skillDir });
     expect(result.pkg).toMatch(/\[general-purpose\] query: own question/);
     expect(result.pkg).toMatch(/\[general-purpose ← via nested agent a4f4e851f268443b9 @depth 3\] query: nested question/);
     rmSync(skillDir, { recursive: true, force: true });
@@ -443,7 +447,7 @@ describe("critique evidence: nested sub-agent research is labeled with its prove
     const { dir, skillDir } = stageRun([
       { resolvedAgentType: "researcher", webSearches: [{ query: "q", resultText: "r", viaAgentId: "abc123" }] },
     ]);
-    const result = packageEvidence(dir, snapshotTurnBoundary(dir), skillDir);
+    const result = packageEvidence(dir, snapshotTurnBoundary(dir), skillDir, false, { mountRoot: skillDir });
     expect(result.pkg).toMatch(/\[researcher ← via nested agent abc123\] query: q/);
     expect(result.pkg).not.toMatch(/@depth/);
     rmSync(skillDir, { recursive: true, force: true });
