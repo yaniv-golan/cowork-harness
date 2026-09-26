@@ -49,6 +49,14 @@ export class UnknownBaselineError extends UsageError {
   }
 }
 
+/** A Zod issue path rendered the way a YAML author can locate it: `assert[0].path_denied.source`, never
+ *  `assert.0`; an empty or non-array path is `(root)`. Shared by `compactSchemaError` and `lint`'s loader
+ *  findings so the two never spell the same location differently. Never throws. */
+export function renderIssuePath(path: unknown): string {
+  if (!Array.isArray(path) || path.length === 0) return "(root)";
+  return path.reduce<string>((acc, seg) => (typeof seg === "number" ? `${acc}[${seg}]` : acc ? `${acc}.${seg}` : String(seg)), "");
+}
+
 /**
  * One line from a Zod issue list (or from an already-formatted Zod message).
  *
@@ -68,10 +76,7 @@ export class UnknownBaselineError extends UsageError {
 export function compactSchemaError(messageOrIssues: string | unknown[], limit = 200, maxIssues = 3): string {
   const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
   const truncate = (s: string) => (s.length > limit ? s.slice(0, limit - 1) + "…" : s);
-  const renderPath = (path: unknown): string => {
-    if (!Array.isArray(path) || path.length === 0) return "(root)";
-    return path.reduce<string>((acc, seg) => (typeof seg === "number" ? `${acc}[${seg}]` : acc ? `${acc}.${seg}` : String(seg)), "");
-  };
+  const renderPath = renderIssuePath;
   try {
     let issues: unknown = messageOrIssues;
     if (typeof messageOrIssues === "string") {
@@ -111,5 +116,39 @@ export class LegacyRunDirError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "LegacyRunDirError";
+  }
+}
+
+/**
+ * A gate the run could not get answered: no scripted rule matched and the terminal decider (a policy, an
+ * external channel) could not supply one. `executeScenario` salvages it into a PARTIAL `result.json` (the
+ * work done before the gate survives, the verdict fails on the unanswered gate) and the CLI reports it as a
+ * clean category-`unanswered` exit 2. Any failure of a decider CHANNEL is one of these too — a helper that
+ * died or never answered leaves the gate exactly as unanswered as a missing rule does.
+ */
+export class UnansweredError extends Error {
+  constructor(
+    message: string,
+    public readonly hint: string,
+  ) {
+    super(message);
+    this.name = "UnansweredError";
+  }
+}
+
+/**
+ * An external decider channel (`--decider-cmd` helper, `--decider-dir` rendezvous) hit its backstop timeout
+ * before answering. A subclass, so every `UnansweredError` path (salvage, envelope, repeat/matrix
+ * accounting) handles it unchanged; the run loop additionally stamps `errorSource: "decider_timeout"` so a
+ * consumer can tell a slow or wedged answerer from a gate nothing was configured to answer.
+ */
+export class DeciderTimeoutError extends UnansweredError {
+  constructor(
+    message: string,
+    hint: string,
+    public readonly channel: "decider-cmd" | "decider-dir",
+  ) {
+    super(message, hint);
+    this.name = "DeciderTimeoutError";
   }
 }

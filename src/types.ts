@@ -1267,7 +1267,7 @@ export interface RunStatus {
   durationMs?: number;
   // terminal-error diagnostics, surfaced so a failure-output debugger gets more than a bare "error"
   // (these live in result.json but not status.json before this). Present only on a terminal error write.
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
   // classifies the error KIND — surfaced here so a batch/status watcher can halt-fast on `usage_limit`
   // (quota exhausted; retrying into a spent quota just burns the batch) rather than treating it as generic.
   resultErrorKind?: "transport" | "agent" | "usage_limit";
@@ -1363,10 +1363,12 @@ export interface RunResult {
   /** How the run terminated in error — the `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`,
    *  or `result` for the SDK-wrapped is_error-result path), OR `no_result` when the stream ended with no
    *  terminal event at all (the turn/time-exhaustion case: neither a result nor an error event fired), OR
-   *  `timeout` when the harness's own wall-clock limit killed the run. Additive diagnostic detail alongside
+   *  `timeout` when the harness's own wall-clock limit killed the run, OR `decider_timeout` when a
+   *  `--decider-cmd`/`--decider-dir` channel did not answer a gate within its backstop (an unanswered-gate
+   *  partial). Additive diagnostic detail alongside
    *  the coarse verdict-relevant `resultErrorKind`; consumed by nobody in the verdict. Absent on a clean run;
    *  a run that recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
   /** The SDK result message's `subtype` verbatim (e.g. `error_max_turns`, `error_during_execution`,
    *  `success`) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution
    *  error without the harness inventing a taxonomy. Present when a result event carried a subtype. */

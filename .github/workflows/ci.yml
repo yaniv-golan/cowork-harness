@@ -281,7 +281,7 @@ jobs:
             echo "::error::action-self-test: reporter output doesn't show a failing verdict row for example-pdf-skill — the reporter may not be rendering assertion failures correctly."
             exit 1
           fi
-      - name: Run the action with command:lint (proves the analyzer passthrough — --output-format json
+      - name: Run the action with command:lint (proves the lint lane end to end — --output-format json
           is stripped/translated to python's --json, not forwarded verbatim and rejected)
         id: lintcase
         uses: ./

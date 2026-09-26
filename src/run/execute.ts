@@ -40,6 +40,7 @@ import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safet
 import { warnUnservedHookEvents, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
+import { installTerminationHandler, registerAgent, childProcessAgent, parkIfTerminating, type TerminableAgent } from "../termination.js";
 import {
   probeImageOmitted,
   probeMicrovmOmitted,
@@ -417,6 +418,9 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
+  // A signal is being handled (a multi-scenario loop reached its next scenario during the grace period):
+  // start nothing new. The termination handler owns the exit and fires within that period.
+  await parkIfTerminating();
   // Refuse a scenario no run can satisfy BEFORE the spawn — the whole point is not to pay for it.
   // Sited here rather than in each command because every lane funnels through executeScenario
   // (`run`/`skill` via cli.ts, `record` via cassette.ts), and a library caller gets it too.
@@ -574,6 +578,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // precedent (`src/decide/external-channel.ts:58-64`); `writeJsonAtomic`'s fs calls are synchronous,
   // which a Node `"exit"` handler requires.
   const runCrashSafety = registerRunForCrashSafety(outDir, runStatusMeta);
+  // SIGINT/SIGTERM from here on must end the run through the exit hooks (the line above marks it "error")
+  // instead of killing the process by the signal, which runs none of them. Every tier.
+  installTerminationHandler();
 
   // Resolve the effective tier early — it is needed BOTH to stamp the session manifest below (so a
   // --resume at a different tier fails loud; the agent's native conversation store is tier-local) AND,
@@ -780,6 +787,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
+  let signalAgent: TerminableAgent | undefined; // what the termination handler stops (protocol/microvm)
+  let deregisterAgent: (() => void) | undefined;
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
   // Container's web_fetch is host-routed too, so its decisions cannot come from the proxy log and must
   // survive the `egress = eg.entries` teardown assignment. Kept separate for exactly that reason.
@@ -856,6 +865,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
       // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
       // so a renderPrompts throw skipped teardown and orphaned the resource.)
+      // The agents the termination handler stops on a signal: protocol's host `claude` and the microvm's
+      // guest agent. container/hostloop are NOT registered — their Ctrl-C reap thunk (below) already
+      // SIGKILLs the agent and removes the container at once, and a SIGTERM grace would only delay it (a
+      // container PID 1 without a handler ignores SIGTERM).
+      if (!containerLike) deregisterAgent = registerAgent(() => signalAgent);
       if (containerLike) {
         // thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
         // concurrent executeScenario calls don't stomp each other's values.
@@ -993,15 +1007,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         sdkMcp = ct.sdkMcp; // cowork/present_files + the skills/plugins discovery servers (combineSdkMcp)
         spawnedSessionRoot = ct.sessionRoot; // VM path (`/sessions/<id>`) — what the agent inside reports
       } else if (effectiveFidelity === "microvm") {
-        child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
+        const vm = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
           proxyPort: microvmProxyPort,
         });
+        child = vm.child;
+        signalAgent = vm.agent;
       } else {
         // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
         // capture l0HostConfigContamination so computeVerdict can fail the run when plugins are configured.
         const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
         child = proto.child;
+        signalAgent = childProcessAgent(proto.child);
         l0HostConfigContamination = proto.l0HostConfigContamination;
         if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
           warn(
@@ -1105,11 +1122,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // orphan a running container holding the network. On the success path the child has already
       // exited (--rm), so these are no-ops.
       deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
-      try {
-        child?.kill?.("SIGKILL");
-      } catch {
-        /* already gone */
-      }
+      await reapAgentOnTeardown({ microvm: effectiveFidelity === "microvm", agent: signalAgent, child, deregister: deregisterAgent });
       // mark BEFORE the forced removal below — this run's own `docker rm -f` makes the hostloop sidecar
       // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
@@ -1908,7 +1921,36 @@ export function defaultedFidelityNotice(name: string): string {
   );
 }
 
+/** Load a scenario file the way `run`/`record` do. Thin wrapper over {@link loadScenarioPure} that adds the
+ *  one side effect the loader has: the defaulted-fidelity deprecation notice on stderr. */
 export function parseScenarioFile(path: string): Scenario {
+  return loadScenarioPure(path, {
+    // Warn, do not fail: this is the deprecation window before `fidelity` becomes required.
+    // ONCE PER SCENARIO NAME, not once per parse. `record <dir> --dry-run` parses each file THREE times
+    // (discovery, the duplicate-target scan, the preview loop), so a 35-file corpus with no `fidelity:` —
+    // the deprecation-window default, i.e. most corpora — emitted 105 copies of an 812-char notice, and
+    // `--quiet` suppresses none of it. That was larger than the broken-file dump it sat next to, and it
+    // fires when NOTHING is wrong. The set is process-lifetime: one warning per scenario per invocation.
+    onFidelityDefaulted: (name) => {
+      if (FIDELITY_NOTICE_SEEN.has(name)) return;
+      FIDELITY_NOTICE_SEEN.add(name);
+      process.stderr.write(defaultedFidelityNotice(name) + "\n");
+    },
+  });
+}
+
+/** Everything the loader checks about a scenario FILE, with no side effects: reads `path` and nothing else —
+ *  no stderr, no environment, no other file. YAML parse, the schema (with its cross-key refinements), the
+ *  filename-derived `name`, the file-relative `session:` string (resolved as a path, never opened), and the
+ *  load-time regex / reserved-value refusals.
+ *
+ *  `cowork-harness lint` calls this directly, so "lint reports no loader finding" and "`run`/`record` load
+ *  the file" are the same function and cannot drift. Throws `UsageError` for a schema violation (the full
+ *  Zod issue list in `hint`) and a plain `Error` for the regex/reserved refusals or a YAML syntax error.
+ *
+ *  `onFidelityDefaulted` runs at the point the notice always ran — after the name default, before the
+ *  session and regex steps — so `parseScenarioFile`'s output order is unchanged. */
+export function loadScenarioPure(path: string, hooks: { onFidelityDefaulted?: (name: string) => void } = {}): Scenario {
   let scenario: Scenario;
   let rawDoc: unknown;
   try {
@@ -1929,16 +1971,7 @@ export function parseScenarioFile(path: string): Scenario {
   }
   // `name` defaults to the filename (sans extension) — the file is the identity.
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
-  // Warn, do not fail: this is the deprecation window before `fidelity` becomes required.
-  // ONCE PER SCENARIO NAME, not once per parse. `record <dir> --dry-run` parses each file THREE times
-  // (discovery, the duplicate-target scan, the preview loop), so a 35-file corpus with no `fidelity:` —
-  // the deprecation-window default, i.e. most corpora — emitted 105 copies of an 812-char notice, and
-  // `--quiet` suppresses none of it. That was larger than the broken-file dump it sat next to, and it
-  // fires when NOTHING is wrong. The set is process-lifetime: one warning per scenario per invocation.
-  if (fidelityWasDefaulted(rawDoc) && !FIDELITY_NOTICE_SEEN.has(scenario.name)) {
-    FIDELITY_NOTICE_SEEN.add(scenario.name);
-    process.stderr.write(defaultedFidelityNotice(scenario.name) + "\n");
-  }
+  if (fidelityWasDefaulted(rawDoc)) hooks.onFidelityDefaulted?.(scenario.name);
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
   // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT
@@ -2174,6 +2207,39 @@ function writeRunJsonl(
  *  hard fail, computed and stored at the end of this function (see the comment there). `partial:true` is
  *  the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its populated
  *  `artifacts[]` as a passing run. */
+/**
+ * The normal-path (success, salvage, crash) agent teardown, extracted so its ORDER is testable.
+ *
+ * microvm: SIGKILLing the host `limactl shell` client alone leaves the guest agent running (and the client's
+ * ssh child orphaned) — on a salvaged/crashed run the agent is still mid-turn here — so kill it in the guest.
+ * The short wait first: on the success path the client is exiting on its own, and a guest-side kill would be
+ * a wasted VM round-trip. (Residual: `drive()` returns when the agent's stdout closes, not when the client
+ * exits, so a client that lingers past the wait gets the guest KILL even on success — only an agent still
+ * flushing its session store after closing stdout would notice.)
+ *
+ * De-register LAST. Until the agent is dead a signal must still find it registered: a signal that lands in
+ * the wait above would otherwise see no agent, exit at once, and leave the guest agent running. A signal
+ * racing the kills below double-kills harmlessly (every kill tolerates an already-dead target).
+ */
+export async function reapAgentOnTeardown(p: {
+  microvm: boolean;
+  agent?: TerminableAgent;
+  child?: { kill?: (s?: NodeJS.Signals) => void };
+  deregister?: () => void;
+  settleMs?: number;
+}): Promise<void> {
+  if (p.microvm && p.agent?.alive()) {
+    await Promise.race([p.agent.exited(), new Promise((r) => setTimeout(r, p.settleMs ?? 1000).unref())]);
+    if (p.agent.alive()) p.agent.forceKill();
+  }
+  try {
+    p.child?.kill?.("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+  p.deregister?.();
+}
+
 export function buildPartialResult(args: {
   /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
   turn?: number;

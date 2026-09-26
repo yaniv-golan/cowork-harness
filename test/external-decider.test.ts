@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ExternalDecider, PromptDecider, ABSTAIN, UnansweredError, type RunContext } from "../src/decide/decider.js";
+import { ExternalDecider, PromptDecider, ABSTAIN, UnansweredError, DeciderTimeoutError, type RunContext } from "../src/decide/decider.js";
 import type { DecisionChannel } from "../src/decide/external-channel.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, writeDoneMarker } from "../src/decide/external-channel.js";
 import type { DecisionRequest } from "../src/agent/session.js";
@@ -262,15 +262,25 @@ describe("fileChannel (channel C — file rendezvous for the driving agent's Mon
     expect(() => fileChannel(dir)).toThrow(/already has gate files/);
   });
 
-  it("timeout → null (→ ExternalDecider UnansweredError, never silent)", async () => {
+  it("timeout → a typed DeciderTimeoutError (an UnansweredError, never silent, and never read as a closed channel)", async () => {
     const dir = tmp();
     process.env.COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS = "40";
     process.env.COWORK_HARNESS_DECIDER_DIR_POLL_MS = "10";
-    const ch = fileChannel(dir);
-    ch.write("{}");
-    expect(await ch.readLine()).toBe(null);
-    delete process.env.COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS;
-    delete process.env.COWORK_HARNESS_DECIDER_DIR_POLL_MS;
+    try {
+      const ch = fileChannel(dir);
+      ch.write("{}");
+      const err = await ch.readLine().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(DeciderTimeoutError);
+      expect(err).toBeInstanceOf(UnansweredError);
+      expect(String(err)).toMatch(/timed out/);
+      expect((err as DeciderTimeoutError).channel).toBe("decider-dir");
+    } finally {
+      delete process.env.COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS;
+      delete process.env.COWORK_HARNESS_DECIDER_DIR_POLL_MS;
+    }
   });
 
   it("round-trips a gate through req/resp files (the fake-agent dance) + index coercion", async () => {

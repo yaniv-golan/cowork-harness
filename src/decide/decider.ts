@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { UnansweredError, DeciderTimeoutError } from "../errors.js";
 import readline from "node:readline";
 import type { AnswerRule } from "../types.js";
 import type { DecisionRequest, DecisionResponse } from "../agent/session.js";
@@ -33,15 +34,9 @@ export interface Decider {
   decide(req: DecisionRequest, ctx: RunContext): Promise<Decision | Abstain>;
 }
 
-export class UnansweredError extends Error {
-  constructor(
-    message: string,
-    public readonly hint: string,
-  ) {
-    super(message);
-    this.name = "UnansweredError";
-  }
-}
+// Defined in the leaf `errors.ts` so the decider channels (external-channel.ts) can throw them without
+// importing this module's graph; re-exported here, where every existing caller already imports them from.
+export { UnansweredError, DeciderTimeoutError };
 
 /** Regex-escape question text for an actionable `--answer "<rx>=<choice>"` hint. */
 function escapeRx(s: string): string {

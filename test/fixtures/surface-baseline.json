@@ -1966,7 +1966,7 @@
       },
       ".errorSource": {
         "type": "string",
-        "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout"]
+        "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout"]
       },
       ".evidenceErrors": {
         "type": "object"
@@ -3991,6 +3991,7 @@
       "COWORK_HARNESS_GITSET",
       "COWORK_HARNESS_HEARTBEAT_MS",
       "COWORK_HARNESS_JUDGE_MODEL",
+      "COWORK_HARNESS_LINT_EXTRA_FINDINGS",
       "COWORK_HARNESS_LLM_MAX_BYTES",
       "COWORK_HARNESS_LLM_RETRIES",
       "COWORK_HARNESS_LLM_TIMEOUT_MS",

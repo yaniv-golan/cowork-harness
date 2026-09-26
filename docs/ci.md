@@ -58,7 +58,7 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 
 | Lane | Commands | Runner requirements | What you get |
 |---|---|---|---|
-| **Token-free** (the headline lane) | `replay`, `lint`, `lint-skill`, `analyze-skill`, `verify-cassettes` | any `ubuntu-latest` | deterministic, no Docker, no API key, no agent binary — this is what most skill repos want. `lint`/`lint-skill` are thin passthroughs to the bundled `scenario.py` (python3, preinstalled on `ubuntu-latest`); `analyze-skill` is pure TS (no python3 needed) |
+| **Token-free** (the headline lane) | `replay`, `lint`, `lint-skill`, `analyze-skill`, `verify-cassettes` | any `ubuntu-latest` | deterministic, no Docker, no API key, no agent binary — this is what most skill repos want. `lint`/`lint-skill` run the bundled `scenario.py` (python3, preinstalled on `ubuntu-latest`), and `lint` also runs the harness's own scenario loader first, so a file `run`/`record` would refuse to load is an ERROR; `analyze-skill` is pure TS (no python3 needed) |
 | **Live** (`command: run`) | `run` | Docker + a provisioned agent binary + `anthropic-api-key` input | real inference against a live scenario — the action does **not** provision the agent binary or build the image for you (see [Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and the agent-binary provenance runbook in [`docs/maintenance.md`](./maintenance.md)); this is for a self-hosted runner that already has both staged, not a stock GitHub-hosted runner |
 
 **A free corpus pre-check before any paid `critique`:** `critique` is not an action `command`, but its

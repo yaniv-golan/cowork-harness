@@ -13,11 +13,13 @@ import { questionKey, questionLabel, canon } from "../agent/session.js";
 import {
   ABSTAIN,
   UnansweredError,
+  DeciderTimeoutError,
   PERMISSIVE_AUTOALLOW_RATIONALE,
   type Decider,
   type Decision,
   type RunContext,
 } from "../decide/decider.js";
+import { terminationRequested, parkIfTerminating } from "../termination.js";
 import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
@@ -409,9 +411,10 @@ export interface RunRecord {
   resultErrorKind?: "transport" | "agent" | "usage_limit";
   // finer error source than resultErrorKind's binary — the raw `error`-event source, or "result" for
   // the SDK-wrapped is_error result path, or "no_result" when the stream closed with no terminal event,
-  // or "timeout" when the harness's wall-clock limit killed the run. Undefined when no error fired; a
+  // or "timeout" when the harness's wall-clock limit killed the run, or "decider_timeout" when an external
+  // decider channel did not answer a gate within its backstop. Undefined when no error fired; a
   // recovered non-fatal agent error that later succeeds keeps its first source. Optional ⇒ no literal churn.
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
   // the SDK result message's `subtype` verbatim (error_max_turns / error_during_execution / success / …).
   // Pass-through diagnostic — captured on the result event, surfaced so a debugger can tell turn-exhaustion
   // from a generic execution error. Undefined until a result event with a subtype is seen.
@@ -1464,7 +1467,23 @@ export class Run {
       decided = g.decided;
       skipRecord = g.skipRecord;
     } else {
-      decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
+      try {
+        decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
+      } catch (e) {
+        // An interrupt kills the --decider-cmd helper first, so its channel closes and the decider throws —
+        // but that is the interrupt, not an unanswered gate. Don't let it reach the salvage path (which
+        // would record and report it as one): the termination handler owns the exit and fires within its
+        // grace period, and still finds the agent through its registration.
+        if (terminationRequested()) await parkIfTerminating();
+        // A decider channel that timed out ends the run as an unanswered-gate partial (the throw below reaches
+        // executeScenario's salvage path); label WHY, so a consumer can tell a wedged answerer from a gate
+        // nothing was configured to answer. The salvaged result.json and status.json both read errorSource.
+        if (e instanceof DeciderTimeoutError) {
+          this.rec.result = "error";
+          this.rec.errorSource = "decider_timeout";
+        }
+        throw e;
+      }
     }
     if (decided === ABSTAIN) {
       // A QUESTION must NEVER be silently answered with option 1 (the worst failure mode: a wrong-branch
