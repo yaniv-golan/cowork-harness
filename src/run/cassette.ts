@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parkIfTerminating } from "../termination.js";
 import { deriveModelProvenance, noModelProvenance } from "./model-provenance.js";
 import { warn, writeAllSync, tildeify } from "../io.js";
 import {
@@ -4476,6 +4477,10 @@ async function recordScenarioObject(
     llmIntent: opts.llmIntent,
     llmModel: opts.llmModel,
   });
+  // An interrupted run (SIGINT/SIGTERM arrived while the agent was being stopped) can still return a
+  // result here — never freeze it into a cassette, even under --allow-failing. The termination handler
+  // owns the exit.
+  await parkIfTerminating();
   // Provenance: stamp from the RESULT, not the flag. result.nonDeterministic (execute.ts) is
   // usage-based — true only if a decision actually came back by:"llm"|"external"|"human"|"first". So a
   // present-but-unused --decider-dir (scripted answers covered every gate) stays deterministic and is NOT

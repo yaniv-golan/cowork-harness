@@ -1966,7 +1966,7 @@
       },
       ".errorSource": {
         "type": "string",
-        "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout"]
+        "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout"]
       },
       ".evidenceErrors": {
         "type": "object"
