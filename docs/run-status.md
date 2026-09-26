@@ -38,8 +38,7 @@ namespace.
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
    `status.json` never gets stuck reporting `"running"` for a process that's actually gone. On a signal the
    harness first stops the agent (SIGTERM, then SIGKILL after 2 s; on `microvm` the kill is
-   sent inside the VM, because killing the host `limactl` client does not reach the guest process — its
-   targeting and command are unit-tested, but it has not yet been exercised against a live microVM), then exits
+   sent inside the VM, because killing the host `limactl` client does not reach the guest process; verified against a live microVM), then exits
    130 (`SIGINT`) or 143 (`SIGTERM`). A second signal skips the wait. An interrupt while the run waits on a
    `--decider-cmd` gate is recorded as an interrupt, not as an unanswered gate.
 5. **Staleness detection (the `SIGKILL` case):** an exit handler cannot run on `SIGKILL`/OOM-kill/a

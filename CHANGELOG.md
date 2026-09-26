@@ -34,8 +34,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **Interrupting a run (SIGINT/SIGTERM) now stops the agent and records the run** (on `microvm` the
-  in-VM kill is unit-tested, not yet exercised live — see the next entry). On
+- **Interrupting a run (SIGINT/SIGTERM) now stops the agent and records the run** (on `microvm`
+  too — see the next entry). On
   `protocol` and `microvm` nothing handled the signal, so the harness died by it: no exit hook ran,
   `status.json` stayed `"running"` (readers only caught it as stale after 15 s), and the agent was never
   told to stop — a signal sent to the harness alone (a wrapper script, a CI cancel, `timeout`) left it
@@ -55,7 +55,9 @@ All notable changes to this project are documented here. The format is based on
   harness now signals this session's agent processes inside the VM (matched by the session's
   `CLAUDE_CONFIG_DIR`, so another session's agent is never touched) and kills the orphaned `ssh`. What is
   verified: the selection of guest processes, the host command, and the order of operations, by unit tests
-  that do not start a VM. It has not yet been exercised end to end against a live microVM.
+  that do not start a VM, and end to end against a live microVM: a run interrupted while its agent was
+  running a `sleep` in the guest exited 130 with `status.json` `"error"`, and afterwards no guest agent,
+  guest `sleep` or host `limactl` client for that session remained (on the previous release all three did).
 - **A `--decider-cmd` helper that times out, exits, or closes its input now ends the run as an
   unanswered-gate partial** instead of a raw stack trace: `result.json` is written (`partial: true`,
   failing verdict), the error is category `unanswered` (it was `internal` under `--output-format json`), and

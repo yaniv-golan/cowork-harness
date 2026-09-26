@@ -195,8 +195,8 @@ export function spawnMicroVm(
  * survives SIGTERM and SIGKILL of the client, still holding its stdin through the ssh session, and keeps
  * working. Pure and exported so the targeting is testable without a VM.
  */
-// UNVERIFIED: the guest kill (this script, microvmGuestKillArgv and microvmAgent below) is unit-tested
-// against a fake /proc and injected spawn/kill only; it has not been exercised against a live microVM.
+// Verified live (2026-09-26): an interrupted run whose guest agent was running a `sleep` left no guest
+// agent, guest `sleep` or host `limactl` client behind; the unit tests pin targeting and ordering.
 export function microvmGuestKillScript(configVm: string, sig: "TERM" | "KILL", procRoot = "/proc"): string {
   const want = shQuote(`CLAUDE_CONFIG_DIR=${configVm}`);
   return (
