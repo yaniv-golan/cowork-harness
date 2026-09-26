@@ -33,6 +33,20 @@ All notable changes to this project are documented here. The format is based on
   not tightened. This is the same class of change as the `enum-value-invalid` rule that shipped in 3.2.0,
   so it ships in a minor release. Running `python3 scenario.py lint` directly is unchanged.
 
+### Added
+
+- **`errorSource: "decider_timeout"`** in `result.json` and `status.json` (and `schema/run-result.json`'s
+  `errorSource` enum): the run ended because a `--decider-cmd` helper or a `--decider-dir` rendezvous did not
+  answer a gate within its backstop (`COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` /
+  `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS`). An additive enum value; a consumer that validates `result.json`
+  against an older copy of the schema will reject a document carrying it.
+- **`RunResult.fsDiff`** — the per-turn outputs filesystem diff: `status` (`clean` / `findings` /
+  `unavailable`), `reason` when unavailable, and `findings`. `clean` means no path present at turn start was
+  deleted; it cannot see a file created and deleted within the turn.
+- **`RunResult.scan.outputsDeleteBasis`** — positional with `scan.outputsDeletes`: `fs-diff`, `named` or
+  `inferred` per entry.
+- **Verdict signal codes `outputs_delete_unconfirmed` and `outputs_diff_unavailable`** (both **warn**).
+
 ### Changed
 
 - **An outputs delete the harness only infers from a command's text no longer fails the run by itself.**
@@ -56,7 +70,8 @@ All notable changes to this project are documented here. The format is based on
   quote-blind, after whole-line comments are dropped and same-command `VAR=value` assignments expanded one
   level; a trailing ` # comment` is not counted as a delete's operand. **Size caps:** a statement longer than
   4 KiB, or a command longer than 16 KiB, skips the operand analysis and is judged by the original rule (a
-  delete word, or `mv`, and an outputs path anywhere in it). That can only be stricter, and it bounds the
+  delete word, or `mv`, and an outputs path anywhere in it). For any outputs path that appears literally in
+  the command that can only be stricter (a mount name assembled from two variables is the exception), and it bounds the
   cost — the worst shapes measured, up to 160 KB, classify in under 10 ms — but it means the false positive
   this change fixes comes back on a huge one-liner: a single-line `python3 -c` body over 4 KiB with a
   variable named `rm` next to an outputs path still fails. Two
@@ -93,11 +108,14 @@ All notable changes to this project are documented here. The format is based on
 ### Fixed
 
 - **The outputs-delete scanner no longer takes seconds on a long command.** A `shred` or `find` without its
-  delete flag, an unclosed `$(mktemp`, or thousands of `VAR=` assignments made the scan quadratic: an 81 KB
-  `shred -a …` line took 1.2 s, a 54 KB command using 4000 variables 3.2 s. The same decisions are now made
-  in one pass, so those shapes take a few milliseconds; what is flagged is unchanged. One shape stays
-  superlinear in the scanner (not the classifier): a single statement that references thousands of distinct
-  variables, about 0.2 s at 4000.
+  delete flag, an unclosed `$(mktemp`, or one statement referencing thousands of variables made the scan
+  quadratic: an 81 KB `shred -a …` line took 1.2 s, and a 4000-variable statement 3.2 s, or 5.4 s per flagged
+  command when each variable's value references the next. The token and `mktemp` checks now run in one pass,
+  and variable expansion has a work budget (about a hundred distinct variables referenced in one 10 KB
+  line): past it the scanner does not expand, and every mount the command names literally counts as
+  deleted in — stricter, never looser, for any mount named in the command. Measured per flagged command
+  (scanner, finding text and classifier together), the worst shapes now take under 25 ms up to 160 KB. No
+  command in the kept run corpus comes near the budget; below it, what is flagged is unchanged.
 - **A resumed turn no longer re-reports an earlier turn's outputs delete.** The outputs diff compared every
   turn against the first turn's baseline, so a delete in turn 1 failed turn 2 again on scenarios that armed
   the manifest; it now compares against the turn's own start, matching the text scan's current-turn scope.
@@ -159,20 +177,6 @@ All notable changes to this project are documented here. The format is based on
   the mount carried an empty `skills/<name>/`, and a skill-folder positional packaged the enclosing plugin's
   agents and shared references although only the folder was mounted. The packager now reads the mount
   root's tracked set, once, for every class.
-
-### Added
-
-- **`errorSource: "decider_timeout"`** in `result.json` and `status.json` (and `schema/run-result.json`'s
-  `errorSource` enum): the run ended because a `--decider-cmd` helper or a `--decider-dir` rendezvous did not
-  answer a gate within its backstop (`COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` /
-  `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS`). An additive enum value; a consumer that validates `result.json`
-  against an older copy of the schema will reject a document carrying it.
-- **`RunResult.fsDiff`** — the per-turn outputs filesystem diff: `status` (`clean` / `findings` /
-  `unavailable`), `reason` when unavailable, and `findings`. `clean` means no path present at turn start was
-  deleted; it cannot see a file created and deleted within the turn.
-- **`RunResult.scan.outputsDeleteBasis`** — positional with `scan.outputsDeletes`: `fs-diff`, `named` or
-  `inferred` per entry.
-- **Verdict signal codes `outputs_delete_unconfirmed` and `outputs_diff_unavailable`** (both **warn**).
 
 ## [3.9.0] — 2026-09-25
 

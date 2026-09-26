@@ -195,3 +195,32 @@ describe("the live assembler actually WIRES the tiering inputs (position checks)
     expect(call).toBeLessThan(gate);
   });
 });
+
+describe("variable expansion: an empty value can join identifiers", () => {
+  // Expansion replaces variables one at a time in assignment order, so an EMPTY value can join the text on
+  // both sides into a new reference: `$B${A}C` with A="" becomes `$BC`, which the later `BC` then expands.
+  it("the joined reference is expanded: a delete of the joined path under outputs is named", () => {
+    const cmd = `A=""; BC=${O}/f; B=zzz; rm $B\${A}C`;
+    expect(isOutputsDelete(cmd)).toBe(true);
+    expect(outputsDeleteBasis(cmd)).toBe("named");
+  });
+  it("…and a joined path that is provably safe is not a delete at all", () => {
+    expect(isOutputsDelete(`A=''; BC=/tmp/x; echo ${O}/log; rm $B\${A}C`)).toBe(false);
+  });
+});
+
+describe("variable expansion has a work budget; over it the scanner decides strictly", () => {
+  // Exact expansion costs (distinct variables referenced) × (statement length). Past EXPANSION_BUDGET the
+  // scanner does not expand: every mount the command names literally counts as deleted in, and the
+  // classifier answers `named`. Stricter only — for any mount named literally in the command.
+  const many = Array.from({ length: 4000 }, (_, i) => `v${i}=$v${i + 1}`).join(" ");
+  const refs = Array.from({ length: 4000 }, (_, i) => `$v${i}`).join("");
+  it("a provably safe delete in a command over the budget is flagged, named", () => {
+    const cmd = `${many}\necho ${refs} ${O}/log\nrm -f /tmp/scratch`;
+    expect(isOutputsDelete(cmd)).toBe(true);
+    expect(outputsDeleteBasis(cmd)).toBe("named");
+  });
+  it("…while the same delete in a small command is not a delete at all", () => {
+    expect(isOutputsDelete(`v0=$v1 v1=x\necho $v0$v1 ${O}/log\nrm -f /tmp/scratch`)).toBe(false);
+  });
+});

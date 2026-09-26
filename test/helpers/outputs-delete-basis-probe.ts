@@ -3,7 +3,10 @@
 // test can SIGKILL a catastrophic regex instead of blocking its own worker: a synchronous hang cannot be
 // pre-empted by a vitest timeout.
 import { pathToFileURL } from "node:url";
-import { outputsDeleteBasis, isOutputsDelete } from "../../src/run/execute.js";
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { outputsDeleteBasis, isOutputsDelete, scanEvents } from "../../src/run/execute.js";
 
 const O = "/sessions/s/mnt/outputs";
 const R = (s: string, n: number) => s.repeat(n);
@@ -32,6 +35,25 @@ export const PROBES: Record<string, () => string> = {
     Array.from({ length: 4000 }, (_, i) => `v${i}=1`).join("\n") +
     "\n" +
     Array.from({ length: 4000 }, (_, i) => `$v${i}`).join("") +
+    ` ${O}/x; rm "$Q"`,
+  // variable expansion with `$`-valued variables: a one-line cascade (each value references the next) and a
+  // fan-out (each value references another variable eight times), then one statement referencing them all.
+  // Past EXPANSION_BUDGET the scanner decides without expanding; the smaller ones stay under it and run the
+  // exact expansion.
+  "cascade: v0=$v1 … × 4000, one line": () =>
+    Array.from({ length: 4000 }, (_, i) => `v${i}=$v${i + 1}`).join(" ") +
+    "\n" +
+    Array.from({ length: 4000 }, (_, i) => `$v${i}`).join("") +
+    ` ${O}/x; rm "$Q"`,
+  "fan-out: vN=$w×8 × 4000": () =>
+    Array.from({ length: 4000 }, (_, i) => `v${i}=${"$w".repeat(8)}`).join("\n") +
+    "\nw=x\n" +
+    Array.from({ length: 4000 }, (_, i) => `$v${i}`).join("") +
+    ` ${O}/x; rm "$Q"`,
+  "under the expansion budget: cascade × 150": () =>
+    Array.from({ length: 150 }, (_, i) => `v${i}=$v${i + 1}`).join(" ") +
+    "\n" +
+    Array.from({ length: 150 }, (_, i) => `$v${i}`).join("") +
     ` ${O}/x; rm "$Q"`,
   "find -x repeated, 80k": () => R("find -x ", 10000) + `${O}/x; rm "$Q"`,
   "a=$(mktemp repeated, 77k": () => R("a=$(mktemp ", 7000) + ` ${O}/x; rm "$Q"`,
@@ -68,5 +90,18 @@ if (isEntry && name !== undefined) {
     basis = outputsDeleteBasis(cmd);
     best = Math.min(best, performance.now() - t);
   }
-  console.log(JSON.stringify({ ms: best, detectorMs: bestDetector, flagged, basis, chars: cmd.length }));
+  // The whole per-command cost as a real run pays it: scanEvents runs the detector over every writable
+  // mount, the finding snippet (its own expansion passes) and nothing else; the basis is timed above.
+  const events = join(mkdtempSync(join(tmpdir(), "cwh-probe-")), "events.jsonl");
+  writeFileSync(
+    events,
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: cmd } }] } }),
+  );
+  let bestScan = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const t = performance.now();
+    scanEvents(events, ["outputs", "proj"]);
+    bestScan = Math.min(bestScan, performance.now() - t);
+  }
+  console.log(JSON.stringify({ ms: best, detectorMs: bestDetector, scanMs: bestScan, flagged, basis, chars: cmd.length }));
 }

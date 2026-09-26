@@ -2672,7 +2672,33 @@ function stripCommentLines(cmd: string): string {
 /** Substitute simple `NAME=VALUE` assignments into later `$NAME`/`${NAME}` uses. Conservative: skips
  *  command-substituted values (`$(...)`/backticks) so an unresolved indirect target is never treated as
  *  resolved (and therefore never "provably safe"). */
+/** Upper bound on the work variable expansion may do for one command, in characters scanned. Exact expansion
+ *  replaces referenced variables one at a time, each pass over the segment, so a statement that references
+ *  thousands of distinct variables costs (variables × segment length) — seconds at 4000. Real commands use
+ *  a few dozen variables; the budget allows about a hundred distinct ones referenced in one 10 KB line. */
+export const EXPANSION_BUDGET = 1_000_000;
+class ExpansionBudgetExceeded extends Error {}
+
+/** `expandSimpleVars`, or `undefined` when the command would exceed `EXPANSION_BUDGET`. Callers that DECIDE
+ *  something must then take the stricter path (see `detectMountDeletes`, `outputsDeleteBasis`). */
+function tryExpandSimpleVars(rawCmd: string): string | undefined {
+  try {
+    return expandSimpleVarsUnbounded(rawCmd, { left: EXPANSION_BUDGET });
+  } catch (e) {
+    if (e instanceof ExpansionBudgetExceeded) return undefined;
+    throw e;
+  }
+}
+/** Display-only callers: over the budget the text is returned unexpanded. */
 function expandSimpleVars(rawCmd: string): string {
+  return tryExpandSimpleVars(rawCmd) ?? rawCmd;
+}
+
+function expandSimpleVarsUnbounded(rawCmd: string, budget: { left: number }): string {
+  const charge = (n: number): void => {
+    budget.left -= n;
+    if (budget.left < 0) throw new ExpansionBudgetExceeded();
+  };
   const cmd = joinLineContinuations(rawCmd);
   const vars = new Map<string, string>();
   // First-insertion position of each var = its position in `vars`' iteration order (a re-`set` keeps it).
@@ -2736,6 +2762,7 @@ function expandSimpleVars(rawCmd: string): string {
     };
     const scan = (text: string, after: number): void => {
       for (const r of text.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) {
+        charge(32); // a match costs more than the characters it spans (an object, a map lookup)
         const at = order.get(r[1]);
         if (at !== undefined && at > after) push(at);
       }
@@ -2746,7 +2773,9 @@ function expandSimpleVars(rawCmd: string): string {
       const current = pop();
       const k = names[current];
       const v = vars.get(k)!;
-      const valueMayJoin = v.includes("$") || /^[\w{]/.test(v);
+      // An EMPTY value joins the text on both sides (`$B${A}C` with A="" becomes `$BC`), so it can create a
+      // reference too.
+      const valueMayJoin = v === "" || v.includes("$") || /^[\w{]/.test(v);
       let mayCreateRef = v.includes("$");
       s = s.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), (match: string, offset: number, str: string) => {
         if (!mayCreateRef && valueMayJoin) {
@@ -2757,7 +2786,11 @@ function expandSimpleVars(rawCmd: string): string {
         }
         return v;
       });
-      if (mayCreateRef) scan(s, current);
+      charge(s.length); // the replace scanned the whole segment
+      if (mayCreateRef) {
+        charge(s.length);
+        scan(s, current);
+      }
     }
     return s;
   };
@@ -3010,8 +3043,14 @@ export function detectMountDeletes(cmd: string, mounts: string[]): string[] {
   // (`# stage to outputs` + `rm -rf "$UNRESOLVED"` still flags, on the rm's own unprovable target).
   // `code` has comments removed and is what every statement-level DECISION reads, so prose can never
   // itself be the operative delete.
-  const expanded = resolveMktempVars(expandSimpleVars(cmd));
-  const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
+  const expandedVars = tryExpandSimpleVars(cmd);
+  const codeVars = tryExpandSimpleVars(stripCommentLines(cmd));
+  // Over the expansion budget (thousands of distinct variables in one statement): decide without expanding,
+  // strictly — every mount the command names literally anywhere counts as deleted in. The expanded text
+  // could only name a mount the raw text does not if the name itself were assembled from variables.
+  if (expandedVars === undefined || codeVars === undefined) return mounts.filter((m) => cmd.includes(m));
+  const expanded = resolveMktempVars(expandedVars);
+  const code = resolveMktempVars(codeVars);
   // Mount-independent, so hoisted out of the per-mount loop rather than recomputed per mount. Both are
   // pure, so this is a cost change only — the per-mount decisions below are byte-identical to the
   // original outputs-only detector.
@@ -3093,7 +3132,9 @@ export function isOutputsDelete(cmd: string): boolean {
  *  Size caps: a command longer than `BASIS_COMMAND_CAP` (16 KiB) skips the whole analysis, pre-split passes
  *  included, and a statement longer than `BASIS_STATEMENT_CAP` (4 KiB) skips the operand analysis. Either way
  *  it is `named` iff the ORIGINAL rule holds — a delete token (or `mv`) and an outputs path anywhere in the
- *  raw text — a superset of what the operand rule names, so a cap can only make a verdict stricter. The
+ *  raw text — a superset of what the operand rule names for any outputs path that appears literally in the
+ *  command, so for those a cap can only make a verdict stricter. (A mount name assembled from two variables,
+ *  `A=mnt/out B=puts; rm $A$B/x`, is never in the raw text and can read `inferred` past a cap.) The
  *  flip side: over a cap the false positives this rule exists to clear come back, e.g. a one-line
  *  `python3 -c` body over 4 KiB with a variable named `rm` next to an outputs path is `named` again.
  *  Argument, operand and receiver scans stop `BASIS_SCAN_CAP` (4096) characters from their anchor. The cost
@@ -3107,10 +3148,13 @@ export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
   const mm = mountMatchers("outputs");
   // Whole-command cap: the pre-split passes (variable expansion, `mktemp` resolution) are superlinear in the
   // worst case, so a command over the cap skips them and is judged by the original rule over its RAW text —
-  // a delete token (or `mv`) and an outputs path anywhere. The raw text contains every literal the expanded
-  // text does (and comments too), so this names a superset of the operand rule: only ever stricter.
+  // a delete token (or `mv`) and an outputs path anywhere. For any path that appears literally in the command
+  // this names a superset of the operand rule (the raw text also keeps comments and assignment values), so it
+  // is stricter there; only a mount name assembled from variables can escape it.
   if (cmd.length > BASIS_COMMAND_CAP) return mm.touches.test(cmd) && (DELETE_TOKEN.test(cmd) || /\bmv\b/.test(cmd)) ? "named" : "inferred";
-  const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
+  const codeVars = tryExpandSimpleVars(stripCommentLines(cmd));
+  if (codeVars === undefined) return "named"; // over the expansion budget: the stricter answer
+  const code = resolveMktempVars(codeVars);
   return splitStatements(code).some(
     (stmt) =>
       mvDeletesOutputs(stmt, mm) ||
