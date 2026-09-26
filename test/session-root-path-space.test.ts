@@ -24,9 +24,10 @@ class MockSession implements AgentSession {
   close() {}
 }
 
-const driveWithRoot = (events: AgentEvent[], root?: string) => {
+const driveWithRoot = (events: AgentEvent[], root?: string, expectedAgentCwd?: string) => {
   const run = new Run(new MockSession(events), new ScriptedDecider([]));
   if (root !== undefined) run.setSessionRoot(root);
+  if (expectedAgentCwd !== undefined) (run as unknown as { setExpectedAgentCwd(c: string): void }).setExpectedAgentCwd(expectedAgentCwd);
   return run.drive("go");
 };
 const initEv = (cwd: string): AgentEvent => ({ type: "init", tools: [], mcpServers: [], skills: [], cwd });
@@ -80,6 +81,19 @@ describe("container geometry: a copy-failure leak is visible", () => {
 });
 
 describe("hostloop geometry stays correct", () => {
+  it("from 2.7032.0 the agent runs at /var/empty: the expected process cwd is accepted, not counted malformed", async () => {
+    // The agent reports its realpath (/private/var/empty), which is outside the session tree by design. The
+    // space check exists to catch a root in the WRONG path space; the harness knows where it spawned the
+    // agent, so it accepts that one cwd (realpath-compared) and still rejects any other outside cwd.
+    const OUT = `${HOST_ROOT}/mnt/outputs/report.html`;
+    const events = [initEv("/private/var/empty"), presentUse("t1", [OUT]), presentResult("t1", [OUT])];
+    const rec = await driveWithRoot(events, HOST_ROOT, "/var/empty");
+    expect(rec.evidenceErrors.presentFilesMalformed).toBe(0);
+    expect(rec.presentedFiles).toEqual([{ from: OUT, to: OUT, promoted: false, leaked: false }]);
+    const other = await driveWithRoot([initEv("/elsewhere"), presentUse("t1", [OUT]), presentResult("t1", [OUT])], HOST_ROOT, "/var/empty");
+    expect(other.evidenceErrors.presentFilesMalformed).toBeGreaterThan(0);
+  });
+
   const OUTPUTS = `${HOST_ROOT}/mnt/outputs`;
   const FILE = `${OUTPUTS}/report.html`;
 

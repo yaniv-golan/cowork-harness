@@ -318,6 +318,13 @@ function allowed(sample: string, cls: string, allow: AllowPattern[]): boolean {
 }
 
 /** Scan one string for PII matches, suppressing anything the (class-scoped, whole-token) allowlist covers. */
+/** macOS system paths that identify no one and appear in ordinary recordings: from Desktop 2.7032.0 the
+ *  host-loop agent runs at `/var/empty` and reports its realpath. Exact directory, or a path under it. */
+const SYSTEM_CONSTANT_PATHS = ["/private/var/empty"];
+function isSystemConstantPath(p: string): boolean {
+  return SYSTEM_CONSTANT_PATHS.some((c) => p === c || p.startsWith(`${c}/`));
+}
+
 export function scanText(text: string, where: string, allow: AllowInput[], patterns = DEFAULT_SCAN_PATTERNS): ScanFinding[] {
   const out: ScanFinding[] = [];
   const norm = allow.map(normAllow);
@@ -325,6 +332,7 @@ export function scanText(text: string, where: string, allow: AllowInput[], patte
     const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
     for (const m of text.matchAll(g)) {
       const sample = m[0];
+      if (cls === "path" && isSystemConstantPath(sample)) continue;
       if (!allowed(sample, cls, norm)) out.push({ where, cls, sample });
     }
   }

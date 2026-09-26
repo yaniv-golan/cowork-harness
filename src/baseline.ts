@@ -104,6 +104,13 @@ export const MOUNT_BARE_NAME_MIN_VERSION = "1.14271.0";
  *  Desktop never set. Not symmetric with CLAUDE_CODE_HOST_PLATFORM, which every asar on record sets. */
 export const DESKTOP_APP_VERSION_MIN_VERSION = "2.2553.1";
 
+/** First Desktop whose host loop runs the agent process OFF the outputs dir: at `/var/empty` when that
+ *  passes a stat check, else a per-session `host-cwd` dir, with deny rules for every spelling of it. Every
+ *  marker of the rule (`/var/empty`, `host-cwd`, `getHostProcessCwd`) is absent from every backed-up asar
+ *  through 2.2553.1 and present from 2.7032.0, where `hostLoopCwd` disappears. Below it the agent runs at
+ *  outputs, as those releases did. */
+export const HOSTLOOP_SYSTEM_EMPTY_CWD_MIN_VERSION = "2.7032.0";
+
 /** True iff `found` is a same-major.minor, different-patch bump over `pinned` (both dotted version
  *  strings). The single definition of "patch-only" shared by the native-binary drift classifier and the
  *  VM-ELF parity-mount tolerance, so the two never diverge on what counts as a safe patch bump. */

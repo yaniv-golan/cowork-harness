@@ -6,7 +6,25 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **`hostloop` against Desktop 2.7032.0 or later: file tools need absolute paths.** The agent no longer runs
+  in the outputs dir, so a skill that gives `Read`/`Write`/`Edit` a relative path — a bare `report.md`, or
+  `outputs/report.md` — now gets the refusal production gives ("File is in a directory that is denied by
+  your permission settings.") instead of a file quietly written to outputs. Write the absolute outputs path
+  the agent's prompt names. A pathless or relative `Grep`/`Glob` still searches outputs. Baselines before
+  2.7032.0 are unchanged, and so are `container` and `microvm`.
+
 ### Changed
+
+- **`hostloop` runs the agent where Desktop 2.7032.0+ does.** From that Desktop, the host-loop agent process
+  runs at `/var/empty` (or, when that directory is not root-owned and locked down, a per-run `host-cwd`
+  directory), with deny rules for every spelling of it and the outputs dir added back as a working
+  directory. The path gate re-anchors a pathless or relative `Grep`/`Glob` to outputs, as Desktop's hook
+  does, and blocks a relative `Read`/`Write`/`Edit`/`MultiEdit` with Desktop's "needs an absolute path here"
+  message if the agent's own refusal ever fails to fire. A re-anchored call is recorded on its `hook_event`
+  row as `rewritten`, since the agent's transcript keeps only the model's original input. Previously the
+  harness ran the agent in outputs, so a relative write that production refuses passed here.
 
 - **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
   folder, so a skill-folder positional inside a plugin is the same run as `critique <plugin> --skill

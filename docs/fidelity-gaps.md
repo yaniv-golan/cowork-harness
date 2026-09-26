@@ -102,7 +102,7 @@ a live bug report can be placed on the right lane before it is compared to a har
 | Surface | Remote lane (measured) | Local lane / this harness |
 |---|---|---|
 | Agent version | **≥ 2.1.248** by payload-field dating (`scratchpad_dir`, `prompt_cache_likely_expired`, … are agent-side fields absent ≤ 2.1.247), contemporary with Desktop's. `CLAUDE_CODE_VERSION=2.1.42` in that env is **runner-set metadata the agent never reads** — not its version. Runner `release-bfe55864c5-ext`, `/opt/claude-code/bin/claude` | the Desktop-staged agent (2.1.275 that day). No measured skew; a hook running `grep -o '"version":"[^"]*"' "$transcript_path"` would give the number |
-| cwd / user | `/home/claude`, runs as **root**, `HOME=/root`; shell and file tools share one filesystem and cwd | `/sessions/<id>/mnt/outputs`, non-root; shell and file tools have different roots |
+| cwd / user | `/home/claude`, runs as **root**, `HOME=/root`; shell and file tools share one filesystem and cwd | shell at `/sessions/<id>`; file-tool agent at `/var/empty` from Desktop 2.7032.0 (the outputs dir before), non-root; shell and file tools have different roots |
 | Uploads | `$HOME/.claude/uploads/<session-id>/<8-hex>-<original name>` (under `/root/.claude/uploads/`). **`/mnt/user-data/uploads` does not exist** although the lane's environment text names it | `/sessions/<id>/mnt/uploads/<name>` |
 | Outputs | `/mnt/user-data/outputs -> /mnt/attach/outputs`, empty throughout; presenting a file from `/home/claude` produced the card | `mnt/outputs` is the channel; `present_files` promotes into it |
 | Links | every `computer://` form renders as plain text; a bare absolute path becomes a broken `https://claude.ai/home/claude/…` link | `computer://` links resolve (`computer_links_resolve` at hostloop) |
@@ -1391,53 +1391,33 @@ desktop-local lane, production resolves a relative path differently depending on
 
 | | production (host-loop) | `container`/`microvm` (VM-loop) | `hostloop` |
 |---|---|---|---|
-| file tools (`Write`/`Read`) base | `mnt/outputs` | session root | `mnt/outputs` ✓ |
+| file tools (`Write`/`Read`) base, Desktop 2.7032.0+ | none — agent at `/var/empty`, relative `Read`/`Write`/`Edit` refused; relative `Grep`/`Glob` re-anchored to `mnt/outputs` | session root | same ✓ |
+| file tools (`Write`/`Read`) base, before 2.7032.0 | `mnt/outputs` | session root | `mnt/outputs` ✓ |
 | `mcp__workspace__bash` cwd | session root | session root ✓ | session root ✓ |
 
 Both cwds come from a single function (`hostLoopCwds`, `src/runtime/hostloop.ts`) and are pinned together
 in one test, because a single-value assertion cannot express "the shell and the file tools disagree, on
 purpose" — and collapsing them into one value is the mistake this arrangement exists to prevent.
 
-> **OPEN as of Desktop 2.7032.0: the agent process cwd moved, and the harness has not followed.** The
-> "outputs dir" row above was measured on 2026-08-27 against an older Desktop, and `hostLoopCwds()` still
-> returns it. At 2.7032.0 production computes the agent's cwd as `sessionDirPaths().hostProcessCwd` —
-> **`/var/empty`** when that path passes a stat check (a directory, root-owned, not group- or
-> world-writable, which is the stock macOS case), otherwise a per-session `<sessionStorageDir>/host-cwd`
-> directory. It is NOT the outputs dir. Two corroborating changes in the same build: the writable-paths
-> helper collapsed from `[hostCwd, hostOutputsDir]` to `[hostOutputsDir]`, and the sub-agent folder
-> manifest states the constant *"Pass absolute paths to these tools."* where it once named a cwd — with
-> the process cwd off the outputs dir, there is no useful cwd for it to name.
+> **From Desktop 2.7032.0 the agent process runs off the outputs dir — modeled.** Production runs it at
+> **`/var/empty`** when that path passes a stat check (a directory, owned by root, not group- or
+> world-writable — the stock macOS case), otherwise at a per-session `host-cwd` directory, and passes the
+> agent deny rules for every spelling of that directory (`/var/empty`, `/private/var/empty`, and their
+> `/System/Volumes/Data` forms), with outputs added back as a working directory. So a relative
+> `Read`/`Write`/`Edit` is **refused by the agent** — *"File is in a directory that is denied by your
+> permission settings."* — while a pathless or relative `Grep`/`Glob` is re-anchored to outputs by the
+> host's PreToolUse hook. Confirmed live on 2.7032.0. The harness does the same for baselines from
+> 2.7032.0: same cwd rule, same deny rules (on `--disallowedTools`), outputs as a working directory (via
+> `--settings`), the same re-anchoring, and — as a second line in case the deny rules ever fail to load —
+> the hook's own *"needs an absolute path here"* block for a relative `Read`/`Write`/`Edit`/`MultiEdit`.
+> A re-anchored `Grep`/`Glob` is recorded on the `hook_event` row (`rewritten`), because the agent's
+> transcript keeps only the model's original input. Older baselines keep the outputs-dir cwd they had.
 >
-> **Why it matters, and it is the direction this section already warns about:** a skill that writes a bare
-> relative path from its file tools lands in `outputs/` under this harness and would land in `/var/empty`
-> (unwritable) in production. That is a skill passing here and failing there — the exact asymmetry the
-> cwd SPLIT exists to prevent, reintroduced by a Desktop change rather than by a harness edit.
->
-> **Measured in production, not only read from the asar.** A host-loop Cowork task that ran hourly across
-> the Desktop upgrade splits cleanly on it in `~/Library/Logs/Claude/main.log`: the agent's patched `cwd`
-> is `<sessionDir>/outputs` in 43 occurrences before `appVersion` becomes `2.7032.0` and `/var/empty` in
-> 10 after, with no overlap and the agent held at 2.1.280 throughout. Desktop `2.2553.13` still used
-> outputs, so the change arrived at 2.7032.0.
->
-> **Production REFUSES a relative path; it does not mis-write — and the refusal comes from the AGENT, not
-> from Desktop's path gate.** For `Read`/`Write`/`Edit` the agent validates input BEFORE `PreToolUse`
-> hooks run: it expands `file_path` against its own cwd, so a bare `x` becomes `/private/var/empty/x`,
-> and checks it against the spawn's deny rules — which cover `/var/empty` — refusing with *"File is in a
-> directory that is denied by your permission settings."* Desktop's gate never sees the call, so its
-> *"needs an absolute path here"* message is effectively unreachable for those three tools. Verified by
-> where each string lives: the deny message is in the 2.1.280 agent ELF (2 hits, 0 in the asar), the two
-> gate messages are in the asar (2 and 1 hits, 0 in the ELF). `Grep`/`Glob` skip that validation, reach
-> the hook, and have their input re-anchored to outputs. So the harness's gap is that it silently ACCEPTS
-> what production refuses — the production symptom is a clear permission refusal, not a file in the wrong
-> place. **Confirmed live** (Desktop 2.7032.0 / agent 2.1.280, host-loop Cowork, probed twice): a bare
-> `probe-rel.md` written or read, and a write to `/var/empty/probe2.md`, all return the tool_use_error
-> *"File is in a directory that is denied by your permission settings."* and nothing is written, while a
-> pathless `Glob *.md` and `Grep x` DO find a file seeded in outputs — so the hook re-anchoring is real
-> too. Desktop's own message never appears, exactly as the string locations predict.
->
-> Not fixed in the sync that recorded it: following production means changing what every host-loop run
-> does, which wants its own change. Found by an internals session and verified here against both the
-> 2.7032.0 asar and this machine's own logs.
+> **Not modeled:** the host's scoped allow rules (per-root `Edit`/`Read` allows); the harness's
+> `spawn.allowedTools` pre-approval covers the same calls. The host also write-denies a shared plugin-cache
+> root that has no harness equivalent — the path gate already write-blocks the staged plugin and skill
+> roots. Production names the transcript folder `session` (`CLAUDE_CODE_PROJECT_DIR_NAME`); the harness's
+> agent keys it on its cwd instead, inside a per-run config dir, so the difference cannot cross runs.
 
 Confirmed by Cowork's own sub-agent prompt: *"Each command starts in `<vmCwd>`; anything written outside
 `<vmCwd>/mnt/` (including `/tmp`) stays in that environment and never reaches the user or your file

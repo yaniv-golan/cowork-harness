@@ -28,6 +28,7 @@ import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-st
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
 import { combineSdkMcp, type HookBundle } from "../agent/session.js";
+import { hostLoopPermissionArgs, hostLoopUsesSystemEmptyCwd, resolveHostProcessCwd } from "../hostloop/process-cwd.js";
 import { stripComments } from "../prompt.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
 
@@ -92,8 +93,10 @@ export function buildHostLoopNativeEnv(
  *  decision is unaffected (it realpaths candidate and roots itself); this only governs the diagnostic. */
 /** The host-loop cwd SPLIT, in one place because the two halves are only correct TOGETHER.
  *
- *  Production keeps them deliberately different, measured on desktop-local Cowork 2026-08-27:
- *   - the agent process sits at the OUTPUTS dir, so its file tools resolve a bare `Write` there;
+ *  Production keeps them deliberately different. Measured on desktop-local Cowork 2026-08-27 (before
+ *  Desktop 2.7032.0):
+ *   - the agent process sits at the OUTPUTS dir, so its file tools resolve a bare `Write` there
+ *     (from 2.7032.0 it sits at `/var/empty` instead and a relative Write is refused — `processCwd`);
  *   - every `mcp__workspace__bash` call starts at the bare SESSION ROOT, and bash resets its cwd
  *     between calls ("no cwd/env carryover"), so a relative shell path can never be `cd`-ed elsewhere.
  *
@@ -104,8 +107,37 @@ export function buildHostLoopNativeEnv(
  *  Collapsing them — which this harness did until 2026-08-27, running bash at the outputs dir — makes a
  *  skill that writes relative paths from a script look correct here and deliver nothing in production.
  *  Keep them as one function so a future edit cannot move one and leave the other. */
-export function hostLoopCwds(sessionRoot: string, hostOutputsDir: string): { agentProcessCwd: string; workspaceBashCwd: string } {
-  return { agentProcessCwd: hostOutputsDir, workspaceBashCwd: sessionRoot };
+export function hostLoopCwds(
+  sessionRoot: string,
+  hostOutputsDir: string,
+  /** From Desktop 2.7032.0 the agent process runs off outputs (`/var/empty`, or a per-session dir — see
+   *  `resolveHostProcessCwd`). Omitted → the older contract, where it ran at outputs. */
+  processCwd?: string,
+): { agentProcessCwd: string; workspaceBashCwd: string; pathResolverBase: string } {
+  // `pathResolverBase` is outputs in both eras: before, because the agent ran there; from 2.7032.0,
+  // because Desktop's hook re-anchors a relative Grep/Glob to outputs.
+  return { agentProcessCwd: processCwd ?? hostOutputsDir, workspaceBashCwd: sessionRoot, pathResolverBase: hostOutputsDir };
+}
+
+/** The agent-process half of a host-loop spawn, as one pure-ish function the spawn calls and tests can pin:
+ *  the process cwd, the argv it implies (deny rules, outputs as a working directory), and the gate's view of
+ *  it. Before Desktop 2.7032.0 all three are the older contract (agent at outputs, no rules). */
+export function hostLoopProcessContract(
+  baseline: PlatformBaseline,
+  outDir: string,
+  sessionRoot: string,
+  hostOutputsDir: string,
+  deps: { stat?: Parameters<typeof resolveHostProcessCwd>[0]["stat"] } = {},
+): {
+  processCwd: string | undefined;
+  permission: ReturnType<typeof hostLoopPermissionArgs> | undefined;
+  cwds: ReturnType<typeof hostLoopCwds>;
+} {
+  const processCwd = hostLoopUsesSystemEmptyCwd(baseline)
+    ? resolveHostProcessCwd({ fallbackDir: join(resolve(outDir), "work", "host-cwd"), stat: deps.stat })
+    : undefined;
+  const permission = processCwd !== undefined ? hostLoopPermissionArgs({ processCwd, hostOutputsDir }) : undefined;
+  return { processCwd, permission, cwds: hostLoopCwds(sessionRoot, hostOutputsDir, processCwd) };
 }
 
 export function pathGateCwdMismatch(wireCwd: string, spawnerCwd: string): boolean {
@@ -247,6 +279,12 @@ export function spawnHostLoop(
   // faithful set. Adding PowerShell here would be a no-op today — and would need revisiting only if
   // this harness ever grows a Windows runtime (the sync extractor's Windows paths are still TODO).
   const hostOutputsDir = join(mntHost, "outputs");
+  // From Desktop 2.7032.0 the agent process runs OFF outputs, with deny rules for that directory and
+  // outputs added back as a working directory (see src/hostloop/process-cwd.ts). The fallback dir is per
+  // run and outside `sessionHost`, which the bash sidecar mounts — Desktop's equivalent is not VM-visible.
+  // `outDir` is stable across a resume, so both turns run at the same cwd (the agent keys its transcript
+  // on it).
+  const { processCwd, permission, cwds } = hostLoopProcessContract(baseline, outDir, sessionRoot, hostOutputsDir);
   // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
   // a registered tool with no backing server is a phantom capability the model can try and fail to use.
   const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];
@@ -268,7 +306,8 @@ export function spawnHostLoop(
     mntRoot: mntHost,
     mcpGuest: mcpHostPath,
     systemPromptAppend,
-    disallowed: ["Bash", "WebFetch", "NotebookEdit"],
+    disallowed: ["Bash", "WebFetch", "NotebookEdit", ...(permission?.disallowed ?? [])],
+    ...(permission ? { extraArgs: permission.extraArgs } : {}),
     // The 5 skills/plugins discovery tools declare + pre-approve on the SAME cowork lane as workspace's
     // own bash/web_fetch (spec §3: `isEnabled` = `sessionType==="cowork"`, which hostloop satisfies).
     // bash + web_fetch are both REGISTERED regardless of the webFetchViaApi gate; the 5 discovery tools
@@ -294,8 +333,9 @@ export function spawnHostLoop(
   });
 
   // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's
-  // `hostCwd = getOutputsDir(e)`); scratchRoots = [hostCwd] (hostCwd and hostOutputsDir are the SAME dir
-  // here, so this is one entry, not two).
+  // `hostCwd = getOutputsDir(e)`), the base a relative path resolves against in both eras;
+  // scratchRoots = [hostCwd] (production's writable set is `[outputs]` from 2.7032.0, and was two names for
+  // the same dir before it).
   const spoolRoot = join(plan.configDir, "projects"); // production's spooled-tool-results dir analog: the staged config dir's own "projects" subdir
   const skillsRoot = join(plan.configDir, "skills");
   const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
@@ -328,6 +368,7 @@ export function spawnHostLoop(
     uploadsRoots: [uploadsRoot],
     spooledProjectsRoots: [spoolRoot],
     readOnlyPluginRoots: [skillsRoot, ...pluginRoots],
+    ...(permission ? { processCwdSpellings: permission.cwdSpellings } : {}),
   };
   const pathGateFired = new Set<string>(); // tool_use_ids the gate actually saw — feeds the runtime tripwire below
   const hooks: HookBundle = {
@@ -340,14 +381,14 @@ export function spawnHostLoop(
       // Wire-cwd cross-check: the hook payload carries input.cwd. The RESOLVER input stays the closure
       // hostCwd (faithful to production's own resolver, which uses its own cwd variable, not the wire
       // value), but a mismatch means the native spawn's cwd drifted from the gate's assumption — loud, never silent.
-      if (typeof input?.cwd === "string" && pathGateCwdMismatch(input.cwd, gateCfg.hostCwd))
-        warn(`::warning:: [hostloop] path-gate cwd mismatch: wire=${input.cwd} spawner=${gateCfg.hostCwd}\n`);
+      if (typeof input?.cwd === "string" && pathGateCwdMismatch(input.cwd, cwds.agentProcessCwd))
+        warn(`::warning:: [hostloop] path-gate cwd mismatch: wire=${input.cwd} spawner=${cwds.agentProcessCwd}\n`);
       return checkHostLoopPathGate(input?.tool_name, input?.tool_input ?? {}, gateCfg);
     },
   };
 
   const child = spawn(agentNativeHost, nativeArgs, {
-    cwd: hostLoopCwds(sessionRoot, hostOutputsDir).agentProcessCwd,
+    cwd: cwds.agentProcessCwd,
     env: nativeEnv,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -400,12 +441,11 @@ export function spawnHostLoop(
   // `chat` branch prepends an explicit `cd ${vmCwd}`, which would be redundant if the argument worked.
   // The old value was never faithful: it reproduced a prompt claim rather than an observed behaviour.
   //
-  // It is deliberately NOT the agent-process cwd. The agent spawns at `hostOutputsDir` (see the
-  // `spawn(agentNativeHost, …, { cwd: hostOutputsDir })` above) so its FILE TOOLS resolve relative paths
-  // against outputs, while the SHELL sits at the session root. Production keeps those two values
+  // It is deliberately NOT the agent-process cwd (outputs before Desktop 2.7032.0, `/var/empty` from it —
+  // `cwds.agentProcessCwd` above), while the SHELL sits at the session root. Production keeps those two values
   // different on purpose; collapsing them is the bug this replaces. Both are pinned together in
   // test/baseline.test.ts — a single-value assertion cannot express the split.
-  const execCwd = hostLoopCwds(sessionRoot, hostOutputsDir).workspaceBashCwd;
+  const execCwd = cwds.workspaceBashCwd;
 
   // Host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
   // surface them to execute.ts → result.egress, making host-loop web_fetch visible to egress assertions.
@@ -457,10 +497,23 @@ export function spawnHostLoop(
   };
   const sdkMcp = combineSdkMcp(workspaceBundle, ...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
   // `sessionRoot` here is the HOST tree (`sessionHost`), not the VM path: the agent runs natively on the
-  // host at this tier (see the `spawn(agentNativeHost, …, { cwd: hostOutputsDir })` above), so the paths
+  // host at this tier, so the paths
   // it reports — and the ones its present_files handler validates — are host paths. Returned for the same
   // reason as container's: the caller must not re-derive it.
-  return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress, infraErrors, markTearingDown, sessionRoot: sessionHost };
+  // `agentProcessCwd` is returned only when it is deliberately outside the session tree, so the run's
+  // present_files space check can accept that one cwd (see `Run.setExpectedAgentCwd`).
+  return {
+    child,
+    sdkMcp,
+    hooks,
+    pathGateFired,
+    containerName,
+    hostEgress,
+    infraErrors,
+    markTearingDown,
+    sessionRoot: sessionHost,
+    ...(processCwd !== undefined ? { agentProcessCwd: processCwd } : {}),
+  };
 }
 
 /** The two infra-error emitters a host-loop run needs, sharing one sink and one events.jsonl writer.
