@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`errorSource: "decider_timeout"`** in `result.json` and `status.json` (and `schema/run-result.json`'s
+  `errorSource` enum): the run ended because a `--decider-cmd` helper or a `--decider-dir` rendezvous did not
+  answer a gate within its backstop (`COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` /
+  `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS`). An additive enum value; a consumer that validates `result.json`
+  against an older copy of the schema will reject a document carrying it.
+
 ### Changed
 
 - **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
@@ -24,17 +32,10 @@ All notable changes to this project are documented here. The format is based on
   git-tracked files, a `--skill` subdirectory with nothing tracked under it, and a target with no readable,
   tracked `SKILL.md`. Previously these ran both turns and failed or degraded afterwards.
 
-### Added
-
-- **`errorSource: "decider_timeout"`** in `result.json` and `status.json` (and `schema/run-result.json`'s
-  `errorSource` enum): the run ended because a `--decider-cmd` helper or a `--decider-dir` rendezvous did not
-  answer a gate within its backstop (`COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` /
-  `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS`). An additive enum value; a consumer that validates `result.json`
-  against an older copy of the schema will reject a document carrying it.
-
 ### Fixed
 
-- **Interrupting a run (SIGINT/SIGTERM) now stops the agent and records the run on every tier.** On
+- **Interrupting a run (SIGINT/SIGTERM) now stops the agent and records the run** (on `microvm` the
+  in-VM kill is unit-tested, not yet exercised live — see the next entry). On
   `protocol` and `microvm` nothing handled the signal, so the harness died by it: no exit hook ran,
   `status.json` stayed `"running"` (readers only caught it as stale after 15 s), and the agent was never
   told to stop — a signal sent to the harness alone (a wrapper script, a CI cancel, `timeout`) left it
@@ -45,7 +46,8 @@ All notable changes to this project are documented here. The format is based on
   unchanged. `container`/`hostloop` keep their immediate container reap, with no added wait. The
   `--decider-cmd` helper cleanup no longer re-raises the signal, which had bypassed all of this. A
   multi-scenario `run` interrupted mid-batch starts no further scenario, and an interrupted `record` never
-  writes a cassette, even with `--allow-failing`. (Runs that `critique` starts are child processes it stops
+  writes a cassette, even with `--allow-failing`. An interrupt while the run waits on a `--decider-cmd` gate
+  is recorded as an interrupt, not as an unanswered gate. (Runs that `critique` starts are child processes it stops
   itself, and are not covered by this.)
 - **`microvm`: stopping a run now stops the agent inside the VM.** Killing the host `limactl shell`
   client never reached the guest agent — it kept running with its input still open — and orphaned the

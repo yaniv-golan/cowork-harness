@@ -1119,21 +1119,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // orphan a running container holding the network. On the success path the child has already
       // exited (--rm), so these are no-ops.
       deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
-      deregisterAgent?.();
-      // microvm: SIGKILLing the host `limactl shell` client alone leaves the guest agent running (and the
-      // client's ssh child orphaned) — on a salvaged/crashed run the agent is still mid-turn here. Kill it
-      // in the guest first. A no-op once the agent has exited (the success path).
-      // The short wait first: on the success path the client is exiting on its own, and a guest-side kill
-      // would be a wasted VM round-trip.
-      if (effectiveFidelity === "microvm" && signalAgent?.alive()) {
-        await Promise.race([signalAgent.exited(), new Promise((r) => setTimeout(r, 1000).unref())]);
-        if (signalAgent.alive()) signalAgent.forceKill();
-      }
-      try {
-        child?.kill?.("SIGKILL");
-      } catch {
-        /* already gone */
-      }
+      await reapAgentOnTeardown({ microvm: effectiveFidelity === "microvm", agent: signalAgent, child, deregister: deregisterAgent });
       // mark BEFORE the forced removal below — this run's own `docker rm -f` makes the hostloop sidecar
       // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
@@ -2197,6 +2183,39 @@ function writeRunJsonl(
  *  hard fail, computed and stored at the end of this function (see the comment there). `partial:true` is
  *  the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its populated
  *  `artifacts[]` as a passing run. */
+/**
+ * The normal-path (success, salvage, crash) agent teardown, extracted so its ORDER is testable.
+ *
+ * microvm: SIGKILLing the host `limactl shell` client alone leaves the guest agent running (and the client's
+ * ssh child orphaned) — on a salvaged/crashed run the agent is still mid-turn here — so kill it in the guest.
+ * The short wait first: on the success path the client is exiting on its own, and a guest-side kill would be
+ * a wasted VM round-trip. (Residual: `drive()` returns when the agent's stdout closes, not when the client
+ * exits, so a client that lingers past the wait gets the guest KILL even on success — only an agent still
+ * flushing its session store after closing stdout would notice.)
+ *
+ * De-register LAST. Until the agent is dead a signal must still find it registered: a signal that lands in
+ * the wait above would otherwise see no agent, exit at once, and leave the guest agent running. A signal
+ * racing the kills below double-kills harmlessly (every kill tolerates an already-dead target).
+ */
+export async function reapAgentOnTeardown(p: {
+  microvm: boolean;
+  agent?: TerminableAgent;
+  child?: { kill?: (s?: NodeJS.Signals) => void };
+  deregister?: () => void;
+  settleMs?: number;
+}): Promise<void> {
+  if (p.microvm && p.agent?.alive()) {
+    await Promise.race([p.agent.exited(), new Promise((r) => setTimeout(r, p.settleMs ?? 1000).unref())]);
+    if (p.agent.alive()) p.agent.forceKill();
+  }
+  try {
+    p.child?.kill?.("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+  p.deregister?.();
+}
+
 export function buildPartialResult(args: {
   /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
   turn?: number;

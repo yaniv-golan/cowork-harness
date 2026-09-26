@@ -254,6 +254,11 @@ export function microvmAgent(
   const note = () => {
     if (child.pid && running()) for (const p of hostChildPids(child.pid, run)) noted.add(p);
   };
+  // Residual: these `limactl`/`pgrep` calls are synchronous and run INSIDE the signal handler. On an
+  // unresponsive VM each guest call can block for its full 5 s timeout (once in terminate, once in
+  // forceKill), and a second Ctrl-C is not processed while one blocks — so "a second signal skips the wait"
+  // does not hold inside those windows. Bounded (spawnSync SIGTERMs limactl at the timeout); a stopped VM
+  // fails at once.
   const guest = (sig: "TERM" | "KILL") => {
     try {
       run(limaPath(), microvmGuestKillArgv(instance, configVm, sig), { stdio: "ignore", timeout: 5000 });

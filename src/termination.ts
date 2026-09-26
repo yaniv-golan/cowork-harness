@@ -138,7 +138,10 @@ function onSignal(sig: NodeJS.Signals): void {
     process.exitCode = code;
   });
   const pending = liveAgents();
-  warn(`::warning:: [interrupt] ${sig} — ${pending.length ? "stopping the agent and " : ""}cleaning up before exit\n`);
+  // Only when there is an agent to stop (the wait that follows is what the operator would otherwise stare
+  // at). Without one the exit is immediate and the egress step prints its own line when it reaps anything —
+  // an unconditional line also fired in every test worker torn down by SIGTERM.
+  if (pending.length) warn(`::warning:: [interrupt] ${sig} — stopping the agent and cleaning up before exit\n`);
   runSteps("helpers", sig);
   if (!pending.length) return finish(sig);
   for (const a of pending) a.terminate();

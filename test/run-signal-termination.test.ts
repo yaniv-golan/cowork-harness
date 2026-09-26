@@ -4,6 +4,8 @@ import { join } from "node:path";
 import {
   CLI,
   POSIX,
+  QUESTION_FRAME,
+  runDir,
   alive,
   credentialLeaks,
   exited,
@@ -109,6 +111,31 @@ describe.runIf(can)("a signalled run ends with a record and no surviving agent (
       } finally {
         if (alive(helperPid)) process.kill(helperPid, "SIGKILL");
       }
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  // An interrupt while the run waits on a --decider-cmd gate is an interrupt, not an unanswered gate. The
+  // handler kills the helper group first; its stdout closing used to read as "channel closed without a
+  // response", so the run was salvaged as an unanswered-gate partial and a JSON consumer got
+  // `error.category: "unanswered"` (the exit code was pinned to 130, so only the record lied). Predicted RED
+  // before the fix: that envelope on stdout and an `unansweredGate` in turns/1/result.json.
+  it("an interrupt during a pending --decider-cmd gate is not reported as an unanswered gate", async () => {
+    const f = makeStubFixture(`printf '%s\\n' '${QUESTION_FRAME}'\nexec sleep 300`);
+    try {
+      const { cli, stubPid } = await startRun(f, ["--decider-cmd", "cat >/dev/null", "--output-format", "json"]);
+      await new Promise((r) => setTimeout(r, 750)); // let the gate reach the helper and the run park on it
+      process.kill(cli.pid!, "SIGINT");
+      const r = await exited(cli);
+      expect(r, cli.stderrText()).toEqual({ code: 130, signal: null });
+      expect(cli.stdoutText()).not.toMatch(/"category"\s*:\s*"unanswered"/);
+      expect(cli.stderrText()).not.toContain("unanswered gate");
+      const d = runDir(f)!;
+      const resultPath = join(d, "turns", "1", "result.json");
+      if (existsSync(resultPath)) expect(JSON.parse(readFileSync(resultPath, "utf8")).unansweredGate).toBeUndefined();
+      expect(readStatus(f)?.state).toBe("error");
+      expect(await waitFor(() => !alive(stubPid), 3000), `agent ${stubPid} outlived the harness`).toBe(true);
     } finally {
       f.cleanup();
     }

@@ -19,6 +19,7 @@ import {
   type Decision,
   type RunContext,
 } from "../decide/decider.js";
+import { terminationRequested, parkIfTerminating } from "../termination.js";
 import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
@@ -1460,6 +1461,11 @@ export class Run {
       try {
         decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
       } catch (e) {
+        // An interrupt kills the --decider-cmd helper first, so its channel closes and the decider throws —
+        // but that is the interrupt, not an unanswered gate. Don't let it reach the salvage path (which
+        // would record and report it as one): the termination handler owns the exit and fires within its
+        // grace period, and still finds the agent through its registration.
+        if (terminationRequested()) await parkIfTerminating();
         // A decider channel that timed out ends the run as an unanswered-gate partial (the throw below reaches
         // executeScenario's salvage path); label WHY, so a consumer can tell a wedged answerer from a gate
         // nothing was configured to answer. The salvaged result.json and status.json both read errorSource.
