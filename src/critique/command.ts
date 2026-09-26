@@ -24,7 +24,7 @@ import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
 import { jsonPayloadEnvelope } from "../run/envelope.js";
@@ -142,10 +142,10 @@ Critique's own:
   --out <path>              ALSO write the selected-format report to this file (stdout unchanged)
   --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ every agents/**.md it dispatches,
                             + the plugin-root references/ files it points at)
-                            instead of a missing plugin-root SKILL.md. Selection only — the positional
-                            folder is still what both turns mount, and fingerprint.skillHash is unchanged
-                            (it keys the mounted folder: per-plugin, not per-skill). A multi-skill root
-                            with no --skill is REFUSED before any model spend.
+                            instead of a missing plugin-root SKILL.md. Selection only — with a plugin-root
+                            positional, --skill does not change what both turns mount, so
+                            fingerprint.skillHash keys the mounted plugin (per-plugin, not per-skill). A
+                            multi-skill root with no --skill is REFUSED before any model spend.
                             <plugin>/skills/<name> as the positional IS <plugin> --skill <name>: critique
                             mounts the plugin (as Cowork does) and grades <name>, with a notice. It mounts
                             the skill folder alone only when --skill cannot reach it (not at skills/<name>,
@@ -515,7 +515,13 @@ function parseArgs(
 /** How a skill-dir positional inside a plugin is treated. `null` when the positional is not that shape (a
  *  plugin root, a plain skill folder with no enclosing manifest, or `--skill` was passed). */
 export type TargetPromotion =
-  { kind: "promoted"; enclosing: string; name: string } | { kind: "fallback"; enclosing: string; name: string; reason: string };
+  | { kind: "promoted"; enclosing: string; name: string }
+  | { kind: "fallback"; enclosing: string; name: string; reason: string }
+  /** The skill folder carries its OWN plugin manifest, so it is a plugin in its own right and is mounted as
+   *  one — but it also sits inside another plugin, which is therefore not mounted. Announced, not promoted:
+   *  which plugin the author meant is not decidable from the tree. `addressable` says whether
+   *  `critique <enclosing> --skill <name>` would reach it. */
+  | { kind: "own-manifest"; enclosing: string; name: string; addressable: boolean };
 
 /** `critique <plugin>/skills/<name>` IS `critique <plugin> --skill <name>`: Cowork installs plugins, never a
  *  bare skill folder, so the faithful mount for a skill inside a plugin is the plugin. Promoted whenever
@@ -532,10 +538,19 @@ export type TargetPromotion =
 export function promoteSkillDirTarget(skillFolder: string, skillSelector: string | undefined): TargetPromotion | null {
   if (skillSelector !== undefined || !existsSync(join(skillFolder, "SKILL.md"))) return null;
   const positional = resolve(skillFolder);
-  const enclosing = findEnclosingPluginDir(positional);
-  if (enclosing === null || enclosing === positional) return null;
+  let enclosing = findEnclosingPluginDir(positional);
+  if (enclosing === null) return null;
+  let ownManifest = false;
+  if (enclosing === positional) {
+    // `findEnclosingPluginDir` is INCLUSIVE of its start: a skill folder with its own manifest is its own
+    // plugin. Look for one around it only to say so.
+    enclosing = findEnclosingPluginDir(dirname(positional));
+    if (enclosing === null) return null;
+    ownManifest = true;
+  }
   const rel = relative(enclosing, positional).split(sep).join("/");
   const at = /^skills\/([^/]+)$/.exec(rel);
+  if (ownManifest) return { kind: "own-manifest", enclosing, name: at ? at[1]! : basename(positional), addressable: at !== null };
   // The name comes from the path RELATIVE to the plugin, never from `basename(skillFolder)` — that is "."
   // for a spelling like `p/skills/x/.`.
   const name = at ? at[1]! : basename(positional);
@@ -556,7 +571,21 @@ export function applyTargetPromotion(opts: ParsedArgs): ParsedArgs {
     process.stderr.write(
       `::notice:: [critique] ${p.name} is a skill inside plugin ${tildeify(p.enclosing)} — mounting the plugin as Cowork does, grading skill '${p.name}'\n`,
     );
-    return { ...opts, skillFolder: p.enclosing, skillSelector: p.name };
+    // Report the plugin in the form the user typed the skill folder — relative stays relative — so the
+    // promoted spelling's `skillFolder`, `skillDir` and turn argv read exactly as `critique <plugin> --skill
+    // <name>` typed the same way would.
+    const skillFolder = isAbsolute(opts.skillFolder) ? p.enclosing : relative(process.cwd(), p.enclosing) || ".";
+    return { ...opts, skillFolder, skillSelector: p.name };
+  }
+  if (p.kind === "own-manifest") {
+    process.stderr.write(
+      `::notice:: [critique] ${tildeify(opts.skillFolder)} has its own plugin manifest, so it is mounted as a plugin in its own right — the plugin ${tildeify(p.enclosing)} around it is not mounted, and nothing it provides outside this folder is graded` +
+        (p.addressable
+          ? `; to grade it as skill '${p.name}' of that plugin, run critique ${tildeify(p.enclosing)} --skill ${p.name}`
+          : "") +
+        `\n`,
+    );
+    return opts;
   }
   process.stderr.write(
     `::notice:: [critique] ${tildeify(opts.skillFolder)} is skill '${p.name}' inside plugin ${tildeify(p.enclosing)}, but critique ${tildeify(p.enclosing)} --skill ${p.name} is not available: ${p.reason} — ` +
@@ -674,7 +703,18 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
     safePathSegment(skillSelector, "--skill name");
     const candidate = join(skillFolder, "skills", skillSelector);
     if (!existsSync(join(candidate, "SKILL.md"))) {
+      // The positional is ITSELF a skill folder — `--skill` selects a skill inside a plugin ROOT, so the
+      // two conflict. Say that, rather than "no skills/<name>/SKILL.md", which reads as "create a skill".
       const available = listPluginSkills();
+      if (available.length === 0 && existsSync(join(skillFolder, "SKILL.md"))) {
+        const enclosing = findEnclosingPluginDir(dirname(resolve(skillFolder)));
+        throw new Error(
+          `--skill ${skillSelector}: ${tildeify(skillFolder)} is itself a skill folder (it has a SKILL.md), and --skill selects a skill inside a plugin root. ` +
+            `Drop --skill to critique this folder` +
+            (enclosing !== null ? `, or pass the plugin root: critique ${tildeify(enclosing)} --skill ${skillSelector}` : "") +
+            `.`,
+        );
+      }
       throw new Error(
         `--skill ${skillSelector}: no skills/${skillSelector}/SKILL.md under ${tildeify(skillFolder)}` +
           (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),

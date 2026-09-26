@@ -12,7 +12,11 @@ All notable changes to this project are documented here. The format is based on
   folder, so a skill-folder positional inside a plugin is the same run as `critique <plugin> --skill
   <name>`: same mount, same packaged corpus, same graded skill, announced with a `::notice::`. Its
   `fingerprint.skillHash` is therefore the whole plugin's (as `--skill`'s always was), so it no longer pairs
-  with critiques recorded from the skill-folder spelling before this release. Critique mounts the skill
+  with critiques recorded from the skill-folder spelling before this release — a pairing-key change, which
+  is why this ships in a minor release. A relative skill-folder spelling reports the plugin relative too.
+  A skill folder with its own plugin manifest is still mounted as its own plugin, now with a notice; and
+  `--skill` on a positional that is itself a skill folder now says to drop `--skill` or pass the plugin
+  root, instead of reporting a missing skill. Critique mounts the skill
   folder alone, with a notice naming why, only when `--skill` cannot reach it: the folder is not at exactly
   `skills/<name>`, it is a git submodule or nested repo, or its spelling's case differs from the tracked
   path.

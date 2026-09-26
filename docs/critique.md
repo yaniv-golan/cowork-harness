@@ -194,10 +194,12 @@ adjudicable". So:
   plugin: the folder is not at exactly `skills/<name>` (say `tools/x`), it is a git submodule or nested
   repo the plugin's index never descends into, or its spelling's case differs from the tracked path. A
   fallback run lacks everything the plugin provides outside that folder (agents, shared references), and
-  its corpus lacks them too.
-- **Selection only:** the positional folder is still what both turns mount (session identity is
-  unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the *mounted folder*,
-  so it pairs generations per-plugin, not per-skill. **Workflow implication: pairing critiques of a
+  its corpus lacks them too. A skill folder that carries its **own** plugin manifest is a plugin in its own
+  right: it is mounted as one, never promoted, and a notice says the plugin around it is not mounted.
+- **Selection only:** with a plugin-root positional, `--skill` does not change what both turns mount
+  (session identity is unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the
+  *mounted plugin* (for a promoted `<plugin>/skills/<name>` spelling too), so it pairs generations
+  per-plugin, not per-skill. **Workflow implication: pairing critiques of a
   multi-skill plugin by skillHash alone CROSS-PAIRS different skills** — pair by
   **(`gradedSkillHash`, `gradedSkill`)**; the report's `gradedSkill` field carries the resolved
   `skills/<name>` (`--skill` or the auto-selection). `--label` remains available for coarser

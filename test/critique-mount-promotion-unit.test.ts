@@ -102,7 +102,12 @@ describe("packageEvidence refuses a plugin root or skill dir outside the mount",
 // seam), so (b) pins the ORDER in source first, and (a) runs only when (b) holds — a mis-wired check can
 // then never spend under the suite. Anchors are CALL sites (a definition sits above `main` and would pass
 // vacuously), each must occur exactly once.
-const SRC = readFileSync(resolve("src/critique/command.ts"), "utf8");
+// Line comments are stripped first: a commented-out call (`// opts = applyTargetPromotion(opts);`) must
+// not satisfy the pin while the live path skips it.
+const SRC = readFileSync(resolve("src/critique/command.ts"), "utf8")
+  .split("\n")
+  .filter((line) => !line.trimStart().startsWith("//"))
+  .join("\n");
 const PROMO = "opts = applyTargetPromotion(opts)";
 const RESOLVE = "resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector)";
 const PRE = "= preflightCritique(resolvedSkill";
@@ -126,7 +131,14 @@ describe("pre-spend check", () => {
   // deleted: the CLI auto-loads the cwd and install-root .env and fills only keys that are undefined.
   const TSX = resolve("node_modules/.bin/tsx");
   const CLI_SRC = resolve("src/cli.ts");
-  const env = { ...process.env, ...Object.fromEntries(KNOWN_SECRET_KEYS.map((k) => [k, ""])) };
+  // Second belt, should (b) ever be satisfied while a refusal is not wired: no credential reaches a turn. Env
+  // keys are blanked (never deleted — the CLI refills undefined keys from .env), and CLAUDE_CONFIG_DIR is an
+  // empty dir, so a host tier cannot pick up a Keychain / config-dir login either.
+  const env = {
+    ...process.env,
+    ...Object.fromEntries(KNOWN_SECRET_KEYS.map((k) => [k, ""])),
+    CLAUDE_CONFIG_DIR: tmp("cwh-pre-noauth-"),
+  };
   const live = (args: string[]) => {
     const r = spawnSync(TSX, [CLI_SRC, "critique", ...args, "--prompt", "x"], { encoding: "utf8", cwd: tmpdir(), env, timeout: 60_000 });
     return { code: r.status, stderr: r.stderr ?? "" };

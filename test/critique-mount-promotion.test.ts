@@ -14,10 +14,10 @@ import { gitCpFilter } from "../src/run/skill-files.js";
 const TSX = resolve("node_modules/.bin/tsx");
 const CLI_SRC = resolve("src/cli.ts");
 
-function critique(args: string[]): { code: number | null; stdout: string; stderr: string; json: any } {
+function critique(args: string[], cwd = tmpdir()): { code: number | null; stdout: string; stderr: string; json: any } {
   const r = spawnSync(TSX, [CLI_SRC, "critique", ...args, "--corpus-only", "--output-format", "json"], {
     encoding: "utf8",
-    cwd: tmpdir(),
+    cwd,
   });
   let json: any = null;
   try {
@@ -144,6 +144,19 @@ describe("critique <plugin>/skills/<name> is promoted to critique <plugin> --ski
     expectCorpusInsideMount(a.json);
   });
 
+  it("typed relative, both spellings report the same relative plugin and skill dir", () => {
+    const p = contributingPlugin();
+    const parent = join(p, "..");
+    const a = critique([join("p", "skills", "x")], parent);
+    const b = critique(["p", "--skill", "x"], parent);
+    expect(a.code).toBe(0);
+    expect(b.code).toBe(0);
+    expect(a.json.skillFolder).toBe(b.json.skillFolder);
+    expect(a.json.skillDir).toBe(b.json.skillDir);
+    expect(a.json.skillFolder).toBe("p");
+    expect(a.json.corpus).toEqual(b.json.corpus);
+  });
+
   it("promotes even when the enclosing plugin contributes nothing the skill uses", () => {
     const p = nonContributingPlugin();
     const a = critique([join(p, "skills", "x")]);
@@ -222,6 +235,29 @@ describe("when promotion is not admissible, critique mounts the skill folder alo
     expect(a.stderr).toContain("mounting only this folder");
     expect(a.stderr).not.toContain("mounting the plugin as Cowork does");
     expectCorpusInsideMount(a.json);
+  });
+});
+
+describe("a skill folder that is its own plugin, and --skill on a skill folder", () => {
+  it("a skill folder with its own manifest is mounted as its own plugin, and the notice says so", () => {
+    const p = contributingPlugin();
+    write(p, { "skills/x/.claude-plugin/plugin.json": JSON.stringify({ name: "x" }) });
+    git(p, "add", "-A");
+    const a = critique([join(p, "skills", "x")]);
+    expect(a.code).toBe(0);
+    expect(resolve(a.json.skillFolder)).toBe(resolve(p, "skills", "x"));
+    expect(a.stderr).toContain("has its own plugin manifest");
+    expect(a.stderr).toContain(`--skill x`);
+    expectCorpusInsideMount(a.json);
+  });
+
+  it("--skill on a positional that is itself a skill folder says to drop --skill or pass the plugin root", () => {
+    const p = contributingPlugin();
+    const a = critique([join(p, "skills", "x"), "--skill", "x"]);
+    expect(a.code).toBe(2);
+    expect(a.stderr).toContain("is itself a skill folder");
+    expect(a.stderr).toContain(`--skill x`);
+    expect(a.stderr).not.toContain("found at all");
   });
 });
 
