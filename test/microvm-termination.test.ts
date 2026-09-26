@@ -58,6 +58,8 @@ describe.runIf(POSIX)("microvm guest-side kill targets exactly this session", ()
     expect(selected(script)).toEqual([]);
   });
 
+  // Defense in depth: session ids are validated to [A-Za-z0-9_-], so today a metacharacter could only arrive
+  // through a baseline's configDirInGuest or a changed session root.
   it("a config dir with shell metacharacters stays a literal", () => {
     const weird = "/sessions/a'b $(touch /tmp/pwn)/mnt/.claude";
     const proc = fakeProc({ "301": [`CLAUDE_CONFIG_DIR=${weird}`], "302": [`CLAUDE_CONFIG_DIR=${CONFIG}`] });

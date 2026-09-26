@@ -37,9 +37,10 @@ namespace.
 4. **Crash safety net:** if the process unwinds via an uncaught throw, or receives `SIGINT`/`SIGTERM`, before
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
    `status.json` never gets stuck reporting `"running"` for a process that's actually gone. On a signal the
-   harness first stops the agent (SIGTERM, then SIGKILL after 2 s; on `microvm` the kill is
-   sent inside the VM, because killing the host `limactl` client does not reach the guest process; verified against a live microVM), then exits
-   130 (`SIGINT`) or 143 (`SIGTERM`). A second signal skips the wait. An interrupt while the run waits on a
+   harness first stops the agent, then exits 130 (`SIGINT`) or 143 (`SIGTERM`). On `protocol`/`microvm` it
+   sends SIGTERM and SIGKILLs after 2 s; on `container`/`hostloop` the agent is killed at once, with the
+   container reap. On `microvm` the kill is sent inside the VM, because killing the host `limactl` client
+   does not reach the guest process (verified against a live microVM). A second signal skips the wait. An interrupt while the run waits on a
    `--decider-cmd` gate is recorded as an interrupt, not as an unanswered gate.
 5. **Staleness detection (the `SIGKILL` case):** an exit handler cannot run on `SIGKILL`/OOM-kill/a
    segfault — nothing in Node runs on those, by design of the OS signal itself, so `status.json` is left

@@ -194,6 +194,9 @@ export function spawnMicroVm(
  * Needed because killing the host `limactl shell` client does not reach the guest: the guest process
  * survives SIGTERM and SIGKILL of the client, still holding its stdin through the ssh session, and keeps
  * working. Pure and exported so the targeting is testable without a VM.
+ *
+ * Residual: `/proc/<pid>/environ` is readable only for the same user, so an agent run under another user
+ * (e.g. via sudo) would silently match nothing — the agent runs as the `limactl shell` user today.
  */
 // Verified live (2026-09-26): an interrupted run whose guest agent was running a `sleep` left no guest
 // agent, guest `sleep` or host `limactl` client behind; the unit tests pin targeting and ordering.
@@ -278,6 +281,8 @@ export function microvmAgent(
     forceKill: () => {
       note();
       guest("KILL");
+      // Residual: these pids were noted up to the grace period earlier and are killed by number; a pid
+      // reused in that window is theoretically possible (re-checking the parent before the kill would close it).
       for (const p of noted) kill(p, "SIGKILL");
       if (child.pid && running()) kill(child.pid, "SIGKILL");
     },

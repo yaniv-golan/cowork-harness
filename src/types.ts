@@ -1363,7 +1363,9 @@ export interface RunResult {
   /** How the run terminated in error — the `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`,
    *  or `result` for the SDK-wrapped is_error-result path), OR `no_result` when the stream ended with no
    *  terminal event at all (the turn/time-exhaustion case: neither a result nor an error event fired), OR
-   *  `timeout` when the harness's own wall-clock limit killed the run. Additive diagnostic detail alongside
+   *  `timeout` when the harness's own wall-clock limit killed the run, OR `decider_timeout` when a
+   *  `--decider-cmd`/`--decider-dir` channel did not answer a gate within its backstop (an unanswered-gate
+   *  partial). Additive diagnostic detail alongside
    *  the coarse verdict-relevant `resultErrorKind`; consumed by nobody in the verdict. Absent on a clean run;
    *  a run that recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
   errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";

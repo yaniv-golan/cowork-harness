@@ -410,7 +410,8 @@ export interface RunRecord {
   resultErrorKind?: "transport" | "agent" | "usage_limit";
   // finer error source than resultErrorKind's binary — the raw `error`-event source, or "result" for
   // the SDK-wrapped is_error result path, or "no_result" when the stream closed with no terminal event,
-  // or "timeout" when the harness's wall-clock limit killed the run. Undefined when no error fired; a
+  // or "timeout" when the harness's wall-clock limit killed the run, or "decider_timeout" when an external
+  // decider channel did not answer a gate within its backstop. Undefined when no error fired; a
   // recovered non-fatal agent error that later succeeds keeps its first source. Optional ⇒ no literal churn.
   errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
   // the SDK result message's `subtype` verbatim (error_max_turns / error_during_execution / success / …).

@@ -124,8 +124,15 @@ describe.runIf(can)("a signalled run ends with a record and no surviving agent (
   it("an interrupt during a pending --decider-cmd gate is not reported as an unanswered gate", async () => {
     const f = makeStubFixture(`printf '%s\\n' '${QUESTION_FRAME}'\nexec sleep 300`);
     try {
-      const { cli, stubPid } = await startRun(f, ["--decider-cmd", "cat >/dev/null", "--output-format", "json"]);
-      await new Promise((r) => setTimeout(r, 750)); // let the gate reach the helper and the run park on it
+      // The helper records each request it receives and never answers. Signalling only once the request
+      // has ARRIVED is what makes this case exercise the pending gate: a fixed sleep let a loaded machine
+      // deliver the signal before the gate existed, and the case then passed without testing anything.
+      const gotRequest = join(f.root, "helper-got-request");
+      const { cli, stubPid } = await startRun(f, ["--decider-cmd", `tee '${gotRequest}' >/dev/null`, "--output-format", "json"]);
+      expect(
+        await waitFor(() => existsSync(gotRequest) && readFileSync(gotRequest, "utf8").includes("decision_request")),
+        `the gate never reached the helper. stderr:\n${cli.stderrText()}`,
+      ).toBe(true);
       process.kill(cli.pid!, "SIGINT");
       const r = await exited(cli);
       expect(r, cli.stderrText()).toEqual({ code: 130, signal: null });

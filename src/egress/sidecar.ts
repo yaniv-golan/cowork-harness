@@ -87,6 +87,8 @@ function installSignalHandlerOnce() {
   // It runs AFTER the agent has been stopped (the handler's "egress" phase), and the exit code is still
   // 128+signo (130 for SIGINT, 143 for SIGTERM).
   registerTerminationStep("egress", (sig) => {
+    // Residual: read after the agent-stop grace period, so a run whose normal path finished during it has
+    // already de-registered its thunks — the count can be lower (even 0) than what was in flight at the signal.
     const n = cleanupRegistry.size;
     if (n) warn(`::warning:: [cleanup] ${sig} — reaping ${n} in-flight egress resource(s) before exit\n`);
     drainCleanups();

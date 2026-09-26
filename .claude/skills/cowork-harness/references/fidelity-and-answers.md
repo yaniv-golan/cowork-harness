@@ -312,7 +312,7 @@ up often enough to spell out:
   (default 600 s; **fail loud** on timeout). A `--decider-cmd` timeout, or a helper that exits before
   answering, ends the run as an unanswered-gate partial (`result.json` written, exit 2); a timeout is
   recorded as `errorSource: "decider_timeout"`.
-- `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous (poll defaults: 300 ms for the run-side rendezvous, 500 ms for `gates --follow`).
+- `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous (poll defaults: 300 ms for the run-side rendezvous, 500 ms for `gates --follow`). A backstop timeout ends the run as an unanswered-gate partial recorded as `errorSource: "decider_timeout"`.
 - `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — dialog auto-cancel (default 6 s).
 - `COWORK_HARNESS_LLM_MAX_BYTES` — stdout bound on `--decider-llm` (default 8 MiB).
 - `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit on the

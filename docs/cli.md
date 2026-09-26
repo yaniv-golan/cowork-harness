@@ -280,6 +280,8 @@ Two footnotes the table cannot carry:
   distinct from the `run`-family `3`, which is a typed `BoundaryError` raised *during* a run (SPEC §11);
 - `rehash`'s `4` and the `run`/`skill` family's reserved `4` are unrelated. Because the space is
   per-command, `rehash` spending `4` on PARTIAL does not consume that reservation (SPEC §11).
+- an interrupted `run`/`skill`/`record` exits `130` (`SIGINT`) or `143` (`SIGTERM`), after stopping the agent
+  and marking the run `"error"` in `status.json` — the shell convention for a signal, outside the table.
 
 After a run, the footer **echoes every auto-answered
 question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them
