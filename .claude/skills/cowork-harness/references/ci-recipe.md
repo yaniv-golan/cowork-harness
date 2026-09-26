@@ -238,8 +238,9 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   `.cowork-redact.json` next to your scenarios (or set `COWORK_HARNESS_REDACT_PATTERNS` /
   `_KEYS`); empty by default. The policy is searched in **cwd → the scenario's dir → the cassette's
   dir** (first file found per dir; env vars merge on top). `cowork-harness init-redact` copies the
-  packaged reference template (local-path prefixes + a generic email regex) into the cwd as a starting
-  point — review and tailor it. Redaction is **verdict-preserving** — `record` refuses to write if
+  packaged reference template (local-path prefixes, incl. macOS temp roots and slugged home segments
+  like `-Users-<user>-…`, + a generic email regex) into the cwd as a starting point — review and tailor
+  it; a copy from an earlier release lacks the temp-root rules, so re-copy with `--force` or add them. Redaction is **verdict-preserving** — `record` refuses to write if
   redaction would flip an assertion (a manufactured green). `--no-redact` skips it for known-synthetic
   inputs.
 - **Pre-spawn preflight**: `record` warns (`::warning::`, before the paid run starts — once per batch

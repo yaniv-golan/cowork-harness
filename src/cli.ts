@@ -225,7 +225,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
   rehash <dir/>|<file> --session  migrate cassette fingerprints (incl. across a hash-format epoch) when content is provably unchanged
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
-                               for hostloop/protocol recordings; review + tailor the patterns before recording)
+                               for hostloop/protocol recordings; review + tailor the patterns before recording;
+                               --force re-copies it to pick up rules added by a later release)
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
                                prune accumulated run dirs, keeping N most recent per scenario (default: 5)
   migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
