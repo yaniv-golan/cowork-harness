@@ -1,4 +1,6 @@
 import { warn, envPositiveNumber } from "../io.js";
+import { UnansweredError, DeciderTimeoutError } from "../errors.js";
+import { installTerminationHandler, registerTerminationStep } from "../termination.js";
 import { mkdirSync, readdirSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import readline from "node:readline";
@@ -217,7 +219,13 @@ export function fileChannel(dir: string): DecisionChannel {
         }
         await new Promise((r) => setTimeout(r, pollMs));
       }
-      return null; // timeout → ExternalDecider throws UnansweredError (loud, never silent)
+      // The backstop: a TIMEOUT, not a closed channel — say so, so the run records it as one.
+      throw new DeciderTimeoutError(
+        `--decider-dir: no answer (resp-${seq}.json) within ${timeoutMs}ms — timed out waiting for the gate to be answered`,
+        `answer each gate with \`cowork-harness answer ${dir} --gate <N> --choose <label>\` while the run waits; ` +
+          `raise COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS if the answerer needs longer`,
+        "decider-dir",
+      );
     },
     snapshot: (destDir) => {
       // Copy THIS scenario's gate wire shapes into the run dir so they survive close()'s cleanup.
@@ -306,21 +314,16 @@ let helperExitHooksInstalled = false;
 function installHelperExitHooks(): void {
   if (helperExitHooksInstalled) return;
   helperExitHooksInstalled = true;
-  // Every exit path that runs JS: normal completion, process.exit() (incl. other SIGINT handlers' exit).
+  // Every exit path that runs JS: normal completion, process.exit() (incl. the termination handler's).
   process.on("exit", () => killAllHelperGroups("SIGKILL"));
-  // A detached helper no longer gets the terminal's Ctrl-C. Forward it — and when nothing else listens for
-  // that signal, keep Node's default (die by it) by re-raising once our listener is gone.
-  for (const sig of ["SIGINT", "SIGTERM"] as const) {
-    const onSignal = () => {
-      killAllHelperGroups("SIGKILL");
-      if (process.listenerCount(sig) === 1) {
-        process.removeListener(sig, onSignal);
-        process.kill(process.pid, sig);
-      }
-    };
-    process.on(sig, onSignal);
-  }
+  // A detached helper no longer gets the terminal's Ctrl-C. The process-wide termination handler takes the
+  // groups down first thing on SIGINT/SIGTERM, then stops the agent and exits 128+signo — so every exit
+  // hook runs. (Re-raising the signal here instead would kill the process by it and skip those hooks.)
+  registerTerminationStep("helpers", () => killAllHelperGroups("SIGKILL"));
+  installTerminationHandler();
 }
+
+const HELPER_HINT = "the --decider-cmd helper must read one JSON request line from stdin and write one JSON reply line per gate";
 
 /** A helper spawned once (`shell:true` so `'python answerer.py'` works). Request→its stdin, answer←its stdout. */
 export function spawnChannel(cmd: string): DecisionChannel {
@@ -349,12 +352,14 @@ export function spawnChannel(cmd: string): DecisionChannel {
   // readLine() throws the clean "helper exited" error, and swallow the async event itself.
   child.stdin?.on("error", () => (dead = true));
   return {
+    // A helper that is gone cannot answer this gate: that is an unanswered gate (salvaged into a partial
+    // result like any other), not a harness fault.
     write: (line) => {
-      if (dead) throw new Error(`--decider-cmd helper exited before answering`);
+      if (dead) throw new UnansweredError(`--decider-cmd helper exited before answering`, HELPER_HINT);
       try {
         child.stdin!.write(line + "\n"); // EPIPE if the helper died mid-run → surface as an error
       } catch {
-        throw new Error(`--decider-cmd helper closed its input (EPIPE) before answering`);
+        throw new UnansweredError(`--decider-cmd helper closed its input (EPIPE) before answering`, HELPER_HINT);
       }
     },
     readLine: () => {
@@ -363,7 +368,13 @@ export function spawnChannel(cmd: string): DecisionChannel {
         timer = setTimeout(() => {
           // The whole group, even when the shell itself has exited: what it started may not have.
           killHelperGroup(child, "SIGKILL");
-          reject(new Error(`--decider-cmd helper timed out before answering after ${timeoutMs}ms`));
+          reject(
+            new DeciderTimeoutError(
+              `--decider-cmd helper timed out before answering after ${timeoutMs}ms`,
+              `${HELPER_HINT}; raise COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS if it needs longer`,
+              "decider-cmd",
+            ),
+          );
         }, timeoutMs);
       });
       return Promise.race([reader.next(), timeout]).finally(() => clearTimeout(timer));

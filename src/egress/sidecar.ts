@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { installTerminationHandler, registerTerminationStep } from "../termination.js";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -71,7 +72,7 @@ export function registerCleanup(entry: CleanupEntry): () => void {
 
 /** Drain all registered cleanups in phase order — "container" thunks BEFORE "network" thunks (load-bearing:
  *  `network rm` fails while a container is still attached). Returns the number of thunks run. Exported for
- *  tests; the signal handler calls this then exits. */
+ *  tests; the termination handler calls this as its egress step. */
 export function drainCleanups(): number {
   const entries = [...cleanupRegistry];
   for (const e of entries) if (e.phase === "container") tryRun(e.run);
@@ -82,14 +83,17 @@ export function drainCleanups(): number {
 function installSignalHandlerOnce() {
   if (signalHandlerInstalled) return;
   signalHandlerInstalled = true;
-  const handler = (sig: NodeJS.Signals) => {
+  // The process-wide termination handler owns the signal and the exit; this registry is one of its steps.
+  // It runs AFTER the agent has been stopped (the handler's "egress" phase), and the exit code is still
+  // 128+signo (130 for SIGINT, 143 for SIGTERM).
+  registerTerminationStep("egress", (sig) => {
+    // Residual: read after the agent-stop grace period, so a run whose normal path finished during it has
+    // already de-registered its thunks — the count can be lower (even 0) than what was in flight at the signal.
     const n = cleanupRegistry.size;
     if (n) warn(`::warning:: [cleanup] ${sig} — reaping ${n} in-flight egress resource(s) before exit\n`);
     drainCleanups();
-    process.exit(sig === "SIGINT" ? 130 : 143);
-  };
-  process.on("SIGINT", handler);
-  process.on("SIGTERM", handler);
+  });
+  installTerminationHandler();
 }
 
 function tryRun(fn: () => void) {

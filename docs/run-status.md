@@ -26,15 +26,23 @@ namespace.
    via `COWORK_HARNESS_STATUS_INTERVAL_MS`) with live tool-call and sub-agent counts.
 3. When the run finishes (success, error, or an unanswered-gate partial), `status.json` is written once
    more with a terminal `state` (`"done"` or `"error"`). On a terminal **error**, it also carries the
-   terminal-error diagnostics — `errorSource` (`spawn`/`protocol`/`exit`/`agent`/`result`/`no_result`/`timeout`
-   — `no_result` = the stream ended with no result event, i.e. turn/time exhaustion), the SDK `resultSubtype`
+   terminal-error diagnostics — `errorSource` (`spawn`/`protocol`/`exit`/`agent`/`result`/`no_result`/`timeout`/
+   `decider_timeout` — `no_result` = the stream ended with no result event, i.e. turn/time exhaustion;
+   `decider_timeout` = a `--decider-cmd`/`--decider-dir` channel did not answer a gate within its backstop, and
+   the run ended as an unanswered-gate partial), the SDK `resultSubtype`
    (e.g. `error_max_turns`), `stderrLogPath`, and `resultErrorKind` (`transport`/`agent`/`usage_limit`) — so a
    failure-output reader gets more than a bare `"error"` (these mirror the same fields in `result.json`).
    `resultErrorKind: "usage_limit"` is worth checking for specifically: a batch/status watcher can halt fast
    on it instead of retrying into an already-spent quota.
-4. **Crash safety net:** if the process unwinds via an uncaught throw (or receives `SIGTERM`) before
+4. **Crash safety net:** if the process unwinds via an uncaught throw, or receives `SIGINT`/`SIGTERM`, before
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
-   `status.json` never gets stuck reporting `"running"` for a process that's actually gone.
+   `status.json` never gets stuck reporting `"running"` for a process that's actually gone. On a signal the
+   harness first stops the agent, then exits 130 (`SIGINT`) or 143 (`SIGTERM`). On `protocol`/`microvm` it
+   sends SIGTERM and SIGKILLs after 2 s; on `container`/`hostloop` the agent is killed at once, with the
+   container reap. On `microvm` the kill is sent inside the VM, because killing the host `limactl` client
+   does not reach the guest process (verified against a live microVM). A second signal skips the wait. An interrupt while the run waits on a
+   `--decider-cmd` gate is not reported as an unanswered gate: the run ends like any other interrupt
+   (exit 130/143, `status.json` `"error"`, no `result.json`).
 5. **Staleness detection (the `SIGKILL` case):** an exit handler cannot run on `SIGKILL`/OOM-kill/a
    segfault — nothing in Node runs on those, by design of the OS signal itself, so `status.json` is left
    sitting at whatever it last said, frozen, with no terminal write ever coming. **Neither the crash
