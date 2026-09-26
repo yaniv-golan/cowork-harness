@@ -605,7 +605,7 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "baseline": "string",                          // platform baseline appVersion
   "result": "success" | "error",                // did the agent turn end without error (NOT "task completed")
   "resultErrorKind?": "transport|agent|usage_limit", // when result==="error": a tail-end transport drop, a genuine agent/skill failure, or usage_limit (quota exhausted — is_error + HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)
-  "errorSource?": "spawn|protocol|exit|agent|result|no_result|timeout", // finer diagnostic detail alongside resultErrorKind; no_result = stream ended with no terminal event; timeout = the harness's own wall-clock limit fired
+  "errorSource?": "spawn|protocol|exit|agent|result|no_result|timeout|decider_timeout", // finer diagnostic detail alongside resultErrorKind; no_result = stream ended with no terminal event; timeout = the harness's own wall-clock limit fired; decider_timeout = an external decider channel did not answer a gate within its backstop (an unanswered-gate partial)
   "resultSubtype?": "string",                    // the SDK result message's subtype verbatim (e.g. error_max_turns), pass-through diagnostic
   "stderrLogPath?": "string",                    // absolute path to the agent's full stderr log; live only, absent on replay
   "stalledOnQuestion?": bool,                     // H2/H3: ended on a question with no productive tool work after its last gate → `stalled` verdict fail unless allow_stall

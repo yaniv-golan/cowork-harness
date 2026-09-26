@@ -113,3 +113,37 @@ export class LegacyRunDirError extends Error {
     this.name = "LegacyRunDirError";
   }
 }
+
+/**
+ * A gate the run could not get answered: no scripted rule matched and the terminal decider (a policy, an
+ * external channel) could not supply one. `executeScenario` salvages it into a PARTIAL `result.json` (the
+ * work done before the gate survives, the verdict fails on the unanswered gate) and the CLI reports it as a
+ * clean category-`unanswered` exit 2. Any failure of a decider CHANNEL is one of these too — a helper that
+ * died or never answered leaves the gate exactly as unanswered as a missing rule does.
+ */
+export class UnansweredError extends Error {
+  constructor(
+    message: string,
+    public readonly hint: string,
+  ) {
+    super(message);
+    this.name = "UnansweredError";
+  }
+}
+
+/**
+ * An external decider channel (`--decider-cmd` helper, `--decider-dir` rendezvous) hit its backstop timeout
+ * before answering. A subclass, so every `UnansweredError` path (salvage, envelope, repeat/matrix
+ * accounting) handles it unchanged; the run loop additionally stamps `errorSource: "decider_timeout"` so a
+ * consumer can tell a slow or wedged answerer from a gate nothing was configured to answer.
+ */
+export class DeciderTimeoutError extends UnansweredError {
+  constructor(
+    message: string,
+    hint: string,
+    public readonly channel: "decider-cmd" | "decider-dir",
+  ) {
+    super(message, hint);
+    this.name = "DeciderTimeoutError";
+  }
+}

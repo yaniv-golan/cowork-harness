@@ -40,6 +40,7 @@ import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safet
 import { warnUnservedHookEvents, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
+import { installTerminationHandler, registerAgent, childProcessAgent, parkIfTerminating, type TerminableAgent } from "../termination.js";
 import {
   probeImageOmitted,
   probeMicrovmOmitted,
@@ -417,6 +418,9 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
+  // A signal is being handled (a multi-scenario loop reached its next scenario during the grace period):
+  // start nothing new. The termination handler owns the exit and fires within that period.
+  await parkIfTerminating();
   // Refuse a scenario no run can satisfy BEFORE the spawn — the whole point is not to pay for it.
   // Sited here rather than in each command because every lane funnels through executeScenario
   // (`run`/`skill` via cli.ts, `record` via cassette.ts), and a library caller gets it too.
@@ -574,6 +578,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // precedent (`src/decide/external-channel.ts:58-64`); `writeJsonAtomic`'s fs calls are synchronous,
   // which a Node `"exit"` handler requires.
   const runCrashSafety = registerRunForCrashSafety(outDir, runStatusMeta);
+  // SIGINT/SIGTERM from here on must end the run through the exit hooks (the line above marks it "error")
+  // instead of killing the process by the signal, which runs none of them. Every tier.
+  installTerminationHandler();
 
   // Resolve the effective tier early — it is needed BOTH to stamp the session manifest below (so a
   // --resume at a different tier fails loud; the agent's native conversation store is tier-local) AND,
@@ -780,6 +787,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
+  let signalAgent: TerminableAgent | undefined; // what the termination handler stops (protocol/microvm)
+  let deregisterAgent: (() => void) | undefined;
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
   // Container's web_fetch is host-routed too, so its decisions cannot come from the proxy log and must
   // survive the `egress = eg.entries` teardown assignment. Kept separate for exactly that reason.
@@ -856,6 +865,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
       // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
       // so a renderPrompts throw skipped teardown and orphaned the resource.)
+      // The agents the termination handler stops on a signal: protocol's host `claude` and the microvm's
+      // guest agent. container/hostloop are NOT registered — their Ctrl-C reap thunk (below) already
+      // SIGKILLs the agent and removes the container at once, and a SIGTERM grace would only delay it (a
+      // container PID 1 without a handler ignores SIGTERM).
+      if (!containerLike) deregisterAgent = registerAgent(() => signalAgent);
       if (containerLike) {
         // thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
         // concurrent executeScenario calls don't stomp each other's values.
@@ -991,15 +1005,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         sdkMcp = ct.sdkMcp; // cowork/present_files + the skills/plugins discovery servers (combineSdkMcp)
         spawnedSessionRoot = ct.sessionRoot; // VM path (`/sessions/<id>`) — what the agent inside reports
       } else if (effectiveFidelity === "microvm") {
-        child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
+        const vm = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
           proxyPort: microvmProxyPort,
         });
+        child = vm.child;
+        signalAgent = vm.agent;
       } else {
         // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
         // capture l0HostConfigContamination so computeVerdict can fail the run when plugins are configured.
         const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
         child = proto.child;
+        signalAgent = childProcessAgent(proto.child);
         l0HostConfigContamination = proto.l0HostConfigContamination;
         if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
           warn(
@@ -1102,6 +1119,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // orphan a running container holding the network. On the success path the child has already
       // exited (--rm), so these are no-ops.
       deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
+      deregisterAgent?.();
+      // microvm: SIGKILLing the host `limactl shell` client alone leaves the guest agent running (and the
+      // client's ssh child orphaned) — on a salvaged/crashed run the agent is still mid-turn here. Kill it
+      // in the guest first. A no-op once the agent has exited (the success path).
+      // The short wait first: on the success path the client is exiting on its own, and a guest-side kill
+      // would be a wasted VM round-trip.
+      if (effectiveFidelity === "microvm" && signalAgent?.alive()) {
+        await Promise.race([signalAgent.exited(), new Promise((r) => setTimeout(r, 1000).unref())]);
+        if (signalAgent.alive()) signalAgent.forceKill();
+      }
       try {
         child?.kill?.("SIGKILL");
       } catch {

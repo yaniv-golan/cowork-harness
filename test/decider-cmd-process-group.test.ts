@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { spawnChannel } from "../src/decide/external-channel.js";
+import { DeciderTimeoutError, UnansweredError } from "../src/errors.js";
 
 // `--decider-cmd` runs under `shell: true`, so the pid we hold is the SHELL's, not the helper's. Killing
 // only that pid leaves whatever the shell started running as an orphan: on Linux, where /bin/sh is dash,
@@ -54,7 +55,15 @@ describe.runIf(POSIX)("--decider-cmd: killing the helper kills everything it sta
     let pid = 0;
     try {
       pid = await grandchildPid(pidFile);
-      await expect(ch.readLine()).rejects.toThrow(/timed out before answering/);
+      const err = await ch.readLine().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(String(err)).toMatch(/timed out before answering/);
+      // Typed, so the run loop salvages it as an unanswered gate (and labels it a decider timeout)
+      // instead of letting a plain Error unwind to the top-level catch.
+      expect(err).toBeInstanceOf(DeciderTimeoutError);
+      expect(err).toBeInstanceOf(UnansweredError);
       expect(await waitFor(() => !alive(pid)), `grandchild ${pid} survived the timeout kill`).toBe(true);
     } finally {
       ch.close?.();
