@@ -189,3 +189,19 @@ describe("the live assembler actually WIRES the tiering inputs (position checks)
     expect(call).toBeLessThan(gate);
   });
 });
+
+describe("outputsDeleteBasis stays linear on long wrapper/flag chains", () => {
+  // The command-position regex matches a chain of prefix words (VAR=x, sudo -u u, nice -n 1, xargs -n 1,
+  // redirects…). Matched non-atomically, a long chain that ends in no delete made the engine try every way
+  // of carving it up — a hang at ~50 repetitions. The chain is now matched atomically.
+  it.each(["x=1 sudo -u a nice -n 1 ", "xargs -n 1 -I {} ", "timeout -k 5 10 env -i A=1 ", "2>a 1>b "])(
+    "%j × 400 then a non-delete, then an unprovable rm",
+    (unit) => {
+      const cmd = unit.repeat(400) + `rmx ${O}/a\nrm "$Q"`;
+      const t = Date.now();
+      expect(outputsDeleteBasis(cmd)).toBe("inferred");
+      expect(Date.now() - t).toBeLessThan(1000);
+    },
+    5000,
+  );
+});

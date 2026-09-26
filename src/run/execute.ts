@@ -2883,21 +2883,24 @@ export function isOutputsDelete(cmd: string): boolean {
  *
  *  `named`: some statement carries a delete whose OWN OPERAND names an outputs path — the delete is the
  *  thing being run, and outputs is what it removes:
- *    - shell: `rm` / `rmdir` / `unlink` / `shred -u` in COMMAND position (the start of a simple command:
- *      statement start, after `|`, `(`, `$(`, a backtick or `{`, after `then`/`do`/`else`, after a
- *      `sudo` / `command` / `exec` / `env` / `nohup` / `time` / `nice` / `ionice` / `timeout N` / `xargs` prefix, or first inside a
- *      `sh -c '…'` body; an optional path prefix such as `/bin/` is allowed), with an outputs path among its
- *      arguments — a trailing ` # comment` is not an argument. Under `xargs` the operands come from the
+ *    - shell: `rm` / `rmdir` / `unlink` / `shred -u` (optionally `\rm` or a path such as `/bin/rm`) in
+ *      COMMAND position — see `CMD_START` and `PREFIX` for exactly where a command may start and which
+ *      wrappers may precede it — with an outputs path among its arguments; a trailing ` # comment` is not an
+ *      argument, and `git rm --cached` is not a delete. Under `xargs` / `parallel` the operands come from the
  *      pipe, so the whole statement is the operand;
- *    - `find … -delete` / `find … -exec rm …` with an outputs path among `find`'s arguments;
+ *    - `find`/`fd` with `-delete`, `-exec`/`-execdir`/`-ok` `rm`/`unlink`/`shred -u`, or `fd -x rm`, and an
+ *      outputs path among its own arguments;
  *    - `mv` out of outputs (`mvDeletesOutputs`);
- *    - Python: `os.remove(` / `os.unlink(` / `os.rmdir(` / `shutil.rmtree(` whose argument text names
- *      outputs (or, in a comprehension, whose `for … in <iterable>` does), or a `.unlink(` / `.rmdir(` method call in a statement that names outputs (the receiver
- *      is typically a `Path(...)` literal or a comprehension over one).
+ *    - a shell delete launched from Python: `os.system('rm …')`, `subprocess.*('rm …', shell=True)`, or the
+ *      argv form `subprocess.*(['rm', …])`;
+ *    - calls: `os.remove(` / `os.unlink(` / `os.rmdir(` / `shutil.rmtree(` / a bare `unlink(` (Python
+ *      `from os import unlink`, PHP, Perl) whose argument text names outputs — or, in a comprehension, whose
+ *      `for … in <iterable>` does; `map(os.remove, <iterable naming outputs>)`; Perl `unlink "…"`; a
+ *      `.unlink(` / `.rmdir(` method call in a statement that names outputs (typically `Path(...)`).
  *  `inferred`: everything else the detector flagged — an unprovable target (`rm "$UNSET"`), a relative
  *  `cd` into outputs, or an outputs path that merely shares a statement with the word `rm`: a Python
- *  identifier (`rm = …`, `rm.find(…)`, `rm[…]`, `rm: str`), quoted prose (`echo 'rm outputs/x'`), a
- *  `sed`/`grep` pattern, a trailing comment.
+ *  identifier (`rm = …`, `rm.find(…)`, `rm[…]`), quoted prose (`echo 'rm outputs/x'`), a `sed`/`grep`
+ *  pattern, a trailing comment.
  *
  *  A "statement" is a `splitStatements` fragment — split on newline, `;`, `&&`, `||`, QUOTE-BLIND — of the
  *  comment-stripped, continuation-joined text with simple same-command `VAR=value` assignments expanded one
@@ -2914,26 +2917,73 @@ export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
   return splitStatements(code).some((stmt) => mvDeletesOutputs(stmt, mm) || statementDeletesNamedOutputs(stmt, mm)) ? "named" : "inferred";
 }
 
-// A command-start anchor, then optional `VAR=value` prefixes and an optional path prefix, then the command
-// word. The prefix-keyword arm captures which prefix it was, so `xargs` can widen the operand to the pipe.
-const CMD_ANCHOR =
-  String.raw`(?:^|[|({` +
+// Where a simple command can START: the statement start; after `|`, `(`, `)` (a `case` label), `{`, `$(` or a
+// backtick; after a background `&` (not `&&`, `>&`, `&>`); after a standalone `!`; after `then` / `do` / `else` /
+// `if` / `while` / `until`; inside an `sh -c` / `bash -lc` / `eval` string; or inside the command string handed
+// to Python's `os.system(…)` / `os.popen(…)` / `subprocess.*(…)`.
+const SH_C = String.raw`\b(?:ba|z|da)?sh\s+-[a-zA-Z]*c[a-zA-Z]*\s+['"]?|\beval\s+['"]?`;
+const CMD_START =
+  String.raw`(?:^|[|(){` +
   "`" +
-  String.raw`]|\$\(|\b(?:then|do|else)\s+|\b(sudo|command|exec|nohup|time|nice|ionice)(?:\s+-\S+(?:\s+-?\d+)?)*\s+|\btimeout(?:\s+-\S+)*\s+\S+\s+|\b(xargs)(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+|\benv(?:\s+-\S+)*(?:\s+\w+=\S*)*\s+|\b(?:ba|z|da)?sh\s+-c\s+['"]?)\s*(?:\w+=\S*\s+)*(?:\S*\/)?`;
-// The command word must not be a Python-style identifier use: `rm = …`, `rm.x`, `rm(…)` as a call is
-// excluded too (not a shell form), `rm[…]`, `rm: T`, `rm,`, `rm)`, `rm}`, augmented assignments.
-const NOT_IDENT_USE = String.raw`(?=\s|$)(?!\s*(?:=|\.|\(|\[|:|,|\)|\}|\+=|-=|\*=|\/=))`;
-const SHELL_DELETE_CMD = new RegExp(CMD_ANCHOR + String.raw`(rm|rmdir|unlink|shred)` + NOT_IDENT_USE, "g");
-const FIND_CMD = new RegExp(CMD_ANCHOR + String.raw`find` + NOT_IDENT_USE, "g");
+  String.raw`]|\$\(|(?<![&>|])&(?![&>])|(?<!\S)!\s|\b(?:then|do|else|if|while|until)\s|` +
+  SH_C +
+  String.raw`|\b(?:os\.system|os\.popen|subprocess\.\w+)\(\s*f?['"])`;
+// Words that can stand between the start and the command itself, repeatable and in any order (`xargs sudo
+// rm`, `xargs -I{} sh -c 'rm …'`): wrappers and their flags — an argument-taking flag gets ONE argument slot,
+// glued or separate, never both, so a flag can never swallow the next command word (`xargs -I{} echo rm {}`
+// must stay a dry run) — plus `VAR=value` assignments and leading redirects (`2>/dev/null rm …`).
+const PREFIX =
+  String.raw`(?:(?:` +
+  [
+    String.raw`sudo(?:\s+(?:-[ugCDhpRrTU](?:\S+|\s+[^-\s]\S*)|-\S+))*`,
+    String.raw`(?:command|exec|nohup|time|builtin|busybox)`,
+    String.raw`git(?:\s+-\S+)*`,
+    String.raw`nice(?:\s+-\S+(?:\s+-?\d+)?)*`,
+    String.raw`ionice(?:\s+(?:-[cnpPu](?:\S+|\s+[^-\s]\S*)|-\S+))*`,
+    String.raw`timeout(?:\s+(?:-[ks](?:\S+|\s+\S+)|-\S+))*\s+\S+`,
+    String.raw`env(?:\s+-\S+)*(?:\s+\w+=\S*)*`,
+    String.raw`(?:xargs|parallel)(?:\s+(?:-[InLPdsaEeS](?:\S+|\s+[^-\s]\S*)|-{1,2}[\w-]+\S*))*`,
+    String.raw`\w+=\S*`,
+    String.raw`\d*[<>]{1,2}&?\s*\S+`,
+  ].join("|") +
+  String.raw`)\s+|` +
+  SH_C +
+  String.raw`)*`;
+// The word must be followed by whitespace or the end — so `rm.x`, `rm(`, `rm[`, `rm,`, `rm)`, `rm:` are not
+// commands — and not by an assignment operator (`rm = …`, `rm += …`), which is a variable, not a command.
+// Nothing else is excluded: an operand may start with `.`, `[` or `:` (`rm ./outputs/x`, `find . …`).
+const NOT_IDENT_USE = String.raw`(?=\s|$)(?!\s*(?:=|\+=|-=|\*=|\/=))`;
+// The prefix chain is matched ATOMICALLY (`(?=(…))\k<…>`, JS having no possessive groups): it takes the
+// longest chain once and never re-splits it. Without that, a long run of `VAR=x`/flag/redirect words that
+// ends in no delete made the engine try every way of carving it into prefix items — exponential, measured
+// as a hang on a few hundred words. Every item's own alternatives are ordered longest-first, so the single
+// chain the lookahead picks is the one that leaves the command word next.
+const COMMAND_WORD = (words: string) =>
+  new RegExp(
+    CMD_START + String.raw`\s*(?=(?<chain>` + PREFIX + String.raw`))\k<chain>\\?(?:\S*\/)?(?<word>` + words + ")" + NOT_IDENT_USE,
+    "g",
+  );
+const SHELL_DELETE_CMD = COMMAND_WORD("rm|rmdir|unlink|shred");
+const FIND_CMD = COMMAND_WORD("find|fd");
+const FIND_DELETES =
+  /(^|\s)-delete\b|-(?:exec|execdir|ok|okdir)\s+\\?(?:\S*\/)?(?:rm|unlink)\b|-(?:exec|execdir|ok|okdir)\s+\\?(?:\S*\/)?shred\b[^;+]*?(?:\s-[a-zA-Z]*u\b|\s--remove\b)|(^|\s)(?:-x|-X|--exec|--exec-batch)\s+\\?(?:\S*\/)?(?:rm|unlink)\b/;
 const PY_DELETE_CALL = /\b(?:os\.(?:remove|unlink|rmdir)|shutil\.rmtree)\s*\(/g;
 const PY_DELETE_METHOD = /\.(?:unlink|rmdir)\s*\(/;
+// `subprocess.run(['rm', '-rf', path])` — the argv form of a shell delete.
+const PY_ARGV_DELETE = /\bsubprocess\.\w+\(\s*\[\s*['"](?:\S*\/)?(?:rm|rmdir|unlink)['"]/g;
+// `map(os.remove, paths)` — the delete function passed by name.
+const PY_MAP_DELETE = /\bmap\(\s*(?:os\.(?:remove|unlink|rmdir)|shutil\.rmtree)\s*,/g;
+// A bare `unlink(…)` call (`from os import unlink`, PHP, Perl) and Perl's `unlink "…"` / `unlink glob "…"`.
+const BARE_UNLINK_CALL = /(?<![\w.$>])unlink\s*\(/g;
+const PERL_UNLINK = /(?<![\w.$>])unlink\s+(?:glob\s+)?["']/g;
 
-/** The operand text of a simple command starting at `from`: up to the next `|` or backtick, minus a trailing
+/** The operand text of a simple command starting at `from`: up to the next `|` (or, for a command that itself
+ *  sits inside backticks, the closing backtick — otherwise a backtick substitution IS operand text), minus a trailing
  *  ` # comment`. Quote-blind like everything else here; a `#` inside quotes only ever SHORTENS the operand,
  *  which can move a delete to `inferred` (a warn), never to `named`. */
-function operandText(stmt: string, from: number): string {
+function operandText(stmt: string, from: number, insideBackticks = false): string {
   const rest = stmt.slice(from);
-  const end = rest.search(/[|`]/);
+  const end = rest.search(insideBackticks ? /[|`]/ : /\|/);
   const simple = end === -1 ? rest : rest.slice(0, end);
   const comment = simple.search(/\s#/);
   return comment === -1 ? simple : simple.slice(0, comment);
@@ -2952,24 +3002,35 @@ function callArgText(stmt: string, from: number): string {
 
 function statementDeletesNamedOutputs(stmt: string, mm: MountMatchers): boolean {
   for (const m of stmt.matchAll(SHELL_DELETE_CMD)) {
-    const [, , viaXargs, word] = m;
-    const operands = viaXargs ? stmt : operandText(stmt, m.index + m[0].length);
+    const lead = m[0];
+    const word = m.groups?.word;
+    const from = m.index + lead.length;
+    // Under xargs/parallel the operands arrive on the pipe, so the whole statement is the operand.
+    const operands = /\b(?:xargs|parallel)\b/.test(lead) ? stmt : operandText(stmt, from, /`[^`]*$/.test(lead));
     if (word === "shred" && !/(^|\s)(-[a-zA-Z]*u\b|--remove\b)/.test(operands)) continue;
+    // `git rm --cached` only drops the index entry; the file stays.
+    if (word === "rm" && /\bgit\b/.test(lead) && /(^|\s)--cached\b/.test(operands)) continue;
     if (mm.touches.test(operands)) return true;
   }
   for (const m of stmt.matchAll(FIND_CMD)) {
     const args = operandText(stmt, m.index + m[0].length);
-    if (/(^|\s)-delete\b|-exec(dir)?\s+(\S*\/)?rm\b/.test(args) && mm.touches.test(args)) return true;
+    if (FIND_DELETES.test(args) && mm.touches.test(args)) return true;
   }
-  for (const m of stmt.matchAll(PY_DELETE_CALL)) {
-    const from = m.index + m[0].length;
-    const arg = callArgText(stmt, from);
+  const callArgs = (re: RegExp) =>
+    [...stmt.matchAll(re)].map((m) => ({ arg: callArgText(stmt, m.index + m[0].length), end: m.index + m[0].length }));
+  for (const { arg, end } of callArgs(PY_DELETE_CALL)) {
     if (mm.touches.test(arg)) return true;
     // A comprehension / generator: `[os.remove(p) for p in glob.glob(".../outputs/*.tmp")]` — the operand
     // is the loop variable, bound by the `for … in <iterable>` right after the call.
-    const after = stmt.slice(from + arg.length + 1);
+    const after = stmt.slice(end + arg.length + 1);
     if (/^\s*for\s+[\w\s,()]+?\s+in\s/.test(after) && mm.touches.test(after)) return true;
   }
+  for (const re of [PY_MAP_DELETE, BARE_UNLINK_CALL]) if (callArgs(re).some(({ arg }) => mm.touches.test(arg))) return true;
+  for (const m of stmt.matchAll(PY_ARGV_DELETE)) {
+    const open = stmt.indexOf("(", m.index);
+    if (mm.touches.test(callArgText(stmt, open + 1))) return true;
+  }
+  for (const m of stmt.matchAll(PERL_UNLINK)) if (mm.touches.test(operandText(stmt, m.index + m[0].length))) return true;
   if (PY_DELETE_METHOD.test(stmt) && mm.touches.test(stmt)) return true;
   return false;
 }

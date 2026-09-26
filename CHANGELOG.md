@@ -13,19 +13,21 @@ All notable changes to this project are documented here. The format is based on
   or an authored `no_delete_in_outputs` — including a `python3 -c` body whose variable is named `rm`
   (`rm = data.get("body","")`) next to an outputs path, where nothing was deleted. Now a flag
   fails only when something confirms it: a filesystem diff of `outputs/` for the turn proves a path present
-  at turn start is gone; a delete in command or call position whose own operand is an `outputs/` path (`rm`,
-  `rmdir`, `unlink`, `shred -u`, `find … -delete`, `os.remove(…)`, `shutil.rmtree(…)`, `Path(…).unlink()`,
-  or a move out of outputs); or the diff could not verify the turn. A flag resting only on the scanner's inference —
+  at turn start is gone; a delete in command or call position whose own operand is an `outputs/` path; or the
+  diff could not verify the turn. "Command or call position" covers `rm`/`rmdir`/`unlink`/`shred -u` as a
+  command (including after a pipe, `&`, `!`, `if`/`while`/`then`/`do`, a `case` label, inside `$(…)`,
+  backticks, `sh -c`/`bash -lc`/`eval` strings, behind `sudo`/`env`/`nice`/`ionice`/`timeout`/`xargs`/
+  `parallel`/`git`/`busybox` and leading `VAR=…` or redirects, and launched from Python through
+  `os.system`/`subprocess`), `find`/`fd` with `-delete` or an `-exec`/`-ok` of `rm`/`unlink`/`shred -u`,
+  `os.remove`/`os.unlink`/`shutil.rmtree`/`Path(…).unlink()`/bare `unlink(…)`/`map(os.remove, …)`/Perl
+  `unlink`, and a move out of outputs. A flag resting only on the scanner's inference —
   an unprovable target, or a relative `cd` into outputs — with a clean diff becomes the new
   `outputs_delete_unconfirmed` **warn**; an authored `no_delete_in_outputs` passes on it, and the warn is
   still raised so the hit stays visible in the run output (it is also the assertion's evidence in the JSON
   envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
   quote-blind, after comments are stripped and same-command `VAR=value` assignments expanded one level. Two
-  consequences to know: **real deletes can land in the warn** — in a loop body, after a `cd` then a relative
-  path, through chained or computed variables, or inside a multi-line `python3 -c` body — because the diff
-  cannot see a file created and deleted within one turn; and **a false positive can still fail** when
-  quoted text, split quote-blind, puts a delete in command position with an outputs operand
-  (`echo 'note; rm mnt/outputs/x'`). An outputs path that only shares a statement with the word — a Python
+  consequences to know: **real deletes can land in the warn**, because the diff cannot see a file created and
+  deleted within one turn — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)`; and **a false positive can still fail**: quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line). An outputs path that only shares a statement with the word — a Python
   variable (`rm = json.load(open(".../outputs/r.json"))`), quoted prose, a `sed`/`grep` pattern, a trailing
   comment — is not a delete's operand and warns. `allow_outputs_delete` waives both codes. `verify-run` over a
   `result.json` written before this release reaches the same verdict as before (it carries no diff, which

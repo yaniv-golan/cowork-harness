@@ -642,10 +642,9 @@ Recognize these before "fixing" a non-bug:
   confirms: the per-turn filesystem diff shows no output present at turn start was deleted, and no flagged
   delete has an `outputs/` path as its own operand (the classic case: a Python variable named `rm` in a
   `python3 -c` body that also reads a report from outputs — `rm = json.load(open(".../outputs/r.json"))`). A file the turn created and then deleted is
-  invisible to the diff, so real deletes in a loop, after a `cd`, or through a chained/computed variable
-  land here too — read the command before dismissing it. A literal-path delete (`rm -f
-  mnt/outputs/x`, `os.remove(".../outputs/x")`) still fails `outputs_delete`, as does quoted text the
-  quote-blind split turns into a delete command (`echo 'note; rm mnt/outputs/x'`); waive either with
+  invisible to the diff, so real deletes land here too — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)` — so read the command before
+  dismissing it. A literal-path delete (`rm -f
+  mnt/outputs/x`, `os.remove(".../outputs/x")`) still fails `outputs_delete`, as do quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line); waive either with
   `allow_outputs_delete`. Raised even when `no_delete_in_outputs` is
   authored (the assertion passes; this warn is how the hit stays visible in text output).
 - **`outputs_diff_unavailable`** (`WARN`) — the outputs filesystem diff could not verify this turn and the
