@@ -644,12 +644,15 @@ Recognize these before "fixing" a non-bug:
   `python3 -c` body that also reads a report from outputs). A file the turn created and then deleted is
   invisible to the diff, so real deletes in a loop, after a `cd`, or through a chained/computed variable
   land here too — read the command before dismissing it. A literal-path delete (`rm -f
-  mnt/outputs/x`) still fails `outputs_delete`, as does quoted prose that names outputs; waive either with
-  `allow_outputs_delete`.
+  mnt/outputs/x`) still fails `outputs_delete`, as do some non-deletes whose statement names outputs —
+  quoted prose, a trailing `# … mnt/outputs` comment on another command, a `sed`/`grep` pattern containing
+  a delete word; waive either with `allow_outputs_delete`. Raised even when `no_delete_in_outputs` is
+  authored (the assertion passes; this warn is how the hit stays visible in text output).
 - **`outputs_diff_unavailable`** (`WARN`) — the outputs filesystem diff could not verify this turn and the
   text scan saw nothing, so a delete by a script file or a non-bash tool would have gone unseen.
 - **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so
-  `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
+  `RunResult.scan` is undefined and the host-path guard and the outputs-delete **text scan did not run this
+  run** (the outputs filesystem diff still did, and a delete it proves still fails). Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
 
 The full 22-code signal table (severity + per-signal opt-out) is in

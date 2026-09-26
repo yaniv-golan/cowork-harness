@@ -675,7 +675,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, the flagged delete statement names an outputs path, or the diff could not verify; a hit resting only on inference with a clean diff passes as advisory. Only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
+      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, the flagged delete statement names an outputs path, or the diff could not verify; a hit resting only on inference with a clean diff passes (the outputs_delete_unconfirmed warn is still raised). Only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
     ),
   no_unexpected_files: z
     .array(z.string().min(1))

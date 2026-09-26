@@ -25,6 +25,10 @@ const named = [
   // kept false positives — a Python identifier or quoted prose in a statement that names outputs
   `python3 -c 'rm = open("/sessions/s/mnt/outputs/r.md").read(); print(rm[:50])'`,
   `echo 'rm outputs/ghost' >> /sessions/s/mnt/outputs/log.md`,
+  // kept false positives the docs name: a trailing comment (only whole-line comments are stripped) and a
+  // sed/grep pattern containing a delete word, each in a statement that names outputs
+  `rm -rf build # clean before writing to /sessions/s/mnt/outputs`,
+  `sed -i '/rm/d' /sessions/s/mnt/outputs/x.md`,
 ];
 const inferred = [
   // the reported false positive
@@ -114,8 +118,11 @@ describe("the live assembler actually WIRES the tiering inputs (position checks)
     expect(/^\s*const fsDiff = outputsFsDiff\(readOutputsBaseline\(outDir\), /m.test(EXEC)).toBe(true);
   });
 
-  it("persists fsDiff on the live RunResult and feeds it, with the positional basis, to the assert ctx", () => {
-    expect([...EXEC.matchAll(/^\s*fsDiff,\s*(\/\/.*)?$/gm)].length, "fsDiff must reach both the assert ctx and result").toBe(2);
+  it("persists fsDiff on the live and salvaged RunResult and feeds it, with the positional basis, to the assert ctx", () => {
+    expect(
+      [...EXEC.matchAll(/^\s*fsDiff,\s*(\/\/.*)?$/gm)].length,
+      "fsDiff must reach the assert ctx, the live result and the salvaged partial result",
+    ).toBe(3);
     expect(/^\s*outputsDeleteBasis: scan\.outputsDeleteBasis,\s*$/m.test(EXEC)).toBe(true);
   });
 

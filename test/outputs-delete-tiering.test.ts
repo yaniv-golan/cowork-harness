@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { computeVerdict } from "../src/run/verdict.js";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import type { RunResult, Assertion } from "../src/types.js";
@@ -142,4 +144,53 @@ describe("outputs-delete: waiver and roster", () => {
     } as Partial<RunResult>);
     expect(codes(computeVerdict(failRun, "live")).filter((c) => c.startsWith("outputs_delete"))).toEqual([]);
   });
+});
+
+describe("outputs-delete: the unconfirmed warn stays visible when the key is authored", () => {
+  // The authored key owns the VERDICT (it passes on this tier), but a passing assertion's evidence is
+  // printed only in the JSON envelope — in text mode the advisory would vanish. The warn never flips
+  // `pass`, so emitting it alongside the authored key costs nothing and keeps the hit on stderr.
+  it("authored no_delete_in_outputs + inferred hit + clean diff ⇒ pass, and the warn is still raised", () => {
+    const v = computeVerdict(
+      rr({
+        scan: textOnly(PY_RM_VAR, "inferred"),
+        fsDiff: clean,
+        assertions: [assn({ no_delete_in_outputs: true }, true)],
+      } as Partial<RunResult>),
+      "live",
+    );
+    expect(v.pass).toBe(true);
+    expect(codes(v)).toContain("outputs_delete_unconfirmed:warn");
+    expect(codes(v)).not.toContain("outputs_delete:fail"); // the fail stays owned by the assertion
+  });
+});
+
+describe("outputs-delete: a malformed persisted fsDiff fails closed instead of throwing", () => {
+  it("fsDiff without a findings array (hand-edited or truncated result.json)", () => {
+    const malformed = { status: "clean" } as unknown as RunResult["fsDiff"];
+    const run = () => computeVerdict(rr({ scan: textOnly(PY_RM_VAR, "inferred"), fsDiff: malformed } as Partial<RunResult>), "live");
+    expect(run).not.toThrow();
+    expect(run().pass).toBe(false);
+    expect(codes(run())).toContain("outputs_delete:fail");
+  });
+});
+
+describe("scan_unavailable no longer claims the whole outputs-delete guard did not run", () => {
+  // With events.jsonl missing only the TEXT half is gone: the filesystem diff still runs and its findings
+  // survive (and can fail the run as outputs_delete). A warn saying "the outputs-delete guard did not run"
+  // beside that failure would contradict it.
+  it("the verdict message scopes the gap to the text scan", () => {
+    const v = computeVerdict(rr({ scan: undefined, fsDiff: clean } as Partial<RunResult>), "live");
+    const msg = v.signals.find((s) => s.code === "scan_unavailable")?.message ?? "";
+    expect(msg).toMatch(/text scan/);
+    expect(msg).not.toMatch(/outputs-delete guards did not run/);
+  });
+
+  it.each(["docs/scenario.md", ".claude/skills/cowork-harness/SKILL.md", ".claude/skills/cowork-harness/references/scenario-schema.md"])(
+    "%s does not say the outputs-delete guard did not run",
+    (rel) => {
+      const text = readFileSync(resolve(rel), "utf8").replace(/\*\*/g, "").replace(/\s+/g, " ");
+      expect(text).not.toMatch(/outputs-delete guards did not run/);
+    },
+  );
 });

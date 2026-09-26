@@ -470,8 +470,9 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         code: "scan_unavailable",
         severity: "warn",
         message:
-          "post-run scan evidence unavailable (events.jsonl missing or corrupt) — the host-path and " +
-          "outputs-delete guards did not run; assert no_delete_in_outputs/transcript_no_host_path to hard-fail on this",
+          "post-run scan evidence unavailable (events.jsonl missing or corrupt) — the host-path guard and the " +
+          "outputs-delete text scan did not run (the outputs filesystem diff still did); assert " +
+          "no_delete_in_outputs/transcript_no_host_path to hard-fail on this",
       });
 
     // `allow_outputs_delete` accepts the detection for this scenario. It is a WAIVER of the harness's
@@ -481,7 +482,9 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // The evidence is tiered (see outputsDeleteTier): a delete the filesystem diff proved, a delete statement
     // that itself names an outputs path, or any text hit on a turn whose diff could not verify ⇒ `fail`; a
     // text hit resting only on the detector's inference, with a clean diff ⇒ the `outputs_delete_unconfirmed`
-    // warn. Both are suppressed by the waiver, and by an authored `no_delete_in_outputs` (it owns the verdict).
+    // warn. The waiver suppresses both. An authored `no_delete_in_outputs` suppresses only the FAIL (the
+    // assertion owns the verdict); the warn is still raised, because a passing assertion's advisory evidence
+    // is visible only in the JSON envelope, and the warn is what keeps an unconfirmed hit on stderr.
     const optInOutputsDelete = authored.some((a) => a.allow_outputs_delete === true);
     const authoredOutputsDelete = authored.some((a) => a.no_delete_in_outputs !== undefined);
     const outputsTier = outputsDeleteTier(result.scan, result.fsDiff);
@@ -494,7 +497,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           `unauthorized delete touched mnt/outputs: ${outputsEvidence} ` +
           `(assert no_delete_in_outputs to make this explicit, or allow_outputs_delete if the deletion is intended)`,
       });
-    if (outputsTier === "warn" && !authoredOutputsDelete && !optInOutputsDelete)
+    if (outputsTier === "warn" && !optInOutputsDelete)
       signals.push({
         code: "outputs_delete_unconfirmed",
         severity: "warn",

@@ -27,9 +27,13 @@ export type OutputsDeleteTier = "none" | "warn" | "fail";
  * variable — which is why it warns rather than going silent.
  */
 export function outputsDeleteTier(scan: OutputsDeleteEvidence | undefined, fsDiff: OutputsFsDiff | undefined): OutputsDeleteTier {
-  if (fsDiff?.findings.length) return "fail";
+  // A persisted diff without a findings array (a hand-edited or truncated result.json) proves nothing
+  // either way: read it as "did not verify" rather than throwing.
+  const wellFormed = fsDiff !== undefined && Array.isArray(fsDiff.findings);
+  if (wellFormed && fsDiff.findings.length) return "fail";
   const entries = scan?.outputsDeletes ?? [];
   if (entries.length === 0) return "none";
+  if (!wellFormed) return "fail";
   const basis = scan?.outputsDeleteBasis;
   if (!basis || basis.length !== entries.length) return "fail";
   if (basis.some((b) => b !== "inferred")) return "fail";
@@ -40,5 +44,6 @@ export function outputsDeleteTier(scan: OutputsDeleteEvidence | undefined, fsDif
 /** The evidence strings behind a tier, fs-diff findings first, de-duplicated (a finding is also merged
  *  into `scan.outputsDeletes` when the scan exists). */
 export function outputsDeleteEntries(scan: OutputsDeleteEvidence | undefined, fsDiff: OutputsFsDiff | undefined): string[] {
-  return [...new Set([...(fsDiff?.findings ?? []), ...(scan?.outputsDeletes ?? [])])];
+  const findings = Array.isArray(fsDiff?.findings) ? fsDiff.findings : [];
+  return [...new Set([...findings, ...(scan?.outputsDeletes ?? [])])];
 }

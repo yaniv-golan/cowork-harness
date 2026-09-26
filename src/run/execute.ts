@@ -401,8 +401,11 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
         a.no_unexpected_files !== undefined ||
         a.input_unmodified !== undefined ||
         a.no_delete_in_outputs !== undefined ||
-        // Arms the full manifest for the mount-wide key, as it always has. The outputs filesystem diff no
-        // longer depends on this manifest (it reads the per-turn outputs snapshot, captureOutputsBaseline).
+        // Arms the full manifest for the mount-wide key, as it always has. Known leftover: nothing consumes
+        // the manifest for this key (mountDeletes is text-only), and the outputs diff no longer needs it for
+        // no_delete_in_outputs either (it reads captureOutputsBaseline's per-turn snapshot). Both keys stay
+        // arming only because dropping them changes which runs persist preRunPaths/preRunHashes and
+        // authored-file attribution — a separate, observable change.
         a.no_delete_in_mounts !== undefined ||
         // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
         // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
@@ -1286,6 +1289,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (unansweredErr) {
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
+        fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         turn,
         // Without this the salvage lane reported `modelSource: "unresolved"` on a run that WAS pinned —
         // a positive false statement, and one `CompleteRunResult` cannot catch (it guards the result's
@@ -2205,6 +2209,8 @@ export function buildPartialResult(args: {
   egress: { host: string; decision: "allow" | "deny" }[];
   durationMs: number;
   unanswered: { message: string; hint?: string };
+  /** The turn's outputs filesystem diff, already computed when the salvage branch runs. */
+  fsDiff?: OutputsFsDiff;
   /** The model the scenario/session pinned, if any — threaded in so a salvaged run reports the same model
    *  provenance a complete one does. Undefined means nothing pinned it (modelSource "unresolved"). */
   pinnedModel?: string;
@@ -2361,7 +2367,8 @@ export function buildPartialResult(args: {
     nonDeterministicTerminal,
     permissiveAutoAllow: undefined,
     scan: undefined,
-    fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
+    // Computed before the salvage branch; a filesystem-proven delete must survive into the partial result.
+    fsDiff: args.fsDiff,
     fidelityWarnings: undefined,
     l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,

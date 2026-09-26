@@ -274,3 +274,31 @@ describe("buildPartialResult — salvage a whiffed run", () => {
     expect(JSON.parse(JSON.stringify(result.verdict))).toEqual(result.verdict);
   });
 });
+
+describe("buildPartialResult — keeps the outputs filesystem diff", () => {
+  // The diff is computed before the salvage branch; a filesystem-proven delete is exactly the evidence the
+  // top-level field exists to preserve, so a partial result must not drop it.
+  it("persists a computed fsDiff on the partial result", () => {
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
+    const fsDiff = { status: "findings" as const, findings: ["[fs-diff] output file removed post-run: outputs/a.md"] };
+    const result = buildPartialResult({
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "container",
+      baseline: "desktop-1.13576.1",
+      record: partialRecord(),
+      outDir,
+      workRoot,
+      configDir,
+      pluginSkillRoots: [],
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "unscripted gate" },
+      fsDiff,
+    } as Parameters<typeof buildPartialResult>[0]);
+    expect(result.fsDiff).toEqual(fsDiff);
+  });
+});

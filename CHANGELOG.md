@@ -16,14 +16,17 @@ All notable changes to this project are documented here. The format is based on
   at turn start is gone; the flagged delete statement itself names an `outputs/` path (or moves something
   out of outputs); or the diff could not verify the turn. A flag resting only on the scanner's inference —
   an unprovable target, or a relative `cd` into outputs — with a clean diff becomes the new
-  `outputs_delete_unconfirmed` **warn**, and an authored `no_delete_in_outputs` passes with the hit kept as
-  advisory evidence. A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
+  `outputs_delete_unconfirmed` **warn**; an authored `no_delete_in_outputs` passes on it, and the warn is
+  still raised so the hit stays visible in the run output (it is also the assertion's evidence in the JSON
+  envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
   quote-blind, after comments are stripped and same-command `VAR=value` assignments expanded one level. Two
   consequences to know: **real deletes can land in the warn** — in a loop body, after a `cd` then a relative
   path, through chained or computed variables, or inside a multi-line `python3 -c` body — because the diff
   cannot see a file created and deleted within one turn; and **some false positives still fail** —
-  `rm = open(".../outputs/r.md").read()`, or quoted prose such as `echo 'rm outputs/x' >> log`, since that
-  statement names an outputs path. `allow_outputs_delete` waives both codes. `verify-run` over a
+  `rm = open(".../outputs/r.md").read()`, quoted prose such as `echo 'rm outputs/x' >> log`, a trailing
+  comment on another command (`rm -rf build # … mnt/outputs` — only whole-line comments are stripped), or a
+  `sed`/`grep` pattern containing a delete word (`sed -i '/rm/d' mnt/outputs/x.md`), since that statement
+  names an outputs path. `allow_outputs_delete` waives both codes. `verify-run` over a
   `result.json` written before this release reaches the same verdict as before (it carries no diff, which
   reads as unverified and keeps the old strictness). A run whose only outputs evidence is unconfirmed can
   now be `record`ed.
@@ -59,7 +62,8 @@ All notable changes to this project are documented here. The format is based on
   still fails, and an authored `no_delete_in_outputs` fails as evidence-unavailable.
 - **A filesystem-proven outputs delete survives a missing or corrupt `events.jsonl`.** The diff's result is
   the new top-level `RunResult.fsDiff` rather than living only inside `scan` (which is absent in that case),
-  so the delete still fails the run instead of surfacing only as `scan_unavailable`.
+  so the delete still fails the run instead of surfacing only as `scan_unavailable`, whose message now says
+  only the text scan was lost. A partial result salvaged from an unanswered gate keeps the diff too.
 - **The critique corpus no longer contains files the graded agent never received.** Every corpus class was
   checked against a git-tracked set read from that class's own directory, while staging reads one set at the
   mount root. A skill that is a git submodule of its plugin was graded from the submodule's own index although
