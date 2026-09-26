@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Run } from "../src/run/run.js";
 import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
@@ -81,16 +82,21 @@ describe("container geometry: a copy-failure leak is visible", () => {
 });
 
 describe("hostloop geometry stays correct", () => {
-  it("from 2.7032.0 the agent runs at /var/empty: the expected process cwd is accepted, not counted malformed", async () => {
-    // The agent reports its realpath (/private/var/empty), which is outside the session tree by design. The
-    // space check exists to catch a root in the WRONG path space; the harness knows where it spawned the
-    // agent, so it accepts that one cwd (realpath-compared) and still rejects any other outside cwd.
+  it("from 2.7032.0 the agent runs outside the tree: the expected process cwd is accepted (by realpath), not counted malformed", async () => {
+    // Production: the harness spawns the agent at /var/empty and the agent reports its realpath
+    // (/private/var/empty on macOS). The space check exists to catch a root in the WRONG path space; the
+    // harness knows where it spawned the agent, so it accepts that one cwd, compared by realpath, and
+    // still rejects any other outside cwd. Built on a symlink this test creates, so the realpath step is
+    // exercised the same way on every OS (a literal /var/empty only realpaths to /private/var/empty on macOS).
+    const real = realpathSync(mkdtempSync(join(tmpdir(), "cwh-agentcwd-real-")));
+    const link = join(realpathSync(mkdtempSync(join(tmpdir(), "cwh-agentcwd-link-"))), "empty");
+    symlinkSync(real, link);
     const OUT = `${HOST_ROOT}/mnt/outputs/report.html`;
-    const events = [initEv("/private/var/empty"), presentUse("t1", [OUT]), presentResult("t1", [OUT])];
-    const rec = await driveWithRoot(events, HOST_ROOT, "/var/empty");
+    const events = [initEv(real), presentUse("t1", [OUT]), presentResult("t1", [OUT])];
+    const rec = await driveWithRoot(events, HOST_ROOT, link);
     expect(rec.evidenceErrors.presentFilesMalformed).toBe(0);
     expect(rec.presentedFiles).toEqual([{ from: OUT, to: OUT, promoted: false, leaked: false }]);
-    const other = await driveWithRoot([initEv("/elsewhere"), presentUse("t1", [OUT]), presentResult("t1", [OUT])], HOST_ROOT, "/var/empty");
+    const other = await driveWithRoot([initEv("/elsewhere"), presentUse("t1", [OUT]), presentResult("t1", [OUT])], HOST_ROOT, link);
     expect(other.evidenceErrors.presentFilesMalformed).toBeGreaterThan(0);
   });
 
