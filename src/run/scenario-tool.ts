@@ -71,7 +71,7 @@ function pythonNotFoundMessage(py: string, cmd: string): string {
  *  file named by `COWORK_HARNESS_LINT_EXTRA_FINDINGS` so python's renderer, `--min-severity` filter and exit
  *  rule apply to both sets unchanged. With no loader findings python runs exactly as before. A direct
  *  `python3 scenario.py lint` does not run the loader. */
-function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
+function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass: (args: string[]) => LintFinding[] = lintPrepass): never {
   // Validate --output-format BEFORE isJsonOutput (matching every other command's ensureOutputFormat
   // gate) — otherwise an unrecognized value (`--output-format xml`, or a valueless trailing flag) falls
   // through isJsonOutput's strict text/json match and silently degrades to text mode, unlike every other
@@ -99,7 +99,7 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
   let handoffDir: string | undefined;
   let loaderRejected: LintFinding[] = [];
   if (subcommand === "lint" && !pyArgs.some((a) => a === "-h" || a === "--help")) {
-    const findings = lintPrepass(pyArgs);
+    const findings = prepass(pyArgs);
     loaderRejected = findings;
     // Zero findings → no file and no variable: python runs exactly as it did before this pre-pass existed.
     if (findings.length > 0) {
@@ -192,8 +192,9 @@ function cleanup(dir: string | undefined): void {
 
 /** `cowork-harness lint <files…>` → `python3 scenario.py lint <files…>`. See `runLintLike` for the
  *  text/json dual-mode behavior and the ENOENT → exit-127 guard. */
-export function cmdLint(args: string[]): never {
-  return runLintLike("lint", args);
+export function cmdLint(args: string[], prepass: (args: string[]) => LintFinding[] = lintPrepass): never {
+  // `prepass` is a test seam: the default is the real loader pre-pass.
+  return runLintLike("lint", args, prepass);
 }
 
 /** `cowork-harness lint-skill <files…>` → `python3 scenario.py lint-skill <files…>`. See `runLintLike`

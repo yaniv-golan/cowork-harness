@@ -117,7 +117,10 @@ Two consequences worth internalising:
   on — the session file and the paths it mounts, an absolute `baseline:` path, environment variables — nor
   the pre-spend refusals that `record --dry-run` adds (below). Any other YAML in a linted directory, such as
   a session or matrix file, is not a scenario and is reported too: keep those out of the linted set. The
-  bundled script run directly (`python3 scenario.py lint`) stays the lenient, offline check.
+  bundled script run directly (`python3 scenario.py lint`) stays the lenient, offline check. When both
+  report on one file — `scenario-invalid` beside `unknown-top-key` or `enum-value-invalid` — the
+  `scenario-invalid` ERROR is the authoritative answer to "does it load"; the linter's own finding next to
+  it is the hint for fixing it (the valid keys, a rename).
 - **Unknown *top-level* scenario keys are handled differently by the two paths.** The **loader**
   (`run`/`skill`/`record`, reading scenario YAML) rejects one outright: exit 2 for a single file, or exit 1
   for a directory, which reports each `✗ broken:` file. **`replay` does not.** A cassette's frozen scenario

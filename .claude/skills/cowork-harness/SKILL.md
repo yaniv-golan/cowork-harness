@@ -440,12 +440,14 @@ the verdict kind, and portability can only ever warn — that do NOT affect the 
 takes no `--out`, so the destination is a guess — and only the path-independent ones (prompt policy, assert
 contradiction, duplicate cassette target) gate the batch. So a directory dry-run CAN exit 0 on a scenario the
 real `record` would refuse; re-run that one file with its real flags for a binding answer. A directory also
-reports every offender and the batch cost estimate. `lint` checks the assertion invariants (both above).
+reports every offender and the batch cost estimate. `lint` checks the assertion invariants AND that each file loads (the same loader, plus a named `baseline:`), but not the pre-spend refusals.
 
 **Which arm to reach for.** They answer different questions, and picking the wrong one is why a consumer
 concluded the free pre-flight was unavailable:
-- **"Does my whole corpus still load?"** → the **directory** arm (`record scenarios/ --dry-run --quiet`,
-  the CI shape in `references/ci-recipe.md`). It reports every offender in one pass, and the
+- **"Does my whole corpus still load?"** → `cowork-harness lint scenarios/` answers it (every file the
+  loader rejects is an ERROR, and so is a `baseline:` naming no shipped baseline), or the **directory** arm
+  (`record scenarios/ --dry-run --quiet`, the CI shape in `references/ci-recipe.md`) when you also want the
+  pre-spend refusals. The directory arm reports every offender in one pass, and the
   destination-policy verdict cannot red it: that arm knows no `--out`, so host-inventory and portability
   are advisory `notes[]` at exit 0 while a file that cannot load is `✗ broken:` at exit 1. Limits worth
   knowing: it is **non-recursive** (`readdirSync` — scenarios in subdirectories are never opened), a file

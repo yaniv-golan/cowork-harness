@@ -205,6 +205,27 @@ describe.skipIf(!can || !havePython)("lint input edge cases never crash the wrap
   });
 });
 
+describe.skipIf(!can || !havePython)("a pre-pass machinery failure reaches python's renderer", () => {
+  it("lint-loader-internal is rendered by the linter, exits 1, and prints no stack trace", () => {
+    // Drives the BUILT wrapper with a pre-pass whose input expansion throws — the only way to make the
+    // pre-pass machinery itself fail on demand. The finding must travel the same handoff as every other
+    // loader finding: python renders it and the exit rule gates on it.
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-load-"));
+    const f = scenario(d, "s.yaml", CLEAN);
+    const tool = resolve("dist/run/scenario-tool.js");
+    const loader = resolve("dist/run/lint-load.js");
+    const src =
+      `const { cmdLint } = await import(${JSON.stringify(tool)});` +
+      `const { lintPrepass } = await import(${JSON.stringify(loader)});` +
+      `cmdLint([${JSON.stringify(f)}], (a) => lintPrepass(a, { expand: () => { throw new Error("expansion exploded"); } }));`;
+    const r = spawnSync("node", ["--input-type=module", "-e", src], { encoding: "utf8" });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/ERROR \[lint-loader-internal\]/);
+    expect(r.stdout).toMatch(/expansion exploded/);
+    expect(r.stderr).not.toMatch(/\bat \S+ \(/);
+  });
+});
+
 describe.skipIf(!can)("record --dry-run keeps the defaulted-fidelity notice ahead of a regex refusal", () => {
   it("prints the notice once, then the load error", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-lint-load-"));

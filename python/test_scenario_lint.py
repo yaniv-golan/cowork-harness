@@ -1385,9 +1385,20 @@ def test_extra_findings_are_merged_filtered_and_gate(tmp_path, monkeypatch):
     code, out = _lint_cli(tmp_path, "--min-severity", "WARN", body="assert:\n  - result: success\n")
     assert code == 1
     assert "scenario-invalid" in out and "loader-info" not in out
+    code_text, text_out = _lint_cli(tmp_path, body="assert:\n  - result: success\n")
     code, out = _lint_cli(tmp_path, "--json", body="assert:\n  - result: success\n")
-    rules = {x["rule"] for x in json.loads(out)}
-    assert {"scenario-invalid", "loader-info"} <= rules
+    assert code == 1 == code_text
+    found = json.loads(out)
+    assert {"scenario-invalid", "loader-info"} <= {x["rule"] for x in found}
+    # Same content in both modes: every JSON finding is rendered in the text report, and the text summary
+    # counts exactly the JSON findings.
+    for x in found:
+        assert f'{x["severity"]} [{x["rule"]}] {x["file"]}' in text_out
+        assert x["message"] in text_out
+    n_err = sum(1 for x in found if x["severity"] == "ERROR")
+    n_warn = sum(1 for x in found if x["severity"] == "WARN")
+    n_info = sum(1 for x in found if x["severity"] == "INFO")
+    assert f"{n_err} error(s), {n_warn} warning(s), {n_info} info" in text_out
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expandLintInputs, lintPrepass, loaderFindings } from "../src/run/lint-load.js";
 import { parseScenarioFile } from "../src/run/execute.js";
+import { listBaselineNames } from "../src/baseline.js";
 
 // Unit tests for the loader pre-pass `cowork-harness lint` runs before the python linter. The CLI-level
 // behaviour is in lint-loads-scenario.test.ts.
@@ -36,6 +37,7 @@ describe("loaderFindings turns every load outcome into the right finding (a tabl
     ["yaml-syntax", ["prompt: [unclosed"]],
     ["contradiction-refine", [...HEAD, "assert:", "  - no_delete_in_outputs: true", "  - allow_outputs_delete: true"]],
     ["no-fidelity", ["prompt: hello"]],
+    ["named-existing-baseline", [`baseline: ${listBaselineNames()[0]}`, "fidelity: container", "prompt: hello"]],
   ];
   for (const [name, lines] of cases) {
     it(name, () => {
