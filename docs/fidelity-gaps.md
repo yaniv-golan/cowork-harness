@@ -1410,8 +1410,9 @@ purpose" — and collapsing them into one value is the mistake this arrangement 
 > 2.7032.0: same cwd rule, same deny rules (on `--disallowedTools`), outputs as a working directory (via
 > `--settings`), the same re-anchoring, and — as a second line in case the deny rules ever fail to load —
 > the hook's own *"needs an absolute path here"* block for a relative `Read`/`Write`/`Edit`/`MultiEdit`.
-> A re-anchored `Grep`/`Glob` is recorded on the `hook_event` row (`rewritten`), because the agent's
-> transcript keeps only the model's original input. Older baselines keep the outputs-dir cwd they had.
+> A re-anchored `Grep`/`Glob` keeps its new path in the run's control log (the hook reply's
+> `updatedInput`), surfaced as `rewritten` on the derived `hook_event`, because the agent's transcript
+> keeps only the model's original input. Older baselines keep the outputs-dir cwd they had.
 >
 > **Not modeled:** the host's scoped allow rules (per-root `Edit`/`Read` allows); the harness's
 > `spawn.allowedTools` pre-approval covers the same calls. The host also write-denies a shared plugin-cache
