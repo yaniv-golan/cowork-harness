@@ -4,7 +4,8 @@
  * fails the build. A finding means "the redactor's policy has a gap (or wasn't configured)".
  *
  * Default classes (chosen for a low false-positive rate): email, currency, bare domain, local
- * absolute path (the recording machine's own filesystem — /Users, /home, /root — not the in-VM
+ * absolute path (the recording machine's own filesystem — /Users, /home, /root, the macOS temp and
+ * volume roots, and a slugged home segment like `-Users-<user>-…` under any root — not the in-VM
  * /sessions mount tree), machine-inventory (the sentinel boilerplate a tool emits when it has
  * LIVE-ENUMERATED local environment state — installed apps, running processes — into its
  * schema/description/output; matches the introducer phrase only, never app names or list shapes).
@@ -52,12 +53,30 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // over structured JSON at scan time (a deliberate design decision: structured extraction beats
     // a boolean over free-form text here). Unix-only by scope — a Windows path (C:\Users\...) does not match; this repo
     // records via Docker/Lima on macOS/Linux.
-    // macOS-host-only prefixes (/private/var, /var/folders, /Volumes) are included alongside the
-    // universal /Users//home//root so a leaked temp-dir or external-volume host path is caught too —
-    // matching the (deliberately separate, encoding-aware) run-level `hostPathLeaked` detector's prefix
-    // set. `/opt/cowork/` is intentionally NOT here: the microvm tier legitimately mounts the agent at
-    // /opt/cowork/agent (src/runtime/lima.ts), so its appearance in a recording is expected, not a leak.
-    re: /(?<![^\s"'(=:])(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/var\/folders\/|\/Volumes\/)[^\s"')]+/gi,
+    // macOS-host-only prefixes (/private/var, /var/folders, /private/tmp, /Volumes) are included alongside
+    // the universal /Users//home//root so a leaked temp-dir or external-volume host path is caught too.
+    // `/private/tmp/` is the realpath of macOS `/tmp` and does not exist in the Linux VM/container, so it
+    // is a host path by construction. `/opt/cowork/` is intentionally NOT here: the microvm tier
+    // legitimately mounts the agent at /opt/cowork/agent (src/runtime/lima.ts), so its appearance in a
+    // recording is expected, not a leak.
+    //
+    // Bare `/tmp/` is deliberately NOT a root: the in-VM HOME is `/tmp`, and clean recordings carry
+    // host-neutral paths like `/tmp/cc-socks/<n>.sock`. What makes a temp path sensitive is the USERNAME
+    // in it, and that usually sits in a SLUGGED segment — a Claude session scratchpad lives at
+    // `/tmp/claude-<uid>/-Users-<user>-<project>/…` (macOS) or `/tmp/claude-<uid>/-home-<user>-…` (Linux).
+    // The second alternative flags that one segment (`-Users-…`/`-home-…`/`-root-…` directly after a `/`),
+    // whatever root it sits under. Under a listed root the first alternative already consumes the whole
+    // path, slug included, so the slug arm only fires on an unlisted root such as bare `/tmp/`. Its sample
+    // is just the segment, so a whole-token `--allow-path` can still clear it.
+    //
+    // The boundary also accepts a `://` prefix: in `computer:///Users/alice/…` or `file:///home/…` the
+    // char before the root is the URI's own third slash, which the plain lookbehind rejects — so a host
+    // path inside a link was never flagged.
+    //
+    // This set now DIVERGES from the run-level `hostPathLeaked` detector (src/run/execute.ts), which has
+    // no `/private/tmp/` and no slug arm. That one is a verdict signal over model-visible text, not a
+    // publication gate, and widening it would change live verdicts; it is left as is on purpose.
+    re: /(?:(?<![^\s"'(=:])|(?<=:\/\/))(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/private\/tmp\/|\/var\/folders\/|\/Volumes\/)[^\s"')]+|(?<=\/)-(?:Users|home|root)-[^/\s"')]+/gi,
     cls: "path",
   },
   {

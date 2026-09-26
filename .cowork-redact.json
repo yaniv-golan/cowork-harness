@@ -6,6 +6,15 @@
     { "regex": "/Users/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
     { "regex": "/home/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
     { "regex": "/root/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
+    { "regex": "/private/tmp/[^\\s\"'\\\\)\\]`]+?(?=/mnt/)", "label": "local-path", "flags": "g" },
+    { "regex": "/private/var/[^\\s\"'\\\\)\\]`]+?(?=/mnt/)", "label": "local-path", "flags": "g" },
+    { "regex": "/var/folders/[^\\s\"'\\\\)\\]`]+?(?=/mnt/)", "label": "local-path", "flags": "g" },
+    { "regex": "/Volumes/[^\\s\"'\\\\)\\]`]+?(?=/mnt/)", "label": "local-path", "flags": "g" },
+    { "regex": "/private/tmp/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
+    { "regex": "/private/var/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
+    { "regex": "/var/folders/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
+    { "regex": "/Volumes/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
+    { "regex": "(?<=/)-(?:Users|home|root)-[^/\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
     { "regex": "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}", "label": "email", "flags": "g" }
   ]
 }

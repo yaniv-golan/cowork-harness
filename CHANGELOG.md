@@ -32,6 +32,19 @@ All notable changes to this project are documented here. The format is based on
   the mount carried an empty `skills/<name>/`, and a skill-folder positional packaged the enclosing plugin's
   agents and shared references although only the folder was mounted. The packager now reads the mount
   root's tracked set, once, for every class.
+- **A recording made from a temp directory no longer publishes the operator's username unnoticed.** A run
+  dir under `/private/tmp`, `/var/folders` or `/tmp` records its host path into tool results and
+  `computer://` links, and that path usually carries the username in a slugged segment (a Claude session
+  scratchpad lives at `/tmp/claude-<uid>/-Users-<user>-<project>/…`). The reference `.cowork-redact.json`
+  covered only `/Users/`, `/home/` and `/root/`, and `verify-cassettes` reported such a cassette clean. The
+  reference policy now also redacts `/private/tmp/`, `/private/var/`, `/var/folders/`, `/Volumes/` and any
+  `-Users-<user>-…` / `-home-<user>-…` / `-root-…` path segment, keeping the `/mnt/` tail so links still
+  resolve on replay. The scanner's `path` class flags the same roots and segments, and now also flags a
+  host path inside a `computer://` or `file://` URI, which its boundary check had skipped. Bare `/tmp/` is
+  still not flagged: it is the in-VM home and appears in clean recordings. **`verify-cassettes` can now
+  fail on a cassette it previously passed**; the finding class (`path`), the redaction token format, the
+  JSON schema and the exit codes are unchanged. A `.cowork-redact.json` copied by an earlier `init-redact`
+  lacks the new rules — re-run `init-redact --force` or add them.
 
 ## [3.9.0] — 2026-09-25
 

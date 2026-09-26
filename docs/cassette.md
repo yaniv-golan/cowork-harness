@@ -1007,6 +1007,12 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   resolving on replay, with no error and no finding. Keep the `(?=/mnt/)`-anchored rules **before** the bare
   ones, as the shipped policy does. Loading a policy in the hazardous order prints a warning naming both
   pattern indices. `--no-redact` skips redaction for known-synthetic inputs.
+  The reference policy covers `/Users/`, `/home/`, `/root/`, the macOS temp and volume roots
+  (`/private/tmp/`, `/private/var/`, `/var/folders/`, `/Volumes/`), and a **slugged home segment**
+  (`-Users-<user>-…`, `-home-<user>-…`) under any root. That last rule is what catches a run dir inside a
+  Claude session scratchpad — `/tmp/claude-<uid>/-Users-<user>-<project>/…` — where the username is not in a
+  `/Users/<user>/` segment at all. A policy copied by an earlier `init-redact` does not have these rules:
+  re-run `init-redact --force` (after saving any tailoring) or add them by hand.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
   bare-`domain` + `path` + `machine-inventory`) runs over the **whole cassette** — the deliverable (`outputs/`
@@ -1026,7 +1032,11 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives, and a
   live-enumerated app/process inventory sentinel (e.g. a computer-use tool schema's "Available applications on
   this machine: …") is never legitimate catalog boilerplate either; none of the three share the ambiguity that
-  gets `currency`/`domain` excluded there. `--allow <regex>` suppresses synthetic / public reference names
+  gets `currency`/`domain` excluded there. The `path` class matches the recording machine's own roots
+  (`/Users/`, `/home/`, `/root/`, `/private/tmp/`, `/private/var/`, `/var/folders/`, `/Volumes/`) —
+  including inside a `computer://` or `file://` URI — plus a slugged home segment (`/-Users-<user>-…`,
+  `/-home-<user>-…`) under any root, so a temp-dir run path carrying a username is flagged. Bare `/tmp/`
+  alone is not a root: it is the in-VM home and appears in clean recordings. `--allow <regex>` suppresses synthetic / public reference names
   (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
   path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
   clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /
