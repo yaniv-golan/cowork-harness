@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **Outputs-delete verdicts loosen.** A delete the scanner only infers from a command's text — no
+  filesystem evidence, and no delete command whose own operand is an outputs path — now warns
+  (`outputs_delete_unconfirmed`) instead of failing, for the default check and for an authored
+  `no_delete_in_outputs`. A CI gate on `ok` / exit code passes runs it used to fail; watch
+  `verdict.signals` for the warn. Some real deletes land there (see Changed).
+- **`record` accepts warn-tier runs.** A recording whose only outputs evidence is unconfirmed is no longer
+  refused.
+- **The outputs filesystem diff runs on every live turn**, not only on scenarios that assert a baseline key,
+  so a scenario that never armed it can now fail on a deleted pre-existing output — including a file an
+  earlier turn of a `--resume` session wrote.
 - **`hostloop` against Desktop 2.7032.0 or later: file tools need absolute paths.** The agent no longer runs
   in the outputs dir, so a skill that gives `Read`/`Write`/`Edit` a relative path — a bare `report.md`, or
   `outputs/report.md` — now gets the refusal production gives ("File is in a directory that is denied by
@@ -36,9 +46,55 @@ All notable changes to this project are documented here. The format is based on
   answer a gate within its backstop (`COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` /
   `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS`). An additive enum value; a consumer that validates `result.json`
   against an older copy of the schema will reject a document carrying it.
+- **`RunResult.fsDiff`** — the per-turn outputs filesystem diff: `status` (`clean` / `findings` /
+  `unavailable`), `reason` when unavailable, and `findings`. `clean` means no path present at turn start was
+  deleted; it cannot see a file created and deleted within the turn.
+- **`RunResult.scan.outputsDeleteBasis`** — positional with `scan.outputsDeletes`: `fs-diff`, `named` or
+  `inferred` per entry.
+- **Verdict signal codes `outputs_delete_unconfirmed` and `outputs_diff_unavailable`** (both **warn**).
 
 ### Changed
 
+- **An outputs delete the harness only infers from a command's text no longer fails the run by itself.**
+  Previously any command the delete scanner flagged near `mnt/outputs` failed the verdict (`outputs_delete`)
+  or an authored `no_delete_in_outputs` — including a `python3 -c` body whose variable is named `rm`
+  (`rm = data.get("body","")`) next to an outputs path, where nothing was deleted. Now a flag
+  fails only when something confirms it: a filesystem diff of `outputs/` for the turn proves a path present
+  at turn start is gone; a delete in command or call position whose own operand is an `outputs/` path; or the
+  diff could not verify the turn. "Command or call position" covers `rm`/`rmdir`/`unlink`/`shred -u` as a
+  command (including after a pipe, `&`, `!`, `if`/`while`/`then`/`do`, a `case` label, inside `$(…)`,
+  backticks, `sh -c`/`bash -lc`/`eval` strings, behind `sudo`/`env`/`nice`/`ionice`/`timeout`/`xargs`/
+  `parallel`/`git`/`busybox` and leading `VAR=…` or redirects, and launched from Python through
+  `os.system`/`subprocess`), `find`/`fd` with `-delete` or an `-exec`/`-ok` of `rm`/`unlink`/`shred -u`,
+  `os.remove`/`os.unlink`/`shutil.rmtree`/bare `unlink(…)`/`map(os.remove, …)`/Perl `unlink` with an outputs
+  argument, a `.unlink()`/`.rmdir()` method whose receiver names outputs (`Path(".../outputs/x").unlink()`),
+  and a move out of outputs. A flag resting only on the scanner's inference —
+  an unprovable target, or a `cd` into outputs followed by a relative path — with a clean diff becomes the new
+  `outputs_delete_unconfirmed` **warn**; an authored `no_delete_in_outputs` passes on it, and the warn is
+  still raised so the hit stays visible in the run output (it is also the assertion's evidence in the JSON
+  envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||`,
+  quote-blind, after whole-line comments are dropped and same-command `VAR=value` assignments expanded one
+  level; a trailing ` # comment` is not counted as a delete's operand. **Size caps:** a statement longer than
+  4 KiB, or a command longer than 16 KiB, skips the operand analysis and is judged by the original rule (a
+  delete word, or `mv`, and an outputs path anywhere in it). For any outputs path that appears literally in
+  the command that can only be stricter (a mount name assembled from two variables is the exception), and it bounds the
+  cost — the worst shapes measured, up to 160 KB, classify in under 10 ms — but it means the false positive
+  this change fixes comes back on a huge one-liner: a single-line `python3 -c` body over 4 KiB with a
+  variable named `rm` next to an outputs path still fails. Two
+  consequences to know: **real deletes can land in the warn**, because the diff cannot see a file created and
+  deleted within one turn — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)`; and **a false positive can still fail**: quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line). An outputs path that only shares a statement with the word — a Python
+  variable (`rm = json.load(open(".../outputs/r.json"))`), quoted prose, a `sed`/`grep` pattern, a trailing
+  comment — is not a delete's operand and warns. `allow_outputs_delete` waives `outputs_delete` and
+  `outputs_delete_unconfirmed`, and also silences `outputs_diff_unavailable`. `verify-run` over a
+  `result.json` written before this release reaches the same verdict as before (it carries no diff, which
+  reads as unverified and keeps the old strictness). A run whose only outputs evidence is unconfirmed can
+  now be `record`ed.
+- **The outputs filesystem diff now runs on every live turn**, not only when the scenario asserted one of
+  the baseline keys. It reads its own outputs-only snapshot taken at the start of each turn, resumed turns
+  included, so the full pre-run manifest (and with it authored-file attribution, `no_unexpected_files`,
+  `input_unmodified`) still appears only on runs that arm it. A delete of a file that existed at turn start
+  now fails every scenario, however it was made (a script file, a non-bash tool) — previously only on
+  scenarios that armed the manifest.
 - **`hostloop` runs the agent where Desktop 2.7032.0+ does.** From that Desktop, the host-loop agent process
   runs at `/var/empty` (or, when that directory is not root-owned and locked down, a per-run `host-cwd`
   directory), with deny rules for every spelling of it and the outputs dir added back as a working
@@ -76,6 +132,30 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The outputs-delete scanner no longer takes seconds on a long command.** A `shred` or `find` without its
+  delete flag, an unclosed `$(mktemp`, or one statement referencing thousands of variables made the scan
+  quadratic: an 81 KB `shred -a …` line took 1.2 s, and a 4000-variable statement 3.2 s, or about 1.3–1.6 s per
+  flagged command when each variable's value references the next. The token and `mktemp` checks now run in one pass,
+  and variable expansion has a work budget (about a hundred distinct variables referenced in one 10 KB
+  line): past it the scanner does not expand, and every mount the command names literally counts as
+  deleted in — stricter, never looser, for any mount named in the command. The regression guard holds the
+  whole scan of each flagged command (scanner, finding text and classifier together) under 150 ms on every
+  shape it probes. No hangs are known; the slowest known shapes take about 0.16–0.25 s per flagged command at
+  ~160 KB — thousands of distinct `$(mktemp)` variables referenced across several segments, or ~50 000 tiny
+  segments. No command in the kept run corpus comes within 1% of the budget; below it, what is flagged is
+  unchanged, except that an operand joined through an empty variable (`$B${A}C` with `A=""`) is no longer
+  read as the joined variable's value: bash expands the two halves separately, so the harness keeps it
+  unprovable — flagged, never cleared as safe.
+- **A resumed turn no longer re-reports an earlier turn's outputs delete.** The outputs diff compared every
+  turn against the first turn's baseline, so a delete in turn 1 failed turn 2 again on scenarios that armed
+  the manifest; it now compares against the turn's own start, matching the text scan's current-turn scope.
+- **An unreadable post-run walk no longer reports every output as deleted.** The diff now reports that it
+  could not verify (`outputs_diff_unavailable`, **warn**, plus a `::warning::`), a text-scan hit on that turn
+  still fails, and an authored `no_delete_in_outputs` fails as evidence-unavailable.
+- **A filesystem-proven outputs delete survives a missing or corrupt `events.jsonl`.** The diff's result is
+  the new top-level `RunResult.fsDiff` rather than living only inside `scan` (which is absent in that case),
+  so the delete still fails the run instead of surfacing only as `scan_unavailable`, whose message now says
+  only the text scan was lost. A partial result salvaged from an unanswered gate keeps the diff too.
 - **`cowork-harness lint` now reports every scenario the loader would reject, so a file it calls clean is
   one `run`/`record` will load.** Previously it ran only the bundled offline linter, which never parses
   with the harness's schema. A scenario with a scalar `semantic_matches.rubric` linted clean under

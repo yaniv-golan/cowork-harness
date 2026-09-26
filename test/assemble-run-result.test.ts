@@ -82,6 +82,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     nonDeterministicTerminal: undefined,
     permissiveAutoAllow: undefined,
     scan: undefined,
+    fsDiff: undefined,
     effectiveFidelity: undefined,
     fidelityWarnings: undefined,
     staleness: undefined,

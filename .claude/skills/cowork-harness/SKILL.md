@@ -652,11 +652,36 @@ Recognize these before "fixing" a non-bug:
   `Command timed out after <duration>` in stderr, matching production. Known gap: if **every** exec
   failed, the agent ran nothing yet the run still only warns — read `result.infraErrors` when a run looks
   suspiciously empty.
+- **`outputs_delete_unconfirmed`** (`WARN`) — a delete-shaped command near `mnt/outputs` that nothing
+  confirms: the per-turn filesystem diff shows no output present at turn start was deleted, and no flagged
+  delete has an `outputs/` path as its own operand. The classic case is a Python variable named `rm` in a
+  `python3 -c` body that also reads a report from outputs: `rm = json.load(open(".../outputs/r.json"))`.
+  A file the turn created and then deleted is invisible to the diff, so real deletes land here too:
+  - a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`);
+  - a `cd` then a relative path;
+  - chained variables (`A=…; B=$A/x; rm "$B"`);
+  - a Python path held in a variable set on another line (`p = …` then `os.remove(p)`);
+  - wrapper flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`);
+  - calls outside the modelled set, such as Node's `fs.promises.rm(…)`.
+
+  Read the command before dismissing it. A literal-path delete (`rm -f mnt/outputs/x`,
+  `os.remove(".../outputs/x")`) still fails `outputs_delete`. So do two non-deletes: quoted text where a
+  delete command with an outputs operand follows a separator, subshell or keyword
+  (`echo 'note; rm mnt/outputs/x'` — the classifier does not track quotes), and a heredoc that *writes* a
+  script instead of running it. A statement over 4 KiB or a command over 16 KiB is judged by the stricter
+  original rule, so a huge one-line body with a variable named `rm` fails again, and a command whose variable
+  expansion would exceed the scanner's work budget (about a hundred distinct variables in one 10 KB line) is
+  not expanded — every mount it names literally counts as deleted in. Waive any of these with
+  `allow_outputs_delete`. The warn is raised even when `no_delete_in_outputs` is authored (the assertion
+  passes; this warn is how the hit stays visible in text output).
+- **`outputs_diff_unavailable`** (`WARN`) — the outputs filesystem diff could not verify this turn and the
+  text scan saw nothing, so a delete by a script file or a non-bash tool would have gone unseen.
 - **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so
-  `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
+  `RunResult.scan` is undefined and the host-path guard and the outputs-delete **text scan did not run this
+  run** (the outputs filesystem diff still did, and a delete it proves still fails). Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
 
-The full 20-code signal table (severity + per-signal opt-out) is in
+The full 22-code signal table (severity + per-signal opt-out) is in
 [`references/scenario-schema.md`](./references/scenario-schema.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 

@@ -162,6 +162,15 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
     expect(schemaRefMd, `${SCHEMA_REF} benign-warn prose`).toContain(`Only the ${WORDS[warnCount]} **warn** codes`);
   });
 
+  // Two more counts that sat outside every check above and would have rotted on the next new code.
+  it("the total-count prose in docs/scenario.md and the schema reference states the real code count", () => {
+    const WORDS_TOTAL: Record<number, string> = { 20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three", 24: "twenty-four" };
+    const total = WORDS_TOTAL[CODES.length];
+    expect(total, `no word for ${CODES.length} — extend WORDS_TOTAL`).toBeDefined();
+    expect(scenarioMd, "docs/scenario.md total-count prose").toContain(`are ${total} codes`);
+    expect(schemaRefMd, `${SCHEMA_REF} total-count prose`).toContain(`All ${total} signal\ncodes`);
+  });
+
   it("SKILL.md's pointer states the real size of the signal table", () => {
     expect(skillMd, "SKILL.md N-code signal table pointer").toContain(`The full ${CODES.length}-code signal table`);
   });
@@ -173,7 +182,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
       expect(scenarioMd, `docs/scenario.md should document the warn signal ${code}`).toContain(`\`${code}\``);
     }
     // the prose states the count in words; keep it honest as the set grows
-    const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+    const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
     expect(scenarioMd).toContain(`Only ${WORDS[warnCodes.length]} codes are **warn**-severity`);
   });
 });

@@ -633,7 +633,9 @@
                   "scan_unavailable",
                   "ended_with_question",
                   "undelivered_deliverables",
-                  "delivery_unobservable"
+                  "delivery_unobservable",
+                  "outputs_delete_unconfirmed",
+                  "outputs_diff_unavailable"
                 ]
               },
               "severity": {
@@ -1063,6 +1065,14 @@
             "type": "string"
           }
         },
+        "outputsDeleteBasis": {
+          "type": "array",
+          "description": "Positional with outputsDeletes (same length and order): why each entry was flagged. fs-diff = proven by the filesystem diff; named = a delete in command/call position has an outputs path as its own operand; inferred = flagged by the detector's inference. Absent on results written before it existed (read as unknown, which fails closed).",
+          "items": {
+            "type": "string",
+            "enum": ["fs-diff", "named", "inferred"]
+          }
+        },
         "hostPathLeaked": {
           "type": "boolean"
         },
@@ -1086,6 +1096,28 @@
           }
         }
       }
+    },
+    "fsDiff": {
+      "type": "object",
+      "description": "The outputs-delete filesystem diff for this turn (live lane only): outputs/ at turn start vs. after the turn. clean = no path present at turn start was deleted (a file created and deleted within the turn is invisible to it); unavailable = it could not verify. A sibling of scan so a filesystem-proven delete survives a missing events.jsonl.",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["clean", "findings", "unavailable"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["baseline-incomplete", "post-walk-incomplete"]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["status", "findings"],
+      "additionalProperties": false
     },
     "effectiveFidelity": {
       "type": "string",

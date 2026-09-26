@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
-import type { RunResult, InfraErrorSource, Assertion } from "../types.js";
+import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff } from "../types.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 import { deriveModelProvenance, unpinnedModelWarning, resolvePinnedModel } from "./model-provenance.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
@@ -86,7 +86,7 @@ import {
   classifyWorkspaceFilesWithHealth,
   trustedWorkspaceFiles,
   scratchpadEvidenceComplete,
-  collectArtifactPaths,
+  collectArtifactPathsWithHealth,
   captureAuthoredFilesWithHealth,
   authoredFilesHealthNonEmpty,
   authoredTotalBytes,
@@ -97,6 +97,8 @@ import {
   readPreRunManifestLinkAware,
   readPreRunManifestOrigin,
   readPreRunManifestStats,
+  readOutputsBaseline,
+  type OutputsBaseline,
 } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { computeVerdict } from "./verdict.js";
@@ -385,8 +387,9 @@ export function assertContradiction(scenario: Scenario): string | undefined {
 }
 
 /** Does this scenario need the pre-run baseline captured? Extracted from `executeScenario` so the rule is
- *  ONE named, testable thing rather than an inline predicate — the list of arming keys is exactly the list
- *  of assertions that read the baseline, and an assertion added to one without the other is the defect this
+ *  ONE named, testable thing rather than an inline predicate — the list of arming keys covers every
+ *  assertion that reads the baseline (plus two that no longer do, kept deliberately — see the inline note at
+ *  `no_delete_in_mounts`), and an assertion that reads it without arming it is the defect this
  *  shape exists to prevent (`semantic_matches` was missing here for two releases, so it graded a document
  *  containing no authored files and reported that as complete).
  *
@@ -400,8 +403,11 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
         a.no_unexpected_files !== undefined ||
         a.input_unmodified !== undefined ||
         a.no_delete_in_outputs !== undefined ||
-        // Without this the fs-diff backstop never arms for the mount-wide key and it would silently
-        // degrade to regex-only — weaker than its outputs-scoped sibling, with nothing saying so.
+        // Arms the full manifest for the mount-wide key, as it always has. Known leftover: nothing consumes
+        // the manifest for this key (mountDeletes is text-only), and the outputs diff no longer needs it for
+        // no_delete_in_outputs either (it reads captureOutputsBaseline's per-turn snapshot). Both keys stay
+        // arming only because dropping them changes which runs persist preRunPaths/preRunHashes and
+        // authored-file attribution — a separate, observable change.
         a.no_delete_in_mounts !== undefined ||
         // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
         // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
@@ -691,11 +697,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         .map((mt) => mt.hostPath),
       warn,
     );
-  // Pre-run baseline capture: only when something will consume it — the scenario asserts
-  // no_unexpected_files, input_unmodified, or no_delete_in_outputs (the filesystem pre/post outputs
-  // diff below needs this SAME baseline to catch a delete that never shows up as a Bash/mcp__workspace__bash
-  // command in events.jsonl — a script file, a renamed binary, a non-bash tool), or this is a recording
-  // (cassettes always carry the baseline so a later assert-add stays replayable without re-record).
+  // Pre-run baseline capture (the full manifest): only when something will consume it — the scenario
+  // asserts one of the keys scenarioArmsPreRunManifest lists, or this is a recording (cassettes always carry
+  // the baseline so a later assert-add stays replayable without re-record). The outputs-delete filesystem
+  // diff does NOT depend on this: it reads its own outputs-only snapshot, taken on every turn.
   // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
   // that never look at it; absence stays loud.
   plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record");
@@ -1221,7 +1226,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
     if (scan.sidecarMissing)
       warn(
-        `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`,
+        `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / outputs-delete text scan / self-heal cannot be verified; the outputs filesystem diff still runs)\n`,
       );
     else if (scan.malformedLines > 0)
       warn(
@@ -1262,37 +1267,27 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // incomplete baseline. Read from the SAME single manifest read the paths/hashes came from.
     const preRunOrigin = readPreRunManifestOrigin(outDir);
 
-    // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
-    // scanEvents' regex (which only inspects Bash/mcp__workspace__bash tool_use commands and so misses a
-    // delete via a script file, a renamed binary, or any non-bash tool). If the pre-run baseline captured
-    // outputs (it always does when captured at all — see pre-run-manifest.ts), any path recorded there
-    // under outputs/ that is no longer present in the post-run walk is a real deletion regardless of HOW
-    // it happened. Fed into the SAME `scan.outputsDeletes` array the regex populates — one signal, two
-    // detectors — so `no_delete_in_outputs` (src/assert.ts) needs no changes to see it. Skipped when there
-    // is no baseline (preRunPaths undefined — the scenario asserted neither key that triggers capture, or a
-    // tier that can't capture); the regex backstop still runs in that case, same as before this change.
-    if (preRunPaths) {
-      // Path walk (matching the pre-run baseline): it emits symlink/hardlink paths too, so a pre-existing
-      // link under outputs that survives is present on BOTH sides and is not falsely reported as removed.
-      const postOutputs = collectArtifactPaths(workRoot, ["outputs"]).map((e) => e.path);
-      scan.outputsDeletes.push(
-        ...outputsRemovedByFsDiff(preRunPaths, postOutputs, {
-          preRunHashes,
-          // sha256 hex, matching the pre-run manifest's format so the two sides are comparable. Only
-          // called for paths that are NEW under outputs, and only when something actually vanished, so
-          // the ordinary run pays nothing. Unreadable ⇒ null ⇒ no rename proven ⇒ the removal reports.
-          hashPostPath: (rel) => {
-            try {
-              return createHash("sha256")
-                .update(readFileSync(join(workRoot, rel)))
-                .digest("hex");
-            } catch {
-              return null;
-            }
-          },
-        }),
+    // Filesystem diff of outputs/ for THIS turn — the ground-truth detector for `no_delete_in_outputs` and
+    // the default outputs-delete signal, INDEPENDENT of scanEvents' text scan (which only reads Bash /
+    // mcp__workspace__bash commands, so misses a delete via a script file, a renamed binary, or any non-bash
+    // tool). The baseline is the outputs-only snapshot taken at the start of every turn, armed or not
+    // (captureOutputsBaseline), so this runs on every live turn. Both walks' health is folded in: a walk that
+    // could not see everything is `unavailable`, never "everything was deleted".
+    //
+    // Findings go to the top-level `fsDiff` (so they survive a missing events.jsonl, which drops `scan`) and
+    // are ALSO merged into `scan.outputsDeletes` with basis `fs-diff`, so every reader of that array keeps
+    // seeing filesystem-proven deletes exactly as before.
+    const outputsPostWalk = collectArtifactPathsWithHealth(workRoot, ["outputs"]);
+    const fsDiff = outputsFsDiff(readOutputsBaseline(outDir), outputsPostWalk, outputsPathHasher(workRoot));
+    scan.outputsDeletes.push(...fsDiff.findings);
+    scan.outputsDeleteBasis.push(...fsDiff.findings.map(() => "fs-diff" as const));
+    if (fsDiff.status === "unavailable")
+      warn(
+        `::warning:: [scan] the outputs filesystem diff could not verify this turn (${fsDiff.reason}) — ` +
+          `a delete made without a bash command would go undetected\n`,
       );
-    }
+    if (scanUnavailable && fsDiff.findings.length)
+      warn(`::warning:: [scan] filesystem-proven outputs delete(s), kept despite the missing scan: ${fsDiff.findings.join("; ")}\n`);
 
     // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
     // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
@@ -1301,6 +1296,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (unansweredErr) {
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
+        fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         turn,
         // Without this the salvage lane reported `modelSource: "unresolved"` on a run that WAS pinned —
         // a positive false statement, and one `CompleteRunResult` cannot catch (it guards the result's
@@ -1459,6 +1455,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       preRunHashes,
       preRunOrigin,
       outputsDeletes: scan.outputsDeletes,
+      outputsDeleteBasis: scan.outputsDeleteBasis,
+      fsDiff,
       mountDeletes: scan.mountDeletes,
       questions: record.questions,
       gateOptions: record.gateOptions,
@@ -1807,11 +1805,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         ? undefined
         : {
             outputsDeletes: scan.outputsDeletes,
+            // Positional with outputsDeletes; omitted when there is nothing to explain.
+            ...(scan.outputsDeletes.length ? { outputsDeleteBasis: scan.outputsDeleteBasis } : {}),
             // Omitted when empty so an unchanged run's result.json is byte-identical to before.
             ...(scan.mountDeletes.length ? { mountDeletes: scan.mountDeletes } : {}),
             hostPathLeaked: scan.hostPathLeaked,
             selfHealRan: scan.selfHealRan,
           },
+      // The outputs filesystem diff — a sibling of `scan`, so a proven delete survives a missing events.jsonl.
+      fsDiff,
       effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
       fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
       l0HostConfigContamination: l0HostConfigContamination || undefined, // failing fidelity signal for protocol+plugins
@@ -2268,6 +2270,8 @@ export function buildPartialResult(args: {
   egress: { host: string; decision: "allow" | "deny" }[];
   durationMs: number;
   unanswered: { message: string; hint?: string };
+  /** The turn's outputs filesystem diff, already computed when the salvage branch runs. */
+  fsDiff?: OutputsFsDiff;
   /** The model the scenario/session pinned, if any — threaded in so a salvaged run reports the same model
    *  provenance a complete one does. Undefined means nothing pinned it (modelSource "unresolved"). */
   pinnedModel?: string;
@@ -2424,6 +2428,8 @@ export function buildPartialResult(args: {
     nonDeterministicTerminal,
     permissiveAutoAllow: undefined,
     scan: undefined,
+    // Computed before the salvage branch; a filesystem-proven delete must survive into the partial result.
+    fsDiff: args.fsDiff,
     fidelityWarnings: undefined,
     l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
@@ -2557,8 +2563,33 @@ export function hostPathLeaked(text: string): boolean {
 //     handled separately by `mvDeletesOutputs` (a move OUT of outputs fails, so it stays flagged).
 // A skill that empties a deliverable is a content bug, catchable with content assertions — not a
 // containment violation, and asserting it here would red runs the real product would allow.
-const DELETE_TOKEN =
-  /\b(rm|unlink|rmdir)\b|\bshred\b[^\n;|&]*[ \t](?:-[a-zA-Z]*u\b|--remove\b)|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+//
+// Semantically this is ONE regex:
+//   /\b(rm|unlink|rmdir)\b|\bshred\b[^\n;|&]*[ \t](?:-[a-zA-Z]*u\b|--remove\b)|\bfind\b[^\n]*-delete\b|
+//    \bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/
+// but the `shred` and `find` arms, run as a regex, re-scan to the end of the segment for EVERY occurrence of
+// the word when the flag is absent — quadratic (`shred -a ` ×9000 took over a second). `test` below decides
+// the same thing in one pass: the first occurrence of the word in a segment sees the longest remainder, so
+// testing only that remainder is exactly equivalent to trying every occurrence.
+const DELETE_TOKEN_SIMPLE = /\b(rm|unlink|rmdir)\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+const SHRED_REMOVE_FLAG = /[ \t](?:-[a-zA-Z]*u\b|--remove\b)/;
+const firstRemainderMatches = (text: string, segmentSep: RegExp, word: RegExp, tail: RegExp): boolean => {
+  if (!word.test(text)) return false; // the common case: the word is absent, one linear scan
+  for (const seg of text.split(segmentSep)) {
+    const at = seg.search(word);
+    if (at !== -1 && tail.test(seg.slice(at + seg.slice(at).match(word)![0].length))) return true;
+  }
+  return false;
+};
+const DELETE_TOKEN = {
+  test(text: string): boolean {
+    return (
+      DELETE_TOKEN_SIMPLE.test(text) ||
+      firstRemainderMatches(text, /[\n;|&]/, /\bshred\b/, SHRED_REMOVE_FLAG) ||
+      firstRemainderMatches(text, /\n/, /\bfind\b/, /-delete\b/)
+    );
+  },
+};
 /** Per-mount matchers. Production denies `unlink`/`rmdir` on EVERY writable Cowork FUSE mount, not just
  *  `outputs` — a connected folder shows the identical default, and approval is strictly per-mount. So the
  *  three matchers below are built per mount NAME rather than hardcoding the literal `outputs`.
@@ -2650,9 +2681,41 @@ function stripCommentLines(cmd: string): string {
 /** Substitute simple `NAME=VALUE` assignments into later `$NAME`/`${NAME}` uses. Conservative: skips
  *  command-substituted values (`$(...)`/backticks) so an unresolved indirect target is never treated as
  *  resolved (and therefore never "provably safe"). */
+/** Upper bound on the work variable expansion may do for one command, in characters scanned. Exact expansion
+ *  replaces referenced variables one at a time, each pass over the segment, so a statement that references
+ *  many distinct variables costs (variables × segment length) — seconds at 4000 on the release code. Real commands use
+ *  a few dozen variables; the budget allows about a hundred distinct ones referenced in one 10 KB line. */
+export const EXPANSION_BUDGET = 1_000_000;
+/** Inserted where an empty variable sits between a reference and more identifier text, so the two are never
+ *  joined into a new reference. Not a word character and not a statement separator; stripped from findings. */
+const EMPTY_JOIN_GUARD = "\u0000";
+class ExpansionBudgetExceeded extends Error {}
+
+/** `expandSimpleVars`, or `undefined` when the command would exceed `EXPANSION_BUDGET`. Callers that DECIDE
+ *  something must then take the stricter path (see `detectMountDeletes`, `outputsDeleteBasis`). */
+function tryExpandSimpleVars(rawCmd: string): string | undefined {
+  try {
+    return expandSimpleVarsUnbounded(rawCmd, { left: EXPANSION_BUDGET });
+  } catch (e) {
+    if (e instanceof ExpansionBudgetExceeded) return undefined;
+    throw e;
+  }
+}
+/** Display-only callers: over the budget the text is returned unexpanded. */
 function expandSimpleVars(rawCmd: string): string {
+  return tryExpandSimpleVars(rawCmd) ?? rawCmd;
+}
+
+function expandSimpleVarsUnbounded(rawCmd: string, budget: { left: number }): string {
+  const charge = (n: number): void => {
+    budget.left -= n;
+    if (budget.left < 0) throw new ExpansionBudgetExceeded();
+  };
   const cmd = joinLineContinuations(rawCmd);
   const vars = new Map<string, string>();
+  // First-insertion position of each var = its position in `vars`' iteration order (a re-`set` keeps it).
+  const order = new Map<string, number>();
+  const names: string[] = []; // names[order.get(k)] === k
   const assign = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/g;
   const record = (part: string): void => {
     assign.lastIndex = 0;
@@ -2660,14 +2723,96 @@ function expandSimpleVars(rawCmd: string): string {
     while ((m = assign.exec(part))) {
       const v = m[3].replace(/^['"]|['"]$/g, "");
       if (/\$\(|`/.test(v)) continue;
+      if (!order.has(m[2])) {
+        order.set(m[2], order.size);
+        names.push(m[2]);
+      }
       vars.set(m[2], v);
     }
   };
   const expand = (part: string): string => {
+    // Semantically: for each known var IN INSERTION ORDER, replace every `${k}` / `$k\b` in the text so far,
+    // so a value inserted for one var can be expanded by a var LATER in that order (never an earlier one).
+    // Done literally that is one regex per var per segment — quadratic on a long run of assignments. Instead
+    // only the vars the text references are visited, in the same order. The referenced names are exactly the
+    // identifiers after `$` / inside `${…}` (`\b` means `$k` only ever matches a whole identifier). A
+    // replacement can create a NEW reference only if the value contains `$`, or it lands right after a `$`
+    // (or a `$name` run it then extends); in that case the text is rescanned, so the visit set stays exact.
+    // `() => v` (function replacer) inserts the value literally — a raw `String.replace` string would treat
+    // `$&`/`$1` in an agent-controlled value as special and corrupt the expansion.
+    if (vars.size === 0 || !part.includes("$")) return part;
+    const heap: number[] = [];
+    const queued = new Set<number>();
+    const push = (at: number): void => {
+      if (queued.has(at)) return;
+      queued.add(at);
+      heap.push(at);
+      for (let i = heap.length - 1; i > 0;) {
+        const p = (i - 1) >> 1;
+        if (heap[p] <= heap[i]) break;
+        [heap[p], heap[i]] = [heap[i], heap[p]];
+        i = p;
+      }
+    };
+    const pop = (): number => {
+      const top = heap[0];
+      const last = heap.pop()!;
+      if (heap.length) {
+        heap[0] = last;
+        for (let i = 0; ;) {
+          const l = 2 * i + 1;
+          const r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l] < heap[m]) m = l;
+          if (r < heap.length && heap[r] < heap[m]) m = r;
+          if (m === i) break;
+          [heap[m], heap[i]] = [heap[i], heap[m]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    const scan = (text: string, after: number): void => {
+      for (const r of text.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) {
+        charge(32); // a match costs more than the characters it spans (an object, a map lookup)
+        const at = order.get(r[1]);
+        if (at !== undefined && at > after) push(at);
+      }
+    };
+    scan(part, -1);
     let s = part;
-    // `() => v` (function replacer) inserts the value literally — a raw `String.replace` string would
-    // treat `$&`/`$1` in an agent-controlled value as special and corrupt the expansion.
-    for (const [k, v] of vars) s = s.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), () => v);
+    while (heap.length) {
+      const current = pop();
+      const k = names[current];
+      const v = vars.get(k)!;
+      // An EMPTY value joins the text on both sides (`$B${A}C` with A="" becomes `$BC`), so it can create a
+      // reference too.
+      const valueMayJoin = v.includes("$") || /^[\w{]/.test(v);
+      let mayCreateRef = v.includes("$");
+      // does the text just before `offset` end in `$`, `${`, or a `$name` run a value placed there would extend?
+      const afterRefStart = (str: string, offset: number): boolean => {
+        let j = offset - 1;
+        while (j >= 0 && /\w/.test(str[j])) j--;
+        return j >= 0 && (str[j] === "$" || (str[j] === "{" && str[j - 1] === "$"));
+      };
+      s = s.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), (match: string, offset: number, str: string) => {
+        // An EMPTY value between a reference and more identifier text (`$B${A}C`, `$${A}B`) would JOIN them
+        // into a new reference. Bash never does that (`$B${A}C` is `$B` then `C`), so the join is kept apart
+        // with a separator: the operand stays unprovable — flagged, never cleared as safe, and `inferred` at
+        // most, whatever the joined name happens to hold.
+        if (v === "") {
+          const next = str[offset + match.length];
+          return next !== undefined && /[\w{]/.test(next) && afterRefStart(str, offset) ? EMPTY_JOIN_GUARD : "";
+        }
+        if (!mayCreateRef && valueMayJoin && afterRefStart(str, offset)) mayCreateRef = true;
+        return v;
+      });
+      charge(s.length); // the replace scanned the whole segment
+      if (mayCreateRef) {
+        charge(s.length);
+        scan(s, current);
+      }
+    }
     return s;
   };
   // Expand in SOURCE ORDER so a later reassignment cannot retroactively change an earlier `$NAME`
@@ -2688,7 +2833,9 @@ function expandSimpleVars(rawCmd: string): string {
   return out;
 }
 
-const MKTEMP_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b([^)]*)\)/g;
+// `NAME=$(mktemp ARGS)`. The `ARGS)` tail is found with a moving cursor rather than `[^)]*\)` in the regex:
+// on an unclosed paren the regex form re-scanned to the end once per `=$(mktemp` — quadratic.
+const MKTEMP_ASSIGN_HEAD = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=\$\(\s*mktemp\b/g;
 const ANY_ASSIGN = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=/g;
 const MKTEMP_SAFE_PLACEHOLDER = "/tmp/.mktemp-safe";
 
@@ -2732,13 +2879,24 @@ function resolveMktempVars(cmd: string): string {
       continue;
     }
     let part = parts[i];
-    for (const v of safeVars) {
-      part = part.replace(new RegExp(`\\$\\{${v}\\}|\\$${v}\\b`, "g"), () => MKTEMP_SAFE_PLACEHOLDER);
-    }
-    MKTEMP_ASSIGN.lastIndex = 0;
+    // Only the safe vars this segment references (the placeholder contains no `$`, so order cannot matter).
+    if (safeVars.size && part.includes("$"))
+      for (const r of new Set([...part.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((x) => x[1])))
+        if (safeVars.has(r)) part = part.replace(new RegExp(`\\$\\{${r}\\}|\\$${r}\\b`, "g"), () => MKTEMP_SAFE_PLACEHOLDER);
+    MKTEMP_ASSIGN_HEAD.lastIndex = 0;
     const mktempHere = new Set<string>();
     let m: RegExpExecArray | null;
-    while ((m = MKTEMP_ASSIGN.exec(part))) if (!mktempIsDirDirected(m[3])) mktempHere.add(m[2]);
+    let close = -1; // index of the next `)` at or after the cursor; -2 once none remains
+    while ((m = MKTEMP_ASSIGN_HEAD.exec(part))) {
+      const from = MKTEMP_ASSIGN_HEAD.lastIndex;
+      if (close !== -2 && close < from) close = part.indexOf(")", from);
+      if (close < 0) {
+        close = -2;
+        break; // no `)` after here, so no later assignment can close either
+      }
+      if (!mktempIsDirDirected(part.slice(from, close))) mktempHere.add(m[2]);
+      MKTEMP_ASSIGN_HEAD.lastIndex = close + 1;
+    }
     ANY_ASSIGN.lastIndex = 0;
     while ((m = ANY_ASSIGN.exec(part))) {
       if (mktempHere.has(m[2])) safeVars.add(m[2]);
@@ -2853,6 +3011,48 @@ export function outputsRemovedByFsDiff(
   return vanished.filter((p) => !(preRunHashes[p] && newContent.has(preRunHashes[p] as string))).map(say);
 }
 
+/** The outputs-delete filesystem diff, with the health of BOTH walks folded in. The ground-truth detector:
+ *  a path present in the turn-start snapshot and absent after the turn was deleted, however it happened.
+ *  Its blind spot is equally structural — a file created AND deleted within the turn is in neither
+ *  snapshot — which is why an empty result is `clean`, not "nothing was deleted".
+ *
+ *  A walk that could not see everything is `unavailable`, never `clean` and never a finding: an
+ *  unreadable post-run walk used to report every baseline output as deleted, and a subtree skipped for
+ *  containment is unobserved rather than proven empty. Callers treat `unavailable` as "the diff did not
+ *  run" — text hits then keep full fail-authority, and a warn says the diff could not verify. */
+export function outputsFsDiff(
+  baseline: OutputsBaseline | undefined,
+  post: { entries: { path: string }[]; complete: boolean; containmentSkips: string[] },
+  hashPostPath: (relPath: string) => string | null,
+): OutputsFsDiff {
+  const skipsOutputs = (skips: string[]) => skips.some((p) => p === "outputs" || p.startsWith("outputs/"));
+  if (!baseline || !baseline.complete) return { status: "unavailable", reason: "baseline-incomplete", findings: [] };
+  if (!post.complete || skipsOutputs(post.containmentSkips)) return { status: "unavailable", reason: "post-walk-incomplete", findings: [] };
+  const findings = outputsRemovedByFsDiff(
+    baseline.paths,
+    post.entries.map((e) => e.path),
+    { preRunHashes: baseline.hashes, hashPostPath },
+  );
+  return findings.length ? { status: "findings", findings } : { status: "clean", findings: [] };
+}
+
+/** The post-run side of the outputs diff's rename check: sha256 hex of a path under `workRoot`, the same format
+ *  `captureOutputsBaseline` records, so a renamed file's content matches its turn-start hash. Only called for
+ *  paths NEW under outputs, and only when something vanished, so the ordinary run pays nothing. Unreadable ⇒
+ *  null ⇒ no rename proven ⇒ the removal reports. Exported so the producer round-trip test uses this exact
+ *  function rather than a copy of it. */
+export function outputsPathHasher(workRoot: string): (relPath: string) => string | null {
+  return (rel) => {
+    try {
+      return createHash("sha256")
+        .update(readFileSync(join(workRoot, rel)))
+        .digest("hex");
+    } catch {
+      return null;
+    }
+  };
+}
+
 /** Which of `mounts` a command deletes in. Same logic per mount as the original outputs-only detector —
  *  `detectMountDeletes(cmd, ["outputs"])` is byte-equivalent to the old `isOutputsDelete(cmd)`, pinned by
  *  test. Returns the matching mount NAMES so a finding can say which mount, since production's approval
@@ -2864,8 +3064,15 @@ export function detectMountDeletes(cmd: string, mounts: string[]): string[] {
   // (`# stage to outputs` + `rm -rf "$UNRESOLVED"` still flags, on the rm's own unprovable target).
   // `code` has comments removed and is what every statement-level DECISION reads, so prose can never
   // itself be the operative delete.
-  const expanded = resolveMktempVars(expandSimpleVars(cmd));
-  const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
+  const expandedVars = tryExpandSimpleVars(cmd);
+  const codeVars = tryExpandSimpleVars(stripCommentLines(cmd));
+  // Over the expansion budget (about a hundred distinct variables referenced in one 10 KB line, fewer in a
+  // longer one): decide without expanding,
+  // strictly — every mount the command names literally anywhere counts as deleted in. The expanded text
+  // could only name a mount the raw text does not if the name itself were assembled from variables.
+  if (expandedVars === undefined || codeVars === undefined) return mounts.filter((m) => cmd.includes(m));
+  const expanded = resolveMktempVars(expandedVars);
+  const code = resolveMktempVars(codeVars);
   // Mount-independent, so hoisted out of the per-mount loop rather than recomputed per mount. Both are
   // pure, so this is a cost change only — the per-mount decisions below are byte-identical to the
   // original outputs-only detector.
@@ -2913,6 +3120,253 @@ export function isOutputsDelete(cmd: string): boolean {
   return detectMountDeletes(cmd, ["outputs"]).length > 0;
 }
 
+/** WHY `isOutputsDelete` flagged a command — the input to the outputs-delete tiering. Only meaningful for a
+ *  command that IS flagged; it never changes what is flagged.
+ *
+ *  `named`: some statement carries a delete whose OWN OPERAND names an outputs path — the delete is the
+ *  thing being run, and outputs is what it removes:
+ *    - shell: `rm` / `rmdir` / `unlink` / `shred -u` (optionally `\rm` or a path such as `/bin/rm`) in
+ *      COMMAND position — see `CMD_START` and `PREFIX` for exactly where a command may start and which
+ *      wrappers may precede it — with an outputs path among its arguments; a trailing ` # comment` is not an
+ *      argument, and `git rm --cached` is not a delete. Under `xargs` / `parallel` the operands come from the
+ *      pipe, so the whole statement is the operand;
+ *    - `find`/`fd` with `-delete`, `-exec`/`-execdir`/`-ok` `rm`/`unlink`/`shred -u`, or `fd -x rm`, and an
+ *      outputs path among its own arguments;
+ *    - `mv` out of outputs (`mvDeletesOutputs`);
+ *    - a shell delete launched from Python: `os.system('rm …')`, `subprocess.*('rm …', shell=True)`, or the
+ *      argv form `subprocess.*(['rm', …])`;
+ *    - calls: `os.remove(` / `os.unlink(` / `os.rmdir(` / `shutil.rmtree(` / a bare `unlink(` (Python
+ *      `from os import unlink`, PHP, Perl) whose argument text names outputs — or, in a comprehension, whose
+ *      `for … in <iterable>` does; `map(os.remove, <iterable naming outputs>)`; Perl `unlink "…"`; a
+ *      `.unlink(` / `.rmdir(` method call whose RECEIVER names outputs (`Path("…/outputs/x").unlink()`), whose
+ *      argument does (Ruby's `File.unlink("…")`), or that sits in a comprehension over an iterable that does.
+ *  `inferred`: everything else the detector flagged — an unprovable target (`rm "$UNSET"`), a relative
+ *  `cd` into outputs, or an outputs path that merely shares a statement with the word `rm`: a Python
+ *  identifier (`rm = …`, `rm.find(…)`, `rm[…]`), quoted prose (`echo 'rm outputs/x'`), a `sed`/`grep`
+ *  pattern, a trailing comment.
+ *
+ *  A "statement" is a `splitStatements` fragment — split on newline, `;`, `&&`, `||`, QUOTE-BLIND — of the
+ *  comment-stripped, continuation-joined text with simple same-command `VAR=value` assignments expanded one
+ *  level and the `mktemp` idiom resolved: the view `detectMountDeletes` decides on. So a delete in a loop
+ *  body (`do rm -f "$f"`), after a `cd`, through a chained or computed variable, or as `p = …` then
+ *  `os.remove(p)` classifies `inferred` even when real.
+ *
+ *  Size caps: a command longer than `BASIS_COMMAND_CAP` (16 KiB) skips the whole analysis, pre-split passes
+ *  included, and a statement longer than `BASIS_STATEMENT_CAP` (4 KiB) skips the operand analysis. Either way
+ *  it is `named` iff the ORIGINAL rule holds — a delete token (or `mv`) and an outputs path anywhere in the
+ *  raw text — a superset of what the operand rule names for any outputs path that appears literally in the
+ *  command, so for those a cap can only make a verdict stricter. (A mount name assembled from two variables,
+ *  `A=mnt/out B=puts; rm $A$B/x`, is never in the raw text and can read `inferred` past a cap.) The
+ *  flip side: over a cap the false positives this rule exists to clear come back, e.g. a one-line
+ *  `python3 -c` body over 4 KiB with a variable named `rm` next to an outputs path is `named` again.
+ *  Argument, operand and receiver scans stop `BASIS_SCAN_CAP` (4096) characters from their anchor. The cost
+ *  is therefore linear above the caps and bounded below them; the child-process probes in
+ *  test/outputs-delete-basis-linear.test.ts pin the worst known shapes under 50 ms.
+ *
+ *  Why "can't tell" may resolve to `inferred`: the basis only matters when the filesystem diff ran on
+ *  complete walks and found nothing. If the diff did not verify the turn, any flagged hit fails regardless
+ *  of basis (`outputsDeleteTier`), so this classifier cannot turn an unverifiable turn into a pass. */
+export function outputsDeleteBasis(cmd: string): "named" | "inferred" {
+  const mm = mountMatchers("outputs");
+  // Whole-command cap: the pre-split passes (variable expansion, `mktemp` resolution) are superlinear in the
+  // worst case, so a command over the cap skips them and is judged by the original rule over its RAW text —
+  // a delete token (or `mv`) and an outputs path anywhere. For any path that appears literally in the command
+  // this names a superset of the operand rule (the raw text also keeps comments and assignment values), so it
+  // is stricter there; only a mount name assembled from variables can escape it.
+  if (cmd.length > BASIS_COMMAND_CAP) return mm.touches.test(cmd) && (DELETE_TOKEN.test(cmd) || /\bmv\b/.test(cmd)) ? "named" : "inferred";
+  const codeVars = tryExpandSimpleVars(stripCommentLines(cmd));
+  if (codeVars === undefined) return "named"; // over the expansion budget: the stricter answer
+  const code = resolveMktempVars(codeVars);
+  return splitStatements(code).some(
+    (stmt) =>
+      mvDeletesOutputs(stmt, mm) ||
+      // Over the cap, fall back to the original statement rule — a delete word and an outputs path anywhere
+      // in the statement — which names a superset of what the operand rule names, so a huge statement can
+      // only get STRICTER, never turn a real delete into a warn. Bounds the operand analysis's cost.
+      (stmt.length > BASIS_STATEMENT_CAP ? DELETE_TOKEN.test(stmt) && mm.touches.test(stmt) : statementDeletesNamedOutputs(stmt, mm)),
+  )
+    ? "named"
+    : "inferred";
+}
+
+/** Statements longer than this skip the operand-level analysis (see `outputsDeleteBasis`). Command-position
+ *  matching is quadratic in the worst case — every `(`, `{`, backtick or `$(` is a candidate start — and a
+ *  minified-JSON `echo` is a realistic 80 KB statement. 4 KiB keeps the worst measured shape well under 50 ms. */
+export const BASIS_STATEMENT_CAP = 4 * 1024;
+/** Commands longer than this skip the whole operand-level classifier, pre-split passes included (see
+ *  `outputsDeleteBasis`). */
+export const BASIS_COMMAND_CAP = 16 * 1024;
+/** How far an argument / operand / receiver scan looks from its anchor. */
+const BASIS_SCAN_CAP = 4096;
+/** `[os.remove(p) for p in <iterable>]` — the `for … in` right after a delete call. Words and whitespace
+ *  strictly alternate, so no two quantifiers compete for the same characters (the earlier
+ *  `for\s+[\w\s,()]+?\s+in\s` was super-quadratic on a long run of spaces). */
+const COMPREHENSION_FOR = /^\s*for\s+(?:[\w,()]+\s+)+?in\s/;
+
+// Where a simple command can START: the statement start; after `|`, `(`, `)` (a `case` label), `{`, `$(` or a
+// backtick; after a background `&` (not `&&`, `>&`, `&>`); after a standalone `!`; after `then` / `do` / `else` /
+// `if` / `while` / `until`; inside an `sh -c` / `bash -lc` / `eval` string; or inside the command string handed
+// to Python's `os.system(…)` / `os.popen(…)` / `subprocess.*(…)`.
+const SH_C = String.raw`\b(?:ba|z|da)?sh\s+-[a-zA-Z]*c[a-zA-Z]*\s+['"]?|\beval\s+['"]?`;
+const CMD_START =
+  String.raw`(?:^|[|(){` +
+  "`" +
+  String.raw`]|\$\(|(?<![&>|])&(?![&>])|(?<!\S)!\s|\b(?:then|do|else|if|while|until)\s|` +
+  SH_C +
+  String.raw`|\b(?:os\.system|os\.popen|subprocess\.\w+)\(\s*f?['"])`;
+// Words that can stand between the start and the command itself, repeatable and in any order (`xargs sudo
+// rm`, `xargs -I{} sh -c 'rm …'`): wrappers and their flags — an argument-taking flag gets ONE argument slot,
+// glued or separate, never both, so a flag can never swallow the next command word (`xargs -I{} echo rm {}`
+// must stay a dry run) — plus `VAR=value` assignments and leading redirects (`2>/dev/null rm …`).
+const PREFIX =
+  String.raw`(?:(?:` +
+  [
+    String.raw`sudo(?:\s+(?:-[ugCDhpRrTU](?:\S+|\s+[^-\s]\S*)|-\S+))*`,
+    String.raw`(?:command|exec|nohup|time|builtin|busybox)`,
+    String.raw`git(?:\s+-\S+)*`,
+    String.raw`nice(?:\s+-\S+(?:\s+-?\d+)?)*`,
+    String.raw`ionice(?:\s+(?:-[cnpPu](?:\S+|\s+[^-\s]\S*)|-\S+))*`,
+    String.raw`timeout(?:\s+(?:-[ks](?:\S+|\s+\S+)|-\S+))*\s+\S+`,
+    String.raw`env(?:\s+-\S+)*(?:\s+\w+=\S*)*`,
+    String.raw`(?:xargs|parallel)(?:\s+(?:-[InLPdsaEeS](?:\S+|\s+[^-\s]\S*)|-{1,2}[\w-]+\S*))*`,
+    String.raw`\w+=\S*`,
+    String.raw`\d*[<>]{1,2}&?\s*\S+`,
+  ].join("|") +
+  String.raw`)\s+|` +
+  SH_C +
+  String.raw`)*`;
+// The word must be followed by whitespace or the end — so `rm.x`, `rm(`, `rm[`, `rm,`, `rm)`, `rm:` are not
+// commands — and not by an assignment operator (`rm = …`, `rm += …`), which is a variable, not a command.
+// Nothing else is excluded: an operand may start with `.`, `[` or `:` (`rm ./outputs/x`, `find . …`).
+const NOT_IDENT_USE = String.raw`(?=\s|$)(?!\s*(?:=|\+=|-=|\*=|\/=))`;
+// The prefix chain is matched ATOMICALLY (`(?=(…))\k<…>`, JS having no possessive groups): it takes the
+// longest chain once and never re-splits it. Without that, a long run of `VAR=x`/flag/redirect words that
+// ends in no delete made the engine try every way of carving it into prefix items — exponential, measured
+// as a hang on a few hundred words. Every item's own alternatives are ordered longest-first, so the single
+// chain the lookahead picks is the one that leaves the command word next.
+const COMMAND_WORD = (words: string) =>
+  new RegExp(
+    // The lookahead after the start rejects, in O(1), the long runs of `(`, `{`, backticks that are each a
+    // candidate start but can never begin a command word.
+    CMD_START +
+      String.raw`(?=\s*[\w\\/.~$<>"'])\s*(?=(?<chain>` +
+      PREFIX +
+      String.raw`))\k<chain>\\?(?:[\w.~$\/-]*\/)?(?<word>` +
+      words +
+      ")" +
+      NOT_IDENT_USE,
+    "g",
+  );
+const SHELL_DELETE_CMD = COMMAND_WORD("rm|rmdir|unlink|shred");
+const FIND_CMD = COMMAND_WORD("find|fd");
+const FIND_DELETES =
+  /(^|\s)-delete\b|-(?:exec|execdir|ok|okdir)\s+\\?(?:\S*\/)?(?:rm|unlink)\b|-(?:exec|execdir|ok|okdir)\s+\\?(?:\S*\/)?shred\b[^;+]*?(?:\s-[a-zA-Z]*u\b|\s--remove\b)|(^|\s)(?:-x|-X|--exec|--exec-batch)\s+\\?(?:\S*\/)?(?:rm|unlink)\b/;
+const PY_DELETE_CALL = /\b(?:os\.(?:remove|unlink|rmdir)|shutil\.rmtree)\s*\(/g;
+const PY_DELETE_METHOD = /\.(?:unlink|rmdir)\s*\(/g;
+// `subprocess.run(['rm', '-rf', path])` — the argv form of a shell delete.
+const PY_ARGV_DELETE = /\bsubprocess\.\w+\(\s*\[\s*['"](?:\S*\/)?(?:rm|rmdir|unlink)['"]/g;
+// `map(os.remove, paths)` — the delete function passed by name.
+const PY_MAP_DELETE = /\bmap\(\s*(?:os\.(?:remove|unlink|rmdir)|shutil\.rmtree)\s*,/g;
+// A bare `unlink(…)` call (`from os import unlink`, PHP, Perl) and Perl's `unlink "…"` / `unlink glob "…"`.
+const BARE_UNLINK_CALL = /(?<![\w.$>])unlink\s*\(/g;
+const PERL_UNLINK = /(?<![\w.$>])unlink\s+(?:glob\s+)?["']/g;
+
+/** The operand text of a simple command starting at `from`: up to the next `|` (or, for a command that itself
+ *  sits inside backticks, the closing backtick — otherwise a backtick substitution IS operand text), minus a trailing
+ *  ` # comment`. Quote-blind like everything else here; a `#` inside quotes only ever SHORTENS the operand,
+ *  which can move a delete to `inferred` (a warn), never to `named`. */
+function operandText(stmt: string, from: number, insideBackticks = false): string {
+  const rest = stmt.slice(from, from + BASIS_SCAN_CAP);
+  const end = rest.search(insideBackticks ? /[|`]/ : /\|/);
+  const simple = end === -1 ? rest : rest.slice(0, end);
+  const comment = simple.search(/\s#/);
+  return comment === -1 ? simple : simple.slice(0, comment);
+}
+
+/** The text inside the parentheses opened just before `from` — balanced, falling back to the rest of the
+ *  statement when they do not close within it (a quote-blind split can cut a call in half). */
+function callArgText(stmt: string, from: number): string {
+  let depth = 1;
+  const end = Math.min(stmt.length, from + BASIS_SCAN_CAP);
+  for (let i = from; i < end; i++) {
+    if (stmt[i] === "(") depth++;
+    else if (stmt[i] === ")" && --depth === 0) return stmt.slice(from, i);
+  }
+  return stmt.slice(from, end);
+}
+
+/** The receiver expression just before a `.method(` at `dot`: walks back over identifiers, dots, quoted
+ *  strings and balanced `(…)` / `[…]` groups — `Path("…/x")`, `Path("…").joinpath("x")`, `(Path("…") / "x")`,
+ *  `p`. Bounded by `BASIS_SCAN_CAP`. */
+function receiverText(stmt: string, dot: number): string {
+  const stop = Math.max(0, dot - BASIS_SCAN_CAP);
+  let i = dot;
+  while (i > stop) {
+    const c = stmt[i - 1];
+    if (c === ")" || c === "]") {
+      const open = c === ")" ? "(" : "[";
+      let depth = 0;
+      let j = i - 1;
+      for (; j >= stop; j--) {
+        if (stmt[j] === c) depth++;
+        else if (stmt[j] === open && --depth === 0) break;
+      }
+      if (j < stop) break;
+      i = j;
+    } else if (c === '"' || c === "'") {
+      const j = stmt.lastIndexOf(c, i - 2);
+      if (j < stop) break;
+      i = j;
+    } else if (/[\w.]/.test(c)) i--;
+    else break;
+  }
+  return stmt.slice(i, dot);
+}
+
+function statementDeletesNamedOutputs(stmt: string, mm: MountMatchers): boolean {
+  for (const m of stmt.matchAll(SHELL_DELETE_CMD)) {
+    const lead = m[0];
+    const word = m.groups?.word;
+    const from = m.index + lead.length;
+    // Under xargs/parallel the operands arrive on the pipe, so the whole statement is the operand.
+    const operands = /\b(?:xargs|parallel)\b/.test(lead) ? stmt : operandText(stmt, from, /`[^`]*$/.test(lead));
+    if (word === "shred" && !/(^|\s)(-[a-zA-Z]*u\b|--remove\b)/.test(operands)) continue;
+    // `git rm --cached` only drops the index entry; the file stays.
+    if (word === "rm" && /\bgit\b/.test(lead) && /(^|\s)--cached\b/.test(operands)) continue;
+    if (mm.touches.test(operands)) return true;
+  }
+  for (const m of stmt.matchAll(FIND_CMD)) {
+    const args = operandText(stmt, m.index + m[0].length);
+    if (FIND_DELETES.test(args) && mm.touches.test(args)) return true;
+  }
+  const callArgs = (re: RegExp) =>
+    [...stmt.matchAll(re)].map((m) => ({ arg: callArgText(stmt, m.index + m[0].length), end: m.index + m[0].length }));
+  for (const { arg, end } of callArgs(PY_DELETE_CALL)) {
+    if (mm.touches.test(arg)) return true;
+    // A comprehension / generator: `[os.remove(p) for p in glob.glob(".../outputs/*.tmp")]` — the operand
+    // is the loop variable, bound by the `for … in <iterable>` right after the call.
+    const after = stmt.slice(end + arg.length + 1, end + arg.length + 1 + BASIS_SCAN_CAP);
+    if (COMPREHENSION_FOR.test(after) && mm.touches.test(after)) return true;
+  }
+  for (const re of [PY_MAP_DELETE, BARE_UNLINK_CALL]) if (callArgs(re).some(({ arg }) => mm.touches.test(arg))) return true;
+  for (const m of stmt.matchAll(PY_ARGV_DELETE)) {
+    const open = stmt.indexOf("(", m.index);
+    if (mm.touches.test(callArgText(stmt, open + 1))) return true;
+  }
+  for (const m of stmt.matchAll(PERL_UNLINK)) if (mm.touches.test(operandText(stmt, m.index + m[0].length))) return true;
+  // `.unlink(` / `.rmdir(` as a method: the path is the RECEIVER (`Path("…").unlink()`), an argument (Ruby's
+  // `File.unlink("…")`), or — in a comprehension — the `for … in <iterable>` after the call. Not merely
+  // somewhere in the statement: `Path("/tmp/x").unlink() if Path("…/outputs/r").exists()` deletes /tmp/x.
+  for (const m of stmt.matchAll(PY_DELETE_METHOD)) {
+    const from = m.index + m[0].length;
+    const arg = callArgText(stmt, from);
+    if (mm.touches.test(receiverText(stmt, m.index)) || mm.touches.test(arg)) return true;
+    const after = stmt.slice(from + arg.length + 1, from + arg.length + 1 + BASIS_SCAN_CAP);
+    if (COMPREHENSION_FOR.test(after) && mm.touches.test(after)) return true;
+  }
+  return false;
+}
+
 /** the operative delete statement(s) within a command that `isOutputsDelete` flagged — for a readable
  *  finding. The raw `cmd.slice(0,120)` truncated away the actual `rm` when a long `VAR=…` assignment prefix
  *  preceded it (the finding then showed only the assignment block). This surfaces the delete/mv itself, with
@@ -2933,7 +3387,7 @@ function outputsDeleteSnippet(cmd: string, mount = "outputs"): string {
   }
   const mm = mountMatchers(mount);
   const ops = splitStatements(expanded).filter((s) => mvDeletesOutputs(s, mm) || DELETE_TOKEN.test(s));
-  return (ops.length ? ops.join("; ") : expanded).trim().slice(0, 160);
+  return (ops.length ? ops.join("; ") : expanded).split(EMPTY_JOIN_GUARD).join("").trim().slice(0, 160);
 }
 
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
@@ -2944,6 +3398,10 @@ export function scanEvents(
   rwMounts: string[] = ["outputs"],
 ): {
   outputsDeletes: string[];
+  /** POSITIONAL companion of `outputsDeletes` — same length, same order — saying why each entry was
+   *  flagged (see `outputsDeleteBasis`). Positional rather than keyed by entry text because identical
+   *  commands produce identical entries. */
+  outputsDeleteBasis: ("fs-diff" | "named" | "inferred")[];
   /** Per-mount delete detections across ALL writable mounts, including `outputs`. A superset of
    *  `outputsDeletes`, which stays exactly as it was because `no_delete_in_outputs`, its verdict signal
    *  and every committed cassette are defined in terms of it. */
@@ -2960,6 +3418,7 @@ export function scanEvents(
   const mounts = rwMounts.includes("outputs") ? rwMounts : ["outputs", ...rwMounts];
   const out = {
     outputsDeletes: [] as string[],
+    outputsDeleteBasis: [] as ("fs-diff" | "named" | "inferred")[],
     mountDeletes: [] as { mount: string; command: string }[],
     hostPathLeaked: false,
     selfHealRan: false,
@@ -3014,7 +3473,10 @@ export function scanEvents(
         for (const m of hits) out.mountDeletes.push({ mount: m, command: outputsDeleteSnippet(cmd, m) });
         // `outputsDeletes` is the `outputs` slice of THIS command's hits — one detection pass feeds both,
         // so they cannot disagree about outputs the way two separate passes could.
-        if (hits.includes("outputs")) out.outputsDeletes.push(outputsDeleteSnippet(cmd));
+        if (hits.includes("outputs")) {
+          out.outputsDeletes.push(outputsDeleteSnippet(cmd));
+          out.outputsDeleteBasis.push(outputsDeleteBasis(cmd));
+        }
         if (selfHealRe.test(cmd)) out.selfHealRan = true;
       }
       if (block.type === "text" && typeof block.text === "string" && hostPathLeaked(block.text)) out.hostPathLeaked = true;
