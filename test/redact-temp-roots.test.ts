@@ -336,3 +336,42 @@ describe("hostPathLeaked — backtick-quoted host path", () => {
     expect(hostPathLeaked("see `/sessions/local_x/mnt/outputs/f.md`")).toBe(false);
   });
 });
+
+describe("data-volume paths after a non-boundary char, and host paths in a URL query", () => {
+  for (const s of [
+    "see **/System/Volumes/Data/Users/alice/p/f.md** now",
+    "a,/System/Volumes/Data/Users/alice/p/f.md",
+    "</System/Volumes/Data/Users/alice/p/f.md>",
+    "x|/System/Volumes/Data/Users/alice/p/f.md",
+    "x/System/Volumes/Data/Users/alice/p/f.md",
+  ])
+    it(`redacts ${JSON.stringify(s.slice(0, 16))}… to one token with no username`, () => {
+      const red = redactText(s, POLICY);
+      expect(red).not.toContain("alice");
+      expect(red.match(/\[REDACTED:/g)?.length).toBe(1);
+      expect(red).not.toContain("]]");
+    });
+
+  it("still leaves an http(s) URL's /system/volumes/ segment alone", () => {
+    const s = "GET https://cdn.test/system/volumes/x.js";
+    expect(redactText(s, POLICY)).toBe(s);
+  });
+
+  for (const s of [
+    "open http://localhost:3000/open?f=/Users/alice/doc.pdf",
+    "open http://localhost:3000/open?f=/private/tmp/claude-501/-Users-alice-x/f",
+  ])
+    it(`the policy fixes what the scanner flags in a query string: ${s.slice(5, 40)}…`, () => {
+      expect(pathFindings(s).length).toBeGreaterThan(0);
+      const red = redactText(s, POLICY);
+      expect(red).not.toContain("alice");
+      expect(pathFindings(red)).toEqual([]);
+    });
+
+  it("a port URL and a plain query stay URLs", () => {
+    for (const s of ["GET https://api.example.com:8443/users/octocat/repos", "GET https://api.example.com/users/x?a=1&b=2"]) {
+      expect(redactText(s, POLICY)).toBe(s);
+      expect(pathFindings(s)).toEqual([]);
+    }
+  });
+});

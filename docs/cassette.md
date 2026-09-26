@@ -1011,7 +1011,8 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   (`/private/tmp/`, `/private/var/`, `/var/folders/`, `/System/Volumes/`, `/Volumes/`), in any letter case,
   and a **slugged home segment** (`-Users-<user>-…`, `-home-<user>-…`, `-root-…`) under any root, at the
   start of a string or line, or after a `/` or a quote. Root rules skip a path segment inside an http(s) URL
-  (`https://api.example.com/users/…`), and `/Volumes/` must start a path, so a Docker or kubelet
+  (`https://api.example.com/users/…`) but not a host path passed as a query value
+  (`http://localhost:3000/open?f=/Users/…` is still redacted), and `/Volumes/` must start a path, so a Docker or kubelet
   `…/volumes/…` segment is left alone. That last rule is what catches a run dir inside a
   Claude session scratchpad — `/tmp/claude-<uid>/-Users-<user>-<project>/…` — where the username is not in a
   `/Users/<user>/` segment at all. A policy copied by an earlier `init-redact` does not have these rules:
