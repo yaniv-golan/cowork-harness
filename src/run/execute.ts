@@ -1917,7 +1917,36 @@ export function defaultedFidelityNotice(name: string): string {
   );
 }
 
+/** Load a scenario file the way `run`/`record` do. Thin wrapper over {@link loadScenarioPure} that adds the
+ *  one side effect the loader has: the defaulted-fidelity deprecation notice on stderr. */
 export function parseScenarioFile(path: string): Scenario {
+  return loadScenarioPure(path, {
+    // Warn, do not fail: this is the deprecation window before `fidelity` becomes required.
+    // ONCE PER SCENARIO NAME, not once per parse. `record <dir> --dry-run` parses each file THREE times
+    // (discovery, the duplicate-target scan, the preview loop), so a 35-file corpus with no `fidelity:` —
+    // the deprecation-window default, i.e. most corpora — emitted 105 copies of an 812-char notice, and
+    // `--quiet` suppresses none of it. That was larger than the broken-file dump it sat next to, and it
+    // fires when NOTHING is wrong. The set is process-lifetime: one warning per scenario per invocation.
+    onFidelityDefaulted: (name) => {
+      if (FIDELITY_NOTICE_SEEN.has(name)) return;
+      FIDELITY_NOTICE_SEEN.add(name);
+      process.stderr.write(defaultedFidelityNotice(name) + "\n");
+    },
+  });
+}
+
+/** Everything the loader checks about a scenario FILE, with no side effects: reads `path` and nothing else —
+ *  no stderr, no environment, no other file. YAML parse, the schema (with its cross-key refinements), the
+ *  filename-derived `name`, the file-relative `session:` string (resolved as a path, never opened), and the
+ *  load-time regex / reserved-value refusals.
+ *
+ *  `cowork-harness lint` calls this directly, so "lint reports no loader finding" and "`run`/`record` load
+ *  the file" are the same function and cannot drift. Throws `UsageError` for a schema violation (the full
+ *  Zod issue list in `hint`) and a plain `Error` for the regex/reserved refusals or a YAML syntax error.
+ *
+ *  `onFidelityDefaulted` runs at the point the notice always ran — after the name default, before the
+ *  session and regex steps — so `parseScenarioFile`'s output order is unchanged. */
+export function loadScenarioPure(path: string, hooks: { onFidelityDefaulted?: (name: string) => void } = {}): Scenario {
   let scenario: Scenario;
   let rawDoc: unknown;
   try {
@@ -1938,16 +1967,7 @@ export function parseScenarioFile(path: string): Scenario {
   }
   // `name` defaults to the filename (sans extension) — the file is the identity.
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
-  // Warn, do not fail: this is the deprecation window before `fidelity` becomes required.
-  // ONCE PER SCENARIO NAME, not once per parse. `record <dir> --dry-run` parses each file THREE times
-  // (discovery, the duplicate-target scan, the preview loop), so a 35-file corpus with no `fidelity:` —
-  // the deprecation-window default, i.e. most corpora — emitted 105 copies of an 812-char notice, and
-  // `--quiet` suppresses none of it. That was larger than the broken-file dump it sat next to, and it
-  // fires when NOTHING is wrong. The set is process-lifetime: one warning per scenario per invocation.
-  if (fidelityWasDefaulted(rawDoc) && !FIDELITY_NOTICE_SEEN.has(scenario.name)) {
-    FIDELITY_NOTICE_SEEN.add(scenario.name);
-    process.stderr.write(defaultedFidelityNotice(scenario.name) + "\n");
-  }
+  if (fidelityWasDefaulted(rawDoc)) hooks.onFidelityDefaulted?.(scenario.name);
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
   // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT

@@ -16,8 +16,9 @@ inputs:
   command:
     description: >-
       cowork-harness subcommand to run: replay | lint | lint-skill | analyze-skill | verify-cassettes |
-      run. `lint` and `lint-skill` are thin passthroughs to the bundled `scenario.py` (needs python3 on
-      the runner — preinstalled on ubuntu-latest); `analyze-skill` is a pure-TS static scan (no python3
+      run. `lint` and `lint-skill` run the bundled `scenario.py` (needs python3 on the runner —
+      preinstalled on ubuntu-latest); `lint` also runs the harness's own scenario loader first, so a
+      file `run`/`record` would refuse to load is an ERROR; `analyze-skill` is a pure-TS static scan (no python3
       needed). This is a description, not a validated allowlist — `path`/`extra-args` are built verbatim
       into the invocation for any subcommand the installed `cowork-harness` accepts.
     required: false
