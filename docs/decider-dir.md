@@ -164,7 +164,9 @@ cowork-harness answer "$GATES" --gate 1 --choose "PDF"
   bare scalar is accepted as a single selection; an array on a single-select gate fails loud. (The
   `answer` subcommand does this for you — just repeat `--choose`.)
 - **Backstop timeout.** If no answer arrives within the deadline, the harness raises a loud
-  `UnansweredError` rather than hanging forever.
+  `UnansweredError` rather than hanging forever: the run ends as an unanswered-gate partial (`result.json`
+  with `partial: true` and a failing verdict, exit 2) and records `errorSource: "decider_timeout"` in
+  `result.json` and `status.json`.
 - **Env knobs:**
   - `COWORK_HARNESS_DECIDER_DIR_POLL_MS` — how often the harness polls for the answer file and how often
     `gates --follow` polls for new gates (defaults: 300 ms for the harness rendezvous, 500 ms for the

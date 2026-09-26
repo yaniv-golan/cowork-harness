@@ -24,8 +24,42 @@ All notable changes to this project are documented here. The format is based on
   git-tracked files, a `--skill` subdirectory with nothing tracked under it, and a target with no readable,
   tracked `SKILL.md`. Previously these ran both turns and failed or degraded afterwards.
 
+### Added
+
+- **`errorSource: "decider_timeout"`** in `result.json` and `status.json` (and `schema/run-result.json`'s
+  `errorSource` enum): the run ended because a `--decider-cmd` helper or a `--decider-dir` rendezvous did not
+  answer a gate within its backstop (`COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` /
+  `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS`). An additive enum value; a consumer that validates `result.json`
+  against an older copy of the schema will reject a document carrying it.
+
 ### Fixed
 
+- **Interrupting a run (SIGINT/SIGTERM) now stops the agent and records the run on every tier.** On
+  `protocol` and `microvm` nothing handled the signal, so the harness died by it: no exit hook ran,
+  `status.json` stayed `"running"` (readers only caught it as stale after 15 s), and the agent was never
+  told to stop — a signal sent to the harness alone (a wrapper script, a CI cancel, `timeout`) left it
+  running, where it could finish a paid turn. One handler now owns the signal for the whole process: it
+  kills `--decider-cmd` helpers, sends the agent SIGTERM and SIGKILLs it after 2 s (at once when there is
+  no agent to wait for; a second signal skips the wait), reaps the container/network resources, and exits
+  130 (`SIGINT`) or 143 (`SIGTERM`) — so `status.json` ends `"error"`. The exit status a shell sees is
+  unchanged. `container`/`hostloop` keep their immediate container reap, with no added wait. The
+  `--decider-cmd` helper cleanup no longer re-raises the signal, which had bypassed all of this. A
+  multi-scenario `run` interrupted mid-batch starts no further scenario, and an interrupted `record` never
+  writes a cassette, even with `--allow-failing`. (Runs that `critique` starts are child processes it stops
+  itself, and are not covered by this.)
+- **`microvm`: stopping a run now stops the agent inside the VM.** Killing the host `limactl shell`
+  client never reached the guest agent — it kept running with its input still open — and orphaned the
+  client's `ssh` process. On an interrupt, and when a run ends early (an unanswered gate, a crash), the
+  harness now signals this session's agent processes inside the VM (matched by the session's
+  `CLAUDE_CONFIG_DIR`, so another session's agent is never touched) and kills the orphaned `ssh`. What is
+  verified: the selection of guest processes, the host command, and the order of operations, by unit tests
+  that do not start a VM. It has not yet been exercised end to end against a live microVM.
+- **A `--decider-cmd` helper that times out, exits, or closes its input now ends the run as an
+  unanswered-gate partial** instead of a raw stack trace: `result.json` is written (`partial: true`,
+  failing verdict), the error is category `unanswered` (it was `internal` under `--output-format json`), and
+  the exit code is 2 as before. A timeout is recorded as `errorSource: "decider_timeout"`. A `--decider-dir`
+  backstop timeout, which was already salvaged, now says it timed out (it said the channel "closed without a
+  response") and records the same `errorSource`.
 - **The critique corpus no longer contains files the graded agent never received.** Every corpus class was
   checked against a git-tracked set read from that class's own directory, while staging reads one set at the
   mount root. A skill that is a git submodule of its plugin was graded from the submodule's own index although
