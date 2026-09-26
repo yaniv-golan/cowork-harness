@@ -67,9 +67,9 @@ describe("published scenario.schema.json is structural, and says so", () => {
     expect(validateScenario({ prompt: "x", assert: [{ no_delete_in_outputs: true }, { allow_outputs_delete: true }] })).toBe(false);
   });
 
-  it("the description points at both commands, because neither alone covers the two cases above", () => {
-    // Measured: `lint` catches the lane case and not the empty rule; `record --dry-run` catches the empty
-    // rule. A description naming only one would send an author to a tool that reports clean.
+  it("the description points at the checks that catch the two cases above", () => {
+    // `cowork-harness lint` runs the real loader, so it catches both; `record --dry-run` adds the pre-spend
+    // refusals. A description naming neither would send an author to the schema alone, which reports clean.
     const d = load("scenario.schema.json").description as string;
     expect(d).toContain("lint");
     expect(d).toContain("--dry-run");

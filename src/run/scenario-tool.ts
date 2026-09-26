@@ -1,9 +1,11 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { fail, isJsonOutput, jsonError, jsonPayloadEnvelope, parseOutputFormat } from "./envelope.js";
 import { writeAllSync } from "../io.js";
+import { lintPrepass, type LintFinding } from "./lint-load.js";
 
 // Synchronous fd write (match envelope.ts/cli.ts/doctor.ts): writeAllSync retries EAGAIN and loops on
 // short writes so the whole payload lands before process.exit on a pipe (see src/io.ts).
@@ -62,8 +64,14 @@ function pythonNotFoundMessage(py: string, cmd: string): string {
  *    `jsonError(cmd, "usage", …)` envelope instead of letting `JSON.parse` throw and crash the wrapper.
  *
  *  A missing python3 is exit 127 in both modes (the ENOENT guard, unchanged); PyYAML is bundled
- *  alongside scenario.py, so neither lane needs a separate install. */
-function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
+ *  alongside scenario.py, so neither lane needs a separate install.
+ *
+ *  **`lint` also runs the scenario loader first** (lint-load.ts): every file `run`/`record` would refuse to
+ *  load becomes an ERROR finding (`scenario-invalid`, `baseline-unknown`), handed to python through a temp
+ *  file named by `COWORK_HARNESS_LINT_EXTRA_FINDINGS` so python's renderer, `--min-severity` filter and exit
+ *  rule apply to both sets unchanged. With no loader findings python runs exactly as before. A direct
+ *  `python3 scenario.py lint` does not run the loader. */
+function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass: (args: string[]) => LintFinding[] = lintPrepass): never {
   // Validate --output-format BEFORE isJsonOutput (matching every other command's ensureOutputFormat
   // gate) — otherwise an unrecognized value (`--output-format xml`, or a valueless trailing flag) falls
   // through isJsonOutput's strict text/json match and silently degrades to text mode, unlike every other
@@ -81,16 +89,56 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
   // reports `usage: scenario.py lint …` — a command a `cowork-harness` user cannot run. Passed as env
   // (not a flag) so the script stays honest when invoked DIRECTLY, which SKILL.md and three docs document:
   // there it falls back to its own basename.
-  const pyEnv = { ...process.env, COWORK_HARNESS_PROG: "cowork-harness" };
+  const pyEnv: NodeJS.ProcessEnv = { ...process.env, COWORK_HARNESS_PROG: "cowork-harness" };
+  // Only THIS process may hand python loader findings. A value inherited from the caller's shell would
+  // inject findings nobody computed (or, on a clean corpus, report ones that are not there).
+  delete pyEnv[EXTRA_FINDINGS_ENV];
+
+  // `lint` only: run the harness's own scenario loader first, so "lint is clean" means "run/record load it".
+  // See lint-load.ts for what is and is not checked. Skipped for --help (python prints usage and exits 0).
+  let handoffDir: string | undefined;
+  let loaderRejected: LintFinding[] = [];
+  if (subcommand === "lint" && !pyArgs.some((a) => a === "-h" || a === "--help")) {
+    const findings = prepass(pyArgs);
+    loaderRejected = findings;
+    // Zero findings → no file and no variable: python runs exactly as it did before this pre-pass existed.
+    if (findings.length > 0) {
+      try {
+        handoffDir = mkdtempSync(join(tmpdir(), "cowork-harness-lint-"));
+        const file = join(handoffDir, "loader-findings.json");
+        writeFileSync(file, JSON.stringify(findings));
+        pyEnv[EXTRA_FINDINGS_ENV] = file;
+      } catch (e) {
+        // Never fall through to a findings-less python run: that would report a scenario the loader
+        // rejects as clean, the false green this pre-pass exists to remove.
+        cleanup(handoffDir);
+        fail(
+          subcommand,
+          "runtime",
+          `${subcommand}: could not hand ${findings.length} loader finding(s) to the linter — ${(e as Error).message}`,
+          "The scenario loader rejected at least one file. Check that the temp directory is writable (TMPDIR), or run `cowork-harness record <file> --dry-run` to see the errors.",
+          json,
+          1,
+        );
+      }
+    }
+  }
+
+  // process.exit() skips `finally`, so every exit below is sequenced as: status → cleanup → exit.
+  const exit = (status: number): never => {
+    cleanup(handoffDir);
+    return process.exit(status);
+  };
 
   if (!json) {
     const r = spawnSync(py, [script, subcommand, ...pyArgs], { stdio: "inherit", env: pyEnv });
     if (r.error) {
       const enoent = (r.error as NodeJS.ErrnoException).code === "ENOENT";
       process.stderr.write((enoent ? pythonNotFoundMessage(py, subcommand) : String(r.error.message)) + "\n");
-      return process.exit(127);
+      process.stderr.write(loaderSummary(loaderRejected));
+      return exit(127);
     }
-    return process.exit(r.status ?? 1);
+    return exit(r.status ?? 1);
   }
 
   const r = spawnSync(py, [script, subcommand, "--json", ...pyArgs], {
@@ -101,7 +149,8 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
   if (r.error) {
     const enoent = (r.error as NodeJS.ErrnoException).code === "ENOENT";
     process.stderr.write((enoent ? pythonNotFoundMessage(py, subcommand) : String(r.error.message)) + "\n");
-    return process.exit(127);
+    process.stderr.write(loaderSummary(loaderRejected));
+    return exit(127);
   }
   const status = r.status ?? 1;
   let findings: unknown;
@@ -111,16 +160,41 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
     // stdio's stderr slot is "inherit" (see the spawnSync call above), so python's usage text already
     // reached the step log directly — r.stderr is always null here, there's no tail to surface as a hint.
     out(jsonError(subcommand, "usage", `${subcommand}: python emitted non-JSON output on --json (exit ${status})`));
-    return process.exit(status);
+    return exit(status);
   }
   out(jsonPayloadEnvelope(subcommand, status === 0, { findings }));
-  return process.exit(status);
+  return exit(status);
+}
+
+/** The variable naming the JSON file of loader findings python merges into its own (see scenario.py
+ *  `cmd_lint`). Internal to the wrapper↔script handoff — not a user knob. */
+const EXTRA_FINDINGS_ENV = "COWORK_HARNESS_LINT_EXTRA_FINDINGS";
+
+/** When the linter itself could not be spawned, the loader findings never reach a renderer. Name the files
+ *  instead of dropping them, so the user learns the scenario also fails to load. Empty when there were none. */
+function loaderSummary(findings: LintFinding[]): string {
+  if (findings.length === 0) return "";
+  const files = [...new Set(findings.map((f) => f.file))];
+  return (
+    `The scenario loader rejected ${files.length} file(s) as well (not shown — the linter never ran): ${files.join(", ")}. ` +
+    "`cowork-harness record <file> --dry-run` shows the errors.\n"
+  );
+}
+
+function cleanup(dir: string | undefined): void {
+  if (!dir) return;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* best effort: a leftover temp file must not change lint's verdict */
+  }
 }
 
 /** `cowork-harness lint <files…>` → `python3 scenario.py lint <files…>`. See `runLintLike` for the
  *  text/json dual-mode behavior and the ENOENT → exit-127 guard. */
-export function cmdLint(args: string[]): never {
-  return runLintLike("lint", args);
+export function cmdLint(args: string[], prepass: (args: string[]) => LintFinding[] = lintPrepass): never {
+  // `prepass` is a test seam: the default is the real loader pre-pass.
+  return runLintLike("lint", args, prepass);
 }
 
 /** `cowork-harness lint-skill <files…>` → `python3 scenario.py lint-skill <files…>`. See `runLintLike`

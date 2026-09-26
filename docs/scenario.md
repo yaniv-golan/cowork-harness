@@ -92,26 +92,35 @@ assert:                                  # pass/fail checks (see below)
 > **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; it is retired —
 > a scenario carrying `profile:` now errors as an unknown key, so write `baseline:`.
 
-### Unknown keys: the loader is strict, `lint` is lenient
+<a id="unknown-keys-the-loader-is-strict-lint-is-lenient"></a>
+
+### Unknown keys: the loader is strict, and `cowork-harness lint` runs it
 
 The scenario schema rejects **every** key it does not know — there is no `profile:` special case, and no
-tolerance for a typo or a key borrowed from a newer release. The two surfaces that see your file disagree
-about how loudly to say so, and the difference matters:
+tolerance for a typo or a key borrowed from a newer release. The surfaces that see your file differ in how
+they report it, and the difference matters:
 
 | surface | on an unknown top-level key | exit |
 |---|---|---|
 | the **loader** — `run`, `skill`, `record` | **hard error**: `Unrecognized key: "<k>"`; the scenario does not run at all | `2` (a directory target reports each `✗ broken:` file and exits `1`) |
-| **`lint`** | ⚠ `WARN [unknown-top-key]`, plus the list of valid keys | `0` |
+| **`cowork-harness lint`** | ✗ `ERROR [scenario-invalid]` (the loader's own error) plus ⚠ `WARN [unknown-top-key]` with the list of valid keys | `1` |
+| `python3 scenario.py lint` (run directly) | ⚠ `WARN [unknown-top-key]` only — the script is offline and does not run the loader | `0` |
 | **`replay`** (frozen scenario) | **silently ignored** — carried in the cassette but never consulted; can flip a lane-sensitive assertion's verdict, see below | `0` |
 
 Two consequences worth internalising:
 
-- **A scenario that lints with only warnings may still be unloadable.** `lint` is the more permissive
-  check, not the stricter one. A clean-ish lint is not proof the file runs. It is not *uniformly* more
-  permissive, though: an invalid **enum value** (`fidelity: bogus`, `assert: - result: succes`,
-  `answers[].decide: allowe`, or one of those keys left empty, which parses as null) is a lint **ERROR**
-  (`enum-value-invalid`), because the loader rejects it outright and a green lint there was a false one.
-  Unknown *keys* remain a warning — see the next point.
+- **`cowork-harness lint` reports everything the loader rejects**, as ERROR `scenario-invalid`: unknown
+  keys, wrong value types (a scalar where a list belongs, such as `semantic_matches.rubric`), invalid enum
+  values, a bad regex, a reserved value. It also reports a `baseline:` that names no baseline this installed
+  CLI ships (ERROR `baseline-unknown`; `latest` always resolves). So a scenario `cowork-harness lint` calls
+  clean is one `run`/`record` will load. It does **not** check what depends on the machine the run happens
+  on — the session file and the paths it mounts, an absolute `baseline:` path, environment variables — nor
+  the pre-spend refusals that `record --dry-run` adds (below). Any other YAML in a linted directory, such as
+  a session or matrix file, is not a scenario and is reported too: keep those out of the linted set. The
+  bundled script run directly (`python3 scenario.py lint`) stays the lenient, offline check. When both
+  report on one file — `scenario-invalid` beside `unknown-top-key` or `enum-value-invalid` — the
+  `scenario-invalid` ERROR is the authoritative answer to "does it load"; the linter's own finding next to
+  it is the hint for fixing it (the valid keys, a rename).
 - **Unknown *top-level* scenario keys are handled differently by the two paths.** The **loader**
   (`run`/`skill`/`record`, reading scenario YAML) rejects one outright: exit 2 for a single file, or exit 1
   for a directory, which reports each `✗ broken:` file. **`replay` does not.** A cassette's frozen scenario
@@ -134,15 +143,17 @@ Two consequences worth internalising:
 **To check whether a scenario loads, without spending anything:**
 
 ```bash
-cowork-harness record path/to/scenario.yaml --dry-run   # runs the real loader; exit 2 if it does NOT load,
+cowork-harness lint path/to/scenario.yaml               # runs the real loader + the authoring checks;
+                                                        # exit 1 on any ERROR, including "does not load"
+cowork-harness record path/to/scenario.yaml --dry-run   # also the real loader; exit 2 if it does NOT load,
                                                         # and exit 1 if it loads but the real record would
                                                         # refuse it (unsatisfiable assert pairing,
                                                         # on_unanswered: prompt, host-inventory destination)
 ```
 
-`--dry-run` writes nothing and needs no token or staged agent to report a schema error, so it is the
-cheap way to answer "does the runtime accept this file?". `lint` answers a different and more permissive
-question. Note that a plain `replay` cannot answer it at all — it evaluates the scenario frozen in the
+Both write nothing and need no token or staged agent. `lint` is the one to gate CI on; `record --dry-run`
+adds the pre-spend policy refusals `lint` does not model (and, unlike `lint`, it does not look up a named
+`baseline:`). Note that a plain `replay` cannot answer it at all — it evaluates the scenario frozen in the
 cassette (see [What `replay` evaluates](#what-replay-evaluates--the-whole-scenario-frozen)); it does print
 a `::notice::` when the sibling YAML fails to load, but the verdict is unaffected.
 
@@ -873,9 +884,10 @@ mismatch. So there is no flag that makes a plain `replay` honour an edited `lane
 `baseline:`: those reach a replay only by re-recording.
 
 > **Authoring a scenario for a newer harness?** The frozen copy is why a `replay` gate can look happy
-> while the YAML is unloadable. Check the file against the real loader with
-> `cowork-harness record <file.yaml> --dry-run` — see
-> [Unknown keys: the loader is strict, `lint` is lenient](#unknown-keys-the-loader-is-strict-lint-is-lenient).
+> while the YAML is unloadable. Check the file against the real loader with `cowork-harness lint
+> <file.yaml>` (it also resolves a named `baseline:`), or `cowork-harness record <file.yaml> --dry-run`
+> for the pre-spend refusals on top — see
+> [Unknown keys: the loader is strict, and `cowork-harness lint` runs it](#unknown-keys-the-loader-is-strict-lint-is-lenient).
 
 The rest of this section is the `assert:`-specific detail.
 

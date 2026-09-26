@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **`cowork-harness lint` can newly fail — including plain `lint` without `--strict`, and the packaged
+  Action's `command: lint` lane, whose `ok` output turns `false`.** It now reports every file the scenario
+  loader rejects as an ERROR (see Fixed). That red lands on three kinds of input:
+  - a scenario that could never have run: `run`/`record` already refused it;
+  - **a session, matrix or answer-policy YAML sitting in a linted directory**. It is not a scenario, and
+    `lint` previously let such a file through with warnings and exit 0; move it out of the linted set;
+  - **a `baseline:` naming a baseline this installed CLI does not ship**, for example a pinned
+    `desktop-<version>` in a repo whose CI installs an older CLI. A token-free replay of a
+    non-`cowork`-tier cassette never looks the name up, so that pipeline could be green today and red
+    after this. Use `latest`, or install a CLI that ships the pinned baseline.
+
+  No flag and no exit-code meaning changed: `1` still means "an ERROR finding", and the scenario schema is
+  not tightened. This is the same class of change as the `enum-value-invalid` rule that shipped in 3.2.0,
+  so it ships in a minor release. Running `python3 scenario.py lint` directly is unchanged.
+
 ### Changed
 
 - **`critique <plugin>/skills/<name>` now mounts the plugin.** Cowork installs plugins, never a bare skill
@@ -26,6 +43,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`cowork-harness lint` now reports every scenario the loader would reject, so a file it calls clean is
+  one `run`/`record` will load.** Previously it ran only the bundled offline linter, which never parses
+  with the harness's schema. A scenario with a scalar `semantic_matches.rubric` linted clean under
+  `--strict --min-severity WARN` and then failed `record --dry-run` with `expected array, received string`.
+  `lint` now runs the same load function `run` and `record` use first. Every rejection becomes an ERROR
+  `scenario-invalid` naming the loader's own path (`assert[1].semantic_matches.rubric`): wrong value types,
+  unknown keys, invalid enum values, a bad regex, a reserved value, a YAML syntax error. A `baseline:` that
+  names no committed baseline becomes an ERROR `baseline-unknown`, which lists the baselines this install
+  ships; before, only a real run or record caught it, and `record --dry-run` passed it. The findings go
+  through the linter's own renderer, `--min-severity` filter and exit rule, so text and JSON output stay
+  identical. Nothing that depends on the machine the run happens on is checked: the session file and the
+  paths it mounts, an absolute `baseline:` path, environment variables, and the tier-dependent pre-spend
+  refusals. If lint cannot hand its loader findings over (an unwritable temp directory), it exits 1 rather
+  than report the file clean.
 - **The critique corpus no longer contains files the graded agent never received.** Every corpus class was
   checked against a git-tracked set read from that class's own directory, while staging reads one set at the
   mount root. A skill that is a git submodule of its plugin was graded from the submodule's own index although

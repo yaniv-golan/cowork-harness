@@ -666,7 +666,7 @@ unused — reserving it now keeps a later addition additive rather than a renumb
 with its own meanings); this reservation applies only to the `run`/`skill` family. `rehash` does use `4`,
 for partial migration success (above) — a different command, so it does not consume this reservation.
 
-**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
+**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
 `2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
 shape, unsupported version, unrecognized assertion key) or any per-file throw, plus the batch loop's
 own source-resolution failures (`--assert-from`/`--reassert` drift, scenario-parse errors, `--write`
@@ -925,6 +925,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   detail that may be renamed, re-split or removed in any release. Ask for a subcommand or flag instead —
   `critique --corpus-only` exists because a consumer had vendored two of these to get a number the CLI
   did not expose.
+  The same goes for `COWORK_HARNESS_LINT_EXTRA_FINDINGS`, the variable through which `cowork-harness lint`
+  hands its scenario-loader findings to the script: an internal handoff, not a knob.
 - **`docs/internal/**`** — untracked working notes.
 - **The reconstructed system-prompt append text** — a paraphrase by design (see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.

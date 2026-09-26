@@ -372,7 +372,8 @@ python3 "$S" scaffold --name report-check --skill ./skills/report-gen \
 ```
 
 Then lint every scenario — it encodes the no-silent-false-green invariants. Use the CLI wrapper
-`cowork-harness lint` (it runs the same bundled `scenario.py lint`):
+`cowork-harness lint`: it runs the bundled `scenario.py lint` **and** the harness's own scenario loader,
+so a file `run`/`record` would refuse fails lint too (running `scenario.py lint` directly skips the loader):
 
 ```bash
 cowork-harness lint scenarios/*.yaml
@@ -391,11 +392,17 @@ and hallucinated schema (`assertions:` vs `assert:`, unknown keys). Exit code is
 (CI-friendly). `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never
 emits a scenario `lint` would reject.
 
-**`lint` is the LENIENT check — the loader is the strict one.** An unknown top-level key is a ⚠ WARN in
-`lint` (exit 0) but a **hard error** in the runtime (`Unrecognized key: "<k>"`, exit 2) — so a scenario
-that lints with warnings may still not run. To check whether a scenario actually loads, without spending:
-`cowork-harness record <file.yaml> --dry-run` (exit 2 on a schema error; a directory reports each
-`✗ broken:` file and exits 1). **Read the exit code, not just its sign:** `record <file>` — with or without
+**`cowork-harness lint` runs the loader: a file it calls clean is one `run`/`record` will load.** Anything
+the loader refuses — an unknown key, a wrong value type (a scalar `semantic_matches.rubric`), a bad regex,
+a reserved value — is ✗ ERROR `scenario-invalid` (exit 1, with or without `--strict`), and a `baseline:`
+naming no baseline this installed CLI ships is ✗ ERROR `baseline-unknown` (`latest` always resolves). It
+does not check what depends on the machine the run happens on (the session file and its mounts, an
+absolute `baseline:` path, environment variables). A session or matrix YAML in a linted directory is not
+a scenario and is reported as one that does not load — keep those out of the linted set. `python3
+scenario.py lint` run directly stays offline and lenient: there an unknown key is only a ⚠ WARN (exit 0).
+`cowork-harness record <file.yaml> --dry-run` also runs the loader and adds the pre-spend refusals (exit 2
+on a schema error; a directory reports each `✗ broken:` file and exits 1). **Read the exit code, not just
+its sign:** `record <file>` — with or without
 `--dry-run` — answers `2` for "did not load" and `1` for "loaded fine, but this record is refused" (a
 pre-spend policy refusal; `--max-budget-usd` is the one refusal that keeps exit 2). Treating any non-zero
 as "scenario broken" mis-reports every refused-but-valid scenario. Corollary: **the loader** fails LOUD on an unknown key (never silently) —
@@ -421,8 +428,9 @@ When the scenario declares `answers:`, verify-run **also** checks they still mat
 reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
-`run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
-`cowork-harness record <file.yaml> --dry-run` — it runs the real loader AND the same scenario-level
+`run` takes no `--dry-run`: to check that a scenario **loads** without spending, `cowork-harness lint
+<file.yaml>` runs the real loader (and resolves a named `baseline:`); `cowork-harness record <file.yaml>
+--dry-run` runs the real loader too AND the same scenario-level
 refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing) **plus the
 cassette-portability pre-flight below**, so it cannot green something a paid run would reject. **That binding
 guarantee is the SINGLE-FILE form only** — it takes the real `--out` and the real flags, so its verdict is the
@@ -432,12 +440,14 @@ the verdict kind, and portability can only ever warn — that do NOT affect the 
 takes no `--out`, so the destination is a guess — and only the path-independent ones (prompt policy, assert
 contradiction, duplicate cassette target) gate the batch. So a directory dry-run CAN exit 0 on a scenario the
 real `record` would refuse; re-run that one file with its real flags for a binding answer. A directory also
-reports every offender and the batch cost estimate. `lint` checks the assertion invariants (both above).
+reports every offender and the batch cost estimate. `lint` checks the assertion invariants AND that each file loads (the same loader, plus a named `baseline:`), but not the pre-spend refusals.
 
 **Which arm to reach for.** They answer different questions, and picking the wrong one is why a consumer
 concluded the free pre-flight was unavailable:
-- **"Does my whole corpus still load?"** → the **directory** arm (`record scenarios/ --dry-run --quiet`,
-  the CI shape in `references/ci-recipe.md`). It reports every offender in one pass, and the
+- **"Does my whole corpus still load?"** → `cowork-harness lint scenarios/` answers it (every file the
+  loader rejects is an ERROR, and so is a `baseline:` naming no shipped baseline), or the **directory** arm
+  (`record scenarios/ --dry-run --quiet`, the CI shape in `references/ci-recipe.md`) when you also want the
+  pre-spend refusals. The directory arm reports every offender in one pass, and the
   destination-policy verdict cannot red it: that arm knows no `--out`, so host-inventory and portability
   are advisory `notes[]` at exit 0 while a file that cannot load is `✗ broken:` at exit 1. Limits worth
   knowing: it is **non-recursive** (`readdirSync` — scenarios in subdirectories are never opened), a file
