@@ -555,10 +555,9 @@ jobs:
   # COWORK_FULL_PARITY=1 (Layer B — tesseract/LibreOffice/opencv/onnxruntime). A base-only gate would let
   # a Layer-B-breaking edit through and die after the tag.
   #
-  # NB any conditional here belongs on a STEP, never on the job: this job is in `ci-green.needs`, which
-  # has no `if: always()`, so a SKIPPED job skips ci-green and the required `typecheck · test · build`
-  # context never reports — leaving every PR unmergeable (see release-preflight.ts's orphaned-context
-  # check, which exists because that happened here for 676 commits).
+  # NB any conditional here belongs on a STEP, never on the job: this job is in `ci-green.needs`, and
+  # ci-green fails unless every job it needs concluded `success`, so a job-level `if:` that SKIPS this
+  # job turns the required `typecheck · test · build` context red on every PR it skips on.
   image-recipe:
     name: agent image recipe (arm64 build)
     runs-on: ubuntu-24.04-arm # must match Cowork's linux/arm64 guest; x86 needs binfmt that is not set up
@@ -576,14 +575,40 @@ jobs:
 
   # ── Aggregation gate: carries the `typecheck · test · build` status the branch ruleset requires,
   # kept meaningful after the unit→build+test split — green ONLY when the fast build gate, every unit
-  # test shard AND the Node-22 floor check pass, so any of them going red blocks a merge exactly as the
-  # old monolithic job did, with no ruleset change. (The separate `pytest cowork-lane …` required context
-  # predates this and is already stale vs the `python` job's name — flagged for a ruleset fix.) ──
+  # test shard, the Node-22 floor check AND the image recipe pass, so any of them going red blocks a merge
+  # exactly as the old monolithic job did, with no ruleset change.
+  #
+  # `if: always()` plus the result check is load-bearing. Without it a red prerequisite SKIPS this job,
+  # and GitHub reports a skipped job as SUCCESS on a required status check, so a PR with a failing build or
+  # test went mergeable. With it, this job always runs and fails unless every job in `needs` concluded
+  # `success`: `failure`, `cancelled` and `skipped` all fail it. None of the needed jobs has a job-level
+  # `if:`, so none is ever legitimately skipped; a skip means an upstream job failed. `always()` (not
+  # `!cancelled()`) on purpose: a cancelled run must report this context as failed, never as skipped.
+  #
+  # The ruleset's other required context is the `python` job's name. That job `needs: build` with no
+  # `if:`, so a red `build` skips it and it reports success, but this job then fails on the same `build`,
+  # so the merge is still blocked. ──
   ci-green:
     name: typecheck · test · build
     runs-on: ubuntu-latest
     needs: [build, test, floor, image-recipe]
+    if: ${{ always() }}
     permissions:
       contents: read
     steps:
-      - run: echo "build gate + all unit-test shards + the node-22 floor check passed"
+      - name: Fail unless every prerequisite job concluded success
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"] | join(", ")')
+          total=$(echo "$NEEDS" | jq 'length')
+          if [ "$total" -eq 0 ]; then
+            echo "::error::needs context is empty; refusing to report success"
+            exit 1
+          fi
+          if [ -n "$bad" ]; then
+            echo "::error::prerequisite job(s) did not succeed: $bad"
+            exit 1
+          fi
+          echo "build gate + all unit-test shards + the node-22 floor check + the image recipe passed"

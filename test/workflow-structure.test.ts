@@ -82,6 +82,22 @@ describe("ci.yml merge gating", () => {
     const ungoverned = Object.keys(jobs).filter((id) => !gated.has(id) && !(id in NON_GATING));
     expect(ungoverned).toEqual([]);
   });
+
+  it("the ci-green aggregator runs on a red prerequisite and fails on it, instead of skipping", () => {
+    // Without `if: always()` a failed `needs` job SKIPS ci-green, and GitHub reports a skipped job as
+    // SUCCESS on a required status check: a PR with a red build or test was mergeable. `always()` alone
+    // would turn that into a false green, so a step must also fail on any non-success result.
+    const gate = ci().jobs?.["ci-green"];
+    expect(gate?.name).toBe("typecheck · test · build");
+    expect(gate?.if).toMatch(/^\$\{\{\s*always\(\)\s*\}\}$|^always\(\)$/);
+    const steps = JSON.stringify(gate?.steps ?? []);
+    expect(steps).toContain("toJSON(needs)");
+    expect(steps).toContain('select(.value.result != \\"success\\")');
+    expect(steps).toContain("exit 1");
+    // A job-level `if:` on a needed job would make a legitimate skip fail the gate; keep conditionals on steps.
+    for (const id of needsOf(gate ?? null))
+      expect(ci().jobs?.[id]?.if, `ci-green needs "${id}", which has a job-level if:`).toBeUndefined();
+  });
 });
 
 describe("every workflow", () => {

@@ -59,6 +59,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **CI's required `typecheck · test · build` check now fails when the build or a test fails, instead of
+  being skipped.** The `ci-green` aggregator that reports it had no `if:`, so a red `build`, `test`, `floor`
+  or `image-recipe` job skipped it, and GitHub counts a skipped job as passing a required status check: a
+  PR with a failing build or unit test was mergeable. It now runs with `if: always()` and fails unless
+  every job it needs concluded `success` (a `failure`, `cancelled` or `skipped` prerequisite fails it), and
+  it prints which one did not. A structural test in `test/workflow-structure.test.ts` fails if either half
+  is removed.
 - **A `COWORK_PROXY_IMAGE` set in `.env` or a `--dotenv` file now reaches the egress sidecar.** The sidecar read
   the variable once, when the CLI loaded, which is before `.env` is applied, so it ran the default proxy image while
   `doctor` checked the one `.env` named. A blank value is now treated as unset and falls back to the default
