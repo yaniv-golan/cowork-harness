@@ -58,6 +58,7 @@ describe("ci.yml merge gating", () => {
   it("has a job named for each required ruleset context", () => {
     const names = Object.values(ci().jobs ?? {}).map((j) => j?.name);
     for (const ctx of REQUIRED_CONTEXTS) expect(names).toContain(ctx);
+    expect("deliberately broken").toBe("throwaway: proves the gate goes red");
   });
 
   it("routes every job to a merge gate or an explicit non-gating reason", () => {
