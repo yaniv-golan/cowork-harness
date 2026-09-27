@@ -21,6 +21,7 @@ interface Job {
   needs?: string | string[];
   steps?: unknown[];
   paths?: unknown;
+  "continue-on-error"?: unknown;
 }
 interface Workflow {
   name?: string;
@@ -62,7 +63,7 @@ describe("ci.yml merge gating", () => {
 
   it("routes every job to a merge gate or an explicit non-gating reason", () => {
     // A required context is satisfied by ONE job; everything that must block a merge has to be reachable
-    // from it via `needs`. `ci-green` is a no-op job whose entire purpose is to be that funnel, so a new
+    // from it via `needs`. `ci-green` exists only to be that funnel (it runs no build or test of its own), so a new
     // job absent from its `needs` runs on every PR and blocks nothing — green CI, unguarded merge.
     const jobs = ci().jobs ?? {};
     const roots = Object.entries(jobs)
@@ -94,6 +95,13 @@ describe("ci.yml merge gating", () => {
     expect(steps).toContain("toJSON(needs)");
     expect(steps).toContain('select(.value.result != \\"success\\")');
     expect(steps).toContain("exit 1");
+    // `continue-on-error` anywhere on the funnel turns a red result into a pass: on the gate or its step the
+    // check concludes success anyway, and on a needed job `needs.<id>.result` reads `success` for a red job.
+    expect(gate?.["continue-on-error"], "ci-green sets continue-on-error").toBeUndefined();
+    for (const [i, step] of (gate?.steps ?? []).entries())
+      expect((step as Record<string, unknown> | null)?.["continue-on-error"], `ci-green step ${i} sets continue-on-error`).toBeUndefined();
+    for (const id of needsOf(gate ?? null))
+      expect(ci().jobs?.[id]?.["continue-on-error"], `ci-green needs "${id}", which sets continue-on-error`).toBeUndefined();
     // A job-level `if:` on a needed job would make a legitimate skip fail the gate; keep conditionals on steps.
     for (const id of needsOf(gate ?? null))
       expect(ci().jobs?.[id]?.if, `ci-green needs "${id}", which has a job-level if:`).toBeUndefined();
