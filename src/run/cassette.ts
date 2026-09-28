@@ -146,7 +146,7 @@ import {
   type AllowInput,
   type AllowPattern,
 } from "../scan.js";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, YAMLParseError } from "yaml";
 
 // Synchronous fd writes (match cli.ts): a `process.stdout.write` + `process.exit()` pair truncates the
 // machine envelope on a PIPE (fd 1 goes non-blocking once the stream is touched; the async tail is dropped
@@ -5226,7 +5226,7 @@ function recordingShapingDrift(frozen: Scenario, onDisk: Scenario): string[] {
  *  baseline, fidelity, lane, answers, skills, requires_capabilities — see recordingShapingDrift), each
  *  default-normalized so a `[]`-vs-undefined churn can't false-positive. A resolvable+drifted field from an EXACTLY-recorded
  *  (persisted) source is a DEFINITE divergence → hard fail. A persisted source the LOADER rejects (a schema
- *  violation, e.g. no `fidelity:`) is `unverifiable: true` — the check cannot run until the file is fixed, and
+ *  violation such as no `fidelity:`, a bad assertion regex, a reserved value) is `unverifiable: true` — the check cannot run until the file is fixed, and
  *  "cannot verify" is not green. A name-resolved match, an unresolvable source, or a YAML syntax break is
  *  "can't compare" → a non-failing note, never a false-red (many valid cassettes ship without a committed
  *  source, and a half-written sibling is a normal mid-edit state). */
@@ -5243,19 +5243,20 @@ export function scenarioContentDrift(
     try {
       onDisk = parseScenarioFile(src.path);
     } catch (e) {
-      // The loader REJECTED the recorded source (a schema violation — e.g. no `fidelity:`, required since
-      // 4.0.0). The drift check cannot run, and this is not a transient state: until the file is fixed,
-      // an edited-but-not-re-recorded prompt goes undetected on every run of this gate. "Cannot verify" is
-      // not green, so it is `unverifiable` (exit 3) — but only for a PERSISTED source, the one this
-      // cassette really was recorded from. A name-lookup match may be an unrelated file.
-      if (e instanceof UsageError && src.via === "persisted")
+      // The loader REJECTED the recorded source — a schema violation (e.g. no `fidelity:`, required since
+      // 4.0.0), a malformed assertion regex, a reserved value. None of those is transient: until the file
+      // is fixed, an edited-but-not-re-recorded prompt goes undetected on every run of this gate. "Cannot
+      // verify" is not green, so it is `unverifiable` (exit 3) — but only for a PERSISTED source, the one
+      // this cassette really was recorded from. A name-lookup match may be an unrelated file. A YAML
+      // SYNTAX break is the one exception: that is the half-written, mid-edit state, and it stays a note.
+      if (!(e instanceof YAMLParseError) && src.via === "persisted")
         return {
           verifiable: false,
           unverifiable: true,
           reason:
             e instanceof FidelityMissingError
               ? `the recorded scenario source does not load, so prompt drift was not checked: ${fidelityMissingForCassette(e, cassette.scenario)}`
-              : `the recorded scenario source ${src.path} does not load (${compactSchemaError(e.message)}), so prompt drift was not checked — fix the file; \`cowork-harness record ${src.path} --dry-run\` shows the full error`,
+              : `the recorded scenario source ${src.path} does not load (${compactSchemaError((e as Error).message)}), so prompt drift was not checked — fix the file; \`cowork-harness record ${src.path} --dry-run\` shows the full error`,
         };
       // Anything else — a YAML syntax break (the mid-edit case) or a name-lookup source — stays a
       // non-failing note. Mirror the default replay lane: a mid-edit on-disk YAML must NEVER abort or red
@@ -5264,8 +5265,12 @@ export function scenarioContentDrift(
         verifiable: false,
         // COMPACT, deliberately: this string lands in the `notes[]` array of a schema-covered envelope.
         // The raw Zod message put 13 lines of JSON between the `(` and the `— prompt drift not checked`
-        // that closes the sentence.
-        reason: `on-disk scenario ${src.path} did not parse (${compactSchemaError((e as Error).message)}) — prompt drift not checked`,
+        // that closes the sentence. A missing `fidelity:` carries its own one-line remedy instead, whole —
+        // the 200-char compaction cut it before the tier to add.
+        reason:
+          e instanceof FidelityMissingError
+            ? `on-disk scenario ${src.path} did not load — prompt drift not checked: ${fidelityMissingForCassette(e, cassette.scenario)}`
+            : `on-disk scenario ${src.path} did not parse (${compactSchemaError((e as Error).message)}) — prompt drift not checked`,
       };
     }
     const drifted = recordingShapingDrift(cassette.scenario as Scenario, onDisk);

@@ -47,6 +47,29 @@ describe("scenarioContentDrift (function-level)", () => {
     expect(r).toEqual({ verifiable: false, unverifiable: true, reason: expect.stringMatching(/fidelity: container/) });
   });
 
+  // Every loader rejection that is not a YAML syntax break is a state of the FILE, not a mid-edit moment:
+  // until someone fixes it, the drift check never runs. The regex and reserved-value refusals throw a plain
+  // Error (not a schema UsageError), so a gate keyed on UsageError alone let them fall to a note.
+  it.each([
+    ["a bad assertion regex", "fidelity: container\nprompt: hi\nassert:\n  - transcript_matches: '('\n", /regex/i],
+    ["a reserved value", "fidelity: container\nprompt: hi\nexecution: cloud-describe\n", /cloud-describe/],
+  ])("a persisted source refused for %s → unverifiable, not a note", (_what, body, why) => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-scd-"));
+    writeFileSync(join(d, "s.yaml"), body);
+    const r = scenarioContentDrift(frozen("hi"), join(d, "x.cassette.json"));
+    expect(r).toEqual({ verifiable: false, unverifiable: true, reason: expect.stringMatching(why) });
+  });
+
+  it("a NAME-LOOKUP source without `fidelity:` is a note carrying the whole remedy, not a truncated one", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-scd-"));
+    writeFileSync(join(d, "c.yaml"), "prompt: hi\n");
+    const cassette = { scenarioSource: "gone.yaml", scenario: { name: "c", prompt: "hi", fidelity: "hostloop" } } as any;
+    const r = scenarioContentDrift(cassette, join(d, "x.cassette.json")) as { reason?: string };
+    expect(r.reason).toMatch(/fidelity: hostloop/);
+    expect(r.reason, "the sentence must reach its end").toMatch(/re-record/);
+    expect(r.reason).not.toMatch(/…/);
+  });
+
   it("a NAME-LOOKUP source the loader rejects stays a note — it may be an unrelated same-named file", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-scd-"));
     writeFileSync(join(d, "c.yaml"), "prompt: hi\n");
