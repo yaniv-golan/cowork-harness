@@ -2007,7 +2007,11 @@ export function loadScenarioPure(path: string): Scenario {
       // to add a tier.
       const isScenarioDoc = typeof rawDoc === "object" && rawDoc !== null && "prompt" in (rawDoc as Record<string, unknown>);
       if (isScenarioDoc && fidelityOmitted(rawDoc)) throw fidelityMissingError(path, e);
-      throw new UsageError(`invalid scenario ${path}: ${compactSchemaError(e.issues)}`, e.message);
+      // Not a scenario (no `prompt:`): it is refused for that already, so drop the "fidelity" issue rather
+      // than tell a session/matrix file to add a tier. Only when something else remains to report.
+      const issues = isScenarioDoc ? e.issues : e.issues.filter((i) => !(i.path.length === 1 && i.path[0] === "fidelity"));
+      const shown = issues.length ? issues : e.issues;
+      throw new UsageError(`invalid scenario ${path}: ${compactSchemaError(shown)}`, JSON.stringify(shown, null, 2));
     }
     throw e;
   }

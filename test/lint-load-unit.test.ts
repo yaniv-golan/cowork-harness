@@ -57,6 +57,17 @@ describe("loaderFindings turns every load outcome into the right finding (a tabl
 });
 
 describe("loaderFindings output", () => {
+  it("a non-scenario doc (no `prompt:`) is not also told its tier is missing", () => {
+    // It is already refused (no prompt, unknown keys) with the "not a scenario" remedy; a third finding
+    // about `fidelity` would be noise about a file that should not carry a tier at all.
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-unit-"));
+    const p = file(d, "session.yaml", ["model: claude-sonnet-5"]);
+    const fs = loaderFindings([p]);
+    expect(fs.length).toBeGreaterThan(0);
+    expect(fs.map((f) => f.message).join("\n")).not.toMatch(/fidelity/);
+    expect(fs.map((f) => f.message).join("\n")).toMatch(/prompt/);
+  });
+
   it("never writes to stdout or stderr", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-lint-unit-"));
     const p = file(d, "s.yaml", HEAD);
