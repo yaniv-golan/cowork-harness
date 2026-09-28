@@ -4,10 +4,11 @@ Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowor
 (baseline `desktop-2.9939.2`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
-**Minimal scenario** — `prompt` is the only required field:
+**Minimal scenario** — `prompt` and `fidelity` are required:
 
 ```yaml
 prompt: "Use the my-skill skill to do X."
+fidelity: container          # required — protocol | container | microvm | hostloop | cowork
 assert:
   - result: success
 ```

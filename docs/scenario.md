@@ -2,10 +2,11 @@
 
 A **scenario** (`scenarios/*.yaml`) is one test: a prompt, scripted answers to the agent's questions/permission requests, and assertions. It references a [session setup](./session.md) for the setup.
 
-**Minimal scenario** — `prompt` is the only required field; everything else has defaults:
+**Minimal scenario** — `prompt` and `fidelity` are required; everything else has defaults:
 
 ```yaml
 prompt: "Use the my-skill skill to do X."
+fidelity: container          # required — protocol | container | microvm | hostloop | cowork
 assert:
   - result: success
 ```
