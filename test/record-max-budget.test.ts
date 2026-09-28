@@ -355,3 +355,171 @@ describe.skipIf(!can)("record --max-budget-usd — a refusal exits 1, not 2", ()
     expect(r.code).toBe(1);
   });
 });
+
+// `record <dir/> --dry-run --output-format json` writes EXACTLY ONE JSON document to stdout, on every
+// outcome. The dir arm used to write its payload envelope (usually `ok: true`) and THEN run the batch
+// budget gate, whose refusal wrote a second, error envelope — a consumer reading the first line saw a
+// false green. Each case parses stdout as a whole: a second document, or any non-JSON line, fails it.
+describe.skipIf(!can)("record <dir/> --dry-run --output-format json — exactly one document on stdout", () => {
+  function oneDoc(stdout: string, label: string) {
+    const lines = stdout.split("\n").filter((l) => l.trim() !== "");
+    expect(lines.length, `${label}: stdout must carry exactly one JSON document, got:\n${stdout}`).toBe(1);
+    return JSON.parse(lines[0]);
+  }
+
+  /** A work dir holding the requested kinds of file, and a runs dir whose history prices `pricey` at $0.50
+   *  and `cheap` at $0.01. `dup` is two loadable files sharing a name, which the dir arm refuses. */
+  function corpus(kinds: ("pricey" | "cheap" | "broken" | "dup")[]) {
+    const root = tmpRoot();
+    const work = tmpWork();
+    seedRun(root, "pricey", "local_1", 0.5);
+    seedRun(root, "cheap", "local_1", 0.01);
+    cli(["stats", "--reindex"], root);
+    for (const k of kinds) {
+      if (k === "broken")
+        writeFileSync(join(work, "broken.yaml"), scenarioYaml("broken").replace("assert:", "assert:\n  - not_a_real_key: true"));
+      else if (k === "dup") {
+        writeFileSync(join(work, "dup1.yaml"), scenarioYaml("dup"));
+        writeFileSync(join(work, "dup2.yaml"), scenarioYaml("dup"));
+      } else writeFileSync(join(work, `${k}.yaml`), scenarioYaml(k));
+    }
+    return { root, work };
+  }
+
+  function dry(work: string, root: string, cap: string, json = true) {
+    const r = spawnSync("node", [CLI, "record", work, "--dry-run", "--max-budget-usd", cap, ...(json ? ["--output-format", "json"] : [])], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: root },
+      cwd: work,
+    });
+    return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
+  }
+
+  it("ok (under the cap): one ok:true payload, exit 0", () => {
+    const { root, work } = corpus(["cheap"]);
+    const r = dry(work, root, "5");
+    const d = oneDoc(r.out, "ok");
+    expect(d.ok).toBe(true);
+    expect(d.dryRun).toBe(true);
+    expect(r.code).toBe(0);
+  });
+
+  it("broken (under the cap): one ok:false payload carrying broken[], exit 1", () => {
+    const { root, work } = corpus(["cheap", "broken"]);
+    const r = dry(work, root, "5");
+    const d = oneDoc(r.out, "broken");
+    expect(d.ok).toBe(false);
+    expect(d.broken).toHaveLength(1);
+    expect(r.code).toBe(1);
+  });
+
+  it("refused (under the cap): one ok:false payload carrying refusals[], exit 1", () => {
+    const { root, work } = corpus(["cheap", "dup"]);
+    const r = dry(work, root, "5");
+    const d = oneDoc(r.out, "refused");
+    expect(d.ok).toBe(false);
+    expect(d.refusals.length).toBeGreaterThan(0);
+    expect(r.code).toBe(1);
+  });
+
+  it("over budget: ONLY the refusal envelope — no ok:true payload before it — exit 1", () => {
+    const { root, work } = corpus(["pricey"]);
+    const r = dry(work, root, "0.0001");
+    const d = oneDoc(r.out, "over budget");
+    expect(d.ok).toBe(false);
+    expect(d.error.message).toMatch(/refused before spending/);
+    expect(r.code).toBe(1);
+  });
+
+  it("mixed (broken + refused + over budget): one refusal envelope, and the broken/refused lines still reach stderr", () => {
+    const { root, work } = corpus(["pricey", "broken", "dup"]);
+    const r = dry(work, root, "0.0001");
+    const d = oneDoc(r.out, "mixed");
+    expect(d.ok).toBe(false);
+    expect(d.error.message).toMatch(/refused before spending/);
+    expect(r.code).toBe(1);
+    // The refusal envelope carries no broken[]/refusals[], so under JSON those findings go to stderr
+    // BEFORE the gate — otherwise a budget refusal would silently hide them.
+    expect(r.err).toMatch(/✗ broken: .*broken\.yaml/);
+    expect(r.err).toMatch(/✗ refused: .*dup\d\.yaml/);
+    // …and once only (the refusal message itself is on stdout, in the envelope).
+    expect(r.err.split("✗ broken:").length - 1).toBe(1);
+    expect(r.err.split("✗ refused:").length - 1).toBe(1);
+  });
+
+  it("all broken: one payload, exit 1 (the budget gate never runs)", () => {
+    const { root, work } = corpus(["broken"]);
+    const r = dry(work, root, "0.0001");
+    const d = oneDoc(r.out, "all broken");
+    expect(d.ok).toBe(false);
+    expect(d.broken).toHaveLength(1);
+    expect(r.out).not.toMatch(/refused before spending/);
+    expect(r.code).toBe(1);
+  });
+
+  it("nothing discovered: one payload, exit 2", () => {
+    const { root, work } = corpus([]);
+    const r = dry(work, root, "0.0001");
+    const d = oneDoc(r.out, "empty");
+    expect(d.scenarios).toEqual([]);
+    expect(r.code).toBe(2);
+  });
+
+  it("text mode is unchanged: stdout stays empty, and every finding precedes the budget refusal on stderr", () => {
+    const { root, work } = corpus(["pricey", "broken", "dup"]);
+    const r = dry(work, root, "0.0001", false);
+    expect(r.out).toBe("");
+    expect(r.code).toBe(1);
+    const at = (s: string) => {
+      const i = r.err.indexOf(s);
+      expect(i, `stderr must contain ${JSON.stringify(s)}:\n${r.err}`).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    const order = [
+      at("✗ broken:"),
+      at("✗ refused:"),
+      at("record --dry-run: 3 scenario(s) in"),
+      at("estimated batch cost:"),
+      at("refused before spending"),
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    // Text mode prints each finding ONCE — the JSON-only stderr copy must not leak into it.
+    expect(r.err.split("✗ broken:").length - 1).toBe(1);
+    expect(r.err.split("✗ refused:").length - 1).toBe(1); // one duplicate-target pair → one refusal
+  });
+});
+
+// The other refusal-capable JSON arms already emit one document; pinned so the class stays closed.
+describe.skipIf(!can)("budget refusal under --output-format json — exactly one document on stdout, every arm", () => {
+  const cases: { label: string; argv: (work: string) => string[]; code: number }[] = [
+    { label: "run <file>", argv: (w) => ["run", join(w, "pricey.yaml")], code: 2 },
+    { label: "record <file> --dry-run", argv: (w) => ["record", join(w, "pricey.yaml"), "--dry-run"], code: 1 },
+    { label: "record <file> (real path)", argv: (w) => ["record", join(w, "pricey.yaml"), "--out", join(w, "p.cassette.json")], code: 1 },
+    { label: "skill <dir>", argv: (w) => ["skill", join(w, "pricey-skill"), "do the thing"], code: 2 },
+  ];
+  for (const c of cases) {
+    it(c.label, () => {
+      const root = tmpRoot();
+      const work = tmpWork();
+      seedRun(root, "pricey", "local_1", 0.5);
+      seedRun(root, "skill-pricey-skill", "local_1", 0.5);
+      cli(["stats", "--reindex"], root);
+      writeFileSync(join(work, "pricey.yaml"), scenarioYaml("pricey"));
+      mkdirSync(join(work, "pricey-skill"));
+      writeFileSync(join(work, "pricey-skill", "SKILL.md"), "---\nname: pricey-skill\ndescription: test skill\n---\nDo the thing.\n");
+      const r = spawnSync("node", [CLI, ...c.argv(work), "--max-budget-usd", "0.0001", "--output-format", "json"], {
+        encoding: "utf8",
+        // A placeholder credential lets the real paths reach the gate (the auth guard sits above it); the
+        // gate refuses before any spawn, and the unit lane's spawn guard backstops anything past it.
+        env: { ...process.env, COWORK_HARNESS_RUNS_DIR: root, ANTHROPIC_API_KEY: "placeholder-not-used-no-spawn-in-this-suite" },
+        cwd: work,
+      });
+      const lines = (r.stdout ?? "").split("\n").filter((l) => l.trim() !== "");
+      expect(lines.length, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
+      const d = JSON.parse(lines[0]);
+      expect(d.ok).toBe(false);
+      expect(d.error.message).toMatch(/refused before spending/);
+      expect(r.status).toBe(c.code);
+    });
+  }
+});

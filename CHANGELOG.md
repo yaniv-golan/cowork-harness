@@ -210,6 +210,13 @@ All notable changes to this project are documented here. The format is based on
   the file. Like every command, `critique` now refuses `--dotenv` given both before and after the
   subcommand, and a trailing `--dotenv` whose file would change the effective output format (put it
   before the subcommand instead).
+- **`record <dir/> --dry-run --output-format json --max-budget-usd …` writes one JSON document, not
+  two.** When the budget gate refused, stdout carried the preview payload (usually `ok: true`) and then
+  the refusal envelope, so a consumer reading the first line saw a pass. The refusal envelope is now the
+  only document, as on the single-file arm. Because it has no `broken[]` / `refusals[]`, under JSON the
+  `✗ broken:` / `✗ refused:` lines now also go to stderr whenever a cap is passed. Every other outcome
+  (pass, broken, refused, all broken, nothing discovered) still prints one payload with the same exit
+  code, and text-mode output is unchanged.
 
 ## [3.10.0] — 2026-09-27
 

@@ -3994,7 +3994,11 @@ export async function cmdRecord(args: string[]) {
         refusals.push({ file: d.split(" ↔ ")[0], message: `two scenarios share a cassette output path: ${d}` });
       // Free by construction (a run-history lookup), so it is reported whether or not a cap was passed.
       const estimate = estimateBatchCost(parsedNames);
-      if (asJson) {
+      // The JSON payload is written LAST, immediately before each exit — never ahead of a gate that can
+      // still refuse. It used to be written first, and the budget gate below then wrote a second (error)
+      // envelope: two documents on stdout, the first usually `ok: true`, a false green for any consumer
+      // reading line 1. (The single-file arm below was ordered this way already.)
+      const emitPayload = () =>
         out(
           jsonPayloadEnvelope("record", refusals.length === 0 && disc.broken.length === 0, {
             dryRun: true,
@@ -4015,15 +4019,19 @@ export async function cmdRecord(args: string[]) {
             agent: agentPayload,
           }),
         );
-      } else {
-        for (const s of disc.skipped) log(`· skipped: ${s}`);
-        // `stripScenarioPrefix`: the message already opens with `invalid scenario <path>:`, so printing
-        // it after `✗ broken: <path>:` put the same absolute path on the line twice — 284 chars of
-        // prefix before the finding, measured on CI-shaped paths.
+      // `stripScenarioPrefix`: the message already opens with `invalid scenario <path>:`, so printing
+      // it after `✗ broken: <path>:` put the same absolute path on the line twice — 284 chars of
+      // prefix before the finding, measured on CI-shaped paths.
+      //
+      // `--quiet` mutes the readiness PREVIEW only; a refusal is the loud half of "silent on success,
+      // loud on failure" and must survive it, exactly as `broken:` does.
+      const logFindings = () => {
         for (const b of disc.broken) log(`✗ broken: ${b.file}: ${stripScenarioPrefix(b.error, b.file)}`);
-        // `--quiet` mutes the readiness PREVIEW only; a refusal is the loud half of "silent on success,
-        // loud on failure" and must survive it, exactly as `broken:` does.
         for (const r of refusals) log(`✗ refused: ${r.file}: ${r.message}`);
+      };
+      if (!asJson) {
+        for (const s of disc.skipped) log(`· skipped: ${s}`);
+        logFindings();
         // Advisory only, and SUPPRESSED BY --quiet: unlike a refusal, a note is part of the preview, and a
         // batch of 26 would otherwise bury a real refusal in a CI log that asked for quiet. (Measured on a
         // real consumer: their `--dry-run --quiet` CI step produces exactly that many.)
@@ -4044,10 +4052,11 @@ export async function cmdRecord(args: string[]) {
       }
       if (disc.scenarios.length === 0) {
         if (disc.broken.length === 0) {
-          if (!asJson) log(`record --dry-run: no scenarios discovered under ${target}`);
+          if (asJson) emitPayload();
+          else log(`record --dry-run: no scenarios discovered under ${target}`);
           // Exit 2 for "nothing discovered at all" — matches the non-dry-run batch path. The JSON payload
-          // envelope was ALREADY emitted above; this is a status-only exit, so no error envelope here.
-          return process.exit(2); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
+          // envelope is the one document on stdout; this is a status-only exit, so no error envelope here.
+          return process.exit(2); // cli-error-envelope-exempt: dry-run payload envelope emitted just above
         }
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
         // The SUMMARY belongs here too, not only on the real arm. This is the arm CI runs (the directory
@@ -4056,8 +4065,9 @@ export async function cmdRecord(args: string[]) {
         // file — hundreds of lines of parser output — with nothing at the end stating that NOTHING loaded.
         // Survives `--quiet` for the same reason the `✗ broken:` lines do: it is the failure, not the
         // preview.
-        if (!asJson) log(`✗ record --dry-run: no loadable scenarios under ${target} — all ${disc.broken.length} file(s) failed to load`);
-        return process.exit(1); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
+        if (asJson) emitPayload();
+        else log(`✗ record --dry-run: no loadable scenarios under ${target} — all ${disc.broken.length} file(s) failed to load`);
+        return process.exit(1); // cli-error-envelope-exempt: dry-run payload envelope emitted just above
       }
       if (!asJson && !quiet) {
         log(`record --dry-run: ${disc.scenarios.length} scenario(s) in ${target}`);
@@ -4070,11 +4080,16 @@ export async function cmdRecord(args: string[]) {
       // "tell me what this would do before I spend" must not report clean and then be refused for real —
       // that is a false preview, and it is free to check (history lookup, no spend).
       if (maxBudgetUsd !== undefined) {
+        // A budget refusal REPLACES the JSON payload (its error envelope is the one document on stdout),
+        // so under JSON the payload's broken[]/refusals[] would vanish with it. Put them on stderr first —
+        // where text mode already printed them above — so a refusal never hides what the corpus is.
+        if (asJson) logFindings();
         preflightBatchBudget("record", parsedNames, maxBudgetUsd, asJson);
         // Part of the preview: the cap is weaker than it looks above --concurrency 1, and the reader
         // deserves to learn that here rather than after spending.
         if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
       }
+      if (asJson) emitPayload();
       // Exit 1 when there are broken files (they won't run but the user should know) or refused ones
       // (they parse, but no run could satisfy them — the real `record` would reject each in turn).
       return process.exit(disc.broken.length > 0 || refusals.length > 0 ? 1 : 0);
