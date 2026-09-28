@@ -4346,7 +4346,11 @@ export async function cmdRecord(args: string[]) {
         log(`  ✓ ${tag} ${cp} (${r.result.result})`);
         return true;
       } catch (e) {
-        log(`  ✗ ${tag} ${cp}: ${recordErrorText(e)}`);
+        // A source without `fidelity:` gets the remedy worded for THIS cassette: add the tier it recorded.
+        // The generic remedy leads with `container`, which on a hostloop/protocol cassette would switch the
+        // tier on the next record — a recording-shaping change nobody chose.
+        const why = e instanceof FidelityMissingError ? fidelityMissingForCassette(e, cassette.scenario) : recordErrorText(e);
+        log(`  ✗ ${tag} ${cp}: ${why}`);
         return false;
       }
     });
@@ -5204,8 +5208,9 @@ const RECORDING_SHAPING_CHECKS: Record<(typeof RECORDING_SHAPING_FIELDS)[number]
  *  answer is not "pick a tier" but "add the tier this cassette recorded". Any other tier is a recording-shaping
  *  change (see RECORDING_SHAPING_CHECKS), so the generic `container` advice would turn a missing key into a
  *  drift on a `hostloop` or `protocol` cassette. The frozen side falls back to `container` for a hand-built
- *  cassette, the same fallback the drift check uses. Shared by the three paths that read the sibling: the
- *  default `replay` notice, `replay --assert-from`, and `verify-cassettes`' drift check. */
+ *  cassette, the same fallback the drift check uses. Shared by the paths that read the sibling: the
+ *  default `replay` notice, `replay --assert-from`, `verify-cassettes`' drift check, and
+ *  `record --rerecord-stale`. */
 export function fidelityMissingForCassette(e: FidelityMissingError, frozen: Pick<Scenario, "fidelity">): string {
   const tier = frozen.fidelity ?? "container";
   return (

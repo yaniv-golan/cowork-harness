@@ -249,3 +249,41 @@ describe.skipIf(!can)("replay of an existing cassette with a fidelity-less sibli
     expect(r.code).toBe(0);
   });
 });
+
+describe.skipIf(!can)("record --rerecord-stale over a fidelity-less recorded source", () => {
+  // The generic remedy leads with `fidelity: container`. On a hostloop cassette that advice silently
+  // switches the tier on the next record, so this path must name the tier the cassette recorded, like the
+  // replay paths do. The cassette is made stale for free (a moved fingerprint baseline); the item fails
+  // at the source load, before any spawn.
+  it("names the tier the cassette recorded, not the generic container-first remedy", () => {
+    const d = work();
+    writeFileSync(
+      join(d, "c.cassette.json"),
+      JSON.stringify({
+        cassetteVersion: CASSETTE_VERSION,
+        fingerprint: { baseline: "desktop-0.0.1", hashFormat: "jcs1" },
+        scenario: {
+          name: "c",
+          baseline: "latest",
+          session: "(inline)",
+          fidelity: "hostloop",
+          prompt: "hi",
+          answers: [],
+          expect_denied: [],
+          assert: [{ result: "success" }],
+        },
+        scenarioSource: "s.yaml",
+        events: [JSON.stringify({ type: "result", subtype: "success" })],
+      }),
+    );
+    writeFileSync(join(d, "s.yaml"), SIBLING_NO_TIER);
+    const r = cli(["record", ".", "--rerecord-stale"], d, {
+      COWORK_HARNESS_RUNS_DIR: join(d, "runs"),
+      ANTHROPIC_API_KEY: "placeholder-not-used-no-spawn",
+    });
+    expect(r.code).toBe(1);
+    const line = r.stderr.split("\n").find((l) => l.includes("✗") && l.includes("c.cassette.json")) ?? "";
+    expect(line).toMatch(/fidelity: hostloop/);
+    expect(line).not.toMatch(/fidelity: container/);
+  });
+});
