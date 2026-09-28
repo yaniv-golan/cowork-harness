@@ -17,8 +17,8 @@ All notable changes to this project are documented here. The format is based on
     already passes `--strict --min-severity WARN` behaves exactly as before.
   - *To keep the old behaviour:* add `--min-severity INFO` (for the Action, `extra-args: --min-severity
     INFO`).
-  - *Action users:* a workflow that leaves `version:` at its `latest` default picks up 4.0.0, and both
-    changes here, as soon as it is promoted. Pin `version: "^3"` to defer it.
+  - *Action users:* a workflow that leaves `version:` at its `latest` default picks up 4.0.0, and every
+    change here, as soon as it is promoted. Pin `version: "^3"` to defer it.
 - **`record` exits 1, not 2, when `--max-budget-usd` refuses**, on `--dry-run` and the real command, on
   every `record` path (a single file, a directory, `--rerecord-stale`). A refusal of a scenario that loaded now always exits 1, so 2 no longer
   means "over budget"; it means the scenario did not load, or a usage or setup error. On a directory,
@@ -35,7 +35,10 @@ All notable changes to this project are documented here. The format is based on
   names the fix. The published `schema/scenario.schema.json` now lists `fidelity` as required, with no
   default.
   - *Who is affected:* any scenario file without a top-level `fidelity:` key. List them with
-    `grep -L '^fidelity:' scenarios/*.yaml`.
+    `grep -l '^prompt:' scenarios/*.yaml | xargs grep -L '^fidelity:'` (the first `grep` keeps session
+    and matrix files out). The pattern misses a quoted key (`"fidelity":`); `lint` does not.
+  - *A green `replay` gate does not mean the corpus is migrated:* replay reads the tier frozen in each
+    cassette, so it stays green over tierless scenario files. Run `lint` to find them.
   - *To keep the old behaviour:* add `fidelity: container`. That was the default, so nothing else changes.
     To match production instead, use `fidelity: hostloop`. But on a scenario that already has a cassette,
     add the tier the cassette recorded: a different tier is a recording-shaping change, so
@@ -53,6 +56,9 @@ All notable changes to this project are documented here. The format is based on
     until you re-record them once. Listing the scenarios directory in `.cowork-hashignore` also changes
     the hash, so do both in the same change: then this one re-record is the last one a scenario edit
     causes.
+  - *Action users:* `command: lint` fails on a tierless scenario, and `command: verify-cassettes` exits 3
+    on a cassette whose recorded scenario file lacks the key; `command: replay` stays green (see above).
+    Pin `version: "^3"` to defer the change.
   - The ad-hoc lanes keep their defaults: `skill --fidelity` (and `$COWORK_HARNESS_FIDELITY`) still
     default to `container`, and `probe-dispatch` to `hostloop`.
 

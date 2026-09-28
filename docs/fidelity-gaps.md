@@ -742,7 +742,7 @@ The harness `--fidelity` flag selects how closely the execution environment matc
 | Tier | Gaps vs. real Cowork (what it does **not** reproduce) |
 |---|---|
 | `protocol` | No sandbox, no filesystem isolation, no egress boundary. |
-| `container` (default) | No Apple VZ microVM; the container mount namespace is frozen at start (no mid-session mounts). |
+| `container` (the `skill` lane's default) | No Apple VZ microVM; the container mount namespace is frozen at start (no mid-session mounts). |
 | `microvm` | Slow boot (~20s); macOS arm64 only; egress is the same allowlist proxy as `container`, **not** a gVisor netstack. |
 | `hostloop` | Not an isolation gap — it reproduces Cowork's real host-loop split: the agent loop is a native host process (no container around the file tools, matching production's own risk model — see [docs/boundary.md](./boundary.md)); only shell/web route through a Docker VM sidecar. |
 | `cowork` | Resolves to `hostloop` or `container` at run time — inherits whichever tier's gaps. |
