@@ -3,20 +3,18 @@
 // docs and the skill's references, and requires each block with a TOP-LEVEL `prompt:` (a scenario, not a
 // session or matrix file) to name a tier at top level too.
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 const ROOTS = ["README.md", "SPEC.md", "docs", ".claude/skills/cowork-harness"];
 
+// Tracked files only: a gitignored local file (e.g. private notes under docs/) must not change the verdict
+// between a developer's machine and CI.
 function markdownFiles(): string[] {
-  const out: string[] = [];
-  const walk = (p: string) => {
-    if (statSync(p).isDirectory()) {
-      for (const e of readdirSync(p)) if (e !== "node_modules" && e !== "_vendor") walk(join(p, e));
-    } else if (p.endsWith(".md")) out.push(p);
-  };
-  for (const r of ROOTS) walk(r);
-  return out;
+  const tracked = execFileSync("git", ["ls-files", "-z", "--", ...ROOTS], { encoding: "utf8" })
+    .split("\0")
+    .filter((p) => p.endsWith(".md") && !p.includes("/_vendor/"));
+  return tracked;
 }
 
 /** Fenced ```yaml / ```yml blocks, with the 1-based line the block opens on. */

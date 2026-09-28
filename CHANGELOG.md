@@ -29,7 +29,7 @@ All notable changes to this project are documented here. The format is based on
     exit 1 as the refusal. To tell a budget refusal from the other refusals, match `refused before
     spending` in the error message (`error.message` in the JSON envelope).
 - **`fidelity:` is required in every scenario.** It defaulted to `container`, with a warning since 2.4.0.
-  A scenario without the key no longer loads: `run` and `record <file>` exit 2 (usage) before anything runs,
+  A scenario without the key no longer loads: `run` (a file or a directory) and `record <file>` exit 2 (usage) before anything runs,
   `record <dir/> --dry-run` lists the file as broken, and `lint` reports ERROR `scenario-invalid` (and
   ERROR `fidelity-missing`, which replaces the `fidelity-defaulted` WARN) without `--strict`. The error
   names the fix. The published `schema/scenario.schema.json` now lists `fidelity` as required, with no
