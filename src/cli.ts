@@ -1836,28 +1836,32 @@ async function cmdRun(rawArgs: string[]) {
     process.exit(matrix.anyFail ? 1 : 0);
   }
 
-  // Budget pre-flight for EVERY resolved scenario, before any of them runs. Deliberately not inside the
-  // loop: a refusal on scenario 3 of 10 would fire only after 1 and 2 had already been paid for, and
-  // `fail()` exits — so those completed results would never reach the JSON envelope either. A pre-flight
-  // that spends money before refusing is not a pre-flight.
+  // LOAD every resolved scenario, then run the pre-flights over all of them, before any of them runs.
+  // Deliberately not inside the loop: a refusal on scenario 3 of 10 (a file that does not load — e.g. no
+  // `fidelity:` — a smuggled `on_unanswered: prompt`, or the budget cap) would fire only after 1 and 2 had
+  // already been paid for, and the refusal exits — so those completed results would never reach the JSON
+  // envelope either. A pre-flight that spends money before refusing is not a pre-flight.
+  const loaded = files.map((f) => parseScenarioFile(f));
+  for (const scenario of loaded) {
+    // The CLI flag guard (resolvePolicy) rejects --on-unanswered prompt on `run`, but a committed
+    // scenario could smuggle it via its YAML and silently block/hang in non-TTY CI. Reject it here too.
+    if (scenario.on_unanswered === "prompt")
+      fail(
+        "run",
+        "usage",
+        `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`run\` (breaks determinism / hangs in CI). Use fail|first, or --decider-dir/--decider-cmd.`,
+        undefined,
+        o.json,
+      );
+  }
   if (maxBudgetUsd !== undefined && repeatN === undefined)
-    for (const f of files) preflightBudget("run", parseScenarioFile(f).name, maxBudgetUsd, o.json);
+    for (const scenario of loaded) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
 
   const results: RunResult[] = [];
   const rollups: RepeatRollup[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
-      const scenario = parseScenarioFile(files[i]);
-      // The CLI flag guard (resolvePolicy) rejects --on-unanswered prompt on `run`, but a committed
-      // scenario could smuggle it via its YAML and silently block/hang in non-TTY CI. Reject it here too.
-      if (scenario.on_unanswered === "prompt")
-        fail(
-          "run",
-          "usage",
-          `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`run\` (breaks determinism / hangs in CI). Use fail|first, or --decider-dir/--decider-cmd.`,
-          undefined,
-          o.json,
-        );
+      const scenario = loaded[i];
 
       if (repeatN === undefined) {
         const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;

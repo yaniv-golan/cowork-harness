@@ -111,10 +111,19 @@ describe("executeScenario refuses a scenario object without `fidelity`", () => {
     assert: [{ result: "success" }],
   } as unknown as Parameters<typeof executeScenario>[0];
 
-  it("rejects with a UsageError naming the key, not with the later baseline failure", async () => {
-    const err = await executeScenario(noTier).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(UsageError);
-    expect((err as Error).message).toMatch(/fidelity/);
+  it("rejects with a UsageError naming the key, not with the later baseline failure, and writes no run dir", async () => {
+    const runs = work();
+    const prev = process.env.COWORK_HARNESS_RUNS_DIR;
+    process.env.COWORK_HARNESS_RUNS_DIR = runs;
+    try {
+      const err = await executeScenario(noTier).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UsageError);
+      expect((err as Error).message).toMatch(/fidelity/);
+      expect(readdirSync(runs), "refused before any run dir exists").toEqual([]);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_RUNS_DIR;
+      else process.env.COWORK_HARNESS_RUNS_DIR = prev;
+    }
   });
 });
 
@@ -130,6 +139,26 @@ describe.skipIf(!can)("commands inherit the refusal", () => {
     expect(env.error.category).toBe("usage");
     expect(env.error.message).toMatch(/fidelity: container/);
     expect(readdirSync(runs), "refused before any run dir exists").toEqual([]);
+  });
+
+  it("`run <dir/>` loads every file before running any: a tierless file refuses the batch before a valid one runs", () => {
+    // Loading lazily, per file, ran (and paid for) the earlier files and then exited 2 on the tierless one,
+    // dropping their results from the envelope. `a.yaml` sorts first and is valid, so a run dir under the
+    // runs root is the evidence that it started.
+    const d = work();
+    const runs = join(d, "runs");
+    mkdirSync(runs);
+    const corpus = join(d, "corpus");
+    mkdirSync(corpus);
+    writeFileSync(join(corpus, "a.yaml"), NO_TIER.replace("name: s", "name: a") + "fidelity: container\n");
+    writeFileSync(join(corpus, "b.yaml"), NO_TIER.replace("name: s", "name: b"));
+    const r = cli(["run", corpus, "--output-format", "json"], d, { COWORK_HARNESS_RUNS_DIR: runs });
+    expect(r.code).toBe(2);
+    const env = JSON.parse(r.stdout.trim());
+    expect(env.error.category).toBe("usage");
+    expect(env.error.message).toMatch(/b\.yaml/);
+    expect(r.stderr, "the spawn guard must not have been reached").not.toMatch(/COWORK_HARNESS_FORBID_SPAWN is set/);
+    expect(readdirSync(runs), "nothing ran").toEqual([]);
   });
 
   it("`record <file> --dry-run` exits 2 (did not load)", () => {
