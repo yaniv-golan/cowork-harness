@@ -948,6 +948,17 @@ def test_fidelity_missing_fails_lint_without_strict(tmp_path):
     assert code == 1
 
 
+# Only a SCENARIO needs a tier. A session or matrix YAML has no `prompt:` and no `fidelity:` by design;
+# reporting it as a missing tier would be a false red on a file that is correct.
+@pytest.mark.parametrize(
+    "body",
+    ["model: claude-sonnet-5\nfolders:\n  - from: ./data\n", "baselines: [latest]\nmodels: [claude-sonnet-5]\n"],
+    ids=["session", "matrix"],
+)
+def test_fidelity_missing_is_silent_on_a_non_scenario_doc(tmp_path, body):
+    assert _mk(tmp_path, body) == []
+
+
 # The rule reads the KEY: any named tier satisfies it.
 @pytest.mark.parametrize("tier", ["container", "hostloop", "cowork", "microvm", "protocol"])
 def test_fidelity_missing_silent_when_a_tier_is_named(tmp_path, tier):

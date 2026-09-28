@@ -23,8 +23,8 @@ lint flags (see references/scenario-schema.md for the why of each):
                                                   (runtime rejects at LOAD time; tier rules suppressed)
   E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
                                                       unless allow_missing_capability)
-  E  `fidelity-missing`        no `fidelity:` key -- required since 4.0.0 (the loader refuses the file);
-                               the tier-dependent rules are skipped for such a file
+  E  `fidelity-missing`        a scenario (it has `prompt:`) with no `fidelity:` key -- required since
+                               4.0.0 (the loader refuses the file); the tier-dependent rules are skipped
   E  `enum-value-invalid`      any enum-valued field carries a value the schema rejects (fidelity,
                                execution, lane, on_unanswered, answers[].decide/else/grant,
                                assert[].result/path_denied.*/question_options.order) — `agent` gets a
@@ -896,8 +896,9 @@ def lint_doc(doc, path, raw_lines):
     # `container` models VM-loop; production runs HOST-LOOP, gate 1143815894 is force-ON in every
     # shipped baseline: the file tools resolve a bare relative path differently, the shell starts
     # somewhere else, and the offered tool set differs (measured 2026-08-27).
-    # Read the KEY, not a resolved value.
-    if "fidelity" not in doc:
+    # Read the KEY, not a resolved value. Only on a SCENARIO (it has `prompt:`, the loader's own signal): a
+    # session or matrix YAML in a linted set carries no tier by design.
+    if "prompt" in doc and "fidelity" not in doc:
         findings.append(
             Finding(
                 "ERROR",
