@@ -362,6 +362,96 @@
       "sectionTags": 43,
       "constantId": "Qgt",
       "note": "Desktop self-updated 1.37937.0 -> 1.37937.1 mid-pass. Prompt BYTE-IDENTICAL to 1.37937.0, same constant id Qgt. Recorded separately because provenance.asarFingerprint is the SAME 16-char value on both builds (it hashes only the cowork slices), so the baseline's own fingerprint cannot distinguish them and this file is where that distinction is kept."
+    },
+    "1.37937.3": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "Ggt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "1.40609.0": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "X_t",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "1.40609.1": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "X_t",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "1.44121.1": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "GSt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "1.46388.3": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "ewt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "1.46388.4": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "QCt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "2.2553.1": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "mPt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "2.7032.0": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "fIt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "2.9939.2": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "NRt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
+    },
+    "2.9939.4": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "NRt",
+      "note": "Backfilled 2026-09-29 from the retained app.asar backup. Cowork system prompt BYTE-IDENTICAL to 1.32352.0 onward; only the minifier-assigned constant id differs."
     }
   },
   "subagentAppendMethod": "Independent of the single-text `versions` fingerprints above: the sub-agent environment append is a TWO-BRANCH generator selected on hostLoopMode. In the SINGLE bundle module that references buildSubagentEnvironmentPrompt AND contains both branch discriminators, slice each branch's raw backtick-template body by scanning outward from its discriminator fragment (escaped backticks are decoded to bare backticks; other escapes left intact); DECODE escapes (same decoder as decodedSha256 -- 1.32352.0's codegen escape change moved BOTH branch fingerprints while the rendered branch text was byte-identical), then normalize every ${...} interpolation to the literal token ${} ; sha256 the UTF-8 bytes; keep the first 16 hex chars. The hl (host-loop) branch is discriminated by the fragment 'on the user's machine' (anchored to the occurrence immediately preceding the vm branch, since the phrase also occurs in unrelated prose), the vm (sandbox) branch by 'exist only in the sandbox'. BOTH fingerprints are mandatory per version entry. Consumed by checkSubagentPromptFacts in src/sync/cowork-sync.ts; re-derive with readMainBundleFiles + extractSubagentBranchSlices + subagentBranchFingerprint (see docs/maintenance.md). Raw texts retained locally only (see localRawRetention).",

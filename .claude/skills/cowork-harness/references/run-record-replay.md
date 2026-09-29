@@ -1,6 +1,6 @@
 # Run, record and lock
 
-Tracks `cowork-harness 4.0.0` (baseline `desktop-2.9939.4`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
+Tracks `cowork-harness 4.1.0` (baseline `desktop-2.9939.4`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
 
 ## Part II — RUN, RECORD & LOCK
 
