@@ -26,6 +26,7 @@ import {
   UnansweredError,
   BoundaryError,
   UsageError,
+  SessionFileError,
   LegacyRunDirError,
   effectiveTier,
   type ExecuteOptions,
@@ -1716,8 +1717,10 @@ async function cmdRun(rawArgs: string[]) {
     try {
       baseSession = loadSessionFromFile(scenario.session);
     } catch (e) {
-      // A bad session ref (missing file, invalid YAML) must read as a clean usage error, matching the
-      // scenario-path check above — not a raw ENOENT + stack trace.
+      // A bad session ref must read as a clean usage error, matching the scenario-path check above — not a
+      // raw ENOENT + stack trace. A file that cannot be read already says so, with the path: pass it through
+      // rather than prefixing a second "failed to load session".
+      if (e instanceof SessionFileError) fail("run", "usage", e.message, e.hint, o.json);
       fail("run", "usage", `failed to load session "${scenario.session}": ${(e as Error).message}`, undefined, o.json);
     }
     // skill_dirs candidates are resolved relative to the MATRIX FILE's own directory (the same

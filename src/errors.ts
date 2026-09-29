@@ -49,6 +49,22 @@ export class UnknownBaselineError extends UsageError {
   }
 }
 
+/**
+ * Thrown by `parseSessionFile` when a scenario's `session:` file cannot be read: it is missing, a directory,
+ * not readable, not valid YAML, or a `~<user>` path. A `UsageError`, so `run`/`skill`/`record` answer it as
+ * the bad input path it is (category `usage`); without it the bare `readFileSync` ENOENT surfaced as
+ * category `internal`, which means a harness bug. Its own class so a caller that reports input errors
+ * rather than refusing them (`record <file> --dry-run`) can tell it from a refusal.
+ */
+export class SessionFileError extends UsageError {
+  readonly path: string;
+  constructor(path: string, message: string, hint?: string) {
+    super(message, hint);
+    this.name = "SessionFileError";
+    this.path = path;
+  }
+}
+
 /** A Zod issue path rendered the way a YAML author can locate it: `assert[0].path_denied.source`, never
  *  `assert.0`; an empty or non-array path is `(root)`. Shared by `compactSchemaError` and `lint`'s loader
  *  findings so the two never spell the same location differently. Never throws. */

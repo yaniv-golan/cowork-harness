@@ -1,5 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { BoundaryError, UsageError, LegacyRunDirError, compactSchemaError } from "../errors.js";
+import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
@@ -40,6 +40,7 @@ import {
   pluginSkillRootsFromPlan,
   isConnectedContent,
   applySessionOverrides,
+  expandUserPath,
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
@@ -1912,9 +1913,46 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   }
 }
 
+/** The on-disk path a `session:` value names: a leading `~` expanded for the current user, anything else
+ *  resolved against cwd (a scenario FILE's relative `session:` was already resolved against its directory by
+ *  the loader). A `~<user>` path is a {@link SessionFileError}. */
+function sessionFilePath(ref: string): string {
+  try {
+    return expandUserPath(ref);
+  } catch (e) {
+    throw new SessionFileError(ref, `session file ${ref}: ${(e as Error).message.replace(/^expandUserPath: /, "")}`);
+  }
+}
+
+/** Read and parse a `session:` file. Every way the file itself can be unusable — missing, a directory, not
+ *  readable, not YAML — is a {@link SessionFileError} (a usage error naming the absolute path), never a raw
+ *  `ENOENT` that reads as a harness bug. A document the session SCHEMA rejects is not this function's
+ *  concern: it parses, and `loadSession` refuses it. Callers that tolerate a session they cannot open (the
+ *  cassette fingerprint and staleness paths, the model pre-flight) guard or catch it themselves. */
 export function parseSessionFile(path: string): unknown {
   if (path === "(inline)") return {};
-  return parseYaml(readFileSync(path, "utf8"));
+  const abs = sessionFilePath(path);
+  let text: string;
+  try {
+    text = readFileSync(abs, "utf8");
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR")
+      throw new SessionFileError(abs, `session file not found: ${abs}`, "`session:` resolves relative to the scenario file's directory");
+    if (code === "EISDIR") throw new SessionFileError(abs, `session file is a directory: ${abs}`);
+    if (code === "EACCES" || code === "EPERM") throw new SessionFileError(abs, `session file is not readable: ${abs}`);
+    throw e;
+  }
+  try {
+    return parseYaml(text);
+  } catch (e) {
+    // The parser's message carries a source excerpt over several lines; its first line names the problem
+    // and the position, which is what a one-line error needs.
+    const first = String((e as Error).message ?? e)
+      .split("\n")[0]
+      .replace(/:$/, "");
+    throw new SessionFileError(abs, `session file is not valid YAML: ${abs}: ${first}`);
+  }
 }
 
 const isFileRelative = (p: string) => p !== "(inline)" && !isAbsolute(p) && !p.startsWith("~");
@@ -2186,8 +2224,10 @@ export function ablateSession<T extends { plugins: Record<string, unknown>; skil
  *  scenario's session, apply the model the run would resolve (and `ablateSkill`, as the run applies it), and
  *  run the same write-free source resolution `executeScenario` runs before it creates a run dir. Throws that
  *  resolution's `UsageError` (a path that does not exist or is the wrong kind, an effort the model does not
- *  offer, a baseline name that resolves nowhere). A session that does not load at all is left to the real
- *  run, as the model pre-flight leaves it; a baseline file that does not load throws what the run would.
+ *  offer, a baseline name that resolves nowhere), and a session FILE that cannot be read (a
+ *  {@link SessionFileError}). A session that reads but does not load (the session schema rejects it) is left
+ *  to the real run, as the model pre-flight leaves it; a baseline file that does not load throws what the run
+ *  would.
  *  `quiet` mutes the resolution's warnings, for a caller whose run resolves again and prints them itself;
  *  `baseline` passes one the caller already loaded. */
 export function launchSourcesPreflight(
@@ -2227,19 +2267,22 @@ export function scenarioInputRefusal(
   opts: ScenarioInputCheckOptions = {},
 ): UsageError | undefined {
   const f = scenarioInputFindings(scenario, modelOverride, opts);
-  return f.vacuity ?? f.inputs;
+  return f.session ?? f.vacuity ?? f.inputs;
 }
 
 export type ScenarioInputCheckOptions = { quiet?: boolean; ablateSkill?: boolean; unloadableBaseline?: "throw" | "skip" | "report" };
 
-/** The two halves of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
- *  differently (`record <file> --dry-run` reports vacuity but refuses a bad input): `vacuity`, the
- *  tier-vacuous refusal; `inputs`, the baseline-name or input-path refusal. The run throws `vacuity` first. */
+/** The parts of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
+ *  differently (`record <file> --dry-run` reports vacuity and an unreadable session file but refuses a bad
+ *  input path): `session`, a `session:` file that cannot be read; `vacuity`, the tier-vacuous refusal;
+ *  `inputs`, the baseline-name or input-path refusal. The run throws them in that order (it loads the session
+ *  before it checks vacuity); with no session there are no input paths to check, so `session` and `inputs`
+ *  never both appear. */
 export function scenarioInputFindings(
   scenario: Scenario,
   modelOverride: string | undefined,
   opts: ScenarioInputCheckOptions = {},
-): { vacuity?: UsageError; inputs?: UsageError } {
+): { session?: SessionFileError; vacuity?: UsageError; inputs?: UsageError } {
   let baseline: PlatformBaseline;
   try {
     baseline = loadBaseline(scenario.baseline);
@@ -2251,13 +2294,19 @@ export function scenarioInputFindings(
   }
   const vacuous = tierVacuityRefusal(scenario, baseline);
   let inputs: UsageError | undefined;
+  let session: SessionFileError | undefined;
   try {
     launchSourcesPreflight(scenario, modelOverride, { quiet: opts.quiet, ablateSkill: opts.ablateSkill, baseline });
   } catch (e) {
-    if (!(e instanceof UsageError)) throw e;
-    inputs = e;
+    if (e instanceof SessionFileError) session = e;
+    else if (e instanceof UsageError) inputs = e;
+    else throw e;
   }
-  return { ...(vacuous ? { vacuity: new UsageError(vacuous) } : {}), ...(inputs ? { inputs } : {}) };
+  return {
+    ...(session ? { session } : {}),
+    ...(vacuous ? { vacuity: new UsageError(vacuous) } : {}),
+    ...(inputs ? { inputs } : {}),
+  };
 }
 
 /** Refuse a `tool_not_called` / `subagent_tool_absent` naming a tool the scenario's tier provably does not
@@ -2286,7 +2335,8 @@ export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaselin
 }
 
 export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
-  const baseDir = sessionRef === "(inline)" ? process.cwd() : dirname(resolve(sessionRef));
+  // `sessionFilePath`, not `resolve`: a `~/…` ref must resolve its mounts against the expanded directory.
+  const baseDir = sessionRef === "(inline)" ? process.cwd() : dirname(sessionFilePath(sessionRef));
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }
 
@@ -3890,4 +3940,4 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
   return id;
 }
 
-export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError };
+export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError, SessionFileError };

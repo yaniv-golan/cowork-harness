@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **A scenario whose `session:` file is missing is a usage error, not a harness bug.** `run` answered a
+  missing session file with a raw `ENOENT` under error category `internal` (exit `2`); it now refuses it
+  as category `usage` (exit `2` unchanged) with `session file not found: <path>` and a hint that
+  `session:` resolves relative to the scenario file's directory, before a run directory is created. A
+  session path that is a directory, is not readable, or is not valid YAML gets the same treatment, each
+  with its own one-line message. `run <dir/>` refuses the batch before its first scenario runs, naming
+  every such file; `run --matrix` prints the reason once instead of prefixing a second "failed to load
+  session". The real `record` already refused it (exit `1`) and now gives the same clean message.
+- **`record --dry-run` reports a session file that cannot be read.** Both the single-file and the
+  directory preview list it under `inputErrors[]` with a `⚠ input error:` line that survives `--quiet`;
+  the exit code and `ok` are unchanged. Before, the single-file preview exited `0` with a clean preview
+  and the directory preview listed the file nowhere.
+- **A `session:` path starting with `~/` now expands to your home directory**, as the session guide
+  already said. It was read as a literal `~` directory, so such a scenario could not run; the cassette
+  fingerprint reads the same expanded path.
+
 ## [4.1.0] — 2026-09-29
 
 ### Upgrade notes

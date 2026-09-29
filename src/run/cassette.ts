@@ -750,6 +750,8 @@ export function resolveCassetteSessionPath(
   // Inline scenarios have no session FILE, so there is nothing an override could point at.
   if (sessionPath === "(inline)") return { path: sessionPath, source: "inline" };
   if (override) return { path: override, source: "override" };
+  // A `~/…` session is home-relative, as the run's loader reads it (parseSessionFile) — never cassette-relative.
+  if (sessionPath === "~" || sessionPath.startsWith("~/")) return { path: expandUserPath(sessionPath), source: "as-given" };
   if (cassetteDir && !isAbsolute(sessionPath)) return { path: join(cassetteDir, sessionPath), source: "cassette-relative" };
   return { path: sessionPath, source: "as-given" };
 }
@@ -4049,7 +4051,8 @@ export async function cmdRecord(args: string[]) {
         if (why) refusals.push({ file: f, message: why });
         // Also path-independent: whether a model resolves depends on `--model` (applied batch-wide), the
         // session and the environment, all of which this arm knows exactly as the real batch will. Opening
-        // the session is new I/O on this arm; a session that does not load is skipped, not refused.
+        // the session is new I/O on this arm; a session that does not load is skipped, not refused (a session
+        // FILE that cannot be read is listed under `inputErrors[]` by the input check below).
         const noModel = unresolvedModelPreflight(sc, modelOverride);
         if (noModel) refusals.push({ file: f, message: noModel });
         // The inputs, checked as executeScenario checks them — but only once a model resolves: the real
@@ -4215,17 +4218,18 @@ export async function cmdRecord(args: string[]) {
     // preview of a path that is not there previews nothing. A scenario that loaded and is refused exits 1,
     // record's rule — naming the reason the real record gives, which is the vacuity when both apply. A
     // baseline file that does not load throws, as it does on the real record.
-    const { vacuity, inputs } = scenarioInputFindings(scenario, modelOverride);
+    const { session, vacuity, inputs } = scenarioInputFindings(scenario, modelOverride);
     if (inputs) {
       const why = vacuity ?? inputs;
       return fail("record", "usage", `record: ${why.message}`, why.hint, asJson, 1);
     }
-    // A `tool_not_called` the tier can never violate, alone: the real record refuses it, but this arm
-    // exited 0 on it through 4.0.0 and the dry-run exit code is a covered meaning, so it is reported
-    // (`inputErrors[]` and a line that survives --quiet), not refused.
-    const singleInputErrors = vacuity
-      ? [{ file: target, message: vacuity.message, ...(vacuity.hint !== undefined ? { hint: vacuity.hint } : {}) }]
-      : [];
+    // A `session:` file that cannot be read, and a `tool_not_called` the tier can never violate: the real
+    // record refuses both, but this arm exited 0 on them through 4.1.0 and the dry-run exit code is a
+    // covered meaning, so they are reported (`inputErrors[]` and a line that survives --quiet), not refused.
+    // Session first: the real record loads the session before it checks vacuity.
+    const singleInputErrors = [session, vacuity]
+      .filter((e): e is UsageError => e !== undefined)
+      .map((e) => ({ file: target, message: e.message, ...(e.hint !== undefined ? { hint: e.hint } : {}) }));
     const logSingleInputErrors = () => {
       for (const e of singleInputErrors) log(inputErrorLine(e.file, e.message));
     };
