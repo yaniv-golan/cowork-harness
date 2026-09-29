@@ -11,7 +11,7 @@
 // session file (and the mounts it names), an absolute `baseline:` path, environment knobs read at run time,
 // and the tier-dependent pre-spawn refusals. A consumer's token-free lint lane often runs where the scenario
 // never will.
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { loadBaseline as realLoadBaseline } from "../baseline.js";
 import { UsageError, renderIssuePath } from "../errors.js";
@@ -191,7 +191,10 @@ export function loaderFindings(files: string[], deps: LoaderDeps = {}): LintFind
       const name = scenario.baseline;
       // `latest` always resolves on a packaged install; an absolute path is a file on some machine, which the
       // lint lane may not be. Only a committed NAME is a property of the scenario plus this install.
-      if (name === "latest" || isAbsolute(name)) continue;
+      // An absolute path is machine-dependent: one that does not exist HERE is not checked (it may exist on
+      // the machine the run happens on). One that exists is checked like a name — a directory or a file that
+      // does not load would fail every run.
+      if (name === "latest" || (isAbsolute(name) && !existsSync(name))) continue;
       if (!baselineOk.has(name)) {
         try {
           resolveBaseline(name);

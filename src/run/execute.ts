@@ -2271,7 +2271,9 @@ export function launchSourcesPreflight(
  *  assertion, then every declared input path. Returns the first refusal as the `UsageError` the run would
  *  throw (message and hint), or `undefined`. Anything else that is not an input error is thrown.
  *
- *  A baseline FILE that does not load (malformed JSON, a shape the schema rejects) is the caller's choice,
+ *  A baseline path the user supplied that does not load is a usage refusal like any other input error
+ *  (`loadBaseline` throws `UnknownBaselineError`). A committed baseline that does not load (malformed JSON,
+ *  a shape the schema rejects — a packaging bug, not an input error) is the caller's choice,
  *  `unloadableBaseline`: `"throw"` (the default) fails as the run would; `"skip"` leaves it to the run
  *  (a batch pre-flight, where that scenario still fails on its turn); `"report"` returns the load error as
  *  the refusal (a directory dry run, whose real record fails that item). */

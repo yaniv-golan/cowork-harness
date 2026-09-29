@@ -286,25 +286,30 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(doc.inputErrors![0].message).toMatch(/does not load: .*JSON/);
   });
 
-  it("record <file> --dry-run: a baseline that fails to LOAD fails as before (internal, exit 2)", () => {
-    // Pin: a single-file preview must not green what the real record crashes on.
+  it("record <file> --dry-run: a baseline file that fails to LOAD is refused as a usage error", () => {
+    // Pin: a single-file preview must not green what the real record refuses.
     const d = fixture();
     writeFileSync(join(d, "bad-baseline.json"), "{not json");
     writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../ok.yaml", `baseline: ${join(d, "bad-baseline.json")}\n`));
     const r = cli(["record", "sc/m.yaml", "--dry-run", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(2);
+    expect(r.code, r.all).not.toBe(0);
     const env = envelope(r.stdout);
     expect(env.ok).toBe(false);
-    expect(env.error?.category).toBe("internal");
+    expect(env.error?.category).toBe("usage");
+    expect(env.error?.message).toMatch(/does not load: not valid JSON/);
   });
 
-  it("run <dir/>: a baseline that fails to LOAD is left to that scenario's turn, not the pre-check", () => {
+  it("run <dir/>: a baseline file that fails to LOAD is refused by the pre-check, before the first scenario", () => {
     const d = fixture();
     writeFileSync(join(d, "bad-baseline.json"), "{not json");
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
     writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../ok.yaml", `baseline: ${join(d, "bad-baseline.json")}\n`));
-    const r = cli(["run", "sc/"], d);
-    expect(r.all).toMatch(SPAWN_GUARD); // `a` runs first; the pre-check did not throw on `m`
+    const r = cli(["run", "sc/", "--output-format", "json"], d);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(2);
+    expect(envelope(r.stdout).error?.category).toBe("usage");
+    expect(envelope(r.stdout).error?.message).toMatch(/m\.yaml: .*does not load/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
   it("record <dir/> --dry-run: a baseline NAME that resolves nowhere is an inputErrors[] entry, hint carried", () => {

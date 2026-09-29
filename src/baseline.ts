@@ -5,7 +5,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PlatformBaseline } from "./types.js";
 import { safeNamedBaseline } from "./boundary-paths.js";
-import { UnknownBaselineError } from "./errors.js";
+import { UnknownBaselineError, compactSchemaError } from "./errors.js";
+import { ZodError } from "zod";
 
 /** SHA-256 (hex) of a file's bytes. Reads the whole file — fine for the ~240 MB agent ELF (a one-off at
  *  sync/verify time, never on the hot path). */
@@ -356,9 +357,41 @@ export function loadBaseline(name: string): PlatformBaseline {
       throw unknownBaseline(name, (e as Error).message);
     }
     if (!existsSync(file)) throw unknownBaseline(name);
+    // An absolute path is a file the USER supplied: every way it fails to load is their input error, stated
+    // in one line. A committed NAME that fails to load is a packaging bug and keeps failing as one (below).
+    if (isAbsolute(name)) return loadBaselineFile(file);
   }
   const raw = JSON.parse(readFileSync(file, "utf8"));
   return PlatformBaseline.parse(raw);
+}
+
+function loadBaselineFile(file: string): PlatformBaseline {
+  const bad = (why: string) =>
+    new UnknownBaselineError(
+      file,
+      `baseline file at "${file}" ${why} — a baseline is \`latest\`, a committed name like desktop-<version>, or an absolute path to a baseline file`,
+    );
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    throw bad(
+      code === "EISDIR" ? "is a directory" : code === "EACCES" || code === "EPERM" ? "is not readable" : `cannot be read (${code})`,
+    );
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw bad(`does not load: not valid JSON (${(e as Error).message.split("\n")[0]})`);
+  }
+  try {
+    return PlatformBaseline.parse(raw);
+  } catch (e) {
+    if (e instanceof ZodError) throw bad(`does not load: not a platform baseline (${compactSchemaError(e.issues)})`);
+    throw e;
+  }
 }
 
 function unknownBaseline(name: string, reason?: string): UnknownBaselineError {
