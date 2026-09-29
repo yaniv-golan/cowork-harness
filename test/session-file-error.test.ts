@@ -2,7 +2,7 @@
 // every strict caller goes through; the callers that tolerate a session they cannot open (the cassette
 // fingerprint and staleness paths, the model pre-flight) stay tolerant.
 import { describe, it, expect, afterEach } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSessionFile, loadSessionFromFile, unresolvedModelPreflight } from "../src/run/execute.js";
@@ -62,6 +62,15 @@ describe("parseSessionFile: an unreadable session file is a SessionFileError", (
     chmodSync(p, 0o600);
     expect(e).toBeInstanceOf(SessionFileError);
     expect(e.message).toBe(`session file is not readable: ${p}`);
+  });
+
+  it("any other read failure (a symlink loop) is a usage error naming the errno, not a raw throw", () => {
+    const d = work();
+    symlinkSync(join(d, "b.yaml"), join(d, "a.yaml"));
+    symlinkSync(join(d, "a.yaml"), join(d, "b.yaml"));
+    const e = thrown(() => parseSessionFile(join(d, "a.yaml"))) as Error;
+    expect(e).toBeInstanceOf(SessionFileError);
+    expect(e.message).toBe(`cannot read session file: ${join(d, "a.yaml")}: ELOOP`);
   });
 
   it("invalid YAML: a one-line reason, not the parser's multi-line dump", () => {

@@ -1932,27 +1932,41 @@ function sessionFilePath(ref: string): string {
 export function parseSessionFile(path: string): unknown {
   if (path === "(inline)") return {};
   const abs = sessionFilePath(path);
+  return readYamlFile(abs, "session", (message, hint) => new SessionFileError(abs, message, hint));
+}
+
+/** Read and parse a YAML input file (a scenario or a session), mapping every way the FILE can be unusable
+ *  to a one-line usage error naming it: missing, a directory, not readable, any other read failure, or not
+ *  valid YAML (the parser's first line — its message carries a multi-line source excerpt). Never a raw
+ *  `ENOENT`/`YAMLParseError`, which `main().catch` would report as category `internal`, a harness bug. */
+export function readYamlFile(path: string, kind: "scenario" | "session", make: (message: string, hint?: string) => UsageError): unknown {
   let text: string;
   try {
-    text = readFileSync(abs, "utf8");
+    text = readFileSync(path, "utf8");
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR")
-      throw new SessionFileError(abs, `session file not found: ${abs}`, "`session:` resolves relative to the scenario file's directory");
-    if (code === "EISDIR") throw new SessionFileError(abs, `session file is a directory: ${abs}`);
-    if (code === "EACCES" || code === "EPERM") throw new SessionFileError(abs, `session file is not readable: ${abs}`);
-    throw e;
+      throw make(
+        `${kind} file not found: ${path}`,
+        kind === "session" ? "`session:` resolves relative to the scenario file's directory" : undefined,
+      );
+    if (code === "EISDIR") throw make(`${kind} file is a directory: ${path}`);
+    if (code === "EACCES" || code === "EPERM") throw make(`${kind} file is not readable: ${path}`);
+    throw make(`cannot read ${kind} file: ${path}: ${code ?? (e as Error).message}`);
   }
   try {
     return parseYaml(text);
   } catch (e) {
-    // The parser's message carries a source excerpt over several lines; its first line names the problem
-    // and the position, which is what a one-line error needs.
-    const first = String((e as Error).message ?? e)
-      .split("\n")[0]
-      .replace(/:$/, "");
-    throw new SessionFileError(abs, `session file is not valid YAML: ${abs}: ${first}`);
+    throw make(`${kind} file is not valid YAML: ${path}: ${firstLine(e)}`);
   }
+}
+
+/** The first line of an error's message, without a trailing colon — the `yaml` parser's message names the
+ *  problem and position on line one and follows it with a source excerpt. */
+export function firstLine(e: unknown): string {
+  return String((e as Error)?.message ?? e)
+    .split("\n")[0]
+    .replace(/:$/, "");
 }
 
 const isFileRelative = (p: string) => p !== "(inline)" && !isAbsolute(p) && !p.startsWith("~");
@@ -2034,7 +2048,7 @@ export function loadScenarioPure(path: string): Scenario {
   let scenario: Scenario;
   let rawDoc: unknown;
   try {
-    rawDoc = parseYaml(readFileSync(path, "utf8"));
+    rawDoc = readYamlFile(path, "scenario", (message, hint) => new UsageError(message, hint));
     scenario = Scenario.parse(rawDoc);
   } catch (e) {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
