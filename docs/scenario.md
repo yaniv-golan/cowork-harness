@@ -151,6 +151,7 @@ Two consequences worth internalising:
 
 ```bash
 cowork-harness lint path/to/scenario.yaml               # runs the real loader + the authoring checks;
+                                                         # add --cassette-dir <dir> to use exact scenarioSource evidence
                                                         # exit 1 on any ERROR, including "does not load"
 cowork-harness record path/to/scenario.yaml --dry-run   # also the real loader; exit 2 if it does NOT load,
                                                         # and exit 1 if it loads but the real record would

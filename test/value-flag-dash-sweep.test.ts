@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { SKILL_FLAG_SURFACE } from "../src/run/skill-flag-surface.js";
 import { RECORD_VALUE_FLAGS } from "../src/run/cassette.js";
+import { LINT_VALUE_FLAGS } from "../src/run/lint-load.js";
 
 // A value-taking flag given a FLAG-LOOKING next token (`--label --dotenv`) must be a usage error naming that
 // flag — never take the flag name as its value and carry on. Until `--dotenv`/`--run-dir` became per-command
@@ -58,13 +59,16 @@ const CASES: Array<[string, string[], string[]]> = [
   ["run", ["run", "s.yaml"], RUN_VALUE_FLAGS],
   ["skill", ["skill", "./plugin", "hi", "--dry-run"], SKILL_VALUE_FLAGS],
   ["record", ["record", "s.yaml", "--dry-run"], [...RECORD_VALUE_FLAGS]],
+  ["lint", ["lint", "s.yaml"], [...LINT_VALUE_FLAGS]],
   ["chat", ["chat", "./plugin"], CHAT_VALUE_FLAGS],
   ["probe-dispatch", ["probe-dispatch", "./plugin", "hi"], PROBE_VALUE_FLAGS],
 ];
 
 describe.skipIf(!can)("every value-taking flag refuses a flag-looking value", () => {
   it("the sweep is not empty", () => {
-    for (const [, , flags] of CASES) expect(flags.length).toBeGreaterThan(4);
+    // A per-command floor, so a list that silently shrinks fails here. lint has only three value flags.
+    const floor: Record<string, number> = { lint: 3 };
+    for (const [cmd, , flags] of CASES) expect(flags.length).toBeGreaterThanOrEqual(floor[cmd] ?? 5);
   });
   for (const [cmd, base, flags] of CASES) {
     for (const flag of flags) {

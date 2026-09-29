@@ -38,6 +38,9 @@ const MAX_ISSUES_PER_FILE = 10;
 
 const NOT_A_SCENARIO = "If this file is not a scenario (a session, matrix or answer-policy file), move it out of the linted set.";
 
+/** Value-taking flags shared by the loader pre-pass and scenario.py's own positional scan. */
+export const LINT_VALUE_FLAGS = ["--min-severity", "--output-format", "--cassette-dir"] as const;
+
 /** Join a directory argument and an entry name the way python's `str(Path(dir) / name)` does, so a finding
  *  from here carries the same `file` string as python's own findings for that file: `./d/` and `d//`
  *  collapse to `d`, but a `..` segment is kept (python does not resolve it; `path.join` would). */
@@ -78,8 +81,8 @@ export function expandLintInputs(paths: string[]): string[] {
 }
 
 /** The positional (path) arguments of a `lint` command line, after `--output-format` was stripped. Flags
- *  and `--min-severity`'s value are dropped; anything after `--` is positional. A token misclassified here
- *  is harmless: `expandLintInputs` skips any path that does not exist. */
+ *  and value-taking lint options are dropped; anything after `--` is positional. A token misclassified
+ *  here is harmless: `expandLintInputs` skips any path that does not exist. */
 export function lintPositionals(args: string[]): string[] {
   const out: string[] = [];
   let rest = false;
@@ -87,7 +90,8 @@ export function lintPositionals(args: string[]): string[] {
     const a = args[i];
     if (rest) out.push(a);
     else if (a === "--") rest = true;
-    else if (a === "--min-severity") i++;
+    else if ((LINT_VALUE_FLAGS as readonly string[]).includes(a)) i++;
+    else if (LINT_VALUE_FLAGS.some((flag) => a.startsWith(`${flag}=`))) continue;
     else if (!a.startsWith("-")) out.push(a);
   }
   return out;

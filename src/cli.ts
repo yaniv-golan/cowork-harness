@@ -272,6 +272,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                hidden and never fails (add --min-severity INFO to fail on INFO too)
       [--min-severity <S>]     drop findings below ERROR|WARN|INFO before printing AND before the exit
                                computation (default INFO; WARN under --strict); applies to --output-format json too
+      [--cassette-dir <path>]  optionally match committed cassettes by their exact scenarioSource; suppresses
+                               replay-evidence INFO only when every matching cassette proves that assertion
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
       [--strict]               fail on WARN too, not just ERROR (never INFO)

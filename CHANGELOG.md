@@ -22,6 +22,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`lint --cassette-dir <dir>` drops a replay-evidence advisory a committed cassette already covers.** A
+  cassette counts for a scenario when its recorded `scenarioSource` resolves to that file, the same way
+  replay resolves it, and the directory is read as `*.cassette.json` like `replay` and `verify-cassettes`.
+  An advisory is dropped only when every matching cassette proves it. A cassette that cannot be checked
+  (unreadable, not a JSON object, an unsupported `cassetteVersion`, or no usable `scenarioSource`) is
+  reported as INFO `cassette-evidence-skipped` and keeps the advisories for every scenario in that run,
+  since it might have been any of their evidence. A missing or empty `--cassette-dir` is a usage error
+  (exit 2). A stale cassette still counts: this checks that the evidence exists, and `verify-cassettes`
+  checks that it is current. `lint --strict --min-severity INFO --cassette-dir <dir>` keeps the actionable
+  INFO findings and drops only the ones a cassette covers.
+
 - **`COWORK_VM_PROVISION_TIMEOUT_S`** (default `900`): how long a microvm run waits for an already-Running
   VM to finish provisioning before failing with a named error (see Fixed).
 - **`vm status` reports `provisioning`**: a new field in its JSON output — `ready`, `pending`, `sealed`,

@@ -97,6 +97,12 @@ GitHub-hosted runners, no token/Docker/agent:
                                                     # reviewed lint-skill WARN, keep --strict and add
                                                     # `--ignore-rule <rule>[=<skill-dir>/<path>]` or an
                                                     # ignore-start/ignore-end marker in the SKILL.md.)
+- run: cowork-harness lint scenarios/*.yaml --strict --min-severity INFO --cassette-dir cassettes/
+                                                    # committed *.cassette.json evidence suppresses only
+                                                    # replay advisories proven by every matching cassette;
+                                                    # skipped or malformed cassettes stay visible.
+                                                    # Staleness does not affect this existence check;
+                                                    # verify-cassettes checks freshness and drift.
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness — FAILS on a stale recording
                                                     # ALSO fails on a leaked host inventory: recording at
                                                     # protocol/hostloop freezes YOUR machine's MCP servers,

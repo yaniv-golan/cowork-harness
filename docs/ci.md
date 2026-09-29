@@ -56,6 +56,18 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
     summary: true                # already the default — shown so the CI self-test twin matches verbatim
 ```
 
+For a token-free lint job, keep INFO findings in the gate while suppressing only replay advisories backed
+by every matching committed cassette:
+
+```bash
+cowork-harness lint scenarios/*.yaml --strict --min-severity INFO --cassette-dir cassettes/
+```
+
+The directory is scanned non-recursively for `*.cassette.json` and matched by each cassette's exact
+`scenarioSource`. A missing directory is a usage error; an unreadable, malformed, unsupported-version, or
+provenance-less cassette is reported and cannot hide the advisory. A stale cassette still counts for this
+existence check; use `verify-cassettes` to check freshness and drift.
+
 | Lane | Commands | Runner requirements | What you get |
 |---|---|---|---|
 | **Token-free** (the headline lane) | `replay`, `lint`, `lint-skill`, `analyze-skill`, `verify-cassettes` | any `ubuntu-latest` | deterministic, no Docker, no API key, no agent binary — this is what most skill repos want. `lint`/`lint-skill` run the bundled `scenario.py` (python3, preinstalled on `ubuntu-latest`), and `lint` also runs the harness's own scenario loader first, so a file `run`/`record` would refuse to load is an ERROR; `analyze-skill` is pure TS (no python3 needed) |

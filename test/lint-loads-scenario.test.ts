@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { listBaselineNames } from "../src/baseline.js";
 import { resolveScenarioScript } from "../src/run/scenario-tool.js";
+import { lintPositionals } from "../src/run/lint-load.js";
 
 // `cowork-harness lint` runs the harness's own scenario loader before the bundled python linter, so a
 // scenario `lint` calls clean is one `run`/`record` will load. These drive the BUILT CLI end to end.
@@ -34,6 +35,13 @@ const RUBRIC_SCALAR = [...HEAD, "assert:", "  - result: success", "  - semantic_
 
 const jsonFindings = (stdout: string) =>
   JSON.parse(stdout.trim()).findings as { rule: string; severity: string; file: string; fix: string; message: string }[];
+
+describe("lint pre-pass positional parsing", () => {
+  it("does not hand --cassette-dir's value to the scenario loader", () => {
+    expect(lintPositionals(["--cassette-dir", "cassettes", "scenarios/a.yaml"])).toEqual(["scenarios/a.yaml"]);
+    expect(lintPositionals(["--cassette-dir=cassettes", "scenarios/a.yaml"])).toEqual(["scenarios/a.yaml"]);
+  });
+});
 
 describe.skipIf(!can || !havePython)("lint reports what the scenario loader rejects", () => {
   it("a wrong-typed field fails `lint --strict --min-severity WARN` with the loader's own path", () => {

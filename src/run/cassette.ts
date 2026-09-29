@@ -5649,7 +5649,7 @@ type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhas
  *  per key), plus whether `expect_denied` changed. The shared core behind BOTH the warn path
  *  (`warnUncheckableOnDiskKeys`) and `replay --write`'s refuse decision — a single source so the two can't
  *  drift on which keys are "checkable". Preserves the original per-key precedence and dedup order. */
-function classifyUncheckableOnDiskKeys(
+export function classifyUncheckableOnDiskKeys(
   cassette: Cassette,
   frozen: Scenario,
   onDisk: Scenario,

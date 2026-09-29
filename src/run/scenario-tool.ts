@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { fail, isJsonOutput, jsonError, jsonPayloadEnvelope, parseOutputFormat } from "./envelope.js";
 import { writeAllSync } from "../io.js";
-import { lintPrepass, type LintFinding } from "./lint-load.js";
+import { LINT_VALUE_FLAGS, lintPrepass, type LintFinding } from "./lint-load.js";
 import { stripCommandGlobals } from "./command-globals.js";
 
 // Synchronous fd write (match envelope.ts/cli.ts/doctor.ts): writeAllSync retries EAGAIN and loops on
@@ -121,7 +121,7 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass:
     fail(subcommand, "usage", String((e as Error).message), undefined, isJsonOutput(args));
   }
   // --dotenv / --run-dir after the subcommand: applied here (python knows neither), then not forwarded.
-  args = stripCommandGlobals(subcommand, args, ["--min-severity", "--ignore-rule", "--output-format"], isJsonOutput(args));
+  args = stripCommandGlobals(subcommand, args, [...LINT_VALUE_FLAGS, "--ignore-rule"], isJsonOutput(args));
   resolveScenarioScript(); // fail on a missing script before the loader pre-pass does any work
   const json = isJsonOutput(args);
   const pyArgs = stripOutputFormatFlag(args);
