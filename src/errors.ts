@@ -65,6 +65,21 @@ export class SessionFileError extends UsageError {
   }
 }
 
+/**
+ * Thrown by the scenario loader when the scenario FILE cannot be read or is not valid YAML — before any
+ * schema check. A `UsageError` (category `usage`), and its own class so a caller that treats a half-written
+ * file differently from a schema violation (the replay sibling notice, the verify-cassettes prompt-drift
+ * check) can still tell them apart; `syntax` is true for a YAML syntax error.
+ */
+export class ScenarioFileError extends UsageError {
+  readonly syntax: boolean;
+  constructor(message: string, syntax: boolean) {
+    super(message);
+    this.name = "ScenarioFileError";
+    this.syntax = syntax;
+  }
+}
+
 /** A Zod issue path rendered the way a YAML author can locate it: `assert[0].path_denied.source`, never
  *  `assert.0`; an empty or non-array path is `(root)`. Shared by `compactSchemaError` and `lint`'s loader
  *  findings so the two never spell the same location differently. Never throws. */

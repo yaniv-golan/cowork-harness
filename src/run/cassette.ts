@@ -48,7 +48,7 @@ import {
   scenarioInputFindings,
 } from "./execute.js";
 import { unresolvedModelRefusal } from "./model-provenance.js";
-import { UsageError, UnknownBaselineError, compactSchemaError } from "../errors.js";
+import { UsageError, UnknownBaselineError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
 
 /** One wording for the `--max-budget-usd` × `--concurrency` degradation, emitted from the dry-run preview
@@ -5514,7 +5514,8 @@ export function scenarioContentDrift(
       // verify" is not green, so it is `unverifiable` (exit 3) — but only for a PERSISTED source, the one
       // this cassette really was recorded from. A name-lookup match may be an unrelated file. A YAML
       // SYNTAX break is the one exception: that is the half-written, mid-edit state, and it stays a note.
-      if (!(e instanceof YAMLParseError) && src.via === "persisted")
+      const syntaxBreak = e instanceof YAMLParseError || (e instanceof ScenarioFileError && e.syntax);
+      if (!syntaxBreak && src.via === "persisted")
         return {
           verifiable: false,
           unverifiable: true,
@@ -6195,7 +6196,7 @@ export async function cmdReplay(args: string[]) {
                 warn(
                   `::notice:: [replay] ${src.path} does not load: ${fidelityMissingForCassette(e, rc.cassette.scenario)} — replay used the scenario frozen in the cassette and is unaffected.\n`,
                 );
-              else if (e instanceof UsageError)
+              else if (e instanceof UsageError && !(e instanceof ScenarioFileError))
                 warn(
                   `::notice:: [replay] ${src.path} does not load: ${compactSchemaError(e.message)} — replay used the scenario frozen in the cassette and is unaffected. ` +
                     `Run \`cowork-harness record ${src.path} --dry-run\` for the full error.\n`,

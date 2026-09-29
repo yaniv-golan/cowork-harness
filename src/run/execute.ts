@@ -1,5 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, compactSchemaError } from "../errors.js";
+import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
@@ -1939,7 +1939,11 @@ export function parseSessionFile(path: string): unknown {
  *  to a one-line usage error naming it: missing, a directory, not readable, any other read failure, or not
  *  valid YAML (the parser's first line — its message carries a multi-line source excerpt). Never a raw
  *  `ENOENT`/`YAMLParseError`, which `main().catch` would report as category `internal`, a harness bug. */
-export function readYamlFile(path: string, kind: "scenario" | "session", make: (message: string, hint?: string) => UsageError): unknown {
+export function readYamlFile(
+  path: string,
+  kind: "scenario" | "session",
+  make: (message: string, hint?: string, syntax?: boolean) => UsageError,
+): unknown {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -1957,7 +1961,7 @@ export function readYamlFile(path: string, kind: "scenario" | "session", make: (
   try {
     return parseYaml(text);
   } catch (e) {
-    throw make(`${kind} file is not valid YAML: ${path}: ${firstLine(e)}`);
+    throw make(`${kind} file is not valid YAML: ${path}: ${firstLine(e)}`, undefined, true);
   }
 }
 
@@ -2048,7 +2052,7 @@ export function loadScenarioPure(path: string): Scenario {
   let scenario: Scenario;
   let rawDoc: unknown;
   try {
-    rawDoc = readYamlFile(path, "scenario", (message, hint) => new UsageError(message, hint));
+    rawDoc = readYamlFile(path, "scenario", (message, _hint, syntax) => new ScenarioFileError(message, syntax === true));
     scenario = Scenario.parse(rawDoc);
   } catch (e) {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
@@ -3956,4 +3960,4 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
   return id;
 }
 
-export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError, SessionFileError };
+export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError };
