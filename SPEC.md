@@ -809,8 +809,9 @@ otherwise report every valid scenario with the same code as a broken one. The sc
 BEFORE the credential guard, so "does this file load" never depends on holding a token. "Would this
 record" reads a second file: to answer the model refusal, `--dry-run` also opens the scenario's session
 (the model resolves from `--model`, the session's `model:`, then `COWORK_HARNESS_MODEL`). A session that
-does not load is skipped by that check, not refused; a session file that cannot be read is reported under
-`inputErrors[]` (exit and `ok` unchanged), and the real record refuses it. On the real
+does not load is skipped by the model check, not refused by it; the input check answers it instead: a
+session file that cannot be read is reported under `inputErrors[]` (exit and `ok` unchanged), a session the
+schema rejects is refused like a bad input path, and the real record refuses both. On the real
 `record <file>` the credential guard still comes first: with no credentials, `record` exits `2` (`runtime`,
 "no model credentials") before the model refusal can answer.
 A `record <dir/>` target keeps the same 1-vs-2 meaning at batch scale: a directory whose files all fail

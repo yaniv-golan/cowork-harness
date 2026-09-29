@@ -2242,10 +2242,10 @@ export function ablateSession<T extends { plugins: Record<string, unknown>; skil
  *  scenario's session, apply the model the run would resolve (and `ablateSkill`, as the run applies it), and
  *  run the same write-free source resolution `executeScenario` runs before it creates a run dir. Throws that
  *  resolution's `UsageError` (a path that does not exist or is the wrong kind, an effort the model does not
- *  offer, a baseline name that resolves nowhere), and a session FILE that cannot be read (a
- *  {@link SessionFileError}). A session that reads but does not load (the session schema rejects it) is left
- *  to the real run, as the model pre-flight leaves it; a baseline file that does not load throws what the run
- *  would.
+ *  offer, a baseline name that resolves nowhere), a session FILE that cannot be read (a
+ *  {@link SessionFileError}), and a session the schema rejects (a plain `UsageError` from `loadSession`) —
+ *  each rethrown as the input refusal it is. Any other failure to load the session is left to the real run;
+ *  a baseline file that does not load throws what the run would.
  *  `quiet` mutes the resolution's warnings, for a caller whose run resolves again and prints them itself;
  *  `baseline` passes one the caller already loaded. */
 export function launchSourcesPreflight(
@@ -2366,8 +2366,9 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
  *  `COWORK_HARNESS_MODEL` — and returns the refusal text, or `undefined` when a model resolves.
  *
  *  A session that does not load returns `undefined`: this check is not the one that reports a broken
- *  session (the real path does, with its own message), and a dry run over files whose session paths do not
- *  exist on this machine must not start failing on a model question it cannot answer. */
+ *  session — the input check does ({@link launchSourcesPreflight}: an unreadable file, a schema the session
+ *  rejects), and so does the real run — and a dry run over files whose session paths do not exist on this
+ *  machine must not start failing on a model question it cannot answer. */
 export function unresolvedModelPreflight(scenario: Scenario, explicit: string | undefined): string | undefined {
   if (explicit !== undefined || envModelDefault() !== undefined) return undefined;
   let sessionModel: string | undefined;

@@ -25,21 +25,27 @@ All notable changes to this project are documented here. The format is based on
   recorded from one stores the `~/…` reference as written — never a path that spells out your home
   directory — and resolves it home-relative, `--rerecord-stale --from-embedded` included. A
   `--session=~/…` override on `replay`, `verify-cassettes`, `rehash` and `boundary-check` expands too.
+  A `~<user>/…` path (another user's home) is an input error on every lane, never an internal crash.
 - **A scenario file that cannot be read is a usage error on `run`.** A scenario file that is not valid
   YAML, is not readable, or is a directory matched by `run <dir/>` was reported under category
   `internal` with the YAML parser's multi-line source excerpt; it is now category `usage` (exit `2`
   unchanged) with a one-line message naming the file, the same message `record --dry-run` gives.
 - **A `baseline:` path to a file that does not load is a usage error.** An absolute `baseline:` path
   that is a directory, is not valid JSON, or is not a platform baseline surfaced as a raw error under
-  category `internal`; it now fails like an unknown baseline name, with one line saying which. `run <dir/>`
+  category `internal`; it now fails like an unknown baseline name, with one line saying which (`record`
+  keeps its exit `1` for it, on `--dry-run` and the real record alike). `run <dir/>`
   refuses it before the first scenario runs instead of failing on that scenario's turn, and `lint`
   reports it as `baseline-unknown` when the path exists on the machine it runs on (a path that does not
   exist there is still not checked). Committed baseline names are unchanged.
-- **`verify-cassettes` flags a home directory hidden behind `../`.** A cassette stores its path
-  metadata — `scenario.session`, `scenarioSource`, the fingerprint's skill sources and file list —
-  relative to itself, so a target under a home directory is written `../../Users/<name>/…` and never
-  started with the `/Users/` the path scan looks for. A relative climb into `Users`, `home` or `root` is
-  now a `path` finding (exit `1`).
+- **`verify-cassettes` flags a home directory hidden behind `../`.** A cassette stores `scenario.session`
+  and `scenarioSource` relative to itself (the fingerprint's skill sources are relative to the session
+  file's directory, its file list to each skill directory), so a target under a home directory is written
+  `../../Users/<name>/…` and never started with the `/Users/` the path scan looks for. A relative climb
+  into `Users`, `home` or `root` in any of those fields is now a `path` finding (exit `1`). The check runs
+  at verify time: `record` still writes the relative path it computes, and no redaction rule rewrites these
+  fields. To clear it, record from inside the repo that holds the session and scenario, use a `~/…`
+  `session:` (stored as written), or accept it with `--allow-path '(\.\./)+Users/<name>.*'` — an
+  existing `--allow-path '/Users/<name>.*'` does not match the relative sample.
 - **A YAML syntax error in a `--matrix` or `--answer-policy` file is reported in one line** — the
   parser's first line, which names the problem and its position — instead of its source excerpt.
 
