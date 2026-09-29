@@ -784,7 +784,7 @@ or the fidelity tier. Recognize these before "fixing" a non-bug:
   A host path the **user supplied** is not a leak (at `container`/`microvm`): before the agent runs, the
   staged uploads and connected folders (and each turn's prompt) are scanned for host paths, and a path the
   agent later shows **verbatim** is exempt, so quoting a kept run's `result.json` or a log you connected
-  does not fail the run. A path token ends at whitespace, a quote, `,`, `;`, `)`, `]`, `<`, `>` or a
+  does not fail the run. A path token ends at whitespace, a quote, a backtick, `,`, `;`, `)`, `]`, `<`, `>` or a
   backslash, and the match is by whole token: a sub-path of an input path, a different spelling (`/var/…`
   vs `/private/var/…`), or a path followed by a sentence-final `.` still counts. A token cut short where
   the path goes on — whitespace, `,` or `;` followed by more path (`/Users/a/My Documents/x`,
