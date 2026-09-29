@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PlatformBaseline } from "./types.js";
 import { safeNamedBaseline } from "./boundary-paths.js";
-import { UnknownBaselineError, compactSchemaError } from "./errors.js";
+import { UnknownBaselineError, BaselineFileError, compactSchemaError } from "./errors.js";
 import { ZodError } from "zod";
 
 /** SHA-256 (hex) of a file's bytes. Reads the whole file — fine for the ~240 MB agent ELF (a one-off at
@@ -367,7 +367,7 @@ export function loadBaseline(name: string): PlatformBaseline {
 
 function loadBaselineFile(file: string): PlatformBaseline {
   const bad = (why: string) =>
-    new UnknownBaselineError(
+    new BaselineFileError(
       file,
       `baseline file at "${file}" ${why} — a baseline is \`latest\`, a committed name like desktop-<version>, or an absolute path to a baseline file`,
     );

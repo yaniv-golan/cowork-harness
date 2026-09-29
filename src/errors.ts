@@ -50,6 +50,19 @@ export class UnknownBaselineError extends UsageError {
 }
 
 /**
+ * A `baseline:` path to a file that EXISTS but does not load (a directory, invalid JSON, not a platform
+ * baseline). An `UnknownBaselineError` for every caller that treats the two alike; its own class because
+ * `record` answers it with exit 1 (a refused scenario that loaded, as before 4.1.1 when the same file
+ * failed as a raw error), while a baseline name that resolves nowhere keeps exit 2.
+ */
+export class BaselineFileError extends UnknownBaselineError {
+  constructor(file: string, message: string) {
+    super(file, message);
+    this.name = "BaselineFileError";
+  }
+}
+
+/**
  * Thrown by `parseSessionFile` when a scenario's `session:` file cannot be read: it is missing, a directory,
  * not readable, not valid YAML, or a `~<user>` path. A `UsageError`, so `run`/`skill`/`record` answer it as
  * the bad input path it is (category `usage`); without it the bare `readFileSync` ENOENT surfaced as

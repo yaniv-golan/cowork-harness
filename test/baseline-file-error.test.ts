@@ -78,3 +78,43 @@ describe.skipIf(!existsSync(CLI) || !havePython)("lint: a baseline file path tha
     expect(r.stdout).not.toMatch(/baseline-unknown/);
   });
 });
+
+describe.skipIf(!existsSync(CLI))("record: a baseline FILE that does not load keeps exit 1; an unknown NAME keeps exit 2", () => {
+  const scenario = (baseline: string) =>
+    `name: m\nbaseline: ${baseline}\nfidelity: container\nprompt: hello\nassert:\n  - result: success\n`;
+  const record = (d: string, extra: string[]) => {
+    const r = spawnSync("node", [CLI, "record", "m.yaml", "--model", "claude-sonnet-5", "--output-format", "json", ...extra], {
+      encoding: "utf8",
+      cwd: d,
+      env: {
+        ...process.env,
+        COWORK_HARNESS_FORBID_SPAWN: "1",
+        COWORK_HARNESS_RUNS_DIR: join(d, ".runs"),
+        CLAUDE_CODE_OAUTH_TOKEN: "dummy",
+      },
+    });
+    const env = JSON.parse(r.stdout || "{}") as { error?: { category?: string; message?: string } };
+    return { code: r.status, env, all: (r.stdout || "") + (r.stderr || "") };
+  };
+
+  it("bad JSON baseline file: real record and --dry-run both exit 1, usage", () => {
+    const d = work();
+    writeFileSync(join(d, "b.json"), "{not json");
+    writeFileSync(join(d, "m.yaml"), scenario(join(d, "b.json")));
+    const real = record(d, ["--out", join(d, "m.cassette.json")]);
+    expect(real.code, real.all).toBe(1);
+    expect(real.env.error?.category).toBe("usage");
+    expect(real.env.error?.message).toMatch(/does not load: not valid JSON/);
+    const dry = record(d, ["--dry-run"]);
+    expect(dry.code, dry.all).toBe(1);
+    expect(dry.env.error?.category).toBe("usage");
+  });
+
+  it("green pin: an unknown baseline NAME on the real record stays exit 2", () => {
+    const d = work();
+    writeFileSync(join(d, "m.yaml"), scenario("no-such-baseline"));
+    const real = record(d, ["--out", join(d, "m.cassette.json")]);
+    expect(real.code, real.all).toBe(2);
+    expect(real.env.error?.category).toBe("usage");
+  });
+});

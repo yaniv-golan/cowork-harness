@@ -48,7 +48,7 @@ import {
   scenarioInputFindings,
 } from "./execute.js";
 import { unresolvedModelRefusal } from "./model-provenance.js";
-import { UsageError, UnknownBaselineError, ScenarioFileError, compactSchemaError } from "../errors.js";
+import { UsageError, UnknownBaselineError, BaselineFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
 
 /** One wording for the `--max-budget-usd` × `--concurrency` degradation, emitted from the dry-run preview
@@ -4756,6 +4756,9 @@ export async function cmdRecord(args: string[]) {
   } catch (e) {
     // A scenario naming no baseline is a usage mistake like any other entry point's: exit 2 with the
     // valid baselines as the hint, not record's general exit 1.
+    // A baseline FILE that exists but does not load is a refusal of a scenario that loaded: exit 1, as it was
+    // before it had its own error class.
+    if (e instanceof BaselineFileError) return fail("record", "usage", `record: ${e.message}`, e.hint, asJson, 1);
     if (e instanceof UnknownBaselineError) return fail("record", "usage", `record: ${e.message}`, e.hint, asJson);
     // A post-run refusal (failing verdict, an assert on an artifact too large to commit, a quarantined
     // inventory finding) comes AFTER a completed, paid run: publish that run in `results` (the same
