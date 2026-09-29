@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.1.1] — 2026-09-29
+
+### Upgrade notes
+
+- **Cassettes: no re-record needed.** Nothing under `src/runtime`, `src/hostloop`, `src/staging` or
+  `baselines/` changed, `src/session.ts` gained only a `~` path helper, and `CASSETTE_VERSION` is still
+  13. A committed cassette's recorded content and fingerprints are unchanged; `verify-cassettes` and
+  `replay --strict` pass on the bundled ones. The one new `verify-cassettes` finding (a home directory
+  hidden behind `../` in a cassette's path metadata) applies only to a cassette recorded from outside
+  the repository — see Fixed.
+
 ### Fixed
 
 - **A scenario whose `session:` file is missing is a usage error, not a harness bug.** `run` answered a
