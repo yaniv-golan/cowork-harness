@@ -62,7 +62,7 @@ import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 export { isLosslessUtf8 } from "./artifacts.js";
 import { isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, type SessionConfig } from "../session.js";
+import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
@@ -6005,7 +6005,7 @@ export async function cmdReplay(args: string[]) {
   // against a different source, so a single override cannot be right for all of them — refuse rather than
   // silently pin the wrong tree, which would manufacture false greens (worse than an honest "cannot
   // verify"). Same reasoning as `record --out` and the `--assert-from --write` guard below.
-  const sessionOverride = p.options["--session"];
+  const sessionOverride = expandHome(p.options["--session"]);
   const targetIsDir = existsSync(target) && statSync(target).isDirectory();
   if (sessionOverride !== undefined && (targetIsDir || resolved.files.length > 1)) {
     return fail(
@@ -6469,7 +6469,7 @@ export async function cmdVerifyCassettes(args: string[]) {
   // and the rest of the boundary survive) for ONE relocated cassette. Refused for a batch — each cassette in a
   // directory may have been recorded against a different source, and silently pinning the wrong tree would
   // manufacture false greens, which is strictly worse than this command's honest exit 3.
-  const vcSessionOverride = p.options["--session"];
+  const vcSessionOverride = expandHome(p.options["--session"]);
   const skipPrivacy = p.flags["--skip-privacy"] ?? false;
   const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
@@ -6889,7 +6889,7 @@ export function cmdRehash(args: string[]): void {
     return fail("rehash", "usage", USAGE, undefined, asJson);
   }
   const target = p.positionals[0];
-  const sessionOverride = p.options["--session"];
+  const sessionOverride = expandHome(p.options["--session"]);
   // A MOVED cassette cannot resolve its recorded `session:` from its own directory, so it can never be
   // proved unchanged — and the hash-format epoch makes migration MANDATORY, which would leave it failing
   // every bare replay with no remedy at all. Mirrors `replay --session`: ONE cassette at a time, because
