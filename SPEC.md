@@ -754,9 +754,10 @@ is a usage error (exit `2`); `--follow` waits for a directory that does not exis
 and says so once on stderr. A gate request that cannot be parsed is a `runtime` error (exit `2`): under
 `--follow` after bounded retries, in one pass on the first read. Before 4.0.0 one pass over a missing
 directory, or over a malformed request, exited `0` with nothing printed.
-**A declared input path that does not exist, or is the wrong kind, is a usage error.** A scenario's
-`session:` file (missing, a directory, unreadable, or not valid YAML; a leading `~` expands to the current
-user's home directory), a plugin folder, `--upload`, `--folder`, a session's `uploads`/`folders`/`projects`/`skills.local`/`local_plugins`/
+**A declared input path that does not exist, or is the wrong kind, is a usage error.** A scenario file,
+or its `session:` file, that is missing, a directory, unreadable or not valid YAML (a leading `~` in
+`session:` expands to the current user's home directory); a `baseline:` path to a file that is a directory,
+not valid JSON or not a platform baseline; a plugin folder, `--upload`, `--folder`, a session's `uploads`/`folders`/`projects`/`skills.local`/`local_plugins`/
 `local_marketplaces` (or a marketplace `entry.source`), an `enabled` plugin missing from its local
 marketplace, a file where a directory is required (or the reverse), two sources mapping to one mount
 destination, a `plugins.config_dir` that is not a directory, an unsafe mount-name segment (a `:` in an
@@ -823,8 +824,8 @@ assert contradiction, duplicate cassette target, a scenario that resolves no mod
 batch-wide, so this arm knows it exactly) join `broken[]` in exiting `1`; the path-DEPENDENT ones
 (host-inventory destination, cassette portability) are advisory `notes[]` that do not affect the exit
 code, because a dir target takes no `--out` and the preview would be guessing the destination. Inputs the
-real record would refuse (an input path, effort or baseline name, a baseline file that does not load, a
-tier-vacuous assertion) are listed
+real record would refuse (a session file that cannot be read, an input path, effort or baseline name, a
+baseline file that does not load, a tier-vacuous assertion) are listed
 under `inputErrors[]`, which also leaves the exit code at `0` (see the input-path rule above).
 **`verify-cassettes` uses its OWN three-way split, not the `run`/`skill` meanings above:** `0` clean ·
 `1` verification RAN and found a real problem (any PII finding, any staleness finding whose

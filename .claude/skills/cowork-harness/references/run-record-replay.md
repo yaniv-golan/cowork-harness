@@ -26,13 +26,13 @@ refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiabl
 cassette-portability pre-flight below**, so it cannot green something a paid run would reject. **That binding
 guarantee is the SINGLE-FILE form only** — it takes the real `--out` and the real flags, so its verdict is the
 one a paid run would give. Two inputs it reports rather than refuses, at exit 0 under `inputErrors[]` with a
-`⚠ input error:` line: a `session:` file that cannot be read (missing, a directory, not valid YAML) and a
-`tool_not_called` the tier can never violate — `run` and the real `record` refuse both. On a **directory** the path-dependent verdicts (host-inventory, cassette
+`⚠ input error:` line: a `session:` file that cannot be read (missing, a directory, not valid YAML — 4.1.1
+and later) and a `tool_not_called` the tier can never violate — `run` and the real `record` refuse both. On a **directory** the path-dependent verdicts (host-inventory, cassette
 portability) are reported as `⚠ would-refuse (advisory)` / `⚠ would-warn (advisory)` notes — the label follows
 the verdict kind, and portability can only ever warn — that do NOT affect the exit code — a dir target
 takes no `--out`, so the destination is a guess — and only the path-independent ones (prompt policy, assert
 contradiction, duplicate cassette target) gate the batch. An input the real record would refuse — a
-`session:` file that cannot be read, a missing path, an unknown baseline name, a `tool_not_called` the tier can never violate — is listed under
+`session:` file that cannot be read (4.1.1 and later), a missing path, an unknown baseline name, a `tool_not_called` the tier can never violate — is listed under
 `inputErrors[]` with a `⚠ input error:` line, also at exit 0. So a directory dry-run CAN exit 0 on a scenario the
 real `record` would refuse; re-run that one file with its real flags for a binding answer, or gate on
 `.ok and (.inputErrors == [])` in the JSON payload (4.1.0 and later). A directory also

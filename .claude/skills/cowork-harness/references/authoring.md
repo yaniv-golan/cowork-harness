@@ -278,15 +278,17 @@ judgement-call finding, pass `--ignore-rule <rule>[=<glob>]` (repeatable; the gl
 file) or fence the text in `SKILL.md` with `<!-- lint-skill: ignore-start <rule>[,<rule>…]: <reason> -->`
 … `<!-- lint-skill: ignore-end -->` (outside any code fence). A suppressed finding is still printed; it
 stops gating. A provable rule (an ERROR, a misplaced `hooks.json`, a missing pinned agent) cannot be
-suppressed: naming it, or an unknown rule, is a usage error (exit 2). A marker that is malformed, unclosed
-or suppresses nothing is reported (`lint-skill-ignore-invalid` / `-unclosed` WARN, `-unused` INFO).
+suppressed: naming it, or an unknown rule, in `--ignore-rule` is a usage error (exit 2); in a marker it is
+WARN `lint-skill-ignore-invalid`, as is any other malformed marker. An unclosed marker is WARN
+`lint-skill-ignore-unclosed`, and one that suppresses nothing is INFO `lint-skill-ignore-unused`.
 
 **`cowork-harness lint` runs the loader: a file it calls clean is one `run`/`record` will load.** Anything
 the loader refuses — an unknown key, a wrong value type (a scalar `semantic_matches.rubric`), a bad regex,
 a reserved value — is ✗ ERROR `scenario-invalid` (exit 1, with or without `--strict`), and a `baseline:`
 naming no baseline this installed CLI ships is ✗ ERROR `baseline-unknown` (`latest` always resolves). It
 does not check what depends on the machine the run happens on (the session file and its mounts, an
-absolute `baseline:` path, environment variables). A session or matrix YAML in a linted directory is not
+absolute `baseline:` path that does not exist here — one that exists is checked (4.1.1 and later) —
+environment variables). A session or matrix YAML in a linted directory is not
 a scenario and is reported as one that does not load — keep those out of the linted set. `python3
 scenario.py lint` run directly stays offline and lenient: there an unknown key is only a ⚠ WARN (exit 0).
 `cowork-harness record <file.yaml> --dry-run` also runs the loader and adds the pre-spend refusals (exit 2

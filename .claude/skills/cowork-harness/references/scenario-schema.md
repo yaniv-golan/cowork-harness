@@ -117,7 +117,8 @@ allow_host_hooks: true              # OPTIONAL — required to run `protocol` fi
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
-form a relocatable bundle. `~` expands to home.
+form a relocatable bundle. `~` expands to home (in a scenario's `session:` itself, 4.1.1 and later; a
+cassette stores such a `session:` as written).
 
 > **A recorded cassette is NOT part of that bundle and is NOT relocatable.** It rewrites its own
 > references relative to **its own** directory at record time (`scenario.session` and

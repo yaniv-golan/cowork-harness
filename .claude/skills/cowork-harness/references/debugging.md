@@ -38,8 +38,9 @@ already does.
 stderr** usually means the VM never finished provisioning (the agent never reached PATH). Check
 `cowork-harness vm status` — a `provisioning` other than `ready` confirms it — and if a run does not
 recover it on its own, `cowork-harness vm delete` and retry. A run on such a VM can also have cached an
-empty toolchain for it in the capability probe's cache: `vm delete` / `vm prune` drop that VM's entry, and
-otherwise delete `capability-cache.json` from the runs root (`~/.cowork-harness/runs/` unless
+empty toolchain for it in the capability probe's cache: `vm delete` drops that VM's entry (`vm prune`
+forgets only the orphaned VMs it deletes, never the current one); otherwise delete `capability-cache.json`
+from the runs root (`~/.cowork-harness/runs/` unless
 `COWORK_HARNESS_RUNS_DIR` is set) so the next run probes again.
 
 **Is it your skill's bug, or a known harness gap?** Before deep-debugging a wrong behavior, rule out a

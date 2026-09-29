@@ -12,8 +12,8 @@ All notable changes to this project are documented here. The format is based on
   missing session file with a raw `ENOENT` under error category `internal` (exit `2`); it now refuses it
   as category `usage` (exit `2` unchanged) with `session file not found: <path>` and a hint that
   `session:` resolves relative to the scenario file's directory, before a run directory is created. A
-  session path that is a directory, is not readable, or is not valid YAML gets the same treatment, each
-  with its own one-line message. `run <dir/>` refuses the batch before its first scenario runs, naming
+  session path that is a directory, is not readable, is not valid YAML, or cannot be read for any other
+  reason gets the same treatment, each with its own one-line message. `run <dir/>` refuses the batch before its first scenario runs, naming
   every such file; `run --matrix` prints the reason once instead of prefixing a second "failed to load
   session". The real `record` already refused it (exit `1`) and now gives the same clean message.
 - **`record --dry-run` reports a session file that cannot be read.** Both the single-file and the
@@ -21,8 +21,27 @@ All notable changes to this project are documented here. The format is based on
   the exit code and `ok` are unchanged. Before, the single-file preview exited `0` with a clean preview
   and the directory preview listed the file nowhere.
 - **A `session:` path starting with `~/` now expands to your home directory**, as the session guide
-  already said. It was read as a literal `~` directory, so such a scenario could not run; a cassette
-  recorded from one stores and fingerprints the expanded path.
+  already said. It was read as a literal `~` directory, so such a scenario could not run. A cassette
+  recorded from one stores the `~/…` reference as written — never a path that spells out your home
+  directory — and resolves it home-relative, `--rerecord-stale --from-embedded` included. A
+  `--session=~/…` override on `replay`, `verify-cassettes`, `rehash` and `boundary-check` expands too.
+- **A scenario file that cannot be read is a usage error on `run`.** A scenario file that is not valid
+  YAML, is not readable, or is a directory matched by `run <dir/>` was reported under category
+  `internal` with the YAML parser's multi-line source excerpt; it is now category `usage` (exit `2`
+  unchanged) with a one-line message naming the file, the same message `record --dry-run` gives.
+- **A `baseline:` path to a file that does not load is a usage error.** An absolute `baseline:` path
+  that is a directory, is not valid JSON, or is not a platform baseline surfaced as a raw error under
+  category `internal`; it now fails like an unknown baseline name, with one line saying which. `run <dir/>`
+  refuses it before the first scenario runs instead of failing on that scenario's turn, and `lint`
+  reports it as `baseline-unknown` when the path exists on the machine it runs on (a path that does not
+  exist there is still not checked). Committed baseline names are unchanged.
+- **`verify-cassettes` flags a home directory hidden behind `../`.** A cassette stores its path
+  metadata — `scenario.session`, `scenarioSource`, the fingerprint's skill sources and file list —
+  relative to itself, so a target under a home directory is written `../../Users/<name>/…` and never
+  started with the `/Users/` the path scan looks for. A relative climb into `Users`, `home` or `root` is
+  now a `path` finding (exit `1`).
+- **A YAML syntax error in a `--matrix` or `--answer-policy` file is reported in one line** — the
+  parser's first line, which names the problem and its position — instead of its source excerpt.
 
 ### Documentation
 
