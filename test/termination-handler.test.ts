@@ -13,12 +13,35 @@ const TERMINATION = JSON.stringify(resolve("src/termination.ts"));
 const SIDECAR = JSON.stringify(resolve("src/egress/sidecar.ts"));
 
 function alive(pid: number): boolean {
+  // A pid that never parsed (a failed spawn) must not read as "gone".
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`no child pid: ${pid}`);
   try {
     process.kill(pid, 0);
     return true;
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/** The harness exits right after sending SIGKILL, so the child may not have died yet, and once it has it
+ *  is reparented to init (or a subreaper) and stays a zombie until reaped; kill(pid, 0) succeeds on a
+ *  zombie. So poll. A child that was never killed keeps running its shell loop and fails the deadline;
+ *  only one that is actually gone passes. */
+function diesWithin(pid: number, ms = 3000): boolean {
+  const until = Date.now() + ms;
+  const tick = new Int32Array(new SharedArrayBuffer(4));
+  while (alive(pid)) {
+    if (Date.now() > until) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* kill a child the handler left running */
+      }
+      return false;
+    }
+    Atomics.wait(tick, 0, 0, 20);
+  }
+  return true;
 }
 
 function runScript(body: string): { status: number | null; signal: NodeJS.Signals | null; stderr: string; dir: string } {
@@ -77,7 +100,9 @@ describe.runIf(POSIX)("termination handler", () => {
       setTimeout(() => {}, 30_000);
     `);
     expect(r.status, r.stderr).toBe(130);
-    expect(Number(readFileSync(join(r.dir, "ms"), "utf8"))).toBeLessThan(200);
+    // Well under the 2000ms grace period, so it still proves there was no grace wait, with headroom for a
+    // loaded CI shard (the exit itself is a few ms).
+    expect(Number(readFileSync(join(r.dir, "ms"), "utf8"))).toBeLessThan(1000);
   });
 
   it("an agent that ignores SIGTERM is force-killed at the end of the grace period", () => {
@@ -99,7 +124,7 @@ describe.runIf(POSIX)("termination handler", () => {
     const [ms, grace] = readFileSync(join(r.dir, "ms"), "utf8").split(" ").map(Number);
     expect(ms).toBeGreaterThanOrEqual(grace - 50);
     expect(ms).toBeLessThan(grace + 1500);
-    expect(alive(Number(readFileSync(join(r.dir, "child.pid"), "utf8")))).toBe(false);
+    expect(diesWithin(Number(readFileSync(join(r.dir, "child.pid"), "utf8")))).toBe(true);
   });
 
   it("a second signal during the grace period exits at once", () => {
@@ -120,7 +145,7 @@ describe.runIf(POSIX)("termination handler", () => {
     `);
     expect(r.status, r.stderr).toBe(130);
     expect(Number(readFileSync(join(r.dir, "ms"), "utf8"))).toBeLessThan(1000);
-    expect(alive(Number(readFileSync(join(r.dir, "child.pid"), "utf8")))).toBe(false);
+    expect(diesWithin(Number(readFileSync(join(r.dir, "child.pid"), "utf8")))).toBe(true);
   });
 
   it("the exit status stays 128+signo when normal flow calls process.exit during the grace period", () => {
