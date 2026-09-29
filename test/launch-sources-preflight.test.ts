@@ -488,6 +488,24 @@ describe.skipIf(!can)("a missing session file is an input error on every lane", 
     expect(text.stderr).toMatch(/⚠ input error: .*m\.yaml: session file not found/);
   });
 
+  it("real record <file>: refused (exit 1, usage) with the clean message, no run dir", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../gone.yaml"));
+    const r = cli(
+      ["record", "sc/m.yaml", "--model", "claude-sonnet-5", "--out", join(d, "m.cassette.json"), "--output-format", "json"],
+      d,
+      {
+        CLAUDE_CODE_OAUTH_TOKEN: "dummy",
+      },
+    );
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(1);
+    const env = envelope(r.stdout);
+    expect(env.error?.category).toBe("usage");
+    expect(env.error?.message).toMatch(/^record: session file not found: .*gone\.yaml/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
   it("record <dir/> --dry-run: reported under inputErrors[], exit 0 and ok unchanged", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));

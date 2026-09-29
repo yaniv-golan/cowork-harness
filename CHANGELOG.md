@@ -21,8 +21,8 @@ All notable changes to this project are documented here. The format is based on
   the exit code and `ok` are unchanged. Before, the single-file preview exited `0` with a clean preview
   and the directory preview listed the file nowhere.
 - **A `session:` path starting with `~/` now expands to your home directory**, as the session guide
-  already said. It was read as a literal `~` directory, so such a scenario could not run; the cassette
-  fingerprint reads the same expanded path.
+  already said. It was read as a literal `~` directory, so such a scenario could not run; a cassette
+  recorded from one stores and fingerprints the expanded path.
 
 ### Documentation
 

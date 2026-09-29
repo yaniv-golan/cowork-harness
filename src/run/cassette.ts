@@ -756,6 +756,14 @@ export function resolveCassetteSessionPath(
   return { path: sessionPath, source: "as-given" };
 }
 
+/** The `session:` a cassette stores: relative to the cassette's own directory, so a moved bundle stays
+ *  resolvable. A `~/…` session is expanded first — the loader reads it home-relative, and `relative` would
+ *  otherwise treat the `~` as a directory under cwd. */
+export function cassetteSessionRef(session: string, cassettePath: string): string {
+  if (session === "(inline)") return session;
+  return relative(dirname(cassettePath), session === "~" || session.startsWith("~/") ? expandUserPath(session) : session);
+}
+
 function skillSourceDirs(
   sessionPath: string,
   cassetteDir?: string,
@@ -4975,10 +4983,7 @@ async function freezeRecordedRun(
     );
   }
   // RELOCATABLE session path (relative to the cassette dir) — metadata-only, keeps a moved bundle honest.
-  const relocatable: Scenario = {
-    ...scenario,
-    session: scenario.session === "(inline)" ? "(inline)" : relative(dirname(cassettePath), scenario.session),
-  };
+  const relocatable: Scenario = { ...scenario, session: cassetteSessionRef(scenario.session, cassettePath) };
   // buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
   // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
