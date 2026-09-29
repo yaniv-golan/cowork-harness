@@ -241,7 +241,9 @@ cowork-harness replay cassettes/                   # replay every *.cassette.jso
 Re-record whenever the protocol or your scenario's expected content changes. An old cassette without
 `controlOut` excludes the gate keys (with a loud warning) — re-record to enable them. `record` **refuses
 to freeze a failing live run** into a cassette (pass `--allow-failing` to override) — a committed red
-cassette is a latent false-signal.
+cassette is a latent false-signal. An `--allow-failing` recording of a red run exits 0 with `ok: true`:
+`record`'s `ok` means a cassette was written, and the run's own verdict is `results[0].verdict.pass`
+(`items[].verdict` on `record <dir/>`).
 
 ## Privacy: cassettes are committed fixtures → record only against SYNTHETIC inputs
 
@@ -256,7 +258,9 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   dir** (first file found per dir; env vars merge on top). `cowork-harness init-redact` copies the
   packaged reference template (local-path prefixes, incl. macOS temp roots and slugged home segments
   like `-Users-<user>-…`, + a generic email regex) into the cwd as a starting point — review and tailor
-  it; a copy from an earlier release lacks the temp-root rules, so re-copy with `--force` or add them. Redaction is **verdict-preserving** — `record` refuses to write if
+  it; a copy from an earlier release lacks the temp-root rules, so re-copy with `--force` (without it
+  `init-redact` refuses to overwrite an existing policy; with it your tailoring is replaced — save and
+  re-apply it) or add them by hand. Redaction is **verdict-preserving** — `record` refuses to write if
   redaction would flip an assertion (a manufactured green). `--no-redact` skips it for known-synthetic
   inputs.
 - **Pre-spawn preflight**: `record` warns (`::warning::`, before the paid run starts — once per batch
@@ -342,8 +346,8 @@ A typical skill repo runs four stages, fastest/cheapest first:
    This is the shape a CI step wants: **silent on success (no output, exit 0), loud and specific on
    failure** — `--quiet` suppresses the readiness preview but never the `✗ broken:` lines, which name the
    offending file *and* the rejected key, one line per file, and the step still exits 1. It exits 0,
-   though, on an input the real record would refuse (a missing path, an unknown baseline name, a
-   tier-vacuous `tool_not_called`): that prints a `⚠ input error:` line and lands in `inputErrors[]`. To
+   though, on an input the real record would refuse (a `session:` file that cannot be read, a missing
+   path, an unknown baseline name, a tier-vacuous `tool_not_called`): that prints a `⚠ input error:` line and lands in `inputErrors[]`. To
    gate on those too, use the JSON form (4.1.0 and later):
 
    ```bash
@@ -443,7 +447,8 @@ sandbox).
 
 `--output-format json` emits a machine envelope on stdout (human output goes to stderr):
 `{tool, version, command, ok, results[], error}` — one `RunResult` per scenario. **Overall pass for a
-scenario is `verdict.pass`** (envelope-wide: `ok`), and it is strictly stronger than
+scenario is `verdict.pass`** (envelope-wide: `ok`; on `record`, `ok` only means the command exited 0 —
+see below), and it is strictly stronger than
 `result === "success" && assertions.every(pass)`: the verdict also carries ~20 signal codes that fail a run
 with no failing assertion at all — `stalled`, `outputs_delete`, `mount_delete`, `host_path_leak`,
 `undelivered_deliverables`, `missing_capability`, `permissive_auto_allow`, `ended_with_question`,
@@ -477,6 +482,11 @@ Keep the `.results[]?` hop and the `?` operators. `.results[0]` silently ignores
 the first when you pass a directory, and a bare `.verdict` does not exist at the envelope root at all —
 both read as "no failures" against a run that failed.
 
+**`record` is shaped differently.** Its `ok` is the exit code's verdict (a cassette was written), not the
+run's: `record --allow-failing` on a red run is `ok: true`. The verdict is in `results[0].verdict` on
+`record <file>` and in `items[].verdict` on `record <dir/>` and `--rerecord-stale`, which carry no
+`results[]` — so `.results[]?` reads nothing there. Use `[.items[]? | .verdict.failures[]?]` on a batch.
+
 > **Do not filter on whether `assertion` is present.** That was the only discriminator before `kind`
 > existed and it never worked in both directions: `coverage` entries carry a key too (an internal
 > `answer_coverage` marker), so they read as authored asserts, while `guard`, `staleness` and
@@ -486,7 +496,9 @@ both read as "no failures" against a run that failed.
 `--output-format json`, `run` / `record` / `replay` / `verify-cassettes` / `status` write their whole
 human rendering — warnings, verdict, `status`'s summary line — to **stderr**, and stdout stays empty.
 A wrapper that captures only stdout gets an empty log and, if it greps that for a state, a silent false
-negative. Capture stderr for the human trail (`2> run.stderr.log`), or ask for JSON and parse stdout.
+negative. Capture stderr for the human trail (`2> run.stderr.log`), or ask for JSON and parse stdout —
+`COWORK_HARNESS_OUTPUT_FORMAT=json` makes JSON the default for every command that takes `--output-format`
+(an explicit flag still wins).
 (Commands whose whole job is to print a value — `--version`, `assertions --list`, `scaffold`, `gates`,
 `skill --dry-run` — write it to stdout by design. Under `--output-format json` the value rides inside the
 envelope: `scaffold`'s YAML is `.scenario`, `skill --dry-run`'s preview is the envelope's own fields;

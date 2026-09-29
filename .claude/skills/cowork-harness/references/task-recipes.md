@@ -85,7 +85,8 @@ record — retrofitting means re-recording:
 
 1. `cowork-harness init-redact` — copies the reference `.cowork-redact.json` (host-path +
    email patterns) into the current directory. Version-control it. Re-run with `--force` after an
-   upgrade to pick up new rules (save your tailoring first).
+   upgrade to pick up new rules: without it `init-redact` refuses to overwrite an existing policy, and with
+   it your tailoring is replaced — save it first and merge it back.
 2. **Search set:** record looks for `.cowork-redact.json` in the **cwd, the scenario's directory,
    and the cassette's output directory** — every distinct file found is MERGED (plus
    `COWORK_HARNESS_REDACT_PATTERNS`/`_KEYS` from the env). Repo root (= cwd in CI) is the
@@ -217,7 +218,9 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
 
 **Lane note:** `semantic_matches` is **live-only** (the judge is a live model call), so these scenarios
 run on the `run` lane, never token-free `replay` — the linter's "all assertions live-only" warning is
-expected and correct here.
+expected and correct here. It is a WARN (`replay-noop`), so a scenario whose only assertion is
+`semantic_matches` fails `lint --strict`: add a replay-checkable item (`- result: success` is enough), or
+keep these files out of the set a strict lint gate covers.
 
 ## Recipe 6 — Iterate a skill across fixes (ground findings, don't cross-pair generations)
 
@@ -267,7 +270,9 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    separates them afterwards, but a hash whose source was never frozen names a generation that is
    unrecoverable, which makes the comparison uninterpretable rather than merely noisy. And pin the model in the session (`model:`), not
    only through `COWORK_HARNESS_MODEL`: a run that resolves none is refused, but the env var is a property
-   of the machine, so a before/after run from two shells can silently straddle two models. Read `result.json` back to confirm: `modelSource` says whether anything pinned the model at all,
+   of the machine, so a before/after run from two shells can silently straddle two models. (Adding `model:`
+   to a session that already has cassettes re-stales them in `verify-cassettes`; until the next re-record,
+   pin with `--model` instead.) Read `result.json` back to confirm: `modelSource` says whether anything pinned the model at all,
    and `modelPinHonored` whether the pin survived (**absent means unverifiable, not "yes"**). `models`
    lists what served the run — ignore any `<…>`-wrapped entry (`<synthetic>` marks a turn the agent
    fabricated locally, not a model).

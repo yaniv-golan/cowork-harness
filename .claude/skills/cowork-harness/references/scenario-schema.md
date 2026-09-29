@@ -143,6 +143,10 @@ model: claude-opus-4-8           # a run must resolve a model: --model (or a mat
                                   # fabricated locally, not a model id).
                                   # On the ad-hoc `skill` lane there is no session file, so `--model <id>`
                                   # (or COWORK_HARNESS_MODEL) is the ONLY way to pin it.
+                                  # Adding or changing this key re-stales every cassette recorded from
+                                  # the session (it is in the session fingerprint, so verify-cassettes
+                                  # exits 1). To pin without re-recording now, pass --model or set
+                                  # COWORK_HARNESS_MODEL; move it here at the next re-record.
 account_name: my-account         # OPTIONAL — display name rendered into {{accountName}} / the prompt's
                                     # "User name:" line; NOT a credential/identity selector (see src/prompt.ts,
                                     # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md)
@@ -219,7 +223,10 @@ staleness:
 The staleness hash uses each skill/plugin source dir's **git-tracked** file set by default (a non-repo dir
 falls back to a raw walk; `COWORK_HARNESS_GITSET=0` opts out). **OS-junk** (`.DS_Store`/`Thumbs.db`/
 `desktop.ini`) is always excluded, so a Finder touch can't re-stale a cassette; run-generated files a skill
-writes into its own dir should be declared in `hash_ignore` / `.cowork-hashignore`. On a mismatch,
+writes into its own dir should be declared in `hash_ignore` / `.cowork-hashignore` — and so should
+scenario or session YAMLs kept inside a mounted plugin dir: they are tracked files, so editing a scenario
+there re-stales every cassette recorded from that plugin (committed `*.cassette.json` files are excluded
+automatically). On a mismatch,
 `verify-cassettes` names the exact changed file; `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the full hashed set.
 For a multi-skill plugin, scope a scenario's hash with `skills: [<name>]`; the opt-in
 `COWORK_HARNESS_AGENT_SCOPE=skill` further treats a skill-named `agents/<name>.md` as that skill's private
@@ -240,6 +247,10 @@ with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are t
 (`.local-plugins/marketplaces/local-desktop-app-uploads/<plugin>`). The choice matters to a skill that
 locates its own files from the shell (at host-loop, Cowork's default, the braced `${CLAUDE_PLUGIN_ROOT}` is
 replaced with a HOST path and a bare `$CLAUDE_PLUGIN_ROOT` is empty in the VM shell).
+Do not derive the VM path from the substituted host path by keeping its `/mnt/…` tail: under `hostloop`
+the harness's staged host path happens to end in the same `/mnt/.local-plugins/…` suffix as the VM path,
+so that shortcut passes here and fails in real Cowork, whose host path has no such tail
+([fidelity gap](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)).
 Search for the skill's own `SKILL.md`, not for a directory named after the plugin — that finds nothing
 under `.remote-plugins/plugin_<id>` — and set no `-maxdepth` that stops short of the deeper local layout:
 `find /sessions/*/mnt/.local-plugins /sessions/*/mnt/.remote-plugins -path '*/skills/<skill-name>/SKILL.md' 2>/dev/null | head -1`.
