@@ -24,6 +24,23 @@ All notable changes to this project are documented here. The format is based on
   already said. It was read as a literal `~` directory, so such a scenario could not run; the cassette
   fingerprint reads the same expanded path.
 
+### Documentation
+
+- **The companion skill caught up with 4.x.** Corrected: the session's `model:` IS part of a cassette's
+  session fingerprint — `verify-cassettes` reports a changed session as stale, while `replay` never checks
+  it (plain, `--strict` or `--assert-from`) — so adding `model:` to a session re-stales its cassettes; pin
+  with `--model` or `COWORK_HARNESS_MODEL` until the next re-record. Added: `record`'s `ok` is the exit
+  code, not the verdict (`--allow-failing` on a red run is `ok: true`; the verdict is in `results[0]`, and
+  in `items[]` on `record <dir/>`); a scenario whose only assertion is `semantic_matches` fails
+  `lint --strict` on `replay-noop`; the hostloop plugin-path suffix trap; scenario YAMLs inside a mounted
+  plugin dir are part of the staleness hash; `scan.inputHostPathTokens` and its notice; the `toolCalls`
+  field; `COWORK_HARNESS_OUTPUT_FORMAT`; the microvm capability-cache reset; why `init-redact --force`
+  drops your tailoring.
+- **Every `lint` rule is documented.** The skill's `authoring.md` now carries a table of every rule id
+  `cowork-harness lint` can report, with its severity, and a section on linting the skill itself
+  (`lint-skill`'s size caps, `--ignore-rule`, suppression markers). A test keeps the table in step with
+  the rule registries in both directions.
+
 ## [4.1.0] — 2026-09-29
 
 ### Upgrade notes
