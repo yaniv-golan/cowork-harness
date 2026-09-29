@@ -3447,7 +3447,17 @@ export function cassettePortabilityPreflight(
 ): { kind: "ok" } | { kind: "warn"; message: string } {
   const refs: { name: string; path: string }[] = [];
   // `(inline)` is stored as the literal sentinel, never as a path — nothing to resolve, nothing to break.
-  if (scenario.session !== "(inline)") refs.push({ name: "session", path: realish(expandUserPath(scenario.session)) });
+  // A session path that cannot be expanded (`~<user>`) is not this check's to report: the input check names it
+  // (a dry run's `inputErrors[]`, the real record's usage refusal), so it simply has no reference to weigh here.
+  if (scenario.session !== "(inline)") {
+    let session: string | undefined;
+    try {
+      session = expandUserPath(scenario.session);
+    } catch {
+      session = undefined;
+    }
+    if (session !== undefined) refs.push({ name: "session", path: realish(session) });
+  }
   if (scenarioSourceFile) refs.push({ name: "scenarioSource", path: realish(scenarioSourceFile) });
   if (refs.length === 0) return { kind: "ok" };
 

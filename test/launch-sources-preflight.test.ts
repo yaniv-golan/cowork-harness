@@ -524,6 +524,28 @@ describe.skipIf(!can)("a missing session file is an input error on every lane", 
     expect(doc.inputErrors![0].message).toMatch(NOT_FOUND);
   });
 
+  it("`~<user>` session: record --dry-run reports it under inputErrors[], the real record refuses it (usage)", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "~someone-else/s.yaml"));
+    const dry = cli(["record", "sc/u.yaml", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
+    expect(dry.code, dry.all).toBe(0);
+    const doc = JSON.parse(dry.stdout) as { ok: boolean; inputErrors?: { message: string }[] };
+    expect(doc.inputErrors?.[0]?.message).toMatch(/another user's home directory/);
+    expect(dry.all).not.toMatch(/expandUserPath:/);
+    const real = cli(
+      ["record", "sc/u.yaml", "--model", "claude-sonnet-5", "--out", join(d, "u.cassette.json"), "--output-format", "json"],
+      d,
+      {
+        CLAUDE_CODE_OAUTH_TOKEN: "dummy",
+      },
+    );
+    expect(real.code, real.all).toBe(1);
+    expect(envelope(real.stdout).error?.category).toBe("usage");
+    expect(envelope(real.stdout).error?.message).toMatch(/another user's home directory/);
+    expect(real.all).not.toMatch(/expandUserPath:/);
+    expect(runDirsUnder(real.runs)).toEqual([]);
+  });
+
   it("run --matrix: one clean message, not a double prefix", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../gone.yaml"));
