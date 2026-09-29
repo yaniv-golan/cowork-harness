@@ -1,5 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { BoundaryError, UsageError, LegacyRunDirError, compactSchemaError } from "../errors.js";
+import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
@@ -40,6 +40,7 @@ import {
   pluginSkillRootsFromPlan,
   isConnectedContent,
   applySessionOverrides,
+  expandUserPath,
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
@@ -1912,9 +1913,64 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   }
 }
 
+/** The on-disk path a `session:` value names: a leading `~` expanded for the current user, anything else
+ *  resolved against cwd (a scenario FILE's relative `session:` was already resolved against its directory by
+ *  the loader). A `~<user>` path is a {@link SessionFileError}. */
+function sessionFilePath(ref: string): string {
+  try {
+    return expandUserPath(ref);
+  } catch (e) {
+    throw new SessionFileError(ref, `session file ${ref}: ${(e as Error).message.replace(/^expandUserPath: /, "")}`);
+  }
+}
+
+/** Read and parse a `session:` file. Every way the file itself can be unusable — missing, a directory, not
+ *  readable, not YAML — is a {@link SessionFileError} (a usage error naming the absolute path), never a raw
+ *  `ENOENT` that reads as a harness bug. A document the session SCHEMA rejects is not this function's
+ *  concern: it parses, and `loadSession` refuses it. Callers that tolerate a session they cannot open (the
+ *  cassette fingerprint and staleness paths, the model pre-flight) guard or catch it themselves. */
 export function parseSessionFile(path: string): unknown {
   if (path === "(inline)") return {};
-  return parseYaml(readFileSync(path, "utf8"));
+  const abs = sessionFilePath(path);
+  return readYamlFile(abs, "session", (message, hint) => new SessionFileError(abs, message, hint));
+}
+
+/** Read and parse a YAML input file (a scenario or a session), mapping every way the FILE can be unusable
+ *  to a one-line usage error naming it: missing, a directory, not readable, any other read failure, or not
+ *  valid YAML (the parser's first line — its message carries a multi-line source excerpt). Never a raw
+ *  `ENOENT`/`YAMLParseError`, which `main().catch` would report as category `internal`, a harness bug. */
+export function readYamlFile(
+  path: string,
+  kind: "scenario" | "session",
+  make: (message: string, hint?: string, syntax?: boolean) => UsageError,
+): unknown {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR")
+      throw make(
+        `${kind} file not found: ${path}`,
+        kind === "session" ? "`session:` resolves relative to the scenario file's directory" : undefined,
+      );
+    if (code === "EISDIR") throw make(`${kind} file is a directory: ${path}`);
+    if (code === "EACCES" || code === "EPERM") throw make(`${kind} file is not readable: ${path}`);
+    throw make(`cannot read ${kind} file: ${path}: ${code ?? (e as Error).message}`);
+  }
+  try {
+    return parseYaml(text);
+  } catch (e) {
+    throw make(`${kind} file is not valid YAML: ${path}: ${firstLine(e)}`, undefined, true);
+  }
+}
+
+/** The first line of an error's message, without a trailing colon — the `yaml` parser's message names the
+ *  problem and position on line one and follows it with a source excerpt. */
+export function firstLine(e: unknown): string {
+  return String((e as Error)?.message ?? e)
+    .split("\n")[0]
+    .replace(/:$/, "");
 }
 
 const isFileRelative = (p: string) => p !== "(inline)" && !isAbsolute(p) && !p.startsWith("~");
@@ -1996,7 +2052,7 @@ export function loadScenarioPure(path: string): Scenario {
   let scenario: Scenario;
   let rawDoc: unknown;
   try {
-    rawDoc = parseYaml(readFileSync(path, "utf8"));
+    rawDoc = readYamlFile(path, "scenario", (message, _hint, syntax) => new ScenarioFileError(message, syntax === true));
     scenario = Scenario.parse(rawDoc);
   } catch (e) {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
@@ -2186,8 +2242,10 @@ export function ablateSession<T extends { plugins: Record<string, unknown>; skil
  *  scenario's session, apply the model the run would resolve (and `ablateSkill`, as the run applies it), and
  *  run the same write-free source resolution `executeScenario` runs before it creates a run dir. Throws that
  *  resolution's `UsageError` (a path that does not exist or is the wrong kind, an effort the model does not
- *  offer, a baseline name that resolves nowhere). A session that does not load at all is left to the real
- *  run, as the model pre-flight leaves it; a baseline file that does not load throws what the run would.
+ *  offer, a baseline name that resolves nowhere), a session FILE that cannot be read (a
+ *  {@link SessionFileError}), and a session the schema rejects (a plain `UsageError` from `loadSession`) —
+ *  each rethrown as the input refusal it is. Any other failure to load the session is left to the real run;
+ *  a baseline file that does not load throws what the run would.
  *  `quiet` mutes the resolution's warnings, for a caller whose run resolves again and prints them itself;
  *  `baseline` passes one the caller already loaded. */
 export function launchSourcesPreflight(
@@ -2217,7 +2275,9 @@ export function launchSourcesPreflight(
  *  assertion, then every declared input path. Returns the first refusal as the `UsageError` the run would
  *  throw (message and hint), or `undefined`. Anything else that is not an input error is thrown.
  *
- *  A baseline FILE that does not load (malformed JSON, a shape the schema rejects) is the caller's choice,
+ *  A baseline path the user supplied that does not load is a usage refusal like any other input error
+ *  (`loadBaseline` throws `UnknownBaselineError`). A committed baseline that does not load (malformed JSON,
+ *  a shape the schema rejects — a packaging bug, not an input error) is the caller's choice,
  *  `unloadableBaseline`: `"throw"` (the default) fails as the run would; `"skip"` leaves it to the run
  *  (a batch pre-flight, where that scenario still fails on its turn); `"report"` returns the load error as
  *  the refusal (a directory dry run, whose real record fails that item). */
@@ -2227,19 +2287,22 @@ export function scenarioInputRefusal(
   opts: ScenarioInputCheckOptions = {},
 ): UsageError | undefined {
   const f = scenarioInputFindings(scenario, modelOverride, opts);
-  return f.vacuity ?? f.inputs;
+  return f.session ?? f.vacuity ?? f.inputs;
 }
 
 export type ScenarioInputCheckOptions = { quiet?: boolean; ablateSkill?: boolean; unloadableBaseline?: "throw" | "skip" | "report" };
 
-/** The two halves of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
- *  differently (`record <file> --dry-run` reports vacuity but refuses a bad input): `vacuity`, the
- *  tier-vacuous refusal; `inputs`, the baseline-name or input-path refusal. The run throws `vacuity` first. */
+/** The parts of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
+ *  differently (`record <file> --dry-run` reports vacuity and an unreadable session file but refuses a bad
+ *  input path): `session`, a `session:` file that cannot be read; `vacuity`, the tier-vacuous refusal;
+ *  `inputs`, the baseline-name or input-path refusal. The run throws them in that order (it loads the session
+ *  before it checks vacuity); with no session there are no input paths to check, so `session` and `inputs`
+ *  never both appear. */
 export function scenarioInputFindings(
   scenario: Scenario,
   modelOverride: string | undefined,
   opts: ScenarioInputCheckOptions = {},
-): { vacuity?: UsageError; inputs?: UsageError } {
+): { session?: SessionFileError; vacuity?: UsageError; inputs?: UsageError } {
   let baseline: PlatformBaseline;
   try {
     baseline = loadBaseline(scenario.baseline);
@@ -2251,13 +2314,19 @@ export function scenarioInputFindings(
   }
   const vacuous = tierVacuityRefusal(scenario, baseline);
   let inputs: UsageError | undefined;
+  let session: SessionFileError | undefined;
   try {
     launchSourcesPreflight(scenario, modelOverride, { quiet: opts.quiet, ablateSkill: opts.ablateSkill, baseline });
   } catch (e) {
-    if (!(e instanceof UsageError)) throw e;
-    inputs = e;
+    if (e instanceof SessionFileError) session = e;
+    else if (e instanceof UsageError) inputs = e;
+    else throw e;
   }
-  return { ...(vacuous ? { vacuity: new UsageError(vacuous) } : {}), ...(inputs ? { inputs } : {}) };
+  return {
+    ...(session ? { session } : {}),
+    ...(vacuous ? { vacuity: new UsageError(vacuous) } : {}),
+    ...(inputs ? { inputs } : {}),
+  };
 }
 
 /** Refuse a `tool_not_called` / `subagent_tool_absent` naming a tool the scenario's tier provably does not
@@ -2286,7 +2355,8 @@ export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaselin
 }
 
 export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
-  const baseDir = sessionRef === "(inline)" ? process.cwd() : dirname(resolve(sessionRef));
+  // `sessionFilePath`, not `resolve`: a `~/…` ref must resolve its mounts against the expanded directory.
+  const baseDir = sessionRef === "(inline)" ? process.cwd() : dirname(sessionFilePath(sessionRef));
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }
 
@@ -2296,8 +2366,9 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
  *  `COWORK_HARNESS_MODEL` — and returns the refusal text, or `undefined` when a model resolves.
  *
  *  A session that does not load returns `undefined`: this check is not the one that reports a broken
- *  session (the real path does, with its own message), and a dry run over files whose session paths do not
- *  exist on this machine must not start failing on a model question it cannot answer. */
+ *  session — the input check does ({@link launchSourcesPreflight}: an unreadable file, a schema the session
+ *  rejects), and so does the real run — and a dry run over files whose session paths do not exist on this
+ *  machine must not start failing on a model question it cannot answer. */
 export function unresolvedModelPreflight(scenario: Scenario, explicit: string | undefined): string | undefined {
   if (explicit !== undefined || envModelDefault() !== undefined) return undefined;
   let sessionModel: string | undefined;
@@ -3890,4 +3961,4 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
   return id;
 }
 
-export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError };
+export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError };

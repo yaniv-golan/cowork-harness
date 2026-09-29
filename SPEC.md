@@ -754,8 +754,10 @@ is a usage error (exit `2`); `--follow` waits for a directory that does not exis
 and says so once on stderr. A gate request that cannot be parsed is a `runtime` error (exit `2`): under
 `--follow` after bounded retries, in one pass on the first read. Before 4.0.0 one pass over a missing
 directory, or over a malformed request, exited `0` with nothing printed.
-**A declared input path that does not exist, or is the wrong kind, is a usage error.** A plugin folder,
-`--upload`, `--folder`, a session's `uploads`/`folders`/`projects`/`skills.local`/`local_plugins`/
+**A declared input path that does not exist, or is the wrong kind, is a usage error.** A scenario file,
+or its `session:` file, that is missing, a directory, unreadable or not valid YAML (a leading `~` in
+`session:` expands to the current user's home directory); a `baseline:` path to a file that is a directory,
+not valid JSON or not a platform baseline; a plugin folder, `--upload`, `--folder`, a session's `uploads`/`folders`/`projects`/`skills.local`/`local_plugins`/
 `local_marketplaces` (or a marketplace `entry.source`), an `enabled` plugin missing from its local
 marketplace, a file where a directory is required (or the reverse), two sources mapping to one mount
 destination, a `plugins.config_dir` that is not a directory, an unsafe mount-name segment (a `:` in an
@@ -771,10 +773,10 @@ an input error and the preview reports it as `model: null`. `record <file> --dry
 over its scenario's session, so both previews surface a bad input path; there it is a refusal of a scenario
 that loaded, so it exits `1` (and when the scenario also has a tier-vacuous assertion, the refusal names
 the vacuity, as the real `record` does). `record <dir/> --dry-run` makes the same check per scenario and
-lists each input the real record would refuse (an input path, effort or baseline name, a baseline file
-that does not load, or a tier-vacuous negative tool assertion) under `inputErrors[]` (`{file, message,
-hint?}`) in its payload, with a `⚠ input error:` stderr line that survives `--quiet`; `record <file>
---dry-run` reports a tier-vacuous assertion alone the same way. It is additive, so `ok` and the exit code
+lists each input the real record would refuse (a session file, an input path, effort or baseline name, a
+baseline file that does not load, or a tier-vacuous negative tool assertion) under `inputErrors[]` (`{file,
+message, hint?}`) in its payload, with a `⚠ input error:` stderr line that survives `--quiet`; `record <file>
+--dry-run` reports a session file that cannot be read, and a tier-vacuous assertion alone, the same way. It is additive, so `ok` and the exit code
 do not change (such a scenario is a `failed` item on the real `record <dir/>`); a gate that wants it
 checks `.ok and (.inputErrors == [])`. The previews check existence and kind, not the git tracked-set
 filter, which only a real run applies. Under `COWORK_HARNESS_SOFT_MISSING` a missing source is
@@ -807,7 +809,9 @@ otherwise report every valid scenario with the same code as a broken one. The sc
 BEFORE the credential guard, so "does this file load" never depends on holding a token. "Would this
 record" reads a second file: to answer the model refusal, `--dry-run` also opens the scenario's session
 (the model resolves from `--model`, the session's `model:`, then `COWORK_HARNESS_MODEL`). A session that
-does not load is skipped by that check, not refused; the real record reports it. On the real
+does not load is skipped by the model check, not refused by it; the input check answers it instead: a
+session file that cannot be read is reported under `inputErrors[]` (exit and `ok` unchanged), a session the
+schema rejects is refused like a bad input path, and the real record refuses both. On the real
 `record <file>` the credential guard still comes first: with no credentials, `record` exits `2` (`runtime`,
 "no model credentials") before the model refusal can answer.
 A `record <dir/>` target keeps the same 1-vs-2 meaning at batch scale: a directory whose files all fail
@@ -821,8 +825,8 @@ assert contradiction, duplicate cassette target, a scenario that resolves no mod
 batch-wide, so this arm knows it exactly) join `broken[]` in exiting `1`; the path-DEPENDENT ones
 (host-inventory destination, cassette portability) are advisory `notes[]` that do not affect the exit
 code, because a dir target takes no `--out` and the preview would be guessing the destination. Inputs the
-real record would refuse (an input path, effort or baseline name, a baseline file that does not load, a
-tier-vacuous assertion) are listed
+real record would refuse (a session file that cannot be read, an input path, effort or baseline name, a
+baseline file that does not load, a tier-vacuous assertion) are listed
 under `inputErrors[]`, which also leaves the exit code at `0` (see the input-path rule above).
 **`verify-cassettes` uses its OWN three-way split, not the `run`/`skill` meanings above:** `0` clean ·
 `1` verification RAN and found a real problem (any PII finding, any staleness finding whose

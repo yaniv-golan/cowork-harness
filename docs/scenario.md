@@ -115,7 +115,8 @@ Two consequences worth internalising:
   values, a bad regex, a reserved value. It also reports a `baseline:` that names no baseline this installed
   CLI ships (ERROR `baseline-unknown`; `latest` always resolves). So a scenario `cowork-harness lint` calls
   clean is one `run`/`record` will load. It does **not** check what depends on the machine the run happens
-  on — the session file and the paths it mounts, an absolute `baseline:` path, environment variables — nor
+  on — the session file and the paths it mounts, an absolute `baseline:` path that does not exist here (one
+  that exists is checked, 4.1.1 and later), environment variables — nor
   the pre-spend refusals that `record --dry-run` adds (below). Any other YAML in a linted directory, such as
   a session or matrix file, is not a scenario and is reported too: keep those out of the linted set. The
   bundled script run directly (`python3 scenario.py lint`) stays the lenient, offline check. When both
@@ -968,11 +969,13 @@ corresponds to the scenario, this path is safe by construction:
   or `requires_capabilities` differ from the recording, replay refuses (re-record instead).
 - **The `session` is not verified on the replay path** — it's excluded from the drift check (stored
   relative in the cassette, resolves absolute on disk), so a session change between record and re-assert
-  does not move the **replay** verdict. The notice says so; re-record if the session changed. It *is*
-  fingerprinted, and `verify-cassettes` checks that hash: `sessionFingerprint` covers connected
-  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects` and `agent_env` when set. The
-  **model** is in neither, so a model swap is undetected everywhere. (Skill *content* under the session
-  IS guarded — next bullet.)
+  does not move the **replay** verdict — plain, `--strict` or `--assert-from`. The notice says so; re-record
+  if the session changed. It *is* fingerprinted, and `verify-cassettes` checks that hash and reports a
+  change as staleness (exit 1): `sessionFingerprint` covers the session's pinned `model:` and connected
+  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects` and `agent_env` when set. A model
+  supplied by `--model` or `COWORK_HARNESS_MODEL` is not in it (`environment.model` records what ran), and a
+  cassette recorded before `model` joined the hash gets a note, not a failure — re-record to gain that
+  coverage. (Skill *content* under the session IS guarded — next bullet.)
 - **Skill-content staleness hard-fails** on this path (it implies `--fail-on-skill-drift`), so an edited assert
   can't green against a skill that no longer produces the frozen events.
 - **Sourcing ≠ evaluation:** `expect_denied` and the filesystem/egress keys are read from the on-disk block but

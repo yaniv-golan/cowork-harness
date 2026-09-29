@@ -30,6 +30,12 @@ export function expandUserPath(p: string, base?: string): string {
   return resolve(base ?? process.cwd(), p);
 }
 
+/** A leading `~` / `~/` expanded for the current user; anything else returned unchanged. For a path flag
+ *  (`--session=~/…`) the shell does not expand, and whose other forms keep their existing resolution. */
+export function expandHome<T extends string | undefined>(p: T): T {
+  return (p !== undefined && (p === "~" || p.startsWith("~/")) ? expandUserPath(p) : p) as T;
+}
+
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
   const env = { ...process.env };

@@ -40,7 +40,10 @@ Compare timings between runs of the same tier and model only.
 
 1. **Pin the model in the session.** A run that resolves no model is refused, but one pinned only by
    `COWORK_HARNESS_MODEL` takes its model from the machine, so two shells can run two models. Set
-   `model:` in the session (or pass the same `--model` on every `skill` run). Read `result.json`'s `models` back before believing any cross-run comparison — and when
+   `model:` in the session (or pass the same `--model` on every `skill` run). Adding `model:` to a session
+   that already has cassettes re-stales them (`verify-cassettes` exits 1 — the model is in the session
+   fingerprint); to pin without re-recording now, use `--model` or `COWORK_HARNESS_MODEL` and move the
+   pin into the session at the next re-record. Read `result.json`'s `models` back before believing any cross-run comparison — and when
    you do, **ignore any entry wrapped in angle brackets**: `<synthetic>` is the agent marking a turn it
    fabricated locally (no API call), not a model, so two runs of the same pinned model can differ on this
    array purely by whether such a turn occurred.

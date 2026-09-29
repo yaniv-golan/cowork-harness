@@ -220,25 +220,75 @@ so a file `run`/`record` would refuse fails lint too (running `scenario.py lint`
 cowork-harness lint scenarios/*.yaml
 ```
 
-`lint` flags: filesystem/egress-only assertions on a `replay` gate (silent no-op), bad regex
-quoting, an egress assert on `protocol` fidelity, `transcript_no_host_path` on `hostloop`/`protocol`
-(ERROR — fails by design at those tiers; WARN on `fidelity: cowork`, whose tier resolves per the
-baseline's host-loop gate), non-empty `requires_capabilities` on `protocol` without
-`allow_missing_capability` (ERROR — the capability probe can't run there, so the run hard-fails as
-unverifiable), `no_scratchpad_leak` off `container` (ERROR on `protocol`/`microvm`/`hostloop` — hostloop's
-`present_files` passes a validated path through without promoting, so there is no scratch→outputs copy
-to leak; WARN on `cowork`, whose tier resolves per the baseline gate) or `present_files_called` on
-`protocol`/`microvm` (ERROR — served only at `container`/`hostloop`), or `present_files_called`/`no_scratchpad_leak`/`user_visible_artifact` on `lane: remote` (ERROR — the runtime rejects those at scenario load time, so the tier rules are suppressed there), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
-and hallucinated schema (`assertions:` vs `assert:`, unknown keys). Exit code is non-zero on errors
-(CI-friendly). `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never
-emits a scenario `lint` would reject.
+`lint` exits non-zero on any ERROR (CI-friendly); `--strict` also fails on WARN. Every rule it reports:
+
+| Rule | Severity | Fires on |
+|---|---|---|
+| `assert-contradiction` | ERROR | assert items no single run can satisfy together |
+| `assertions-key` | ERROR | `assertions:` instead of `assert:` — none of the checks would run |
+| `authored-replay-fidelity` | ERROR | an authored `replay_protocol_fidelity` (only the replay lane synthesizes it) |
+| `capabilities-on-protocol` | ERROR | non-empty `requires_capabilities` on `protocol` without `allow_missing_capability` — the probe cannot run there, so the run fails as unverifiable |
+| `cassette-evidence-skipped` | INFO | with `--cassette-dir`: a cassette (or the directory) could not be read, so it cannot quiet replay-evidence advice |
+| `container-only-key-off-container` | ERROR | `no_scratchpad_leak` off `container` — hostloop's `present_files` never promotes, so there is nothing to leak (WARN on `cowork`, whose tier resolves per the baseline gate) |
+| `egress-on-protocol` | ERROR | an egress assertion (`egress_*` / `expect_denied`) on `protocol`, which enforces no egress |
+| `enum-value-invalid` | ERROR | a field value outside its allowed set |
+| `fidelity-missing` | ERROR | no `fidelity:` (required since 4.0.0) |
+| `file-absent-contradiction` | ERROR | one path under both `file_exists` and `file_absent` |
+| `gate-needs-controlout` | INFO | gate assertions, which evaluate on replay only when the cassette has `controlOut` |
+| `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
+| `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
+| `lane-remote-incompatible-key` | ERROR | `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` on `lane: remote` (the runtime rejects them at load, so the tier rules are suppressed there) |
+| `linter-extra-findings-invalid` | ERROR | the loader findings `cowork-harness lint` hands the linter could not be read |
+| `linter-unclassified-key` | ERROR | a valid assertion key this linter cannot classify (the linter is out of date) |
+| `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest |
+| `mixed-assert-item` | WARN | one assert item mixing replay-checkable and live-only keys (replay drops the live-only half) |
+| `no-scenarios` | ERROR | a linted directory with no `*.yaml` / `*.yml` |
+| `not-found` | ERROR | a named file that does not exist |
+| `parse` | ERROR | a file that is not YAML, or not a mapping |
+| `positional-choose-order` | INFO | an answer rule with a positional `choose` (first / index), which option re-ordering can move |
+| `present-files-key-off-tier` | ERROR | `present_files_called` on `protocol` / `microvm` (served only at `container` / `hostloop`) |
+| `prompt-slash-not-leading` | WARN | a `prompt:` that names `/<skill>` without starting with it, so it is never expanded |
+| `reference-access-contradiction` | ERROR | one reference under both `reference_read` and `no_observed_reference_access` |
+| `regex-double-quoted` | WARN | a double-quoted regex with an unescaped backslash (YAML strips it) |
+| `replay-noop` | WARN | every assertion is live-only or a verdict modifier, so a replay gate verifies nothing |
+| `tool-called-always-passes` | INFO | `tool_called` with `count: {min: 0}` and no `max` — it asserts nothing |
+| `tool-input-regex-redactable` | WARN | a `tool_not_called` input literal the redaction policy rewrites in the committed cassette (or a policy pattern it cannot check offline) |
+| `tool-input-shell-tier` | INFO | the object form with `tool: Bash` and a `command` on `hostloop` / `cowork`, where shell runs as `mcp__workspace__bash` — list both |
+| `tool-not-called-tier-vacuous` | WARN | `tool_not_called` / `subagent_tool_absent` naming a tool the tier never serves |
+| `transcript-command-shaped` | WARN | a `transcript_*` value shaped like a shell command — those keys read prose only, never a tool call |
+| `unknown-assert-key` | WARN | an assertion key not in the catalog (the loader rejects it) |
+| `unknown-top-key` | WARN | a scenario key not in the schema |
+| `vacuous-gate-assert` | WARN | `gate_answers_delivered` with no presence companion (zero gates passes it), or inert beside `questions_count_max: 0` |
+| `scenario-invalid` | ERROR | the harness's scenario loader refuses the file (via `cowork-harness lint` only — see below) |
+| `baseline-unknown` | ERROR | `baseline:` names no baseline this CLI ships (via `cowork-harness lint` only) |
+| `lint-loader-internal` | ERROR | the wrapper could not run its loader check on a file — a harness bug; it never falls back to a lint that skipped the loader |
+
+`scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never emits a scenario `lint`
+would reject.
+
+**Lint the skill itself: `cowork-harness lint-skill <skill-dir>`.** It checks the skill, not a scenario:
+Cowork host-loop footguns (`${CLAUDE_PLUGIN_ROOT}` in a VM bash step, hook events, a misplaced
+`hooks.json`, an unresolvable `subagent_type`), the evidence corpus a `critique` can package
+(`references/critique.md`), and two size caps. `skill-body-over-reattach-cap` (WARN) fires when the
+`SKILL.md` body, frontmatter excluded, passes 19,000 B — after a compaction the agent re-attaches only the
+start of an invoked skill — and `skill-body-near-reattach-cap` (INFO) from 80% of that;
+`skill-reference-over-read-cap` (WARN) fires on a `references/**.md` over 60,000 B, past which a
+whole-file Read returns a partial view. `--strict` fails on WARN, never on INFO. To accept a reviewed
+judgement-call finding, pass `--ignore-rule <rule>[=<glob>]` (repeatable; the glob matches the finding's
+file) or fence the text in `SKILL.md` with `<!-- lint-skill: ignore-start <rule>[,<rule>…]: <reason> -->`
+… `<!-- lint-skill: ignore-end -->` (outside any code fence). A suppressed finding is still printed; it
+stops gating. A provable rule (an ERROR, a misplaced `hooks.json`, a missing pinned agent) cannot be
+suppressed: naming it, or an unknown rule, in `--ignore-rule` is a usage error (exit 2); in a marker it is
+WARN `lint-skill-ignore-invalid`, as is any other malformed marker. An unclosed marker is WARN
+`lint-skill-ignore-unclosed`, and one that suppresses nothing is INFO `lint-skill-ignore-unused`.
 
 **`cowork-harness lint` runs the loader: a file it calls clean is one `run`/`record` will load.** Anything
 the loader refuses — an unknown key, a wrong value type (a scalar `semantic_matches.rubric`), a bad regex,
 a reserved value — is ✗ ERROR `scenario-invalid` (exit 1, with or without `--strict`), and a `baseline:`
 naming no baseline this installed CLI ships is ✗ ERROR `baseline-unknown` (`latest` always resolves). It
 does not check what depends on the machine the run happens on (the session file and its mounts, an
-absolute `baseline:` path, environment variables). A session or matrix YAML in a linted directory is not
+absolute `baseline:` path that does not exist here — one that exists is checked (4.1.1 and later) —
+environment variables). A session or matrix YAML in a linted directory is not
 a scenario and is reported as one that does not load — keep those out of the linted set. `python3
 scenario.py lint` run directly stays offline and lenient: there an unknown key is only a ⚠ WARN (exit 0).
 `cowork-harness record <file.yaml> --dry-run` also runs the loader and adds the pre-spend refusals (exit 2

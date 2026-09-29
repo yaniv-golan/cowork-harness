@@ -175,9 +175,10 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     `--reassert`). That opt-in path is safe by construction for the authored fields — it **hard-fails** if
     `prompt`/`answers`/`baseline`/`fidelity`/`lane`/`skills`/`requires_capabilities` or the skill content (when a
     fingerprint exists) drifted from the recording (re-record then), and `expect_denied`/filesystem/egress keys
-    are sourced but stay **live-only** (it warns; they don't move the replay verdict). **Caveat:** the `session`
-    (model / data mounts / discovery) is NOT drift-checked or fingerprinted, so a **model change** between record
-    and re-assert is undetected — the notice flags this; re-record if the session changed. `verify-run` reads
+    are sourced but stay **live-only** (it warns; they don't move the replay verdict). **Caveat:** the session's
+    `model:` IS in the cassette's `sessionFingerprint` (a `--model`/env model is not; `environment.model`
+    records what ran). `verify-cassettes` reports a changed session as staleness (exit 1); `replay` never
+    checks it — plain, `--strict` or `--assert-from` — so re-record if the session changed. `verify-run` reads
     on-disk `assert:` against a kept *run dir*; `replay --assert-from` is the equivalent for a *cassette*.
 
 18. **`questions_count_max` counts sub-questions, not gates.** One `AskUserQuestion` tool call can

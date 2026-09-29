@@ -25,12 +25,14 @@ the discovery/encode/record dance entirely and answer gates **live during the re
 refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing) **plus the
 cassette-portability pre-flight below**, so it cannot green something a paid run would reject. **That binding
 guarantee is the SINGLE-FILE form only** — it takes the real `--out` and the real flags, so its verdict is the
-one a paid run would give. On a **directory** the path-dependent verdicts (host-inventory, cassette
+one a paid run would give. Two inputs it reports rather than refuses, at exit 0 under `inputErrors[]` with a
+`⚠ input error:` line: a `session:` file that cannot be read (missing, a directory, not valid YAML — 4.1.1
+and later) and a `tool_not_called` the tier can never violate — `run` and the real `record` refuse both. On a **directory** the path-dependent verdicts (host-inventory, cassette
 portability) are reported as `⚠ would-refuse (advisory)` / `⚠ would-warn (advisory)` notes — the label follows
 the verdict kind, and portability can only ever warn — that do NOT affect the exit code — a dir target
 takes no `--out`, so the destination is a guess — and only the path-independent ones (prompt policy, assert
-contradiction, duplicate cassette target) gate the batch. An input the real record would refuse — a missing
-path, an unknown baseline name, a `tool_not_called` the tier can never violate — is listed under
+contradiction, duplicate cassette target) gate the batch. An input the real record would refuse — a
+`session:` file that cannot be read (4.1.1 and later), a missing path, an unknown baseline name, a `tool_not_called` the tier can never violate — is listed under
 `inputErrors[]` with a `⚠ input error:` line, also at exit 0. So a directory dry-run CAN exit 0 on a scenario the
 real `record` would refuse; re-run that one file with its real flags for a binding answer, or gate on
 `.ok and (.inputErrors == [])` in the JSON payload (4.1.0 and later). A directory also
@@ -68,7 +70,10 @@ finished: a failing verdict without `--allow-failing`, an assert on an artifact 
 quarantined inventory finding, or any other error before the cassette is written. Only the after-the-run
 refusals report the run: under `--output-format json` they carry it in `results[0]` (verdict and
 cost) with `error.category: "runtime"`; every pre-spend refusal, and a run that throws before returning a
-result (an unanswered gate), has `results: []`.
+result (an unanswered gate), has `results: []`. The envelope's `ok` is the exit code (`ok` ⇔ exit 0, a
+cassette was written), not the verdict: an `--allow-failing` recording of a red run is `ok: true` with
+`results[0].verdict.pass: false`. `record <dir/>` reports per scenario under `items[]` (each with `status`,
+and `verdict`/`result` once its run finished), not `results[]`.
 
 **Decide WHERE the cassette lives before you record it — a cassette cannot be moved afterwards.**
 Without `--out`, `record` writes `cassettes/<scenario-name-slug>.cassette.json` (gitignored by
@@ -254,7 +259,9 @@ Recognize these before "fixing" a non-bug:
   run that lands on `container` is armed. Author `transcript_no_host_path` to enforce cleanliness where
   it's valid. A host path that came verbatim from the scenario's own uploads, connected folders or prompt
   is not a leak (whole-token match; a token cut short where the path goes on, or one naming a location the
-  harness created for the run, is never exempt); `scan.hostPathsFromInputs` counts the paths exempted.
+  harness created for the run, is never exempt); `scan.inputHostPathTokens` counts the host-path tokens the
+  inputs carried, `scan.hostPathsFromInputs` the ones exempted, and a non-zero exemption prints a
+  `::notice::` so a clean scan that relied on it is never silent.
 - **`exec_infra_error`** (`WARN`, host-loop) — one or more container `exec` calls failed for
   infrastructure reasons (daemon/container-level), so those tool calls returned an error to the agent
   rather than the command's own output. Warn-severity because the run's other evidence is intact — unlike

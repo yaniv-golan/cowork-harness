@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSy
 import { unionReferenceAccesses } from "./run/run.js";
 import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, YAMLParseError } from "yaml";
 import {
   Scenario,
   AnswerRule,
@@ -16,16 +16,18 @@ import {
 } from "./types.js";
 import { writeAllSync } from "./io.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, countStringInFile, newestStagedSibling } from "./baseline.js";
-import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources } from "./session.js";
+import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
   parseScenarioFile,
   loadSessionFromFile,
+  firstLine,
   unresolvedModelPreflight,
   scenarioInputRefusal,
   UnansweredError,
   BoundaryError,
   UsageError,
+  SessionFileError,
   LegacyRunDirError,
   effectiveTier,
   type ExecuteOptions,
@@ -1278,7 +1280,7 @@ function loadAnswerPolicy(command: string, path: string, json: boolean): AnswerR
   try {
     parsed = parseYaml(readFileSync(path, "utf8"));
   } catch (e) {
-    return fail(command, "usage", `cannot parse --answer-policy ${path}: ${String((e as Error).message)}`, undefined, json);
+    return fail(command, "usage", `cannot parse --answer-policy ${path}: ${firstLine(e)}`, undefined, json);
   }
   const res = parseAnswerPolicyDoc(parsed);
   if ("error" in res) return fail(command, "usage", `--answer-policy ${path}: ${res.error}`, undefined, json);
@@ -1707,7 +1709,9 @@ async function cmdRun(rawArgs: string[]) {
     try {
       matrixDoc = MatrixFile.parse(parseYaml(readFileSync(matrixFile, "utf8")));
     } catch (e) {
-      fail("run", "usage", `invalid matrix file: ${(e as Error).message}`, undefined, o.json);
+      // A YAML syntax error's message is the parser's multi-line source excerpt; its first line is the reason.
+      const why = e instanceof YAMLParseError ? firstLine(e) : (e as Error).message;
+      fail("run", "usage", `invalid matrix file: ${why}`, undefined, o.json);
     }
     const { cells, totalBeforeCap, truncated } = expandMatrix(matrixDoc!, maxCells);
     if (truncated)
@@ -1716,8 +1720,10 @@ async function cmdRun(rawArgs: string[]) {
     try {
       baseSession = loadSessionFromFile(scenario.session);
     } catch (e) {
-      // A bad session ref (missing file, invalid YAML) must read as a clean usage error, matching the
-      // scenario-path check above — not a raw ENOENT + stack trace.
+      // A bad session ref must read as a clean usage error, matching the scenario-path check above — not a
+      // raw ENOENT + stack trace. A file that cannot be read already says so, with the path: pass it through
+      // rather than prefixing a second "failed to load session".
+      if (e instanceof SessionFileError) fail("run", "usage", e.message, e.hint, o.json);
       fail("run", "usage", `failed to load session "${scenario.session}": ${(e as Error).message}`, undefined, o.json);
     }
     // skill_dirs candidates are resolved relative to the MATRIX FILE's own directory (the same
@@ -2790,7 +2796,7 @@ function cmdBoundary(args: string[]) {
     return fail("boundary-check", "usage", (e as Error).message, undefined, json);
   }
   applyParsedCommandGlobals("boundary-check", p, json);
-  const sessionPath = p.options["--session"];
+  const sessionPath = expandHome(p.options["--session"]);
   // Reject extra baseline positionals rather than silently using only the first.
   if (p.positionals.length > 1) {
     return fail(

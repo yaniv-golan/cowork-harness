@@ -37,7 +37,11 @@ already does.
 **microvm: "control-protocol write failed" with `env: 'claude': No such file or directory` in the agent
 stderr** usually means the VM never finished provisioning (the agent never reached PATH). Check
 `cowork-harness vm status` — a `provisioning` other than `ready` confirms it — and if a run does not
-recover it on its own, `cowork-harness vm delete` and retry.
+recover it on its own, `cowork-harness vm delete` and retry. A run on such a VM can also have cached an
+empty toolchain for it in the capability probe's cache: `vm delete` drops that VM's entry (`vm prune`
+forgets only the orphaned VMs it deletes, never the current one); otherwise delete `capability-cache.json`
+from the runs root (`~/.cowork-harness/runs/` unless
+`COWORK_HARNESS_RUNS_DIR` is set) so the next run probes again.
 
 **Is it your skill's bug, or a known harness gap?** Before deep-debugging a wrong behavior, rule out a
 **deliberate fidelity gap** — the harness intentionally does *not* reproduce a few real-Cowork behaviors,
@@ -80,7 +84,9 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   walk observe this run — what distinguishes "nothing was left undelivered" from "cannot tell"), `cost` (`cost.usd` = the SDK's
   `total_cost_usd` for the run — the authoritative single-run spend of the agent session, which leaves out the `semantic_matches` judge and the LLM decider calls; NOT the same source as summing
   `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),
-  `usage` (`input_tokens`/`output_tokens`/`turns`), `toolDurations` (with `toolDurationsBasis`), `models`, `toolErrors`,
+  `usage` (`input_tokens`/`output_tokens`/`turns`), `toolDurations` (with `toolDurationsBasis`), `models`,
+  `toolCalls` (every tool call in stream order: `name`, top-level `input` fields each capped at 10 KB, and
+  `origin` `main`/`subagent`/`unknown` — what the object form of `tool_called`/`tool_not_called` reads), `toolErrors`,
   `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/`dispatchModel`/
   `resolvedModel`/output/`attributedSkillId`, `outputTruncated`, `referencesRead`, `reasoning`/`reasoningElided`),
   `context` (tools/mcpServers/availableSkills), `tasks`,

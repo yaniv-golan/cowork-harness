@@ -748,7 +748,8 @@ describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
     writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
     const r = run(["run", "s.yaml", "--matrix", "m.yaml"], d);
     expect(r.code).toBe(2);
-    expect(r.out).toMatch(/failed to load session/);
+    expect(r.out).toMatch(/session file not found: .*does-not-exist\.yaml/);
+    expect(r.out).not.toMatch(/failed to load session/); // the reason already names the file — no second prefix
     expect(r.out).not.toMatch(/at readFileSync|at parseSessionFile|at cmdRun/); // no raw stack trace
   });
 

@@ -48,7 +48,7 @@ import {
   scenarioInputFindings,
 } from "./execute.js";
 import { unresolvedModelRefusal } from "./model-provenance.js";
-import { UsageError, UnknownBaselineError, compactSchemaError } from "../errors.js";
+import { UsageError, UnknownBaselineError, BaselineFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
 
 /** One wording for the `--max-budget-usd` × `--concurrency` degradation, emitted from the dry-run preview
@@ -62,7 +62,7 @@ import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 export { isLosslessUtf8 } from "./artifacts.js";
 import { isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, type SessionConfig } from "../session.js";
+import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
@@ -142,6 +142,7 @@ import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type
 import { collectSecrets, scrubField } from "../secrets.js";
 import {
   scanText,
+  scanClimbOutHomePath,
   scanHostInventory,
   DEFAULT_SCAN_PATTERNS,
   MANIFEST_SCAN_PATTERNS,
@@ -750,8 +751,25 @@ export function resolveCassetteSessionPath(
   // Inline scenarios have no session FILE, so there is nothing an override could point at.
   if (sessionPath === "(inline)") return { path: sessionPath, source: "inline" };
   if (override) return { path: override, source: "override" };
+  // A `~/…` session is home-relative, as the run's loader reads it (parseSessionFile) — never cassette-relative.
+  if (sessionPath === "~" || sessionPath.startsWith("~/")) return { path: expandUserPath(sessionPath), source: "as-given" };
   if (cassetteDir && !isAbsolute(sessionPath)) return { path: join(cassetteDir, sessionPath), source: "cassette-relative" };
   return { path: sessionPath, source: "as-given" };
+}
+
+/** The `session:` a cassette stores: relative to the cassette's own directory, so a moved bundle stays
+ *  resolvable. A `~/…` session is stored AS WRITTEN, like `(inline)`: it already names the file on any
+ *  machine, and a path relative to the cassette would spell out the recording user's home directory in a
+ *  committed fixture. Readers resolve it home-relative ({@link resolveCassetteSessionPath}). */
+export function cassetteSessionRef(session: string, cassettePath: string): string {
+  if (session === "(inline)" || session === "~" || session.startsWith("~/")) return session;
+  return relative(dirname(cassettePath), session);
+}
+
+/** The on-disk session file a cassette's stored `session:` names, for a re-record from its embedded
+ *  snapshot (`--rerecord-stale --from-embedded`): the same resolution every other cassette reader uses. */
+export function embeddedSessionPath(session: string, cassettePath: string): string {
+  return resolveCassetteSessionPath(session, dirname(cassettePath)).path;
 }
 
 function skillSourceDirs(
@@ -1593,17 +1611,28 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
   findings.push(...scanText(cassette.scenario.prompt ?? "", "scenario.prompt", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
-  for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
+  for (const s of cassette.fingerprint?.skillSources ?? [])
+    findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL), ...scanClimbOutHomePath(s, "fingerprint.skillSources", allow));
   // v5: per-file manifest paths are a committed surface — scan them like skillSources (a path can name a customer).
-  for (const [p] of cassette.fingerprint?.fileSigs ?? []) findings.push(...scanText(p, "fingerprint.fileSigs", allow, FULL));
+  for (const [p] of cassette.fingerprint?.fileSigs ?? [])
+    findings.push(...scanText(p, "fingerprint.fileSigs", allow, FULL), ...scanClimbOutHomePath(p, "fingerprint.fileSigs", allow));
   // human-authored / structural METADATA fields were never scanned, so a customer folder mount name
   // in userVisibleRoots (or a customer name in the scenario name / session path) could leak through `verify-
   // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
   // structural paths, distinct from free-text findings in the transcript/deliverable.
   (cassette.userVisibleRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:userVisibleRoots[${i}]`, allow, FULL)));
   findings.push(...scanText(cassette.scenario.name ?? "", "metadata:scenario.name", allow, FULL));
-  findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
-  if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
+  // The stored path references are RELATIVE to the cassette, so a home directory hides behind `../`
+  // segments there (`../../Users/<name>/…`) — the absolute path class cannot see that; scanClimbOutHomePath can.
+  findings.push(
+    ...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL),
+    ...scanClimbOutHomePath(cassette.scenario.session ?? "", "metadata:scenario.session", allow),
+  );
+  if (cassette.scenarioSource)
+    findings.push(
+      ...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL),
+      ...scanClimbOutHomePath(cassette.scenarioSource, "metadata:scenarioSource", allow),
+    );
   // `environment.agentImage.ref` is a VERBATIM COWORK_AGENT_IMAGE value, so a private-registry ref
   // (`ghcr.io/acme-internal/agent:2`, `registry.customer.corp/cowork:2`) is committed straight into a
   // public fixture. `environment` had never been scanned at all — the same shape as the inventory leak
@@ -3418,7 +3447,17 @@ export function cassettePortabilityPreflight(
 ): { kind: "ok" } | { kind: "warn"; message: string } {
   const refs: { name: string; path: string }[] = [];
   // `(inline)` is stored as the literal sentinel, never as a path — nothing to resolve, nothing to break.
-  if (scenario.session !== "(inline)") refs.push({ name: "session", path: realish(expandUserPath(scenario.session)) });
+  // A session path that cannot be expanded (`~<user>`) is not this check's to report: the input check names it
+  // (a dry run's `inputErrors[]`, the real record's usage refusal), so it simply has no reference to weigh here.
+  if (scenario.session !== "(inline)") {
+    let session: string | undefined;
+    try {
+      session = expandUserPath(scenario.session);
+    } catch {
+      session = undefined;
+    }
+    if (session !== undefined) refs.push({ name: "session", path: realish(session) });
+  }
   if (scenarioSourceFile) refs.push({ name: "scenarioSource", path: realish(scenarioSourceFile) });
   if (refs.length === 0) return { kind: "ok" };
 
@@ -4049,7 +4088,8 @@ export async function cmdRecord(args: string[]) {
         if (why) refusals.push({ file: f, message: why });
         // Also path-independent: whether a model resolves depends on `--model` (applied batch-wide), the
         // session and the environment, all of which this arm knows exactly as the real batch will. Opening
-        // the session is new I/O on this arm; a session that does not load is skipped, not refused.
+        // the session is new I/O on this arm; a session that does not load is skipped, not refused (a session
+        // FILE that cannot be read is listed under `inputErrors[]` by the input check below).
         const noModel = unresolvedModelPreflight(sc, modelOverride);
         if (noModel) refusals.push({ file: f, message: noModel });
         // The inputs, checked as executeScenario checks them — but only once a model resolves: the real
@@ -4215,17 +4255,18 @@ export async function cmdRecord(args: string[]) {
     // preview of a path that is not there previews nothing. A scenario that loaded and is refused exits 1,
     // record's rule — naming the reason the real record gives, which is the vacuity when both apply. A
     // baseline file that does not load throws, as it does on the real record.
-    const { vacuity, inputs } = scenarioInputFindings(scenario, modelOverride);
+    const { session, vacuity, inputs } = scenarioInputFindings(scenario, modelOverride);
     if (inputs) {
       const why = vacuity ?? inputs;
       return fail("record", "usage", `record: ${why.message}`, why.hint, asJson, 1);
     }
-    // A `tool_not_called` the tier can never violate, alone: the real record refuses it, but this arm
-    // exited 0 on it through 4.0.0 and the dry-run exit code is a covered meaning, so it is reported
-    // (`inputErrors[]` and a line that survives --quiet), not refused.
-    const singleInputErrors = vacuity
-      ? [{ file: target, message: vacuity.message, ...(vacuity.hint !== undefined ? { hint: vacuity.hint } : {}) }]
-      : [];
+    // A `session:` file that cannot be read, and a `tool_not_called` the tier can never violate: the real
+    // record refuses both, but this arm exited 0 on them through 4.1.0 and the dry-run exit code is a
+    // covered meaning, so they are reported (`inputErrors[]` and a line that survives --quiet), not refused.
+    // Session first: the real record loads the session before it checks vacuity.
+    const singleInputErrors = [session, vacuity]
+      .filter((e): e is UsageError => e !== undefined)
+      .map((e) => ({ file: target, message: e.message, ...(e.hint !== undefined ? { hint: e.hint } : {}) }));
     const logSingleInputErrors = () => {
       for (const e of singleInputErrors) log(inputErrorLine(e.file, e.message));
     };
@@ -4399,7 +4440,7 @@ export async function cmdRecord(args: string[]) {
           continue;
         }
       } else if (fromEmbedded) {
-        const sessionRef = rc.cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), rc.cassette.scenario.session);
+        const sessionRef = embeddedSessionPath(rc.cassette.scenario.session, cp);
         sc = { ...rc.cassette.scenario, session: sessionRef };
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
@@ -4482,7 +4523,7 @@ export async function cmdRecord(args: string[]) {
         } else {
           // --from-embedded: explicitly re-record from the embedded snapshot (edits to the YAML won't apply).
           log(`  ⚠ ${tag} --from-embedded: re-recording "${cassette.scenario.name}" from the embedded snapshot (YAML edits won't apply)`);
-          const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+          const sessionRef = embeddedSessionPath(cassette.scenario.session, cp);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
             {
@@ -4725,6 +4766,9 @@ export async function cmdRecord(args: string[]) {
   } catch (e) {
     // A scenario naming no baseline is a usage mistake like any other entry point's: exit 2 with the
     // valid baselines as the hint, not record's general exit 1.
+    // A baseline FILE that exists but does not load is a refusal of a scenario that loaded: exit 1, as it was
+    // before it had its own error class.
+    if (e instanceof BaselineFileError) return fail("record", "usage", `record: ${e.message}`, e.hint, asJson, 1);
     if (e instanceof UnknownBaselineError) return fail("record", "usage", `record: ${e.message}`, e.hint, asJson);
     // A post-run refusal (failing verdict, an assert on an artifact too large to commit, a quarantined
     // inventory finding) comes AFTER a completed, paid run: publish that run in `results` (the same
@@ -4971,10 +5015,7 @@ async function freezeRecordedRun(
     );
   }
   // RELOCATABLE session path (relative to the cassette dir) — metadata-only, keeps a moved bundle honest.
-  const relocatable: Scenario = {
-    ...scenario,
-    session: scenario.session === "(inline)" ? "(inline)" : relative(dirname(cassettePath), scenario.session),
-  };
+  const relocatable: Scenario = { ...scenario, session: cassetteSessionRef(scenario.session, cassettePath) };
   // buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
   // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
@@ -5486,7 +5527,8 @@ export function scenarioContentDrift(
       // verify" is not green, so it is `unverifiable` (exit 3) — but only for a PERSISTED source, the one
       // this cassette really was recorded from. A name-lookup match may be an unrelated file. A YAML
       // SYNTAX break is the one exception: that is the half-written, mid-edit state, and it stays a note.
-      if (!(e instanceof YAMLParseError) && src.via === "persisted")
+      const syntaxBreak = e instanceof YAMLParseError || (e instanceof ScenarioFileError && e.syntax);
+      if (!syntaxBreak && src.via === "persisted")
         return {
           verifiable: false,
           unverifiable: true,
@@ -5977,7 +6019,7 @@ export async function cmdReplay(args: string[]) {
   // against a different source, so a single override cannot be right for all of them — refuse rather than
   // silently pin the wrong tree, which would manufacture false greens (worse than an honest "cannot
   // verify"). Same reasoning as `record --out` and the `--assert-from --write` guard below.
-  const sessionOverride = p.options["--session"];
+  const sessionOverride = expandHome(p.options["--session"]);
   const targetIsDir = existsSync(target) && statSync(target).isDirectory();
   if (sessionOverride !== undefined && (targetIsDir || resolved.files.length > 1)) {
     return fail(
@@ -6167,7 +6209,7 @@ export async function cmdReplay(args: string[]) {
                 warn(
                   `::notice:: [replay] ${src.path} does not load: ${fidelityMissingForCassette(e, rc.cassette.scenario)} — replay used the scenario frozen in the cassette and is unaffected.\n`,
                 );
-              else if (e instanceof UsageError)
+              else if (e instanceof UsageError && !(e instanceof ScenarioFileError))
                 warn(
                   `::notice:: [replay] ${src.path} does not load: ${compactSchemaError(e.message)} — replay used the scenario frozen in the cassette and is unaffected. ` +
                     `Run \`cowork-harness record ${src.path} --dry-run\` for the full error.\n`,
@@ -6441,7 +6483,7 @@ export async function cmdVerifyCassettes(args: string[]) {
   // and the rest of the boundary survive) for ONE relocated cassette. Refused for a batch — each cassette in a
   // directory may have been recorded against a different source, and silently pinning the wrong tree would
   // manufacture false greens, which is strictly worse than this command's honest exit 3.
-  const vcSessionOverride = p.options["--session"];
+  const vcSessionOverride = expandHome(p.options["--session"]);
   const skipPrivacy = p.flags["--skip-privacy"] ?? false;
   const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
@@ -6861,7 +6903,7 @@ export function cmdRehash(args: string[]): void {
     return fail("rehash", "usage", USAGE, undefined, asJson);
   }
   const target = p.positionals[0];
-  const sessionOverride = p.options["--session"];
+  const sessionOverride = expandHome(p.options["--session"]);
   // A MOVED cassette cannot resolve its recorded `session:` from its own directory, so it can never be
   // proved unchanged — and the hash-format epoch makes migration MANDATORY, which would leave it failing
   // every bare replay with no remedy at all. Mirrors `replay --session`: ONE cassette at a time, because

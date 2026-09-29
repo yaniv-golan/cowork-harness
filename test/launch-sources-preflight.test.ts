@@ -286,25 +286,30 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(doc.inputErrors![0].message).toMatch(/does not load: .*JSON/);
   });
 
-  it("record <file> --dry-run: a baseline that fails to LOAD fails as before (internal, exit 2)", () => {
-    // Pin: a single-file preview must not green what the real record crashes on.
+  it("record <file> --dry-run: a baseline file that fails to LOAD is refused as a usage error", () => {
+    // Pin: a single-file preview must not green what the real record refuses.
     const d = fixture();
     writeFileSync(join(d, "bad-baseline.json"), "{not json");
     writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../ok.yaml", `baseline: ${join(d, "bad-baseline.json")}\n`));
     const r = cli(["record", "sc/m.yaml", "--dry-run", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(2);
+    expect(r.code, r.all).not.toBe(0);
     const env = envelope(r.stdout);
     expect(env.ok).toBe(false);
-    expect(env.error?.category).toBe("internal");
+    expect(env.error?.category).toBe("usage");
+    expect(env.error?.message).toMatch(/does not load: not valid JSON/);
   });
 
-  it("run <dir/>: a baseline that fails to LOAD is left to that scenario's turn, not the pre-check", () => {
+  it("run <dir/>: a baseline file that fails to LOAD is refused by the pre-check, before the first scenario", () => {
     const d = fixture();
     writeFileSync(join(d, "bad-baseline.json"), "{not json");
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
     writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../ok.yaml", `baseline: ${join(d, "bad-baseline.json")}\n`));
-    const r = cli(["run", "sc/"], d);
-    expect(r.all).toMatch(SPAWN_GUARD); // `a` runs first; the pre-check did not throw on `m`
+    const r = cli(["run", "sc/", "--output-format", "json"], d);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(2);
+    expect(envelope(r.stdout).error?.category).toBe("usage");
+    expect(envelope(r.stdout).error?.message).toMatch(/m\.yaml: .*does not load/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
   it("record <dir/> --dry-run: a baseline NAME that resolves nowhere is an inputErrors[] entry, hint carried", () => {
@@ -437,5 +442,128 @@ describe.skipIf(!can)("tier vacuity: the record lanes", () => {
     const text = cli(["record", "sc/v.yaml", "--dry-run", "--quiet"], d);
     expect(text.code, text.all).toBe(0);
     expect(text.stderr).toMatch(/⚠ input error: .*v\.yaml: .*can never be violated/);
+  });
+});
+
+// A `session:` file that is not there is an input-path error like any other: `run` refuses it as a usage
+// error before a run dir exists (it was a raw ENOENT, category `internal`), `run <dir/>` refuses the batch
+// before its first scenario runs, and both `record --dry-run` arms report it under `inputErrors[]` with the
+// exit code and `ok` unchanged.
+describe.skipIf(!can)("a missing session file is an input error on every lane", () => {
+  const NOT_FOUND = /^session file not found: .*gone\.yaml/;
+
+  it("run <file>: usage (exit 2) with a clean message, no run dir", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../gone.yaml"));
+    const r = cli(["run", "sc/m.yaml", "--model", "claude-sonnet-5", "--output-format", "json"], d);
+    expect(r.code, r.all).toBe(2);
+    const env = envelope(r.stdout);
+    expect(env.error?.category).toBe("usage");
+    expect(env.error?.message).toMatch(NOT_FOUND);
+    expect(env.error?.message).not.toMatch(/ENOENT/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
+  it("run <dir/>: refused before the first scenario runs, naming the file", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
+    writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../gone.yaml"));
+    const r = cli(["run", "sc/", "--output-format", "json"], d);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(2);
+    const env = envelope(r.stdout);
+    expect(env.error?.category).toBe("usage");
+    expect(env.error?.message).toMatch(/b\.yaml: session file not found/);
+    expect(env.error?.message).not.toMatch(/a\.yaml/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
+  it("record <file> --dry-run: reported under inputErrors[], exit 0 and ok unchanged", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../gone.yaml"));
+    const r = cli(["record", "sc/m.yaml", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
+    expect(r.code, r.all).toBe(0);
+    const doc = JSON.parse(r.stdout) as { ok: boolean; inputErrors?: { file: string; message: string }[] };
+    expect(doc.ok).toBe(true);
+    expect(doc.inputErrors).toHaveLength(1);
+    expect(doc.inputErrors![0].file).toMatch(/m\.yaml$/);
+    expect(doc.inputErrors![0].message).toMatch(NOT_FOUND);
+    const text = cli(["record", "sc/m.yaml", "--dry-run", "--model", "claude-sonnet-5", "--quiet"], d);
+    expect(text.code, text.all).toBe(0);
+    expect(text.stderr).toMatch(/⚠ input error: .*m\.yaml: session file not found/);
+  });
+
+  it("real record <file>: refused (exit 1, usage) with the clean message, no run dir", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../gone.yaml"));
+    const r = cli(
+      ["record", "sc/m.yaml", "--model", "claude-sonnet-5", "--out", join(d, "m.cassette.json"), "--output-format", "json"],
+      d,
+      {
+        CLAUDE_CODE_OAUTH_TOKEN: "dummy",
+      },
+    );
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(1);
+    const env = envelope(r.stdout);
+    expect(env.error?.category).toBe("usage");
+    expect(env.error?.message).toMatch(/^record: session file not found: .*gone\.yaml/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
+  it("record <dir/> --dry-run: reported under inputErrors[], exit 0 and ok unchanged", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
+    writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../gone.yaml"));
+    const r = cli(["record", "sc/", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
+    expect(r.code, r.all).toBe(0);
+    const doc = JSON.parse(r.stdout) as { ok: boolean; inputErrors?: { file: string; message: string }[] };
+    expect(doc.ok).toBe(true);
+    expect(doc.inputErrors).toHaveLength(1);
+    expect(doc.inputErrors![0].file).toMatch(/b\.yaml$/);
+    expect(doc.inputErrors![0].message).toMatch(NOT_FOUND);
+  });
+
+  it("`~<user>` session: record --dry-run reports it under inputErrors[], the real record refuses it (usage)", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "~someone-else/s.yaml"));
+    const dry = cli(["record", "sc/u.yaml", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
+    expect(dry.code, dry.all).toBe(0);
+    const doc = JSON.parse(dry.stdout) as { ok: boolean; inputErrors?: { message: string }[] };
+    expect(doc.inputErrors?.[0]?.message).toMatch(/another user's home directory/);
+    expect(dry.all).not.toMatch(/expandUserPath:/);
+    const real = cli(
+      ["record", "sc/u.yaml", "--model", "claude-sonnet-5", "--out", join(d, "u.cassette.json"), "--output-format", "json"],
+      d,
+      {
+        CLAUDE_CODE_OAUTH_TOKEN: "dummy",
+      },
+    );
+    expect(real.code, real.all).toBe(1);
+    expect(envelope(real.stdout).error?.category).toBe("usage");
+    expect(envelope(real.stdout).error?.message).toMatch(/another user's home directory/);
+    expect(real.all).not.toMatch(/expandUserPath:/);
+    expect(runDirsUnder(real.runs)).toEqual([]);
+  });
+
+  it("run --matrix: one clean message, not a double prefix", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../gone.yaml"));
+    writeFileSync(join(d, "matrix.yaml"), "models:\n  - claude-sonnet-5\n");
+    const r = cli(["run", "sc/m.yaml", "--matrix", "matrix.yaml", "--output-format", "json"], d);
+    expect(r.code, r.all).toBe(2);
+    const env = envelope(r.stdout);
+    expect(env.error?.category).toBe("usage");
+    expect(env.error?.message).toMatch(NOT_FOUND);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
+  it("`~` in session: expands to the home directory (the file loads and the run reaches the spawn)", () => {
+    const d = fixture();
+    writeFileSync(join(d, "home-session.yaml"), MODEL);
+    writeFileSync(join(d, "sc", "t.yaml"), SCENARIO("t", "~/home-session.yaml"));
+    const r = cli(["run", "sc/t.yaml", "--output-format", "json"], d, { HOME: d });
+    expect(r.all).toMatch(SPAWN_GUARD);
+    expect(r.all).not.toMatch(/ENOENT|session file not found/);
   });
 });

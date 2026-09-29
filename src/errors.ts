@@ -49,6 +49,50 @@ export class UnknownBaselineError extends UsageError {
   }
 }
 
+/**
+ * A `baseline:` path to a file that EXISTS but does not load (a directory, invalid JSON, not a platform
+ * baseline). An `UnknownBaselineError` for every caller that treats the two alike; its own class because
+ * `record` answers it with exit 1 (a refused scenario that loaded, as before 4.1.1 when the same file
+ * failed as a raw error), while a baseline name that resolves nowhere keeps exit 2.
+ */
+export class BaselineFileError extends UnknownBaselineError {
+  constructor(file: string, message: string) {
+    super(file, message);
+    this.name = "BaselineFileError";
+  }
+}
+
+/**
+ * Thrown by `parseSessionFile` when a scenario's `session:` file cannot be read: it is missing, a directory,
+ * not readable, not valid YAML, or a `~<user>` path. A `UsageError`, so `run`/`skill`/`record` answer it as
+ * the bad input path it is (category `usage`); without it the bare `readFileSync` ENOENT surfaced as
+ * category `internal`, which means a harness bug. Its own class so a caller that reports input errors
+ * rather than refusing them (`record <file> --dry-run`) can tell it from a refusal.
+ */
+export class SessionFileError extends UsageError {
+  readonly path: string;
+  constructor(path: string, message: string, hint?: string) {
+    super(message, hint);
+    this.name = "SessionFileError";
+    this.path = path;
+  }
+}
+
+/**
+ * Thrown by the scenario loader when the scenario FILE cannot be read or is not valid YAML — before any
+ * schema check. A `UsageError` (category `usage`), and its own class so a caller that treats a half-written
+ * file differently from a schema violation (the replay sibling notice, the verify-cassettes prompt-drift
+ * check) can still tell them apart; `syntax` is true for a YAML syntax error.
+ */
+export class ScenarioFileError extends UsageError {
+  readonly syntax: boolean;
+  constructor(message: string, syntax: boolean) {
+    super(message);
+    this.name = "ScenarioFileError";
+    this.syntax = syntax;
+  }
+}
+
 /** A Zod issue path rendered the way a YAML author can locate it: `assert[0].path_denied.source`, never
  *  `assert.0`; an empty or non-array path is `(root)`. Shared by `compactSchemaError` and `lint`'s loader
  *  findings so the two never spell the same location differently. Never throws. */
