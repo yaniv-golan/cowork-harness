@@ -6,7 +6,14 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSessionFile, loadSessionFromFile, unresolvedModelPreflight } from "../src/run/execute.js";
-import { checkStaleness, resolveCassetteSessionPath, cassetteSessionRef, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
+import {
+  checkStaleness,
+  resolveCassetteSessionPath,
+  cassetteSessionRef,
+  embeddedSessionPath,
+  CASSETTE_VERSION,
+  type Cassette,
+} from "../src/run/cassette.js";
 import { SessionFileError, UsageError } from "../src/errors.js";
 
 function work(): string {
@@ -100,11 +107,21 @@ describe("`~` in a session path expands to the current user's home directory", (
     expect(resolveCassetteSessionPath("~/s.yaml").path).toBe(join(d, "s.yaml"));
   });
 
-  it("the cassette stores a `~/…` session relative to itself, pointing at the expanded file", () => {
+  it("the cassette stores a `~/…` session ref as written — never a relative path that spells out the home dir", () => {
     const d = work();
     process.env.HOME = d;
-    expect(cassetteSessionRef("~/s/session.yaml", join(d, "cassettes", "c.cassette.json"))).toBe(join("..", "s", "session.yaml"));
+    expect(cassetteSessionRef("~/s/session.yaml", join(d, "cassettes", "c.cassette.json"))).toBe("~/s/session.yaml");
     expect(cassetteSessionRef("(inline)", join(d, "c.cassette.json"))).toBe("(inline)");
+    expect(cassetteSessionRef(join(d, "s", "session.yaml"), join(d, "cassettes", "c.cassette.json"))).toBe(join("..", "s", "session.yaml"));
+  });
+
+  it("re-recording from an embedded snapshot resolves a stored `~/…` session home-relative", () => {
+    const d = work();
+    process.env.HOME = d;
+    const cp = join(d, "cassettes", "c.cassette.json");
+    expect(embeddedSessionPath("~/s/session.yaml", cp)).toBe(join(d, "s", "session.yaml"));
+    expect(embeddedSessionPath(join("..", "s", "session.yaml"), cp)).toBe(join(d, "s", "session.yaml"));
+    expect(embeddedSessionPath("(inline)", cp)).toBe("(inline)");
   });
 
   it("`~<user>` is a usage error, not a raw throw", () => {

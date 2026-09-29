@@ -415,3 +415,21 @@ export function scanText(text: string, where: string, allow: AllowInput[], patte
   }
   return out;
 }
+
+/** A RELATIVE reference that climbs out of its tree into a home directory — `../../Users/<name>/…`,
+ *  `../home/<name>/…`, `..\Users\<name>\…`, `../root/…`. A cassette stores its path metadata (the session,
+ *  the scenario source, skill sources) relative to itself, so a target under a home directory is written
+ *  that way and never starts with the `/Users/` the absolute `path` class looks for, yet it names the
+ *  recording user all the same. Reported as class `path` (same allow semantics), sampled up to the name. */
+export function scanClimbOutHomePath(text: string, where: string, allow: AllowInput[]): ScanFinding[] {
+  const segs = text.split(/[\\/]+/);
+  let i = 0;
+  while (segs[i] === "..") i++;
+  if (i === 0 || i >= segs.length) return [];
+  const root = segs[i].toLowerCase();
+  // `Users`/`home` name the user in the NEXT segment; `root` is the user, and must be a directory.
+  const end = root === "users" || root === "home" ? i + 2 : root === "root" ? i + 1 : -1;
+  if (end < 0 || segs.length <= (root === "root" ? end : end - 1) || segs[end - 1] === "") return [];
+  const sample = segs.slice(0, end).join("/");
+  return allowed(sample, "path", allow.map(normAllow)) ? [] : [{ where, cls: "path", sample }];
+}

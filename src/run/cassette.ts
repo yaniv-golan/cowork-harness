@@ -142,6 +142,7 @@ import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type
 import { collectSecrets, scrubField } from "../secrets.js";
 import {
   scanText,
+  scanClimbOutHomePath,
   scanHostInventory,
   DEFAULT_SCAN_PATTERNS,
   MANIFEST_SCAN_PATTERNS,
@@ -757,11 +758,18 @@ export function resolveCassetteSessionPath(
 }
 
 /** The `session:` a cassette stores: relative to the cassette's own directory, so a moved bundle stays
- *  resolvable. A `~/…` session is expanded first — the loader reads it home-relative, and `relative` would
- *  otherwise treat the `~` as a directory under cwd. */
+ *  resolvable. A `~/…` session is stored AS WRITTEN, like `(inline)`: it already names the file on any
+ *  machine, and a path relative to the cassette would spell out the recording user's home directory in a
+ *  committed fixture. Readers resolve it home-relative ({@link resolveCassetteSessionPath}). */
 export function cassetteSessionRef(session: string, cassettePath: string): string {
-  if (session === "(inline)") return session;
-  return relative(dirname(cassettePath), session === "~" || session.startsWith("~/") ? expandUserPath(session) : session);
+  if (session === "(inline)" || session === "~" || session.startsWith("~/")) return session;
+  return relative(dirname(cassettePath), session);
+}
+
+/** The on-disk session file a cassette's stored `session:` names, for a re-record from its embedded
+ *  snapshot (`--rerecord-stale --from-embedded`): the same resolution every other cassette reader uses. */
+export function embeddedSessionPath(session: string, cassettePath: string): string {
+  return resolveCassetteSessionPath(session, dirname(cassettePath)).path;
 }
 
 function skillSourceDirs(
@@ -1603,17 +1611,28 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
   findings.push(...scanText(cassette.scenario.prompt ?? "", "scenario.prompt", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
-  for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
+  for (const s of cassette.fingerprint?.skillSources ?? [])
+    findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL), ...scanClimbOutHomePath(s, "fingerprint.skillSources", allow));
   // v5: per-file manifest paths are a committed surface — scan them like skillSources (a path can name a customer).
-  for (const [p] of cassette.fingerprint?.fileSigs ?? []) findings.push(...scanText(p, "fingerprint.fileSigs", allow, FULL));
+  for (const [p] of cassette.fingerprint?.fileSigs ?? [])
+    findings.push(...scanText(p, "fingerprint.fileSigs", allow, FULL), ...scanClimbOutHomePath(p, "fingerprint.fileSigs", allow));
   // human-authored / structural METADATA fields were never scanned, so a customer folder mount name
   // in userVisibleRoots (or a customer name in the scenario name / session path) could leak through `verify-
   // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
   // structural paths, distinct from free-text findings in the transcript/deliverable.
   (cassette.userVisibleRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:userVisibleRoots[${i}]`, allow, FULL)));
   findings.push(...scanText(cassette.scenario.name ?? "", "metadata:scenario.name", allow, FULL));
-  findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
-  if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
+  // The stored path references are RELATIVE to the cassette, so a home directory hides behind `../`
+  // segments there (`../../Users/<name>/…`) — the absolute path class cannot see that; scanClimbOutHomePath can.
+  findings.push(
+    ...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL),
+    ...scanClimbOutHomePath(cassette.scenario.session ?? "", "metadata:scenario.session", allow),
+  );
+  if (cassette.scenarioSource)
+    findings.push(
+      ...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL),
+      ...scanClimbOutHomePath(cassette.scenarioSource, "metadata:scenarioSource", allow),
+    );
   // `environment.agentImage.ref` is a VERBATIM COWORK_AGENT_IMAGE value, so a private-registry ref
   // (`ghcr.io/acme-internal/agent:2`, `registry.customer.corp/cowork:2`) is committed straight into a
   // public fixture. `environment` had never been scanned at all — the same shape as the inventory leak
@@ -4411,7 +4430,7 @@ export async function cmdRecord(args: string[]) {
           continue;
         }
       } else if (fromEmbedded) {
-        const sessionRef = rc.cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), rc.cassette.scenario.session);
+        const sessionRef = embeddedSessionPath(rc.cassette.scenario.session, cp);
         sc = { ...rc.cassette.scenario, session: sessionRef };
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
@@ -4494,7 +4513,7 @@ export async function cmdRecord(args: string[]) {
         } else {
           // --from-embedded: explicitly re-record from the embedded snapshot (edits to the YAML won't apply).
           log(`  ⚠ ${tag} --from-embedded: re-recording "${cassette.scenario.name}" from the embedded snapshot (YAML edits won't apply)`);
-          const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+          const sessionRef = embeddedSessionPath(cassette.scenario.session, cp);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
             {
