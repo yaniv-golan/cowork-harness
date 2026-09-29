@@ -33,6 +33,8 @@ All notable changes to this project are documented here. The format is based on
   checks that it is current. `lint --strict --min-severity INFO --cassette-dir <dir>` keeps the actionable
   INFO findings and drops only the ones a cassette covers.
 
+  Thanks to [@Oscar-Williams](https://github.com/Oscar-Williams) for this contribution.
+
 - **`COWORK_VM_PROVISION_TIMEOUT_S`** (default `900`): how long a microvm run waits for an already-Running
   VM to finish provisioning before failing with a named error (see Fixed).
 - **`vm status` reports `provisioning`**: a new field in its JSON output — `ready`, `pending`, `sealed`,
