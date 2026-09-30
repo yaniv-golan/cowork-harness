@@ -152,9 +152,9 @@ export interface ExecuteOptions {
   /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Sonnet default. */
   llmModel?: string;
   /** override the `semantic_matches` judge — mainly so tests inject a stub in place of the live LLM
-   *  judge. Default: judgesForRun's makeSemanticJudge() (the real judge, via the shared claude -p transport). */
+   *  judge. Default: the real judge (`makeSemanticJudge`, via the shared claude -p transport). The judge
+   *  carries per-call state (`model`, `lastCostUsd`), so never share one instance across concurrent runs. */
   semanticJudge?: SemanticJudge;
-  // The judge carries per-call state (`model`, `lastCostUsd`): never share one instance across concurrent runs.
   /** Grade EVERY `semantic_matches` assert with this judge model, a per-assert `judge_model` included — for
    *  a caller that must hold the judge constant across runs (a paired comparison). Not a CLI flag. */
   judgeModelOverride?: string;

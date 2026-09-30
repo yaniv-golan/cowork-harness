@@ -29,7 +29,7 @@ const HARNESS_VERSION = (JSON.parse(readFileSync(resolve("package.json"), "utf8"
 const today = (): string => new Date().toISOString().slice(0, 10);
 // JUDGE_PROMPT_HASH fingerprints the judge prompt TEMPLATE. Recorded in the baseline and checked by the
 // gate: a prompt edit silently shifts every pass rate, and the model-provenance guard can't see it — so a
-// baseline captured under a different prompt is not comparable and the gate must refuse to diff across it (M1).
+// baseline captured under a different prompt is not comparable and the gate must refuse to diff across it.
 
 // ─────────────────────────────── pure statistics (exported for tests) ───────────────────────────────
 
