@@ -37,7 +37,8 @@ namespace.
 4. **Crash safety net:** if the process unwinds via an uncaught throw, or receives `SIGINT`/`SIGTERM`, before
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
    `status.json` never gets stuck reporting `"running"` for a process that's actually gone. On a signal the
-   harness first stops the agent, then exits 130 (`SIGINT`) or 143 (`SIGTERM`). On `protocol`/`hostloop`/`microvm`
+   harness first stops the agent, then exits 130 (`SIGINT`), 143 (`SIGTERM`) or 129 (`SIGHUP`, a closed
+   terminal; not on Windows). On `protocol`/`hostloop`/`microvm`
    it sends SIGTERM and SIGKILLs after a grace period (5 s at `hostloop`, as Claude Desktop stops its agent;
    2 s otherwise); at `protocol` and `hostloop` that covers every host process the agent
    started, not only the agent (see [fidelity-gaps.md](./fidelity-gaps.md#stopping-a-host-tier-run-stops-the-processes-the-agent-started)).

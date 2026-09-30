@@ -103,6 +103,8 @@ All notable changes to this project are documented here. The format is based on
   `hostloop` is 5 seconds, as in Desktop (`protocol` keeps 2). On Ctrl-C at `hostloop` the sidecar
   container is removed after that grace period, not before it. A run's `durationMs` does not include this
   stop sequence.
+- **Closing the terminal (SIGHUP) now stops the run like SIGTERM** (exit `129`), off Windows: the agent's
+  own session no longer receives the terminal's hangup, so the harness passes it on.
 - **`chat`: a Ctrl-C during a turn stops the turn.** On a terminal, at every tier, it stops the agent and
   everything it started and exits `130`, without a `result.json` — as an interrupted `run` does. Before, it
   took effect only after the agent finished the turn. A Ctrl-C at the `you>` prompt still ends the session

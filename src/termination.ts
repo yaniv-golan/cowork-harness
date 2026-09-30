@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { warn } from "./io.js";
 
 /**
- * The ONE owner of SIGINT/SIGTERM for a harness process.
+ * The ONE owner of SIGINT/SIGTERM (and SIGHUP, off Windows) for a harness process.
  *
  * Without an owner, Node's default applies — die by the signal — and on a signal death no `"exit"` hook runs:
  * the crash-safety sweep never marks the run `"error"` (status.json stays `"running"`), and a host agent the
@@ -214,4 +214,8 @@ export function installTerminationHandler(): void {
   installed = true;
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  // The terminal closing: the host agent runs in its own session (see agent-tree.ts), so the hangup reaches
+  // only the harness — which must pass it on as a stop, or the agent and its tree outlive the terminal.
+  // Not on Windows, where Node emulates SIGHUP for a closed console window with a hard ~10 s kill deadline.
+  if (process.platform !== "win32") process.on("SIGHUP", onSignal);
 }

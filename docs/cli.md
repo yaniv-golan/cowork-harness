@@ -287,6 +287,7 @@ Two footnotes the table cannot carry:
   per-command, `rehash` spending `4` on PARTIAL does not consume that reservation (SPEC §11).
 - an interrupted `run`/`skill`/`record` exits `130` (`SIGINT`) or `143` (`SIGTERM`), after stopping the agent
   and marking the run `"error"` in `status.json` — the shell convention for a signal, outside the table.
+- a closed terminal (`SIGHUP`, not on Windows) is handled like `SIGTERM` and exits `129`;
 - an interrupted `chat` exits `130`/`143` the same way, without writing a `result.json`: a Ctrl-C during a turn
   stops the agent at once. A Ctrl-C at the `you>` prompt ends the session normally, and a first signal while
   the session's result is being written waits for the write (a second exits at once).

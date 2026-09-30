@@ -80,6 +80,24 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(died).toBe(true);
   });
 
+  it("SIGHUP (the terminal closed) stops the agent like SIGTERM and exits 129", async () => {
+    const r = await runScript(`
+      import { installTerminationHandler, registerAgent } from ${TERMINATION};
+      import { appendFileSync } from "node:fs";
+      import { join } from "node:path";
+      const log = (s) => appendFileSync(join($DIR, "order"), s + "\\n");
+      installTerminationHandler();
+      let alive = true;
+      registerAgent(() => ({ unconditionalForceKill: true, alive: () => alive, terminate: () => { log("terminate"); alive = false; },
+        forceKill: () => log("forceKill"), exited: () => Promise.resolve() }));
+      setTimeout(() => process.kill(process.pid, "SIGHUP"), 50);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.status, r.stderr).toBe(129);
+    expect(readFileSync(join(r.dir, "order"), "utf8").trim().split("\n")).toEqual(["terminate", "forceKill"]);
+  });
+
   it("SIGTERM exits 143", async () => {
     const r = await runScript(`
       import { installTerminationHandler } from ${TERMINATION};
