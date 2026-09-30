@@ -20,6 +20,13 @@ All notable changes to this project are documented here. The format is based on
   `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
   cost to recover, so their rows stay without it, even after `stats --reindex`.
 
+- **`verify-cassettes` and `replay` note a cassette whose recording agent differs from its baseline's.**
+  The agent version is read from the recording's own `system/init` event (`claude_code_version`) and
+  compared with the `agentVersion` of the baseline named in `fingerprint.baseline`. A mismatch usually
+  means the fingerprint was re-stamped by hand across an agent bump. It is an `agent-version:` entry in
+  `notes[]`: it does not change `ok` or the exit code. It works on existing cassettes without a
+  re-record, and says nothing when the event carries no version or the baseline is not a committed one.
+
 ### Fixed
 
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's

@@ -2024,6 +2024,54 @@ function computeReplacedBuiltinNote(cassette: Cassette): string[] {
   ];
 }
 
+/** The agent build this cassette was recorded with, as the agent itself reported it in `system/init`
+ *  (`claude_code_version`), or `undefined` when the stream carries no such frame or the field is absent or
+ *  not a string. Same walk and the same "absent ⇒ no evidence" rule as recordedInitTools. */
+function recordedInitAgentVersion(cassette: Cassette): string | undefined {
+  if (!Array.isArray(cassette.events)) return undefined;
+  for (const line of cassette.events) {
+    let m: { type?: string; subtype?: string; claude_code_version?: unknown };
+    try {
+      m = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (m?.type !== "system" || m?.subtype !== "init") continue;
+    return typeof m.claude_code_version === "string" && m.claude_code_version.length > 0 ? m.claude_code_version : undefined;
+  }
+  return undefined;
+}
+
+/** NOTE (never a finding): the agent that recorded this stream is not the agent its fingerprint baseline
+ *  pins. The usual cause is a `fingerprint.baseline` re-stamped by hand across an agent bump, which files a
+ *  stream from one agent build under a baseline that describes another; nothing else would notice, because
+ *  staleness compares the baseline NAME, not what the recording ran.
+ *
+ *  Derived from the init frame the cassette already freezes, not from a stamped field, so it works on every
+ *  cassette ever recorded and cannot disagree with the evidence. `fingerprint.baseline` holds either the bare
+ *  app version (`2.9939.4`) or a file stem (`desktop-1.18286.0`); both map to a committed baseline file.
+ *  Silent whenever any input is missing: no init version, no fingerprint, or a baseline name that is not a
+ *  plain version or does not resolve to a committed file. Exported for tests. */
+export function computeAgentVersionNote(cassette: Cassette): string[] {
+  const recorded = recordedInitAgentVersion(cassette);
+  const name = cassette.fingerprint?.baseline;
+  if (recorded === undefined || typeof name !== "string") return [];
+  const stem = /^desktop-\d+(?:\.\d+)*$/.test(name) ? name : /^\d+(?:\.\d+)*$/.test(name) ? `desktop-${name}` : undefined;
+  if (stem === undefined) return [];
+  let pinned: string | undefined;
+  try {
+    pinned = loadBaseline(stem).agentVersion;
+  } catch {
+    return []; // no committed baseline by that name — nothing to compare against
+  }
+  if (!pinned || pinned === recorded) return [];
+  return [
+    `agent-version: recorded by agent ${recorded}, but its fingerprint names baseline ${name}, which pins agent ` +
+      `${pinned}. The fingerprint was most likely re-stamped across an agent bump, so this stream is not what ` +
+      `that baseline's agent produces. Re-record to clear it.`,
+  ];
+}
+
 export function computeStaleness(
   cassette: Cassette,
   cassetteDir: string | undefined,
@@ -2031,7 +2079,12 @@ export function computeStaleness(
 ): { findings: StalenessFinding[]; notes: string[] } {
   const tier = computeTierStaleness(cassette);
   const findings: StalenessFinding[] = [...tier.findings];
-  const notes: string[] = [...tier.notes, ...computeDiscoverySurfaceNote(cassette), ...computeReplacedBuiltinNote(cassette)];
+  const notes: string[] = [
+    ...tier.notes,
+    ...computeDiscoverySurfaceNote(cassette),
+    ...computeReplacedBuiltinNote(cassette),
+    ...computeAgentVersionNote(cassette),
+  ];
   const fp = cassette.fingerprint;
   // BEFORE the fingerprint guard on purpose — same rationale as the tier check above: fingerprint-less
   // cassettes are the OLDEST, i.e. exactly the population the discovery-surface note targets.
