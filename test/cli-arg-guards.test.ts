@@ -1,14 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { afterAll, describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { hermeticPackageRoot } from "./helpers/hermetic-cli.js";
 
 // Structural guard (built incrementally as commands migrate to parseArgs): every migrated command must
 // reject an unknown flag and an extra positional with exit 2, and must not mistake a value-flag's value
 // for the target. Needs dist/cli.js (the `ci` script builds first); skips cleanly otherwise.
-const CLI = resolve("dist/cli.js");
-const can = existsSync(CLI);
+const can = existsSync(resolve("dist/cli.js"));
+// A copy of the built CLI whose package root has no `.env`: several cases parse the combined stdout+stderr as
+// JSON, and a checkout whose own `.env` holds a credential adds an `[env] using …` line to stderr.
+const PKG = can ? hermeticPackageRoot() : undefined;
+const CLI = PKG?.cli ?? "";
+afterAll(() => PKG && rmSync(PKG.root, { recursive: true, force: true })); // removes the links, not what they point to
 
 function run(args: string[], cwd: string) {
   const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd });
