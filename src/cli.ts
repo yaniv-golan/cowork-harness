@@ -159,7 +159,8 @@ import { buildRepeatRollup, rollupPasses, armLabel, type RepeatRollup } from "./
 import { parseRepeatFlags, RepeatFlagError } from "./run/repeat-flags.js";
 import { cmdCritique } from "./critique/command.js";
 import { EVAL_USAGE } from "./eval/usage.js";
-import { parseEvalArgs, parseEvalReportArgs, runEval, evalEnvelopePayload, EvalStagingError, type EvalJobSpec } from "./eval/command.js";
+import { parseEvalArgs, parseEvalReportArgs, runEval, evalEnvelopePayload, EvalStagingError } from "./eval/command.js";
+import { makeEvalJobRunner } from "./eval/job-runner.js";
 import { writeEvalReport, REPORT_MD } from "./eval/report.js";
 import {
   MatrixFile,
@@ -2075,23 +2076,7 @@ async function cmdEval(rawArgs: string[]) {
   try {
     outcome = await runEval(parsed, {
       log,
-      runJob: (spec: EvalJobSpec) =>
-        runOneScenario({
-          command: "run",
-          scenario: spec.scenario,
-          label: `${spec.job.arm} ${spec.scenario.name} r${spec.job.rep}`,
-          // A per-job COPY: runOneScenario writes flags.label/ablateSkill over `extra`, and jobs run concurrently.
-          flags: { ...flags, label: spec.runLabel, ablateSkill: undefined },
-          policy,
-          externalChannel,
-          o,
-          extra: {
-            session: spec.session,
-            runId: spec.job.runId,
-            ...(spec.judgeModelOverride !== undefined ? { judgeModelOverride: spec.judgeModelOverride } : {}),
-          },
-          rethrowUnanswered: true,
-        }),
+      runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
     });
   } catch (e) {
     externalChannel?.close?.();

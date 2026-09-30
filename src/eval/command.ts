@@ -14,10 +14,9 @@ import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
 import { loadBaseline } from "../baseline.js";
-import { parseScenarioFile, loadSessionFromFile, launchSourcesPreflight, runOutDir } from "../run/execute.js";
+import { parseScenarioFile, loadSessionFromFile, launchSourcesPreflight } from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
-import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
@@ -37,6 +36,7 @@ import { resolveAgentPins, resolveJudgePins } from "./pins.js";
 import { buildSchedule, type ScheduledJob } from "./schedule.js";
 import { appendRunsLine, buildRunsLine, RUNS_FILE } from "./runs.js";
 import { evidenceFacts } from "./invocation.js";
+import { evalJobRunDir, salvagedResult, type EvalJobSpec } from "./job-runner.js";
 import { MANIFEST_FILE, type EvalManifest, type ManifestArm, type ManifestScenario } from "./manifest.js";
 import { writeEvalReport, REPORT_MD, type EvalReport } from "./report.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_VALUE_FLAGS } from "./usage.js";
@@ -215,16 +215,7 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
   };
 }
 
-/** One job handed to the runner. */
-export interface EvalJobSpec {
-  job: ScheduledJob;
-  scenario: Scenario;
-  /** The arm's session: the snapshot in place of the declared plugin, the pinned model baked in. */
-  session: SessionConfig;
-  /** `eval:<eval-id>:<arm>`. */
-  runLabel: string;
-  judgeModelOverride?: string;
-}
+export type { EvalJobSpec } from "./job-runner.js";
 
 export interface EvalDeps {
   runJob: (spec: EvalJobSpec) => Promise<RunResult>;
@@ -548,7 +539,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     await pMapBounded(jobs, args.concurrency, async (job) => {
       const s = scenarios[job.scenarioIndex];
       const session = sessions.get(`${job.arm}\0${job.scenario}`)!;
-      const expectedDir = runOutDir(s.scenario.name, job.runId);
+      const expectedDir = evalJobRunDir({ scenario: s.scenario, job });
       let result: RunResult | undefined;
       let thrown: unknown;
       try {
@@ -593,19 +584,6 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     const report = writeEvalReport(evalDir);
     say(`[eval] report: ${tildeify(join(evalDir, REPORT_MD))}`);
     return { evalDir, report, manifest };
-  }
-}
-
-/** The result.json a job left in its pre-assigned dir before throwing (an unanswered gate's salvaged partial). */
-function salvagedResult(dir: string): RunResult | undefined {
-  const t = latestTurn(dir);
-  if (t === undefined) return undefined;
-  const p = turnArtifactPath(dir, t, "result.json");
-  if (!existsSync(p)) return undefined;
-  try {
-    return JSON.parse(readFileSync(p, "utf8")) as RunResult;
-  } catch {
-    return undefined;
   }
 }
 
