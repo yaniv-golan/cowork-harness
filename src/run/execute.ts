@@ -154,6 +154,7 @@ export interface ExecuteOptions {
   /** override the `semantic_matches` judge — mainly so tests inject a stub in place of the live LLM
    *  judge. Default: judgesForRun's makeSemanticJudge() (the real judge, via the shared claude -p transport). */
   semanticJudge?: SemanticJudge;
+  // The judge carries per-call state (`model`, `lastCostUsd`): never share one instance across concurrent runs.
   /** Grade EVERY `semantic_matches` assert with this judge model, a per-assert `judge_model` included — for
    *  a caller that must hold the judge constant across runs (a paired comparison). Not a CLI flag. */
   judgeModelOverride?: string;
@@ -1554,7 +1555,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
     if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
       // A per-assert judge_model is honoured unless the caller pinned one judge for the whole run.
-      const { judge, judgeFor } = judgesForRun({ judge: opts.semanticJudge, modelOverride: opts.judgeModelOverride });
+      const { judge, judgeFor } = judgesForExecute(opts);
       await runSemanticJudges(scenario.assert, assertCtx, judge, judgeFor);
     }
     const assertions = evaluate(scenario.assert, assertCtx);
@@ -3962,3 +3963,12 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
 }
 
 export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError };
+
+/** The judges `executeScenario` grades with: `ExecuteOptions` mapped onto `judgesForRun`. Exported so the
+ *  option wiring itself is under test, not only the helper it calls. */
+export function judgesForExecute(
+  opts: Pick<ExecuteOptions, "semanticJudge" | "judgeModelOverride">,
+  make?: Parameters<typeof judgesForRun>[1],
+): ReturnType<typeof judgesForRun> {
+  return judgesForRun({ judge: opts.semanticJudge, modelOverride: opts.judgeModelOverride }, make);
+}

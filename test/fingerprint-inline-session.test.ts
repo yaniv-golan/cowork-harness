@@ -136,6 +136,12 @@ describe("buildFingerprint on a file session with a substituted session object (
     expect(fp.skillSources).toEqual([join("v2", "my-plugin")]);
   });
 
+  it("an explicit session override wins over the session object", () => {
+    const { sessionFile, substituted } = fixture();
+    const viaOverride = buildFingerprint(sessionFile, "1.0.0", undefined, undefined, undefined, undefined, sessionFile);
+    expect(buildFingerprint(sessionFile, "1.0.0", undefined, undefined, undefined, substituted, sessionFile)).toEqual(viaOverride);
+  });
+
   it("is byte-identical to the file-only fingerprint when the session object is NOT substituted", () => {
     const { sessionFile, original } = fixture();
     expect(buildFingerprint(sessionFile, "1.0.0", undefined, undefined, undefined, original)).toEqual(

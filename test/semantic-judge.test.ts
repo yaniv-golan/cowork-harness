@@ -202,3 +202,20 @@ describe("semantic judge — judgesForRun (run-level judge model override)", () 
     expect(judgesForRun({ judge: injected, modelOverride: "claude-pinned-2" }, make).judge).toBe(injected);
   });
 });
+
+describe("executeScenario's judge wiring (judgesForExecute)", () => {
+  it("maps ExecuteOptions.judgeModelOverride onto the run-level judge and suppresses the per-assert factory", async () => {
+    const { judgesForExecute } = await import("../src/run/execute.js");
+    const make = (o: { model?: string } = {}) => {
+      const j = (async () => []) as unknown as ReturnType<typeof makeSemanticJudge>;
+      j.model = o.model ?? "default";
+      return j;
+    };
+    const pinned = judgesForExecute({ judgeModelOverride: "claude-pinned-2" }, make);
+    expect(pinned.judge.model).toBe("claude-pinned-2");
+    expect(pinned.judgeFor).toBeUndefined();
+    const plain = judgesForExecute({}, make);
+    expect(plain.judge.model).toBe("default");
+    expect(plain.judgeFor?.("claude-x-1").model).toBe("claude-x-1");
+  });
+});

@@ -794,7 +794,8 @@ function skillSourceDirs(
   // substitutes `local_plugins[0]`. Re-parsing the file here hashed the ORIGINAL dir on every cell, so each
   // cell's fingerprint described a skill it never ran. Paths in the object are absolute (resolved against
   // the session-file dir), so `baseDir` stays the session-file dir and `skillSources` stay relative to it.
-  if (inlineSession) return { ...dirsFromConfig(inlineSession, resolved), baseDir, source };
+  // An explicit session override names a different file on purpose; it is never shadowed by the object.
+  if (inlineSession && override === undefined) return { ...dirsFromConfig(inlineSession, resolved), baseDir, source };
   if (!existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [], source, failure: { kind: "not-found", path: resolved } };
   let cfg;
   try {

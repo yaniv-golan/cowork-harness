@@ -159,3 +159,22 @@ describe("semantic_matches — judge cost + prompt-hash provenance on the assert
     expect(evaluate([b], c2)[0]).not.toHaveProperty("judgePromptHash");
   });
 });
+
+describe("semantic_matches — judgeModel provenance fallback", () => {
+  const withKey = (): Assertion => ({ semantic_matches: { rubric: ["alpha"], judge_model: "claude-per-assert-1" } });
+  const modelless: SemanticJudge = async (rubric) => rubric.map((claim, index) => ({ index, claim, pass: true }));
+
+  it("records the per-assert judge_model when that key actually selected the judge", async () => {
+    const a = withKey();
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, modelless, () => (async (r: string[]) => modelless(r, "")) as SemanticJudge);
+    expect(evaluate([a], c)[0].judgeModel).toBe("claude-per-assert-1");
+  });
+
+  it("does NOT record a per-assert judge_model that a run-level judge overrode", async () => {
+    const a = withKey();
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, modelless); // no factory: the run-level judge graded
+    expect(evaluate([a], c)[0].judgeModel).toBe("unknown");
+  });
+});

@@ -793,7 +793,7 @@ export async function runSemanticJudges(
     // until the transport resolves it per-call to a concrete id (`makeSemanticJudge` mutates `.model` onto
     // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
     // requested alias even when the transport actually resolved to a different concrete model (F11).
-    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
+    ctx.judgeModels.set(a, j.model ?? (j !== judge ? override : undefined) ?? "unknown"); // an unused per-assert key is not provenance
     if (graded) ctx.semanticResults.set(a, graded);
   }
 }
