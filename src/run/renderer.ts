@@ -345,7 +345,19 @@ export function renderFooter(
     write(
       `   ${dim(plan, "no terminal result event (likely turn/time exhaustion) — see " + (r.stderrLogPath ? tildeify(r.stderrLogPath) : "the run's agent.stderr.log"))}\n`,
     );
-  for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
+  // computeVerdict pushes one "assertion" signal per failed assertion, first and in assertion order, so the
+  // k-th such signal is the k-th failed assertion. That pairing is how a failed semantic_matches assert gets
+  // its failed claims' rationales printed beneath it without touching `message` (which also feeds
+  // verdict.failures[], repeat's sampleFailure and the redaction self-check). Rationales are printed as-is,
+  // like messages: --compact/--demo transform neither.
+  const failedAsserts = r.assertions.filter((a) => !a.pass);
+  let assertIdx = 0;
+  for (const s of failSignals) {
+    write(`   ${red(plan, "✗ " + s.message)}\n`);
+    if (s.code !== "assertion") continue;
+    const claims = failedAsserts[assertIdx++]?.semanticClaims ?? [];
+    for (const c of claims) if (!c.pass && c.rationale) write(`     ${dim(plan, `↳ [${c.index}] ${c.rationale}`)}\n`);
+  }
   renderProvenance(r, plan, write); // "it failed" is often "it ran the wrong thing" — say which one it ran
   renderWarns(warnSignals, plan, write);
   renderGuards(verdict.guards, plan, write); // show which guards ran even on a fail (no silent guards)

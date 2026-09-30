@@ -243,6 +243,50 @@ describe("renderer — renderFooter", () => {
     expect(t).not.toContain("non_deterministic:");
   });
 
+  it("fail footer: a failed semantic_matches assert lists each FAILED claim's rationale (never a passed one's)", () => {
+    const s = sink();
+    renderFooter(
+      {
+        ...base,
+        // A leading PASSING assert and a result error pin the pairing: the k-th failed-assertion signal
+        // maps to the k-th FAILED assert (not the k-th assert), and a non-assertion fail signal consumes
+        // nothing.
+        result: "error",
+        assertions: [
+          {
+            assertion: { semantic_matches: { rubric: ["decoy"] } },
+            pass: true,
+            semanticClaims: [{ index: 0, claim: "decoy", pass: false, rationale: "DECOY-REASON from a passing assert" }],
+          },
+          { assertion: { file_exists: "x" }, pass: false, message: "missing x" },
+          {
+            assertion: { semantic_matches: { rubric: ["names the owner", "gives a date"] } },
+            pass: false,
+            message: "semantic: 1/2 rubric claims passed (need 2); failed claim indices: 1",
+            semanticClaims: [
+              { index: 0, claim: "names the owner", pass: true, rationale: "PASSED-REASON the owner is named" },
+              { index: 1, claim: "gives a date", pass: false, rationale: "FAILED-REASON no date anywhere" },
+            ],
+          },
+        ],
+      },
+      plan({ color: false }),
+      { write: s.write },
+    );
+    const lines = s.text().split("\n");
+    const semLine = lines.findIndex((l) => l.includes("rubric claims passed"));
+    expect(semLine).toBeGreaterThan(-1);
+    // rendered directly under its own ✗ line, indented deeper, naming the claim index
+    expect(lines[semLine + 1]).toMatch(/^\s{5,}.*\[1\].*FAILED-REASON no date anywhere/);
+    expect(s.text()).not.toContain("PASSED-REASON");
+    expect(s.text()).not.toContain("DECOY-REASON");
+    // the message itself is untouched: the rationale is not appended to it
+    expect(lines[semLine]).not.toContain("FAILED-REASON");
+    // and nothing is attached to the unrelated file_exists failure
+    const feLine = lines.findIndex((l) => l.includes("missing x"));
+    expect(lines[feLine + 1]).toContain("rubric claims passed");
+  });
+
   it("fail footer: ✗ + failing assertion + the failing transcript (the debug win)", () => {
     const s = sink();
     const r = makeRenderer(plan({ live: false }), () => {});

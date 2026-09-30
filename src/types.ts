@@ -1672,8 +1672,11 @@ export interface RunResult {
     source?: "staleness" | "cassette-format" | "coverage";
     evidence?: string;
     /** Per-claim results for a `semantic_matches` assert (aligned to its rubric by index) — present only
-     *  on the live lane where the judge ran; a consumer can diff these across runs to gate a change. */
-    semanticClaims?: Array<{ index: number; claim: string; pass: boolean }>;
+     *  on the live lane where the judge ran; a consumer can diff these across runs to gate a change.
+     *  `rationale` is the judge's one-sentence reason (absent when it gave none or gave a non-string): model
+     *  output that can quote the judged document, so treat it as untrusted text. Its content never affects
+     *  `pass`. Compare rationales only between runs that share `judgePromptHash`. */
+    semanticClaims?: Array<{ index: number; claim: string; pass: boolean; rationale?: string }>;
     /** The judge model that graded a `semantic_matches` assert (provenance) — the resolved run-level
      *  pinned model, or a per-assert `judge_model` override. Lets a before/after eval verify the judge
      *  was held constant. Present only on the live lane where the judge ran. */
