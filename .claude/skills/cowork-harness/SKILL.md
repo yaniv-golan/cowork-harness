@@ -109,7 +109,8 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 
 1. **`result: success` is not "the task completed".** It means the agent didn't error. Assert the
    deliverable (`file_exists` / `artifact_json` / `transcript_matches`). A `skill`-lane `PASS` only means
-   no guard fired: read `skillsInvoked`, `models` and `ablated` before concluding anything from it.
+   no guard fired: read `skillsInvoked` (plus `slashInvokedSkills` — a `/<skill>` prompt runs the skill
+   with no `Skill` call), `models` and `ablated` before concluding anything from it.
 2. **`replay` skips live-only keys.** Filesystem and egress keys are skipped on replay (loudly), so a
    mixed item like `{result, egress_denied}` greens on its content half. Keep one concern per `assert:`
    item, put live-only checks on a live gate, and run `cowork-harness lint`.

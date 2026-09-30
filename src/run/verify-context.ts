@@ -16,6 +16,7 @@ import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
 import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { unionReferenceAccesses } from "./run.js";
 import { requireTurns, turnArtifactPath } from "./turn-layout.js";
+import { recordedSlashInvokedSkills } from "../critique/skill-invocation.js";
 
 /** Read the persisted transcript from a kept run's `run.jsonl` (the `{t:"transcript"}` line).
  *  Returns `null` when the sidecar is absent or unreadable — distinct from an empty-but-present transcript.
@@ -433,6 +434,9 @@ export function assertContextFromRunDir(
     scanMissing: result.scan === undefined,
     skillsInvoked: result.skillsInvoked ?? [],
     skillsInvokedMissing: result.skillsInvoked === undefined,
+    // The persisted slash channel, or — on a result.json written before the field existed — the same
+    // derivation over the prompt and init inventory this record already carries.
+    slashInvokedSkills: recordedSlashInvokedSkills(result),
     // `skillToolAvailable` predates being persisted on older result.json too; default true rather than
     // false so an old run's skill_triggered doesn't spuriously read as evidence-unavailable for the WRONG
     // reason (agent-tool-drift) when the real reason is just "this field didn't exist yet".

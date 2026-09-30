@@ -36,6 +36,7 @@ function ctx(workRoot: string, over: Partial<AssertContext> = {}): AssertContext
     toolResultTexts: [],
     skillsInvoked: [],
     skillToolAvailable: true,
+    slashInvokedSkills: [],
     ...over,
   };
 }

@@ -586,11 +586,15 @@ export const Assertion = z.strictObject({
   skill_triggered: z
     .string()
     .optional()
-    .describe('a skill matching this regex (by its invoked skill id, e.g. "plugin:skill") was invoked via the Skill tool'),
+    .describe(
+      'a skill matching this regex (by its invoked skill id, e.g. "plugin:skill") was invoked — via the Skill tool, or by the prompt\'s leading slash command (`/<skill> …`), which the agent expands without a Skill call',
+    ),
   no_skill_triggered: z
     .string()
     .optional()
-    .describe("no invoked skill id matched this regex — the negative-control / description-collision catcher"),
+    .describe(
+      "no invoked skill id matched this regex, counting both the Skill tool and a slash-command prompt — the negative-control / description-collision catcher",
+    ),
   skill_available: z
     .string()
     .optional()
@@ -2184,6 +2188,14 @@ export interface RunResult {
    *  older result.json format — `no_skill_triggered` treats absence as evidence-unavailable, never a
    *  vacuous pass. */
   skillsInvoked?: string[];
+  /** Staged skill ids this turn's prompt invoked by a leading slash command (`/<skill> …` or
+   *  `/<plugin>:<skill> …`), resolved against the init frame's skill inventory. The agent binary expands such
+   *  a command itself — no `Skill` tool_use is emitted, and a `context: fork` skill forks directly — so these
+   *  never appear in `skillsInvoked`, whose meaning is unchanged. `skill_triggered`/`no_skill_triggered` read
+   *  both. `[]` = the prompt invoked no staged skill by slash; absent = cannot tell (no prompt, a slash prompt
+   *  with no inventory, a bare name more than one staged skill answers to, or a result written before this
+   *  field existed — a kept-run re-check then re-derives it from `prompt` + `context.availableSkills`). */
+  slashInvokedSkills?: string[];
   /** Whether the agent's init tool list included "Skill" — false means this runtime/agent version can't be
    *  observed invoking a skill through the recognized channel, so `skill_triggered`/`no_skill_triggered`
    *  fail as evidence-unavailable rather than risk a false negative on an agent-version tool rename. */

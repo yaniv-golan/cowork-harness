@@ -73,6 +73,7 @@ describe("outputs-delete: an uncorroborated, inferred text hit warns instead of 
       toolResultTexts: [],
       skillsInvoked: [],
       skillToolAvailable: true,
+      slashInvokedSkills: [],
     } as unknown as AssertContext;
     const [r] = evaluate([{ no_delete_in_outputs: true }], ctx);
     expect(r.pass).toBe(true);
@@ -223,6 +224,7 @@ describe("outputs-delete: the authored key on the diff's own evidence states", (
       toolResultTexts: [],
       skillsInvoked: [],
       skillToolAvailable: true,
+      slashInvokedSkills: [],
       ...over,
     }) as unknown as AssertContext;
   const run = (over: Partial<AssertContext>) => evaluate([{ no_delete_in_outputs: true }], baseCtx(over))[0];
