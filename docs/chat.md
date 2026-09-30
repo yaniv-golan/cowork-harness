@@ -79,7 +79,10 @@ available:
 | `/exit` | End the session and print the transcript path. |
 | `/quit` | Alias for `/exit`. |
 
-Ctrl-D (EOF) also terminates the session.
+Ctrl-D (EOF) also terminates the session, and so does Ctrl-C at the `you>` prompt; both still write the
+session's result. Ctrl-C while the agent is working on a turn (including at a permission or question prompt)
+stops the agent and everything it started, then exits with status 130 without writing a result, like an
+interrupted `run`.
 
 ## Mount paths
 

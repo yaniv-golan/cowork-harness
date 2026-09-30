@@ -134,9 +134,9 @@ All notable changes to this project are documented here. The format is based on
     instead of waiting for input.
   - At `hostloop` the agent now gets SIGTERM and a grace period before SIGKILL, as Desktop stops it. On
     Ctrl-C the sidecar container is removed after that grace period, not before it.
-  - `chat` installs the same Ctrl-C handling at `protocol` and `hostloop`. On a terminal, a Ctrl-C during a
-    turn stops the agent and exits; a Ctrl-C at the `you>` prompt still ends the session and writes its
-    result.
+  - `chat` stops its agent the same way at `protocol` and `hostloop`. On a terminal, at every tier, a Ctrl-C
+    during a turn now stops the agent and exits 130 instead of taking effect only after the turn; a Ctrl-C
+    at the `you>` prompt still ends the session and writes its result.
   - A background process that has already detached from the agent is found by an orphan sweep. On Linux
     the sweep matches `COWORK_HARNESS_RUN_TAG`, a new per-run variable in the agent's environment, which the
     model can see with `env`. On macOS it matches processes owned by you, detached from any terminal,
