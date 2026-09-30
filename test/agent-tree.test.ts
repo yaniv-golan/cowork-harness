@@ -667,8 +667,9 @@ describe.skipIf(process.platform === "win32")("listProcessesSync — the teardow
   it("a listing that times out once is taken again and succeeds", () => {
     const dir = mkdtempSync(join(tmpdir(), "ps-once-"));
     const marker = join(dir, "first-call");
-    const ps = stub(`if [ ! -e '${marker}' ]; then : > '${marker}'; exec sleep 5; fi\nprintf '${ROWS}\\n'`);
-    const rows = listProcessesSync({ ps, timeoutMs: 500 });
+    const ps = stub(`if [ ! -e '${marker}' ]; then : > '${marker}'; exec sleep 30; fi\nprintf '${ROWS}\\n'`);
+    const rows = listProcessesSync({ ps, timeoutMs: 3000 });
+    // The limit leaves the stub's shell room to start under load; the first call then sleeps far past it.
     expect(existsSync(marker)).toBe(true); // the first attempt ran and was cut off
     expect(rows?.map((r) => r.pid)).toEqual([1, SELF, AGENT]);
   }, 15_000);
