@@ -308,6 +308,22 @@ describe("semantic_matches — judgedDoc fingerprints the document the judge act
     expect(big.chars).toBeLessThan(300 * 1024); // clipped to what the judge saw
   });
 
+  it("is recorded on an INVALID grade too — the judge was still sent the document, twice", async () => {
+    const received: string[] = [];
+    const broken: SemanticJudge = async (_rubric, answer) => {
+      received.push(answer);
+      throw new Error("malformed grade");
+    };
+    const a = sem(["alpha"]);
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, broken);
+    const r = evaluate([a], c)[0];
+    expect(r.judgeInvalid).toBe(true);
+    expect(received).toHaveLength(2);
+    expect(received[1]).toBe(received[0]);
+    expect(r.judgedDoc?.sha256).toBe(sha(received[0]!));
+  });
+
   it("is absent on an assert the judge never graded", () => {
     const a = sem(["alpha"]);
     expect(evaluate([a], ctx({ transcript: "alpha" }))[0]).not.toHaveProperty("judgedDoc");

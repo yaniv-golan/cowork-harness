@@ -507,8 +507,10 @@ export class LlmDecider implements Decider {
     private secrets: string[] = [],
   ) {}
 
-  /** Spend across every model call this decider made — summed from the transport's usage map, every model
-   *  key included. `undefined` until a call reports a price: unpriced is never $0. */
+  /** Spend reported by every COMPLETED model call this decider made — summed from the transport's usage map,
+   *  every model key included. A call that threw, and the transport's internal retries after a non-zero
+   *  exit, report no usage and are not counted, so this is a floor. `undefined` until a call reports a
+   *  price: unpriced is never $0. */
   private spentUsd: number | undefined;
   private spentTokens: TokenUsage | undefined;
   costUsd(): number | undefined {

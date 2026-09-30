@@ -36,6 +36,21 @@ describe("authored-file capture reports the budget it actually used", () => {
     expect(cap.files[0]!.content.length).toBe(cap.budget.perFileBytes);
   });
 
+  it("says whether the scratchpad was walked: yes with a scratchpad root, no on a resume or without one", () => {
+    const root = stage({ "a.md": 10 });
+    const scratch = mkdtempSync(join(tmpdir(), "cwh-capbudget-scratch-"));
+    roots.push(scratch);
+    writeFileSync(join(scratch, "draft.md"), "d");
+    const walked = captureAuthoredFilesWithHealth(root, ["outputs"], [], {}, { scratchpadRoot: scratch });
+    expect(walked.scratchpadWalked).toBe(true);
+    expect(walked.files.map((f) => f.path)).toContain("scratchpad/draft.md"); // it really was walked
+    expect(captureAuthoredFilesWithHealth(root, ["outputs"], [], {}, { scratchpadRoot: scratch, resume: true }).scratchpadWalked).toBe(
+      false,
+    );
+    expect(captureAuthoredFilesWithHealth(root, ["outputs"], [], {}, {}).scratchpadWalked).toBe(false);
+    expect(captureAuthoredFilesWithHealth(root, ["outputs"], [], undefined, { scratchpadRoot: scratch }).scratchpadWalked).toBe(false);
+  });
+
   it("reports the budget even when there is no pre-run manifest to diff against", () => {
     const root = stage({});
     const cap = captureAuthoredFilesWithHealth(root, ["outputs"], [], undefined, { totalBytes: 1234 });
