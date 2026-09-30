@@ -1,5 +1,5 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
-import { existsSync, readdirSync, statSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
@@ -18,6 +18,18 @@ function liveJournalsFor(runsRoot: string, scenarioSlug: string): number {
 }
 
 const DEFAULT_KEEP_LAST = 5;
+
+/** The eval id a run dir belongs to (its run label is `eval:<eval-id>:<arm>`), or undefined. Read from the
+ *  run's status.json, which is written when the run starts. */
+function evalIdOf(dir: string): string | undefined {
+  try {
+    const label = (JSON.parse(readFileSync(join(dir, "status.json"), "utf8")) as { runLabel?: unknown }).runLabel;
+    const m = typeof label === "string" ? /^eval:([^:]+):/.exec(label) : null;
+    return m ? m[1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Parse a `<N>d|h|m` retention window (e.g. `7d`, `24h`, `30m`) to milliseconds, or undefined if
  *  malformed. Used only by the opt-in `--pinned-older-than` reclaim — pinned sessions are otherwise
@@ -110,6 +122,13 @@ export function cmdRunsGc(args: string[]): void {
 
   let deleted = 0;
   let kept = 0;
+  // An eval's runs are ordinary ephemeral runs, so --keep-last trims them. Its report is rebuilt from the
+  // eval dir, never from these, but the report's evidence links point here — say which evals lost runs.
+  const evalRunsPruned = new Map<string, number>();
+  const notePruned = (dir: string) => {
+    const id = evalIdOf(dir);
+    if (id !== undefined) evalRunsPruned.set(id, (evalRunsPruned.get(id) ?? 0) + 1);
+  };
 
   for (const scenarioSlug of readdirSync(runsRoot).sort()) {
     if (scenarioSlug === MIGRATION_JOURNAL_DIR) continue; // the journal store is not a scenario
@@ -184,6 +203,7 @@ export function cmdRunsGc(args: string[]): void {
         /* deleted between filter and loop — treat as fresh (kept) */
       }
       if (pinnedOlderThanMs !== undefined && now - mtime > pinnedOlderThanMs) {
+        notePruned(d.path);
         if (!dryRun) rmSync(d.path, { recursive: true, force: true });
         log(`${dryRun ? "(dry-run) " : ""}✗ pruned pinned ${d.path}`);
         deleted++;
@@ -196,6 +216,7 @@ export function cmdRunsGc(args: string[]): void {
       if (i < keepLast) {
         kept++;
       } else {
+        notePruned(ephemeral[i].path);
         if (!dryRun) {
           rmSync(ephemeral[i].path, { recursive: true, force: true });
         }
@@ -205,6 +226,11 @@ export function cmdRunsGc(args: string[]): void {
     }
   }
 
+  for (const [id, n] of [...evalRunsPruned].sort(([a], [b]) => a.localeCompare(b)))
+    log(
+      `::warning:: prune: ${n} of the pruned run dir(s) belong to eval ${id} — its report's evidence links now point at deleted runs. ` +
+        `\`eval report <eval-dir>\` still rebuilds the report (it reads only the eval dir); raise --keep-last to keep an eval's runs.`,
+    );
   log(
     deleted > 0
       ? `✓ prune: pruned ${deleted} run dir(s), kept ${kept}${dryRun ? " (dry-run — nothing deleted)" : ""}`
