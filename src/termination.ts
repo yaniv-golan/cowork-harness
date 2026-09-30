@@ -50,6 +50,9 @@ export interface TerminableAgent {
   readonly graceMs?: number;
   /** Resolves when the agent has exited. */
   exited(): Promise<void>;
+  /** Resolves when any background bookkeeping the force-kill depends on has landed (awaited by the async
+   *  teardown; the signal handler, which cannot wait, uses what it has). */
+  idle?(): Promise<void>;
 }
 
 /** The plain case: a child process signalled by PID alone. The host agents (protocol, hostloop) use

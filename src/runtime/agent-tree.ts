@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnOptions } from "node:child_process";
+import { execFile, spawnSync, type SpawnOptions } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { sep } from "node:path";
 import { warn as ioWarn } from "../io.js";
@@ -133,8 +133,11 @@ export interface AgentTreeDeps {
   uid: number;
   env: NodeJS.ProcessEnv;
   now(): number;
-  /** One consistent process listing, or undefined when `ps` failed. */
+  /** One consistent process listing, or undefined when `ps` failed. Synchronous: for the signal handler and
+   *  the teardown, which must not yield. */
   snapshot(): ProcRow[] | undefined;
+  /** The same listing without blocking the event loop — the drive loop's per-frame refresh. */
+  snapshotAsync(): Promise<ProcRow[] | undefined>;
   /** `process.kill`; a negative target is a process group. Must not throw. */
   kill(target: number, sig: NodeJS.Signals): void;
   lsofCwd(pids: number[]): Map<number, string> | { error: string };
@@ -143,6 +146,10 @@ export interface AgentTreeDeps {
   realpath(p: string): string;
   warn(msg: string): void;
 }
+
+const PS_ARGS = ["-A", "-o", "pid=,ppid=,pgid=,uid=,tty=,lstart=,comm="];
+const PS_ENV = () => ({ ...process.env, LC_ALL: "C" });
+const PS_MAX_BUFFER = 16 * 1024 * 1024;
 
 function defaultDeps(): AgentTreeDeps {
   return {
@@ -153,15 +160,16 @@ function defaultDeps(): AgentTreeDeps {
     env: process.env,
     now: () => Date.now(),
     snapshot: () => {
-      const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,uid=,tty=,lstart=,comm="], {
-        encoding: "utf8",
-        timeout: PS_TIMEOUT_MS,
-        env: { ...process.env, LC_ALL: "C" },
-        maxBuffer: 16 * 1024 * 1024,
-      });
+      const r = spawnSync("ps", PS_ARGS, { encoding: "utf8", timeout: PS_TIMEOUT_MS, env: PS_ENV(), maxBuffer: PS_MAX_BUFFER });
       if (r.error || r.status !== 0 || typeof r.stdout !== "string") return undefined;
       return parsePsSnapshot(r.stdout);
     },
+    snapshotAsync: () =>
+      new Promise((res) =>
+        execFile("ps", PS_ARGS, { encoding: "utf8", timeout: PS_TIMEOUT_MS, env: PS_ENV(), maxBuffer: PS_MAX_BUFFER }, (err, stdout) =>
+          res(err ? undefined : parsePsSnapshot(stdout)),
+        ),
+      ),
     kill: (target, sig) => {
       try {
         process.kill(target, sig);
@@ -253,8 +261,11 @@ export interface TreeAgent extends TerminableAgent {
   readonly graceMs?: number;
   /** Re-list processes and extend the tracked set from the agent and every tracked process still alive. */
   refresh(): void;
-  /** Feed a parsed stream-json frame from the drive loop; refreshes on `result` and `tool_result` frames. */
+  /** Feed a parsed stream-json frame from the drive loop; refreshes on `result` and `tool_result` frames,
+   *  asynchronously (see {@link idle}). */
   onFrame(msg: unknown): void;
+  /** Resolves when the last asynchronous refresh has landed. */
+  idle(): Promise<void>;
 }
 
 /** Frames that mark a point where the agent may have started (or be about to reap) a process. Partial-message
@@ -295,6 +306,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       forceKill: () => signalLeader("SIGKILL"),
       exited: () => exited,
       refresh: () => {},
+      idle: () => Promise.resolve(),
       onFrame: () => {},
     };
   }
@@ -326,9 +338,31 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     }
   };
 
+  // Asynchronous refreshes (the drive loop's) apply only if they are the newest one started and no
+  // synchronous listing was taken since they began — an older listing must never prune what a newer one saw.
+  let syncListings = 0;
+  let asyncGen = 0;
+  let inflight: Promise<void> = Promise.resolve();
+  const refreshAsyncAt = (t: number) => {
+    lastRefreshAt = t;
+    const gen = ++asyncGen;
+    const syncAtStart = syncListings;
+    inflight = d
+      .snapshotAsync()
+      .then((rows) => {
+        if (!rows || gen !== asyncGen || syncListings !== syncAtStart) return;
+        lastRows = rows;
+        extend(rows);
+      })
+      .catch(() => {
+        /* a failed listing leaves the tracked set as it was; the teardown's own listing warns if it fails */
+      });
+  };
+
   /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). */
   const refreshAt = (t: number): boolean => {
     lastRefreshAt = t;
+    syncListings++;
     const rows = d.snapshot();
     if (!rows) return false;
     lastRows = rows;
@@ -424,15 +458,22 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     graceMs: opts.graceMs,
     alive: running,
     exited: () => exited,
+    idle: () => inflight,
     refresh: () => refreshAt(d.now()),
     onFrame: (msg) => {
       if (!isRefreshFrame(msg)) return;
       const t = d.now();
       // A `result` frame is never throttled: it is the last listing before the agent exits on the normal path,
-      // when everything it started is about to be reparented out of reach of the walk. Only the tool_result
-      // cadence is throttled.
-      if ((msg as { type?: unknown }).type !== "result" && t - lastRefreshAt < REFRESH_MIN_INTERVAL_MS) return;
-      refreshAt(t);
+      // when everything it started is about to be reparented out of reach of the walk.
+      if ((msg as { type?: unknown }).type === "result") {
+        // Synchronous, once per turn: this listing must be taken before the agent exits and its children are
+        // reparented out of the walk's reach, and an asynchronous `ps` would race that exit.
+        refreshAt(t);
+        return;
+      }
+      if (t - lastRefreshAt < REFRESH_MIN_INTERVAL_MS) return;
+      // tool_result frames come many times a turn: list without blocking the event loop.
+      refreshAsyncAt(t);
     },
     terminate: () => {
       if (!refreshAt(d.now())) warnNoListing();

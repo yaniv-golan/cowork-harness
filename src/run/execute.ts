@@ -2557,6 +2557,7 @@ export async function reapAgentOnTeardown(p: {
     }
   } else if (p.agent) {
     const t0 = Date.now();
+    await p.agent.idle?.(); // the drive loop's last (asynchronous) listing, taken at the final result frame
     if (p.agent.alive()) {
       await wait(p.agent, p.settleMs ?? 2000);
       if (p.agent.alive()) {

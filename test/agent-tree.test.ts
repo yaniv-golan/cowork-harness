@@ -90,6 +90,10 @@ function harness(opts: { rows?: ProcRow[]; platform?: NodeJS.Platform; detach?: 
       h.snapshots++;
       return rows.map((r) => ({ ...r }));
     },
+    snapshotAsync: async () => {
+      h.snapshots++;
+      return rows.map((r) => ({ ...r }));
+    },
     kill: (target, sig) => void h.kills.push([target, sig]),
     lsofCwd: (pids) => {
       h.lsofCalls.push([...pids]);
@@ -337,6 +341,55 @@ describe("agentTreeAgent — the end-of-turn refresh", () => {
     now += 10;
     a.onFrame({ type: "result", subtype: "success" });
     expect(h.snapshots).toBe(s0 + 2);
+  });
+});
+
+describe("agentTreeAgent — the drive-loop refresh does not block the event loop", () => {
+  it("a result frame lists synchronously: the listing is in place before the agent can exit (once per turn)", () => {
+    const rows = [...base(), row(300, AGENT, 300)];
+    const h = harness({ rows });
+    let now = T0;
+    h.deps.now = () => now;
+    h.deps.snapshotAsync = () => new Promise(() => {}); // never lands
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    h.setRows([...base(), row(300, AGENT, 300), row(301, 300, 300)]);
+    now += 1000;
+    a.onFrame({ type: "result", subtype: "success" });
+    h.setRows([...base().filter((r) => r.pid !== AGENT), row(300, 1, 300), row(301, 300, 300)]);
+    h.child.exit();
+    a.forceKill({ fast: true }); // the last listing only
+    expect(h.kills.map(([k]) => k)).toContain(-300);
+  });
+  it("a tool_result frame lists processes asynchronously; a timer fires while a slow ps runs, and the listing still lands", async () => {
+    const rows = [...base(), row(300, AGENT, 300, { comm: "mcp" })];
+    const h = harness({ rows: base() });
+    let slow = false; // the construction-time listing is fast; every later one takes 300 ms
+    let useSync = true;
+    h.deps.snapshot = () => {
+      if (!useSync) return undefined; // the kill below must rely on what the asynchronous listing tracked
+      if (slow) {
+        const until = Date.now() + 300;
+        while (Date.now() < until) {
+          /* a slow ps, blocking */
+        }
+        return rows.map((r) => ({ ...r }));
+      }
+      return base();
+    };
+    h.deps.snapshotAsync = () => new Promise((res) => setTimeout(() => res(rows.map((r) => ({ ...r }))), 300));
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    slow = true;
+    let timerFired = false;
+    setTimeout(() => (timerFired = true), 20);
+    const t = Date.now();
+    a.onFrame({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } });
+    expect(Date.now() - t).toBeLessThan(100);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(timerFired).toBe(true);
+    await a.idle();
+    useSync = false;
+    a.forceKill({ fast: true });
+    expect(h.kills.map(([k]) => k)).toContain(-300);
   });
 });
 
