@@ -67,7 +67,12 @@ async function run(f: StubFixture) {
 
 describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes", () => {
   it("an agent that dies before any stream arrives reports apiRetries absent, not zeros", async () => {
-    const f = makeStubFixture("exit 1");
+    // The stub consumes the harness's writes up to and including the user turn, then exits 1 without
+    // emitting a single frame. A bare `exit 1` races the harness's first stdin write: on Linux the child is
+    // usually gone before `initialize` is written, the write fails, and the run aborts as an internal error
+    // with no result.json at all — a different path from the one under test (the agent died, the harness
+    // salvaged a result). Waiting for the user turn removes the race without giving the harness a stream.
+    const f = makeStubFixture(`while IFS= read -r line; do case "$line" in *'"type":"user"'*) exit 1;; esac; done; exit 1`);
     try {
       scenario(f, "");
       const r = await run(f);
