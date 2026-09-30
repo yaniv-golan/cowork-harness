@@ -3945,16 +3945,47 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           const wrap = toolsSite.match(
             new RegExp(`function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`),
           );
+          // Desktop 2.16120.0: the sessionType term may instead be `(<s>.sessionType===void 0||<s>.sessionType==="scheduled")`
+          // with the scheduledTaskId term DROPPED — the scheduled-run restriction moved upstream (checked
+          // below). The body is now anchored at its END too (`…&&!<hipaa>()}`): as a prefix match, a
+          // widening appended after the last conjunct (`||!0`) passed silently.
+          const pred = wrap
+            ? toolsSite.match(
+                new RegExp(
+                  `function ${reEsc(wrap[3])}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&(?:\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0|(\\(\\1\\.sessionType===void 0\\|\\|\\1\\.sessionType==="scheduled"\\))(?:&&\\1\\.scheduledTaskId===void 0)?)&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?![\\w$]+(?:\\.[\\w$]+)?\\(\\)\\}`,
+                ),
+              )
+            : null;
           if (!wrap) miss("S6c Artifact gate", "the attended-turn wrapper body changed — _isUnattended may no longer restrict Artifact");
-          else if (
-            !new RegExp(
-              `function ${reEsc(wrap[3])}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?`,
-            ).test(toolsSite)
-          )
+          else if (!pred)
             miss(
               "S6c Artifact gate",
-              "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isBridgeSession/isDispatchChild before admitting the spread",
+              "the frame-artifacts predicate changed (a term was dropped, reordered or appended) — re-verify sessionType/scheduledTaskId/isBridgeSession/isDispatchChild before admitting the spread",
             );
+          else if (pred[3] !== undefined) {
+            // Scheduled form: scheduled runs keep the server's frameArtifactsEnabled only while
+            // `scheduledRunFrameArtifacts` (a key of coworkRuntimeConfig, gate 1978029737) allows it:
+            //     e.scheduledTaskId&&!xp()&&(e.frameArtifactsEnabled=void 0)
+            //     function xp(){return t.OU()&&t.AU("1978029737","scheduledRunFrameArtifacts",!0,t.TQ())}
+            // Without that clear site the predicate alone admits every scheduled run.
+            const clear = toolsSite.match(/([\w$]+)\.scheduledTaskId&&!([\w$]+)\(\)&&\(\1\.frameArtifactsEnabled=void 0\)/);
+            const readerBody = clear ? braceBodyOf(toolsSite, `function ${clear[2]}(`) : null;
+            if (!clear)
+              miss(
+                "S6c Artifact gate",
+                "the predicate admits scheduled sessions but the upstream scheduledTaskId clear of frameArtifactsEnabled is gone — scheduled runs would get Artifact unconditionally",
+              );
+            else if (
+              readerBody === null ||
+              !/^return [\w$]+(?:\.[\w$]+)?\(\)&&[\w$]+(?:\.[\w$]+)?\("1978029737","scheduledRunFrameArtifacts",!0(?:,[^;]*)?\)$/.test(
+                readerBody,
+              )
+            )
+              miss(
+                "S6c Artifact gate",
+                `the scheduled-run clear is no longer gated on key scheduledRunFrameArtifacts of gate 1978029737 (reader ${clear[2]}) — reclassify before admitting scheduled Artifact`,
+              );
+          }
           // S6e (B17): the trailing conjunct must still be the HIPAA-restriction reader. Resolving it is
           // what the old hard-coded `.r()` only pretended to do — that regex accepted ANY single-letter
           // member, so re-pointing the conjunct at a different export would have passed silently.

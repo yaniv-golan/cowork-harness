@@ -1155,6 +1155,76 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(fixture2255310())).toEqual([]);
   });
 
+  // Desktop 2.16120.0: the predicate dropped `scheduledTaskId===void 0` and admits
+  // `sessionType==="scheduled"`. The scheduled-run restriction MOVED upstream, into a gate-conditional
+  // clear of the server flag at session start (`scheduledTaskId&&!<g>()&&(<s>.frameArtifactsEnabled=void 0)`,
+  // `<g>` reading key `scheduledRunFrameArtifacts` of gate 1978029737). The new form is admitted only
+  // together with that clear site; without it, scheduled runs would get Artifact unconditionally.
+  const SCHED_CLEAR =
+    "function zSs(e){if(e.scheduledTaskId&&!zXp()&&(e.frameArtifactsEnabled=void 0),e.sessionType)return}" +
+    'function zXp(){return zOU()&&zAU("1978029737","scheduledRunFrameArtifacts",!0,zTQ())}';
+  const fixture2161200 = () =>
+    fixture2255310()
+      .replace("e.sessionType===void 0&&e.scheduledTaskId===void 0&&", '(e.sessionType===void 0||e.sessionType==="scheduled")&&')
+      .replace("HEADER;", `HEADER;${SCHED_CLEAR}`);
+  it("2.16120.0 build shape: scheduled sessions admitted + upstream gate-conditional clear stays CLEAN", () => {
+    expect(fixture2161200()).toContain('e.sessionType==="scheduled"'); // the fixture really is the new form
+    expect(checkSpawnContractFacts(fixture2161200())).toEqual([]);
+  });
+  it("2.16120.0 build shape: `$`-named gate reader still resolves", () => {
+    expect(checkSpawnContractFacts(fixture2161200().replaceAll("zXp(", "$Xp("))).toEqual([]);
+  });
+  const SCHED_MUT: ReadonlyArray<readonly [string, () => string]> = [
+    ["S1 sessionType conjunct dropped", () => fixture2161200().replace('(e.sessionType===void 0||e.sessionType==="scheduled")&&', "")],
+    [
+      "S2 ||!0 inside the sessionType group",
+      () => fixture2161200().replace('e.sessionType==="scheduled")', 'e.sessionType==="scheduled"||!0)'),
+    ],
+    [
+      "S3 another session type admitted",
+      () => fixture2161200().replace('e.sessionType==="scheduled")', 'e.sessionType==="scheduled"||e.sessionType==="agent")'),
+    ],
+    [
+      "S4 ||!0 appended to the predicate body",
+      () => fixture2161200().replace("&&!t.isHostLoop&&!zA.r()}", "&&!t.isHostLoop&&!zA.r()||!0}"),
+    ],
+    [
+      "S5 frameArtifactsEnabled weakened (!==!1)",
+      () => fixture2161200().replace("e.frameArtifactsEnabled===!0&&(", "e.frameArtifactsEnabled!==!1&&("),
+    ],
+    ["S6 frameArtifactsEnabled conjunct dropped", () => fixture2161200().replace("e.frameArtifactsEnabled===!0&&(", "(")],
+    ["S7 predicate drops !isBridgeSession", () => fixture2161200().replace("&&!t.isBridgeSession", "")],
+    ["S8 predicate drops !isDispatchChild", () => fixture2161200().replace("&&!t.isDispatchChild", "")],
+    [
+      "S9 scheduled form WITHOUT the upstream clear site",
+      () => fixture2161200().replace("e.scheduledTaskId&&!zXp()&&(e.frameArtifactsEnabled=void 0),", ""),
+    ],
+    [
+      "S10 clear-site gate reader is a constant !0",
+      () => fixture2161200().replace(/function zXp\(\)\{[^}]*\}/, "function zXp(){return!0}"),
+    ],
+    ["S11 clear-site gate reader reads a different key", () => fixture2161200().replace('"scheduledRunFrameArtifacts"', '"somethingElse"')],
+    ["S12 clear-site gate reader reads a different gate", () => fixture2161200().replace('zAU("1978029737"', 'zAU("123456789"')],
+    [
+      "S13 clear site gated on an unresolvable reader",
+      () => fixture2161200().replace("!zXp()&&(e.frameArtifactsEnabled", "!zNope()&&(e.frameArtifactsEnabled"),
+    ],
+    // The old form must not lose its scheduledTaskId term unless the scheduled alternative replaces it.
+    [
+      "S14 old form drops scheduledTaskId without the scheduled alternative",
+      () => fixture2255310().replace("&&e.scheduledTaskId===void 0", ""),
+    ],
+    // The predicate regex used to be a PREFIX match, so a widening appended after its last conjunct passed
+    // silently on the old form too (the condition-level R1 does not cover the predicate body).
+    [
+      "S15 old form: ||!0 appended to the predicate body",
+      () => fixture2255310().replace("&&!t.isHostLoop&&!zA.r()}", "&&!t.isHostLoop&&!zA.r()||!0}"),
+    ],
+  ];
+  it.each(SCHED_MUT)("2.16120.0 mutation %s fails loud (%#)", (_label, mutate) => {
+    expect(checkSpawnContractFacts(mutate()).join("\n")).toContain("S6c Artifact gate");
+  });
+
   // The host-grant key's allowlist entry claims it is "absent on a default session", and that claim rests
   // ENTIRELY on its guard. S6f asserts the guard is the SAME predicate as the Artifact tool spread.
   it("S6f: the host-grant key made unconditional → flags (the allowlist alone would admit it)", () => {
