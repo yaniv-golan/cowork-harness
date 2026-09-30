@@ -409,6 +409,8 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 
 ## 11. Machine output (`--output-format json`)
 
+Every envelope, like all text output, is secret-scrubbed with the same set as the run's files (CB-6: the known auth tokens, `COWORK_HARNESS_SCRUB_KEYS`, `COWORK_HARNESS_SCRUB_VALUES` and their encoded forms), so a value `result.json` shows as `[REDACTED]` reads `[REDACTED]` in the envelope too.
+
 ### 11.0 Replay fidelity contract
 
 `replay` consumes BOTH recorded protocol directions:
