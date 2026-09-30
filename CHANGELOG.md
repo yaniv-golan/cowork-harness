@@ -27,12 +27,15 @@ All notable changes to this project are documented here. The format is based on
     origin are unchanged from `desktop-2.9939.4`.
   - The recorded changes: `spawn.env` and `spawnEnvKeys` gain `PYTHONDONTWRITEBYTECODE` (below),
     `asarGateIds` gains 30 ids and loses 3, and the GrowthBook cache's `featureCount` goes 384 → 387.
-  - Desktop's `cowork` server no longer declares `create_artifact`/`list_artifacts`/`update_artifact`/
-    `verify_artifact` in the observed session, which carries the native `Artifact` tool instead, and it
-    declares a new `screenshot_file_preview`, which the harness does not serve (see
-    `docs/fidelity-gaps.md`).
-  - The Desktop init surface for 2.16120.0 was read from a scheduled session (the only local session
-    kind still available); no interactive-session frame.
+  - The observed sessions declare `screenshot_file_preview` on Desktop's `cowork` server and, in some
+    session kinds, the artifact family (`create_artifact`/`list_artifacts`/`update_artifact`/
+    `verify_artifact`) including a new `screenshot_artifact`. The artifact family is offered where the
+    native `Artifact` tool is not. Neither `screenshot_file_preview` nor the artifact family is served
+    by the harness (see `docs/fidelity-gaps.md`).
+  - The Desktop init surface for 2.16120.0 was read from 3 local init frames on this install; no
+    interactive local session was available.
+  - The computer-use permission gate (`cuCanUseToolEnabled`) moved to off, server-side. The harness does
+    not model computer use.
   - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: none of them runs Python that
     could write bytecode, so the one spawn-env addition cannot change what they recorded.
     `verify-cassettes` and `replay --strict` pass on them.

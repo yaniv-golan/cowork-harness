@@ -291,7 +291,7 @@ and the decision has not been revisited yet.
 The two mechanisms are mutually exclusive but not exhaustive — there is a third state. The tool
 additionally requires an **attended** turn, while the mount suppression does not check that, so a
 session with the flag on whose turn is unattended gets **neither** the artifact mounts nor the
-`Artifact` tool. A scheduled run is outside that state on Desktop 2.16120.0 and later: its init frame
+`Artifact` tool. A scheduled run can be outside that state on Desktop 2.16120.0 and later: the one observed
 carries the native `Artifact` tool and none of the `cowork` artifact tools. Reading "one or the other" as a guarantee that
 some artifact mechanism is always present would be wrong.
 
@@ -1501,18 +1501,21 @@ remote lane, measured from inside" above for what `/mnt/user-data` holds), and t
 file tools share one root.
 
 
-### Not served: `screenshot_file_preview` (Desktop 2.16120.0)
+### Not served: `screenshot_file_preview` and `screenshot_artifact` (Desktop 2.16120.0)
 
 **Real Cowork behaviour:** from Desktop 2.16120.0 the `cowork` server also declares
 `screenshot_file_preview`: it screenshots an HTML or SVG file the agent wrote this session, as rendered
 in Desktop's file preview panel after the page's JavaScript has run, and returns a JPEG plus a short
 note. It only takes `.html`/`.htm`/`.svg`, needs the file to have been presented with `present_files`
 first, and is offered when Desktop's `verifyToolsEnabled` and `coworkNativeFilePreview` flags are both on,
-independently of the artifact tools. The same release stopped declaring
-`create_artifact`/`list_artifacts`/`update_artifact`/`verify_artifact` on the scheduled run observed.
+independently of the artifact tools. The same release adds `screenshot_artifact` to the `cowork`
+artifact family (`create_artifact`/`list_artifacts`/`update_artifact`/`verify_artifact`), which Desktop
+still declares, but only in sessions that do not get the native `Artifact` tool — so which of the two a
+session carries depends on its kind.
 
-**Harness behaviour:** not served (the harness's `cowork` server registers `present_files` only). A skill
-that produces HTML or SVG and checks its own rendering with this tool gets an unknown-tool error here — a
+**Harness behaviour:** neither is served (the harness's `cowork` server registers `present_files` only).
+A skill that produces HTML or SVG and checks its own rendering with either tool gets an unknown-tool
+error here — a
 false red — and a skill that would have fixed a rendering bug after looking at the screenshot has no
 such loop in the harness, so a green run says nothing about how the page actually renders.
 
