@@ -123,6 +123,10 @@ it landed in.
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
 
+The `auth` and `usage_limit` rows need the reply to come from the agent itself, which writes it as a
+`<synthetic>` turn. A skill's own message that merely reads like one ("You've reached your daily limit
+of 5 files") is the skill's failure and is scored.
+
 The rows are checked in that order, and the first that matches decides. Two consequences:
 
 - **An agent failure outranks a pin exclusion.** A rep that crashed fails every row even when its pin is
@@ -184,8 +188,8 @@ Judged per scenario, for each arm:
 - **Every rep of one arm is infrastructure**: that arm never ran the skill. Same outcome.
 - **Every rep of one arm is the agent's own failure, and the other arm has valid reps**: a skill that
   crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
-  every row) and the rows show the drop. The header still names the arm and its error; the exit code
-  follows the usual rules.
+  every row) and the rows show the drop. The header still names the arm and its error. It exits 0 unless
+  `--fail-on` is set, like any other drop.
 
 ## Picking scenarios
 

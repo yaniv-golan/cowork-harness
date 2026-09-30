@@ -143,8 +143,8 @@ function thrownKind(e: unknown): ThrownKind {
  *  | success, any other errorSource or any kind                         | unclassified    |
  *  | error, errorSource spawn / protocol / decider_timeout              | errored_infra   |
  *  | error, kind transport / usage_limit                                | errored_infra   |
- *  | error, finalMessage is the agent's authentication failure          | errored_infra (auth) |
- *  | error, finalMessage is a terminal usage/spend-limit message        | errored_infra (usage_limit) |
+ *  | error, `<synthetic>` in models, finalMessage an auth failure       | errored_infra (auth) |
+ *  | error, `<synthetic>` in models, finalMessage a terminal limit      | errored_infra (usage_limit) |
  *  | error, models only `<synthetic>`, cost 0 (no model answered)       | errored_infra (no_model_answered) |
  *  | error, errorSource timeout / no_result                             | errored_agent   |
  *  | error, errorSource result, kind agent (any subtype)                | errored_agent   |
@@ -198,11 +198,15 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
   // skill for a missing credential.
   if (source !== undefined && ERROR_SOURCE_RULE[source] === "infra") return out("errored_infra", `source_${source}`);
   if (kind !== undefined && INFRA_KINDS.has(kind)) return out("errored_infra", `kind_${kind}`);
-  if (typeof r.finalMessage === "string" && AUTH_FAILURE_SIGNATURE.test(r.finalMessage)) return out("errored_infra", "auth");
+  // The agent writes its own sign-in and limit replies as a `<synthetic>` turn (every kept error run with
+  // such text has one), so the text counts only beside that marker — a skill's own message that merely
+  // reads like a limit or a login prompt ("You've reached your daily limit of 5 files") stays the skill's.
+  const agentWrote = typeof r.finalMessage === "string" && (r.models ?? []).some((m) => !isLiveModelId(m));
+  if (agentWrote && AUTH_FAILURE_SIGNATURE.test(r.finalMessage!)) return out("errored_infra", "auth");
   // The run lane names a usage limit only on the `result` path (with its HTTP status); on the nonzero-exit
   // path the same terminal text arrives as kind `agent`, even after a live model has spent. The text is the
   // account's quota, never the skill: the shared terminal-limit matcher (transient rate limits excluded).
-  if (typeof r.finalMessage === "string" && matchesTerminalUsageLimitText(r.finalMessage)) return out("errored_infra", "usage_limit");
+  if (agentWrote && matchesTerminalUsageLimitText(r.finalMessage!)) return out("errored_infra", "usage_limit");
   if (noModelAnswered(r)) return out("errored_infra", "no_model_answered");
 
   if (source !== undefined) {

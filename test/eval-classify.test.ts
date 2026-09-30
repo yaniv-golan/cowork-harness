@@ -245,6 +245,18 @@ describe("no model answered: an authentication or spend failure is infrastructur
       });
     }
   });
+  it("the same text written by the SKILL (a live model, no <synthetic> turn) is the agent's error, scored", () => {
+    // The agent writes its own sign-in and limit replies as a <synthetic> turn — every kept error run with
+    // such text has one. A skill's message that merely reads like a limit or a login prompt does not.
+    const skillSaid = (finalMessage: string) => ({
+      ...fixture("spend-limit-after-spend"),
+      finalMessage,
+      models: ["claude-opus-5"],
+      cost: { usd: 0.2 },
+    });
+    for (const text of ["You've reached your daily limit of 5 CSV files in this demo", "Not logged in · Please run /login"])
+      expect(classifyTermination({ result: skillSaid(text) }), text).toMatchObject({ bucket: "errored_agent" });
+  });
   it("the auth signature holds after a live model answered (a token that expires mid-run)", () => {
     const r = { ...fixture("auth-exit"), models: ["claude-sonnet-5", "<synthetic>"], cost: { usd: 0.4 } };
     expect(classifyTermination({ result: r })).toMatchObject({ bucket: "errored_infra", rule: "auth" });

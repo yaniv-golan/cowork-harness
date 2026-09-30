@@ -41,7 +41,8 @@ are a pin the agent did not honour (false, or unknown on a rep that completed) a
 excluded and reported. A loud UNCLASSIFIED count means a termination the classifier does not know — read
 those runs. Per scenario: if EVERY rep of both arms errored, or every rep of one arm is infrastructure,
 that scenario compared nothing — its rows are `insufficient` and the eval exits 1. If one arm's every rep
-is the agent's own failure and the other arm ran, the reps are scored (a real drop). Either way the header
+is the agent's own failure and the other arm ran, the reps are scored (a real drop) — exit 0 unless
+`--fail-on`. Either way the header
 names the arm, scenario, dominant error and a matching hint (`Every rep of arm <label> in <scenario> errored — …`).
 
 ## Refused before any run (exit 2)
