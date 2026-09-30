@@ -1,0 +1,25 @@
+{
+  "scenario": "fixture-result-agent",
+  "result": "error",
+  "errorSource": "result",
+  "resultErrorKind": "agent",
+  "resultSubtype": "success",
+  "models": [
+    "<synthetic>"
+  ],
+  "modelFallbacks": [],
+  "assertions": [
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "file_exists": "<redacted>"
+      },
+      "pass": false
+    }
+  ]
+}

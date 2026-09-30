@@ -60,7 +60,7 @@ import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
-import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
+import { checkPathHookFacts, checkVmAgentStagingFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -1155,6 +1155,76 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(fixture2255310())).toEqual([]);
   });
 
+  // Desktop 2.16120.0: the predicate dropped `scheduledTaskId===void 0` and admits
+  // `sessionType==="scheduled"`. The scheduled-run restriction MOVED upstream, into a gate-conditional
+  // clear of the server flag at session start (`scheduledTaskId&&!<g>()&&(<s>.frameArtifactsEnabled=void 0)`,
+  // `<g>` reading key `scheduledRunFrameArtifacts` of gate 1978029737). The new form is admitted only
+  // together with that clear site; without it, scheduled runs would get Artifact unconditionally.
+  const SCHED_CLEAR =
+    "function zSs(e){if(e.scheduledTaskId&&!zXp()&&(e.frameArtifactsEnabled=void 0),e.sessionType)return}" +
+    'function zXp(){return zOU()&&zAU("1978029737","scheduledRunFrameArtifacts",!0,zTQ())}';
+  const fixture2161200 = () =>
+    fixture2255310()
+      .replace("e.sessionType===void 0&&e.scheduledTaskId===void 0&&", '(e.sessionType===void 0||e.sessionType==="scheduled")&&')
+      .replace("HEADER;", `HEADER;${SCHED_CLEAR}`);
+  it("2.16120.0 build shape: scheduled sessions admitted + upstream gate-conditional clear stays CLEAN", () => {
+    expect(fixture2161200()).toContain('e.sessionType==="scheduled"'); // the fixture really is the new form
+    expect(checkSpawnContractFacts(fixture2161200())).toEqual([]);
+  });
+  it("2.16120.0 build shape: `$`-named gate reader still resolves", () => {
+    expect(checkSpawnContractFacts(fixture2161200().replaceAll("zXp(", "$Xp("))).toEqual([]);
+  });
+  const SCHED_MUT: ReadonlyArray<readonly [string, () => string]> = [
+    ["S1 sessionType conjunct dropped", () => fixture2161200().replace('(e.sessionType===void 0||e.sessionType==="scheduled")&&', "")],
+    [
+      "S2 ||!0 inside the sessionType group",
+      () => fixture2161200().replace('e.sessionType==="scheduled")', 'e.sessionType==="scheduled"||!0)'),
+    ],
+    [
+      "S3 another session type admitted",
+      () => fixture2161200().replace('e.sessionType==="scheduled")', 'e.sessionType==="scheduled"||e.sessionType==="agent")'),
+    ],
+    [
+      "S4 ||!0 appended to the predicate body",
+      () => fixture2161200().replace("&&!t.isHostLoop&&!zA.r()}", "&&!t.isHostLoop&&!zA.r()||!0}"),
+    ],
+    [
+      "S5 frameArtifactsEnabled weakened (!==!1)",
+      () => fixture2161200().replace("e.frameArtifactsEnabled===!0&&(", "e.frameArtifactsEnabled!==!1&&("),
+    ],
+    ["S6 frameArtifactsEnabled conjunct dropped", () => fixture2161200().replace("e.frameArtifactsEnabled===!0&&(", "(")],
+    ["S7 predicate drops !isBridgeSession", () => fixture2161200().replace("&&!t.isBridgeSession", "")],
+    ["S8 predicate drops !isDispatchChild", () => fixture2161200().replace("&&!t.isDispatchChild", "")],
+    [
+      "S9 scheduled form WITHOUT the upstream clear site",
+      () => fixture2161200().replace("e.scheduledTaskId&&!zXp()&&(e.frameArtifactsEnabled=void 0),", ""),
+    ],
+    [
+      "S10 clear-site gate reader is a constant !0",
+      () => fixture2161200().replace(/function zXp\(\)\{[^}]*\}/, "function zXp(){return!0}"),
+    ],
+    ["S11 clear-site gate reader reads a different key", () => fixture2161200().replace('"scheduledRunFrameArtifacts"', '"somethingElse"')],
+    ["S12 clear-site gate reader reads a different gate", () => fixture2161200().replace('zAU("1978029737"', 'zAU("123456789"')],
+    [
+      "S13 clear site gated on an unresolvable reader",
+      () => fixture2161200().replace("!zXp()&&(e.frameArtifactsEnabled", "!zNope()&&(e.frameArtifactsEnabled"),
+    ],
+    // The old form must not lose its scheduledTaskId term unless the scheduled alternative replaces it.
+    [
+      "S14 old form drops scheduledTaskId without the scheduled alternative",
+      () => fixture2255310().replace("&&e.scheduledTaskId===void 0", ""),
+    ],
+    // The predicate regex used to be a PREFIX match, so a widening appended after its last conjunct passed
+    // silently on the old form too (the condition-level R1 does not cover the predicate body).
+    [
+      "S15 old form: ||!0 appended to the predicate body",
+      () => fixture2255310().replace("&&!t.isHostLoop&&!zA.r()}", "&&!t.isHostLoop&&!zA.r()||!0}"),
+    ],
+  ];
+  it.each(SCHED_MUT)("2.16120.0 mutation %s fails loud (%#)", (_label, mutate) => {
+    expect(checkSpawnContractFacts(mutate()).join("\n")).toContain("S6c Artifact gate");
+  });
+
   // The host-grant key's allowlist entry claims it is "absent on a default session", and that claim rests
   // ENTIRELY on its guard. S6f asserts the guard is the SAME predicate as the Artifact tool spread.
   it("S6f: the host-grant key made unconditional → flags (the allowlist alone would admit it)", () => {
@@ -1235,6 +1305,17 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
     expect(env).toEqual(EXPECTED_GREEN);
     expect(checkSpawnContractFacts(fixture())).toEqual([]);
+  });
+
+  // Desktop 2.16120.0: W2 gained an UNCONDITIONAL `PYTHONDONTWRITEBYTECODE:"1"` (first-party and 3p alike),
+  // between API_TIMEOUT_MS and DISABLE_CRON. Pinned like its W2 neighbours, so it enters spawn.env and
+  // reaches every tier's agent spawn env by the baseline spread.
+  it('2.16120.0: the unconditional W2 PYTHONDONTWRITEBYTECODE key is PINNED to "1" (not an unknown-key hard fail)', () => {
+    const w2 = fixture().replace("API_TIMEOUT_MS:String(FKd),", 'API_TIMEOUT_MS:String(FKd),PYTHONDONTWRITEBYTECODE:"1",');
+    expect(w2).toContain("PYTHONDONTWRITEBYTECODE");
+    const { env, flags } = deriveSpawnEnv(w2, greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).toEqual({ ...EXPECTED_GREEN, PYTHONDONTWRITEBYTECODE: "1" });
   });
 
   // 1b. Minifier-rename regression: the gate-check helper's name is minifier-assigned and changed
@@ -2472,6 +2553,171 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
     expect(checkPathHookFacts(blockFiles())).toEqual([]);
   });
 
+  // Desktop 2.16120.0: the chain's terminal is no longer a bare call of the saved original — its answer
+  // passes through a post-processor that re-pins an ALLOW's `updatedInput` to the input that was judged
+  // (`Xd(e,n,await Ve(e,n,r))`). The same release flipped link 3's managed-ask branch from a hard deny to
+  // a fall-through into the original callback (the permission prompt). The wrapper is admitted only while
+  // its body is exactly that pin; link 3's new branch is pinned too, because the terminal rule alone cannot
+  // see a deny→prompt (or deny→allow) flip inside a link body.
+  const MANAGED_ASK_FALLTHROUGH = "if(t.Ma(e,r)){t.EZ.info(`[canUseTool:HostLoop] ${e} → pre-fork approval path (managed ask)`);return}";
+  const PIN_WRAPPER =
+    `function Xw(e,n,r){if(r?.behavior!=="allow"||!t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS.includes(e))return r;` +
+    `let i=r.updatedInput,a=i===void 0?[]:Object.keys(i).filter((k=>i[k]!==n[k]));` +
+    "return a.length>0&&t.EZ.warn(`${e} allow pinned to the judged input (${a.length} key(s))`),{...r,updatedInput:n}}";
+  const wrappedFiles = (mutate?: (s: string) => string, mutateDefining?: (s: string) => string) =>
+    pathHookFiles({
+      defining: (d) => {
+        const withPred = d.replace(
+          "export{",
+          `function Mak(e,t){return t==="Organization policy requires approval for this tool."||t===void 0&&Rq(e)}export{Mak as Ma,`,
+        );
+        return mutateDefining ? mutateDefining(withPred) : withPred;
+      },
+      consuming: (c) => {
+        const swapped = c
+          .replace(/const Se=e\.canUseTool;[\s\S]*$/, blockBodyInstall())
+          .replace("??await Se(g,S,k);", "??Xw(g,S,await Se(g,S,k));")
+          .replace("function Qt(e,o,r,n){return ", `function Qt(e,o,r,n){${MANAGED_ASK_FALLTHROUGH}return `)
+          .concat(PIN_WRAPPER);
+        return mutate ? mutate(swapped) : swapped;
+      },
+    });
+
+  it("2.16120.0 shape: pin-wrapped terminal + managed-ask fall-through → no flags", () => {
+    expect(checkPathHookFacts(wrappedFiles())).toEqual([]);
+  });
+
+  it("back-compat: a bare terminal with the pre-2.16120.0 managed-ask DENY in link 3 stays clean", () => {
+    const denyForm = blockFiles((s) =>
+      s.replace(
+        "function Qt(e,o,r,n){return ",
+        'function Qt(e,o,r,n){if(t.Ma(e,r))return t.EZ.info(`${e} → deny (managed ask)`),{behavior:"deny",message:`${e} requires per-call approval under the organization\'s tool policy`};return ',
+      ),
+    );
+    expect(checkPathHookFacts(denyForm)).toEqual([]);
+  });
+
+  const WRAP_MUT: ReadonlyArray<readonly [string, (s: string) => string, string]> = [
+    [
+      "P1 blanket allow appended after the wrapper",
+      (s) => s.replace("??Xw(g,S,await Se(g,S,k));", '??Xw(g,S,await Se(g,S,k))??{behavior:"allow"};'),
+      "canUseTool chain terminal",
+    ],
+    // A Promise is never nullish and has no `.behavior`, so the guard returns it untouched — the pin is
+    // gone and `finish()` receives a Promise.
+    [
+      "P2 inner call of the original not awaited",
+      (s) => s.replace("Xw(g,S,await Se(g,S,k))", "Xw(g,S,Se(g,S,k))"),
+      "canUseTool chain terminal",
+    ],
+    [
+      'P3 wrapper body gains a behavior:"allow" literal',
+      (s) => s.replace("let i=r.updatedInput,", 'if(e==="Read")return{behavior:"allow",updatedInput:n};let i=r.updatedInput,'),
+      "canUseTool chain terminal",
+    ],
+    // Keeps the card's rewritten input — the pre-2.16120.0 semantics, silently.
+    [
+      "P4 updatedInput taken from the card's answer",
+      (s) => s.replace("{...r,updatedInput:n}}", "{...r,updatedInput:i}}"),
+      "canUseTool chain terminal",
+    ],
+    ["P5 wrapper does not resolve in the hook chunk", (s) => s.replace("Xw(g,S,await", "Xq(g,S,await"), "canUseTool chain terminal"],
+    [
+      "P6 passthrough guard dropped (every answer is rewritten)",
+      (s) => s.replace('if(r?.behavior!=="allow"||!t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS.includes(e))return r;', ""),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P7 wrapper pins a different input than the original judged",
+      (s) => s.replace("Xw(g,S,await Se(g,S,k))", "Xw(g,T,await Se(g,S,k))"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P8 passthrough guard keyed on a different tool set",
+      (s) => s.replace("||!t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS.includes(e))", "||!t.SOME_OTHER_SET.includes(e))"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "L1 managed-ask branch flipped back to a hard deny",
+      (s) =>
+        s.replace(
+          MANAGED_ASK_FALLTHROUGH,
+          'if(t.Ma(e,r))return t.EZ.info(`${e} → deny`),{behavior:"deny",message:"requires per-call approval"};',
+        ),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L2 managed-ask branch returns an allow",
+      (s) => s.replace("(managed ask)`);return}", '(managed ask)`);return{behavior:"allow",updatedInput:o}}'),
+      "canUseTool managed-ask",
+    ],
+    ["L3 managed-ask branch removed", (s) => s.replace(MANAGED_ASK_FALLTHROUGH, ""), "canUseTool managed-ask"],
+    // Undoing the pin BETWEEN the guard and the pinned return. Each keeps the guard, the return count and
+    // the `{...r,updatedInput:n}` tail intact, so only a check on writes to the judged input sees them.
+    [
+      "P9 judged input reassigned to the card's answer (n=i) before the pin",
+      (s) => s.replace("let i=r.updatedInput,a=", "let i=r.updatedInput;n=i;let a="),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P10 judged input reassigned inside the single let",
+      (s) => s.replace("let i=r.updatedInput,a=", "let i=(n=r.updatedInput),a="),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P11 card keys merged into the judged input (Object.assign)",
+      (s) => s.replace("return a.length>0&&", "return Object.assign(n,i??{}),a.length>0&&"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P12 differing keys copied into the judged input (for..of)",
+      (s) => s.replace("return a.length>0&&", "for(const k of a)n[k]=i[k];return a.length>0&&"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P13 a judged-input key deleted",
+      (s) => s.replace("return a.length>0&&", "return delete n.file_path,a.length>0&&"),
+      "canUseTool chain terminal",
+    ],
+    // Link 3: a second decision on the same predicate, a reason rewrite, or the branch made dead code.
+    [
+      "L4 a hard deny on the same predicate placed before the fall-through",
+      (s) =>
+        s.replace(
+          MANAGED_ASK_FALLTHROUGH,
+          'if(t.Ma(e,r)&&o!==void 0)return{behavior:"deny",message:"per-call approval"};' + MANAGED_ASK_FALLTHROUGH,
+        ),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L5 reason rewritten on the predicate before the branch",
+      (s) => s.replace(MANAGED_ASK_FALLTHROUGH, "t.Ma(e,r)&&(r=Zt);" + MANAGED_ASK_FALLTHROUGH),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L6 the fall-through made dead code behind a deny return",
+      (s) => s.replace(MANAGED_ASK_FALLTHROUGH, 'if(o!==void 0)return{behavior:"deny",message:"outside"};' + MANAGED_ASK_FALLTHROUGH),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L7 tool name rewritten before the branch",
+      (s) => s.replace(MANAGED_ASK_FALLTHROUGH, 'e="Glob";' + MANAGED_ASK_FALLTHROUGH),
+      "canUseTool managed-ask",
+    ],
+  ];
+  it.each(WRAP_MUT)("2.16120.0 wrapper mutation %s fails loud (%#)", (_label, mutate, expected) => {
+    expect(checkPathHookFacts(wrappedFiles(mutate)).join("\n")).toContain(expected);
+  });
+
+  it("MUTATION: the managed-ask predicate no longer resolves to the organization-policy check → flags", () => {
+    const f = wrappedFiles(undefined, (d) => d.replace("Organization policy requires approval for this tool.", "something else"));
+    expect(checkPathHookFacts(f).join("\n")).toContain("canUseTool managed-ask");
+  });
+
+  it("`$`-named pin wrapper still resolves", () => {
+    expect(checkPathHookFacts(wrappedFiles((s) => s.replaceAll("Xw(", "$w(")))).toEqual([]);
+  });
+
   // `$`-named pre-pass, pre-pass result and chain link (Desktop 2.9939.2 emits `$`-initial names). The
   // captured names reach `new RegExp`; unescaped, the result checks false-flag a healthy build and the
   // two await checks can never match, so an un-awaited async call would pass in silence.
@@ -3387,5 +3633,48 @@ describe("committed baselines: provenance.desktopInitSurface is allowlisted and 
     // Tautological on sync-written data (sync stamps both sides); guards hand edits and cross-file copies.
     expect(block.agentVersion).toBe(b.agentVersion);
     expect(block.appVersion).toBe(b.appVersion);
+  });
+});
+
+// The harness's staged agent binary arrives on disk only because Desktop's VM start stages it: `startVM`
+// runs the bundle download and `prepareForVM` (the SDK/agent staging) together in the
+// `download_and_sdk_prepare` step. If Desktop drops that call or moves it off the startVM path, the
+// agent supply stops silently — so it is a fail-closed sync fact.
+describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
+  const vmChunk = (mutate?: (s: string) => string) => {
+    const c =
+      `var Ex={isVMDownloaded:()=>UJ,startVM:()=>KJ,stopVM:()=>JJ};` +
+      `async function Uwr(e,t,n){let s=tr();try{s.stepStarted("download_and_sdk_prepare");` +
+      `let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);if(!h.ready){let e=Error(h.error??"SDK preparation failed");throw s.stepFailed("download_and_sdk_prepare",e),e}` +
+      `s.stepCompleted("download_and_sdk_prepare")}catch(e){throw e}}` +
+      `async function KJ(e,t){if(DJ)return DJ.promise;let i=new AbortController;return QCr=DJ,Uwr(e,i,t).catch((e=>{throw e}))}` +
+      `async function Other(){return 1}`;
+    return new Map([["index.chunk-main.js", mutate ? mutate(c) : c]]);
+  };
+  it("clean: the prepare step sits on the startVM path", () => {
+    expect(checkVmAgentStagingFacts(vmChunk())).toEqual([]);
+  });
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkVmAgentStagingFacts(files)).toEqual([]);
+  });
+  const MUT: ReadonlyArray<readonly [string, (s: string) => string]> = [
+    ["V1 prepareForVM dropped from the Promise.all", (s) => s.replace("[BJ(e,t),EG.prepareForVM(t)]", "[BJ(e,t)]")],
+    [
+      "V2 prepareForVM moved out of the Promise.all",
+      (s) => s.replace("[BJ(e,t),EG.prepareForVM(t)]", "[BJ(e,t),Promise.resolve({ready:!0})]"),
+    ],
+    [
+      "V3 the prepare step moved out of the startVM path",
+      (s) => s.replace("Uwr(e,i,t).catch(", "Nope(e,i,t).catch(").replace("async function Other(){", "async function Nope(){"),
+    ],
+    ["V4 the step marker is gone", (s) => s.replaceAll("download_and_sdk_prepare", "download_only")],
+    ["V5 the startVM export is gone", (s) => s.replace("startVM:()=>KJ,", "")],
+    // The real call passes one identifier (`EG.prepareForVM(t)`); an options object could switch staging off.
+    ["V6 prepareForVM called with an options object", (s) => s.replace("EG.prepareForVM(t)", "EG.prepareForVM(t,{skip:!0})")],
+  ];
+  it.each(MUT)("mutation %s fails loud (%#)", (_label, mutate) => {
+    expect(checkVmAgentStagingFacts(vmChunk(mutate)).join("\n")).toContain("vm agent staging");
   });
 });

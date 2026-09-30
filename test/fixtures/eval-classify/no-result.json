@@ -1,0 +1,60 @@
+{
+  "scenario": "fixture-no-result",
+  "result": "error",
+  "errorSource": "no_result",
+  "models": [
+    "claude-opus-5"
+  ],
+  "fingerprint": {
+    "contentSig": "0fecea1e910945bae9a5b01b3b7198251143a2dcbdb4bc51076be0281fc98481"
+  },
+  "assertions": [
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "skill_triggered": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "tool_called": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "questions_count_max": 1
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "semantic_matches": {
+          "rubric": [
+            "claim 1",
+            "claim 2"
+          ]
+        }
+      },
+      "pass": false,
+      "semanticClaims": [
+        {
+          "index": 0,
+          "claim": "claim 1",
+          "pass": false
+        },
+        {
+          "index": 1,
+          "claim": "claim 2",
+          "pass": false
+        }
+      ]
+    }
+  ]
+}

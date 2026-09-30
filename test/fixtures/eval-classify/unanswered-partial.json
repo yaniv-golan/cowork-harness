@@ -1,0 +1,18 @@
+{
+  "scenario": "fixture-unanswered-partial",
+  "result": "error",
+  "partial": true,
+  "unansweredGate": {
+    "message": "<redacted>",
+    "hint": "<redacted>"
+  },
+  "models": [
+    "claude-sonnet-4-6"
+  ],
+  "modelFallbacks": [],
+  "modelPinHonored": true,
+  "fingerprint": {
+    "contentSig": "af30651e14d1a7b57f5e85563584988795d03cb85fd1b230075581ca8effec68"
+  },
+  "assertions": []
+}

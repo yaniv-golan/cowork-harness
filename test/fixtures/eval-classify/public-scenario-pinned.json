@@ -1,0 +1,64 @@
+{
+  "scenario": "csv-metrics",
+  "result": "success",
+  "resultSubtype": "success",
+  "models": [
+    "claude-opus-4-8"
+  ],
+  "modelFallbacks": [],
+  "modelPinHonored": true,
+  "fingerprint": {
+    "contentSig": "a432b8564b37b8405fc0c5413adb2a3d32f86da1e75781655af638ce83562fcc"
+  },
+  "cost": {
+    "usd": 0.216095
+  },
+  "usage": {
+    "turns": 7
+  },
+  "durationMs": 23472,
+  "assertions": [
+    {
+      "assertion": {
+        "result": "success"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "tool_called": "Skill"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "tool_called": "Bash"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "user_visible_artifact": "outputs/metrics.json"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "user_visible_artifact": "outputs/summary.md"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "transcript_matches": "metrics\\.json"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "no_delete_in_outputs": true
+      },
+      "pass": true
+    }
+  ]
+}
