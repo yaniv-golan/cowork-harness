@@ -31,10 +31,15 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
 | `underpowered` | no outcome at these sizes could reach `--alpha` — NOT "no change" |
 | `insufficient` | too few valid reps in an arm (4 of 5 needed by default) |
 
-A drop is a signal to investigate, not proof: open the run dirs the report links for that row. An
-agent-caused failure (timeout, max turns, unanswered question, crash) fails every row of its rep; an
-infrastructure failure, a pin the agent did not honour, or a snapshot that changed is excluded and
-reported. A loud UNCLASSIFIED count means a termination the classifier does not know — read those runs.
+A drop is a signal to investigate, not proof: open the run dirs the report links for that row. In order,
+first match wins: an infrastructure failure is excluded and reported — including a rep where no model
+answered (the agent's `Not logged in` / `Authentication required` reply, rule `auth`; or only
+`<synthetic>` models at $0, rule `no_model_answered`). An agent-caused failure (timeout, max turns,
+unanswered question, crash) then fails every row of its rep, even with its pin unknown. Only after that
+are a pin the agent did not honour (false, or unknown on a rep that completed) and a snapshot that changed
+excluded and reported. A loud UNCLASSIFIED count means a termination the classifier does not know — read
+those runs. If EVERY rep of an arm errored, the header says so (`Every rep of arm <label> errored — …`),
+every row is `insufficient`, and the eval exits 1: nothing was compared.
 
 ## Refused before any run (exit 2)
 
@@ -44,12 +49,14 @@ reported. A loud UNCLASSIFIED count means a termination the classifier does not 
 - an arm that contains the eval's own scenario or session files (by location, copy or symlink), an
   `evals.json`, or a symlink resolving outside it;
 - a scenario input a run would refuse (a missing path, a `tool_not_called` the tier can never violate);
-- `--fail-on confirmed` when no row could reach `confirmed` at this `--reps`.
+- `--fail-on confirmed` when no row could reach `confirmed` at this `--reps`;
+- no usable agent credential for a scenario's tier — the same check as `doctor --tier <tier>`'s `token` row,
+  with its fix. A Keychain login without an env/.env token passes only at `protocol`.
 
 ## Exit codes
 
 `0` completed — no drop fails the eval unless you pass `--fail-on`. `1` a drop at the `--fail-on` level,
-every row `insufficient`, or the judge model differed across reps (an A/A run under `--fail-on possible`
+every row `insufficient` (including an arm whose every rep errored), or the judge model differed across reps (an A/A run under `--fail-on possible`
 can exit 1 on noise). `2` usage or a refusal. `3` an arm snapshot could not be copied or staged.
 
 ## Files

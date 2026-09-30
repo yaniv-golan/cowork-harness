@@ -24,7 +24,8 @@ it.
   judge call per `semantic_matches` assert per run. There is no budget flag; the start-up line prints the
   job count before the first run, and `stats` prices past runs of the same scenarios.
 - **Tier.** Each scenario runs at its own `fidelity:`, with that tier's prerequisites (Docker and the
-  agent image for `container`, and so on) — check them with `cowork-harness doctor --tier <tier>`.
+  agent image for `container`, and so on) — check them with `cowork-harness doctor --tier <tier>`. The
+  agent credential is checked for you: see [What it holds fixed](#what-it-holds-fixed-refused-before-any-run-exit-2).
 - **Run an A/A first.** `eval` with the same source as both arms (`--allow-identical-arms`) shows how
   far your scenarios' rates move when nothing changed. Read that before trusting a before/after.
 
@@ -97,6 +98,9 @@ The header states what every number depends on:
   where a drop is);
 - **per arm**: each rep's bucket, an `errorSource` histogram, and a loud **UNCLASSIFIED** count for any
   termination the classifier does not recognise (excluded — read those run dirs);
+- **an arm in which every rep errored**, named with its most frequent bucket and rule — for example
+  `errored_infra (auth) 5/5`. Nothing was compared, so every row is `insufficient` (see
+  [Exit codes](#exit-codes)); `report.json` lists these under `summary.erroredArms`;
 - per-arm medians of cost, judge cost, turns and duration (descriptive, no test);
 - "no control arm: prior-answerable claims are not flagged".
 
@@ -110,10 +114,22 @@ it landed in.
 | Rep | Counted as |
 |---|---|
 | ran to completion | valid |
-| the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
 | infrastructure: a spawn or protocol failure, a transport error, a usage limit, a decider timeout | excluded, reported |
-| the pin did not hold (`modelPinHonored` false or unknown), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
+| no model answered: the agent could not authenticate (its reply is `Not logged in · Please run /login` or `Authentication required · Sign in again to continue`), or every model it reported is its own `<synthetic>` marker and the run cost $0 (a spend limit, say) | excluded as infrastructure, reported (rule `auth` or `no_model_answered`) |
+| the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
+| the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
+
+The rows are checked in that order, and the first that matches decides. Two consequences:
+
+- **An agent failure outranks a pin exclusion.** A rep that crashed fails every row even when its pin is
+  unknown — a crash before the first model reply leaves no model evidence, and excluding it would hide a
+  skill that breaks on its first turn. So "unknown" excludes only a rep that ran to completion.
+- **A pin that is unknown because no model answered is infrastructure**, not the agent's failure and not
+  a pin exclusion. "No model answered" needs positive evidence — a `<synthetic>`-only model list *and* $0
+  spent, or the agent's authentication text; a run that recorded no model at all is still the agent's. A
+  successful run whose model list is `<synthetic>`-only (a prompt that starts with `/plugin:skill`) is not
+  affected by this rule.
 
 ## What it holds fixed (refused before any run, exit 2)
 
@@ -134,17 +150,26 @@ it landed in.
 - **The scenarios' inputs**, as a run checks them, over each arm's snapshot: every input path, and a
   `tool_not_called` the scenario's tier can never violate.
 - **`--fail-on confirmed`** when no row could reach `confirmed` at this `--reps` and correction.
+- **The agent credential**, for every tier the scenarios run at, by the same check
+  `cowork-harness doctor --tier <tier>` prints as its `token` row: a failing check refuses the eval with
+  doctor's message and fix. A token in the environment or `.env` passes at every tier. Without one, a
+  Claude Code login in the macOS Keychain is enough only at `protocol` (which keeps your real config dir,
+  so the agent signs itself in; doctor shows it as a warning); every other tier gives the agent a managed
+  config dir, and there it is refused. The check cannot see a token that is present but expired — a rep
+  that then fails to authenticate is excluded as infrastructure (above).
 
 A refused eval leaves nothing in its eval dir.
 
 ## Exit codes
 
 - `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
-  result or a judge disagreement still exits 1 — see below.)
+  result, an arm in which every rep errored, or a judge disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
   classification rows do not); with `--fail-on confirmed`, a `confirmed` drop. Also, with or without it:
-  every row `insufficient`, or the judge model differed across reps. An A/A run under
-  `--fail-on possible` can exit 1 on noise alone.
+  every row `insufficient`, or the judge model differed across reps. An arm in which **every** rep
+  errored — infrastructure or the agent's own failure, in any mix — compared nothing, so every row of the
+  eval is reported `insufficient` and this rule applies; the header names the arm and its most frequent
+  error. An A/A run under `--fail-on possible` can exit 1 on noise alone.
 - `2` — usage, or any refusal before the first run.
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
 

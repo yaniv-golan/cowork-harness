@@ -33,12 +33,22 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   - Refused before any run (exit `2`): alias models, `--reps` below 4 without `--allow-underpowered`, an
     eval directory inside a git work tree, identical arms (unless `--allow-identical-arms`), an arm that
     contains the eval's own scenario or session files (a symlink included), an `evals.json` or a symlink
-    resolving outside it, a scenario input a run would refuse, and a `--fail-on confirmed` that no row
-    could reach. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
+    resolving outside it, a scenario input a run would refuse, a `--fail-on confirmed` that no row
+    could reach, and no usable agent credential for a scenario's tier — decided by the same check as
+    `doctor --tier <tier>`'s `token` row, whose message and fix the refusal prints (a Keychain login with
+    no env/.env token passes only at `protocol`). In a scenario directory, YAML with no `prompt:` (a
+    session file) is skipped.
+  - A rep in which no model answered is excluded as infrastructure, not scored as the skill failing: the
+    agent's own authentication-failure reply (`Not logged in · Please run /login`, `Authentication
+    required · Sign in again to continue`; rule `auth`), or an error whose only models are `<synthetic>`
+    and which cost $0 (rule `no_model_answered`). An agent-caused failure outranks a pin exclusion, so a
+    crash with no model evidence still fails every row.
   - Exit `0` when the eval completed, whatever drops the rows show; `--fail-on possible|confirmed` opts in
     to exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
-    differed across reps, and `3` when an arm snapshot could not be copied or failed its staging
-    preflight. The report format, labels and statistical defaults are experimental
+    differed across reps; an arm in which every rep errored compared nothing, so its eval reports every row
+    `insufficient`, names the arm and its most frequent error in the header (`summary.erroredArms`), and
+    exits `1`. Exit `3` when an arm snapshot could not be copied or failed its staging preflight. The
+    report format, labels and statistical defaults are experimental
     ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
 - **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so
   `--keep-last` applies to them; `prune` warns that the eval's report links point at deleted runs
@@ -197,6 +207,9 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   on macOS and the order was arbitrary on Linux. It prints them oldest → newest by version, and names the
   one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
   filename per line), and `latest: true` on that entry in `--output-format json`.
+- **`stats --group-by label` gives the right reason for runs it leaves out.** It explained a run with no
+  label with the skill-hash reason (no fingerprint, nothing to hash). It says a run carries a label only
+  when started with `--label`, or by `eval`.
 - **`critique` no longer fails on an `events.jsonl` line that is a JSON scalar** (such as `null`) while
   reading sub-agent `Skill` calls; the line is skipped like a torn one.
 - **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
