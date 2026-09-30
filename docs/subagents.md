@@ -684,7 +684,11 @@ written to that dispatch's `subagents[].reasoning`.
   `Run.THINKING_TEXT_CAP_BYTES` but separate constants), with `reasoningElided` counting turns pushed
   out past the cap (only present when non-zero).
 - **`configDirRoot` is fidelity-tier-resolved** — hostloop vs. the container/microvm sandboxed config
-  dir; an unresolvable root (e.g. `protocol`) leaves `reasoning` undefined on every dispatch.
+  dir. At `protocol` it is the run's own config dir under managed config (`COWORK_MANAGED_CONFIG=1`
+  with a token, or `ANTHROPIC_API_KEY`); without managed config the host agent reads your real config
+  dir, which the harness never walks, so `reasoning` stays undefined on every dispatch. When a
+  `semantic_matches` assert sets `include_subagent_text: true` and no dispatch got `reasoning`, the run
+  prints a `::warning::` saying the judge saw no sub-agent text, and why.
 - **Never fails the run.** A missing/malformed child transcript or an unreadable `configDirRoot` is a
   silent per-dispatch no-op — `reasoning` just stays `undefined` for that dispatch (distinct from `[]`,
   which means a child file WAS found but produced no thinking/text turns). A transcript with **no

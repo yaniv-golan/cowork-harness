@@ -298,12 +298,17 @@ function readOriginMarker(path: string): OriginMarker | null {
  *      `mntHost`), NOT `outDir/work/session/mnt` — root is `join(VM_WORK_HOST, sessionId, "mnt",
  *      ".claude")`. Using the container root here would glob an empty (non-existent) dir and silently
  *      leave `reasoning` undefined on every microvm run.
- *  Other tiers (protocol — no real agent binary spawns) return `undefined`: there is no child
- *  transcript to read, so the caller skips the capture entirely. */
+ *    - protocol spawns the HOST `claude`, which writes child transcripts too — but where depends on the
+ *      config branch `spawnProtocol` picked. Under managed config it sets `CLAUDE_CONFIG_DIR=plan.configDir`;
+ *      off it, the agent uses the operator's REAL config dir, which must never be walked (it holds every
+ *      other session the operator ever ran). So the root is whatever `spawnProtocol` returned as its
+ *      `subagentConfigRoot` (the managed dir, or undefined) — decided by the runtime, never re-derived here.
+ *  Any other tier returns `undefined`, and the caller skips the capture entirely. */
 export function resolveSubagentConfigRoot(
   effectiveFidelity: string,
-  ctx: { configDir: string; workRoot: string; sessionId?: string },
+  ctx: { configDir: string; workRoot: string; sessionId?: string; protocolConfigRoot?: string },
 ): string | undefined {
+  if (effectiveFidelity === "protocol") return ctx.protocolConfigRoot;
   if (effectiveFidelity === "hostloop") return ctx.configDir;
   if (effectiveFidelity === "container") return join(ctx.workRoot, ".claude");
   if (effectiveFidelity === "microvm") {
@@ -322,21 +327,42 @@ export function resolveSubagentConfigRoot(
  *  document reads `ctx.subagents[].reasoning`, so a capture that ran after the judge left every live
  *  `include_subagent_text: true` grade without the sub-agent text it asked for.
  *
- *  `subagents` must be the array `ctx.subagents` is (executeScenario passes `record.subagents` for both);
- *  `result.subagents` is built from it afterwards (as-is, or `attributeSubagentSkills`' shallow copies,
- *  which carry the captured arrays by reference), so the persisted reasoning is the reasoning the judge
- *  saw. Runs the capture exactly once — it APPENDS to `webSearches`, so a second pass would double them.
- *  An `undefined` root (protocol tier) or a capture-internal failure leaves `reasoning` absent, never
- *  fails the run. `judges` is called only when a `semantic_matches` assert exists, so building the judge
- *  (which can spend) stays gated. */
+ *  The capture writes INTO `ctx.subagents` — the very objects the judge reads — so the judge's input cannot
+ *  be a different array from the capture target. executeScenario builds that ctx over `record.subagents`
+ *  and `result.subagents` from the same array afterwards (as-is, or `attributeSubagentSkills`' shallow
+ *  copies, which carry the captured arrays by reference), so the persisted reasoning is the reasoning the
+ *  judge saw. Runs the capture exactly once — it APPENDS to `webSearches`, so a second pass would double
+ *  them. An `undefined` root (a tier with no readable child transcripts) or a capture-internal failure
+ *  leaves `reasoning` absent, never fails the run — but an `include_subagent_text` assert over dispatches
+ *  none of which got reasoning is warned about, since its judge then sees no sub-agent text. `judges` is
+ *  called only when a `semantic_matches` assert exists, so building the judge (which can spend) stays
+ *  gated. */
 export async function captureSubagentReasoningThenJudge(args: {
   subagentConfigRoot: string | undefined;
-  subagents: Parameters<typeof captureSubagentReasoning>[1];
+  /** The tier, for the warning's wording only. */
+  effectiveFidelity: string;
   asserts: Scenario["assert"];
   ctx: AssertContext;
   judges: () => { judge: SemanticJudge; judgeFor?: (model: string) => SemanticJudge };
 }): Promise<void> {
-  if (args.subagentConfigRoot) captureSubagentReasoning(args.subagentConfigRoot, args.subagents);
+  // AssertContext declares a narrower view of each dispatch than RunResult's (no webSearches/…Elided), but
+  // every live construction site passes the run's own dispatch objects, which the capture fills in place.
+  const subagents = args.ctx.subagents as unknown as Parameters<typeof captureSubagentReasoning>[1];
+  if (args.subagentConfigRoot) captureSubagentReasoning(args.subagentConfigRoot, subagents);
+  const wantsSubagentText = args.asserts.some((a) => a.semantic_matches?.include_subagent_text === true);
+  if (wantsSubagentText && args.ctx.subagents?.length && args.ctx.subagents.every((s) => s.reasoning === undefined)) {
+    const why = args.subagentConfigRoot
+      ? `no child transcript under ${args.subagentConfigRoot} matched any of the ${args.ctx.subagents.length} dispatch(es)`
+      : args.effectiveFidelity === "protocol"
+        ? `protocol runs without managed config (or whose config dir is the operator's own) read the operator's ` +
+          `real config dir, which the harness does not walk (set COWORK_MANAGED_CONFIG=1 with a token, or use a ` +
+          `sandboxed tier)`
+        : `the ${args.effectiveFidelity} tier has no child transcripts the harness can read`;
+    warn(
+      `::warning:: [semantic_matches] include_subagent_text: true, but the judged document has NO sub-agent text — ` +
+        `no sub-agent reasoning was captured: ${why}. The grade covers the main agent's text only.\n`,
+    );
+  }
   if (args.asserts.some((a) => a.semantic_matches !== undefined)) {
     const { judge, judgeFor } = args.judges();
     await runSemanticJudges(args.asserts, args.ctx, judge, judgeFor);
@@ -879,6 +905,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
   let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
+  // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
+  // operator's real one (see resolveSubagentConfigRoot). Set by spawnProtocol, never re-derived.
+  let protocolSubagentConfigRoot: string | undefined;
   let promptFidelityWarnings: string[] | undefined; // structured prompt warnings collected by renderPrompts
   // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
   // created HERE (before spawnHostLoop builds the handler) and filled with a Run-backed bundle after
@@ -1116,6 +1145,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           workDir: proto.workDir,
         });
         l0HostConfigContamination = proto.l0HostConfigContamination;
+        protocolSubagentConfigRoot = proto.subagentConfigRoot;
         if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
           warn(
             `::warning:: [protocol] scenario asserts transcript_no_host_path — protocol (L0) runs the agent's file tools ` +
@@ -1416,6 +1446,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         workRoot,
         configDir: plan.configDir,
         sessionId,
+        protocolConfigRoot: protocolSubagentConfigRoot,
         pluginSkillRoots: pluginSkillRootsFromPlan(plan),
         userVisibleRoots,
         readonlyFolderRoots,
@@ -1636,10 +1667,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // judge (`include_subagent_text`) and result.json see the same reasoning. The judge is built only when
     // a semantic assert exists, so a scenario without one never spends a model call. (Replay strips
     // `semantic_matches` as live-only, so it never reaches here.)
-    const subagentConfigRoot = resolveSubagentConfigRoot(effectiveFidelity, { configDir: plan.configDir, workRoot, sessionId });
+    const subagentConfigRoot = resolveSubagentConfigRoot(effectiveFidelity, {
+      configDir: plan.configDir,
+      workRoot,
+      sessionId,
+      protocolConfigRoot: protocolSubagentConfigRoot,
+    });
     await captureSubagentReasoningThenJudge({
       subagentConfigRoot,
-      subagents: record.subagents,
+      effectiveFidelity,
       asserts: scenario.assert,
       ctx: assertCtx,
       // A per-assert judge_model is honoured unless the caller pinned one judge for the whole run.
@@ -2686,6 +2722,9 @@ export function buildPartialResult(args: {
    *  `executeScenario` call site always passes it. Omitting it on a microvm partial just leaves
    *  `reasoning` absent for that salvage run, same as any other capture-unavailable case. */
   sessionId?: string;
+  /** protocol tier only: the config dir `spawnProtocol` reported for the reasoning capture (see
+   *  `resolveSubagentConfigRoot`). Absent ⇒ no capture at protocol. */
+  protocolConfigRoot?: string;
   pluginSkillRoots: PluginSkillRoot[];
   userVisibleRoots: string[];
   readonlyFolderRoots: string[];
@@ -2759,6 +2798,18 @@ export function buildPartialResult(args: {
         `UNAVAILABLE (undefined), not a partial list (#54).\n`,
     );
   const workspaceFiles = trustedWorkspaceFiles(wfHealth);
+  // Same sub-agent reasoning capture the success path runs (see resolveSubagentConfigRoot's doc
+  // comment) — a salvaged partial run is still LIVE, and a dispatch may have completed (and thought)
+  // before the gate that ended the run. Captured onto the RECORD before assembly, as on the success path, so
+  // result.json, run.jsonl and trace.json (both written from the record) carry the same reasoning. Silent
+  // no-op on a tier with no child transcript, or a capture failure. No judge runs on this path.
+  const subagentConfigRoot = resolveSubagentConfigRoot(args.effectiveFidelity, {
+    configDir: args.configDir,
+    workRoot: args.workRoot,
+    sessionId: args.sessionId,
+    protocolConfigRoot: args.protocolConfigRoot,
+  });
+  if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, args.record.subagents);
   const built = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -2877,17 +2928,6 @@ export function buildPartialResult(args: {
     outcome: undefined, // stamped alongside the verdict just below (derived from it)
     verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there
   });
-  // Same sub-agent reasoning capture the success path runs (see resolveSubagentConfigRoot's doc
-  // comment) — a salvaged partial run is still LIVE, and a dispatch may have completed (and thought)
-  // before the gate that ended the run. Silent no-op on a tier with no child transcript, or a capture
-  // failure.
-  const subagentConfigRoot = resolveSubagentConfigRoot(args.effectiveFidelity, {
-    configDir: args.configDir,
-    workRoot: args.workRoot,
-    sessionId: args.sessionId,
-  });
-  if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, built.subagents);
-
   // A partial run still has a verdict — it failed on the unanswered gate (`result:"error"`), not on an
   // assertion (there are none to evaluate here). Compute it from the just-assembled object (computeVerdict
   // reads result.assertions/unansweredGate/etc. off it) and store the result, same as the success path above.

@@ -63,7 +63,7 @@ describe("live grading: sub-agent reasoning is captured before the judge runs", 
     const a: Assertion = { semantic_matches: { rubric: ["the sub-agent found the answer"], include_subagent_text: true } };
     await captureSubagentReasoningThenJudge({
       subagentConfigRoot: configRoot,
-      subagents,
+      effectiveFidelity: "hostloop",
       asserts: [a],
       ctx,
       judges: () => ({ judge }),
@@ -80,7 +80,7 @@ describe("live grading: sub-agent reasoning is captured before the judge runs", 
     const { configRoot, subagents, ctx } = stagedRun();
     await captureSubagentReasoningThenJudge({
       subagentConfigRoot: configRoot,
-      subagents,
+      effectiveFidelity: "hostloop",
       asserts: [],
       ctx,
       judges: () => {
@@ -99,13 +99,96 @@ describe("live grading: sub-agent reasoning is captured before the judge runs", 
     expect(persisted[0].webSearches).toHaveLength(1);
   });
 
-  it("no config root (protocol tier / replay): no capture, the judge still runs, the section is absent", async () => {
+  it("no config root (unmanaged protocol): no capture, the judge still runs, the section is absent", async () => {
     const { subagents, ctx } = stagedRun();
     const { judge, received } = capturingJudge();
     const a: Assertion = { semantic_matches: { rubric: ["x"], include_subagent_text: true } };
-    await captureSubagentReasoningThenJudge({ subagentConfigRoot: undefined, subagents, asserts: [a], ctx, judges: () => ({ judge }) });
+    const { stderr } = await withStderr(() =>
+      captureSubagentReasoningThenJudge({
+        subagentConfigRoot: undefined,
+        effectiveFidelity: "protocol",
+        asserts: [a],
+        ctx,
+        judges: () => ({ judge }),
+      }),
+    );
     expect(subagents[0].reasoning).toBeUndefined();
     expect(received[0]).not.toContain("Sub-agent output");
+    expect(stderr).toMatch(/::warning:: \[semantic_matches\] include_subagent_text: true, but the judged document has NO sub-agent text/);
+    expect(stderr).toMatch(/without managed config/);
+  });
+});
+
+/** Run `fn` with process.stderr.write captured; returns what was written. */
+async function withStderr(fn: () => Promise<void>): Promise<{ stderr: string }> {
+  const orig = process.stderr.write.bind(process.stderr);
+  let out = "";
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    out += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = orig;
+  }
+  return { stderr: out };
+}
+
+// include_subagent_text over dispatches none of which got reasoning grades the main agent's text only. That
+// must be loud — but only loud: the judged document (and its fingerprint) stays exactly what it would be.
+describe("include_subagent_text with no captured sub-agent reasoning warns", () => {
+  const a: Assertion = { semantic_matches: { rubric: ["x"], include_subagent_text: true } };
+
+  it("a root that matched no transcript names the root; the judged document is unchanged", async () => {
+    const { subagents, ctx } = stagedRun();
+    const emptyRoot = mkdtempSync(join(tmpdir(), "cwh-empty-root-"));
+    const { judge, received } = capturingJudge();
+    const { stderr } = await withStderr(() =>
+      captureSubagentReasoningThenJudge({
+        subagentConfigRoot: emptyRoot,
+        effectiveFidelity: "container",
+        asserts: [a],
+        ctx,
+        judges: () => ({ judge }),
+      }),
+    );
+    expect(stderr).toContain(`no child transcript under ${emptyRoot} matched any of the 1 dispatch(es)`);
+    expect(subagents[0].reasoning).toBeUndefined();
+    // Same document as a run with no dispatches at all: the warning changed nothing the judge saw.
+    const { judge: j2, received: r2 } = capturingJudge();
+    const bare = { ...ctx, subagents: [] } as AssertContext;
+    await captureSubagentReasoningThenJudge({
+      subagentConfigRoot: undefined,
+      effectiveFidelity: "container",
+      asserts: [a],
+      ctx: bare,
+      judges: () => ({ judge: j2 }),
+    });
+    expect(received[0]).toBe(r2[0]);
+  });
+
+  it("silent when reasoning was captured, when no assert opted in, and when there were no dispatches", async () => {
+    const captured = stagedRun();
+    const { judge } = capturingJudge();
+    const plain: Assertion = { semantic_matches: { rubric: ["x"] } };
+    const cases = [
+      { root: captured.configRoot, ctx: captured.ctx, asserts: [a] },
+      { root: undefined, ctx: stagedRun().ctx, asserts: [plain] },
+      { root: undefined, ctx: { ...stagedRun().ctx, subagents: [] } as AssertContext, asserts: [a] },
+    ];
+    for (const c of cases) {
+      const { stderr } = await withStderr(() =>
+        captureSubagentReasoningThenJudge({
+          subagentConfigRoot: c.root,
+          effectiveFidelity: "hostloop",
+          asserts: c.asserts,
+          ctx: c.ctx,
+          judges: () => ({ judge }),
+        }),
+      );
+      expect(stderr).not.toContain("[semantic_matches]");
+    }
   });
 });
 
