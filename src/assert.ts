@@ -802,7 +802,18 @@ export async function runSemanticJudges(
     // template's identity (filled with placeholder claims), never a hash over this rubric.
     const rubric = a.semantic_matches.rubric;
     const scrubbedRubric = secrets.length ? rubric.map((c) => scrub(c, secrets)) : rubric;
-    const sentRubric = scrubbedRubric.some((c, i) => c !== rubric[i]) ? scrubbedRubric : rubric;
+    const redactedIdx = scrubbedRubric.flatMap((c, i) => (c !== rubric[i] ? [i] : []));
+    const sentRubric = redactedIdx.length ? scrubbedRubric : rubric;
+    // A claim that NAMES a secret cannot be graded for it: the judge sees `[REDACTED]` (and the judged
+    // document was already scrubbed of the value), so "must not contain <secret>" becomes a different
+    // claim. Loud, once per assert, naming indexes only — never the claim text, which holds the secret.
+    if (redactedIdx.length)
+      warn(
+        `::warning:: [semantic_matches] rubric claim ${redactedIdx.length === 1 ? "index" : "indexes"} ${redactedIdx.join(",")} ` +
+          `contained a scrubbed secret value and ${redactedIdx.length === 1 ? "was" : "were"} sent to the judge redacted, so ` +
+          `${redactedIdx.length === 1 ? "it" : "they"} cannot be graded for that value. Assert on a secret deterministically ` +
+          `instead: \`transcript_not_contains\` or \`artifact_text: {not_contains}\` (both read the raw evidence on the live run).\n`,
+      );
     const built = judgedDocument(a.semantic_matches.include_subagent_text === true, a.semantic_matches.evidence_files);
     const answer = built.doc;
     ctx.semanticDocInfo.set(a, {

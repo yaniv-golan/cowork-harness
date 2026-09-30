@@ -13,7 +13,11 @@ All notable changes to this project are documented here. The format is based on
   named a secret value (for example "the report must not contain `<token>`") shipped that value out of the
   process. Each claim is now scrubbed with the same secret set as the judged document before the call. A
   rubric with no secret in it is sent unchanged, `judgePromptHash` is unaffected, and the per-claim results
-  in `semanticClaims` still line up with the scenario's claims by index.
+  in `semanticClaims` still line up with the scenario's claims by index. A claim that names a secret cannot
+  be graded for that secret (the judged document was already scrubbed of it, so a "must not contain" claim
+  like the one above used to pass whatever the run did). The run now prints a `::warning:: [semantic_matches]` naming the redacted claim
+  indexes. Assert on a secret with `transcript_not_contains` or `artifact_text: {not_contains}` instead,
+  which read the raw transcript and file on the live run.
 
 ## [4.2.0] — 2026-09-30
 

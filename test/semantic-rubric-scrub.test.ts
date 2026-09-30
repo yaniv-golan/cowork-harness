@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { makeSemanticJudge, JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import type { Complete } from "../src/decide/decider.js";
 import { evaluate, runSemanticJudges, type AssertContext, type SemanticJudge } from "../src/assert.js";
-import { collectSecrets } from "../src/secrets.js";
+import { collectSecrets, scrub } from "../src/secrets.js";
+import { classifyRep, repRowValues, scenarioRows, type ClassifiableResult } from "../src/eval/classify.js";
 import type { Assertion } from "../src/types.js";
 
 // The `semantic_matches` RUBRIC leaves the process for the judge model exactly like the judged document
@@ -53,7 +54,21 @@ function recorder(opts: { throwFirst?: boolean } = {}): SemanticJudge & { calls:
   return j;
 }
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+/** Capture everything written to stderr (where `warn()` goes) while `fn` runs. */
+async function stderrOf(fn: () => Promise<void>): Promise<string> {
+  let out = "";
+  vi.spyOn(process.stderr, "write").mockImplementation(((c: string) => {
+    out += String(c);
+    return true;
+  }) as typeof process.stderr.write);
+  await fn();
+  return out;
+}
 
 describe("semantic_matches rubric — scrubbed before it reaches the judge", () => {
   it("a secret in a rubric claim (any collectSecrets() encoding) never reaches the judge", async () => {
@@ -159,5 +174,46 @@ describe("semantic_matches rubric — scrubbed before it reaches the judge", () 
     const override = recorder();
     await runSemanticJudges([a], ctx({ secrets }), recorder(), () => override);
     expect(override.calls[0].rubric).toEqual(["contains [REDACTED]"]);
+  });
+
+  it("warns once per assert, naming the redacted claim indexes and never the secret", async () => {
+    const secrets = secretsFor(SECRET);
+    const a: Assertion = { semantic_matches: { rubric: ["plain", `must not contain ${SECRET}`, `nor ${SECRET}`] } };
+    const err = await stderrOf(() => runSemanticJudges([a], ctx({ secrets }), recorder()));
+    const lines = err.split("\n").filter((l) => l.includes("[semantic_matches]"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^::warning:: \[semantic_matches\] rubric claim indexes 1,2 /);
+    expect(lines[0]).toMatch(/cannot be graded for that value/);
+    expect(lines[0]).toContain("transcript_not_contains");
+    expect(lines[0]).toContain("artifact_text");
+    expect(err).not.toContain(SECRET);
+  });
+
+  it("an unchanged rubric emits no warning", async () => {
+    const secrets = secretsFor(SECRET);
+    const a: Assertion = { semantic_matches: { rubric: ["alpha", "beta"] } };
+    const err = await stderrOf(() => runSemanticJudges([a], ctx({ secrets }), recorder()));
+    expect(err).not.toContain("[semantic_matches]");
+  });
+
+  it("eval's per-claim rows line up with a restored claim (in-memory result), by index and text", async () => {
+    const secrets = secretsFor(SECRET);
+    const a: Assertion = { semantic_matches: { rubric: ["first", `second mentions ${SECRET}`], min_pass: 1 } };
+    const c = ctx({ secrets });
+    await runSemanticJudges([a], c, recorder());
+    const r: ClassifiableResult = { result: "success", assertions: evaluate([a], c) };
+    const rows = scenarioRows("s", [a]);
+    const vals = repRowValues(rows, [a], { ...classifyRep({ result: r }, {}), bucket: "valid" as const }, r);
+    expect(vals.map((v) => [v.row.kind, v.row.claimIndex, v.value, v.excluded])).toEqual([
+      ["semantic_rollup", undefined, 1, undefined],
+      ["claim", 0, 1, undefined],
+      ["claim", 1, 0, undefined],
+    ]);
+    // The PERSISTED result.json is scrubbed whole on write, so its assertion no longer equals the frozen
+    // scenario's and eval excludes the grade as misaligned. That predates the rubric scrub (the whole-file
+    // scrub already did this) and is pinned here so the behaviour is known, not inferred.
+    const persisted = JSON.parse(scrub(JSON.stringify(r), secrets)) as ClassifiableResult;
+    const pv = repRowValues(rows, [a], { ...classifyRep({ result: persisted }, {}), bucket: "valid" as const }, persisted);
+    expect(pv.every((v) => v.excluded === "grade_misaligned")).toBe(true);
   });
 });
