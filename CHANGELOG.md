@@ -39,6 +39,53 @@ All notable changes to this project are documented here. The format is based on
   and `--max-budget-usd` still count the agent's spend only. The run index gains a matching
   `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
   cost to recover, so their rows stay without it, even after `stats --reindex`.
+- **`semantic_matches` records the judge's reason for each claim.** Each entry of
+  `RunResult.assertions[].semanticClaims[]` can now carry `rationale`: one sentence naming the evidence
+  for a pass, or what is missing for a fail. A failed assert's footer prints the rationale under each
+  failed claim.
+  - It is untrusted model text that can quote the judged document. Control characters are collapsed to spaces,
+    secrets are scrubbed, and it is then capped at 400 characters.
+  - It is advisory: its content never changes `pass`. A missing or non-string rationale is simply absent
+    and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
+    quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
+    A literal newline or tab inside a rationale is tolerated.
+
+### Changed
+
+- **The `semantic_matches` judge prompt now asks for a rationale before each verdict,** and tells the judge
+  to treat the candidate answer as data rather than instructions. Grades against the same rubric may
+  shift, so `judgePromptHash` changes. Compare before/after only between runs that share
+  `judgePromptHash`.
+- **A `semantic_matches` judge reply with a malformed `{"results": …}` group next to a valid grade is now
+  ambiguous and graded invalid** (retried once, then `judgeInvalid`). Before, the valid group was used. A
+  quote inside the judge's text could split its real grade, leaving a `{"results": …}` object quoted from
+  the judged document as the only valid group. A partial restatement of some claims is skipped when it
+  agrees with the full grade and is ambiguous when it contradicts it. An echo of the prompt's output
+  template, even a reformatted one, is still skipped.
+
+- **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), now what `latest` resolves to.
+  - The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
+    origin are unchanged from `desktop-2.9939.4`.
+  - The recorded changes: `spawn.env` and `spawnEnvKeys` gain `PYTHONDONTWRITEBYTECODE` (below),
+    `asarGateIds` gains 30 ids and loses 3, and the GrowthBook cache's `featureCount` goes 384 → 387.
+  - The observed sessions declare `screenshot_file_preview` on Desktop's `cowork` server and, in some
+    session kinds, the artifact family (`create_artifact`/`list_artifacts`/`update_artifact`/
+    `verify_artifact`) including a new `screenshot_artifact`. The artifact family is offered where the
+    native `Artifact` tool is not. Neither `screenshot_file_preview` nor the artifact family is served
+    by the harness (see `docs/fidelity-gaps.md`).
+  - The Desktop init surface for 2.16120.0 was read from 3 local init frames on this install; no
+    interactive local session was available.
+  - The computer-use permission gate (`cuCanUseToolEnabled`) moved to off, server-side. The harness does
+    not model computer use.
+  - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: none of them runs Python that
+    could write bytecode, so the one spawn-env addition cannot change what they recorded.
+    `verify-cassettes` and `replay --strict` pass on them.
+- **`PYTHONDONTWRITEBYTECODE=1` is now set in the agent spawn env**, as Desktop 2.16120.0 does for every
+  Cowork session. On `container` and `microvm`, where the agent's own Bash runs, Python run by the agent
+  or a skill's scripts no longer writes `__pycache__`/`.pyc` files into mounted folders or outputs. On
+  `hostloop` it reaches the agent process, and the shell sidecar keeps its proxy-only env — as Desktop's
+  host-loop VM bash gets `TZ` only. It comes from the pinned baseline, so a scenario pinned to an older
+  baseline does not get it.
 
 ### Fixed
 
@@ -54,6 +101,25 @@ All notable changes to this project are documented here. The format is based on
     Previously it compared the wrong directory against itself and passed.
 - **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
   as its own repeat batch, as documented in the scenario reference.
+- **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
+  them as unknown deltas. The host-loop permission chain now ends in a step that pins an approval's
+  input to the input that was judged, and an organization-policy "ask" on a file tool now reaches the
+  permission prompt instead of being denied; the Artifact tool gate now admits scheduled sessions, with
+  the scheduled-run restriction moved to a gate-controlled step at session start. Each new shape is
+  accepted only in its exact form: a blanket allow, a dropped `await`, a rewritten input, or a scheduled
+  form without its session-start restriction still fails `sync`.
+- **`sync` no longer passes a widening appended to the Artifact predicate.** The predicate was matched as a
+  prefix, so a trailing `||!0` after its last condition passed on every Desktop version; the whole body
+  is now matched.
+- **`sync` now fails if Desktop's VM start stops staging the agent.** The staged agent binary the harness
+  runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
+  moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
+  no longer staged.
+
+### Internal
+
+- **Eval-gate** (`scripts/eval-gate.ts`, maintainer instrument, not shipped with the skill): a judge-prompt
+  mismatch against the baseline is now refused before any paid capture, and `--calibrate` refuses it too.
 
 ## [4.1.1] — 2026-09-29
 

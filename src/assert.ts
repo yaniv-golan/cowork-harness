@@ -9,6 +9,7 @@ import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
+import { finalizeRationale } from "./decide/semantic-judge.js";
 import { warn } from "./io.js";
 import { DEFAULT_AUTHORED_PER_FILE_BYTES, authoredTotalBytes, collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
@@ -288,6 +289,11 @@ export interface SemanticClaimResult {
   index: number;
   claim: string;
   pass: boolean;
+  /** The judge's one-sentence reason for this claim's grade. Model output that can quote the judged
+   *  document: untrusted text for any downstream consumer (normalized, secret-scrubbed and capped, but
+   *  never instructions). Absent when the judge gave none or gave a non-string. Its content never affects
+   *  `pass`; a reply whose JSON it breaks is a malformed grade (retried, then `judgeInvalid`) like any other. */
+  rationale?: string;
 }
 /** The semantic judge: grade a fixed rubric against the run's answer. LIVE-ONLY (a real model call).
  *  Injectable so tests can stub it; the real judge is `makeSemanticJudge` in src/decide/. `model` is the
@@ -794,7 +800,19 @@ export async function runSemanticJudges(
     // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
     // requested alias even when the transport actually resolved to a different concrete model (F11).
     ctx.judgeModels.set(a, j.model ?? (j !== judge ? override : undefined) ?? "unknown"); // an unused per-assert key is not provenance
-    if (graded) ctx.semanticResults.set(a, graded);
+    if (graded) {
+      // The judged document was scrubbed before it left, but the rationale is fresh model output that can
+      // quote it — scrub it again, then normalize and cap, before it is stored (and so reaches result.json
+      // and the footer). Done here, for every judge, so a stub or future judge cannot skip it.
+      const secrets = ctx.secrets ?? [];
+      graded = graded.map((c) => {
+        if (c.rationale === undefined) return c;
+        const { rationale, ...rest } = c;
+        const safe = finalizeRationale(rationale, secrets);
+        return safe !== undefined ? { ...rest, rationale: safe } : rest;
+      });
+      ctx.semanticResults.set(a, graded);
+    }
   }
 }
 

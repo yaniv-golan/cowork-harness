@@ -155,3 +155,19 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     expect(env).toEqual({ CLAUDE_CODE_SUBAGENT_MODEL_NOT_A_REAL_KEY: "keep" });
   });
 });
+
+// Desktop 2.16120.0's W2 base env sets PYTHONDONTWRITEBYTECODE="1" unconditionally. The harness carries it
+// through the pinned baseline spawn.env, so every tier's agent spawn env must include it: container and
+// microvm build theirs with spawnEnv, hostloop with buildHostLoopNativeEnv (over hostNativeSpawnEnv).
+describe("PYTHONDONTWRITEBYTECODE reaches the agent spawn env on every tier (Desktop 2.16120.0)", () => {
+  const base = () => loadBaseline("desktop-2.16120.0");
+  it('the 2.16120.0 baseline pins it to "1"', () => {
+    expect(base().spawn?.env?.PYTHONDONTWRITEBYTECODE).toBe("1");
+  });
+  it("container/microvm (spawnEnv)", () => {
+    expect(spawnEnv(base(), { configGuest: "/mnt/.claude", proxyHost: "http://p" }).PYTHONDONTWRITEBYTECODE).toBe("1");
+  });
+  it("hostloop (native process env)", () => {
+    expect(buildHostLoopNativeEnv(base(), { configDir: "/tmp/cfg" }).PYTHONDONTWRITEBYTECODE).toBe("1");
+  });
+});
