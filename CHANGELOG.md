@@ -43,6 +43,10 @@ All notable changes to this project are documented here. The format is based on
   on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
   the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
   filename per line), and `latest: true` on that entry in `--output-format json`.
+- **`replay --help`, `verify-cassettes --help` and the CI guide now name the scriptable success signal.**
+  In text mode both commands print nothing to stdout by design, and the exit code is the only signal.
+  For a script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
+  envelope's `ok`, for example with `jq -e '.ok'`.
 - **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
   as its own repeat batch, as documented in the scenario reference.
 
