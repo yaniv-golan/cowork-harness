@@ -6,9 +6,46 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.2.0] — 2026-09-30
+
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
 per-claim judge rationales, a fingerprint of what the judge was shown, and the judge's and the LLM
 decider's spend on every graded run. Full `/claude-api hillclimb` integration is coming in 4.3.
+
+### Upgrade notes
+
+- **Cassettes: no re-record needed for this release's harness changes; a cassette recorded through
+  `baseline: latest` needs a re-stamp or a re-record for the new baseline.**
+  - `latest` resolves to `desktop-2.16120.0`, so a cassette recorded through it against 2.9939.4 reports
+    `[stale] baseline moved 2.9939.4 → 2.16120.0 since record — re-record`: `verify-cassettes` and
+    `replay --strict` exit `1` on it, and a plain `replay` prints it as a `::warning::` and keeps its exit
+    code. A cassette pinned to a named baseline is unaffected.
+  - A re-stamp is sound: the agent is unchanged at 2.1.284, the Cowork system prompt is byte-identical
+    to 2.9939.4 (only the minifier's constant name moved), and the sub-agent append, prompt assets and
+    egress allowlist are unchanged. Set `fingerprint.baseline` to `"2.16120.0"`, one line per cassette
+    ([docs/cassette.md](./docs/cassette.md#cassette-versioning), "Clearing a drifted baseline"). The one
+    recorded-contract change is `PYTHONDONTWRITEBYTECODE=1` in the spawn env; re-record instead if the
+    recording ran Python that imports modules from a mounted folder and a `.pyc` in it could matter.
+  - What else moved on the spawn path: at `protocol` and `hostloop` the agent is spawned in its own
+    process group with `COWORK_HARNESS_RUN_TAG` in its env, for teardown. That variable is harness-side
+    and outside a cassette's fingerprint, and nothing a cassette records depends on it. Nothing moved
+    under `src/staging`, `src/session.ts` or the agent argv, and `CASSETTE_VERSION` (13) and the hash
+    format (epoch 12) are unchanged.
+  - The committed cassettes are re-stamped to `2.16120.0`. `verify-cassettes` exits `0` on all four (the
+    one accepted `unscanned` entry is `example-pdf-skill`'s uploaded artifact body), `replay --strict`
+    exits `0` on the three in `examples/replays/`, and none carries the new `agent-version` note.
+- **At `protocol` and `hostloop`, a run stops the host processes the agent started** (see Fixed). A
+  scenario that relied on a background process surviving the run, or on a daemon started from inside the
+  work dir (a `tmux` server, an ssh `ControlPersist` master), does not get it; set
+  `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` to turn off the orphan sweep for such a run.
+- **Live-validated against `desktop-2.16120.0`** (agent 2.1.284) on 2026-09-30. On `main` before the release's
+  last fixes merged: `test:live` 5 files, 21 tests, all passed (`protocol`, `container` and
+  `hostloop`); a real `eval` A/A of 4 reps exited `0`, and `eval report` rebuilt its report
+  byte-identically; `protocol`, `hostloop` and `microvm` runs passed; `chat` on a real terminal exited
+  `130` 1.7 s after a mid-turn Ctrl-C with the agent's process tree gone, and kept its result on `/exit`
+  and on a Ctrl-C at the prompt. On the release code: `eval` without a usable credential refused (exit
+  `2`, no eval directory), and `skill_triggered`/`no_skill_triggered` were correct on a live
+  slash-command run. Details are in `DESIGN.md`'s scope note.
 
 ### Added
 
@@ -48,13 +85,33 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   - Refused before any run (exit `2`): alias models, `--reps` below 4 without `--allow-underpowered`, an
     eval directory inside a git work tree, identical arms (unless `--allow-identical-arms`), an arm that
     contains the eval's own scenario or session files (a symlink included), an `evals.json` or a symlink
-    resolving outside it, a scenario input a run would refuse, and a `--fail-on confirmed` that no row
-    could reach. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
+    resolving outside it, a scenario input a run would refuse, a session without exactly one
+    `plugins.local_plugins` entry, a `--fail-on confirmed` that no row could reach, and no usable agent
+    credential for a scenario's tier — decided by the same check as `doctor --tier <tier>`'s `token` row,
+    whose message and fix the refusal prints (a Keychain login or a config-dir `.credentials.json` with
+    no env/.env token passes only at `protocol`). In a scenario directory, YAML with no `prompt:` (a
+    session file) is skipped.
+  - A rep that failed on the account rather than the skill is excluded as infrastructure, not scored as
+    the skill failing: the agent's own authentication-failure reply (`Not logged in · Please run /login`,
+    `Authentication required · Sign in again to continue`; rule `auth`), a usage or spend limit as its
+    final message, including on a nonzero exit after a model has spent (rule `usage_limit`), or an error
+    whose only models are `<synthetic>` and which cost $0 (rule `no_model_answered`). An agent-caused
+    failure outranks a pin exclusion, so a crash with no model evidence still fails every row.
   - Exit `0` when the eval completed, whatever drops the rows show; `--fail-on possible|confirmed` opts in
     to exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
-    differed across reps, and `3` when an arm snapshot could not be copied or failed its staging
-    preflight. The report format, labels and statistical defaults are experimental
+    differed across reps, or when a scenario compared nothing: every rep of both arms errored, or every
+    rep of one arm is infrastructure — its rows are `insufficient`. An arm whose every rep is the agent's
+    own failure against an arm that ran is scored (a real drop). Each all-errored arm and scenario is named
+    in the header with its most frequent error and a matching hint (`summary.erroredArms`). Exit `3` when
+    an arm snapshot could not be copied or failed its staging preflight. The
+    report format, labels and statistical defaults are experimental
     ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
+- **A credential loaded from the install's own `.env` is named on stderr.** When `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` comes from `<install>/.env` while the CLI runs from another
+  directory — for example `node <clone>/dist/cli.js` — one `[env] using <names> from <file>` line says which
+  file, and never prints a value. A `--dotenv` after the subcommand that replaces that credential adds a
+  second line naming its file. Every other `.env` load stays silent. See the `.env` notes in
+  [docs/cli.md](./docs/cli.md).
 - **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so
   `--keep-last` applies to them; `prune` warns that the eval's report links point at deleted runs
   (`eval report` still rebuilds the report from the eval dir).
@@ -135,9 +192,9 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
     interactive local session was available.
   - The computer-use permission gate (`cuCanUseToolEnabled`) moved to off, server-side. The harness does
     not model computer use.
-  - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: none of them runs Python that
-    could write bytecode, so the one spawn-env addition cannot change what they recorded.
-    `verify-cassettes` and `replay --strict` pass on them.
+  - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: the only Python any of them
+    runs is a `python3 --version`, which writes no bytecode, so the baseline's spawn-env addition cannot
+    change what they recorded. `verify-cassettes` and `replay --strict` pass on them. See Upgrade notes.
 - **`PYTHONDONTWRITEBYTECODE=1` is set in the agent spawn env**, as Desktop 2.16120.0 does for every
   Cowork session. On `container` and `microvm`, where the agent's own Bash runs, Python run by the agent
   or a skill's scripts does not write `__pycache__`/`.pyc` files into mounted folders or outputs. On
@@ -171,7 +228,8 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   everything it started and exits `130`, without a `result.json` — as an interrupted `run` does. Before, it
   took effect only after the agent finished the turn. A Ctrl-C at the `you>` prompt still ends the session
   and writes its result, and a first Ctrl-C while that result is being written waits for it (a second one
-  exits at once).
+  exits at once; a second signal sent with `kill` first waits for a process listing already running, up to
+  10 s).
 - **`replay --help`, `verify-cassettes --help` and the CI guide name the scriptable success signal.** In
   text mode both commands print nothing to stdout by design, and the exit code is the only signal. For a
   script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
@@ -196,6 +254,11 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
     `tmux` server, `code .`, or an ssh `ControlPersist` master left by a `git fetch` over ssh. A
     `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
     the next. On Windows only the agent process itself is stopped, as before.
+  - Each stop lists the host's processes with `ps` first, allowing up to 10 s, so a busy machine does not
+    end the stop on an older listing. At the end of a run a listing that timed out is taken once more;
+    after Ctrl-C or SIGTERM it is not. When the listing fails, a `::warning:: [teardown] could not list
+    processes` line says so. A second Ctrl-C reuses the last listing and exits at once; a second signal
+    sent with `kill` first waits for a listing already running, up to 10 s.
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
   `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
   session file declares, not the substituted candidate the cell actually mounted, so every cell looked
@@ -212,6 +275,20 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   on macOS and the order was arbitrary on Linux. It prints them oldest → newest by version, and names the
   one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
   filename per line), and `latest: true` on that entry in `--output-format json`.
+- **`modelPinHonored` is no longer absent on a run that starts with a `/plugin:skill` prompt.** Its
+  slash-command expansion is a synthetic turn, so `models` held only `<synthetic>` and the pin read as
+  unverifiable although a model answered; `eval` excluded every such rep as a model mismatch. With no live
+  model in `models`, the run's `modelUsage` decides, only when unambiguous: `true` when the concrete
+  pinned id is the only or the dominant billed model, `false` when the single billed model is another,
+  and absent otherwise (an alias pin, a tie, the pin missing among several).
+- **`doctor --tier protocol` accepts a signed-in config dir.** With no env/.env token, a
+  `.credentials.json` in the config dir (`CLAUDE_CONFIG_DIR`, else `~/.claude`) makes the token check
+  a warning instead of a failure at `protocol`, as a macOS Keychain login already did: that tier keeps the
+  real config dir, so the agent signs itself in. Only the file's existence is checked. Other tiers still
+  require an env/.env token.
+- **`stats --group-by label` gives the right reason for runs it leaves out.** It explained a run with no
+  label with the skill-hash reason (no fingerprint, nothing to hash). It says a run carries a label only
+  when started with `--label`, or by `eval`.
 - **`critique` no longer fails on an `events.jsonl` line that is a JSON scalar** (such as `null`) while
   reading sub-agent `Skill` calls; the line is skipped like a torn one.
 - **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
@@ -228,6 +305,31 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
   moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
   no longer staged.
+- **`skill_triggered` and `no_skill_triggered` count a skill run by a slash command.** A prompt that starts
+  with `/<skill> …` or `/<plugin>:<skill> …` runs the skill with no `Skill` tool call — the agent expands the
+  command itself, and a `context: fork` skill forks directly — so `skill_triggered` failed on a run where
+  the skill ran, and `no_skill_triggered` passed on it. Both resolve the prompt's leading token against
+  the init frame's skill inventory, by the same rule `critique` and `eval` already used.
+  - `result.json` gains `slashInvokedSkills`: the staged skill the prompt ran that way (`[]` when none,
+    absent when the harness cannot tell). `skillsInvoked` still lists `Skill` tool calls only. Replay
+    derives the field from the recorded prompt, and `verify-run` derives it for a kept run written before
+    the field existed.
+  - A bare `/name` that more than one staged skill answers to, or a slash prompt on a run that delivered
+    no skill inventory, makes both keys fail as evidence unavailable rather than pass or fail.
+  - The regex is tried against the slash hit's qualified id and its bare name, so an anchored `^skill$`
+    matches it the way it matches a bare `Skill` call. A slash command the agent refused (a
+    `user-invocable: false` skill, or `Unknown command: /<name>`) counts as not invoked when the result
+    text starts with the refusal and no model spent output tokens; an answer that quotes the line is
+    still an invocation. The refusal shape is read from the agent's code and not yet measured in a run.
+  - The `[provenance]` banner shows `skill=offered,invoked(slash)` instead of `offered,NOT-invoked`. When
+    the main loop carried only the agent's `<synthetic>` marker, `model=unknown` is followed by the model
+    ids in `modelUsage`; the JSON `provenance.model` stays `unknown`.
+  - New `lint` warning `slash-prompt-forked-result-anchor`: a `/<skill>` prompt with a `tool_result_*`
+    anchored on `forked execution` (as a literal or a regex such as `forked\s+execution`). That text is the `Skill` tool's result and does not exist when the skill
+    was run by slash command.
+  - `critique`'s `skillInvocationObserved` no longer goes absent for a prompt with no leading slash on a run
+    that delivered no skill inventory: such a prompt cannot invoke a skill by slash command, whatever the
+    inventory.
 
 ## [4.1.1] — 2026-09-29
 

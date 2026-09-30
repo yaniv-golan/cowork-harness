@@ -2899,6 +2899,12 @@
       ".skippedAssertions.partial": {
         "type": "number"
       },
+      ".slashInvokedSkills": {
+        "type": "array"
+      },
+      ".slashInvokedSkills[]": {
+        "type": "string"
+      },
       ".staleness": {
         "type": "array"
       },

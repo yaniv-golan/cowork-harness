@@ -29,6 +29,7 @@ function ctx(command: string, resultText: string): AssertContext {
     toolResultTexts: [resultText],
     skillsInvoked: [],
     skillToolAvailable: true,
+    slashInvokedSkills: [],
     toolCalls: [{ toolUseId: "b1", name: "Bash", input: { command: { text: command } }, origin: "main" }],
     toolResults: [{ toolUseId: "b1", isError: false, text: resultText }],
   };

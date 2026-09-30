@@ -36,7 +36,7 @@ npm ci && npm run build
 node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 ```
 
-(Installing globally — `npm install -g "cowork-harness@^4.1.1"` — gives you the `cowork-harness` CLI for your own
+(Installing globally — `npm install -g "cowork-harness@^4.2.0"` — gives you the `cowork-harness` CLI for your own
 scenarios and cassettes; the bundled example above also replays from a global install — see the `$(npm root -g)` path below.)
 
 Full setup → [Quick start](./docs/cli.md#quick-start).
@@ -49,8 +49,8 @@ Three ways to use this project. Each row is the whole hook — follow the link f
 
 | I want to… | Start here | Needs |
 |---|---|---|
-| **Run scenarios myself** from a terminal | **[docs/cli.md](./docs/cli.md)**<br><br>`npm i -g "cowork-harness@^4.1.1"`<br>`cowork-harness replay examples/replays/example-pdf-skill.cassette.json` | Node ≥ 22. The replay demo above is token-free and needs nothing else; live tiers above `protocol` need Docker + a staged agent binary |
-| **Have Claude Code drive it** for me | **[docs/companion-skill.md](./docs/companion-skill.md)**<br><br>`/plugin marketplace add yaniv-golan/cowork-harness`<br>`/plugin install cowork-harness@cowork-harness` | Claude Code. The skill self-bootstraps the CLI via `npx "cowork-harness@^4.1.1"` |
+| **Run scenarios myself** from a terminal | **[docs/cli.md](./docs/cli.md)**<br><br>`npm i -g "cowork-harness@^4.2.0"`<br>`cowork-harness replay examples/replays/example-pdf-skill.cassette.json` | Node ≥ 22. The replay demo above is token-free and needs nothing else; live tiers above `protocol` need Docker + a staged agent binary |
+| **Have Claude Code drive it** for me | **[docs/companion-skill.md](./docs/companion-skill.md)**<br><br>`/plugin marketplace add yaniv-golan/cowork-harness`<br>`/plugin install cowork-harness@cowork-harness` | Claude Code. The skill self-bootstraps the CLI via `npx "cowork-harness@^4.2.0"` |
 | **Gate my skill in CI** | **[docs/ci.md](./docs/ci.md)**<br><br>`- uses: yaniv-golan/cowork-harness@v4`<br>`  with: { command: replay, path: cassettes/ }` | Nothing for the token-free gate; the live lane needs a self-hosted runner with Docker + an agent binary |
 
 **In short:** three ways in (the table above). Five `fidelity:` tiers — `protocol`, `container`, `microvm`, `hostloop`,
@@ -164,6 +164,10 @@ finalMessage:  "This is a quick syntax question, not a full skill-creation
 The model declined the skill and answered from its own knowledge. The guidance being tested was
 correct and simply never consulted — so the run was measuring the model, not the skill. No transcript
 of the *answer* would have shown that, because the answer was fine.
+
+That record predates `slashInvokedSkills`; today's harness would also record `slashInvokedSkills: []`
+there. Read both before concluding "never invoked": a prompt that starts with `/<skill>` runs the skill
+with no `Skill` call, so it leaves `skillsInvoked` empty and records the skill in `slashInvokedSkills`.
 
 They widened the skill's description in response, re-ran the same probe, and it now invokes — then
 pinned the fix with a scenario so it cannot regress silently. **That is the loop this is for:** find a

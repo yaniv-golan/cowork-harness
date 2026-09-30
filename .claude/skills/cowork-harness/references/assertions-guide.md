@@ -1,6 +1,6 @@
 # Assertions guide
 
-Tracks `cowork-harness 4.1.1` (baseline `desktop-2.16120.0`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog is `assertion-catalog.md`.
+Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog is `assertion-catalog.md`.
 
 ### Assertions: two orthogonal axes
 
@@ -43,7 +43,7 @@ them by what you're trying to prove:
 | a skill actually **ran** (or must NOT) | `skill_triggered: <regex>`, `no_skill_triggered: <regex>` |
 | a tool ran **inside** a skill's scope | `skill_tool_used: {skill, tool}` |
 | a sub-agent did the work | `subagent_output_contains: {contains}`, `subagent_dispatched: <regex>`, `dispatch_count_max: <N>` |
-| a `context: fork` skill answered correctly | `tool_result_matches: '^Skill "[^"]*" completed \(forked execution\)[\s\S]*<pattern>'` — its answer is the `Skill` tool result, not a sub-agent output, so `subagent_output_contains` and `semantic_matches` never see it (foreground fork only — a backgrounded fork's result carries no answer) |
+| a `context: fork` skill answered correctly | `tool_result_matches: '^Skill "[^"]*" completed \(forked execution\)[\s\S]*<pattern>'` — its answer is the `Skill` tool result, not a sub-agent output, so `subagent_output_contains` and `semantic_matches` never see it (foreground fork only — a backgrounded fork's result carries no answer). Only when the MODEL invokes the skill: a `/<skill> …` prompt runs the fork with no `Skill` call and no such result — use `skill_triggered` + `transcript_matches` there |
 | a pre-existing input wasn't mutated (incl. `uploads/**`) | `input_unmodified: <glob>` or `[<glob>, …]` (live/verify-run) |
 | no authored interactive artifact silently loses its Submit under Cowork | `no_lost_write_back: true` (**live-only**; static Tier A over the run's authored `.html`/`.py`/`.js`; per-scenario gate for the same class `analyze-skill` scans) |
 | a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |

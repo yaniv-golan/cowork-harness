@@ -99,6 +99,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     missingCapabilityUse: undefined,
     gateProvenance: undefined,
     skillsInvoked: undefined,
+    slashInvokedSkills: undefined,
     skillToolAvailable: undefined,
     tasks: undefined,
     context: undefined,

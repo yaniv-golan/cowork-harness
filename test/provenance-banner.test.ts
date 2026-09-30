@@ -74,7 +74,9 @@ describe("runProvenance — skill", () => {
   // The exact failure that produced a believable-looking answer with an empty skillActivity: the skill
   // was mounted and offered, and the model read SKILL.md as a file instead of invoking it.
   it("offered and NOT invoked", () => {
-    expect(runProvenance(r({ context: { availableSkills: [{ id: "p:s" }] }, skillsInvoked: [] })).skill).toBe("offered,NOT-invoked");
+    expect(runProvenance(r({ context: { availableSkills: [{ id: "p:s" }] }, skillsInvoked: [], slashInvokedSkills: [] })).skill).toBe(
+      "offered,NOT-invoked",
+    );
   });
 
   it("nothing offered — an ablated or skill-less run", () => {
@@ -111,7 +113,13 @@ describe("runProvenance — ablated", () => {
 describe("formatProvenanceLine", () => {
   it("renders all three fields on one line", () => {
     const line = formatProvenanceLine(
-      r({ models: ["claude-sonnet-5"], context: { availableSkills: [{ id: "p:s" }] }, skillsInvoked: [], ablated: false }),
+      r({
+        models: ["claude-sonnet-5"],
+        context: { availableSkills: [{ id: "p:s" }] },
+        skillsInvoked: [],
+        slashInvokedSkills: [],
+        ablated: false,
+      }),
     );
     expect(line).toBe("[provenance] model=claude-sonnet-5  skill=offered,NOT-invoked  ablated=false");
   });
@@ -122,6 +130,7 @@ describe("renderFooter — the banner is on every verdict", () => {
     models: ["claude-sonnet-5"],
     context: { availableSkills: [{ id: "p:s" }] },
     skillsInvoked: [],
+    slashInvokedSkills: [],
   });
 
   it("prints on a PASSING run", () => {
@@ -191,7 +200,7 @@ describe("provenance on the --repeat rollup", () => {
     const roll = buildRepeatRollup(
       "s",
       3,
-      batch({ models: ["claude-sonnet-5"], context: { availableSkills: [{ id: "p:s" }] }, skillsInvoked: [] }),
+      batch({ models: ["claude-sonnet-5"], context: { availableSkills: [{ id: "p:s" }] }, skillsInvoked: [], slashInvokedSkills: [] }),
     );
     expect(roll.provenance).toEqual({ models: ["claude-sonnet-5"], skills: ["offered,NOT-invoked"], ablatedRuns: 0 });
   });

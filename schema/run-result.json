@@ -462,7 +462,7 @@
     },
     "modelPinHonored": {
       "type": "boolean",
-      "description": "did the model the scenario pinned survive the run? THREE-state: true = pinned and no fallback observed; false = pinned and the agent fell back off it; ABSENT = unverifiable (nothing was pinned, or the run produced no live model evidence). Absence is not a pass \u2014 a consumer that reads a missing value as true is asserting something the run cannot support."
+      "description": "did the model the scenario pinned survive the run? THREE-state: true = pinned and no fallback observed; false = pinned and the agent fell back off it; ABSENT = unverifiable (nothing was pinned, or the run produced no live model evidence). When the main loop reported no live model (the synthetic turn of a /plugin:skill prompt), modelUsage decides only when unambiguous: true if the concrete pinned id is the only or the dominant billed model, false if the single billed model is another. Absence is not a pass \u2014 a consumer that reads a missing value as true is asserting something the run cannot support."
     },
     "modelSource": {
       "type": "string",
@@ -1280,6 +1280,13 @@
         "type": "string"
       },
       "description": "Wave 1 / E8: skill/plugin ids invoked via the Skill tool_use event, in call order, duplicates kept. Backs skill_triggered/no_skill_triggered. Absent on a run predating E8."
+    },
+    "slashInvokedSkills": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "staged skill ids this turn's prompt invoked by a leading slash command (`/<skill> \u2026` or `/<plugin>:<skill> \u2026`), resolved against the init frame's skill inventory. The agent expands such a command itself and emits no Skill tool_use, so these never appear in skillsInvoked (whose meaning is unchanged); skill_triggered/no_skill_triggered read both. [] = no staged skill invoked by slash; absent = cannot tell (no prompt, a slash prompt with no inventory, a bare name more than one staged skill answers to, or a result predating the field)."
     },
     "skillToolAvailable": {
       "type": "boolean",

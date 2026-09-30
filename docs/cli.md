@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g "cowork-harness@^4.1.1"    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^4.2.0"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -38,7 +38,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@^4.1.1"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@^4.2.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -48,7 +48,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.1.1"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.2.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -113,6 +113,7 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
 3. **An auth token** — either `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)` (the `claude setup-token` step needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`) or a **`.env`** file (copy `.env.example` → `.env`; gitignored). `.env.example` lists all three accepted vars — `CLAUDE_CODE_OAUTH_TOKEN`, then `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN` — in that precedence order.
    - **Resolution order:** exported env > `--dotenv <path>` > `./.env` (cwd) > `<install>/.env` (the package root) — so a `npm link`ed install works from any directory. (Use `--dotenv`, not `--env-file` — Node reserves the latter.)
    - **Explicit beats best-effort:** that chain is about *precedence*, not error recovery. A `--dotenv` path you passed explicitly must be readable — if it is missing, unreadable, or a directory, the run stops with a usage error rather than quietly falling through to `./.env` and running against different credentials. The automatic `./.env` / `<install>/.env` locations remain best-effort.
+   - **Which file supplied your credential:** loading is silent, with one exception. When `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` comes from `<install>/.env` and you are running from another directory, stderr gets one line naming the variables and the file (never the values): `[env] using CLAUDE_CODE_OAUTH_TOKEN from ~/code/cowork-harness/.env (the install's .env, not this directory's)`. A run started with `node <clone>/dist/cli.js` from elsewhere is billed to that clone's credential; to use another, export it, put it in `./.env` or pass `--dotenv`. A `--dotenv` given after the subcommand is read later, so when it replaces that credential a second line names it: `[env] CLAUDE_CODE_OAUTH_TOKEN from ~/work/my.env (replacing the install's .env)`. `COWORK_HARNESS_DEBUG=1` lists every loaded key.
    - **Placement:** keep `.env` at a working-dir or install root, never inside a mounted skill/project folder.
    - **Global install:** find the package root with `` `$(npm root -g)/cowork-harness` `` (e.g. `$(npm root -g)/cowork-harness/.env`) — or simpler, just use `--dotenv <path>` / `./.env` in your working directory, which take priority over the package root anyway.
 
@@ -124,7 +125,7 @@ The parts people ask about. **`package.json`'s `files[]` is the exhaustive, mach
 this table is the readable summary of it, and deliberately omits the infrastructure that always ships
 (`baselines/`, `schema/`, `fixtures/`, `scripts/`, `docker/`).
 
-| What ships | npm global (`npm install -g "cowork-harness@^4.1.1"`) | Source checkout (`git clone` + `npm ci`) |
+| What ships | npm global (`npm install -g "cowork-harness@^4.2.0"`) | Source checkout (`git clone` + `npm ci`) |
 |---|---|---|
 | CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
@@ -139,7 +140,7 @@ since a global install puts nothing in your working directory. The matrix, answe
 examples are the only ones that still need a source checkout. The **marketplace skill install** is
 narrower again — it pulls only `.claude/skills/cowork-harness/` (SKILL.md + `references/` +
 `scenario.py`/assertion keys, per `.claude-plugin/marketplace.json`'s `source`); everything in the npm column
-arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.1.1"` — the last row stays
+arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.2.0"` — the last row stays
 ✗ either way, since `matrices/`, `answer-policies/` and `probes/` are not published at all. See
 [docs/companion-skill.md](./companion-skill.md) for that install path.
 
@@ -328,7 +329,7 @@ Two footnotes the table cannot carry:
 - a closed terminal (`SIGHUP`, not on Windows) is handled like `SIGTERM` and exits `129`;
 - an interrupted `chat` exits `130`/`143` the same way, without writing a `result.json`: a Ctrl-C during a turn
   stops the agent at once. A Ctrl-C at the `you>` prompt ends the session normally, and a first signal while
-  the session's result is being written still writes it and then exits `130` (a second exits at once).
+  the session's result is being written still writes it and then exits `130` (a second exits at once — a second signal sent with `kill` rather than a terminal Ctrl-C first waits for a process listing already running, up to 10 s; see [fidelity-gaps.md](./fidelity-gaps.md#stopping-a-host-tier-run-stops-the-processes-the-agent-started)).
 
 After a run, the footer **echoes every auto-answered
 question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them

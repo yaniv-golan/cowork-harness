@@ -25,6 +25,7 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
     toolResultTexts: [],
     skillsInvoked: [],
     skillToolAvailable: true,
+    slashInvokedSkills: [],
     ...over,
   };
 }

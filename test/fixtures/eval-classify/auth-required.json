@@ -1,13 +1,21 @@
 {
-  "scenario": "fixture-result-agent",
+  "scenario": "fixture-auth-required",
   "result": "error",
   "errorSource": "result",
   "resultErrorKind": "agent",
   "resultSubtype": "success",
+  "finalMessage": "Authentication required · Sign in again to continue",
   "models": [
     "<synthetic>"
   ],
   "modelFallbacks": [],
+  "cost": {
+    "usd": 0
+  },
+  "usage": {
+    "turns": 1
+  },
+  "durationMs": 9079,
   "assertions": [
     {
       "assertion": {

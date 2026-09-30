@@ -359,6 +359,21 @@ describe.skipIf(!can)("cli: stats — generation queries", () => {
     const r = run(["stats", "s", "--group-by", "skill-hash"], root);
     expect(r.code).toBe(0);
     expect(r.out).toContain("1 run(s) excluded from grouping");
+    // The reason is the skillHash one — a run that recorded no fingerprint.
+    expect(r.out).toMatch(/no skillHash recorded.*fingerprint/);
+  });
+
+  it("--group-by label explains a missing label by how a run gets one, not by a fingerprint", () => {
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { runLabel: "gen-1", fingerprint: { skillHash: GEN1 + "aaaa" } });
+    seedRun(root, "s", "local_2", { fingerprint: { skillHash: GEN1 + "aaaa" } }); // fingerprinted, never labelled
+    run(["stats", "--reindex"], root);
+    const r = run(["stats", "s", "--group-by", "label"], root);
+    expect(r.code).toBe(0);
+    const line = r.out.split("\n").find((l) => l.includes("excluded from grouping"))!;
+    expect(line).toContain("1 run(s) excluded from grouping — no --label recorded");
+    expect(line).toMatch(/--label/);
+    expect(line).not.toMatch(/fingerprint|nothing to hash/);
   });
 });
 

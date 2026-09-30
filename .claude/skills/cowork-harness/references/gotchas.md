@@ -1,6 +1,6 @@
 # Gotchas
 
-Tracks `cowork-harness 4.1.1` (baseline `desktop-2.16120.0`). The full "✓ passed ≠ correct" landmine catalog.
+Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). The full "✓ passed ≠ correct" landmine catalog.
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
@@ -282,7 +282,9 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     `run` the same word additionally means *your assertions held*; on `skill --repeat N`, `PASS — N/N`
     means N runs cleared the guards — it says nothing about which model served them, whether the skill
     was invoked, or whether they were the ablated arm. *Fix:* read the three fields the record already
-    carries before drawing any conclusion — `skillsInvoked` / `skillActivity` (was it invoked at all),
+    carries before drawing any conclusion — `skillsInvoked` / `skillActivity` (was it invoked at all;
+    a `/<skill> …` prompt runs the skill with NO `Skill` call, so read `slashInvokedSkills` too — and
+    `models` is then just `["<synthetic>"]`, with the real model only in `modelUsage`),
     `models` (which model), `ablated` + `context.availableSkills` (which arm). An answer that reads
     exactly like skill output is not evidence: the skill's own source is mounted where the model can
     read it — in production too — so on a self-referential prompt it may read `SKILL.md` and answer

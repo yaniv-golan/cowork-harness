@@ -154,16 +154,22 @@ the reason to read the *record* rather than the answer. (`critique` is built on 
   multi-run measurements were silently scoped to the wrong thing: one measured on `claude-sonnet-5`
   because the session file omitted `model:`, one where the skill was offered and never invoked, and a
   10-run batch that was all `--ablate-skill` control runs. Each fact was already in `result.json` and
-  nobody looks there until a result seems wrong — which is after the money is spent. `skill=` has four
-  states, and `offered,unknown` / `unknown` mean *evidence unavailable*, never "no": the banner refuses
-  to print a confident negative from a missing field. The same object rides in the
+  nobody looks there until a result seems wrong — which is after the money is spent. `skill=` reads
+  `offered,invoked`, `offered,invoked(slash)` (the prompt's leading `/<skill>` ran it, with no `Skill`
+  call), `offered,NOT-invoked`, `not-offered`, `offered,unknown` or `unknown`; the last two mean
+  *evidence unavailable*, never "no": the banner refuses to print a confident negative from a missing
+  field. When the main loop carried only the agent's `<synthetic>` marker (a slash-invoked fork skill
+  answers that way), `model=unknown` is followed by the real model ids the run's `modelUsage` shows —
+  usage across the whole session, not attributed to any one sub-agent; the JSON `model` stays `unknown`. The same object rides in the
   `--output-format json` envelope as `results[].provenance`, and a `--repeat` batch gets an aggregate
   `provenance:` row on its rollup (models and skill states as SETS — a batch spanning two models is the
   multi-run form of the same defect). `--compact`/`--demo` suppress the line, like `[status]`.
 
 - **Did the skill actually run?** The banner's `skill=` field answers this at a glance; the underlying
   evidence, when you need the detail: `result.json`'s
-  **`skillsInvoked`** lists what the agent invoked via the `Skill` tool; **`skillActivity`** shows the
+  **`skillsInvoked`** lists what the agent invoked via the `Skill` tool, and **`slashInvokedSkills`** the staged
+  skill a `/<skill> …` prompt ran directly (no `Skill` call — the banner shows `skill=offered,invoked(slash)`);
+  **`skillActivity`** shows the
   per-invocation window (which tools fired inside it, sub-agent calls included); **`context.availableSkills`**
   is what was *offered*, read off each staged skill's `SKILL.md` frontmatter — so `offered but never
   invoked` is a fact you can read directly rather than infer. An answer that "looks like skill output"

@@ -116,6 +116,7 @@ import {
   type OutputsBaseline,
 } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
+import { slashInvokedSkillIds } from "../critique/skill-invocation.js";
 import { computeVerdict } from "./verdict.js";
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
@@ -1458,6 +1459,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       availableSkills:
         initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
     };
+    // The slash-command channel: a prompt starting `/<staged skill>` runs that skill with no Skill tool_use.
+    // Derived ONCE from this turn's prompt and the init inventory, and fed to both the evaluate() ctx and the
+    // RunResult below, so the grade and the record cannot disagree.
+    const slashInvokedSkills = slashInvokedSkillIds(scenario.prompt, record.context.availableSkills, {
+      resultText: record.resultText,
+      modelUsage: record.modelUsage,
+    });
 
     // Surface dropped egress proxy-log lines as evidence health (collected in the finally above; applied here
     // where `record` is definitely assigned). #39
@@ -1553,6 +1561,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       toolErrors: record.toolErrors,
       redundantToolCalls: record.redundantToolCalls,
       skillsInvoked: record.skillsInvoked,
+      slashInvokedSkills,
       skillToolAvailable: record.initTools.includes("Skill"),
       skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
       tasks: Array.from(record.tasks.values()),
@@ -1820,7 +1829,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       ...toolDurationFields(timelineEvents), // toolDurations + toolDurationsBasis, derived together
       skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
       models: record.models.length ? record.models : undefined,
-      ...deriveModelProvenance(plan.model, record.models.length ? record.models : undefined, record.modelFallbacks),
+      ...deriveModelProvenance(plan.model, record.models.length ? record.models : undefined, record.modelFallbacks, record.modelUsage),
       thinking: record.thinking.length ? record.thinking : undefined,
       thinkingElided: record.thinkingElided,
       toolErrors: record.toolErrors,
@@ -1844,6 +1853,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       authoredCapture: { ...authored.budget, scratchpadWalked: authored.scratchpadWalked }, // what the capture above actually did
       apiRetries: apiRetriesFrom(record),
       skillsInvoked: record.skillsInvoked,
+      slashInvokedSkills,
       skillToolAvailable: record.initTools.includes("Skill"),
       durationMs: Date.now() - startedAt - agentStopMs,
       outDir,
@@ -2698,6 +2708,12 @@ export function buildPartialResult(args: {
   // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
   // delivery trees. Own wiring, independent of executeScenario's (this function's own args.configDir /
   // args.pluginSkillRoots).
+  // Read BEFORE the enrichment below collapses an absent inventory to [] — a slash prompt over an inventory
+  // init never delivered is "cannot tell", not "no staged skill answered".
+  const slashInvokedSkills = slashInvokedSkillIds(args.prompt, args.record.context?.availableSkills, {
+    resultText: args.record.resultText,
+    modelUsage: args.record.modelUsage,
+  });
   const availableSkillIds = args.record.context?.availableSkills?.map((s) => s.id) ?? [];
   args.record.context = {
     ...args.record.context,
@@ -2757,7 +2773,7 @@ export function buildPartialResult(args: {
     ...toolDurationFields(timelineEvents), // toolDurations + toolDurationsBasis, derived together
     skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
     models: record.models.length ? record.models : undefined,
-    ...deriveModelProvenance(args.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks),
+    ...deriveModelProvenance(args.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks, record.modelUsage),
     thinking: record.thinking.length ? record.thinking : undefined,
     thinkingElided: record.thinkingElided,
     toolErrors: record.toolErrors,
@@ -2781,6 +2797,7 @@ export function buildPartialResult(args: {
     authoredCapture: undefined, // the salvage lane runs no authored-file capture
     apiRetries: apiRetriesFrom(record),
     skillsInvoked: record.skillsInvoked,
+    slashInvokedSkills,
     skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: args.durationMs,
     outDir: args.outDir,

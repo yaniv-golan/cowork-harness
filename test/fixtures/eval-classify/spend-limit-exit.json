@@ -1,0 +1,39 @@
+{
+  "scenario": "fixture-spend-limit-exit",
+  "result": "error",
+  "errorSource": "exit",
+  "resultErrorKind": "agent",
+  "resultSubtype": "success",
+  "finalMessage": "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/admin-settings/usage · your weekly limit resets <redacted>",
+  "models": [
+    "<synthetic>"
+  ],
+  "modelFallbacks": [],
+  "cost": {
+    "usd": 0
+  },
+  "usage": {
+    "turns": 1
+  },
+  "durationMs": 2787,
+  "assertions": [
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "transcript_contains": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "egress_allowed": "<redacted>"
+      },
+      "pass": true
+    }
+  ]
+}

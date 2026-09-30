@@ -1,14 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { afterAll, describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { hermeticPackageRoot } from "./helpers/hermetic-cli.js";
 
 // `--dotenv` / `--run-dir` are accepted AFTER the subcommand, by each command's own parser, as well as
 // before it. The leading-only pre-dispatch scan is unchanged, so a `--dotenv=…` token that is another flag's
 // VALUE is still never taken as the flag. Token-free: nothing here spawns an agent.
-const CLI = resolve("dist/cli.js");
-const can = existsSync(CLI);
+const can = existsSync(resolve("dist/cli.js"));
+// Run a copy of the built CLI whose package root has no `.env`: the CLI auto-loads `<install>/.env`, so a
+// checkout with one would otherwise add its keys to every case here (CI has none).
+const PKG = can ? hermeticPackageRoot() : undefined;
+const CLI = PKG?.cli ?? "";
+afterAll(() => PKG && rmSync(PKG.root, { recursive: true, force: true })); // removes the links, not what they point to
 const MISSING = "/definitely/not/here/command-globals.env";
 
 function cli(args: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}) {

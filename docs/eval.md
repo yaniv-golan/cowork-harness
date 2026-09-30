@@ -24,7 +24,8 @@ it.
   judge call per `semantic_matches` assert per run. There is no budget flag; the start-up line prints the
   job count before the first run, and `stats` prices past runs of the same scenarios.
 - **Tier.** Each scenario runs at its own `fidelity:`, with that tier's prerequisites (Docker and the
-  agent image for `container`, and so on) — check them with `cowork-harness doctor --tier <tier>`.
+  agent image for `container`, and so on) — check them with `cowork-harness doctor --tier <tier>`. The
+  agent credential is checked for you: see [What it holds fixed](#what-it-holds-fixed-refused-before-any-run-exit-2).
 - **Run an A/A first.** `eval` with the same source as both arms (`--allow-identical-arms`) shows how
   far your scenarios' rates move when nothing changed. Read that before trusting a before/after.
 
@@ -97,6 +98,10 @@ The header states what every number depends on:
   where a drop is);
 - **per arm**: each rep's bucket, an `errorSource` histogram, and a loud **UNCLASSIFIED** count for any
   termination the classifier does not recognise (excluded — read those run dirs);
+- **every (arm, scenario) in which every rep errored**, named with its most frequent bucket and rule —
+  for example `errored_infra (auth) 5/5` — and a hint that follows the rule (sign-in, quota, start-up,
+  network, decider, or read the run dirs). Whether that scenario's rows were compared is stated on the
+  line (see [below](#when-every-rep-errored)); `report.json` lists these under `summary.erroredArms`;
 - per-arm medians of cost, judge cost, turns and duration (descriptive, no test);
 - "no control arm: prior-answerable claims are not flagged".
 
@@ -110,10 +115,28 @@ it landed in.
 | Rep | Counted as |
 |---|---|
 | ran to completion | valid |
-| the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
 | infrastructure: a spawn or protocol failure, a transport error, a usage limit, a decider timeout | excluded, reported |
-| the pin did not hold (`modelPinHonored` false or unknown), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
+| the agent could not authenticate: its reply is `Not logged in · Please run /login` or `Authentication required · Sign in again to continue` | excluded as infrastructure, reported (rule `auth`) |
+| a usage or spend limit reported as the agent's final message (`You've hit your … limit`, out of usage credits, …) — including on a nonzero exit, and after a model has already spent | excluded as infrastructure, reported (rule `usage_limit`) |
+| no model answered: every model the run reported is the agent's own `<synthetic>` marker and it cost $0 | excluded as infrastructure, reported (rule `no_model_answered`) |
+| the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
+| the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
+
+The `auth` and `usage_limit` rows need the reply to come from the agent itself, which writes it as a
+`<synthetic>` turn. A skill's own message that merely reads like one ("You've reached your daily limit
+of 5 files") is the skill's failure and is scored.
+
+The rows are checked in that order, and the first that matches decides. Two consequences:
+
+- **An agent failure outranks a pin exclusion.** A rep that crashed fails every row even when its pin is
+  unknown — a crash before the first model reply leaves no model evidence, and excluding it would hide a
+  skill that breaks on its first turn. So "unknown" excludes only a rep that ran to completion.
+- **A pin that is unknown because no model answered is infrastructure**, not the agent's failure and not
+  a pin exclusion. "No model answered" needs positive evidence — a `<synthetic>`-only model list *and* $0
+  spent, or the agent's authentication text; a run that recorded no model at all is still the agent's. A
+  successful run whose model list is `<synthetic>`-only (a prompt that starts with `/plugin:skill`) is not
+  affected by this rule.
 
 ## What it holds fixed (refused before any run, exit 2)
 
@@ -133,20 +156,42 @@ it landed in.
   refused: the agent could read the answers.
 - **The scenarios' inputs**, as a run checks them, over each arm's snapshot: every input path, and a
   `tool_not_called` the scenario's tier can never violate.
+- **The plugin under test** must be the session's one `plugins.local_plugins` entry; a session that
+  declares it only under `remote_plugins` is refused (see [Lane note](#lane-note)).
 - **`--fail-on confirmed`** when no row could reach `confirmed` at this `--reps` and correction.
+- **The agent credential**, for every tier the scenarios run at, by the same check
+  `cowork-harness doctor --tier <tier>` prints as its `token` row: a failing check refuses the eval with
+  doctor's message and fix. A token in the environment or `.env` passes at every tier. Without one, a
+  Claude Code login — in the macOS Keychain, or a `.credentials.json` in the config dir
+  (`CLAUDE_CONFIG_DIR`, else `~/.claude`; only its existence is checked) — is enough only at `protocol`,
+  which keeps your real config dir, so the agent signs itself in; doctor shows it as a warning. Every
+  other tier gives the agent a managed config dir, and there it is refused. The check cannot see a token that is present but expired — a rep
+  that then fails to authenticate is excluded as infrastructure (above).
 
 A refused eval leaves nothing in its eval dir.
 
 ## Exit codes
 
 - `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
-  result or a judge disagreement still exits 1 — see below.)
+  result, a scenario that compared nothing, or a judge disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
   classification rows do not); with `--fail-on confirmed`, a `confirmed` drop. Also, with or without it:
-  every row `insufficient`, or the judge model differed across reps. An A/A run under
-  `--fail-on possible` can exit 1 on noise alone.
+  every row `insufficient`, a scenario that compared nothing (below), or the judge model differed across
+  reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
 - `2` — usage, or any refusal before the first run.
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
+
+### When every rep errored
+
+Judged per scenario, for each arm:
+
+- **Every rep of both arms errored** (infrastructure or the agent's own failure, in any mix): 0 against 0
+  is not a comparison. The scenario's rows get no reps, so they are `insufficient`, and the eval exits 1.
+- **Every rep of one arm is infrastructure**: that arm never ran the skill. Same outcome.
+- **Every rep of one arm is the agent's own failure, and the other arm has valid reps**: a skill that
+  crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
+  every row) and the rows show the drop. The header still names the arm and its error. It exits 0 unless
+  `--fail-on` is set, like any other drop.
 
 ## Picking scenarios
 
@@ -162,9 +207,22 @@ A refused eval leaves nothing in its eval dir.
 
 ## Lane note
 
-`eval` compares behaviour inside the harness, and that comparison does not depend on which Cowork lane
-you target. Assertions about the environment itself — paths, `present_files`, what lands in `outputs/`
-— describe the local lane.
+`eval` compares two versions of one plugin under the same conditions, but those conditions include where
+the plugin is mounted, and that is not the same for every way Cowork delivers a plugin. `eval` swaps only
+a `plugins.local_plugins` entry, mounted at `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>`
+(Cowork's local-uploads channel). A plugin installed through Cowork's UI is served from
+`mnt/.remote-plugins/plugin_<id>` instead — `plugins.remote_plugins` in a session (see
+[session.md](./session.md)). A skill that locates its own files at runtime sees a different path under
+each, so a result for the `local_plugins` layout does not carry over to the installed one unless the skill
+finds its files the same way under both.
+
+A session that declares its plugin only under `plugins.remote_plugins` is refused (exit `2`: the session
+must declare exactly one `plugins.local_plugins` entry). To compare such a plugin, point `eval` at a copy
+of the session that declares the same directory under `local_plugins` instead, and check the skill's own
+path handling separately with an ordinary `run` of the `remote_plugins` session.
+
+Assertions about the environment itself — paths, `present_files`, what lands in `outputs/` — describe the
+local lane.
 
 ## Files, and `prune`
 
