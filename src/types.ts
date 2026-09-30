@@ -1598,7 +1598,10 @@ export interface RunResult {
   /** Did the model the scenario pinned survive the run? A THREE-state answer, and the third state is the
    *  point: `true` = pinned and no fallback observed; `false` = pinned and the agent fell back off it;
    *  `undefined` = **unverifiable** — nothing was pinned, or the run produced no model evidence at all
-   *  (the unreadable-cassette lane sets `models: undefined`). A boolean would have to render the third
+   *  (the unreadable-cassette lane sets `models: undefined`). The evidence is the main loop's live
+   *  `models`; when it has none (a `/plugin:skill` prompt's synthetic turn), the session's `modelUsage`
+   *  answers only when it is unambiguous — the pin is the only or the dominant billed model (`true`), or
+   *  the single billed model is another (`false`) — and a concrete id was pinned. A boolean would have to render the third
    *  case as one of the first two, and rendering "we could not tell" as `true` is a false green of exactly
    *  the kind this repo's own guards exist to prevent. */
   modelPinHonored?: boolean;

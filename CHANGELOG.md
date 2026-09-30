@@ -207,6 +207,12 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   on macOS and the order was arbitrary on Linux. It prints them oldest → newest by version, and names the
   one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
   filename per line), and `latest: true` on that entry in `--output-format json`.
+- **`modelPinHonored` is no longer absent on a run that starts with a `/plugin:skill` prompt.** Its
+  slash-command expansion is a synthetic turn, so `models` held only `<synthetic>` and the pin read as
+  unverifiable although a model answered; `eval` excluded every such rep as a model mismatch. With no live
+  model in `models`, the run's `modelUsage` now decides, only when unambiguous: `true` when the concrete
+  pinned id is the only or the dominant billed model, `false` when the single billed model is another,
+  and absent otherwise (an alias pin, a tie, the pin missing among several).
 - **`stats --group-by label` gives the right reason for runs it leaves out.** It explained a run with no
   label with the skill-hash reason (no fingerprint, nothing to hash). It says a run carries a label only
   when started with `--label`, or by `eval`.

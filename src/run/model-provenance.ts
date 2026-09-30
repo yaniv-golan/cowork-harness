@@ -62,10 +62,31 @@ export function isConcreteModelId(id: string | undefined): id is string {
   return true;
 }
 
+/** The model the SDK's own `modelUsage` vouches for, when the main loop reported no live model (a prompt
+ *  that starts with `/plugin:skill` expands into a synthetic turn, so `models` is `["<synthetic>"]` though a
+ *  model answered). `modelUsage` covers the whole session — sub-agents and auxiliary calls too — so it
+ *  counts only when it resolves unambiguously: `true` when the pinned id is the only billed model or has
+ *  strictly the largest spend; `false` when exactly one model was billed and it is not the pin; otherwise
+ *  (nothing billed, a tie, the pin absent among several) `undefined`. `pinned` is already normalized. */
+function pinFromModelUsage(pinned: string, modelUsage: Record<string, unknown> | undefined): boolean | undefined {
+  const billed = Object.entries(modelUsage ?? {})
+    .filter(([m]) => isLiveModelId(m))
+    .map(([m, e]) => {
+      const c = (e as { costUSD?: unknown } | null)?.costUSD;
+      return { model: normalizeModelId(m), cost: typeof c === "number" && Number.isFinite(c) ? c : 0 };
+    });
+  if (billed.length === 0) return undefined;
+  if (billed.length === 1) return billed[0].model === pinned;
+  const mine = billed.find((b) => b.model === pinned);
+  if (mine === undefined) return undefined;
+  return billed.every((b) => b === mine || b.cost < mine.cost) ? true : undefined;
+}
+
 export function deriveModelProvenance(
   pinnedModel: string | undefined,
   models: string[] | undefined,
   fallbacks: RunResult["modelFallbacks"],
+  modelUsage?: Record<string, unknown>,
 ): ModelProvenance {
   const observed = (models ?? []).filter(isLiveModelId);
   const pinned = pinnedModel === undefined ? undefined : normalizeModelId(pinnedModel);
@@ -80,8 +101,15 @@ export function deriveModelProvenance(
     // the distinction production draws is user-chose vs system-chose, not which UI surface carried it.
     modelSource: pinnedModel === undefined ? "unresolved" : "user_setting",
     modelPinHonored: (() => {
-      if (pinned === undefined || observed.length === 0) return undefined; // nothing to honor, or no evidence
+      if (pinned === undefined) return undefined; // nothing to honor
       if (UNRESOLVABLE_ALIASES.has(pinned)) return undefined; // names no family — nothing to compare against
+      if (observed.length === 0) {
+        // No live main-loop model: the session's billed models are the only evidence left, and only for a
+        // CONCRETE pin (an alias names a family whose resolved member modelUsage cannot be matched against).
+        if (!isConcreteModelId(pinned)) return undefined;
+        const fromUsage = pinFromModelUsage(pinned, modelUsage);
+        return fromUsage === undefined ? undefined : fromUsage && !fellOffPin;
+      }
       // A FAMILY alias is checkable as membership, not equality. Live-verified: `--model opus` runs and
       // the agent reports `claude-opus-5` — it resolves the alias rather than echoing it, and WHICH member
       // it resolves to is account-supplied, so equality would report a false `false`. Family membership is

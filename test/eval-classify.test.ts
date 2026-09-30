@@ -40,6 +40,7 @@ import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../src/erro
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { hostPathTokenOccurrences } from "../src/run/host-path-tokens.js";
 import { loadScenarioPure } from "../src/run/execute.js";
+import { deriveModelProvenance } from "../src/run/model-provenance.js";
 import type { Assertion, RunResult } from "../src/types.js";
 import { evaluateFamily, insufficientThreshold } from "../src/eval/stats.js";
 import {
@@ -263,6 +264,15 @@ describe("no model answered: an authentication or spend failure is infrastructur
       bucket: "errored_infra",
       rule: "kind_usage_limit",
     });
+  });
+  it("a slash-command run's pin is vouched for by its modelUsage, so the rep is valid, not model_mismatch", () => {
+    const r = fixture("slash-success-synthetic");
+    const full = r as unknown as RunResult;
+    const p = deriveModelProvenance("claude-sonnet-5", full.models, full.modelFallbacks, full.modelUsage);
+    expect(p.modelPinHonored).toBe(true);
+    expect(classifyRep({ result: { ...r, modelPinHonored: p.modelPinHonored } }, { contentSig: r.fingerprint!.contentSig }).bucket).toBe(
+      "valid",
+    );
   });
   it("a synthetic-only SUCCESS (a slash-command run) is not read as no model answered", () => {
     expect(classifyTermination({ result: fixture("slash-success-synthetic") })).toMatchObject({ bucket: "valid", rule: "success" });

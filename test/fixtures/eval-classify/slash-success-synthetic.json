@@ -7,6 +7,22 @@
     "<synthetic>"
   ],
   "modelFallbacks": [],
+  "modelUsage": {
+    "claude-sonnet-5": {
+      "inputTokens": 10,
+      "outputTokens": 1306,
+      "cacheReadInputTokens": 82056,
+      "cacheCreationInputTokens": 25539,
+      "webSearchRequests": 0,
+      "costUSD": 0.09333870000000001,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "thinkingTokens": 25,
+      "canonicalModel": "claude-sonnet-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
   "fingerprint": {
     "contentSig": "67082f91846ba3969baa36dff45fa69b6b74954a0380dbcafae5a272521887cf"
   },
