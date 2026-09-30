@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   runDoctorChecks,
+  tokenCheck,
   agentBuildLine,
   freshnessFor,
   ghcrRefFor,
@@ -614,5 +615,27 @@ describe("image-freshness is offline", () => {
     // Exactly one spawn, and it is the local inspect.
     expect(fn.match(/spawnSync\(/g)?.length ?? 0).toBe(1);
     expect(fn).toContain('"image", "inspect"');
+  });
+});
+
+// `eval` refuses before spend on doctor's own token check, so the check must be ONE function that doctor
+// itself uses — a second detector could decide a tier differently from what doctor prints.
+describe("doctor — tokenCheck is the token row runDoctorChecks reports", () => {
+  const tiers = ["protocol", "container", "microvm", "hostloop", "cowork"] as const;
+  const probes: Array<Partial<DoctorProbe>> = [
+    {},
+    { hasToken: () => false },
+    { hasToken: () => false, hasKeychainToken: () => true },
+    { hasToken: () => false, hasKeychainToken: () => true, platform: () => "linux" },
+    { hasToken: () => false, worktreeEnv: () => "/main/.env" },
+  ];
+  it.each(tiers)("at %s, for every token situation", (tier) => {
+    for (const over of probes) expect(tokenCheck(tier, probe(over))).toEqual(get(runDoctorChecks(tier, probe(over)), "token"));
+  });
+  it("the consumer's case — Keychain only, no env token — fails at hostloop and cowork and only warns at protocol", () => {
+    const kc = probe({ hasToken: () => false, hasKeychainToken: () => true });
+    expect(tokenCheck("hostloop", kc).status).toBe("fail");
+    expect(tokenCheck("cowork", kc).status).toBe("fail");
+    expect(tokenCheck("protocol", kc).status).toBe("warn");
   });
 });
