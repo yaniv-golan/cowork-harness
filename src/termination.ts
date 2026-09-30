@@ -215,6 +215,15 @@ export function holdExit(): () => void {
 export function installTerminationHandler(): void {
   if (installed) return;
   installed = true;
+  // A hung-up terminal (SIGHUP) or a closed pipe fails every later write to stdout/stderr with EIO/EPIPE, and
+  // an unhandled stream error kills the process on the first warning line — before the agent's grace period
+  // and force-kill, leaving what the agent started running. Those two codes are not worth dying for while
+  // this handler owns the exit; anything else stays fatal, as it was.
+  for (const stream of [process.stdout, process.stderr])
+    stream.on("error", (e: NodeJS.ErrnoException) => {
+      if (e.code === "EIO" || e.code === "EPIPE") return;
+      throw e;
+    });
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   // The terminal closing: the host agent runs in its own session (see agent-tree.ts), so the hangup reaches
