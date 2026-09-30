@@ -779,7 +779,7 @@ What differs from Cowork, and what the sweep can miss or wrongly kill:
 | Case | Effect |
 |---|---|
 | A `--session-id … --resume` chain | Host background processes do not survive from one invocation to the next, even though Cowork's sandbox would keep them for the session. A skill that starts a helper in one invocation and expects it in the next works in Cowork and not here. |
-| `COWORK_HARNESS_RUN_TAG` in the agent's environment | The Linux sweep's marker: a per-run value set at `protocol` and `hostloop` on every platform. The model can see it (`env` in a Bash call), real Cowork has no such variable, so transcripts can differ from Cowork's. |
+| `COWORK_HARNESS_RUN_TAG` in the agent's environment | The Linux sweep's marker: a per-run value set at `protocol` and `hostloop` on every platform. At `protocol` the model can see it (`env` in a Bash call); real Cowork has no such variable, so transcripts can differ from Cowork's there. At `hostloop` the model cannot see it: the native Bash tool is disabled and the sidecar's shell gets a proxy-only environment. |
 | Linux: a process started with a scrubbed environment | Not found: `env -i`, `sudo` (which resets the environment), or anything the model starts with `docker run` carries no tag. |
 | macOS: how the sweep attributes a process | macOS exposes no other process's environment, so a candidate must be owned by you, detached from any terminal, reparented to init, started during the run, and working inside the run's work dir; the harness itself and its ancestry never qualify. At `hostloop` there is no macOS sweep: its Bash runs in the sidecar, which `docker rm -f` ends. |
 | macOS: a background process that changed directory out of the work dir | Not found. |
