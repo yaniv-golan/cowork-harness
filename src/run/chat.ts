@@ -25,7 +25,7 @@ import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { buildChatResult } from "./chat-result.js";
 import { writeTrace, scrubRawRunLogs, beginTurn, makeContainerPhaseReap, reapAgentOnTeardown } from "./execute.js";
-import { installTerminationHandler, registerAgent } from "../termination.js";
+import { installTerminationHandler, registerAgent, holdExit } from "../termination.js";
 import { agentTreeAgent, hostAgentStopTiming, type TreeAgent } from "../runtime/agent-tree.js";
 import { turnWriteDir } from "./turn-layout.js";
 import { appendIndexRow, indexRowFromResult } from "./run-index.js";
@@ -415,7 +415,10 @@ export async function cmdChat(args: string[]) {
   // mid-turn Ctrl-C would only take effect after the agent finished its turn. Mid-turn (including at a
   // gate prompt) it goes to the termination handler, which stops the agent and exits; at the `you>` prompt
   // it ends the session like EOF, so the result is still written.
-  const turnPrompt = { open: false };
+  // From the moment the user ends the session (`/exit`, EOF, Ctrl-C at the prompt) until its result is written,
+  // a first Ctrl-C/SIGTERM waits for the write instead of discarding it (holdExit); a second still exits at once.
+  let releaseExit: (() => void) | undefined;
+  const turnPrompt = { open: false, ended: () => void (releaseExit ??= holdExit()) };
   wireChatInterrupt(rl, { atTurnPrompt: () => turnPrompt.open, forward: () => process.kill(process.pid, "SIGINT") });
   // ONE display translator, shared by all three fidelity branches below (protocol/hostloop/container each
   // build their own `makeRenderer(renderPlan)` off this SAME plan object) — the hostloop gate lives in the
@@ -600,41 +603,45 @@ export async function cmdChat(args: string[]) {
     // finally; being after the kill/reap minimizes the stderr flush window.)
     scrubRawRunLogs(outDir, collectSecrets());
   }
-  log(`\nchat ended (transcript under ${outDir})\n`);
-  // A session that crashed before the agent produced its first turn has no RunRecord — nothing to
-  // write. Otherwise write the same result.json/trace/index-row shape `run` and `skill` write, so a
-  // chat session shows up in `stats`/`trace`/`scaffold` — previously chat discarded `record` entirely.
-  if (record) {
-    // Fold the hostloop VM sidecar's own crash into infraErrors the SAME way execute.ts does — a live
-    // drive never re-reads the out-of-band `infra_error` row spawnHostLoop appends to events.jsonl (only
-    // cassette replay does), so this fold is the only path a sidecar crash reaches result.json through.
-    if (hostloopInfraErrors?.length) record.infraErrors.push(...hostloopInfraErrors);
-    // workRoot is tier-conditional (mirrors execute.ts): protocol runs the host binary directly with
-    // no container sandbox, so it has no `work/session/mnt` — only container/hostloop do.
-    const workRoot = fidelity === "protocol" ? join(resolve(outDir), "work") : join(resolve(outDir), "work", "session", "mnt");
-    const chatResult = buildChatResult(record, {
-      scenario: scenario.name || "(chat)",
-      prompt: seedPrompt ?? "",
-      fidelity,
-      baseline: baseline.appVersion,
-      pinnedModel: session.model,
-      outDir,
-      workRoot,
-      userVisibleRoots: userVisibleRootsFromPlan(plan),
-      readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
-      egress: sidecar ? sidecar.collect().entries : [],
-      durationMs: Date.now() - start - agentStopMs,
-      turn: turnNumber,
-    });
-    const secrets = collectSecrets();
-    // THROUGH THE SEAM, not a chat-only root file: chat now writes its one turn the same way run/skill
-    // write theirs (see turnWriteDir/beginTurn above), so `stats`/`trace`/`scaffold`/verify-run address it
-    // via turnArtifactPath like any other run dir, instead of a root shape only chat produced.
-    const tDir = turnWriteDir(outDir, turnNumber);
-    // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
-    writeTextAtomic(join(tDir, "result.json"), scrub(JSON.stringify(chatResult, null, 2), secrets));
-    appendIndexRow(runsWriteRoot(), indexRowFromResult(chatResult, { command: "chat", partial: false }));
-    writeTrace(tDir, record, chatResult.egress, secrets, chatResult.durationMs);
+  try {
+    log(`\nchat ended (transcript under ${outDir})\n`);
+    // A session that crashed before the agent produced its first turn has no RunRecord — nothing to
+    // write. Otherwise write the same result.json/trace/index-row shape `run` and `skill` write, so a
+    // chat session shows up in `stats`/`trace`/`scaffold` — previously chat discarded `record` entirely.
+    if (record) {
+      // Fold the hostloop VM sidecar's own crash into infraErrors the SAME way execute.ts does — a live
+      // drive never re-reads the out-of-band `infra_error` row spawnHostLoop appends to events.jsonl (only
+      // cassette replay does), so this fold is the only path a sidecar crash reaches result.json through.
+      if (hostloopInfraErrors?.length) record.infraErrors.push(...hostloopInfraErrors);
+      // workRoot is tier-conditional (mirrors execute.ts): protocol runs the host binary directly with
+      // no container sandbox, so it has no `work/session/mnt` — only container/hostloop do.
+      const workRoot = fidelity === "protocol" ? join(resolve(outDir), "work") : join(resolve(outDir), "work", "session", "mnt");
+      const chatResult = buildChatResult(record, {
+        scenario: scenario.name || "(chat)",
+        prompt: seedPrompt ?? "",
+        fidelity,
+        baseline: baseline.appVersion,
+        pinnedModel: session.model,
+        outDir,
+        workRoot,
+        userVisibleRoots: userVisibleRootsFromPlan(plan),
+        readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
+        egress: sidecar ? sidecar.collect().entries : [],
+        durationMs: Date.now() - start - agentStopMs,
+        turn: turnNumber,
+      });
+      const secrets = collectSecrets();
+      // THROUGH THE SEAM, not a chat-only root file: chat now writes its one turn the same way run/skill
+      // write theirs (see turnWriteDir/beginTurn above), so `stats`/`trace`/`scaffold`/verify-run address it
+      // via turnArtifactPath like any other run dir, instead of a root shape only chat produced.
+      const tDir = turnWriteDir(outDir, turnNumber);
+      // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
+      writeTextAtomic(join(tDir, "result.json"), scrub(JSON.stringify(chatResult, null, 2), secrets));
+      appendIndexRow(runsWriteRoot(), indexRowFromResult(chatResult, { command: "chat", partial: false }));
+      writeTrace(tDir, record, chatResult.egress, secrets, chatResult.durationMs);
+    }
+  } finally {
+    releaseExit?.();
   }
 }
 
@@ -655,7 +662,7 @@ async function* withSeedPrompt(seed: string | undefined, turns: AsyncGenerator<s
 
 /** Async generator of user turns read from the TTY until EOF / `/exit`. Uses the caller's shared
  *  readline interface (the same one PromptDecider prompts gates on) — cmdChat owns its lifetime. */
-async function* ttyTurns(rl: readline.Interface, turnPrompt: { open: boolean }): AsyncGenerator<string> {
+export async function* ttyTurns(rl: readline.Interface, turnPrompt: { open: boolean; ended?: () => void }): AsyncGenerator<string> {
   // Track EOF once: with a piped/non-interactive stdin the interface can `close` while a turn is
   // still being processed, so the NEXT ask() must not call rl.question() on a closed interface
   // (that throws ERR_USE_AFTER_CLOSE). The per-turn close listener is removed when a line arrives
@@ -685,9 +692,15 @@ async function* ttyTurns(rl: readline.Interface, turnPrompt: { open: boolean }):
     });
   while (true) {
     const line = await ask();
-    if (line == null) break;
+    if (line == null) {
+      turnPrompt.ended?.();
+      break;
+    }
     const t = line.trim();
-    if (t === "/exit" || t === "/quit") break;
+    if (t === "/exit" || t === "/quit") {
+      turnPrompt.ended?.();
+      break;
+    }
     if (t === "/help") {
       log("Commands: /exit  /quit  /help\n");
       continue;

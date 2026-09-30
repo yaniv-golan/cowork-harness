@@ -82,7 +82,8 @@ available:
 Ctrl-D (EOF) also terminates the session, and so does Ctrl-C at the `you>` prompt; both still write the
 session's result. Ctrl-C while the agent is working on a turn (including at a permission or question prompt)
 stops the agent and everything it started, then exits with status 130 without writing a result, like an
-interrupted `run`.
+interrupted `run`. A first Ctrl-C while the session's result is being written (after `/exit`) waits for the write to
+finish; a second exits at once.
 
 ## Mount paths
 

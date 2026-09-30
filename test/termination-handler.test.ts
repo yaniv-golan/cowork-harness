@@ -240,6 +240,39 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(readFileSync(join(r.dir, "order"), "utf8").trim().split("\n")).toEqual(["terminate", 'forceKill {"fast":true}']);
   });
 
+  it("a first signal while an exit hold is open waits for the hold to release (a result being written is kept)", async () => {
+    const r = await runScript(`
+      import { installTerminationHandler, holdExit } from ${TERMINATION};
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      installTerminationHandler();
+      const release = holdExit();
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 50);
+      setTimeout(() => { writeFileSync(join($DIR, "result"), "kept"); release(); }, 600);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.status, r.stderr).toBe(130);
+    expect(readFileSync(join(r.dir, "result"), "utf8")).toBe("kept");
+    expect(r.stderr).toContain("again to exit now");
+  });
+
+  it("a second signal during an exit hold exits at once", async () => {
+    const r = await runScript(`
+      import { installTerminationHandler, holdExit } from ${TERMINATION};
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      installTerminationHandler();
+      holdExit();
+      let sentAt = 0;
+      process.on("exit", () => writeFileSync(join($DIR, "ms"), String(Date.now() - sentAt)));
+      setTimeout(() => { sentAt = Date.now(); process.kill(process.pid, "SIGINT"); }, 50);
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 250);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.status, r.stderr).toBe(130);
+    expect(Number(readFileSync(join(r.dir, "ms"), "utf8"))).toBeLessThan(1000);
+  });
+
   it("parkIfTerminating is a no-op when no signal has arrived", async () => {
     const { parkIfTerminating } = await import("../src/termination.js");
     await expect(parkIfTerminating()).resolves.toBeUndefined();

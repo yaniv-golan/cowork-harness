@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import readline from "node:readline";
 import { makeContainerPhaseReap } from "../src/run/execute.js";
-import { wireChatInterrupt } from "../src/run/chat.js";
+import { wireChatInterrupt, ttyTurns } from "../src/run/chat.js";
 
 // Where the process-tree kill is wired in. The tree agent itself is covered by agent-tree(.live).test.ts;
 // these pin that each stop site hands the agent to it instead of SIGKILLing one pid.
@@ -59,6 +59,31 @@ describe("chat: a Ctrl-C on the terminal reaches the termination handler mid-tur
     t.input.write("\x03");
     expect(forwarded).toEqual([]);
     expect(t.closed()).toBe(true);
+  });
+});
+
+describe("chat: ending the session opens the exit hold that protects its result", () => {
+  async function drain(lines: string[]) {
+    const input = new PassThrough();
+    const rl = readline.createInterface({ input, output: new PassThrough(), terminal: false });
+    const events: string[] = [];
+    const turnPrompt = { open: false, ended: () => void events.push("ended") };
+    // Fed one line per prompt: readline drops lines that arrive while no question is pending.
+    const feed = [...lines];
+    const next = () => setTimeout(() => (feed.length ? input.write(feed.shift()!) : input.end()), 10);
+    next();
+    for await (const t of ttyTurns(rl, turnPrompt)) {
+      events.push(`turn ${t}`);
+      next();
+    }
+    rl.close();
+    return events;
+  }
+  it("/exit ends the turns and opens the hold", async () => {
+    expect(await drain(["hello\n", "/exit\n"])).toEqual(["turn hello", "ended"]);
+  });
+  it("EOF ends the turns and opens the hold", async () => {
+    expect(await drain(["hello\n"])).toEqual(["turn hello", "ended"]);
   });
 });
 

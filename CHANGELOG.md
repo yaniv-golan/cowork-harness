@@ -93,6 +93,21 @@ All notable changes to this project are documented here. The format is based on
   agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
   and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
 
+- **At `protocol` and `hostloop` the agent has no controlling terminal.** It runs in its own session and
+  process group, as Claude Desktop spawns it. A host tool that needs `/dev/tty` (an `ssh` password prompt,
+  `sudo`, `gh auth login`) fails at once instead of waiting for input.
+- **The model can see `COWORK_HARNESS_RUN_TAG`** (`env` in a Bash call) at `protocol` and `hostloop`. Real
+  Cowork has no such variable, so a transcript can differ from Cowork's there.
+- **A host agent is stopped with Claude Desktop's timing.** At the end of a run the harness first waits up
+  to 2 seconds for the agent to exit on its own; then SIGTERM, then SIGKILL after a grace period, which at
+  `hostloop` is 5 seconds, as in Desktop (`protocol` keeps 2). On Ctrl-C at `hostloop` the sidecar
+  container is removed after that grace period, not before it. A run's `durationMs` does not include this
+  stop sequence.
+- **`chat`: a Ctrl-C during a turn stops the turn.** On a terminal, at every tier, it stops the agent and
+  everything it started and exits `130`, without a `result.json` — as an interrupted `run` does. Before, it
+  took effect only after the agent finished the turn. A Ctrl-C at the `you>` prompt still ends the session
+  and writes its result, and a first Ctrl-C while that result is being written waits for it (a second one
+  exits at once).
 ### Fixed
 
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
@@ -128,23 +143,14 @@ All notable changes to this project are documented here. The format is based on
 - **Stopping a run at `protocol` or `hostloop` now stops the processes the agent started on the host** —
   Bash-tool background jobs, hook commands and MCP servers — instead of leaving them running after the
   harness exits. This applies to Ctrl-C and SIGTERM, a timeout, stall or unanswered gate, and the normal end
-  of a run.
-  - The agent runs in its own session and process group, as Claude Desktop spawns it, with no controlling
-    terminal. A host tool that needs `/dev/tty` (an `ssh` password prompt, `sudo`, `gh auth login`) fails
-    instead of waiting for input.
-  - At `hostloop` the agent now gets SIGTERM and a 5-second grace period before SIGKILL, as Desktop stops
-    it. On Ctrl-C the sidecar container is removed after that grace period, not before it. At the end of a
-    run, the harness first waits up to 2 seconds for the agent to exit on its own, as Desktop does.
-  - `chat` stops its agent the same way at `protocol` and `hostloop`. On a terminal, at every tier, a Ctrl-C
-    during a turn now stops the agent and exits 130 instead of taking effect only after the turn; a Ctrl-C
-    at the `you>` prompt still ends the session and writes its result.
+  of a run. Behaviour changes that come with it are listed under Changed.
   - A background process that has already detached from the agent is found by an orphan sweep. On Linux
-    the sweep matches `COWORK_HARNESS_RUN_TAG`, a new per-run variable in the agent's environment, which the
-    model can see with `env`. On macOS it matches processes owned by you, detached from any terminal,
-    started during the run and working inside the run's work dir. Each process the sweep kills prints a
-    `::warning::` line; `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` turns the sweep off.
+    the sweep matches `COWORK_HARNESS_RUN_TAG`, a per-run variable in the agent's environment. On macOS it
+    matches processes owned by you, detached from any terminal, started during the run and working inside
+    the run's work dir. Each process the sweep kills prints a `::warning::` line;
+    `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` turns the sweep off.
   - Known limits: on macOS a background process that changed directory out of the run's work dir is not
-    found, and a `tmux`/`screen` server started during the run from inside the work dir is stopped. A
+    found, and a command that daemonizes from inside the work dir during the run is stopped. A
     `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
     the next. On Windows only the agent process itself is stopped, as before.
 

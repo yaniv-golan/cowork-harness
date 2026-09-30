@@ -165,6 +165,15 @@ function onSignal(sig: NodeJS.Signals): void {
   process.on("exit", () => {
     process.exitCode = code;
   });
+  if (holds.size) {
+    warn(`::warning:: [interrupt] ${sig} — finishing the session's result first; press Ctrl-C again to exit now\n`);
+    deferred = sig;
+    return;
+  }
+  proceed(sig);
+}
+
+function proceed(sig: NodeJS.Signals): void {
   const pending = liveAgents();
   // Only when there is an agent to stop (the wait that follows is what the operator would otherwise stare
   // at). Without one the exit is immediate and the egress step prints its own line when it reaps anything —
@@ -176,6 +185,26 @@ function onSignal(sig: NodeJS.Signals): void {
   const graceMs = Math.max(...pending.map((a) => a.graceMs ?? TERMINATION_GRACE_MS));
   const grace = new Promise<void>((res) => setTimeout(res, graceMs));
   void Promise.race([Promise.all(pending.map((a) => a.exited())), grace]).then(() => finish(sig));
+}
+
+const holds = new Set<symbol>();
+let deferred: NodeJS.Signals | undefined;
+
+/**
+ * Hold a FIRST signal's exit until the returned release is called — for a short stretch whose output would
+ * be lost to an exit (`chat` writing the session's result after its last turn). The signal still pins the
+ * exit status and prints a line; the stop-and-exit sequence runs at release. A second signal exits at once,
+ * as everywhere else.
+ */
+export function holdExit(): () => void {
+  const h = Symbol("hold");
+  holds.add(h);
+  return () => {
+    if (!holds.delete(h) || holds.size || !deferred) return;
+    const sig = deferred;
+    deferred = undefined;
+    proceed(sig);
+  };
 }
 
 /** Install the handler (idempotent). Every caller that spawns something which must not outlive the
