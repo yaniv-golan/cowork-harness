@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
+per-claim judge rationales, a fingerprint of what the judge was shown, and the judge's and the LLM
+decider's spend on every graded run. Full `/claude-api hillclimb` integration is coming in 4.3.
+
 ### Added
 
 - **`eval` — paired A/B evaluation of a skill edit (EXPERIMENTAL).**
