@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { SKILL_FLAG_SURFACE } from "../src/run/skill-flag-surface.js";
 import { RECORD_VALUE_FLAGS } from "../src/run/cassette.js";
 import { LINT_VALUE_FLAGS } from "../src/run/lint-load.js";
+import { EVAL_VALUE_FLAGS, EVAL_REPEATED_FLAGS } from "../src/eval/usage.js";
 
 // A value-taking flag given a FLAG-LOOKING next token (`--label --dotenv`) must be a usage error naming that
 // flag — never take the flag name as its value and carry on. Until `--dotenv`/`--run-dir` became per-command
@@ -62,6 +63,7 @@ const CASES: Array<[string, string[], string[]]> = [
   ["lint", ["lint", "s.yaml"], [...LINT_VALUE_FLAGS]],
   ["chat", ["chat", "./plugin"], CHAT_VALUE_FLAGS],
   ["probe-dispatch", ["probe-dispatch", "./plugin", "hi"], PROBE_VALUE_FLAGS],
+  ["eval", ["eval", "s.yaml", "--arm", "a", "--arm", "b"], [...EVAL_VALUE_FLAGS, ...EVAL_REPEATED_FLAGS]],
 ];
 
 describe.skipIf(!can)("every value-taking flag refuses a flag-looking value", () => {

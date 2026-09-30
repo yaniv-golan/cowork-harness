@@ -13,7 +13,7 @@ import {
   type RunStatus,
   type PlatformBaseline,
 } from "./types.js";
-import { writeAllSync } from "./io.js";
+import { writeAllSync, tildeify } from "./io.js";
 import {
   loadBaseline,
   BASELINES_DIR,
@@ -164,6 +164,10 @@ import {
 import { buildRepeatRollup, rollupPasses, armLabel, type RepeatRollup } from "./run/repeat.js";
 import { parseRepeatFlags, RepeatFlagError } from "./run/repeat-flags.js";
 import { cmdCritique } from "./critique/command.js";
+import { EVAL_USAGE } from "./eval/usage.js";
+import { parseEvalArgs, parseEvalReportArgs, runEval, evalEnvelopePayload, EvalStagingError } from "./eval/command.js";
+import { makeEvalJobRunner } from "./eval/job-runner.js";
+import { writeEvalReport, REPORT_MD } from "./eval/report.js";
 import {
   MatrixFile,
   expandMatrix,
@@ -237,6 +241,11 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--decider-dir <dir>]   answer live questions in-band; then use 'gates'/'answer' to stream/respond
       [--output-format text|json] [--quiet|-q] [--verbose]
       (run 'run --help' for the full flag reference)
+
+  eval <scenario.yaml | dir/> --arm [<label>=]<source> --arm [<label>=]<source>
+                               EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
+                               each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
+  eval report <eval-dir>       rebuild an eval's report from its directory ($0)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
@@ -692,6 +701,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       --scenario <name> scopes the run to one scenario dir — migrate a single scenario, verify it, then do the rest.\n" +
     "       exit: 0 nothing refused · 1 one or more directories refused (unfinished work) · 2 usage (or unknown --scenario)",
 
+  eval: EVAL_USAGE,
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":
@@ -725,6 +735,7 @@ const COMMANDS = [
   "inspect",
   "diff",
   "critique",
+  "eval",
   "assertions",
   "scaffold",
   "status",
@@ -942,6 +953,8 @@ async function main() {
       return cmdDiff(rest);
     case "critique":
       return void (await cmdCritique(rest));
+    case "eval":
+      return cmdEval(rest);
     case "assertions":
       return cmdAssert(rest);
     case "scaffold":
@@ -2016,6 +2029,68 @@ async function cmdRun(rawArgs: string[]) {
     ? rollups.every((r) => rollupPasses(r, minPassRate, allowBudgetStop))
     : results.every((r) => computeVerdict(r, "live").pass);
   process.exit(ok ? 0 : 1);
+}
+
+/** `eval` — the paired evaluation. The command logic lives in src/eval/command.ts and throws; this wrapper
+ *  supplies the per-scenario runner (`runOneScenario`, the one `run` uses, with a per-job copy of the flags
+ *  so concurrent jobs cannot clobber each other's label) and maps the outcome to the exit contract. */
+async function cmdEval(rawArgs: string[]) {
+  const json = isJsonOutput(rawArgs);
+  const failFor = (e: unknown): never => {
+    if (e instanceof EvalStagingError || e instanceof BoundaryError)
+      return fail("eval", "boundary", (e as Error).message, undefined, json, 3);
+    if (e instanceof UsageError) return fail("eval", "usage", e.message, e.hint, json);
+    throw e;
+  };
+  const emit = (evalDir: string, report: ReturnType<typeof writeEvalReport>, text: string) => {
+    const code = report.summary.exitCode;
+    if (json) out(jsonPayloadEnvelope("eval", code === 0, evalEnvelopePayload(evalDir, report)));
+    else log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}`);
+    process.exit(code);
+  };
+  if (rawArgs[0] === "report") {
+    let r: ReturnType<typeof parseEvalReportArgs>;
+    try {
+      r = parseEvalReportArgs(rawArgs.slice(1));
+    } catch (e) {
+      return failFor(e);
+    }
+    for (const g of r.globals) applyCommandGlobal("eval", g.flag, g.value, json);
+    const report = writeEvalReport(r.evalDir);
+    return emit(r.evalDir, report, readFileSync(join(r.evalDir, REPORT_MD), "utf8"));
+  }
+  let parsed: ReturnType<typeof parseEvalArgs>;
+  try {
+    parsed = parseEvalArgs(rawArgs);
+  } catch (e) {
+    return failFor(e);
+  }
+  for (const g of parsed.globals) applyCommandGlobal("eval", g.flag, g.value, json);
+  // Runs render nothing (json-shaped output plan): concurrent jobs would interleave a live renderer on
+  // stderr, so the eval prints one line per finished job instead.
+  const flags: CommonFlags = {
+    output: "json",
+    quiet: true,
+    verbose: false,
+    ...(parsed.onUnanswered ? { onUnanswered: parsed.onUnanswered } : {}),
+    ...(parsed.deciderCmd ? { deciderCmd: parsed.deciderCmd } : {}),
+    ...(parsed.deciderDir ? { deciderDir: parsed.deciderDir } : {}),
+  };
+  const externalChannel = resolveExternal("eval", flags);
+  const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
+  const o = resolveOutput("run", flags);
+  let outcome: Awaited<ReturnType<typeof runEval>>;
+  try {
+    outcome = await runEval(parsed, {
+      log,
+      runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
+    });
+  } catch (e) {
+    externalChannel?.close?.();
+    return failFor(e);
+  }
+  externalChannel?.close?.();
+  emit(outcome.evalDir, outcome.report, readFileSync(join(outcome.evalDir, REPORT_MD), "utf8"));
 }
 
 async function cmdSkill(rawArgs: string[]) {

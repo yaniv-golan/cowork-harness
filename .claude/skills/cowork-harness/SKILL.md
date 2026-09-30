@@ -1,6 +1,6 @@
 ---
 name: cowork-harness
-description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, asserting artifacts, egress, or sub-agent dispatch, measuring how long each tool call took (toolDurations / trace), or debugging a failed run or verdict from its result.json or transcript. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
+description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, asserting artifacts, egress, or sub-agent dispatch, measuring how long each tool call took (toolDurations / trace), or debugging a failed run or verdict from its result.json or transcript. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. Also for comparing two versions of a skill before merging an edit — did the change make its answers worse? (`eval`: paired, interleaved A/B of two plugin versions, pinned models). NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold / critique / stats / eval commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
   version: 4.1.1
@@ -76,8 +76,10 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
   grades against a different artifact, `critique-evidence-package.txt`, which none of these tools
   surface; see `references/critique.md`.
 - **Regression-test your skill's ANSWER quality** (not just its behavior — does its guidance still lead to
-  correct answers after you edit it?) → author `semantic_matches` scenarios and gate on the per-claim
-  profile. See **Recipe 5** in `references/task-recipes.md` (validity, N≥3, discrimination — the traps).
+  correct answers after you edit it?) → author `semantic_matches` scenarios, then compare the version
+  before your edit with the one after using `cowork-harness eval` (EXPERIMENTAL, live: 10 runs per
+  scenario at the defaults). See **Recipe 5** step 6 in `references/task-recipes.md` (validity,
+  discrimination — the traps) and [`references/eval.md`](references/eval.md).
 - **"What is WRONG with this skill?"** (a graded critique, not a pass/fail) → `cowork-harness critique
   <folder> --prompt "<probe>"`. Up to four model workloads (zero with `--corpus-only`; pass 2 is skipped with no self-report) and 10–20 minutes; budget from
   `report.costUsd.totalUsd`. Reach for it when you want **findings**. **For "what does this skill
@@ -97,7 +99,7 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · migrate-run-dir · lint ·
 lint-skill · analyze-skill · probe-dispatch ·
-verify-run · trace · inspect · diff · critique · stats · decide · gates · answer · scaffold · assertions --list · sync ·
+verify-run · trace · inspect · diff · critique · eval · eval report · stats · decide · gates · answer · scaffold · assertions --list · sync ·
 list · boundary-check · status · vm <init|status|delete|prune> · doctor · init-redact`. Always check `cowork-harness <cmd> --help`.
 
 ## Invariants — how a green run lies
@@ -154,4 +156,5 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/fidelity-and-answers.md`](references/fidelity-and-answers.md) | tier semantics, answer paths, the determinism contract |
 | [`references/ci-recipe.md`](references/ci-recipe.md) | the GitHub Action, replay-vs-live lanes, the four-stage pipeline |
 | [`references/critique.md`](references/critique.md) | `critique` report and evidence-package shapes |
+| [`references/eval.md`](references/eval.md) | `eval`: paired before/after of two plugin versions — labels, refusals, exit codes, files |
 | `scripts/scenario.py` | `scaffold`, `lint`, `lint-skill`, `resolve-agent-types <plugin-dir>` (validates a pinned `subagent_type` against `plugin.json` + `agents/*.md`) |

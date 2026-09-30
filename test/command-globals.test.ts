@@ -36,6 +36,7 @@ const MATRIX: Array<[string, string[]]> = [
   ["inspect", ["inspect", "some-run"]],
   ["diff", ["diff", "a", "b"]],
   ["critique", ["critique", "./plugin", "--prompt", "hi"]],
+  ["eval", ["eval", "x.yaml", "--arm", "a", "--arm", "b"]],
   ["assertions", ["assertions", "--list"]],
   ["scaffold (run-id form)", ["scaffold", "some-run"]],
   ["scaffold (flag-built form)", ["scaffold", "--name", "x", "--prompt", "p"]],

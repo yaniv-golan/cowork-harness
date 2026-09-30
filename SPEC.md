@@ -592,8 +592,9 @@ there are three families:
   `diff`, `trace`, `analyze-skill`, `lint`/`lint-skill`**, plus `record --dry-run`'s discovery
   payload, the `record <dir/>` / `record --rerecord-stale` batch payload (below), `scaffold <run>`
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
-  preview's fields), `critique --corpus-only`'s corpus payload, `verify-cassettes` (§11.1), `doctor`
-  (§11.2), `rehash`, and `answer` (`gate`, `answers`).
+  preview's fields), `critique --corpus-only`'s corpus payload, `eval` and `eval report` (`evalDir`, `arms`, `pins`,
+  `sections`, `summary`, `cost`, `stoppedEarly`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
+  and `answer` (`gate`, `answers`).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
@@ -785,7 +786,7 @@ prints the same exclusion warning the run prints. `verify-run` follows the same 
 not exist or is a file, or a scenario file that does not load, is `usage`; a directory holding no completed
 run stays `runtime`. `answer` splits the same way: a directory or gate that is not there is `usage`; a gate
 request that exists but cannot be read or parsed, or an answer that cannot be written, is `runtime`.
-**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
+**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `eval` (and `eval report`) exits `0` when the comparison completed — whatever drops the rows show, unless `--fail-on` was given; `1` for a drop at the `--fail-on` level (`possible` or `confirmed`; no gating without the flag), every row `insufficient`, or a judge model that differed across reps; `2` for a usage error or any refusal before the first run (an alias model, an eval dir inside a git work tree, identical arms, the answer-key guard, a scenario input a run would refuse, an unreachable `--fail-on confirmed`); `3` when an arm snapshot could not be copied or failed its staging preflight. Its `--output-format json` envelope is `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`, with `ok` ⇔ exit `0`. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
 `2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
 shape, unsupported version, unrecognized assertion key) or any per-file throw, plus the batch loop's
 own source-resolution failures (`--assert-from`/`--reassert` drift, scenario-parse errors, `--write`
@@ -1107,6 +1108,12 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `critique --corpus-only`'s preview payload (the `corpus` object above) is the same experimental
   surface — a documented subset of `evidenceBudget`, same field names and meaning — and may change while
   it stabilizes too.
+- **The `eval` report** — `report.json` (`schemaVersion: 0`), `report.md`, `manifest.json`, `runs.jsonl` and the
+  `arms`/`pins`/`sections`/`summary`/`cost` payload of its JSON envelope — plus its row labels and the defaults of
+  its statistical flags (`--reps`, `--alpha`, `--correction`, `--concurrency`, and the `insufficient` threshold).
+  `eval` is EXPERIMENTAL; these are expected to change as the wording and thresholds are tuned. The command name,
+  its `--arm` source grammar, its exit codes (§11) and `--fail-on`'s meaning — no gating unless it is given — are
+  covered.
 - **The bundled `scenario.py`'s functions, constants and module layout** — the `lint` / `lint-skill` /
   `scaffold` subcommands (and the CLI's passthroughs to them) are the surface; the script is not an
   importable API, and a consumer that vendors or imports a `_helper` from it is copying an implementation

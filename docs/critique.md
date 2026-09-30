@@ -111,6 +111,7 @@ Where your vocabulary lands here:
 | Bounded execution | `--timeout` (both lanes); `--max-budget-usd` on `run`/`skill` — a cumulative cap with `--repeat`, a history-based pre-flight refusal without it. `critique` itself rejects it: four workloads, so a single-run estimate gates on the wrong number |
 | Circuit breaker / stagnation detection | Consumer-side. We supply the per-iteration signals — `verdict.signals`, `fingerprint.skillHash`, the run index (see [stats.md](./stats.md)'s generation-pairing recipes) |
 | Trace | `trace`, `trace --full-results` |
+| Regression gate for an edit | [`eval`](./eval.md) — a paired before/after of two versions of the skill; still not a loop |
 | **Hill-climbing loop** | **Deliberately not provided.** See below |
 
 **What we do not do, stated plainly.** There is no convergence orchestrator: nothing here re-runs a skill,

@@ -143,6 +143,11 @@ export interface ExecuteOptions {
   externalChannel?: DecisionChannel;
   /** stable session handle: pins the run dir + the agent's native session id (so it can be resumed). */
   sessionId?: string;
+  /** A PRE-ASSIGNED id for an ordinary, ephemeral run (the `local_<base36>` shape every unpinned run gets),
+   *  for a caller that must know the run dir before the run (a paired eval job). Unlike `sessionId` it is
+   *  not a resumable session and gets no `sess-` prefix, so the agent sees the same shape of cwd as any
+   *  other run. Refused when the run dir already exists — an id is never reused. */
+  runId?: string;
   /** resume a prior session of this id — reuse its persisted work dir + pass the agent's `--resume`. */
   resume?: boolean;
   /** --compact: suppress the INFORMATIONAL capability `::notice::` lines for shareable output. The
@@ -209,6 +214,13 @@ export function slugForPath(name: string): string {
   if (full.length <= 128) return full;
   const hash = createHash("sha256").update(full).digest("hex").slice(0, 8);
   return `${full.slice(0, 128)}-${hash}`;
+}
+
+/** Where a run of `scenarioName` with run id `sessionId` (`local_…`, or `sess-…` when pinned) writes its
+ *  artifacts. The one derivation: a caller that needs a run's dir before the run (an eval job, to recover
+ *  an unanswered gate's salvaged result) calls this rather than re-assembling it. */
+export function runOutDir(scenarioName: string, sessionId: string): string {
+  return join(runsWriteRoot(), slugForPath(scenarioName), sessionId);
 }
 
 /** The SOURCE host paths a session stages (skills/uploads/folders/plugins, plus the session file itself).
@@ -513,11 +525,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     throw new UsageError(
       `--session-id "${opts.sessionId}" may contain only letters, digits, "_" or "-" (no path separators or other characters)`,
     );
+  if (opts.runId !== undefined) {
+    if (!/^local_[0-9a-z]{8,32}$/.test(opts.runId))
+      throw new UsageError(`run id "${opts.runId}" must be local_ followed by 8-32 base36 characters`);
+    if (opts.sessionId !== undefined || opts.resume)
+      throw new UsageError("a pre-assigned run id cannot be combined with --session-id or --resume");
+  }
   const stable = opts.sessionId ? `sess-${opts.sessionId}` : undefined;
-  const sessionId = stable ?? `local_${process.hrtime.bigint().toString(36)}`;
+  const sessionId = stable ?? opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
   // the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
   // "../x" can't place run artifacts outside runs/. The display name (scenario.name) is unchanged.
-  const outDir = join(runsWriteRoot(), slugForPath(scenario.name), sessionId);
+  const outDir = runOutDir(scenario.name, sessionId);
+  if (opts.runId !== undefined && existsSync(outDir))
+    throw new UsageError(`run id ${opts.runId} is already used by ${outDir}; a pre-assigned run id is never reused`);
   // The marker lives at outDir/.origin — ABOVE workRoot (outDir/work/...), so it's invisible to
   // collectArtifacts / file_exists / user_visible_artifact / the trace events.jsonl scan, and untouched
   // by cpSync staging. It MUST stay here; moving it into the staged tree would surface it as an artifact.
@@ -2262,15 +2282,25 @@ export function ablateSession<T extends { plugins: Record<string, unknown>; skil
 export function launchSourcesPreflight(
   scenario: Scenario,
   modelOverride: string | undefined,
-  opts: { quiet?: boolean; ablateSkill?: boolean; baseline?: PlatformBaseline } = {},
+  opts: {
+    quiet?: boolean;
+    ablateSkill?: boolean;
+    baseline?: PlatformBaseline;
+    /** The session the run will ACTUALLY use, when the caller substitutes one (`ExecuteOptions.session`,
+     *  e.g. an eval arm's snapshot in place of the declared plugin dir). Without it this preflights the
+     *  session FILE's sources — the original dir — and passes vacuously on a broken substitute. */
+    session?: ReturnType<typeof loadSession>;
+  } = {},
 ): void {
   let loaded: ReturnType<typeof loadSession>;
-  try {
-    loaded = loadSessionFromFile(scenario.session);
-  } catch (e) {
-    if (e instanceof UsageError) throw e;
-    return;
-  }
+  if (opts.session !== undefined) loaded = opts.session;
+  else
+    try {
+      loaded = loadSessionFromFile(scenario.session);
+    } catch (e) {
+      if (e instanceof UsageError) throw e;
+      return;
+    }
   const model = resolvePinnedModel(modelOverride, loaded.model, envModelDefault());
   const withModel = model !== undefined && model !== loaded.model ? applySessionOverrides(loaded, { model }) : loaded;
   const session = opts.ablateSkill ? ablateSession(withModel) : withModel;
@@ -2301,7 +2331,13 @@ export function scenarioInputRefusal(
   return f.session ?? f.vacuity ?? f.inputs;
 }
 
-export type ScenarioInputCheckOptions = { quiet?: boolean; ablateSkill?: boolean; unloadableBaseline?: "throw" | "skip" | "report" };
+export type ScenarioInputCheckOptions = {
+  quiet?: boolean;
+  ablateSkill?: boolean;
+  unloadableBaseline?: "throw" | "skip" | "report";
+  /** The session the run will actually use, when the caller substitutes one (see launchSourcesPreflight). */
+  session?: ReturnType<typeof loadSession>;
+};
 
 /** The parts of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
  *  differently (`record <file> --dry-run` reports vacuity and an unreadable session file but refuses a bad
@@ -2327,7 +2363,12 @@ export function scenarioInputFindings(
   let inputs: UsageError | undefined;
   let session: SessionFileError | undefined;
   try {
-    launchSourcesPreflight(scenario, modelOverride, { quiet: opts.quiet, ablateSkill: opts.ablateSkill, baseline });
+    launchSourcesPreflight(scenario, modelOverride, {
+      quiet: opts.quiet,
+      ablateSkill: opts.ablateSkill,
+      baseline,
+      ...(opts.session ? { session: opts.session } : {}),
+    });
   } catch (e) {
     if (e instanceof SessionFileError) session = e;
     else if (e instanceof UsageError) inputs = e;

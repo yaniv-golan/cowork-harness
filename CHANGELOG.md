@@ -8,6 +8,34 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`eval` — paired A/B evaluation of a skill edit (EXPERIMENTAL).**
+  `cowork-harness eval <scenario.yaml | dir/> --arm before=<source> --arm after=<source>` runs every
+  scenario with each of two versions of the session's `plugins.local_plugins` plugin and compares how often
+  each assertion and each `semantic_matches` rubric claim passes. `eval report <eval-dir>` rebuilds the
+  report from the eval directory at no cost, byte-identical to the one the eval wrote. See
+  [docs/eval.md](./docs/eval.md).
+  - An arm is a directory or `git:<ref>:<path>`. Each is copied once, before the first run, and every rep
+    mounts the copy; a `git:` arm is read file by file from the commit.
+  - Runs are interleaved (A B, then B A, …), 5 reps per arm by default, with the agent and judge models
+    required to be concrete ids (`--model`, `--judge-model`).
+  - Each row reports B − A with a 95% Newcombe interval and a two-sided Fisher exact p, labelled
+    `confirmed`/`possible` drop or rise (Benjamini-Hochberg by default, `--correction holm`),
+    `no detectable change` with its minimum detectable difference, `underpowered` or `insufficient`.
+    `--holdout` reports scenarios you did not tune against in their own section.
+  - Each job's run id has the ordinary `local_…` shape and names neither the eval nor the arm, so both arms
+    see the same working directory shape and system prompt.
+  - Refused before any run (exit `2`): alias models, an eval directory inside a git work tree, identical
+    arms (unless `--allow-identical-arms`), an arm that contains the eval's own scenario or session files
+    (a symlink included), an `evals.json` or a symlink resolving outside it, and a scenario input a run
+    would refuse. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
+  - Exit `0` when the eval completed, whatever drops the rows show; `--fail-on possible|confirmed` opts in
+    to exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
+    differed across reps, and `3` when an arm snapshot could not be copied or failed its staging preflight. The report format, labels and
+    statistical defaults are experimental
+    ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
+- **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so
+  `--keep-last` applies to them; `prune` warns that the eval's report links now point at deleted runs
+  (`eval report` still rebuilds the report from the eval dir).
 - **`semantic_matches` judge cost and prompt identity are recorded.** Each graded assert now carries:
   - `RunResult.assertions[].judgeCostUsd`: the judge's spend, summed over both attempts when a malformed
     grade is retried.
@@ -120,6 +148,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique` no longer fails on an `events.jsonl` line that is a JSON scalar** (such as `null`) while
+  reading sub-agent `Skill` calls; the line is skipped like a torn one.
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
   `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
   session file declares, not the substituted candidate the cell actually mounted. Every cell therefore

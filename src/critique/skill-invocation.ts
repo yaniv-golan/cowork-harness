@@ -98,6 +98,7 @@ export function subagentSkillCalls(eventsJsonl: string): string[] | undefined {
     } catch {
       continue; // a torn final line is normal on an append-only stream; never fail the critique on it
     }
+    if (!e || typeof e !== "object") continue; // a JSON scalar (`null`, a number) is not an event
     if (e.type !== "assistant" || typeof e.parent_tool_use_id !== "string") continue;
     const content = e.message?.content;
     if (!Array.isArray(content)) continue;

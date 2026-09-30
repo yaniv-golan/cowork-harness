@@ -1,4 +1,5 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
+import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
 import { deriveModelProvenance, noModelProvenance } from "./model-provenance.js";
@@ -6557,6 +6558,17 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     aliases: { "-q": "--quiet" },
     usage: VERIFY_CASSETTES_USAGE,
     allowlist: VERIFY_CASSETTES_ALLOWLIST,
+  },
+  {
+    // `eval`'s flag lists live in a dependency-free module (src/eval/usage.ts): the eval command imports this
+    // file, so the reverse import must not pull the command in.
+    command: "eval",
+    booleanFlags: EVAL_BOOLEAN_FLAGS,
+    valueFlags: EVAL_VALUE_FLAGS,
+    repeatedFlags: EVAL_REPEATED_FLAGS,
+    aliases: { "-q": "--quiet" },
+    usage: EVAL_USAGE,
+    allowlist: [],
   },
 ];
 

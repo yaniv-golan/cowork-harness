@@ -79,6 +79,12 @@ no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^4 criti
 `jq -e` IS the gate: the flag itself exits 0 on a measurement even over the ceiling. The number is a
 floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)).
 
+**A live pre-merge comparison.** [`eval`](./eval.md) runs your scenarios against the version on the base
+branch and the one in the PR, interleaved, on the same self-hosted runner the live lane needs. No drop
+fails it unless you pass `--fail-on possible|confirmed`; with it, exit `1` fails the job on a drop at that
+level. Exit `1` also follows when every row is `insufficient` or the judge model differed across reps. It is EXPERIMENTAL, and at 10 runs per scenario at the defaults it is a
+deliberate, priced step rather than a per-push check.
+
 **Scripting `replay` or `verify-cassettes` yourself (outside the Action):** in text mode both commands
 write their report to stderr and nothing to stdout, so a passing run prints 0 bytes there. That is by
 design: text output is for people and is not a compatibility contract

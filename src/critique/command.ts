@@ -2089,10 +2089,7 @@ export function gradedSkillNameFor(
  *  and the `Skill` tool launches either through the same registry; the run records the name, not the
  *  kind (vercel@0.48.0 does exactly this). That makes EVERY channel undecidable for this skill — a match
  *  is reported absent, never true. */
-export function commandShadowsSkillFor(
-  gradedSkillName: string | undefined,
-  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "pluginRoot">,
-): boolean {
+export function commandShadowsSkillFor(gradedSkillName: string | undefined, resolved: { pluginRoot: string | undefined }): boolean {
   return (
     gradedSkillName !== undefined &&
     resolved.pluginRoot !== undefined &&
@@ -2113,19 +2110,34 @@ export function computeSkillInvocationVerdict(args: {
 }): boolean | undefined {
   const { outDir, boundary, taskRaw, resolved, gradedSkillName } = args;
   if (gradedSkillName === undefined) return undefined;
+  const eventsText = (() => {
+    try {
+      return readTurn1Slice(outDir, "events.jsonl", boundary);
+    } catch {
+      return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
+    }
+  })();
+  return skillInvocationFromRecord({ gradedSkillName, pluginRoot: resolved.pluginRoot, record: taskRaw, eventsText });
+}
+
+/** The wiring of `observedSkillInvocation` over one run's persisted record — shared by critique (over its
+ *  graded turn's slice) and `eval` (over a one-turn run's whole `events.jsonl`). `eventsText` undefined =
+ *  the events could not be read, which makes the sub-agent channel unobservable. */
+export function skillInvocationFromRecord(args: {
+  gradedSkillName: string | undefined;
+  pluginRoot: string | undefined;
+  record: Record<string, unknown> | null | undefined;
+  eventsText: string | undefined;
+}): boolean | undefined {
+  const { gradedSkillName, record: taskRaw, eventsText, pluginRoot } = args;
+  if (gradedSkillName === undefined) return undefined;
   // The qualifier a plugin-qualified observed id must carry to count — derived the way the BINARY
   // derives it (`.claude-plugin/plugin.json#name`, else the directory basename; a root `plugin.json` is
   // ignored), not via `readPluginName`, whose root-`plugin.json` leniency made a fully-invoked
   // `rootpj-dir:qux` run read as never invoked. Without the qualifier a same-named skill from ANOTHER
   // installed plugin (present in the inventory at hostloop/protocol) would satisfy the match.
-  const gradedPluginName = resolved.pluginRoot !== undefined ? binaryPluginIdentity(resolved.pluginRoot).name : undefined;
-  const subagentSkills = (() => {
-    try {
-      return subagentSkillCalls(readTurn1Slice(outDir, "events.jsonl", boundary));
-    } catch {
-      return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
-    }
-  })();
+  const gradedPluginName = pluginRoot !== undefined ? binaryPluginIdentity(pluginRoot).name : undefined;
+  const subagentSkills = eventsText === undefined ? undefined : subagentSkillCalls(eventsText);
   return observedSkillInvocation(
     gradedSkillName,
     gradedPluginName,
@@ -2135,7 +2147,7 @@ export function computeSkillInvocationVerdict(args: {
       typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
       (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
     ),
-    commandShadowsSkillFor(gradedSkillName, resolved),
+    commandShadowsSkillFor(gradedSkillName, { pluginRoot }),
   );
 }
 
