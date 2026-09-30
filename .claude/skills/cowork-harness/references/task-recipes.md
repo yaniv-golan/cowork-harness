@@ -198,7 +198,9 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    correct claim can pass one rep and miss the next. A claim's baseline is its pass *rate* (3/3, 2/3), read
    from `RunResult.assertions[].semanticClaims`. Do **not** chase single-run all-pass — set `min_pass` to
    the reliably-hit core for a green verdict, and treat the per-claim rates as the real signal. (N=1
-   routinely mislabels a stable 0/3 as "intermittent" and vice-versa.)
+   routinely mislabels a stable 0/3 as "intermittent" and vice-versa.) `eval` (step 6) defaults to 5 reps
+   per arm and refuses fewer than 4 without `--allow-underpowered`: below that, no exact test can flag
+   even a total collapse.
 5. **Check discrimination — does the skill actually help?** Run one rep with the skill NOT installed and
    compare. `--ablate-skill` is the flag for it: it empties every skill/plugin discovery source for
    **that one invocation**, so the agent answers from its own priors, and stamps the result
@@ -207,14 +209,26 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    A/B — and the rollup labels it `PASS [ABLATED — control arm]` so you cannot bank it as one. A not-invoked rep is not a control:
    outside `--ablate-skill` it can still read the source (see step 3). If the answer still scores high without the skill, that claim is
    answerable from priors and tests the model, not your skill — strengthen it (a skill-specific fact) or
-   drop it. Everything past "run both arms" — scrubbing giveaways, shuffling, judging blind, unblinding
-   after grading — is yours to build; the harness supplies the runs and the control.
-6. **Gate a change on the profile diff.** Capture the per-claim profile before your edit (the baseline),
-   make the edit, re-capture, and compare per claim. Compare only runs that share `judgePromptHash` and `judgeModel`. A claim that DROPPED (e.g. 3/3 → 0/3) is a
-   **regression signal to investigate**, not proof your edit caused it: at a small number of reps one
-   observation can move by chance. Re-run that claim and read the reps' transcripts before attributing
-   it. A claim already at 0/3 (a known gap) cannot regress. That turns "did my SKILL.md refactor quietly
-   make the advice worse?" into a checkable signal.
+   drop it. The harness supplies the runs, this with/without control and, for a before/after of two
+   versions, the paired `eval` of step 6; scrubbing giveaways and judging blind stay with you. Before you trust any
+   comparison, measure your scenarios' own noise: `eval` with the SAME source as both arms
+   (`--allow-identical-arms`) shows how far the rates move when nothing changed.
+6. **Gate a change with `eval` — a paired comparison of the two versions.** Hand-diffing two profiles
+   captured at different times mixes your edit with everything else that moved in between. `eval` runs
+   both versions of the plugin in one interleaved schedule, holds the agent and judge models fixed, and
+   compares every assertion and every rubric claim with an exact test:
+   ```bash
+   cowork-harness eval evals/scenarios/ --arm before=git:HEAD:plugins/my-skill --arm after=./plugins/my-skill \
+     --model <concrete id> --judge-model <concrete id> --holdout evals/scenarios/untouched-question.yaml
+   ```
+   The first `--arm` is the baseline. Each arm is snapshotted before the first run (a `git:` arm is read
+   from the commit — freeze a recoverable source this way rather than trusting the working tree to stay
+   put). A row labelled `possible drop` or `confirmed drop` is a **regression signal to investigate**,
+   not proof your edit caused it: open the run dirs the report links for that row, read the transcripts,
+   and re-run if the evidence is thin. A claim already at 0% in both arms cannot regress, and one at 100%
+   in both cannot show an improvement — the report counts both. Keep `--holdout` scenarios you did not
+   tune against; a scenario you shaped the skill to is weak evidence. Details, labels and exit codes:
+   [docs/eval.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/eval.md).
 
 **Lane note:** `semantic_matches` is **live-only** (the judge is a live model call), so these scenarios
 run on the `run` lane, never token-free `replay` — the linter's "all assertions live-only" warning is

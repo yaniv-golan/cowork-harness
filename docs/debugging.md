@@ -258,6 +258,8 @@ cowork-harness stats "skill-$(basename "$SKILL")" --group-by skill-hash
 #    A window you did NOT split warns when it spans >1 generation, so a cross-generation aggregate
 #    never passes silently. For per-generation TOTAL spend including critique's evaluator passes, use
 #    stats.md's jq recipes — `stats` reports percentiles over aggregatable rows.
+#    For a CONTROLLED before/after — both versions interleaved, models pinned, an exact test per claim —
+#    run `cowork-harness eval` on your scenarios instead (docs/eval.md).
 
 # 6. Repeat from 1. Stop when critique stops producing ACTIONABLE findings you agree with.
 ```

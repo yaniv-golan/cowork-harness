@@ -50,6 +50,8 @@ const CASES: Array<[string, string[]]> = [
   ["sync", []],
   ["verify-run", ["somedir", "s.yaml"]],
   ["regrade", ["somedir", "--scenario", "s.yaml"]],
+  ["eval", ["s.yaml", "--arm", "a", "--arm", "b"]],
+  ["eval", ["report", "somedir"]],
 ];
 
 describe.skipIf(!can)("CLI structural guard — every command rejects an unknown flag", () => {

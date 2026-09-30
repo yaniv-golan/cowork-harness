@@ -48,6 +48,20 @@ const UNRESOLVABLE_ALIASES = new Set(["best", "opusplan"]);
  *  model (`e.id+"[1m]"`), not a different model, so a `[1m]` pin is honored by the bare id. */
 const normalizeModelId = (m: string): string => m.replace(/\[\dm\]$/i, "").toLowerCase();
 
+/** Is `id` a CONCRETE model id — one that names exactly one model — rather than a family alias
+ *  (`opus`), a mode/any alias (`best`, `opusplan`), or nothing? `[1m]` is a context-window selector on the
+ *  same model, so it is stripped first (the binary's own normalization). Used where a comparison must hold
+ *  the model fixed across runs: an alias resolves to whatever the account's latest member is at call time.
+ *  Deliberately does not claim the id EXISTS — only that it cannot silently mean two different models. */
+export function isConcreteModelId(id: string | undefined): id is string {
+  if (id === undefined) return false;
+  const n = normalizeModelId(id.trim());
+  if (n === "") return false;
+  if ((FAMILY_ALIASES as readonly string[]).includes(n)) return false;
+  if (UNRESOLVABLE_ALIASES.has(n)) return false;
+  return true;
+}
+
 export function deriveModelProvenance(
   pinnedModel: string | undefined,
   models: string[] | undefined,

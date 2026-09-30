@@ -1,0 +1,177 @@
+// `runs.jsonl`: one line per finished eval job, appended as the job ends. The report is rebuilt from these
+// lines and the manifest ALONE — never from the run dirs, which `prune` may remove — so each line carries
+// every field the classifier, the row extractor and the medians read, plus the per-rep evidence facts
+// (computed at run time, while the run dir is certainly there).
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.js";
+import type { RunResult } from "../types.js";
+import type { ClassifiableResult, RepEvidence } from "./classify.js";
+import { tildeify } from "../io.js";
+
+export const RUNS_FILE = "runs.jsonl";
+
+export type ThrownKind = "boundary" | "unanswered" | "decider_timeout" | "other";
+
+/** A per-rep fact: observed true/false, or not observable from this run's record. */
+export type Fact = boolean | "unobservable";
+
+export interface EvidenceFacts {
+  /** The selected skill was invoked (a `Skill` call, a sub-agent's `Skill` call, or the prompt's slash token). */
+  invoked: Fact;
+  /** The agent read the mounted SKILL.md or a reference directly. */
+  sourceRead: Fact;
+  /** Neither of the above. */
+  neither: Fact;
+}
+
+/** The assertion fields a grade keeps. */
+export type GradedAssertion = NonNullable<ClassifiableResult["assertions"]>[number] & { judgeModel?: string };
+
+export interface Grade {
+  /** `live`: the grading the run itself did. Later re-grades append entries; the report reads entry 0. */
+  source: "live";
+  assertions: GradedAssertion[];
+}
+
+export interface RunsLine {
+  v: 0;
+  index: number;
+  arm: string;
+  scenario: string;
+  rep: number;
+  runId: string;
+  /** `~`-relative; null when the job never produced a run dir. */
+  runDir: string | null;
+  /** What the job threw, if anything. */
+  thrown?: { kind: ThrownKind; message: string };
+  /** The result's classification inputs (no assertions — those are in `grades`). Absent when no result. */
+  result?: Omit<ClassifiableResult, "assertions"> & { judgeCostUsd?: number };
+  errorSource?: string;
+  resultErrorKind?: string;
+  models?: string[];
+  judge?: { models: string[]; promptHashes: string[] };
+  evidence?: EvidenceFacts;
+  grades: Grade[];
+}
+
+export function thrownKind(e: unknown): ThrownKind {
+  if (e instanceof DeciderTimeoutError) return "decider_timeout";
+  if (e instanceof BoundaryError) return "boundary";
+  if (e instanceof UnansweredError) return "unanswered";
+  return "other";
+}
+
+/** Rebuild an error the classifier recognises by class, from its persisted kind. */
+export function reviveThrown(t: { kind: ThrownKind; message: string }): unknown {
+  switch (t.kind) {
+    case "decider_timeout":
+      return new DeciderTimeoutError(t.message, "", "decider-cmd");
+    case "boundary":
+      return new BoundaryError(t.message);
+    case "unanswered":
+      return new UnansweredError(t.message, "");
+    default:
+      return new Error(t.message);
+  }
+}
+
+const uniq = (xs: Array<string | undefined>): string[] => [...new Set(xs.filter((x): x is string => typeof x === "string"))].sort();
+
+/** Project a finished job into its runs.jsonl line. */
+export function buildRunsLine(args: {
+  index: number;
+  arm: string;
+  scenario: string;
+  rep: number;
+  runId: string;
+  runDir: string | undefined;
+  result: RunResult | undefined;
+  thrown: unknown;
+  evidence: EvidenceFacts | undefined;
+}): RunsLine {
+  const r = args.result;
+  const assertions: GradedAssertion[] = (r?.assertions ?? []).map((a) => ({
+    assertion: a.assertion,
+    pass: a.pass,
+    ...(a.source !== undefined ? { source: a.source } : {}),
+    ...(a.semanticClaims !== undefined ? { semanticClaims: a.semanticClaims } : {}),
+    ...(a.judgeInvalid !== undefined ? { judgeInvalid: a.judgeInvalid } : {}),
+    ...(a.judgePromptHash !== undefined ? { judgePromptHash: a.judgePromptHash } : {}),
+    ...(a.judgeCostUsd !== undefined ? { judgeCostUsd: a.judgeCostUsd } : {}),
+    ...(a.judgeModel !== undefined ? { judgeModel: a.judgeModel } : {}),
+  }));
+  const semantic = assertions.filter((a) => a.assertion.semantic_matches !== undefined);
+  return {
+    v: 0,
+    index: args.index,
+    arm: args.arm,
+    scenario: args.scenario,
+    rep: args.rep,
+    runId: args.runId,
+    runDir: args.runDir !== undefined ? tildeify(args.runDir) : null,
+    ...(args.thrown !== undefined
+      ? { thrown: { kind: thrownKind(args.thrown), message: String((args.thrown as Error)?.message ?? args.thrown) } }
+      : {}),
+    ...(r
+      ? {
+          result: {
+            scenario: r.scenario,
+            result: r.result,
+            ...(r.errorSource !== undefined ? { errorSource: r.errorSource } : {}),
+            ...(r.resultErrorKind !== undefined ? { resultErrorKind: r.resultErrorKind } : {}),
+            ...(r.resultSubtype !== undefined ? { resultSubtype: r.resultSubtype } : {}),
+            ...(r.stalledOnQuestion !== undefined ? { stalledOnQuestion: r.stalledOnQuestion } : {}),
+            ...(r.partial !== undefined ? { partial: r.partial } : {}),
+            ...(r.unansweredGate !== undefined ? { unansweredGate: r.unansweredGate } : {}),
+            ...(r.models !== undefined ? { models: r.models } : {}),
+            ...(r.modelPinHonored !== undefined ? { modelPinHonored: r.modelPinHonored } : {}),
+            ...(r.fingerprint?.contentSig !== undefined ? { fingerprint: { contentSig: r.fingerprint.contentSig } } : {}),
+            ...(r.cost?.usd !== undefined ? { cost: { usd: r.cost.usd } } : {}),
+            ...(r.usage?.turns !== undefined ? { usage: { turns: r.usage.turns } } : {}),
+            ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+          },
+          ...(r.errorSource !== undefined ? { errorSource: r.errorSource } : {}),
+          ...(r.resultErrorKind !== undefined ? { resultErrorKind: r.resultErrorKind } : {}),
+          ...(r.models !== undefined ? { models: r.models } : {}),
+          judge: { models: uniq(semantic.map((a) => a.judgeModel)), promptHashes: uniq(semantic.map((a) => a.judgePromptHash)) },
+        }
+      : {}),
+    ...(args.evidence ? { evidence: args.evidence } : {}),
+    grades: r ? [{ source: "live", assertions }] : [],
+  };
+}
+
+export function appendRunsLine(file: string, line: RunsLine): void {
+  appendFileSync(file, JSON.stringify(line) + "\n");
+}
+
+/** Read runs.jsonl, ordered by schedule index. A torn final line (a crash mid-append) is skipped and
+ *  counted; any other unparseable line throws — a corrupt record must not render as a smaller eval. */
+export function readRunsLines(file: string): { lines: RunsLine[]; tornFinalLine: boolean } {
+  if (!existsSync(file)) return { lines: [], tornFinalLine: false };
+  const raw = readFileSync(file, "utf8").split("\n");
+  const lines: RunsLine[] = [];
+  let torn = false;
+  raw.forEach((text, i) => {
+    if (!text.trim()) return;
+    try {
+      lines.push(JSON.parse(text) as RunsLine);
+    } catch (e) {
+      const isLast = raw.slice(i + 1).every((t) => !t.trim());
+      if (isLast) torn = true;
+      else throw new Error(`${file}: line ${i + 1} is not valid JSON (${(e as Error).message})`);
+    }
+  });
+  lines.sort((a, b) => a.index - b.index);
+  return { lines, tornFinalLine: torn };
+}
+
+/** The classifier's input for one line: the result excerpt with the LIVE grade's assertions, and the revived
+ *  thrown error. */
+export function repEvidenceOf(line: RunsLine): RepEvidence {
+  const grade = line.grades[0];
+  return {
+    ...(line.result ? { result: { ...line.result, assertions: grade?.assertions ?? [] } } : {}),
+    ...(line.thrown ? { thrown: reviveThrown(line.thrown) } : {}),
+  };
+}

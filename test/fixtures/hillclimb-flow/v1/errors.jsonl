@@ -1,0 +1,1 @@
+{"prompt_id":"long-answer","rep":1,"failure_class":"serving_substitution","error":"served model claude-haiku-4-5-20251001 differs from the requested claude-sonnet-4-5-20250929","retries":0,"judge_retries":0,"model":"claude-haiku-4-5-20251001","usage":{"input_tokens":1500,"output_tokens":300},"latency_s":28.2}
