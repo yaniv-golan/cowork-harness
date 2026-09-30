@@ -6,9 +6,46 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.2.0] — 2026-09-30
+
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
 per-claim judge rationales, a fingerprint of what the judge was shown, and the judge's and the LLM
 decider's spend on every graded run. Full `/claude-api hillclimb` integration is coming in 4.3.
+
+### Upgrade notes
+
+- **Cassettes: no re-record needed for this release's harness changes; a cassette recorded through
+  `baseline: latest` needs a re-stamp or a re-record for the new baseline.**
+  - `latest` resolves to `desktop-2.16120.0`, so a cassette recorded through it against 2.9939.4 reports
+    `[stale] baseline moved 2.9939.4 → 2.16120.0 since record — re-record`: `verify-cassettes` and
+    `replay --strict` exit `1` on it, and a plain `replay` prints it as a `::warning::` and keeps its exit
+    code. A cassette pinned to a named baseline is unaffected.
+  - A re-stamp is sound: the agent is unchanged at 2.1.284, the Cowork system prompt is byte-identical
+    to 2.9939.4 (only the minifier's constant name moved), and the sub-agent append, prompt assets and
+    egress allowlist are unchanged. Set `fingerprint.baseline` to `"2.16120.0"`, one line per cassette
+    ([docs/cassette.md](./docs/cassette.md#cassette-versioning), "Clearing a drifted baseline"). The one
+    recorded-contract change is `PYTHONDONTWRITEBYTECODE=1` in the spawn env; re-record instead if the
+    recording ran Python that imports modules from a mounted folder and a `.pyc` in it could matter.
+  - What else moved on the spawn path: at `protocol` and `hostloop` the agent is spawned in its own
+    process group with `COWORK_HARNESS_RUN_TAG` in its env, for teardown. That variable is harness-side
+    and outside a cassette's fingerprint, and nothing a cassette records depends on it. Nothing moved
+    under `src/staging`, `src/session.ts` or the agent argv, and `CASSETTE_VERSION` (13) and the hash
+    format (epoch 12) are unchanged.
+  - The committed cassettes are re-stamped to `2.16120.0`. `verify-cassettes` exits `0` on all four (the
+    one accepted `unscanned` entry is `example-pdf-skill`'s uploaded artifact body), `replay --strict`
+    exits `0` on the three in `examples/replays/`, and none carries the new `agent-version` note.
+- **At `protocol` and `hostloop`, a run stops the host processes the agent started** (see Fixed). A
+  scenario that relied on a background process surviving the run, or on a daemon started from inside the
+  work dir (a `tmux` server, an ssh `ControlPersist` master), does not get it; set
+  `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` to turn off the orphan sweep for such a run.
+- **Live-validated against `desktop-2.16120.0`** (agent 2.1.284) on 2026-09-30. On `main` before the release's
+  last fixes merged: `test:live` 5 files, 21 tests, all passed (`protocol`, `container` and
+  `hostloop`); a real `eval` A/A of 4 reps exited `0`, and `eval report` rebuilt its report
+  byte-identically; `protocol`, `hostloop` and `microvm` runs passed; `chat` on a real terminal exited
+  `130` 1.7 s after a mid-turn Ctrl-C with the agent's process tree gone, and kept its result on `/exit`
+  and on a Ctrl-C at the prompt. On the release code: `eval` without a usable credential refused (exit
+  `2`, no eval directory), and `skill_triggered`/`no_skill_triggered` were correct on a live
+  slash-command run. Details are in `DESIGN.md`'s scope note.
 
 ### Added
 
@@ -140,9 +177,9 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
     interactive local session was available.
   - The computer-use permission gate (`cuCanUseToolEnabled`) moved to off, server-side. The harness does
     not model computer use.
-  - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: none of them runs Python that
-    could write bytecode, so the one spawn-env addition cannot change what they recorded.
-    `verify-cassettes` and `replay --strict` pass on them.
+  - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: the only Python any of them
+    runs is a `python3 --version`, which writes no bytecode, so the baseline's spawn-env addition cannot
+    change what they recorded. `verify-cassettes` and `replay --strict` pass on them. See Upgrade notes.
 - **`PYTHONDONTWRITEBYTECODE=1` is set in the agent spawn env**, as Desktop 2.16120.0 does for every
   Cowork session. On `container` and `microvm`, where the agent's own Bash runs, Python run by the agent
   or a skill's scripts does not write `__pycache__`/`.pyc` files into mounted folders or outputs. On
@@ -226,11 +263,11 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
 - **`modelPinHonored` is no longer absent on a run that starts with a `/plugin:skill` prompt.** Its
   slash-command expansion is a synthetic turn, so `models` held only `<synthetic>` and the pin read as
   unverifiable although a model answered; `eval` excluded every such rep as a model mismatch. With no live
-  model in `models`, the run's `modelUsage` now decides, only when unambiguous: `true` when the concrete
+  model in `models`, the run's `modelUsage` decides, only when unambiguous: `true` when the concrete
   pinned id is the only or the dominant billed model, `false` when the single billed model is another,
   and absent otherwise (an alias pin, a tie, the pin missing among several).
 - **`doctor --tier protocol` accepts a signed-in config dir.** With no env/.env token, a
-  `.credentials.json` in the config dir (`CLAUDE_CONFIG_DIR`, else `~/.claude`) now makes the token check
+  `.credentials.json` in the config dir (`CLAUDE_CONFIG_DIR`, else `~/.claude`) makes the token check
   a warning instead of a failure at `protocol`, as a macOS Keychain login already did: that tier keeps the
   real config dir, so the agent signs itself in. Only the file's existence is checked. Other tiers still
   require an env/.env token.
@@ -256,7 +293,7 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
 - **`skill_triggered` and `no_skill_triggered` count a skill run by a slash command.** A prompt that starts
   with `/<skill> …` or `/<plugin>:<skill> …` runs the skill with no `Skill` tool call — the agent expands the
   command itself, and a `context: fork` skill forks directly — so `skill_triggered` failed on a run where
-  the skill ran, and `no_skill_triggered` passed on it. Both now resolve the prompt's leading token against
+  the skill ran, and `no_skill_triggered` passed on it. Both resolve the prompt's leading token against
   the init frame's skill inventory, by the same rule `critique` and `eval` already used.
   - `result.json` gains `slashInvokedSkills`: the staged skill the prompt ran that way (`[]` when none,
     absent when the harness cannot tell). `skillsInvoked` still lists `Skill` tool calls only. Replay
