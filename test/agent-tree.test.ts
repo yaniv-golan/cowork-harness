@@ -366,8 +366,7 @@ describe("agentTreeAgent — the end-of-turn refresh", () => {
 
 describe("agentTreeAgent — the drive-loop refresh does not block the event loop", () => {
   it("a result frame lists synchronously: the listing is in place before the agent can exit (once per turn)", () => {
-    const rows = [...base(), row(300, AGENT, 300)];
-    const h = harness({ rows });
+    const h = harness({ rows: base() }); // at spawn the agent has started nothing yet
     let now = T0;
     h.deps.now = () => now;
     h.deps.snapshotAsync = () => new Promise(() => {}); // never lands
