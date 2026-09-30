@@ -374,12 +374,19 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     const base = basename(expandHome(pluginDecl));
     const snaps: Array<SnapshotInfo & { spec: ArmSpec; sourceDir?: string }> = specs.map((spec) => {
       const dest = join(evalDir, "arms", spec.label, base);
-      if (spec.source.kind === "dir") {
-        const info = snapshotDirArm(resolve(cwd, spec.source.path), dest, args.includeUntracked, spec.raw);
-        return { ...info, spec, sourceDir: resolve(cwd, spec.source.path) };
+      try {
+        if (spec.source.kind === "dir") {
+          const info = snapshotDirArm(resolve(cwd, spec.source.path), dest, args.includeUntracked, spec.raw);
+          return { ...info, spec, sourceDir: resolve(cwd, spec.source.path) };
+        }
+        const info = snapshotGitArm(spec.source, dest, cwd, spec.raw);
+        return { ...info, spec };
+      } catch (e) {
+        // A refusal about the source is usage; anything else (an unreadable file, a full disk, a git that
+        // failed mid-extraction, a tracked set that cannot be listed) is the eval's own staging failing.
+        if (e instanceof UsageError) throw e;
+        throw new EvalStagingError(`arm ${spec.label}: snapshot failed: ${(e as Error).message}`);
       }
-      const info = snapshotGitArm(spec.source, dest, cwd, spec.raw);
-      return { ...info, spec };
     });
     for (const s of snaps)
       say(

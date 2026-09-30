@@ -106,7 +106,7 @@ snapshot failed its staging preflight.
 
 - **Hold some out.** A scenario you tuned the skill against is weak evidence that the edit helps: you
   shaped the skill to it. Keep scenarios you did not look at while editing, and pass each with
-  `--holdout <scenario.yaml>`. They are reported, and corrected, in their own section. Nothing is
+  `--holdout <scenario.yaml>`. They are reported, and corrected, in their own section. `--holdout` may name every scenario; the report then has only the held-out section. Nothing is
   concluded about overfitting automatically; compare the two sections yourself.
 - **Pick hard cases.** A scenario every version passes 5/5 sits at the ceiling and cannot show an
   improvement. Choose questions a person would find hard, where the skill's guidance is what makes the

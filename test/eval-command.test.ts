@@ -10,7 +10,7 @@
 // named in the test that does it.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UsageError, UnansweredError } from "../src/errors.js";
@@ -19,7 +19,7 @@ import { loadBaseline } from "../src/baseline.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { slugForPath } from "../src/run/execute.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
-import { runEval, parseEvalArgs, type EvalJobSpec } from "../src/eval/command.js";
+import { runEval, parseEvalArgs, EvalStagingError, type EvalJobSpec } from "../src/eval/command.js";
 import { writeEvalReport } from "../src/eval/report.js";
 import { readRunsLines } from "../src/eval/runs.js";
 import { classifyRep } from "../src/eval/classify.js";
@@ -442,6 +442,21 @@ describe("eval: snapshots and their signatures", () => {
   });
 });
 
+describe("eval: exit 3 — the eval's own snapshot staging failed", () => {
+  it("an unreadable file in an arm source is EvalStagingError (not a usage error), and the dir is cleaned", async () => {
+    const { scen, a, b } = setup();
+    const locked = join(b, "skills", "csv-metrics", "locked.md");
+    writeFileSync(locked, "x");
+    chmodSync(locked, 0o000);
+    try {
+      await expect(runEval(args(scen, a, b), deps(fakeRunner()))).rejects.toThrow(EvalStagingError);
+    } finally {
+      chmodSync(locked, 0o644);
+    }
+    expect(existsSync(join(root, "eval"))).toBe(false);
+  });
+});
+
 describe("eval: git: arms", () => {
   function repoWithPlugin() {
     const repo = join(root, "grepo");
@@ -713,6 +728,23 @@ describe.skipIf(!existsSync(CLI))("eval: the CLI wrapper", () => {
     expect(env).toMatchObject({ tool: "cowork-harness", command: "eval", ok: false, error: null, stoppedEarly: null });
     expect(env.summary.failOnHit).toBe(true);
     expect(readFileSync(join(out.evalDir, "report.md")).equals(md)).toBe(true);
+  });
+
+  it("a snapshot staging failure is exit 3 with a boundary envelope", () => {
+    const { scen, a, b } = setup();
+    const locked = join(b, "skills", "csv-metrics", "locked.md");
+    writeFileSync(locked, "x");
+    chmodSync(locked, 0o000);
+    try {
+      const r = spawnSync("node", [CLI, "eval", scen, "--arm", a, "--arm", b, "--out", join(root, "e3"), "--output-format", "json"], {
+        encoding: "utf8",
+        cwd: root,
+      });
+      expect(r.status, r.stderr).toBe(3);
+      expect(JSON.parse(r.stdout)).toMatchObject({ command: "eval", ok: false, error: { category: "boundary" } });
+    } finally {
+      chmodSync(locked, 0o644);
+    }
   });
 
   it("a refusal before any run is exit 2 with the error envelope", () => {

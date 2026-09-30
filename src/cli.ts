@@ -14,7 +14,7 @@ import {
   type RunStatus,
   type PlatformBaseline,
 } from "./types.js";
-import { writeAllSync } from "./io.js";
+import { writeAllSync, tildeify } from "./io.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, countStringInFile, newestStagedSibling } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
@@ -2037,7 +2037,7 @@ async function cmdEval(rawArgs: string[]) {
   const emit = (evalDir: string, report: ReturnType<typeof writeEvalReport>, text: string) => {
     const code = report.summary.exitCode;
     if (json) out(jsonPayloadEnvelope("eval", code === 0, evalEnvelopePayload(evalDir, report)));
-    else log(text + `\nreport: ${join(evalDir, REPORT_MD)}`);
+    else log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}`);
     process.exit(code);
   };
   if (rawArgs[0] === "report") {
