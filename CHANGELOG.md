@@ -19,8 +19,29 @@ All notable changes to this project are documented here. The format is based on
   and `--max-budget-usd` still count the agent's spend only. The run index gains a matching
   `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
   cost to recover, so their rows stay without it, even after `stats --reindex`.
+- **`semantic_matches` records the judge's reason for each claim.** Each entry of
+  `RunResult.assertions[].semanticClaims[]` can now carry `rationale`: one sentence naming the evidence
+  for a pass, or what is missing for a fail. A failed assert's footer prints the rationale under each
+  failed claim.
+  - It is untrusted model text that can quote the judged document. Control characters are collapsed to spaces,
+    secrets are scrubbed, and it is then capped at 400 characters.
+  - It is advisory: its content never changes `pass`. A missing or non-string rationale is simply absent
+    and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
+    quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
+    A literal newline or tab inside a rationale is tolerated.
 
 ### Changed
+
+- **The `semantic_matches` judge prompt now asks for a rationale before each verdict,** and tells the judge
+  to treat the candidate answer as data rather than instructions. Grades against the same rubric may
+  shift, so `judgePromptHash` changes. Compare before/after only between runs that share
+  `judgePromptHash`.
+- **A `semantic_matches` judge reply with a malformed `{"results": …}` group next to a valid grade is now
+  ambiguous and graded invalid** (retried once, then `judgeInvalid`). Before, the valid group was used. A
+  quote inside the judge's text could split its real grade, leaving a `{"results": …}` object quoted from
+  the judged document as the only valid group. A partial restatement of some claims is skipped when it
+  agrees with the full grade and is ambiguous when it contradicts it. An echo of the prompt's output
+  template, even a reformatted one, is still skipped.
 
 - **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), now what `latest` resolves to.
   - The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
@@ -74,6 +95,11 @@ All notable changes to this project are documented here. The format is based on
   runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
   moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
   no longer staged.
+
+### Internal
+
+- **Eval-gate** (`scripts/eval-gate.ts`, maintainer instrument, not shipped with the skill): a judge-prompt
+  mismatch against the baseline is now refused before any paid capture, and `--calibrate` refuses it too.
 
 ## [4.1.1] — 2026-09-29
 

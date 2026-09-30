@@ -294,7 +294,8 @@ back to lock in a deterministic re-run.
 
 **Output.** `skill` renders the agent's work (assistant text + tool calls) plus a metered footer — you
 see *what it did*, not just a green; `run` is verdict-first but prints the failing transcript inline on a
-`FAIL` (no spelunking `runs/…`). Human-readable output goes to stderr, machine output to stdout, so
+`FAIL` (no spelunking `runs/…`). Under a failed `semantic_matches` line, each failed claim that carries a
+judge rationale gets its own `↳ [i] <rationale>` line (`i` is the claim's rubric index). Human-readable output goes to stderr, machine output to stdout, so
 `--output-format json` always pipes cleanly; it honors `NO_COLOR` too.
 
 | Flag | Effect |

@@ -14,7 +14,7 @@ never gate a PR; a human adjudicates a red.
 |---|---|
 | `scenarios/eval-*.yaml` | 18 Q&A scenarios — each installs the skill and asserts the answer with a `semantic_matches` rubric of discrete, checkable claims. |
 | `scenarios/_session.yaml` | shared session: installs the skill and **pins the answerer to a mid-tier model** (`claude-sonnet-5`) — too strong an answerer masks skill-content regressions. `eval-7-session.yaml` is a per-scenario override. |
-| `baseline/profile.json` | the committed baseline: per-claim pass rates + which claims are `discriminating` (skill-driven), under a `__meta__` header recording the judge + answerer models it was captured with. |
+| `baseline/profile.json` | the committed baseline: per-claim pass rates + which claims are `discriminating` (skill-driven), under a `__meta__` header recording the judge + answerer models and the judge-prompt hash (`judgePromptHash`) it was captured with. |
 | `files/` | cassette fixtures for the replay-based scenarios (e.g. the false-green debug case). |
 | `evals.json` | the source eval spec the scenarios were derived from — **not read by the gate** (the gate runs the `scenarios/*.yaml`). |
 
@@ -42,7 +42,11 @@ npm run eval-gate -- --dotenv .env
 (p ≈ 0.12) lands in **Inconclusive** by design — escalate it with `--reps 12`. A separate
 **trigger-rate** check catches the skill no longer firing at all. The gate **refuses to diff** if the
 candidate's judge or answerer model differs from the baseline's recorded provenance (that would measure
-model drift, not skill quality) — re-record with `--rebaseline` after any intended model change.
+model drift, not skill quality) — re-record with `--rebaseline` after any intended model change. It
+also refuses when the baseline was graded under a different judge-prompt template (its recorded
+`judgePromptHash` differs from the current one), since a prompt change can shift every pass rate; `--calibrate`
+refuses on the same mismatch, and both refuse before any paid run. The committed `baseline/profile.json` was graded
+under a previous judge prompt, so the gate refuses it until `--rebaseline` (and optionally `--calibrate`) is re-run.
 
 **Detection power is honest, not oversold.** At N=6 the gate reliably catches *strong* degradation;
 *subtle* degradation relies on the `--reps 12` escalation and the human `-`-line review of the skill diff.
