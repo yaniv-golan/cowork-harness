@@ -209,8 +209,10 @@ describe.runIf(POSIX)("termination handler", () => {
       registerAgent(() => agentTreeAgent(child, { runTag: "r" + process.pid, runStartMs, workDir: work }));
       let sentAt = 0;
       process.on("exit", () => writeFileSync(join($DIR, "ms"), String(Date.now() - sentAt)));
-      setTimeout(() => { sentAt = Date.now(); process.kill(process.pid, "SIGINT"); }, 300);
-      setTimeout(() => process.kill(process.pid, "SIGINT"), 500);
+      // Timed from the SECOND signal: the first one's terminate() takes a process listing (slow under load);
+      // what this pins is that the second one's force-kill takes none (no ps, no lsof) and exits at once.
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 300);
+      setTimeout(() => { sentAt = Date.now(); process.kill(process.pid, "SIGINT"); }, 800);
       setTimeout(() => {}, 30_000);
     `);
     expect(r.status, r.stderr).toBe(130);
