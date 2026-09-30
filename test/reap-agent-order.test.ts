@@ -45,11 +45,38 @@ describe("reapAgentOnTeardown", () => {
     expect(registeredDuringWait).toBe(true);
   });
 
-  it("non-microvm: no guest kill, SIGKILL the child, then de-register", async () => {
+  it("tree agent still running: wait, SIGTERM the tree, wait the grace, force-kill it, and only then de-register", async () => {
     const log: string[] = [];
     await reapAgentOnTeardown({
       microvm: false,
       agent: fakeAgent(log),
+      child: { kill: (s?: NodeJS.Signals) => void log.push(`child ${s}`) },
+      deregister: () => log.push("deregister"),
+      settleMs: 10,
+      graceMs: 10,
+    });
+    // The leader dies with the tree (forceKill ends with a pid SIGKILL of a surviving leader); a bare
+    // child SIGKILL here would leave every process the agent started running.
+    expect(log).toEqual(["terminate", "forceKill", "deregister"]);
+  });
+
+  it("tree agent whose leader already exited: no SIGTERM round, the tree is still force-killed", async () => {
+    const log: string[] = [];
+    const agent = fakeAgent(log);
+    agent.alive = () => false;
+    await reapAgentOnTeardown({
+      microvm: false,
+      agent,
+      child: { kill: (s?: NodeJS.Signals) => void log.push(`child ${s}`) },
+      deregister: () => log.push("deregister"),
+    });
+    expect(log).toEqual(["forceKill", "deregister"]);
+  });
+
+  it("container (no host agent): SIGKILL the docker client, then de-register", async () => {
+    const log: string[] = [];
+    await reapAgentOnTeardown({
+      microvm: false,
       child: { kill: (s?: NodeJS.Signals) => void log.push(`child ${s}`) },
       deregister: () => log.push("deregister"),
     });

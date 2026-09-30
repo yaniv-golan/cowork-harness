@@ -2,66 +2,68 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 
 // The signal handler can only be exercised in a process that is allowed to die, so each case runs a small
 // script against the REAL source (via tsx) in a child node process, the same way the --decider-cmd
 // process-group test exercises its exit hook.
+//
+// A child the script spawns inherits fd 3, a pipe back to this test (`stdio: ["ignore", "ignore", "ignore", 3]`).
+// "The child died" is observed as EOF on that pipe once the script has exited: fds close at death, zombie or
+// not, so this holds in a container without an init process and needs no pid polling.
 
 const POSIX = process.platform !== "win32";
 const TERMINATION = JSON.stringify(resolve("src/termination.ts"));
 const SIDECAR = JSON.stringify(resolve("src/egress/sidecar.ts"));
 
-function alive(pid: number): boolean {
-  // A pid that never parsed (a failed spawn) must not read as "gone".
-  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`no child pid: ${pid}`);
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/** The harness exits right after sending SIGKILL, so the child may not have died yet, and once it has it
- *  is reparented to init (or a subreaper) and stays a zombie until reaped; kill(pid, 0) succeeds on a
- *  zombie. So poll. A child that was never killed keeps running its shell loop and fails the deadline;
- *  only one that is actually gone passes. */
-function diesWithin(pid: number, ms = 3000): boolean {
-  const until = Date.now() + ms;
-  const tick = new Int32Array(new SharedArrayBuffer(4));
-  while (alive(pid)) {
-    if (Date.now() > until) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        /* kill a child the handler left running */
-      }
-      return false;
-    }
-    Atomics.wait(tick, 0, 0, 20);
-  }
-  return true;
-}
-
-function runScript(body: string): { status: number | null; signal: NodeJS.Signals | null; stderr: string; dir: string } {
+async function runScript(
+  body: string,
+): Promise<{ status: number | null; signal: NodeJS.Signals | null; stderr: string; dir: string; eof: () => Promise<boolean> }> {
   const dir = mkdtempSync(join(tmpdir(), "termination-"));
   const script = join(dir, "harness.mts");
   writeFileSync(script, body.replaceAll("$DIR", JSON.stringify(dir)));
-  const r = spawnSync(process.execPath, ["--import", "tsx", script], { encoding: "utf8", timeout: 20_000 });
-  return { status: r.status, signal: r.signal as NodeJS.Signals | null, stderr: r.stderr, dir };
+  const proc = spawn(process.execPath, ["--import", "tsx", script], { stdio: ["ignore", "ignore", "pipe", "pipe"] });
+  let stderr = "";
+  proc.stderr!.on("data", (d) => (stderr += d));
+  const fd3 = proc.stdio[3] as Readable;
+  let ended = false;
+  fd3.on("data", () => {});
+  fd3.on("end", () => (ended = true));
+  const killer = setTimeout(() => proc.kill("SIGKILL"), 20_000);
+  const [status, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((res) => proc.on("exit", (c, s) => res([c, s])));
+  clearTimeout(killer);
+  const eof = (ms = 3000) =>
+    new Promise<boolean>((res) => {
+      if (ended) return res(true);
+      const t = setTimeout(() => res(false), ms);
+      fd3.once("end", () => {
+        clearTimeout(t);
+        res(true);
+      });
+    });
+  return { status, signal, stderr, dir, eof };
+}
+
+/** A child that survived the handler is killed here by the pid its script wrote, so a red test leaks nothing. */
+function reap(dir: string): void {
+  try {
+    process.kill(Number(readFileSync(join(dir, "child.pid"), "utf8")), "SIGKILL");
+  } catch {
+    /* gone, as it should be */
+  }
 }
 
 describe.runIf(POSIX)("termination handler", () => {
-  it("SIGINT: helpers step, agent terminated, egress step, exit hooks run, exit 130", () => {
-    const r = runScript(`
+  it("SIGINT: helpers step, agent terminated, egress step, exit hooks run, exit 130", async () => {
+    const r = await runScript(`
       import { installTerminationHandler, registerAgent, registerTerminationStep, childProcessAgent } from ${TERMINATION};
       import { spawn } from "node:child_process";
       import { appendFileSync, writeFileSync } from "node:fs";
       import { join } from "node:path";
       const log = (s) => appendFileSync(join($DIR, "order"), s + "\\n");
       installTerminationHandler();
-      const child = spawn("sleep", ["300"], { stdio: "ignore" });
+      const child = spawn("sleep", ["300"], { stdio: ["ignore", "ignore", "ignore", 3] });
       writeFileSync(join($DIR, "child.pid"), String(child.pid));
       child.on("exit", () => log("agent-exit"));
       registerAgent(() => childProcessAgent(child));
@@ -73,12 +75,13 @@ describe.runIf(POSIX)("termination handler", () => {
     `);
     expect(r.status, r.stderr).toBe(130);
     expect(readFileSync(join(r.dir, "order"), "utf8").trim().split("\n")).toEqual(["helpers", "agent-exit", "egress", "exit-hook"]);
-    const pid = Number(readFileSync(join(r.dir, "child.pid"), "utf8"));
-    expect(alive(pid)).toBe(false);
+    const died = await r.eof();
+    reap(r.dir);
+    expect(died).toBe(true);
   });
 
-  it("SIGTERM exits 143", () => {
-    const r = runScript(`
+  it("SIGTERM exits 143", async () => {
+    const r = await runScript(`
       import { installTerminationHandler } from ${TERMINATION};
       installTerminationHandler();
       setTimeout(() => process.kill(process.pid, "SIGTERM"), 50);
@@ -87,8 +90,8 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(r.status, r.stderr).toBe(143);
   });
 
-  it("with nothing to wait for, the exit is immediate (no grace delay)", () => {
-    const r = runScript(`
+  it("with nothing to wait for, the exit is immediate (no grace delay)", async () => {
+    const r = await runScript(`
       import { installTerminationHandler, registerTerminationStep } from ${TERMINATION};
       import { writeFileSync } from "node:fs";
       import { join } from "node:path";
@@ -105,14 +108,14 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(Number(readFileSync(join(r.dir, "ms"), "utf8"))).toBeLessThan(1000);
   });
 
-  it("an agent that ignores SIGTERM is force-killed at the end of the grace period", () => {
-    const r = runScript(`
+  it("an agent that ignores SIGTERM is force-killed at the end of the grace period", async () => {
+    const r = await runScript(`
       import { installTerminationHandler, registerAgent, childProcessAgent, TERMINATION_GRACE_MS } from ${TERMINATION};
       import { spawn } from "node:child_process";
       import { writeFileSync } from "node:fs";
       import { join } from "node:path";
       installTerminationHandler();
-      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: "ignore" });
+      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: ["ignore", "ignore", "ignore", 3] });
       writeFileSync(join($DIR, "child.pid"), String(child.pid));
       registerAgent(() => childProcessAgent(child));
       let sentAt = 0;
@@ -124,17 +127,19 @@ describe.runIf(POSIX)("termination handler", () => {
     const [ms, grace] = readFileSync(join(r.dir, "ms"), "utf8").split(" ").map(Number);
     expect(ms).toBeGreaterThanOrEqual(grace - 50);
     expect(ms).toBeLessThan(grace + 1500);
-    expect(diesWithin(Number(readFileSync(join(r.dir, "child.pid"), "utf8")))).toBe(true);
+    const died = await r.eof();
+    reap(r.dir);
+    expect(died).toBe(true);
   });
 
-  it("a second signal during the grace period exits at once", () => {
-    const r = runScript(`
+  it("a second signal during the grace period exits at once", async () => {
+    const r = await runScript(`
       import { installTerminationHandler, registerAgent, childProcessAgent } from ${TERMINATION};
       import { spawn } from "node:child_process";
       import { writeFileSync } from "node:fs";
       import { join } from "node:path";
       installTerminationHandler();
-      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: "ignore" });
+      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: ["ignore", "ignore", "ignore", 3] });
       writeFileSync(join($DIR, "child.pid"), String(child.pid));
       registerAgent(() => childProcessAgent(child));
       let sentAt = 0;
@@ -145,15 +150,17 @@ describe.runIf(POSIX)("termination handler", () => {
     `);
     expect(r.status, r.stderr).toBe(130);
     expect(Number(readFileSync(join(r.dir, "ms"), "utf8"))).toBeLessThan(1000);
-    expect(diesWithin(Number(readFileSync(join(r.dir, "child.pid"), "utf8")))).toBe(true);
+    const died = await r.eof();
+    reap(r.dir);
+    expect(died).toBe(true);
   });
 
-  it("the exit status stays 128+signo when normal flow calls process.exit during the grace period", () => {
-    const r = runScript(`
+  it("the exit status stays 128+signo when normal flow calls process.exit during the grace period", async () => {
+    const r = await runScript(`
       import { installTerminationHandler, registerAgent, childProcessAgent } from ${TERMINATION};
       import { spawn } from "node:child_process";
       installTerminationHandler();
-      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: "ignore" });
+      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: ["ignore", "ignore", "ignore", 3] });
       registerAgent(() => childProcessAgent(child));
       setTimeout(() => process.kill(process.pid, "SIGINT"), 300);
       setTimeout(() => { child.kill("SIGKILL"); process.exit(1); }, 600);
@@ -162,8 +169,8 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(r.status, r.stderr).toBe(130);
   });
 
-  it("the egress cleanup still reaps containers before networks when fired by a signal", () => {
-    const r = runScript(`
+  it("the egress cleanup still reaps containers before networks when fired by a signal", async () => {
+    const r = await runScript(`
       import { registerCleanup } from ${SIDECAR};
       import { appendFileSync } from "node:fs";
       import { join } from "node:path";
@@ -176,6 +183,43 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(r.status, r.stderr).toBe(130);
     expect(readFileSync(join(r.dir, "order"), "utf8").trim().split("\n")).toEqual(["con", "net"]);
     expect(r.stderr).toContain("reaping 2 in-flight egress resource(s)");
+  });
+
+  it("force-kill reaches a tree agent whose leader already exited; a guest (microvm-style) agent keeps its alive() gate", async () => {
+    const r = await runScript(`
+      import { installTerminationHandler, registerAgent } from ${TERMINATION};
+      import { appendFileSync } from "node:fs";
+      import { join } from "node:path";
+      const log = (s) => appendFileSync(join($DIR, "order"), s + "\\n");
+      installTerminationHandler();
+      const done = Promise.resolve();
+      registerAgent(() => ({ unconditionalForceKill: true, alive: () => false, terminate: () => log("tree-terminate"),
+        forceKill: (o) => log("tree-forceKill " + JSON.stringify(o ?? {})), exited: () => done }));
+      registerAgent(() => ({ alive: () => false, terminate: () => log("guest-terminate"),
+        forceKill: () => log("guest-forceKill"), exited: () => done }));
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 50);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.status, r.stderr).toBe(130);
+    expect(readFileSync(join(r.dir, "order"), "utf8").trim().split("\n")).toEqual(["tree-forceKill {}"]);
+  });
+
+  it("a second signal force-kills with { fast: true } (no fresh process listing)", async () => {
+    const r = await runScript(`
+      import { installTerminationHandler, registerAgent } from ${TERMINATION};
+      import { appendFileSync } from "node:fs";
+      import { join } from "node:path";
+      const log = (s) => appendFileSync(join($DIR, "order"), s + "\\n");
+      installTerminationHandler();
+      let alive = true;
+      registerAgent(() => ({ unconditionalForceKill: true, alive: () => alive, terminate: () => log("terminate"),
+        forceKill: (o) => { log("forceKill " + JSON.stringify(o ?? {})); alive = false; }, exited: () => new Promise(() => {}) }));
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 50);
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 250);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.status, r.stderr).toBe(130);
+    expect(readFileSync(join(r.dir, "order"), "utf8").trim().split("\n")).toEqual(["terminate", 'forceKill {"fast":true}']);
   });
 
   it("parkIfTerminating is a no-op when no signal has arrived", async () => {
