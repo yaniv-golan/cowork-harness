@@ -393,13 +393,14 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       });
   };
 
-  /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). `stopping`: a
-   *  terminate/force-kill listing. Once a signal is being handled it gets ONE attempt: a second signal sent with
-   *  `kill` cannot be handled while a synchronous listing runs, so a retry would double how long it waits. */
-  const refreshAt = (t: number, stopping = false): boolean => {
+  /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). Once a signal is
+   *  being handled, every synchronous listing (a stop's, or a `result` frame's during the grace wait) gets ONE
+   *  attempt: a second signal sent with `kill` cannot be handled while one runs, so a retry would double how
+   *  long it waits. */
+  const refreshAt = (t: number): boolean => {
     lastRefreshAt = t;
     syncListings++;
-    const rows = stopping && d.signalled() ? d.snapshot({ attempts: 1 }) : d.snapshot();
+    const rows = d.signalled() ? d.snapshot({ attempts: 1 }) : d.snapshot();
     if (!rows) return false;
     lastRows = rows;
     extend(rows);
@@ -519,7 +520,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       refreshAsyncAt(t);
     },
     terminate: () => {
-      if (!refreshAt(d.now(), true)) warnNoListing();
+      if (!refreshAt(d.now())) warnNoListing();
       try {
         child.stdin?.end();
       } catch {
@@ -531,7 +532,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     // Unconditional: it runs whether or not the leader is alive, because what it exists to reach — the tracked
     // groups and the orphans — outlives the leader. A second signal passes `fast` and reuses the last listing.
     forceKill: (o?: { fast?: boolean }) => {
-      if (!o?.fast && !refreshAt(d.now(), true)) warnNoListing();
+      if (!o?.fast && !refreshAt(d.now())) warnNoListing();
       const rows = lastRows;
       if (rows) {
         const reached = signalTracked(rows, "SIGKILL");

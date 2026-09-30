@@ -717,6 +717,14 @@ describe("the signal path lists with one attempt; the normal teardown with the r
     expect(calls).toHaveLength(2);
   });
 
+  it("after a signal: a result frame's listing passes attempts: 1 too", () => {
+    const { h, calls } = recording(true);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    calls.length = 0;
+    a.onFrame({ type: "result" });
+    expect(calls).toEqual([{ attempts: 1 }]);
+  });
+
   it("a listing that fails after a signal says it may have been interrupted", () => {
     const { h } = recording(true);
     h.deps.snapshot = () => undefined; // e.g. a terminal Ctrl-C also reached the running `ps`
