@@ -3674,8 +3674,10 @@ function cmdStats(args: string[]) {
   }
   if (hashlessRuns > 0)
     log(
-      `stats: ${hashlessRuns} run(s) excluded from grouping — no ${groupBy === "label" ? "--label" : "skillHash"} recorded ` +
-        `(the chat lane records no fingerprint, and a run that mounted no skill has nothing to hash).`,
+      `stats: ${hashlessRuns} run(s) excluded from grouping — ` +
+        (groupBy === "label"
+          ? "no --label recorded (a run carries a label only when it was started with --label, or by eval, which labels its runs eval:<eval-id>:<arm>)."
+          : "no skillHash recorded (the chat lane records no fingerprint, and a run that mounted no skill has nothing to hash)."),
     );
 }
 
