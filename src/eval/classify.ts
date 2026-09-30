@@ -140,10 +140,10 @@ function thrownKind(e: unknown): ThrownKind {
  *  | success, errorSource absent or `agent`, no kind, stalled           | errored_agent   |
  *  | success, errorSource absent or `agent`, no kind                    | valid           |
  *  | success, any other errorSource or any kind                         | unclassified    |
- *  | error, finalMessage is the agent's authentication failure          | errored_infra (auth) |
- *  | error, models only `<synthetic>`, cost 0 (no model answered)       | errored_infra (no_model_answered) |
  *  | error, errorSource spawn / protocol / decider_timeout              | errored_infra   |
  *  | error, kind transport / usage_limit                                | errored_infra   |
+ *  | error, finalMessage is the agent's authentication failure          | errored_infra (auth) |
+ *  | error, models only `<synthetic>`, cost 0 (no model answered)       | errored_infra (no_model_answered) |
  *  | error, errorSource timeout / no_result                             | errored_agent   |
  *  | error, errorSource result, kind agent (any subtype)                | errored_agent   |
  *  | error, errorSource exit, kind agent                                | errored_agent, ambiguousExit |
@@ -191,8 +191,11 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
     return unclassified("success_with_error_fields");
   }
 
-  // Before the errorSource table: the agent reports a failed login as an ordinary `result`/`exit` error with
-  // kind `agent`, so the table alone blames the skill for a missing credential.
+  // Infrastructure the table already names keeps its name; then, before the agent's rows: the agent reports
+  // a failed login as an ordinary `result`/`exit` error with kind `agent`, so the table alone blames the
+  // skill for a missing credential.
+  if (source !== undefined && ERROR_SOURCE_RULE[source] === "infra") return out("errored_infra", `source_${source}`);
+  if (kind !== undefined && INFRA_KINDS.has(kind)) return out("errored_infra", `kind_${kind}`);
   if (typeof r.finalMessage === "string" && AUTH_FAILURE_SIGNATURE.test(r.finalMessage)) return out("errored_infra", "auth");
   if (noModelAnswered(r)) return out("errored_infra", "no_model_answered");
 

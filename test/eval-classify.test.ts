@@ -22,7 +22,8 @@
 // matches: `auth-exit` (`Not logged in · Please run /login`, the nonzero-exit shape), `auth-result` (the
 // same text as an is_error result), `auth-required` (`Authentication required · Sign in again to continue`).
 // `spend-limit-exit` is a spend-limit message on the exit path (which `usage_limit` never covers), its reset
-// time redacted. `slash-success-synthetic` is a successful slash-command run whose `models` is synthetic-only
+// time redacted; `usage-limit-synthetic` is the same message on the result path, which the harness already
+// classifies `usage_limit` — it must keep that name rather than fall to the catch-all. `slash-success-synthetic` is a successful slash-command run whose `models` is synthetic-only
 // too, kept to prove that shape is NOT read as "no model answered". The former `result-agent` excerpt (a
 // `result`+`agent` error with synthetic-only models and no finalMessage/cost kept) was that same auth
 // shape — every kept instance of it is — and is replaced by `auth-result`, which keeps the fields now read.
@@ -200,6 +201,7 @@ describe("real kept run shapes (sanitized excerpts)", () => {
     ["auth-result", "errored_infra"],
     ["auth-required", "errored_infra"],
     ["spend-limit-exit", "errored_infra"],
+    ["usage-limit-synthetic", "errored_infra"],
     ["slash-success-synthetic", "valid"],
     ["usage-limit", "errored_infra"],
     ["timeout", "errored_agent"],
@@ -255,6 +257,12 @@ describe("no model answered: an authentication or spend failure is infrastructur
     const { finalMessage: _drop, ...old } = fixture("auth-exit");
     void _drop;
     expect(classifyTermination({ result: old })).toMatchObject({ bucket: "errored_infra", rule: "no_model_answered" });
+  });
+  it("a failure the table already names keeps its name: a synthetic-only $0 usage limit stays kind_usage_limit", () => {
+    expect(classifyTermination({ result: fixture("usage-limit-synthetic") })).toMatchObject({
+      bucket: "errored_infra",
+      rule: "kind_usage_limit",
+    });
   });
   it("a synthetic-only SUCCESS (a slash-command run) is not read as no model answered", () => {
     expect(classifyTermination({ result: fixture("slash-success-synthetic") })).toMatchObject({ bucket: "valid", rule: "success" });
