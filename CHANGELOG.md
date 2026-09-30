@@ -95,6 +95,27 @@ All notable changes to this project are documented here. The format is based on
   runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
   moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
   no longer staged.
+- **Stopping a run at `protocol` or `hostloop` now stops the processes the agent started on the host** —
+  Bash-tool background jobs, hook commands and MCP servers — instead of leaving them running after the
+  harness exits. This applies to Ctrl-C and SIGTERM, a timeout, stall or unanswered gate, and the normal end
+  of a run.
+  - The agent runs in its own session and process group, as Claude Desktop spawns it, with no controlling
+    terminal. A host tool that needs `/dev/tty` (an `ssh` password prompt, `sudo`, `gh auth login`) fails
+    instead of waiting for input.
+  - At `hostloop` the agent now gets SIGTERM and a grace period before SIGKILL, as Desktop stops it. On
+    Ctrl-C the sidecar container is removed after that grace period, not before it.
+  - `chat` installs the same Ctrl-C handling at `protocol` and `hostloop`. On a terminal, a Ctrl-C during a
+    turn stops the agent and exits; a Ctrl-C at the `you>` prompt still ends the session and writes its
+    result.
+  - A background process that has already detached from the agent is found by an orphan sweep. On Linux
+    the sweep matches `COWORK_HARNESS_RUN_TAG`, a new per-run variable in the agent's environment, which the
+    model can see with `env`. On macOS it matches processes owned by you, detached from any terminal,
+    started during the run and working inside the run's work dir. Each process the sweep kills prints a
+    `::warning::` line; `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` turns the sweep off.
+  - Known limits: on macOS a background process that changed directory out of the run's work dir is not
+    found, and a `tmux`/`screen` server started during the run from inside the work dir is stopped. A
+    `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
+    the next. On Windows only the agent process itself is stopped, as before.
 
 ### Internal
 

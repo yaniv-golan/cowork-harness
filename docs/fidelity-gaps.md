@@ -21,7 +21,7 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 33 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 34 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
@@ -29,7 +29,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 33 o
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
 - **Identity & environment** — [Auto-memory: four env-delivered keys the harness never sets](#auto-memory-four-env-delivered-keys-the-harness-never-sets) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
-- **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host)
+- **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
 ## Which Cowork LANE this harness models — read first, it scopes everything below
@@ -754,6 +754,38 @@ The harness `--fidelity` flag selects how closely the execution environment matc
 | `cowork` | Resolves to `hostloop` or `container` at run time — inherits whichever tier's gaps. |
 
 The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` would require replicating the cowork-tier wiring, which resolves the tier via the shared `decideLoopFromBaseline` gate logic (`src/run/execute.ts` → `src/loop-decision.ts`).
+
+---
+
+## Stopping a host-tier run stops the processes the agent started
+
+**Real Cowork behaviour:** the agent and everything it starts run inside the session's sandbox, which lives
+for the whole session — a background process from one turn is still there in the next, and in a resumed
+session — and ends with it. Desktop spawns its agent detached: its own session and process group, no
+controlling terminal.
+
+**Harness behaviour:** at `protocol` and `hostloop` the agent is a host process, spawned detached as Desktop
+spawns it. When a run ends (normally, on a timeout, stall or unanswered gate, or on Ctrl-C/SIGTERM) the harness
+stops the agent and every host process it started: SIGTERM, a 2-second grace period, then SIGKILL to the agent's
+process group, to each descendant's group, and to background processes that have already detached from the
+agent, found by an orphan sweep. Each process the sweep kills prints
+`::warning:: [teardown] orphan sweep killed pid <n> (<command>) …`; `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` turns
+the sweep off. `container` and `microvm` are unaffected: their agent and its processes end with the container
+or the guest.
+
+What differs from Cowork, and what the sweep can miss or wrongly kill:
+
+| Case | Effect |
+|---|---|
+| A `--session-id … --resume` chain | Host background processes do not survive from one invocation to the next, even though Cowork's sandbox would keep them for the session. A skill that starts a helper in one invocation and expects it in the next works in Cowork and not here. |
+| `COWORK_HARNESS_RUN_TAG` in the agent's environment | The Linux sweep's marker: a per-run value set at `protocol` and `hostloop` on every platform. The model can see it (`env` in a Bash call), real Cowork has no such variable, so transcripts can differ from Cowork's. |
+| Linux: a process started with a scrubbed environment | Not found: `env -i`, `sudo` (which resets the environment), or anything the model starts with `docker run` carries no tag. |
+| macOS: how the sweep attributes a process | macOS exposes no other process's environment, so a candidate must be owned by you, detached from any terminal, reparented to init, started during the run, and working inside the run's work dir; the harness itself and its ancestry never qualify. At `hostloop` there is no macOS sweep: its Bash runs in the sidecar, which `docker rm -f` ends. |
+| macOS: a background process that changed directory out of the work dir | Not found. |
+| macOS: a process that acquired its own terminal (the model ran `tmux` or `script` in a Bash call) | Not found. |
+| macOS: a `tmux` or `screen` server started during the run from inside the work dir | Killed — it matches every condition. One started before the run, or from a terminal that is still open, is not. |
+| A host tool that opens `/dev/tty` (`ssh` password prompt, `sudo`, `gh auth login`) | Fails instead of prompting, as under Desktop: the agent has no controlling terminal. |
+| Windows | Only the agent process itself is stopped. |
 
 ---
 
