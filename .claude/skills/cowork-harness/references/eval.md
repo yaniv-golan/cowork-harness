@@ -1,6 +1,6 @@
 # `eval` — paired before/after comparison of a skill edit (EXPERIMENTAL)
 
-Tracks `cowork-harness 4.1.1` (baseline `desktop-2.16120.0`). The full guide is
+Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). The full guide is
 [docs/eval.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/eval.md); this is the part you
 need while running it.
 

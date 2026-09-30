@@ -1,6 +1,6 @@
 # Assertion catalog
 
-Tracks `cowork-harness 4.1.1` (baseline `desktop-2.16120.0`). Every `assert:` key with its semantics, and the
+Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). Every `assert:` key with its semantics, and the
 verdict-signal table. Which keys survive `replay` is in [`scenario-schema.md`](./scenario-schema.md#replay-class);
 the scenario and session YAML fields are there too.
 
