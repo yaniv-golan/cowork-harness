@@ -67,6 +67,9 @@ jobs:
         run: npm run check:versions
 
       - name: Build + test (also runs via prepublishOnly)
+        # The hillclimb lite-contract test fetches pinned upstream files; on CI a fetch failure must fail, not skip.
+        env:
+          COWORK_HARNESS_CONTRACT_FETCH: required
         run: npm run ci
 
       # STAGED PUBLISH — deliberately NOT `latest`.

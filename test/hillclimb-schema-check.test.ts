@@ -144,6 +144,27 @@ describe("schema-check: row fields", () => {
     expect(rulesAt(missing, "error")).toContain("row.rep");
   });
 
+  it("rep (schema profile): missing is a note and defaults to the row's index among its case's rows", () => {
+    // Drop rep from both extract-table rows: indexes 0 and 1 pair with the existing _rep0/_rep1 traces, so no
+    // trace.missing / trace.orphan follows. A wrong default would produce both.
+    const s = base();
+    const rs = rows(s).map((r) => {
+      if (r.prompt_id === "extract-table") delete r.rep;
+      return r;
+    });
+    setRows(s, rs);
+    expectOnly(check(s, "schema"), "note", "row.rep");
+    expect(check(s, "schema").findings.length).toBe(2);
+    expect(rulesAt(check(s), "error")).toEqual(["row.rep", "row.rep"]);
+    // A defaulted rep can still collide with an explicit one.
+    const d = base();
+    const drs = rows(d);
+    delete drs[1]!.rep; // extract-table, index 1 -> rep 1 ...
+    drs[0]!.rep = 1; // ... and the first row now claims rep 1 explicitly
+    setRows(d, drs);
+    expect(rulesAt(check(d, "schema"), "error")).toContain("row.duplicate");
+  });
+
   it("duplicate (prompt_id, rep) within a variant is an error", () => {
     const s = base();
     const rs = rows(s);
@@ -169,11 +190,40 @@ describe("schema-check: row fields", () => {
     expect(check(withRow((r) => (r.tags = []))).findings).toEqual([]);
   });
 
-  it("grade: a non-dict grade is an error (lite blanks the cell silently)", () => {
+  it("grade: a non-dict grade is an error in the harness profile (lite blanks the cell silently)", () => {
     for (const bad of [true, 1, [1], "1"]) {
       const r = check(withRow((row) => (row.grade = bad)));
       expect(rulesAt(r, "error"), JSON.stringify(bad)).toContain("row.grade");
     }
+  });
+
+  it("grade (schema profile): a bare bool/number is a note with no declared metrics, an error with them", () => {
+    const noMetrics = (g: unknown) => {
+      const s = withState((st) => delete st.metrics);
+      const rs = rows(s).map((r) => {
+        delete r.explanation;
+        return r;
+      });
+      rs[0]!.grade = g;
+      setRows(s, rs);
+      return check(s, "schema");
+    };
+    for (const g of [true, 0.5]) {
+      const r = noMetrics(g);
+      expect(r.errors, JSON.stringify(r.findings)).toBe(0);
+      expect(r.findings.some((f) => f.rule === "row.grade" && f.level === "note")).toBe(true);
+    }
+    // Arrays and strings are never a grade.
+    for (const g of [[1], "1"]) expect(rulesAt(noMetrics(g), "error")).toContain("row.grade");
+    // With metrics declared, a bare grade blanks every metric cell.
+    expectOnly(
+      check(
+        withRow((row) => (row.grade = true)),
+        "schema",
+      ),
+      "error",
+      "row.grade",
+    );
   });
 
   it("grade: every declared metric must be present", () => {
@@ -193,9 +243,18 @@ describe("schema-check: row fields", () => {
     expect(check(withRow((row) => ((row.grade as Row).pass = true))).findings).toEqual([]);
   });
 
-  it("explanation: keys must be a subset of grade keys, values strings", () => {
-    expectOnly(check(withRow((row) => ((row.explanation as Row).a9 = "[untrusted judge] x"))), "error", "row.explanation");
-    expectOnly(check(withRow((row) => ((row.explanation as Row).a1_c0 = 3))), "error", "row.explanation");
+  it("explanation: values strings; keys a subset of grade keys in the harness profile only (ours, not upstream)", () => {
+    const extra = withRow((row) => ((row.explanation as Row).a9 = "[untrusted judge] x"));
+    expectOnly(check(extra), "error", "row.explanation");
+    expect(check(extra, "schema").findings).toEqual([]);
+    expectOnly(
+      check(
+        withRow((row) => ((row.explanation as Row).a1_c0 = 3)),
+        "schema",
+      ),
+      "error",
+      "row.explanation",
+    );
   });
 
   it("explanation (harness profile): the untrusted prefix and meta flag are required; schema profile does not ask", () => {
@@ -223,6 +282,12 @@ describe("schema-check: row fields", () => {
     expectOnly(check(withRow((row) => (row.judge_usage = { outputTokens: 1 }))), "error", "usage.key");
   });
 
+  it("usage: the two cache counters may be null (SDK number | null); the token counts may not", () => {
+    const nulls = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: null, cache_creation_input_tokens: null };
+    expect(check(withRow((row) => (row.usage = nulls))).findings).toEqual([]);
+    expectOnly(check(withRow((row) => (row.usage = { ...nulls, input_tokens: null }))), "error", "usage.value");
+  });
+
   it("perf fields: numeric when present; a declared one absent is a note", () => {
     expectOnly(check(withRow((row) => (row.cost_usd = "0.05"))), "error", "row.perf");
     expectOnly(check(withRow((row) => (row.in_tokens = null))), "error", "row.perf");
@@ -237,12 +302,35 @@ describe("schema-check: row fields", () => {
     );
   });
 
-  it("status: only ok|truncated; 'ok' is a note in the harness profile only", () => {
-    expectOnly(check(withRow((row) => (row.status = "error"))), "error", "row.status");
-    const ok = withRow((row) => (row.status = "ok"));
-    expectOnly(check(ok), "note", "row.status");
-    expect(check(ok, "schema").findings).toEqual([]);
-    expect(check(withRow((row) => (row.status = "truncated"))).findings).toEqual([]);
+  it("status: ok, truncated or absent are accepted in both profiles", () => {
+    for (const profile of ["harness", "schema"] as const) {
+      expect(
+        check(
+          withRow((row) => (row.status = "ok")),
+          profile,
+        ).findings,
+      ).toEqual([]);
+      expect(
+        check(
+          withRow((row) => (row.status = "truncated")),
+          profile,
+        ).findings,
+      ).toEqual([]);
+      expect(
+        check(
+          withRow((row) => {
+            delete row.status;
+          }),
+          profile,
+        ).findings,
+      ).toEqual([]);
+    }
+  });
+
+  it("status: any other value is an error in the harness profile, a note in the schema profile", () => {
+    const odd = withRow((row) => (row.status = "error"));
+    expectOnly(check(odd), "error", "row.status");
+    expectOnly(check(odd, "schema"), "note", "row.status");
   });
 
   it("model/stop_reason/judge_model must be strings; meta an object", () => {
@@ -391,6 +479,21 @@ describe("schema-check: traces (Turn[])", () => {
     delete m.variants.baseline!.traces["extract-table_rep1.json"];
     expectOnly(check(m), "note", "trace.missing");
   });
+
+  it("a flat <id>.json trace is rep 0, as lite links it", () => {
+    const s = base();
+    const t = s.variants.baseline!.traces;
+    t["extract-table.json"] = t["extract-table_rep0.json"]!;
+    delete t["extract-table_rep0.json"];
+    expect(check(s).findings).toEqual([]);
+    // It stands in for rep 0 only: without the _rep1 file, rep 1 is still missing.
+    delete t["extract-table_rep1.json"];
+    expectOnly(check(s), "note", "trace.missing");
+    // A flat trace with no rep-0 row is an orphan, not a naming error.
+    const o = base();
+    o.variants.baseline!.traces["ghost.json"] = "[]";
+    expectOnly(check(o), "note", "trace.orphan");
+  });
 });
 
 describe("schema-check: variant dirs", () => {
@@ -408,6 +511,20 @@ describe("schema-check: variant dirs", () => {
   it("lite's non-variant dirs, dot/underscore dirs and plain files are allowed", () => {
     for (const ok of ["trajectory", "inputs", "out", "ref", ".git", "_scratch"]) expect(check(withEntry(ok, "dir")).findings).toEqual([]);
     expect(check(withEntry("report.html", "file")).findings).toEqual([]);
+  });
+
+  it("a v0 dir is reported by name, and its rows are still checked (the lite builder reads them)", () => {
+    const s = base();
+    s.entries.push({ name: "v0", kind: "dir" });
+    const v0 = structuredClone(s.variants.v1!);
+    s.variants.v0 = v0;
+    expectOnly(check(s), "error", "variant.name");
+    const rs = rows(s, "v0");
+    rs[0]!.tags = "oops";
+    setRows(s, rs, "v0");
+    const r = check(s);
+    expect(new Set(rulesAt(r, "error"))).toEqual(new Set(["variant.name", "row.tags"]));
+    expect(r.findings.find((f) => f.rule === "row.tags")!.file).toBe("v0/results.jsonl");
   });
 
   it("a symlinked variant dir is an error; a missing baseline is an error", () => {
@@ -472,6 +589,20 @@ describe("schema-check: _state.json", () => {
     expectOnly(check(withState((st) => (st.metrics = [...(st.metrics as Row[]), { kind: "binary" }]))), "error", "state.metrics");
   });
 
+  it("the legacy `criteria` key is read as metrics (with a note), and its metrics are enforced", () => {
+    const legacy = withState((st) => {
+      st.criteria = st.metrics;
+      delete st.metrics;
+    });
+    expectOnly(check(legacy), "note", "state.metrics");
+    const s = withState((st) => {
+      st.criteria = [...(st.metrics as Row[]), { id: "quality", kind: "judge" }];
+      delete st.metrics;
+    });
+    expect(rulesAt(check(s), "error").length).toBe(12);
+    expect(new Set(rulesAt(check(s), "error"))).toEqual(new Set(["row.grade"]));
+  });
+
   it("a declared metric missing from every row is reported per row", () => {
     const r = check(withState((st) => (st.metrics = [...(st.metrics as Row[]), { id: "quality", kind: "judge" }])));
     expect(r.findings.every((f) => f.rule === "row.grade" && /quality is missing/.test(f.message))).toBe(true);
@@ -496,8 +627,9 @@ describe("schema-check: _state.json", () => {
     expectOnly(check(withState((st) => (st.val_ids = [{ id: 1 }]))), "error", "state.split");
   });
 
-  it("harness_paths must be string[]; harness_sha a string", () => {
-    expectOnly(check(withState((st) => (st.harness_paths = ["a", 1]))), "error", "state.harness_paths");
+  it("harness_paths must be a list (a non-string entry is a note: the scaffold stringifies it); harness_sha a string", () => {
+    expectOnly(check(withState((st) => (st.harness_paths = ["a", 1]))), "note", "state.harness_paths");
+    expectOnly(check(withState((st) => (st.harness_paths = "a"))), "error", "state.harness_paths");
     expectOnly(check(withState((st) => (st.harness_sha = 12))), "error", "state.harness_sha");
   });
 });

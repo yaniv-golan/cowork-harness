@@ -11,8 +11,9 @@
 //
 // Two profiles:
 //   - "schema":  only what the published sources state.
-//   - "harness" (default): adds the conventions cowork-harness's own runner writes on top (rep always present,
-//     `status` only ever "truncated", judge rationale marked untrusted). A flow written by some other runner
+//   - "harness" (default): adds the conventions cowork-harness's own runner writes on top: `rep` always present,
+//     `grade` always the dict form, `status` only "ok" or "truncated" (as the scaffold writes it), explanation
+//     keys a subset of grade keys, and judge rationale marked untrusted. A flow written by some other runner
 //     should be checked with "schema".
 //
 // Pure: `checkFlowSnapshot` reads nothing; `loadFlowSnapshot` is the only function that touches the disk, and
@@ -114,6 +115,7 @@ const ERROR_ROW_KEYS = new Set([
 /** cowork-harness convention: every judge rationale is prefixed so a reader never takes it as instructions. */
 export const UNTRUSTED_JUDGE_PREFIX = "[untrusted judge] ";
 const TRACE_NAME_RE = /^(.+)_rep(\d+)\.json$/;
+const FLAT_TRACE_NAME_RE = /^(.+)\.json$/;
 
 // ---- helpers ------------------------------------------------------------------------------------------------
 
@@ -211,6 +213,8 @@ function checkUsage(c: Collector, file: string, key: string, v: unknown, line?: 
   const known = new Set<string>(USAGE_KEYS);
   for (const [k, val] of Object.entries(v)) {
     if (known.has(k)) {
+      // The SDK types the two cache counters as number | null.
+      if (val === null && k.startsWith("cache_")) continue;
       if (!isNonNegInt(val)) c.error("usage.value", file, `${key}.${k} must be a non-negative integer`, line);
       continue;
     }
@@ -239,14 +243,20 @@ function readDeclared(c: Collector, text: string | undefined): Declared {
     return d;
   }
 
-  if (st.metrics === undefined) {
+  // build-report-lite.mjs l.298: `state.metrics || state.criteria` (the legacy key).
+  let metricsCfg = st.metrics;
+  if (metricsCfg === undefined && st.criteria !== undefined) {
+    c.note("state.metrics", F, "metrics declared under the legacy `criteria` key; the report reads it, but `metrics` is the current name");
+    metricsCfg = st.criteria;
+  }
+  if (metricsCfg === undefined) {
     c.note("state.metrics", F, "no `metrics`: kinds are inferred, and any explanation key flips a metric to judge");
-  } else if (!Array.isArray(st.metrics)) {
+  } else if (!Array.isArray(metricsCfg)) {
     c.error("state.metrics", F, "`metrics` must be a list");
   } else {
     d.metricsDeclared = true;
     const seen = new Set<string>();
-    st.metrics.forEach((m: unknown, i: number) => {
+    metricsCfg.forEach((m: unknown, i: number) => {
       const at = `metrics[${i}]`;
       if (typeof m === "string") {
         if (seen.has(m)) c.error("state.metrics", F, `${at}: duplicate metric id ${JSON.stringify(m)}`);
@@ -314,8 +324,12 @@ function readDeclared(c: Collector, text: string | undefined): Declared {
     }
   }
 
-  if (st.harness_paths !== undefined && !(Array.isArray(st.harness_paths) && st.harness_paths.every((p) => typeof p === "string")))
-    c.error("state.harness_paths", F, "`harness_paths` must be a list of strings");
+  if (st.harness_paths !== undefined) {
+    if (!Array.isArray(st.harness_paths)) c.error("state.harness_paths", F, "`harness_paths` must be a list of paths");
+    // The scaffold maps each entry through String(), so a non-string still works; it is just unusual.
+    else if (!st.harness_paths.every((p) => typeof p === "string"))
+      c.note("state.harness_paths", F, "`harness_paths` holds a non-string entry; the scaffold stringifies it");
+  }
   if (st.harness_sha !== undefined && typeof st.harness_sha !== "string") c.error("state.harness_sha", F, "`harness_sha` must be a string");
   return d;
 }
@@ -328,7 +342,7 @@ function checkRow(
   d: Declared,
   profile: SchemaProfile,
   files: Set<string> | undefined,
-): { id?: string; rep?: number } {
+): { id?: string; rep?: number; repMissing?: boolean } {
   if (!isObj(r)) {
     c.error("row.shape", file, "a results.jsonl line must be a JSON object", line);
     return {};
@@ -361,8 +375,12 @@ function checkRow(
     );
 
   let rep: number | undefined;
-  if (r.rep === undefined) c.error("row.rep", file, "no rep: resume keys on (prompt_id, rep)", line);
-  else if (!isNonNegInt(r.rep)) c.error("row.rep", file, `rep must be a non-negative integer, got ${JSON.stringify(r.rep)}`, line);
+  // Upstream `rep` is optional and defaults to the row's index among its case's rows (SCHEMA.md `rep?`,
+  // build-report-lite.mjs l.341); resume in the scaffold and in our runner keys on it, so the harness requires it.
+  if (r.rep === undefined) {
+    if (profile === "harness") c.error("row.rep", file, "no rep: resume keys on (prompt_id, rep)", line);
+    else c.note("row.rep", file, "no rep: the report uses the row's index among its case's rows", line);
+  } else if (!isNonNegInt(r.rep)) c.error("row.rep", file, `rep must be a non-negative integer, got ${JSON.stringify(r.rep)}`, line);
   else rep = r.rep;
 
   if (typeof r.prompt !== "string") c.error("row.prompt", file, "prompt (the full prompt text) must be a string", line);
@@ -382,25 +400,33 @@ function checkRow(
   for (const k of d.perfFields)
     if (r[k] === undefined) c.note("row.perf", file, `declared perf field ${k} is absent (the table shows an empty cell)`, line);
 
-  if (r.status !== undefined) {
-    if (r.status !== "ok" && r.status !== "truncated")
-      c.error("row.status", file, `status must be "ok" or "truncated", got ${JSON.stringify(r.status)}`, line);
-    else if (r.status === "ok" && profile === "harness")
-      c.note("row.status", file, 'status "ok": allowed by the sources, but our runner omits status unless it is "truncated"', line);
+  // SCHEMA.md: `status` is present only when not 'ok' (e.g. 'truncated'); the scaffold writes "ok" or
+  // "truncated" on every row. The report keeps any other value out of the means.
+  if (r.status !== undefined && r.status !== "ok" && r.status !== "truncated") {
+    const msg = `status ${JSON.stringify(r.status)} is neither "ok" nor "truncated": the report keeps this rep out of the means`;
+    if (profile === "harness") c.error("row.status", file, msg, line);
+    else c.note("row.status", file, msg, line);
   }
 
   // grade: the dict form, every declared metric present.
   const grade = r.grade;
   let gradeKeys: Set<string> | undefined;
   if (!isObj(grade)) {
-    c.error(
-      "row.grade",
-      file,
-      grade === undefined
-        ? "no grade"
-        : `grade must be a {metric_id: number} object; ${JSON.stringify(grade)} renders as a blank or dash cell with no warning`,
-      line,
-    );
+    // A bare boolean or number is valid upstream (build-eval.md l.118; the report reads it as {score}). It only
+    // renders blank when metrics are declared, since none of them is `score`. Our runner always writes the dict.
+    const bare = typeof grade === "boolean" || isFiniteNum(grade);
+    if (grade === undefined) c.error("row.grade", file, "no grade", line);
+    else if (bare && profile === "schema" && !d.metricsDeclared)
+      c.note("row.grade", file, `bare grade ${JSON.stringify(grade)}: the report reads it as the metric \`score\``, line);
+    else
+      c.error(
+        "row.grade",
+        file,
+        bare
+          ? `bare grade ${JSON.stringify(grade)}: the report reads it as \`score\`, which is no declared metric, so every metric cell is blank with no warning`
+          : `grade must be a {metric_id: number} object; ${JSON.stringify(grade)} renders as a blank cell with no warning`,
+        line,
+      );
   } else {
     gradeKeys = new Set(Object.keys(grade));
     if (gradeKeys.size === 0) c.error("row.grade", file, "grade is an empty object", line);
@@ -427,7 +453,9 @@ function checkRow(
       for (const k of keys) {
         const v = r.explanation[k];
         if (typeof v !== "string") c.error("row.explanation", file, `explanation.${k} must be a string`, line);
-        if (gradeKeys && !gradeKeys.has(k)) c.error("row.explanation", file, `explanation.${k} has no matching grade key`, line);
+        // Ours, not upstream: the report shows an explanation for any key.
+        if (profile === "harness" && gradeKeys && !gradeKeys.has(k))
+          c.error("row.explanation", file, `explanation.${k} has no matching grade key`, line);
         if (profile === "harness" && typeof v === "string" && !v.startsWith(UNTRUSTED_JUDGE_PREFIX))
           c.error("row.explanation", file, `explanation.${k} lacks the ${JSON.stringify(UNTRUSTED_JUDGE_PREFIX)} prefix`, line);
       }
@@ -444,7 +472,7 @@ function checkRow(
   }
 
   if (r.attachments !== undefined) checkAttachments(c, file, "row", r.attachments, files, line);
-  return { id, rep };
+  return { id, rep, repMissing: r.rep === undefined };
 }
 
 function checkErrorRow(c: Collector, file: string, line: number, e: unknown): void {
@@ -538,7 +566,7 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
   const seenIds = new Set<string>();
 
   for (const [v, vs] of Object.entries(snap.variants)) {
-    if (!VARIANT_DIR_RE.test(v)) continue; // already reported by name
+    // v0/v01 are reported by name above, but the lite builder still reads them, so their rows are checked too.
     const rowKeys = new Set<string>();
     const resultsFile = `${v}/results.jsonl`;
     if (vs.results === undefined) {
@@ -547,14 +575,22 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
       if (vs.results.length && !vs.results.endsWith("\n"))
         c.note("row.torn", resultsFile, "does not end in a newline: the next append joins its last line unless the writer repairs it");
       let n = 0;
+      const perCase = new Map<string, number>();
       for (const { line, value, bad } of parseJsonl(vs.results)) {
         if (bad !== undefined) {
           c.error("row.json", resultsFile, `malformed JSON (${bad}): the lite builder skips it with a warning`, line);
           continue;
         }
         n++;
-        const { id, rep } = checkRow(c, resultsFile, line, value, d, profile, files);
-        if (id !== undefined) seenIds.add(id);
+        const { id, rep: given, repMissing } = checkRow(c, resultsFile, line, value, d, profile, files);
+        let rep = given;
+        if (id !== undefined) {
+          seenIds.add(id);
+          const k = perCase.get(id) ?? 0;
+          perCase.set(id, k + 1);
+          // build-report-lite.mjs l.341: `r.rep ?? k`, k the row's index among its case's rows.
+          if (repMissing && profile === "schema") rep = k;
+        }
         if (id !== undefined && rep !== undefined) {
           const k = `${id}\0${rep}`;
           if (rowKeys.has(k)) c.error("row.duplicate", resultsFile, `duplicate (prompt_id, rep) = (${id}, ${rep})`, line);
@@ -586,11 +622,12 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
     const traceKeys = new Set<string>();
     for (const [name, text] of Object.entries(vs.traces)) {
       const F = `${v}/traces/${name}`;
-      const m = TRACE_NAME_RE.exec(name);
+      // <id>_rep<k>.json, or the flat <id>.json the report links as rep 0 (build-report-lite.mjs l.344).
+      const m = TRACE_NAME_RE.exec(name) ?? FLAT_TRACE_NAME_RE.exec(name);
       if (!m || !isLinkSafeId(m[1]!))
-        c.error("trace.name", F, "not named <prompt_id>_rep<k>.json with a link-safe id: the report never links it");
+        c.error("trace.name", F, "not named <prompt_id>_rep<k>.json (or <prompt_id>.json) with a link-safe id: the report never links it");
       else {
-        const k = `${m[1]}\0${Number(m[2])}`;
+        const k = `${m[1]}\0${Number(m[2] ?? 0)}`;
         traceKeys.add(k);
         if (vs.results !== undefined && !rowKeys.has(k)) c.note("trace.orphan", F, "no results.jsonl row for this (prompt_id, rep)");
       }

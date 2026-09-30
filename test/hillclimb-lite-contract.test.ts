@@ -92,6 +92,15 @@ function readRows(file: string): Row[] {
     .map((l) => JSON.parse(l) as Row);
 }
 
+/** A grade value as the report reads it: a number or boolean in the dict form, else nothing (a bare or
+ *  non-numeric grade contributes no value, so the cell comes out empty rather than as a wrong number). */
+function gradeValue(grade: unknown, metric: string): number | undefined {
+  if (typeof grade !== "object" || grade === null || Array.isArray(grade)) return undefined;
+  const v = (grade as Record<string, unknown>)[metric];
+  if (typeof v === "boolean") return Number(v);
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
 /** Independent of the builder: variants in scaffold order, cases in first-seen order, per-case mean of the
  *  primary metric (first declared binary) over reps whose status is absent or "ok", to 3 decimals. */
 function expectedScores(flow: string): { variants: string[]; cases: string[]; tsv: string } {
@@ -116,7 +125,8 @@ function expectedScores(flow: string): { variants: string[]; cases: string[]; ts
       const vals = byVariant
         .get(v)!
         .filter((r) => r.prompt_id === id && (r.status === undefined || r.status === "ok"))
-        .map((r) => Number(r.grade[primary]));
+        .map((r) => gradeValue(r.grade, primary))
+        .filter((x): x is number => x !== undefined);
       return vals.length ? (vals.reduce((s, x) => s + x, 0) / vals.length).toFixed(3) : "";
     });
     lines.push([id, split.get(id) ?? "all", ...cells].join("\t"));
@@ -160,6 +170,16 @@ describe("hillclimb lite report builder contract (anthropics/skills@8a1541c4a3ff
 
     const got = readFileSync(join(flow, "trajectory", "scores.tsv"), "utf8");
     expect(got).toBe(tsv);
+
+    // The truncated rep is kept out of the mean: v1 long-answer has reps pass=1 (ok) and pass=0 (truncated),
+    // so 1.000 here, where a mean over every rep would be 0.500.
+    const v1Rows = readRows(join(flow, "v1", "results.jsonl")).filter((row) => row.prompt_id === "long-answer");
+    expect(v1Rows.map((row) => [row.status, row.grade.pass])).toEqual([
+      ["ok", 1],
+      ["truncated", 0],
+    ]);
+    const longAnswer = got.split("\n").find((l) => l.startsWith("long-answer\t"))!;
+    expect(longAnswer.split("\t")[3]).toBe("1.000");
     for (const row of got.trim().split("\n").slice(1)) {
       const cells = row.split("\t").slice(2);
       expect(cells.length).toBe(variants.length);

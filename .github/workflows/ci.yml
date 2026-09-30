@@ -203,6 +203,9 @@ jobs:
         # `timeout` bounds the whole shard: SIGTERM at 10 min, SIGKILL 30s later. This is the guard
         # that turns an indefinite hang into a loud failure with the captured log — belt to the job's
         # `timeout-minutes` suspenders. --preserve-status surfaces vitest's real exit code on a clean run.
+        # The hillclimb lite-contract test fetches pinned upstream files; on CI a fetch failure must fail, not skip.
+        env:
+          COWORK_HARNESS_CONTRACT_FETCH: required
         run: timeout --preserve-status --signal=SIGTERM --kill-after=30s 600 npx vitest run --shard=${{ matrix.shard }}/4
 
   # ── Stage 1a: packaged Action self-test (uses: ./ against THIS commit, packed as a tarball —
@@ -549,7 +552,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "22", cache: npm }
       - run: npm ci
-      - run: npm run ci
+      - name: Build + test
+        # The hillclimb lite-contract test fetches pinned upstream files; on CI a fetch failure must fail, not skip.
+        env:
+          COWORK_HARNESS_CONTRACT_FETCH: required
+        run: npm run ci
 
   # ── Stage 2: agent image recipe — COMPILE it, on every PR ──────────────────────────
   # `boundary` PULLS the published image (deliberately: it exercises the consumer path) and hard-fails
