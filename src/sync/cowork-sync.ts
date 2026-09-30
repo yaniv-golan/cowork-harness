@@ -2287,7 +2287,8 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     const calleeOf = (op: string) => op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
     const bodyOf = (fn: string) => braceBodyOf(consuming, `async function ${fn}(`) ?? braceBodyOf(consuming, `function ${fn}(`);
 
-    // (1) TERMINAL: must be exactly a call to the saved original, nothing wrapping it. Anchored `$` so
+    // (1) TERMINAL: exactly one of two admitted forms — a bare call to the saved original, or the judged-
+    //     input pin wrapping an awaited call of it (below). Both anchored `$` so
     //     `(K(e,t,n)??{behavior:"allow"})` — a blanket allow on fall-through — cannot pass as "calls it".
     const last = operands[operands.length - 1];
     // Desktop 2.16120.0: the terminal may instead be `<F>(a,b,await <orig>(a,b,c))`, where <F> re-pins an
@@ -3872,12 +3873,6 @@ export function partitionSpawnFlags(flags: string[]): { deltas: string[]; notes:
   return { deltas, notes };
 }
 
-/**
- * S-tier sentinel: the structural/curated spawn facts the generator does NOT produce (scalar options,
- * tools/allowedTools heads + tail-guards, the FnA delete def+application, the negative invariant, the
- * two prompt-asset delivery shapes). Any anchor miss → a flag naming the field (re-derive the anchor).
- * Pure over the bundle string, mirroring checkMountModeFacts.
- */
 /** The innermost `function NAME(…){…}` whose body spans `at`, or null. Scans headers backwards. */
 function enclosingFunctionName(chunk: string, at: number): string | null {
   const heads = [...chunk.slice(0, at).matchAll(/(?<![\w$])function ([\w$]+)\([^)]*\)\{/g)];
@@ -3917,8 +3912,10 @@ export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   const { chunk, at } = sites[0];
   const all = chunk.slice(at + STEP.length).match(/^;let\[[\w$]+,[\w$]+\]=await Promise\.all\(\[([^\]]*)\]\)/);
   if (!all) miss("the step no longer awaits a Promise.all([...]) right after it starts");
-  else if (!/(?:^|,)[\w$]+(?:\.[\w$]+)?\.prepareForVM\([^()]*\)(?:,|$)/.test(all[1]))
-    miss("the download_and_sdk_prepare Promise.all no longer runs prepareForVM — the agent binary may no longer be staged");
+  // Exact arity: the real call passes one identifier (`EG.prepareForVM(t)`, both 2.9939.4 and 2.16120.0).
+  // An added argument (e.g. an options object) could switch the staging off while the call stays present.
+  else if (!/(?:^|,)[\w$]+(?:\.[\w$]+)?\.prepareForVM\([\w$]+\)(?:,|$)/.test(all[1]))
+    miss("the download_and_sdk_prepare Promise.all no longer runs prepareForVM(<one argument>) — the agent binary may no longer be staged");
   const holder = enclosingFunctionName(chunk, at);
   const startChunk = [...files.values()].find((c) => /(?<![\w$])startVM:\(\)=>[\w$]+/.test(c));
   const start = startChunk ? startChunk.match(/(?<![\w$])startVM:\(\)=>([\w$]+)/)![1] : null;
@@ -3932,6 +3929,12 @@ export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   return flags;
 }
 
+/**
+ * S-tier sentinel: the structural/curated spawn facts the generator does NOT produce (scalar options,
+ * tools/allowedTools heads + tail-guards, the FnA delete def+application, the negative invariant, the
+ * two prompt-asset delivery shapes). Any anchor miss → a flag naming the field (re-derive the anchor).
+ * Pure over the bundle string, mirroring checkMountModeFacts.
+ */
 export function checkSpawnContractFacts(bundle: string, files?: Map<string, string>): string[] {
   const flags: string[] = [];
   const w1 = twoAnchorWindow(bundle, "env:{CLAUDE_CONFIG_DIR", ",systemPrompt:");

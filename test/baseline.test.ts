@@ -3671,6 +3671,8 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     ],
     ["V4 the step marker is gone", (s) => s.replaceAll("download_and_sdk_prepare", "download_only")],
     ["V5 the startVM export is gone", (s) => s.replace("startVM:()=>KJ,", "")],
+    // The real call passes one identifier (`EG.prepareForVM(t)`); an options object could switch staging off.
+    ["V6 prepareForVM called with an options object", (s) => s.replace("EG.prepareForVM(t)", "EG.prepareForVM(t,{skip:!0})")],
   ];
   it.each(MUT)("mutation %s fails loud (%#)", (_label, mutate) => {
     expect(checkVmAgentStagingFacts(vmChunk(mutate)).join("\n")).toContain("vm agent staging");
