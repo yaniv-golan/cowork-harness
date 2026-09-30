@@ -1,0 +1,55 @@
+{
+  "scenario": "smoke-semantic-evidence-files",
+  "result": "success",
+  "resultSubtype": "success",
+  "models": [
+    "claude-sonnet-5"
+  ],
+  "modelFallbacks": [],
+  "assertions": [
+    {
+      "assertion": {
+        "result": "success"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "user_visible_artifact": "outputs/report.md"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "user_visible_artifact": "outputs/_work/f6.md"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "semantic_matches": {
+          "rubric": [
+            "The document reports that six filler files were created under a _work directory.",
+            "The document states that all six writes completed without error."
+          ],
+          "evidence_files": [
+            "outputs/report.md"
+          ]
+        }
+      },
+      "pass": true,
+      "semanticClaims": [
+        {
+          "index": 0,
+          "claim": "The document reports that six filler files were created under a _work directory.",
+          "pass": true
+        },
+        {
+          "index": 1,
+          "claim": "The document states that all six writes completed without error.",
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

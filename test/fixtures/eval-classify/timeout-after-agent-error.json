@@ -1,0 +1,20 @@
+{
+  "scenario": "fixture-timeout-after-agent-error",
+  "result": "error",
+  "errorSource": "timeout",
+  "resultErrorKind": "agent",
+  "models": [
+    "claude-sonnet-5"
+  ],
+  "fingerprint": {
+    "contentSig": "c650ae0bcac3cde58c5d5319c99fa1f45eff618393b47e056a1c2c3fd62bfc79"
+  },
+  "assertions": [
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    }
+  ]
+}
