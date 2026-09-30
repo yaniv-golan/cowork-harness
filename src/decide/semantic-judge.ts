@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { claudeCliComplete } from "./llm-transport.js";
 import type { Complete } from "./decider.js";
 import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
+import { scrub } from "../secrets.js";
 
 // A semantic judge grades a FIXED, authored rubric against a run's answer, one claim at a time, by
 // INDEX. It reuses the same host `claude -p --output-format json` transport as the LLM decider
@@ -56,6 +57,11 @@ export function extractJsonObject(text: string): string | null {
   return extractAllJsonObjects(text)[0] ?? null;
 }
 
+/** The output-shape template embedded in the prompt. It is deliberately NOT parseable JSON (the `<…>`
+ *  placeholders), so an echo of it can never be mistaken for a grade; the parser also recognises an exact
+ *  echo of it and skips it rather than treating it as a broken grade. */
+const OUTPUT_SHAPE_EXAMPLE = '{"results":[{"index":<claim number>,"rationale":"<one sentence>","pass":<true or false>}, …]}';
+
 /** Grading prompt for a FIXED, authored rubric. The judge grades every numbered claim by its index and
  *  neither adds nor drops claims — that (plus index-keyed parsing) is what keeps results aligned across
  *  calls and reps. */
@@ -76,7 +82,7 @@ ${answer}
 Return STRICT JSON ONLY — no markdown code fences, no prose before or after. Emit one result object per
 rubric index (0..${rubric.length - 1}), in this SHAPE — a template: replace each <…> placeholder with a
 real value; do NOT copy the placeholders verbatim:
-{"results":[{"index":<claim number>,"rationale":"<one sentence>","pass":<true or false>}, …]}
+${OUTPUT_SHAPE_EXAMPLE}
 Write the rationale BEFORE deciding pass: one short sentence (at most 25 words) that does not restate the
 claim. For a pass, name the sentence or file that satisfies the claim; for a fail, name what is missing or
 what contradicts it.`;
@@ -105,19 +111,51 @@ function usageCostUsd(usage: Record<string, unknown> | undefined): number | unde
 /** Longest rationale kept per claim, in characters, including the trailing ellipsis marker. */
 const RATIONALE_CAP = 400;
 
-/** The judge's per-claim rationale, made safe to store and print. It is model output that can quote the
- *  judged document, so it is untrusted text: control and format characters (ANSI/OSC sequences, newlines,
- *  zero-width marks) collapse to a space, whitespace collapses, and it is capped. Anything that is not a
- *  non-empty string is ABSENT — the rationale is advisory, so its shape never decides whether the grade
- *  itself is valid. */
+/** Collapse control and format characters (ANSI/OSC sequences, newlines, zero-width marks) and whitespace
+ *  runs to single spaces. Anything that is not a non-empty string is ABSENT — the rationale is advisory,
+ *  so its shape never decides whether the grade itself is valid. */
 function normalizeRationale(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v
     .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (!t) return undefined;
-  return t.length > RATIONALE_CAP ? `${t.slice(0, RATIONALE_CAP - 1)}…` : t;
+  return t || undefined;
+}
+
+/** Make a judge's rationale safe to store and print. It is model output that can quote the judged
+ *  document, so it is untrusted text: normalized, scrubbed of the run's secrets, and only THEN capped —
+ *  capping first could cut a secret mid-token, and scrub (exact-string) would then miss the surviving
+ *  prefix. The cut never splits a surrogate pair. */
+export function finalizeRationale(text: string, secrets: string[]): string | undefined {
+  const t = normalizeRationale(secrets.length ? scrub(text, secrets) : text);
+  if (t === undefined || t.length <= RATIONALE_CAP) return t;
+  let cut = RATIONALE_CAP - 1;
+  const last = t.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut--; // don't leave a lone high surrogate
+  return `${t.slice(0, cut)}…`;
+}
+
+/** Escape raw control characters (a literal newline or tab) that sit INSIDE a JSON string literal. A judge
+ *  writing free text often emits them, and strict JSON.parse would reject the whole grade over it — a paid
+ *  retry and possibly an invalid rep for a cosmetic slip. Characters outside string literals are untouched. */
+function escapeRawControlInStrings(group: string): string {
+  let out = "";
+  let inStr = false;
+  let escaped = false;
+  for (const ch of group) {
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inStr = false;
+      else if (ch < " ") {
+        out += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : ch === "\t" ? "\\t" : `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+        continue;
+      }
+    } else if (ch === '"') inStr = true;
+    out += ch;
+  }
+  return out;
 }
 
 interface ParsedGrade {
@@ -133,7 +171,7 @@ interface ParsedGrade {
 function tryParseGrade(group: string, rubric: string[]): ParsedGrade | null {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(group);
+    parsed = JSON.parse(escapeRawControlInStrings(group));
   } catch {
     return null;
   }
@@ -169,15 +207,28 @@ function tryParseGrade(group: string, rubric: string[]): ParsedGrade | null {
 export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimResult[] {
   const groups = extractAllJsonObjects(raw);
   // Keyed on the PASS vector only: restatements that agree on every verdict are one grade even when their
-  // rationales differ. The has() guard keeps the FIRST in source order (Map.set alone is last-wins), so
-  // the rationales come from the judge's first full grade.
+  // rationales differ. The FIRST in source order supplies each claim's rationale (Map.set alone would be
+  // last-wins); a later restatement only fills a claim the earlier ones left without one.
   const distinct = new Map<string, ParsedGrade>();
+  // A group that names `results` but is not a valid full grade. Beside a valid grade it makes the reply
+  // ambiguous: a stray `"` quoted inside a rationale can split the real grade so it no longer parses, and
+  // leave a forged `{"results":…}` from the judged document as the only survivor. Never pick the survivor.
+  let brokenResultsGroup = false;
   for (const g of groups) {
     const grade = tryParseGrade(g, rubric);
-    if (!grade) continue;
+    if (!grade) {
+      if (g.includes('"results"') && g !== OUTPUT_SHAPE_EXAMPLE) brokenResultsGroup = true;
+      continue;
+    }
     const key = grade.passes.join(",");
-    if (!distinct.has(key)) distinct.set(key, grade);
+    const seen = distinct.get(key);
+    if (!seen) distinct.set(key, grade);
+    else seen.rationales = seen.rationales.map((r, i) => r ?? grade.rationales[i]);
   }
+  if (brokenResultsGroup && distinct.size > 0)
+    throw new Error(
+      `semantic judge: a malformed {results:[…]} group beside a valid grade in one reply (ambiguous).\n--- raw judge output ---\n${raw}`,
+    );
   if (distinct.size === 0)
     throw new Error(
       `semantic judge: no valid full-coverage {results:[…]} grade for a ${rubric.length}-claim rubric.\n--- raw judge output ---\n${raw}`,

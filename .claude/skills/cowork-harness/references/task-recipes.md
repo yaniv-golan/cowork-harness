@@ -210,7 +210,7 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    drop it. Everything past "run both arms" — scrubbing giveaways, shuffling, judging blind, unblinding
    after grading — is yours to build; the harness supplies the runs and the control.
 6. **Gate a change on the profile diff.** Capture the per-claim profile before your edit (the baseline),
-   make the edit, re-capture, and compare per claim. A claim that DROPPED (e.g. 3/3 → 0/3) is a
+   make the edit, re-capture, and compare per claim. Compare only runs that share `judgePromptHash` and `judgeModel`. A claim that DROPPED (e.g. 3/3 → 0/3) is a
    **regression signal to investigate**, not proof your edit caused it: at a small number of reps one
    observation can move by chance. Re-run that claim and read the reps' transcripts before attributing
    it. A claim already at 0/3 (a known gap) cannot regress. That turns "did my SKILL.md refactor quietly

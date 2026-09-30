@@ -149,4 +149,16 @@ describe("runSemanticJudges — never-drop + authored-file grading", () => {
     await runSemanticJudges([b], c2, bare);
     expect("rationale" in c2.semanticResults!.get(b)![0]).toBe(false);
   });
+
+  it("caps the stored rationale after scrubbing, whatever the judge returned", async () => {
+    const secret = "SECRETTOKEN1234567";
+    const judge: SemanticJudge = async (rubric) =>
+      rubric.map((claim, index) => ({ index, claim, pass: false, rationale: "a".repeat(390) + secret + "b".repeat(500) }));
+    const a = sem(["x"]);
+    const c = ctx({ transcript: "x", secrets: [secret] });
+    await runSemanticJudges([a], c, judge);
+    const r = c.semanticResults!.get(a)![0].rationale!;
+    expect(r.length).toBeLessThanOrEqual(400);
+    expect(r).not.toContain("SECRE");
+  });
 });

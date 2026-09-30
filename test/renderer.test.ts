@@ -248,7 +248,16 @@ describe("renderer — renderFooter", () => {
     renderFooter(
       {
         ...base,
+        // A leading PASSING assert and a result error pin the pairing: the k-th failed-assertion signal
+        // maps to the k-th FAILED assert (not the k-th assert), and a non-assertion fail signal consumes
+        // nothing.
+        result: "error",
         assertions: [
+          {
+            assertion: { semantic_matches: { rubric: ["decoy"] } },
+            pass: true,
+            semanticClaims: [{ index: 0, claim: "decoy", pass: false, rationale: "DECOY-REASON from a passing assert" }],
+          },
           { assertion: { file_exists: "x" }, pass: false, message: "missing x" },
           {
             assertion: { semantic_matches: { rubric: ["names the owner", "gives a date"] } },
@@ -270,6 +279,7 @@ describe("renderer — renderFooter", () => {
     // rendered directly under its own ✗ line, indented deeper, naming the claim index
     expect(lines[semLine + 1]).toMatch(/^\s{5,}.*\[1\].*FAILED-REASON no date anywhere/);
     expect(s.text()).not.toContain("PASSED-REASON");
+    expect(s.text()).not.toContain("DECOY-REASON");
     // the message itself is untouched: the rationale is not appended to it
     expect(lines[semLine]).not.toContain("FAILED-REASON");
     // and nothing is attached to the unrelated file_exists failure
