@@ -115,7 +115,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     ...toolDurationFields(timeline?.events), // toolDurations + toolDurationsBasis, derived together
     skillActivity: timeline ? foldSkillActivity(timeline.events) : undefined,
     models: record.models.length ? record.models : undefined,
-    ...deriveModelProvenance(opts.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks),
+    ...deriveModelProvenance(opts.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks, record.modelUsage),
     thinking: record.thinking.length ? record.thinking : undefined,
     thinkingElided: record.thinkingElided,
     toolErrors: record.toolErrors,

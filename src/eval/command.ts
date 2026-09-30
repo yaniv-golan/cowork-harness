@@ -10,7 +10,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { basename, join, relative, resolve } from "node:path";
-import type { RunResult, Scenario } from "../types.js";
+import type { FidelityTier, RunResult, Scenario } from "../types.js";
+import type { DoctorCheck } from "../run/doctor.js";
 import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
@@ -221,6 +222,9 @@ export type { EvalJobSpec } from "./job-runner.js";
 
 export interface EvalDeps {
   runJob: (spec: EvalJobSpec) => Promise<RunResult>;
+  /** Doctor's token check for a tier (`tokenCheck` in src/run/doctor.ts — the CLI passes it with the real
+   *  probe). Required, so no caller can skip the preflight by omission. */
+  tokenCheck: (tier: FidelityTier) => DoctorCheck;
   log: (s: string) => void;
   /** Test seams. */
   evalId?: string;
@@ -515,6 +519,22 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
       throw new UsageError(
         `--fail-on confirmed can never fire at --reps ${args.reps} with ${sectionReach.map((x) => x.m).join("/")} row(s) under ${args.correction}: raise --reps, or use --fail-on possible`,
       );
+
+    // Credentials: doctor's own token check for every tier the scenarios run at, before the manifest (so a
+    // refusal leaves no eval dir) and before any spend. Without it an eval with no usable credential runs
+    // every rep to "Not logged in" — each one a zero-cost error the agent reports like any other.
+    const byTier = new Map<FidelityTier, string[]>();
+    for (const s of scenarios) byTier.set(s.scenario.fidelity, [...(byTier.get(s.scenario.fidelity) ?? []), s.scenario.name]);
+    for (const [tier, names] of byTier) {
+      const c = deps.tokenCheck(tier);
+      if (c.status === "fail")
+        throw new UsageError(
+          `no usable agent credential for fidelity ${tier} (scenario${names.length > 1 ? "s" : ""} ${names.join(", ")}): ${c.detail}` +
+            (c.remedy ? `. Fix: ${c.remedy}` : "") +
+            ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
+          c.remedy,
+        );
+    }
 
     // Manifest.
     const manifestScenarios: ManifestScenario[] = scenarios.map((s) => ({

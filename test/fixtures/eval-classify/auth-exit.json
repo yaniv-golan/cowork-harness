@@ -1,0 +1,157 @@
+{
+  "scenario": "fixture-auth-exit",
+  "result": "error",
+  "errorSource": "exit",
+  "resultErrorKind": "agent",
+  "resultSubtype": "success",
+  "finalMessage": "Not logged in · Please run /login",
+  "models": [
+    "<synthetic>"
+  ],
+  "modelFallbacks": [],
+  "fingerprint": {
+    "contentSig": "52552f472b9cb54793361cfa9dd302b7edc996f6a1aba3585efee8d3744e7363"
+  },
+  "cost": {
+    "usd": 0
+  },
+  "usage": {
+    "turns": 1
+  },
+  "durationMs": 4014,
+  "assertions": [
+    {
+      "assertion": {
+        "tool_result_not_contains": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "file_exists": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_json": {
+          "artifact": "<redacted>",
+          "path": "<redacted>",
+          "exists": true
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "subagent_dispatched": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "subagent_file_write": {
+          "path_suffix": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "subagent_dispatch_healthy": {
+          "type": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "skill_triggered": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "no_skill_triggered": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "computer_links_resolve": true
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "no_delete_in_outputs": true
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "subagent_tool_absent": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "questions_count_max": 8
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "dispatch_count_max": 6
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "max_turns": 115
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "tool_calls_max": 110
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "no_unexpected_files": [
+          "<redacted>",
+          "<redacted>",
+          "<redacted>",
+          "<redacted>"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "gate_answers_delivered": true
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "gate_answer_count_min": 1
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "present_files_called": true
+      },
+      "pass": false
+    }
+  ]
+}

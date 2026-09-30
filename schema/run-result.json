@@ -462,7 +462,7 @@
     },
     "modelPinHonored": {
       "type": "boolean",
-      "description": "did the model the scenario pinned survive the run? THREE-state: true = pinned and no fallback observed; false = pinned and the agent fell back off it; ABSENT = unverifiable (nothing was pinned, or the run produced no live model evidence). Absence is not a pass \u2014 a consumer that reads a missing value as true is asserting something the run cannot support."
+      "description": "did the model the scenario pinned survive the run? THREE-state: true = pinned and no fallback observed; false = pinned and the agent fell back off it; ABSENT = unverifiable (nothing was pinned, or the run produced no live model evidence). When the main loop reported no live model (the synthetic turn of a /plugin:skill prompt), modelUsage decides only when unambiguous: true if the concrete pinned id is the only or the dominant billed model, false if the single billed model is another. Absence is not a pass \u2014 a consumer that reads a missing value as true is asserting something the run cannot support."
     },
     "modelSource": {
       "type": "string",

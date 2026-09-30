@@ -1829,7 +1829,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       ...toolDurationFields(timelineEvents), // toolDurations + toolDurationsBasis, derived together
       skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
       models: record.models.length ? record.models : undefined,
-      ...deriveModelProvenance(plan.model, record.models.length ? record.models : undefined, record.modelFallbacks),
+      ...deriveModelProvenance(plan.model, record.models.length ? record.models : undefined, record.modelFallbacks, record.modelUsage),
       thinking: record.thinking.length ? record.thinking : undefined,
       thinkingElided: record.thinkingElided,
       toolErrors: record.toolErrors,
@@ -2773,7 +2773,7 @@ export function buildPartialResult(args: {
     ...toolDurationFields(timelineEvents), // toolDurations + toolDurationsBasis, derived together
     skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
     models: record.models.length ? record.models : undefined,
-    ...deriveModelProvenance(args.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks),
+    ...deriveModelProvenance(args.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks, record.modelUsage),
     thinking: record.thinking.length ? record.thinking : undefined,
     thinkingElided: record.thinkingElided,
     toolErrors: record.toolErrors,

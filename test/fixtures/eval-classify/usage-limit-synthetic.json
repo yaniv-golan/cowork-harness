@@ -1,0 +1,36 @@
+{
+  "scenario": "fixture-usage-limit-synthetic",
+  "result": "error",
+  "errorSource": "result",
+  "resultErrorKind": "usage_limit",
+  "resultSubtype": "success",
+  "finalMessage": "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/admin-settings/usage · your weekly limit resets <redacted>",
+  "models": [
+    "<synthetic>"
+  ],
+  "modelFallbacks": [],
+  "fingerprint": {
+    "contentSig": "22d43c07dc2c8efcd648d280027317e2b586e5bf5bc42c274b19fc28de8ad552"
+  },
+  "cost": {
+    "usd": 0
+  },
+  "usage": {
+    "turns": 1
+  },
+  "durationMs": 3354,
+  "assertions": [
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "tool_called": "<redacted>"
+      },
+      "pass": false
+    }
+  ]
+}

@@ -27,6 +27,51 @@ import { UsageError } from "../src/errors.js";
  *  silently when there is no evidence, rendering "we could not tell" as "the pin held". That is the false
  *  green this module exists to prevent, so the no-evidence cases are asserted as `undefined` explicitly
  *  rather than left to a truthiness check that would accept either answer. */
+// A run whose main loop reported no live model — a prompt that starts with `/plugin:skill` expands into a
+// synthetic turn, so `models` is `["<synthetic>"]` — can still be vouched for by the SDK's own per-model
+// `modelUsage`. It covers the whole session (sub-agents, auxiliary calls), so it counts only when it
+// resolves unambiguously.
+describe("deriveModelProvenance: modelUsage when the main loop reported no live model", () => {
+  const use = (entries: Record<string, number>) => Object.fromEntries(Object.entries(entries).map(([m, costUSD]) => [m, { costUSD }]));
+  it("the pinned id is the only billed model → honored", () => {
+    expect(deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], use({ "claude-sonnet-5": 0.09 })).modelPinHonored).toBe(true);
+    expect(deriveModelProvenance("claude-sonnet-5", undefined, [], use({ "claude-sonnet-5": 0.09 })).modelPinHonored).toBe(true);
+    expect(deriveModelProvenance("claude-sonnet-5[1m]", ["<synthetic>"], [], use({ "Claude-Sonnet-5": 0.09 })).modelPinHonored).toBe(true);
+  });
+  it("the pinned id dominates an auxiliary model's spend → honored", () => {
+    const u = use({ "claude-haiku-4-5": 0.001, "claude-sonnet-5": 0.09 });
+    expect(deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], u).modelPinHonored).toBe(true);
+  });
+  it("one billed model that is not the pin → NOT honored", () => {
+    expect(deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], use({ "claude-opus-5": 0.2 })).modelPinHonored).toBe(false);
+  });
+  it("ambiguous: the pin present but not dominant, or absent among several → unverifiable", () => {
+    expect(
+      deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], use({ "claude-sonnet-5": 0.01, "claude-opus-5": 0.5 })).modelPinHonored,
+    ).toBeUndefined();
+    expect(
+      deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], use({ "claude-sonnet-5": 0.05, "claude-opus-5": 0.05 }))
+        .modelPinHonored,
+    ).toBeUndefined();
+    expect(
+      deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], use({ "claude-haiku-4-5": 0.01, "claude-opus-5": 0.5 }))
+        .modelPinHonored,
+    ).toBeUndefined();
+  });
+  it("no billed model, a marker key, or an alias pin → unverifiable", () => {
+    expect(deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], {}).modelPinHonored).toBeUndefined();
+    expect(deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], [], use({ "<synthetic>": 0 })).modelPinHonored).toBeUndefined();
+    expect(deriveModelProvenance("sonnet", ["<synthetic>"], [], use({ "claude-sonnet-5": 0.09 })).modelPinHonored).toBeUndefined();
+  });
+  it("a fallback off the pin still refutes it", () => {
+    const fb = [{ trigger: "overloaded", originalModel: "claude-sonnet-5", fallbackModel: "claude-opus-5" }];
+    expect(deriveModelProvenance("claude-sonnet-5", ["<synthetic>"], fb, use({ "claude-sonnet-5": 0.09 })).modelPinHonored).toBe(false);
+  });
+  it("a live main-loop model is still the evidence; modelUsage is not consulted", () => {
+    expect(deriveModelProvenance("claude-sonnet-5", ["claude-opus-5"], [], use({ "claude-sonnet-5": 0.09 })).modelPinHonored).toBe(false);
+  });
+});
+
 describe("deriveModelProvenance", () => {
   it("pinned, model observed, no fallback → honored", () => {
     const p = deriveModelProvenance("claude-opus-5", ["claude-opus-5"], []);

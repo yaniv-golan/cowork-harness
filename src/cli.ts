@@ -85,7 +85,7 @@ import {
 } from "./run/command-globals.js";
 import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
 import { projectDispatchProbe, formatDispatchProbe } from "./run/probe-dispatch.js";
-import { cmdDoctor } from "./run/doctor.js";
+import { cmdDoctor, tokenCheck } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
 import { resolveStatusTarget } from "./run/status-target.js";
@@ -2100,6 +2100,7 @@ async function cmdEval(rawArgs: string[]) {
   try {
     outcome = await runEval(parsed, {
       log,
+      tokenCheck: (tier) => tokenCheck(tier),
       runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
     });
   } catch (e) {
@@ -3690,8 +3691,10 @@ function cmdStats(args: string[]) {
   }
   if (hashlessRuns > 0)
     log(
-      `stats: ${hashlessRuns} run(s) excluded from grouping — no ${groupBy === "label" ? "--label" : "skillHash"} recorded ` +
-        `(the chat lane records no fingerprint, and a run that mounted no skill has nothing to hash).`,
+      `stats: ${hashlessRuns} run(s) excluded from grouping — ` +
+        (groupBy === "label"
+          ? "no --label recorded (a run carries a label only when it was started with --label, or by eval, which labels its runs eval:<eval-id>:<arm>)."
+          : "no skillHash recorded (the chat lane records no fingerprint, and a run that mounted no skill has nothing to hash)."),
     );
 }
 

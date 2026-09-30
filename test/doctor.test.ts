@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   runDoctorChecks,
+  tokenCheck,
+  realProbe,
   agentBuildLine,
   freshnessFor,
   ghcrRefFor,
@@ -614,5 +617,66 @@ describe("image-freshness is offline", () => {
     // Exactly one spawn, and it is the local inspect.
     expect(fn.match(/spawnSync\(/g)?.length ?? 0).toBe(1);
     expect(fn).toContain('"image", "inspect"');
+  });
+});
+
+// `eval` refuses before spend on doctor's own token check, so the check must be ONE function that doctor
+// itself uses — a second detector could decide a tier differently from what doctor prints.
+describe("doctor — tokenCheck is the token row runDoctorChecks reports", () => {
+  const tiers = ["protocol", "container", "microvm", "hostloop", "cowork"] as const;
+  const probes: Array<Partial<DoctorProbe>> = [
+    {},
+    { hasToken: () => false },
+    { hasToken: () => false, hasKeychainToken: () => true },
+    { hasToken: () => false, hasKeychainToken: () => true, platform: () => "linux" },
+    { hasToken: () => false, worktreeEnv: () => "/main/.env" },
+  ];
+  it.each(tiers)("at %s, for every token situation", (tier) => {
+    for (const over of probes) expect(tokenCheck(tier, probe(over))).toEqual(get(runDoctorChecks(tier, probe(over)), "token"));
+  });
+  it("the consumer's case — Keychain only, no env token — fails at hostloop and cowork and only warns at protocol", () => {
+    const kc = probe({ hasToken: () => false, hasKeychainToken: () => true });
+    expect(tokenCheck("hostloop", kc).status).toBe("fail");
+    expect(tokenCheck("cowork", kc).status).toBe("fail");
+    expect(tokenCheck("protocol", kc).status).toBe("warn");
+  });
+});
+
+// Claude Code on Linux (and wherever it has no Keychain) keeps its login in `<config dir>/.credentials.json`.
+// protocol keeps the operator's real config dir, so the agent signs itself in from that file, exactly as it
+// does from the macOS Keychain; every other tier gives it a managed dir, where the file is not seen.
+describe("doctor — a signed-in config dir (.credentials.json) counts at protocol only", () => {
+  const credsFile = (path: string | null) => ({ hasToken: () => false, configCredentialsFile: () => path });
+  it.each(["linux", "darwin"])("on %s: warn at protocol, naming the file, never reading it", (plat) => {
+    const tok = tokenCheck("protocol", probe({ ...credsFile("/home/u/.claude/.credentials.json"), platform: () => plat }));
+    expect(tok.status).toBe("warn");
+    expect(tok.detail).toMatch(/\/home\/u\/\.claude\/\.credentials\.json/);
+    expect(tok.remedy).toMatch(/setup-token/);
+  });
+  it.each(["container", "microvm", "hostloop", "cowork"] as const)("still fails at %s", (tier) => {
+    expect(tokenCheck(tier, probe({ ...credsFile("/home/u/.claude/.credentials.json"), platform: () => "linux" })).status).toBe("fail");
+  });
+  it("no file (and no Keychain, no token) still fails at protocol", () => {
+    expect(tokenCheck("protocol", probe({ ...credsFile(null), platform: () => "linux" })).status).toBe("fail");
+  });
+  it("an env token still wins, and the file is not consulted", () => {
+    let asked = false;
+    const tok = tokenCheck("protocol", probe({ configCredentialsFile: () => ((asked = true), "/x/.credentials.json") }));
+    expect(tok.status).toBe("ok");
+    expect(asked).toBe(false);
+  });
+  it("the real probe looks in CLAUDE_CONFIG_DIR when set, else ~/.claude, by existence only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "doctor-creds-"));
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      process.env.CLAUDE_CONFIG_DIR = dir;
+      expect(realProbe.configCredentialsFile!()).toBeNull();
+      writeFileSync(join(dir, ".credentials.json"), "not json — never parsed");
+      expect(realProbe.configCredentialsFile!()).toBe(join(dir, ".credentials.json"));
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

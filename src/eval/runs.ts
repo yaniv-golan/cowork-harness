@@ -75,6 +75,10 @@ export function reviveThrown(t: { kind: ThrownKind; message: string }): unknown 
   }
 }
 
+/** An error result's `finalMessage` is kept (bounded) because the classifier matches the agent's own
+ *  authentication-failure text on it; a success's answer is not the report's business. */
+export const FINAL_MESSAGE_MAX = 300;
+
 const uniq = (xs: Array<string | undefined>): string[] => [...new Set(xs.filter((x): x is string => typeof x === "string"))].sort();
 
 /** Project a finished job into its runs.jsonl line. */
@@ -120,6 +124,9 @@ export function buildRunsLine(args: {
             ...(r.errorSource !== undefined ? { errorSource: r.errorSource } : {}),
             ...(r.resultErrorKind !== undefined ? { resultErrorKind: r.resultErrorKind } : {}),
             ...(r.resultSubtype !== undefined ? { resultSubtype: r.resultSubtype } : {}),
+            ...(r.result !== "success" && typeof r.finalMessage === "string"
+              ? { finalMessage: r.finalMessage.slice(0, FINAL_MESSAGE_MAX) }
+              : {}),
             ...(r.stalledOnQuestion !== undefined ? { stalledOnQuestion: r.stalledOnQuestion } : {}),
             ...(r.partial !== undefined ? { partial: r.partial } : {}),
             ...(r.unansweredGate !== undefined ? { unansweredGate: r.unansweredGate } : {}),
