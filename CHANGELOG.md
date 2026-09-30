@@ -20,6 +20,18 @@ All notable changes to this project are documented here. The format is based on
   `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
   cost to recover, so their rows stay without it, even after `stats --reindex`.
 
+### Changed
+
+- **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), now what `latest` resolves to.
+  The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
+  origin are unchanged from `desktop-2.9939.4`. The bundled cassettes are re-stamped to `2.16120.0`,
+  not re-recorded: none of them runs Python that could write bytecode, so the one spawn-env addition
+  below cannot change what they recorded. `verify-cassettes` and `replay --strict` pass on them.
+- **`PYTHONDONTWRITEBYTECODE=1` is now set in the agent spawn env on every tier** (`container`,
+  `microvm` and `hostloop`), as Desktop 2.16120.0 does for every Cowork session. Python run by the
+  agent or a skill's scripts no longer writes `__pycache__`/`.pyc` files into mounted folders or outputs.
+  It comes from the pinned baseline, so a scenario pinned to an older baseline does not get it.
+
 ### Fixed
 
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
@@ -34,6 +46,13 @@ All notable changes to this project are documented here. The format is based on
     Previously it compared the wrong directory against itself and passed.
 - **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
   as its own repeat batch, as documented in the scenario reference.
+- **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
+  them as unknown deltas. The host-loop permission chain now ends in a step that pins an approval's
+  input to the input that was judged, and an organization-policy "ask" on a file tool now reaches the
+  permission prompt instead of being denied; the Artifact tool gate now admits scheduled sessions, with
+  the scheduled-run restriction moved to a gate-controlled step at session start. Each new shape is
+  accepted only in its exact form: a blanket allow, a dropped `await`, a rewritten input, or a scheduled
+  form without its session-start restriction still fails `sync`.
 
 ## [4.1.1] — 2026-09-29
 
