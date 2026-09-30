@@ -476,9 +476,9 @@
         "note": "— startup syncPlugins(); plugins load via --plugin-dir (registry inert in-VM)."
       },
       "cuCanUseToolEnabled:2486083521": {
-        "on": true,
-        "source": "force",
-        "value": true
+        "on": false,
+        "source": "defaultValue",
+        "value": false
       },
       "skeletonHome:2614807392": {
         "on": false,
@@ -602,8 +602,8 @@
     ],
     "spawnEnvSpreadCount": 34,
     "fcache": {
-      "content16": "d8c2ffe2b66fc75e",
-      "embeddedTimestamp": 1790751973569,
+      "content16": "5455ee345dae4b9e",
+      "embeddedTimestamp": 1790758917910,
       "featureCount": 387
     },
     "asarGateIds": [
@@ -1116,7 +1116,13 @@
             "save_skill",
             "screenshot_file_preview"
           ],
-          "toolsSome": []
+          "toolsSome": [
+            "create_artifact",
+            "list_artifacts",
+            "screenshot_artifact",
+            "update_artifact",
+            "verify_artifact"
+          ]
         },
         "plugins": {
           "presence": "all",
