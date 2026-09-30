@@ -2321,7 +2321,13 @@ export function scenarioInputRefusal(
   return f.session ?? f.vacuity ?? f.inputs;
 }
 
-export type ScenarioInputCheckOptions = { quiet?: boolean; ablateSkill?: boolean; unloadableBaseline?: "throw" | "skip" | "report" };
+export type ScenarioInputCheckOptions = {
+  quiet?: boolean;
+  ablateSkill?: boolean;
+  unloadableBaseline?: "throw" | "skip" | "report";
+  /** The session the run will actually use, when the caller substitutes one (see launchSourcesPreflight). */
+  session?: ReturnType<typeof loadSession>;
+};
 
 /** The parts of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
  *  differently (`record <file> --dry-run` reports vacuity and an unreadable session file but refuses a bad
@@ -2347,7 +2353,12 @@ export function scenarioInputFindings(
   let inputs: UsageError | undefined;
   let session: SessionFileError | undefined;
   try {
-    launchSourcesPreflight(scenario, modelOverride, { quiet: opts.quiet, ablateSkill: opts.ablateSkill, baseline });
+    launchSourcesPreflight(scenario, modelOverride, {
+      quiet: opts.quiet,
+      ablateSkill: opts.ablateSkill,
+      baseline,
+      ...(opts.session ? { session: opts.session } : {}),
+    });
   } catch (e) {
     if (e instanceof SessionFileError) session = e;
     else if (e instanceof UsageError) inputs = e;

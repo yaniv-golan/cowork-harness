@@ -106,8 +106,13 @@ export function isInsideGitWorkTree(p: string): boolean {
   if (!statSync(dir).isDirectory()) dir = dirname(dir);
   const r = spawnSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", env: gitEnvWithoutAmbientRepo() });
   if (r.status === null || r.error) return true;
-  if (r.status !== 0) return false;
-  return r.stdout.trim() === "true";
+  if (r.status === 0) return r.stdout.trim() === "true";
+  // Only git's own "not a repository" answer clears the path. Any other failure (a repository git refuses
+  // to read, a corrupt one) says nothing about where the snapshots would land: refuse, with git's reason.
+  if (/not a git repository/i.test(r.stderr ?? "")) return false;
+  throw new UsageError(
+    `could not tell whether ${tildeify(dir)} is inside a git work tree (git: ${(r.stderr ?? "").trim().split("\n")[0] || `exit ${r.status}`}); pass --out <dir> somewhere git can answer for`,
+  );
 }
 
 export interface SnapshotInfo {

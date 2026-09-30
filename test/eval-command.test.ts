@@ -19,6 +19,7 @@ import {
   symlinkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   writeFileSync,
@@ -907,5 +908,99 @@ describe("eval: a plugin with several skills", () => {
       deps(fakeRunner()),
     );
     expect(withSkill.manifest.skill).toBe("second");
+  });
+});
+
+describe("eval: discovery, preflight and small persistence fixes", () => {
+  it("a scenario directory holding its session file (_session.yaml) runs: non-scenario YAML is skipped with a notice", async () => {
+    const plugin = join(import.meta.dirname, "..", ".claude", "skills", "cowork-harness");
+    const a = join(root, "a", "cowork-harness");
+    const b = join(root, "b", "cowork-harness");
+    cpSync(plugin, a, { recursive: true });
+    cpSync(plugin, b, { recursive: true });
+    writeFileSync(join(b, "SKILL.md"), readFileSync(join(b, "SKILL.md"), "utf8") + "\nedited\n");
+    const log: string[] = [];
+    const scen = join(import.meta.dirname, "evals", "scenarios");
+    const p = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval"),
+      "--reps",
+      "2",
+      "--allow-underpowered",
+    ]);
+    const out = await runEval(p, deps(fakeRunner(), log));
+    expect(log.join("\n")).toMatch(/skipped 2 non-scenario file\(s\): _session\.yaml, eval-7-session\.yaml/);
+    expect(out.manifest.scenarios.length).toBeGreaterThan(10);
+  }, 120_000);
+
+  it("a scenario its tier cannot violate is refused before any run (not failed in every job)", async () => {
+    const { scen, a, b } = setup();
+    writeFileSync(
+      join(scen, "csv-metrics.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: hostloop\nprompt: analyze\nassert:\n  - tool_not_called: NotebookEdit\n`,
+    );
+    const calls: EvalJobSpec[] = [];
+    await expect(runEval(args(scen, a, b), deps(fakeRunner(undefined, calls)))).rejects.toThrow(/can never be violated/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("two sessions spelling the same plugin differently (a symlinked path) are substituted per session", async () => {
+    const { scen, a, b } = setup();
+    symlinkSync(join(root, "declared"), join(root, "declared-link"));
+    writeFileSync(join(root, "session-b.yaml"), "model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ./declared-link/csv-metrics\n");
+    writeFileSync(
+      join(scen, "other.yaml"),
+      `baseline: latest\nsession: ../session-b.yaml\nfidelity: container\nprompt: analyze\n${CSV_ASSERTS}`,
+    );
+    const calls: EvalJobSpec[] = [];
+    const out = await runEval(args(scen, a, b), deps(fakeRunner(undefined, calls)));
+    for (const c of calls) expect(c.session.plugins.local_plugins).toEqual([join(out.evalDir, "arms", c.job.arm, "csv-metrics")]);
+  });
+
+  it("an existing EMPTY --out is left empty by a refusal", async () => {
+    const { scen, a } = setup();
+    mkdirSync(join(root, "eval"));
+    await expect(runEval(args(scen, a, a), deps(fakeRunner()))).rejects.toThrow(/identical/);
+    expect(readdirSync(join(root, "eval"))).toEqual([]);
+  });
+
+  it("report.json lists every rep with its bucket", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" && s.job.rep === 1 ? { ...r, modelPinHonored: false } : r))),
+    );
+    const rj = JSON.parse(readFileSync(join(out.evalDir, "report.json"), "utf8"));
+    expect(rj.reps).toHaveLength(10);
+    expect(rj.reps.find((x: { arm: string; rep: number }) => x.arm === "after" && x.rep === 1).bucket).toBe("model_mismatch");
+    expect(rj.reps.filter((x: { bucket: string }) => x.bucket === "valid")).toHaveLength(9);
+  });
+
+  it("runs.jsonl keeps an absent models[] absent (not [])", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner((_s, r) => ({ ...r, models: undefined }) as unknown as RunResult)));
+    const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
+    expect(lines.every((l) => !("models" in l))).toBe(true);
+  });
+
+  it("the work-tree check fails CLOSED when git errors for a reason other than 'not a repository'", async () => {
+    const { isInsideGitWorkTree } = await import("../src/eval/snapshot.js");
+    const bin = join(root, "fakegit");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), "#!/bin/sh\necho 'fatal: detected dubious ownership in repository' >&2\nexit 128\n");
+    chmodSync(join(bin, "git"), 0o755);
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}:${saved}`;
+    try {
+      expect(() => isInsideGitWorkTree(join(root, "somewhere"))).toThrow(/could not tell/);
+    } finally {
+      process.env.PATH = saved;
+    }
+    expect(isInsideGitWorkTree(join(root, "somewhere"))).toBe(false);
   });
 });

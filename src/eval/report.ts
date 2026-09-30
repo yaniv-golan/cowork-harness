@@ -89,6 +89,17 @@ export interface EvalReport {
   skill: string | null;
   sections: { tuned: ReportSection | null; heldOut: ReportSection | null };
   judgeDisagreements: Array<{ scenario: string; assertionIndex: number; models: string[] }>;
+  /** Every recorded rep, in schedule order, with the bucket the report put it in. */
+  reps: Array<{
+    index: number;
+    arm: string;
+    scenario: string;
+    rep: number;
+    runDir: string | null;
+    bucket: RepBucket;
+    rule: string;
+    unclassified: boolean;
+  }>;
   summary: {
     familyRows: number;
     labels: Record<string, number>;
@@ -373,6 +384,16 @@ export function buildEvalReport(evalDir: string): EvalReport {
     skill: m.skill,
     sections: { tuned, heldOut },
     judgeDisagreements,
+    reps: classified.map(({ line, c }) => ({
+      index: line.index,
+      arm: line.arm,
+      scenario: line.scenario,
+      rep: line.rep,
+      runDir: line.runDir,
+      bucket: c.bucket,
+      rule: c.termination.rule,
+      unclassified: c.termination.unclassified,
+    })),
     summary: {
       familyRows: familyRows.length,
       labels: Object.fromEntries(Object.entries(labels).sort(([x], [y]) => x.localeCompare(y))),

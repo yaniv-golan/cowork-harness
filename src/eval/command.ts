@@ -8,13 +8,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { parse as parseYaml } from "yaml";
 import { basename, join, relative, resolve } from "node:path";
 import type { RunResult, Scenario } from "../types.js";
 import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
 import { loadBaseline } from "../baseline.js";
-import { parseScenarioFile, loadSessionFromFile, launchSourcesPreflight } from "../run/execute.js";
+import { parseScenarioFile, loadSessionFromFile, scenarioInputFindings } from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
@@ -257,9 +258,29 @@ interface LoadedScenario {
   heldOut: boolean;
 }
 
-function loadScenarios(args: EvalArgs): LoadedScenario[] {
-  const resolved = resolveInputs(args.target, [".yaml", ".yml"]);
-  if ("error" in resolved) throw new UsageError(`eval: ${resolved.error}`);
+function loadScenarios(args: EvalArgs, say: (s: string) => void): LoadedScenario[] {
+  const inputs = resolveInputs(args.target, [".yaml", ".yml"]);
+  if ("error" in inputs) throw new UsageError(`eval: ${inputs.error}`);
+  // A scenario directory usually holds its session file too (`_session.yaml`). In a directory, a YAML
+  // document with no `prompt:` is not a scenario (the loader's own rule) and is skipped, with a notice; a
+  // single file named on the command line is always loaded, so a wrong file still fails loud.
+  const skipped: string[] = [];
+  const files = inputs.isDir
+    ? inputs.files.filter((f) => {
+        let doc: unknown;
+        try {
+          doc = parseYaml(readFileSync(f, "utf8"));
+        } catch {
+          return true; // unparseable: let the scenario loader report it
+        }
+        const isScenario = typeof doc === "object" && doc !== null && !Array.isArray(doc) && "prompt" in doc;
+        if (!isScenario) skipped.push(basename(f));
+        return isScenario;
+      })
+    : inputs.files;
+  if (skipped.length) say(`[eval] skipped ${skipped.length} non-scenario file(s): ${skipped.join(", ")}`);
+  if (files.length === 0) throw new UsageError(`eval: no scenario files under ${args.target}`);
+  const resolved = { files };
   const holdReal = new Set<string>();
   const fileReal = resolved.files.map(realOr);
   for (const h of args.holdout) {
@@ -313,7 +334,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   };
 
   // Scenarios, sessions, rows.
-  const scenarios = loadScenarios(args);
+  const scenarios = loadScenarios(args, say);
   let rowCount = 0;
   for (const s of scenarios) {
     try {
@@ -349,6 +370,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     );
   if (existsSync(evalDir) && (!statSync(evalDir).isDirectory() || readdirSync(evalDir).length > 0))
     throw new UsageError(`eval dir ${tildeify(evalDir)} already exists and is not empty`);
+  // Created now, or an existing EMPTY dir: either way, a refusal before the manifest removes what we made.
   const createdDir = !existsSync(evalDir);
   mkdirSync(evalDir, { recursive: true });
   try {
@@ -356,14 +378,24 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   } catch (e) {
     // A refusal after the dir was made (a bad snapshot, the guard, a preflight) leaves nothing behind, so the
     // same --out can be used again. Once the manifest exists the eval has started and the dir is kept.
-    if (createdDir && !existsSync(join(evalDir, MANIFEST_FILE))) rmSync(evalDir, { recursive: true, force: true });
+    if (!existsSync(join(evalDir, MANIFEST_FILE))) {
+      if (createdDir) rmSync(evalDir, { recursive: true, force: true });
+      else for (const e of readdirSync(evalDir)) rmSync(join(evalDir, e), { recursive: true, force: true });
+    }
     throw e;
   }
 
   async function afterEvalDir(): Promise<EvalOutcome> {
     // Snapshots.
-    const pluginDecl = scenarios[0].session.plugins.local_plugins[0];
-    const base = basename(expandHome(pluginDecl));
+    // Every scenario declares the same plugin dir (checked by realpath); each is substituted by its OWN
+    // spelling. The snapshot takes the declared final directory name, which is the mount name the
+    // scenarios' assertions see — so every spelling must end in the same name.
+    const bases = [...new Set(scenarios.map((s) => basename(expandHome(s.session.plugins.local_plugins[0]))))];
+    if (bases.length > 1)
+      throw new UsageError(
+        `the scenarios declare the plugin under different final directory names (${bases.join(", ")}); the mount name comes from that name, so declare it the same way in every session`,
+      );
+    const base = bases[0];
     const snaps: Array<SnapshotInfo & { spec: ArmSpec }> = specs.map((spec) => {
       const dest = join(evalDir, "arms", spec.label, base);
       try {
@@ -410,7 +442,10 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
         const baseline = loadBaseline(s.scenario.baseline);
         let sub: SessionConfig;
         try {
-          sub = applySessionOverrides(s.session, { model: agentPins[si].model, skillDirSubstitution: [pluginDecl, snap.dir] });
+          sub = applySessionOverrides(s.session, {
+            model: agentPins[si].model,
+            skillDirSubstitution: [s.session.plugins.local_plugins[0], snap.dir],
+          });
         } catch (e) {
           throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
         }
@@ -422,7 +457,12 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           );
         sigs[ai][s.scenario.name] = sig;
         try {
-          launchSourcesPreflight(s.scenario, undefined, { quiet: true, baseline, session: sub });
+          // The same input checks a run makes before its run dir exists — the tier-vacuous refusal and every
+          // input path — over the SUBSTITUTED session, so a bad input refuses the eval instead of failing
+          // every job.
+          const f = scenarioInputFindings(s.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
+          const refusal = f.session ?? f.vacuity ?? f.inputs;
+          if (refusal) throw refusal;
         } catch (e) {
           if (e instanceof BoundaryError)
             throw new EvalStagingError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);

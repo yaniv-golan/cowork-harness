@@ -132,7 +132,7 @@ export function buildRunsLine(args: {
           },
           ...(r.errorSource !== undefined ? { errorSource: r.errorSource } : {}),
           ...(r.resultErrorKind !== undefined ? { resultErrorKind: r.resultErrorKind } : {}),
-          models: r.models ?? [],
+          ...(r.models !== undefined ? { models: r.models } : {}),
           judge: { models: uniq(semantic.map((a) => a.judgeModel)), promptHashes: uniq(semantic.map((a) => a.judgePromptHash)) },
         }
       : {}),
