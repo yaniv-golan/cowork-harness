@@ -114,4 +114,13 @@ describe("reapAgentOnTeardown", () => {
     const container = await reapAgentOnTeardown({ microvm: false, child: { kill: () => {} } });
     expect(container).toBe(0);
   });
+
+  it("tree agent: the force-kill waits for the drive loop's last asynchronous listing to land", async () => {
+    const log: string[] = [];
+    const agent = fakeAgent(log);
+    agent.alive = () => false;
+    agent.idle = () => new Promise<void>((res) => setTimeout(() => (log.push("listing landed"), res()), 50));
+    await reapAgentOnTeardown({ microvm: false, agent, deregister: () => log.push("deregister") });
+    expect(log).toEqual(["listing landed", "forceKill", "deregister"]);
+  });
 });
