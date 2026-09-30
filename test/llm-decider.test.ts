@@ -287,3 +287,74 @@ describe("LlmDecider", () => {
     expect((d as any).response.answers).toEqual({ "Format?": "Markdown", "Depth?": "Deep" });
   });
 });
+
+describe("LlmDecider — spend accounting (costUsd / usage)", () => {
+  const priced =
+    (texts: string[], usage: Record<string, unknown>[]): Complete =>
+    async () => {
+      const i = calls++;
+      return { text: texts[i]!, model: "m", ...(usage[i] ? { usage: usage[i] } : {}) };
+    };
+  let calls = 0;
+
+  it("sums cost and tokens over every model call of a 2-question gate, auxiliary model keys included", async () => {
+    calls = 0;
+    const complete = priced(
+      ["PDF", "Yes"],
+      [
+        { main: { inputTokens: 100, outputTokens: 5, cacheReadInputTokens: 7, cacheCreationInputTokens: 3, costUSD: 0.01 } },
+        { main: { inputTokens: 200, outputTokens: 6, costUSD: 0.02 }, aux: { inputTokens: 10, outputTokens: 1, costUSD: 0.001 } },
+      ],
+    );
+    const d = new LlmDecider(complete);
+    expect(d.costUsd()).toBeUndefined(); // nothing spent yet
+    await d.decide(
+      {
+        id: "r",
+        kind: "question",
+        questions: [
+          { question: "Format?", options: [{ label: "Markdown" }, { label: "PDF" }] },
+          { question: "Proceed?", options: [{ label: "Yes" }, { label: "No" }] },
+        ],
+      },
+      ctx(),
+    );
+    expect(calls).toBe(2);
+    expect(d.costUsd()).toBeCloseTo(0.031, 10);
+    expect(d.usage()).toEqual({ input_tokens: 310, output_tokens: 12, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 });
+  });
+
+  it("accumulates across gates, including the web_fetch permission path", async () => {
+    calls = 0;
+    const complete = priced(["PDF", "Allow once"], [{ m: { inputTokens: 1, costUSD: 0.5 } }, { m: { inputTokens: 2, costUSD: 0.25 } }]);
+    const d = new LlmDecider(complete);
+    await d.decide(ask("Format?", ["Markdown", "PDF"]), ctx());
+    await d.decide(
+      {
+        id: "p",
+        kind: "permission",
+        tool: "webfetch:x.com",
+        input: { domain: "x.com", url: "https://x.com/a" },
+        options: [{ label: "Allow once" }, { label: "Deny" }],
+      },
+      ctx(),
+    );
+    expect(d.costUsd()).toBeCloseTo(0.75, 10);
+    expect(d.usage()?.input_tokens).toBe(3);
+  });
+
+  it("counts a call whose answer is then rejected (the spend happened before the parse failed)", async () => {
+    calls = 0;
+    const d = new LlmDecider(priced(["I would rather not say"], [{ m: { outputTokens: 9, costUSD: 0.04 } }]));
+    await expect(d.decide(ask("Format?", ["Markdown", "PDF"]), ctx())).rejects.toBeInstanceOf(UnansweredError);
+    expect(d.costUsd()).toBeCloseTo(0.04, 10);
+    expect(d.usage()?.output_tokens).toBe(9);
+  });
+
+  it("stays undefined — never $0 — when the transport reports no usage", async () => {
+    const d = new LlmDecider(async () => reply("PDF"));
+    await d.decide(ask("Format?", ["Markdown", "PDF"]), ctx());
+    expect(d.costUsd()).toBeUndefined();
+    expect(d.usage()).toBeUndefined();
+  });
+});

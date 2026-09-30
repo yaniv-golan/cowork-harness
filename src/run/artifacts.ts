@@ -549,6 +549,12 @@ export interface AuthoredFilesHealth {
 export interface CaptureAuthoredFilesResult {
   files: AuthoredFile[];
   health: AuthoredFilesHealth;
+  /** The budget this capture resolved and read under — returned rather than re-derived by the caller, so
+   *  what a run records as its budget is the one the walk used. */
+  budget: { perFileBytes: number; totalBytes: number };
+  /** True iff the scratchpad walk ran (a `scratchpadRoot` was given, this is not a `--resume`, and a
+   *  pre-run manifest existed). False = session-root files were never candidates for the capture. */
+  scratchpadWalked: boolean;
 }
 
 /** True iff any evidence-health signal is set — i.e. the capture was NOT fully clean. The lanes persist
@@ -689,12 +695,13 @@ export function captureAuthoredFilesWithHealth(
   };
   // No baseline ⇒ no diff ⇒ no capture. RECORD it: an empty `files` with clean health reads as "the run
   // authored nothing", which is a different and much weaker claim than "we could not tell what it authored".
-  if (preRunHashes === undefined) {
-    health.noPreRunManifest = true;
-    return { files: [], health };
-  }
   const perFile = opts.perFileBytes ?? DEFAULT_AUTHORED_PER_FILE_BYTES;
   const total = opts.totalBytes ?? DEFAULT_AUTHORED_TOTAL_BYTES;
+  const budget = { perFileBytes: perFile, totalBytes: total };
+  if (preRunHashes === undefined) {
+    health.noPreRunManifest = true;
+    return { files: [], health, budget, scratchpadWalked: false };
+  }
   const out: AuthoredFile[] = [];
   let used = 0;
 
@@ -822,7 +829,7 @@ export function captureAuthoredFilesWithHealth(
   // Stable, order-independent bookkeeping: `omittedPaths` is reported to the judge and quoted in the
   // refusal message, so it must not depend on which pass a file happened to be dropped in.
   health.omittedPaths.sort();
-  return { files: out, health };
+  return { files: out, health, budget, scratchpadWalked: !!opts.scratchpadRoot && !opts.resume };
 }
 
 /** ONE traversal of the scratchpad (the session root outside `mnt`), shared by authored-file capture

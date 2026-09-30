@@ -1390,6 +1390,35 @@ interface ModelUsageEntry {
   webSearchRequests?: number;
 }
 
+/** Token counters for a harness-side model call (the LLM decider, the semantic judge), in the snake_case
+ *  the Messages API uses, summed across every model key the transport reported. */
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+/** See `RunResult.assertions[].judgedDoc`. `sha256` is over the whole document as sent (UTF-8), including
+ *  any truncation marker the aggregate cap appended. `sections` lists, in order, the parts the document is
+ *  composed of, each hashed over the exact text of that part the judge received; parts are separated by one
+ *  blank line, so walking the document by `chars + 2` recovers each one. A part cut by the aggregate cap is
+ *  hashed over its surviving prefix, and a part wholly past the cut is not listed. `chars` counts UTF-16
+ *  code units (JavaScript string length), the unit the judge caps are measured in. */
+export interface JudgedDocFingerprint {
+  sha256: string;
+  sections: Array<{
+    /** `final` = the agent's final answer; `transcript`; `subagent` = one opted-in sub-agent's text;
+     *  `authored` = one authored file (`path` set); `scratch_note` = the note qualifying scratch files;
+     *  `health` = the evidence-health note. */
+    kind: "final" | "transcript" | "subagent" | "authored" | "scratch_note" | "health";
+    /** The authored file's path (workRoot-relative, or `scratchpad/…`) — `authored` sections only. */
+    path?: string;
+    sha256: string;
+    chars: number;
+  }>;
+}
+
 /** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
  *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
  *  differently instead of collapsing both into one fatal class. */
@@ -1685,6 +1714,14 @@ export interface RunResult {
      *  grade is retried once, and both calls are paid). Reported BESIDE `cost.usd` (the agent's spend),
      *  never folded into it. Absent when no attempt was priced — unpriced is not $0. Live lane only. */
     judgeCostUsd?: number;
+    /** Tokens the judge used grading this `semantic_matches` assert, summed over every attempt whose call
+     *  completed and every model key the transport reported (the same basis as `judgeCostUsd`). Absent when no attempt reported
+     *  token counters. Live lane only. */
+    judgeUsage?: TokenUsage;
+    /** A fingerprint of the exact document this assert's judge received (after secret scrubbing and every
+     *  cap). Lets a later re-grade prove it showed the judge the same bytes, section by section, instead of
+     *  assuming it. Absent when the judge never ran. Live lane only. */
+    judgedDoc?: JudgedDocFingerprint;
     /** Identity (16 hex) of the grading-prompt TEMPLATE the judge used. A before/after comparison must
      *  refuse to mix hashes: a prompt change can shift every pass rate. Live lane only. */
     judgePromptHash?: string;
@@ -1938,6 +1975,34 @@ export interface RunResult {
   nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
   usage?: UsageInfo;
   cost?: CostInfo;
+  /** USD the LLM decider (`on_unanswered: llm` / `--decider-llm`) spent answering this run's gates: the sum,
+   *  over every model key, of the usage each COMPLETED transport call reported. Not counted: a call that
+   *  threw (timeout, spawn failure, an envelope that did not parse) and the transport's own internal retries
+   *  after a non-zero exit, which report no usage — so this is a floor, never an overcount. Reported BESIDE `cost.usd` (the agent's
+   *  spend), never folded into it. Absent when no LLM decider answered, or none of its calls was priced —
+   *  unpriced is not $0. Live lane only. */
+  deciderCostUsd?: number;
+  /** Tokens behind `deciderCostUsd`, same basis. Absent when no call reported token counters. */
+  deciderUsage?: TokenUsage;
+  /** The authored-file capture budget this run actually used: `perFileBytes` (the cap on an incidental
+   *  file) and `totalBytes` (`COWORK_HARNESS_AUTHORED_TOTAL_BYTES`, else the
+   *  default). The authored-file sections of a `semantic_matches` judge's document were drawn under this
+   *  budget, so recomposing that document later needs it. `scratchpadWalked` says whether session-root
+   *  (`scratchpad/…`) files were candidates at all — false on a `--resume` turn or a tier with no such
+   *  layout. Absent when no capture ran (chat, replay, a salvaged partial run). */
+  authoredCapture?: { perFileBytes: number; totalBytes: number; scratchpadWalked: boolean };
+  /** The agent's own retried model calls, which it reports nowhere else — a run can be slow or costly
+   *  because of them. Main loop and sub-agents are kept apart:
+   *  - `count`/`delayMs`: `system` events with `subtype: "api_retry"`, and the sum of their
+   *    `retry_delay_ms`. The main loop is sequential, so `delayMs` is time the run spent waiting.
+   *  - `subagentCount`/`subagentDelayMs`: `tool_progress` frames carrying `subagent_retry` (the frame the
+   *    agent emits when such a retry resolves carries none and is not counted). Sub-agents run
+   *    concurrently, so `subagentDelayMs` is backoff summed across agents, NOT wall-clock time; never add
+   *    it to `delayMs`.
+   *  All zeros = a stream was observed with no retry of either kind; absent = no stream was observed (no
+   *  `system/init` frame arrived: an agent that died before its stream began, a cassette that could not
+   *  be driven, the error-replay lane). */
+  apiRetries?: { count: number; delayMs: number; subagentCount: number; subagentDelayMs: number };
   durationMs?: number;
   // Skill/plugin staleness fingerprint at run time. Persisted so `verify-run` can detect a kept run that
   // predates a skill change (its gate snapshot is stale → don't vouch for answer-coverage against it).

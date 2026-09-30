@@ -29,6 +29,50 @@ All notable changes to this project are documented here. The format is based on
     and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
     quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
     A literal newline or tab inside a rationale is tolerated.
+- **`verify-cassettes` and `replay` note a cassette whose recording agent differs from the one its
+  baseline pins for that tier.** The agent version is read from the recording's own `system/init` event
+  (`claude_code_version`) and compared per tier with the baseline named in `fingerprint.baseline`:
+  - `container` and `microvm` run the staged VM agent, so they are compared with the baseline's
+    `agentVersion`.
+  - `hostloop` runs the staged native agent, which versions separately, so it is compared with the version
+    in the baseline's `agentBinary.nativeStagedPath`. A baseline without one gives no note.
+  - `protocol` runs the `claude` on your `PATH`, which no baseline pins, so it is never noted.
+  - A `cowork` cassette that does not record which tier it resolved to is never noted either.
+
+  The note states the mismatch and lists that tier's possible causes without picking one: a fingerprint
+  re-stamped by hand across an agent bump, a recording made under `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`,
+  an explicit binary override (`COWORK_AGENT_BINARY`, or `COWORK_HOST_AGENT_BINARY` at `hostloop`), and at
+  `hostloop` the patch-bump substitution of the native agent that is accepted by default.
+  `verify-cassettes` reports it as an `agent-version:` entry in the result's `notes[]` (a `[note]` line in
+  text mode). `replay` has no `notes[]`: it prints one `::notice:: [replay] <file> — … [agent-version]`
+  line per cassette on stderr, under `--output-format json` too. Neither changes `ok` or the exit code. It
+  works on existing cassettes without a re-record, and says nothing when the event carries no version or
+  the baseline is not a committed one.
+- **The LLM decider's spend is recorded.** A run answered by the LLM decider (`on_unanswered: llm` /
+  `--decider-llm`) now carries `RunResult.deciderCostUsd` and `deciderUsage` (tokens): the usage every
+  completed decider call reported, including the call on a gate that then failed to bind on a salvaged
+  partial run. A call that threw and the transport's internal retries after a failed exit report nothing
+  and are not counted, so the figure is a floor. Like the judge's, it sits beside `cost.usd` and is never
+  added to it, and it is absent (not `0`) when no LLM decider answered or no call was priced. The run index gains `deciderCostUsd` per row.
+- **`stats --runs` shows harness-side spend beside each run's cost:** `judge=$…` and `decider=$…` in text,
+  `judgeCostUsd`/`deciderCostUsd` on each JSON `runs[]` entry. Totals and percentiles are unchanged.
+- **`semantic_matches` records the judge's tokens and what it was shown.** Each graded assert now carries:
+  - `assertions[].judgeUsage`: the judge's tokens, summed over both attempts when the call completed (the
+    same basis as `judgeCostUsd`).
+  - `assertions[].judgedDoc`: `{sha256, sections: [{kind, path?, sha256, chars}]}`, a fingerprint of the
+    exact document the judge received after scrubbing and every cap, part by part (`final`, `transcript`,
+    `subagent`, `authored` with its path, `scratch_note`, `health`). A later re-grade can compare against
+    it to prove it showed the judge the same bytes. It is recorded on an invalid grade too.
+- **`RunResult.authoredCapture`** records the authored-file capture a live run made
+  (`{perFileBytes, totalBytes, scratchpadWalked}`), so the judged document's authored-file sections can be
+  recomposed under the same budget later.
+- **`RunResult.apiRetries`** counts the agent's own retried model calls, which were previously ignored,
+  keeping the main loop and sub-agents apart: `count`/`delayMs` from the `system` `api_retry` events, and
+  `subagentCount`/`subagentDelayMs` from the `tool_progress` frames that carry `subagent_retry` (the frame
+  sent when a retry resolves is not counted). Sub-agents run concurrently, so `subagentDelayMs` is backoff
+  summed across agents, not elapsed time; never add it to `delayMs`. All zeros means a stream was observed
+  with no retry; absent means none was observed (an agent that exited before its stream began, or a
+  cassette that could not be replayed to the end).
 
 ### Changed
 
@@ -66,6 +110,13 @@ All notable changes to this project are documented here. The format is based on
   `hostloop` it reaches the agent process, and the shell sidecar keeps its proxy-only env — as Desktop's
   host-loop VM bash gets `TZ` only. It comes from the pinned baseline, so a scenario pinned to an older
   baseline does not get it.
+- **`replay --help`, `verify-cassettes --help` and the CI guide now name the scriptable success signal.**
+  In text mode both commands print nothing to stdout by design, and the exit code is the only signal.
+  For a script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
+  envelope's `ok`, for example with `jq -e '.ok'`.
+- **The `lint-skill` size caps are re-verified against agent 2.1.284.** The values are unchanged. The
+  agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
+  and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
 
 ### Fixed
 
@@ -95,6 +146,10 @@ All notable changes to this project are documented here. The format is based on
   runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
   moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
   no longer staged.
+- **`list` printed baselines in directory order**, so `desktop-1.24012.11` came before `desktop-1.24012.9`
+  on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
+  the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
+  filename per line), and `latest: true` on that entry in `--output-format json`.
 
 ### Internal
 

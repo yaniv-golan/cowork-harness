@@ -95,7 +95,7 @@ describe("every AssertContext builder unions sub-agent accesses in", () => {
   // failing unit test, and `no_observed_reference_access` passing green on a run where a sub-agent read
   // the file cover to cover. A dispatcher-shaped skill does all its reading a level down, so that is the
   // common case, not the corner one.
-  const SOURCES = ["src/run/execute.ts", "src/run/cassette.ts", "src/cli.ts"];
+  const SOURCES = ["src/run/execute.ts", "src/run/cassette.ts", "src/run/verify-context.ts"];
 
   /** Every `: AssertContext = { … }` literal, brace-balanced. An earlier version bounded the search by a
    *  character window and by the shared `toolsCalled` key instead: the window silently missed the

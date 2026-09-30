@@ -282,6 +282,34 @@ describe.skipIf(!can)("cli: stats — generation queries", () => {
     expect(r.out).toMatch(/local_2[\s\S]*local_1/); // newest first
   });
 
+  it("--runs shows the judge's and the LLM decider's spend beside the agent's cost, text and JSON", () => {
+    const root = runsRoot();
+    const sem = { semantic_matches: { rubric: ["c"] } };
+    seedRun(root, "spend", "local_1", {
+      cost: { usd: 0.5 },
+      deciderCostUsd: 0.004,
+      assertions: [
+        { assertion: sem, pass: true, judgeCostUsd: 0.01 },
+        { assertion: sem, pass: true, judgeCostUsd: 0.02 },
+      ],
+    });
+    seedRun(root, "spend", "local_0", { cost: { usd: 0.25 } }); // neither: both columns absent, not $0
+    run(["stats", "--reindex"], root);
+    const text = run(["stats", "spend", "--runs"], root).out;
+    expect(text).toMatch(/local_1\s.*\$0\.5000\s+judge=\$0\.0300\s+decider=\$0\.0040/);
+    expect(text).not.toMatch(/local_0\s.*(judge|decider)=/);
+    const envelope = JSON.parse(
+      run(["stats", "spend", "--runs", "--output-format", "json"], root)
+        .out.split("\n")
+        .find((l) => l.startsWith("{"))!,
+    );
+    const byId = Object.fromEntries(envelope.runs.map((x: { runId: string }) => [x.runId, x]));
+    expect(byId.local_1).toMatchObject({ costUsd: 0.5, deciderCostUsd: 0.004 });
+    expect(byId.local_1.judgeCostUsd).toBeCloseTo(0.03, 10);
+    expect(byId.local_0).not.toHaveProperty("judgeCostUsd");
+    expect(byId.local_0).not.toHaveProperty("deciderCostUsd");
+  });
+
   it("--runs nests each run under its own group when grouping by generation", () => {
     const out = run(["stats", "s", "--runs", "--group-by", "skill-hash"], seedTwoGenerations()).out;
     const gen1Summary = out.indexOf(`s (skillHash=${GEN1})`);
