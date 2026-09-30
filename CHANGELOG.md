@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`semantic_matches: {include_subagent_text: true}` now grades with the sub-agent text on live runs.**
+  The sub-agents' reasoning was read from their transcripts only after the judge had run, so on every
+  live run (`container`, `hostloop`, `microvm`) the judge got no sub-agent text, although `result.json`
+  recorded `subagents[].reasoning` afterwards. The reasoning is now read before the judge runs. A grade
+  recorded before this fix did not see the sub-agent text, and its `judgedDoc` (where recorded) lists no
+  `subagent` section; re-run a scenario that uses `include_subagent_text: true` to grade it with the
+  sub-agent text.
+  - A sub-agent's reasoning and web searches now also appear in `run.jsonl`'s `subagent` lines on every
+    live run. Before, they appeared there only when the run had no usable timeline.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus

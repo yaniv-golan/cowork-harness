@@ -317,6 +317,32 @@ export function resolveSubagentConfigRoot(
   return undefined;
 }
 
+/** The live lane's grading pre-pass, in the order that makes `include_subagent_text` work: capture each
+ *  sub-agent's reasoning from its child transcript FIRST, then run the semantic judges. The judged
+ *  document reads `ctx.subagents[].reasoning`, so a capture that ran after the judge left every live
+ *  `include_subagent_text: true` grade without the sub-agent text it asked for.
+ *
+ *  `subagents` must be the array `ctx.subagents` is (executeScenario passes `record.subagents` for both);
+ *  `result.subagents` is built from it afterwards (as-is, or `attributeSubagentSkills`' shallow copies,
+ *  which carry the captured arrays by reference), so the persisted reasoning is the reasoning the judge
+ *  saw. Runs the capture exactly once — it APPENDS to `webSearches`, so a second pass would double them.
+ *  An `undefined` root (protocol tier) or a capture-internal failure leaves `reasoning` absent, never
+ *  fails the run. `judges` is called only when a `semantic_matches` assert exists, so building the judge
+ *  (which can spend) stays gated. */
+export async function captureSubagentReasoningThenJudge(args: {
+  subagentConfigRoot: string | undefined;
+  subagents: Parameters<typeof captureSubagentReasoning>[1];
+  asserts: Scenario["assert"];
+  ctx: AssertContext;
+  judges: () => { judge: SemanticJudge; judgeFor?: (model: string) => SemanticJudge };
+}): Promise<void> {
+  if (args.subagentConfigRoot) captureSubagentReasoning(args.subagentConfigRoot, args.subagents);
+  if (args.asserts.some((a) => a.semantic_matches !== undefined)) {
+    const { judge, judgeFor } = args.judges();
+    await runSemanticJudges(args.asserts, args.ctx, judge, judgeFor);
+  }
+}
+
 /** Groups of assertions that cannot all hold. Each group pairs ONE assertion demanding that a record
  *  NOT exist with the assertions demanding that the same record DOES exist, on a single evidence channel.
  *
@@ -1603,14 +1629,22 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       resources,
     };
 
-    // LIVE lane: grade any `semantic_matches` asserts with the LLM judge BEFORE the synchronous
-    // evaluate() reads the per-claim results into check(). Gated so a scenario with no such assert never
-    // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
-    if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
+    // LIVE lane: capture sub-agent reasoning from the child transcripts (see resolveSubagentConfigRoot's
+    // doc comment for the per-tier root), THEN grade any `semantic_matches` asserts with the LLM judge
+    // BEFORE the synchronous evaluate() reads the per-claim results into check(). The capture mutates
+    // `record.subagents` — the array `assertCtx.subagents` is and `result.subagents` is built from — so the
+    // judge (`include_subagent_text`) and result.json see the same reasoning. The judge is built only when
+    // a semantic assert exists, so a scenario without one never spends a model call. (Replay strips
+    // `semantic_matches` as live-only, so it never reaches here.)
+    const subagentConfigRoot = resolveSubagentConfigRoot(effectiveFidelity, { configDir: plan.configDir, workRoot, sessionId });
+    await captureSubagentReasoningThenJudge({
+      subagentConfigRoot,
+      subagents: record.subagents,
+      asserts: scenario.assert,
+      ctx: assertCtx,
       // A per-assert judge_model is honoured unless the caller pinned one judge for the whole run.
-      const { judge, judgeFor } = judgesForExecute(opts);
-      await runSemanticJudges(scenario.assert, assertCtx, judge, judgeFor);
-    }
+      judges: () => judgesForExecute(opts),
+    });
     const assertions = evaluate(scenario.assert, assertCtx);
 
     if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -1930,14 +1964,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       outcome: undefined, // stamped alongside the verdict just below (derived from it)
       verdict: undefined, // computed just below (after assertions are evaluated / the object is fully assembled) and stored — see the comment there
     });
-
-    // Sub-agent reasoning (thinking + text turns), read from each dispatch's on-disk child session
-    // transcript (LIVE/record only — see resolveSubagentConfigRoot's doc comment for the per-tier root
-    // and captureSubagentReasoning's for the join). Mutates `result.subagents[].reasoning` in place; a
-    // `undefined` root (e.g. protocol tier) or a capture-internal failure is a silent no-op — reasoning
-    // just stays absent, never a run failure.
-    const subagentConfigRoot = resolveSubagentConfigRoot(effectiveFidelity, { configDir: plan.configDir, workRoot, sessionId });
-    if (subagentConfigRoot) captureSubagentReasoning(subagentConfigRoot, result.subagents);
 
     // THE verdict-persist point: `computeVerdict` is downstream of assembling `result` (it reads
     // `result.assertions`, `result.scan`, `result.permissiveAutoAllow`, …), so it can only run here, after
