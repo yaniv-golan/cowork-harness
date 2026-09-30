@@ -43,8 +43,6 @@ All notable changes to this project are documented here. The format is based on
   agrees with the full grade and is ambiguous when it contradicts it. An echo of the prompt's output
   template, even a reformatted one, is still skipped.
 
-### Changed
-
 - **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), now what `latest` resolves to.
   - The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
     origin are unchanged from `desktop-2.9939.4`.
