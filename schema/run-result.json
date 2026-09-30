@@ -883,6 +883,75 @@
         }
       }
     },
+    "deciderCostUsd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "USD the LLM decider (on_unanswered: llm / --decider-llm) spent answering this run's gates, the sum, over every model key, of the usage each completed transport call reported; a call that threw and the transport's internal retries after a non-zero exit report no usage and are not counted, so this is a floor. Reported BESIDE cost.usd (the agent's spend), never folded into it. Absent when no LLM decider answered, or none of its calls was priced (unpriced is not $0). Live lane only."
+    },
+    "deciderUsage": {
+      "type": "object",
+      "description": "Tokens behind deciderCostUsd, same basis (every call, every model key). Absent when no call reported token counters.",
+      "required": ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"],
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "authoredCapture": {
+      "type": "object",
+      "description": "The authored-file capture budget this run actually used: perFileBytes (the cap on an incidental file) and totalBytes (COWORK_HARNESS_AUTHORED_TOTAL_BYTES, else the default). A semantic_matches judge's authored-file sections were drawn under this budget. scratchpadWalked: whether session-root (scratchpad/) files were capture candidates at all (false on a --resume turn or a tier with no such layout). Absent when no capture ran (chat, replay, a salvaged partial run).",
+      "required": ["perFileBytes", "totalBytes", "scratchpadWalked"],
+      "properties": {
+        "perFileBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scratchpadWalked": {
+          "type": "boolean"
+        }
+      }
+    },
+    "apiRetries": {
+      "type": "object",
+      "description": "The agent's own retried model calls, main loop and sub-agents kept apart. count/delayMs: system events with subtype api_retry and the sum of their retry_delay_ms (the main loop is sequential, so delayMs is time spent waiting). subagentCount/subagentDelayMs: tool_progress frames carrying subagent_retry (the twin frame emitted when a retry resolves carries none and is not counted); sub-agents run concurrently, so subagentDelayMs is backoff summed across agents, not wall-clock time, and must never be added to delayMs. All zeros = a stream was observed with no retry of either kind; absent = no stream was observed.",
+      "required": ["count", "delayMs", "subagentCount", "subagentDelayMs"],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "delayMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "subagentCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subagentDelayMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
     "durationMs": {
       "type": "number"
     },

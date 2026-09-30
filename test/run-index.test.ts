@@ -143,6 +143,22 @@ describe("indexRowFromResult — judgeCostUsd", () => {
   });
 });
 
+describe("indexRowFromResult — deciderCostUsd", () => {
+  it("carries the LLM decider's spend beside costUsd and judgeCostUsd, never folded into either", () => {
+    const row = indexRowFromResult(rr({ cost: { usd: 1 }, deciderCostUsd: 0.004 } as Partial<RunResult>), {
+      command: "run",
+      partial: false,
+    });
+    expect(row.deciderCostUsd).toBeCloseTo(0.004, 10);
+    expect(row.costUsd).toBe(1);
+  });
+
+  it("is undefined — not $0 — when the result recorded none", () => {
+    const row = indexRowFromResult(rr({}), { command: "run", partial: false });
+    expect(row.deciderCostUsd).toBeUndefined();
+  });
+});
+
 describe("appendIndexRow / readIndex — the on-disk round trip", () => {
   it("writes and reads back one row", () => {
     const dir = mkdtempSync(join(tmpdir(), "run-index-"));

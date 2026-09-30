@@ -27,6 +27,7 @@ import {
 // the cycle is intrinsic — kept runtime-only rather than refactored.
 import { buildFingerprint, skillCommit } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
+import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
 import { loadBaseline } from "../baseline.js";
 import {
@@ -95,6 +96,7 @@ import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, typ
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
+import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import {
   classifyWorkspaceFilesWithHealth,
@@ -110,7 +112,6 @@ import {
   readPreRunManifestHashes,
   readPreRunManifestLinkAware,
   readPreRunManifestOrigin,
-  readPreRunManifestStats,
   readOutputsBaseline,
   type OutputsBaseline,
 } from "./pre-run-manifest.js";
@@ -812,6 +813,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let resourceSampler: ResourceSampler | undefined;
   let microvmProxyPort: number | undefined;
   let record: RunRecord;
+  // The run's LLM decider, kept past the drive so its spend reaches the result (success AND salvage lanes).
+  let llmDecider: LlmDecider | undefined;
   let unansweredErr: UnansweredError | undefined; // set when a gate whiffs — drives the salvage branch below
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container
   let containerName: string | undefined;
@@ -1093,6 +1096,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
       const llmTerminal =
         onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
+      llmDecider = llmTerminal; // an instance that is never consulted reports no spend (undefined), not $0
       const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
       const policyDecider =
         opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
@@ -1376,6 +1380,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         onUnanswered,
         nonDeterministicHint: opts.nonDeterministicHint,
         externalChannel: !!opts.externalChannel,
+        // The decider most often spent money on exactly the gate that whiffed — keep it on the salvage.
+        deciderCostUsd: llmDecider?.costUsd(),
+        deciderUsage: llmDecider?.usage(),
       });
       // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
       // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
@@ -1462,7 +1469,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // while the harness bind-mounts the whole session dir, so these files persist and can be graded as
     // authored. That is correct for the semantic judge (the run did write them) and wrong as a model of
     // delivery. `user_visible_artifact` is unaffected: it checks user-visible ROOTS, not this set.
-    const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
+    // (The scratchpad root — the parent of `mnt` — is derived in `authoredCaptureOpts`.)
     // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
     // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
     // unavailable is safer than misattribution). #17
@@ -1471,15 +1478,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // drains the whole budget before the deliverable is reached — and the judge is then refused over
     // files no rubric mentions. The union across every `semantic_matches`: one capture serves them all.
     const priorityGlobs = [...new Set(scenario.assert.flatMap((a) => a.semantic_matches?.evidence_files ?? []))];
-    const authored = captureAuthoredFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
-      scratchpadRoot,
-      resume: plan.resume,
-      // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
-      // UNCHANGED rather than either mis-attributed as authored or silently dropped from evidence. #15/#12
-      preRunStats: readPreRunManifestStats(outDir),
-      ...(priorityGlobs.length ? { priorityGlobs } : {}),
-      totalBytes: authoredTotalBytes(),
-    });
+    // One option derivation shared with the kept-run context builder, so a re-grade captures what this did.
+    const authored = captureAuthoredFilesWithHealth(
+      workRoot,
+      userVisibleRoots,
+      readonlyFolderRoots,
+      preRunHashes,
+      authoredCaptureOpts({ workRoot, runDir: outDir, resume: plan.resume, priorityGlobs, totalBytes: authoredTotalBytes() }),
+    );
 
     const assertCtx: AssertContext = {
       transcript: record.transcript,
@@ -1559,7 +1565,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       effectiveFidelity,
       // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
       // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
-      // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
+      // this same "live" mode (see assertContextFromRunDir in verify-context.ts).
       linkResolution: {
         mode: "live",
         hostRoots: [join(resolve(outDir), "work", "session", "mnt"), ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath)],
@@ -1813,6 +1819,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       nonReproducibleAnswers: record.unanswered,
       usage: record.usage,
       cost: record.cost,
+      deciderCostUsd: llmDecider?.costUsd(),
+      deciderUsage: llmDecider?.usage(),
+      authoredCapture: { ...authored.budget, scratchpadWalked: authored.scratchpadWalked }, // what the capture above actually did
+      apiRetries: apiRetriesFrom(record),
       skillsInvoked: record.skillsInvoked,
       skillToolAvailable: record.initTools.includes("Skill"),
       durationMs: Date.now() - startedAt - agentStopMs,
@@ -2623,6 +2633,9 @@ export function buildPartialResult(args: {
   onUnanswered?: OnUnanswered;
   nonDeterministicHint?: boolean;
   externalChannel?: boolean;
+  /** The LLM decider's spend up to the whiff — see `RunResult.deciderCostUsd`. Absent = none recorded. */
+  deciderCostUsd?: number;
+  deciderUsage?: RunResult["deciderUsage"];
 }): RunResult {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
@@ -2722,6 +2735,10 @@ export function buildPartialResult(args: {
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,
+    deciderCostUsd: args.deciderCostUsd,
+    deciderUsage: args.deciderUsage,
+    authoredCapture: undefined, // the salvage lane runs no authored-file capture
+    apiRetries: apiRetriesFrom(record),
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: args.durationMs,
