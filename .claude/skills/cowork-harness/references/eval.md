@@ -1,7 +1,8 @@
 # `eval` — paired before/after comparison of a skill edit (EXPERIMENTAL)
 
-The full guide is `docs/eval.md` in the repository (and in an npm install, under
-`node_modules/cowork-harness/docs/`). This is the part you need while running it.
+Tracks `cowork-harness 4.1.1` (baseline `desktop-2.16120.0`). The full guide is
+[docs/eval.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/eval.md); this is the part you
+need while running it.
 
 ```bash
 cowork-harness eval <scenario.yaml | dir/> --arm before=git:HEAD:plugins/my-skill --arm after=./plugins/my-skill \
