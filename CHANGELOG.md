@@ -14,10 +14,18 @@ All notable changes to this project are documented here. The format is based on
   text output: the agent's final message, assertion messages, verdict signals and failures, and the
   transcript in the failure footer. This affected `run`, `skill`, `record`, `replay` and `verify-run`
   (`verify-run` and `replay` echo the scenario's own assertion values). stdout and stderr are now scrubbed
-  with the same set of secrets, and a json envelope is still a single parseable document.
+  with the same set of secrets. Text cut to fit a display line (a `-V` tool input, a tool-result head, a
+  `trace` row) is scrubbed before the cut, so no leading part of a secret is printed either. A json
+  envelope stays one parseable document for secrets of realistic length. A very short or common value, or
+  one equal to a JSON token (`e`, `1`, `true`), is redacted wherever that text appears, help text and JSON
+  syntax included, and can leave the output unparseable, so use `COWORK_HARNESS_SCRUB_VALUES` for real
+  secret values only.
+- **A secret ending in a backslash left an invalid escape in `result.json`.** Of a secret's redacted
+  forms, the longest is now replaced first, so its JSON-escaped form is replaced whole.
 - **`eval` wrote unscrubbed text to `runs.jsonl`.** An errored rep's final message and the other result
   fields in each line are now secret-scrubbed like the rep's `result.json`, and the final message is
-  scrubbed before its 300-character cap, so no partial secret is left at the cut. `report.json` and
+  scrubbed before its 300-character cap, so no partial secret is left at the cut. Values are scrubbed
+  before the line is serialized, so a line stays valid JSON whatever the secret set. `report.json` and
   `report.md` are rebuilt from those lines.
 
 ## [4.2.0] — 2026-09-30

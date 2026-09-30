@@ -409,7 +409,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 
 ## 11. Machine output (`--output-format json`)
 
-Every envelope, like all text output, is secret-scrubbed with the same set as the run's files (CB-6: the known auth tokens, `COWORK_HARNESS_SCRUB_KEYS`, `COWORK_HARNESS_SCRUB_VALUES` and their encoded forms), so a value `result.json` shows as `[REDACTED]` reads `[REDACTED]` in the envelope too.
+Every envelope, like all text output, is secret-scrubbed with the same set as the run's files (CB-6: the known auth tokens, `COWORK_HARNESS_SCRUB_KEYS`, `COWORK_HARNESS_SCRUB_VALUES` and their encoded forms), so a value `result.json` shows as `[REDACTED]` reads `[REDACTED]` in the envelope too. The scrub replaces matching TEXT, so the envelope stays parseable for secrets of realistic length; a very short or common value, or one equal to a JSON token (`e`, `1`, `true`), is redacted wherever that text appears, JSON syntax included, and can make the envelope unparseable.
 
 ### 11.0 Replay fidelity contract
 

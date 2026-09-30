@@ -142,8 +142,14 @@ export function writeAllSync(fd: number, s: string): void {
  * `executeScenario` scrubs the TEXT it writes to result.json but returns the raw in-memory `RunResult`, and
  * every printer formats that object (or re-grades a scenario whose assertion literals may carry a value) —
  * so without this, a value result.json shows as `[REDACTED]` went to stdout/stderr verbatim, which is
- * usually a CI log. Same text-level `scrub` as result.json: `collectSecrets` includes the JSON-escaped form,
- * and `[REDACTED]` holds no JSON-structural character, so a json envelope stays one parseable document.
+ * usually a CI log. Same text-level `scrub` as result.json: `collectSecrets` includes the JSON-escaped form
+ * (replaced longest-first) and `[REDACTED]` holds no JSON-structural character, so a json envelope stays
+ * parseable for secrets of realistic length. It is TEXT replacement, though: a very short or common value,
+ * or one equal to a JSON token (`e`, `1`, `true`), is replaced wherever it appears — help text, JSON syntax
+ * and `\u` escapes included — and can make the output unparseable (documented in docs/cli.md).
+ *
+ * Also called BEFORE a display slice (renderer, trace rows, stderr tail, tool-call messages): a secret
+ * straddling the cut leaves a prefix this scrub can no longer match once the text reaches a sink.
  *
  * `collectSecrets()` is read per call, from `process.env`: the set `executeScenario` snapshots is taken from
  * the same env after every `.env`/`--dotenv` source has loaded, so at print time this is the same set (or a

@@ -7,7 +7,7 @@ import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.j
 import type { RunResult } from "../types.js";
 import type { ClassifiableResult, RepEvidence } from "./classify.js";
 import { tildeify } from "../io.js";
-import { collectSecrets, scrub } from "../secrets.js";
+import { collectSecrets, scrub, scrubDeep } from "../secrets.js";
 
 export const RUNS_FILE = "runs.jsonl";
 
@@ -152,9 +152,12 @@ export function buildRunsLine(args: {
 }
 
 /** Appended secret-scrubbed, like each rep's result.json: the line is built from the in-memory RunResult,
- *  which `executeScenario` returns unscrubbed, and the report files are rebuilt from these lines. */
+ *  which `executeScenario` returns unscrubbed, and the report files are rebuilt from these lines. The
+ *  string VALUES are scrubbed before serializing (never the serialized text), so the line stays valid JSON
+ *  even when the secret set holds a JSON token such as `true` or `1` — an unparseable middle line makes
+ *  `readRunsLines` throw after every rep was paid for, and an unparseable last one is dropped as torn. */
 export function appendRunsLine(file: string, line: RunsLine): void {
-  appendFileSync(file, scrub(JSON.stringify(line), collectSecrets()) + "\n");
+  appendFileSync(file, JSON.stringify(scrubDeep(line, collectSecrets())) + "\n");
 }
 
 /** Read runs.jsonl, ordered by schedule index. A torn final line (a crash mid-append) is skipped and

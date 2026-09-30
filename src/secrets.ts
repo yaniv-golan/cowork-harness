@@ -38,10 +38,28 @@ export function collectSecrets(): string[] {
   return out;
 }
 
+/** Replace every occurrence of every secret form with `[REDACTED]`. LONGEST FIRST: a secret's forms
+ *  overlap (the JSON-escaped form of a secret ending in a backslash starts with the raw form), and
+ *  replacing the shorter one first leaves the remainder behind — in JSON text, a dangling backslash that
+ *  is an invalid escape. */
 export function scrub(text: string, secrets: string[]): string {
   let t = text;
-  for (const s of secrets) if (s) t = t.split(s).join("[REDACTED]");
+  for (const s of [...secrets].sort((a, b) => b.length - a.length)) if (s) t = t.split(s).join("[REDACTED]");
   return t;
+}
+
+/** Scrub every STRING VALUE of a JSON-shaped value (object keys untouched), returning a new value. Unlike
+ *  `scrub` over serialized text, the result always serializes to valid JSON whatever the secret set — a
+ *  secret equal to `true`, `1` or a quote cannot reach the structure. */
+export function scrubDeep<T>(value: T, secrets: string[]): T {
+  if (!secrets.length) return value;
+  const walk = (v: unknown): unknown => {
+    if (typeof v === "string") return scrub(v, secrets);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    return v;
+  };
+  return walk(value) as T;
 }
 
 /**

@@ -8,7 +8,11 @@
 // (test/helpers/stub-agent.ts) at the protocol tier. No agent, no model call, no spend. The secret is
 // planted two ways: in the agent's answer (the realistic channel) and as an assertion literal in the
 // scenario (which reaches assertion messages, verdict signals and the failure footer).
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { appendRunsLine, readRunsLines, type RunsLine } from "../src/eval/runs.js";
+import { collectSecrets, scrub } from "../src/secrets.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -290,4 +294,96 @@ describe.runIf(existsSync(resolve("dist/io.js")))("installTerminalScrub", () => 
     expect(out.toString("latin1")).toBe("s:[REDACTED]\nb:[REDACTED]\n\xff\xfe\nc:[REDACTED]\n");
     expect(r.stderr.toString()).toBe("e:[REDACTED]\nce:[REDACTED]\n::warning:: w:[REDACTED]\n");
   });
+});
+
+// main() must install the stream seam: `chat`'s flag errors go out through a direct process.stderr.write
+// (not writeAllSync), so this is red if the installTerminalScrub() call is removed from main().
+describe.runIf(can)("the CLI installs the stream seam", () => {
+  it("chat --<secret> prints the unknown-flag error redacted", async () => {
+    const f = makeStubFixture("exit 0", { COWORK_HARNESS_SCRUB_VALUES: "SEKRETzz" });
+    try {
+      const r = await cli(f, ["chat", "--SEKRETzz"]);
+      expect(r.stderr).toContain("--[REDACTED]");
+      expect(r.stderr.includes("SEKRETzz")).toBe(false);
+    } finally {
+      f.cleanup();
+    }
+  });
+});
+
+// Display text is cut to fit a line; the scrub must run BEFORE the cut, or the kept part of a long secret
+// is printed. The `-V` tool-input summary is sliced to 80 chars, the tool-result head to 80.
+describe.runIf(can)("a display slice never prints part of a secret", () => {
+  it("run --verbose: a long secret in a tool input and its result leaves no prefix on stderr", async () => {
+    const LONG = "sk-ant-LONGSEKRET-" + "a1b2c3d4".repeat(11);
+    const body = [
+      `printf '%s\\n' '{"type":"system","subtype":"init","session_id":"stub","model":"claude-sonnet-5","tools":["Bash"],"cwd":"/tmp"}'`,
+      `printf '%s\\n' '{"type":"assistant","message":{"id":"msg_1","role":"assistant","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"curl -H ${LONG} x"}}]},"session_id":"stub"}'`,
+      `printf '%s\\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok ${LONG}"}]},"session_id":"stub"}'`,
+      `printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"stub","num_turns":1}'`,
+      "cat >/dev/null",
+    ].join("\n");
+    const f = makeStubFixture(body, { COWORK_HARNESS_SCRUB_VALUES: LONG });
+    try {
+      const r = await cli(f, ["run", f.scenario, "--verbose"]);
+      expect(r.stderr, "the tool line was not rendered — the case is not armed").toContain("Bash");
+      expect(r.stderr).toContain("[REDACTED]");
+      expect(r.stderr.includes(LONG.slice(0, 12)), r.stderr).toBe(false);
+    } finally {
+      f.cleanup();
+    }
+  });
+});
+
+describe("scrub ordering and eval runs.jsonl validity", () => {
+  const saved = process.env.COWORK_HARNESS_SCRUB_VALUES;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+    else process.env.COWORK_HARNESS_SCRUB_VALUES = saved;
+  });
+
+  it("a secret ending in a backslash leaves valid JSON (longest form replaced first)", () => {
+    process.env.COWORK_HARNESS_SCRUB_VALUES = "tok\\";
+    const text = scrub(JSON.stringify({ a: "x tok\\ y" }), collectSecrets());
+    expect(JSON.parse(text)).toEqual({ a: "x [REDACTED] y" });
+  });
+
+  for (const token of ["true", "false", "1"]) {
+    it(`runs.jsonl stays parseable with no rep lost when the secret set holds ${token}`, () => {
+      process.env.COWORK_HARNESS_SCRUB_VALUES = `${token},${SECRET}`;
+      const dir = mkdtempSync(join(tmpdir(), "runs-jsonl-scrub-"));
+      try {
+        const file = join(dir, "runs.jsonl");
+        for (const index of [0, 1, 2])
+          appendRunsLine(file, {
+            v: 0,
+            index,
+            arm: "a",
+            scenario: "q",
+            rep: index,
+            runId: `r${index}`,
+            runDir: null,
+            result: { scenario: "q", result: "error", finalMessage: `said ${SECRET} and ${token}` },
+            judge: { models: [], promptHashes: [] },
+            grades: [
+              {
+                source: "live",
+                assertions: [
+                  { assertion: { result: "success" }, pass: true },
+                  { assertion: { result: "error" }, pass: false },
+                ],
+              },
+            ],
+          } as unknown as RunsLine);
+        const { lines, tornFinalLine } = readRunsLines(file);
+        expect(tornFinalLine).toBe(false);
+        expect(lines.map((l) => l.index)).toEqual([0, 1, 2]);
+        const body = readFileSync(file, "utf8");
+        expect(body.includes(SECRET)).toBe(false);
+        expect((lines[0] as unknown as { result: { finalMessage: string } }).result.finalMessage).toBe("said [REDACTED] and [REDACTED]");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 });
