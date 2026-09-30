@@ -78,7 +78,7 @@ import {
   type SemanticJudge,
   expandExpectDenied,
 } from "../assert.js";
-import { makeSemanticJudge } from "../decide/semantic-judge.js";
+import { judgesForRun } from "../decide/semantic-judge.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
@@ -152,8 +152,11 @@ export interface ExecuteOptions {
   /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Sonnet default. */
   llmModel?: string;
   /** override the `semantic_matches` judge — mainly so tests inject a stub in place of the live LLM
-   *  judge. Default: makeSemanticJudge() (the real judge, via the shared claude -p transport). */
+   *  judge. Default: judgesForRun's makeSemanticJudge() (the real judge, via the shared claude -p transport). */
   semanticJudge?: SemanticJudge;
+  /** Grade EVERY `semantic_matches` assert with this judge model, a per-assert `judge_model` included — for
+   *  a caller that must hold the judge constant across runs (a paired comparison). Not a CLI flag. */
+  judgeModelOverride?: string;
   /** ABLATION (`--ablate-skill`): run the SAME prompt with the skill(s)-under-test removed — a
    *  deterministic negative control for skill-lift measurement (with-skill vs without). All plugin/skill
    *  discovery is stripped so nothing mounts and the agent answers from its own priors; the result is
@@ -1550,12 +1553,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // evaluate() reads the per-claim results into check(). Gated so a scenario with no such assert never
     // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
     if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
-      await runSemanticJudges(
-        scenario.assert,
-        assertCtx,
-        opts.semanticJudge ?? makeSemanticJudge(),
-        (model) => makeSemanticJudge({ model }), // honor a per-assert judge_model override
-      );
+      // A per-assert judge_model is honoured unless the caller pinned one judge for the whole run.
+      const { judge, judgeFor } = judgesForRun({ judge: opts.semanticJudge, modelOverride: opts.judgeModelOverride });
+      await runSemanticJudges(scenario.assert, assertCtx, judge, judgeFor);
     }
     const assertions = evaluate(scenario.assert, assertCtx);
 

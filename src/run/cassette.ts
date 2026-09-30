@@ -789,6 +789,12 @@ function skillSourceDirs(
     if (!inlineSession) return { dirs: [], baseDir, hashIgnore: [], source, failure: { kind: "inline-without-config" } };
     return { dirs: declaredSkillDirs(inlineSession), baseDir: process.cwd(), hashIgnore: inlineSession.staleness.hash_ignore, source };
   }
+  // A FILE session run with an already-resolved session object (execute.ts passes `loadedSession`): the
+  // object is what was actually MOUNTED, and it can differ from the file — a `--matrix` `skill_dirs` cell
+  // substitutes `local_plugins[0]`. Re-parsing the file here hashed the ORIGINAL dir on every cell, so each
+  // cell's fingerprint described a skill it never ran. Paths in the object are absolute (resolved against
+  // the session-file dir), so `baseDir` stays the session-file dir and `skillSources` stay relative to it.
+  if (inlineSession) return { ...dirsFromConfig(inlineSession, resolved), baseDir, source };
   if (!existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [], source, failure: { kind: "not-found", path: resolved } };
   let cfg;
   try {
@@ -809,15 +815,23 @@ function skillSourceDirs(
       failure: { kind: "unreadable", path: resolved, message: String((e as Error)?.message ?? e) },
     };
   }
-  // session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
+  return { ...dirsFromConfig(cfg, resolved), baseDir, source };
+}
+
+/** The mounted skill dirs + session-declared ignore globs (added to any plugin-local .cowork-hashignore
+ *  inside hashSkillDirs) of an already-resolved session. Shared by the file and object paths above. */
+function dirsFromConfig(
+  cfg: SessionConfig,
+  sessionFile: string,
+): { dirs: string[]; hashIgnore: string[]; failure?: SessionResolutionFailure } {
   const dirs = declaredSkillDirs(cfg);
   const declared = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces]
     .length;
   // Declared > 0 but resolved 0 is a FAILURE, not an empty session — and reporting "this session mounts
   // none" for it states the opposite of the truth.
   const failure: SessionResolutionFailure | undefined =
-    dirs.length === 0 && declared > 0 ? { kind: "declared-dirs-missing", path: resolved, declared } : undefined;
-  return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore, source, ...(failure ? { failure } : {}) };
+    dirs.length === 0 && declared > 0 ? { kind: "declared-dirs-missing", path: sessionFile, declared } : undefined;
+  return { dirs, hashIgnore: cfg.staleness.hash_ignore, ...(failure ? { failure } : {}) };
 }
 
 /** Best-effort git commit provenance for the skill dirs a session mounts — the human-readable "which

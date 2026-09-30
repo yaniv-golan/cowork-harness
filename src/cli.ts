@@ -523,7 +523,8 @@ Repeat / flakiness measurement:
 Matrix testing — one scenario × a cross-product of axes, in one run:
   --matrix <matrix.yaml>           run <scenario.yaml> across the cross-product of a matrix file's axes
                                    (baselines/models/skill_dirs — see docs/scenario.md). Requires exactly
-                                   one scenario file (not a dir). Cannot combine with --repeat. Exit 1 if
+                                   one scenario file (not a dir). With --repeat, each cell runs as its own
+                                   repeat batch, judged against --min-pass-rate. Exit 1 if
                                    any cell fails (assertion OR a cell-level infra error, e.g. the pinned
                                    baseline's agent binary isn't staged) — a matrix is a compatibility gate,
                                    not a survey. The JSON envelope gains an additive "matrix: {cells[]}" field.

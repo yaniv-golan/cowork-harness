@@ -1678,6 +1678,13 @@ export interface RunResult {
      *  pinned model, or a per-assert `judge_model` override. Lets a before/after eval verify the judge
      *  was held constant. Present only on the live lane where the judge ran. */
     judgeModel?: string;
+    /** USD the judge spent grading this `semantic_matches` assert, summed over every attempt (a malformed
+     *  grade is retried once, and both calls are paid). Reported BESIDE `cost.usd` (the agent's spend),
+     *  never folded into it. Absent when no attempt was priced — unpriced is not $0. Live lane only. */
+    judgeCostUsd?: number;
+    /** Identity (16 hex) of the grading-prompt TEMPLATE the judge used. A before/after comparison must
+     *  refuse to mix hashes: a prompt change can shift every pass rate. Live lane only. */
+    judgePromptHash?: string;
     /** True when a `semantic_matches` grade was INVALID (malformed/ambiguous after a retry). Distinct
      *  from a normal fail: an eval aggregator counts this rep as invalid (not a fail, not absent), so a
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */

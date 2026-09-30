@@ -112,3 +112,50 @@ describe("semantic_matches — replay classification", () => {
     expect(LIVE_ONLY_KEYS).toContain("semantic_matches");
   });
 });
+
+describe("semantic_matches — judge cost + prompt-hash provenance on the assertion result", () => {
+  /** A judge double that behaves like makeSemanticJudge's cost stamping: sets lastCostUsd per call. */
+  function costedJudge(steps: Array<{ cost?: number; fail?: boolean }>, promptHash?: string): SemanticJudge {
+    let i = 0;
+    const j: SemanticJudge = async (rubric) => {
+      const s = steps[i++]!;
+      j.lastCostUsd = s.cost;
+      if (s.fail) throw new Error("malformed grade");
+      return rubric.map((claim, index) => ({ index, claim, pass: true }));
+    };
+    if (promptHash) j.promptHash = promptHash;
+    return j;
+  }
+
+  it("sums the cost of BOTH attempts when the first grade is retried", async () => {
+    const a = sem(["alpha"]);
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, costedJudge([{ cost: 0.01, fail: true }, { cost: 0.02 }]));
+    expect(evaluate([a], c)[0].judgeCostUsd).toBeCloseTo(0.03, 10);
+  });
+
+  it("counts a priced attempt even when the other attempt carried no cost", async () => {
+    const a = sem(["alpha"]);
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, costedJudge([{ fail: true }, { cost: 0.02 }]));
+    expect(evaluate([a], c)[0].judgeCostUsd).toBeCloseTo(0.02, 10);
+  });
+
+  it("omits judgeCostUsd when no attempt was priced (unpriced is not $0)", async () => {
+    const a = sem(["alpha"]);
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, costedJudge([{}]));
+    expect(evaluate([a], c)[0]).not.toHaveProperty("judgeCostUsd");
+  });
+
+  it("stamps judgePromptHash from the judge that graded, and omits it for a judge that has none", async () => {
+    const a = sem(["alpha"]);
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, costedJudge([{ cost: 0.01 }], "abcdef0123456789"));
+    expect(evaluate([a], c)[0].judgePromptHash).toBe("abcdef0123456789");
+    const b = sem(["alpha"]);
+    const c2 = ctx({ transcript: "alpha" });
+    await runSemanticJudges([b], c2, stub);
+    expect(evaluate([b], c2)[0]).not.toHaveProperty("judgePromptHash");
+  });
+});
