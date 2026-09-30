@@ -365,6 +365,48 @@ describe("agentTreeAgent — the end-of-turn refresh", () => {
 });
 
 describe("agentTreeAgent — the drive-loop refresh does not block the event loop", () => {
+  const toolResult = { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } };
+  function deferredListings(h: Harness) {
+    const pending: Array<(rows: ProcRow[]) => void> = [];
+    h.deps.snapshotAsync = () => new Promise((res) => pending.push(res));
+    return pending;
+  }
+
+  it("an older asynchronous listing that lands after a newer one is dropped", async () => {
+    const h = harness({ rows: base() });
+    let now = T0;
+    h.deps.now = () => now;
+    const pending = deferredListings(h);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    now += 1000;
+    a.onFrame(toolResult); // listing 1 (older)
+    now += 1000;
+    a.onFrame(toolResult); // listing 2 (newer)
+    pending[1]([...base(), row(300, AGENT, 300)]); // the newer one sees 300 …
+    await new Promise((r) => setTimeout(r, 0));
+    pending[0](base()); // … the older one, taken before 300 started, lands last
+    await a.idle();
+    await new Promise((r) => setTimeout(r, 0));
+    a.forceKill({ fast: true });
+    expect(h.kills.map(([k]) => k)).toContain(-300);
+  });
+
+  it("an asynchronous listing that lands after a synchronous one was taken is dropped", async () => {
+    const h = harness({ rows: base() });
+    let now = T0;
+    h.deps.now = () => now;
+    const pending = deferredListings(h);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    now += 1000;
+    a.onFrame(toolResult); // asynchronous listing, taken before 300 started
+    h.setRows([...base(), row(300, AGENT, 300)]);
+    a.refresh(); // synchronous listing sees 300
+    pending[0](base()); // the older asynchronous one lands last
+    await a.idle();
+    a.forceKill({ fast: true });
+    expect(h.kills.map(([k]) => k)).toContain(-300);
+  });
+
   it("a result frame lists synchronously: the listing is in place before the agent can exit (once per turn)", () => {
     const h = harness({ rows: base() }); // at spawn the agent has started nothing yet
     let now = T0;
