@@ -164,27 +164,92 @@ describe("an anchored bare regex matches the slash channel the way it matches a 
   });
 });
 
+describe("an answer that QUOTES a refusal line is still an invocation", () => {
+  // The real s1 run, with its answer replaced by a paragraph that quotes both refusal strings — exactly
+  // what a skill explaining the binary's behaviour may write. The model spent real tokens, and the text
+  // does not START with a refusal, so the slash invocation must stand.
+  const QUOTING =
+    'When a skill sets user-invocable: false, the binary replies "This skill can only be invoked by Claude, not directly by users." ' +
+    'and an unregistered name gets "Unknown command: /claude-code-internals" instead.';
+  it("replay keeps slashInvokedSkills and no_skill_triggered FAILS", async () => {
+    const saved = process.stderr.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      const events = S1.events.map((e: any) =>
+        e.type === "assistant"
+          ? { ...e, message: { ...e.message, content: [{ type: "text", text: QUOTING }] } }
+          : e.type === "result"
+            ? { ...e, result: QUOTING }
+            : e,
+      );
+      const cassette: any = {
+        scenario: {
+          name: "quoting",
+          baseline: "latest",
+          session: "(inline)",
+          fidelity: "hostloop",
+          prompt: S1.result.prompt,
+          answers: [],
+          expect_denied: [],
+          assert: [{ no_skill_triggered: "claude-code-internals" }],
+        },
+        events: events.map((e: unknown) => JSON.stringify(e)),
+        controlOut: [],
+      };
+      const r = await replayCassette(cassette);
+      expect(r.slashInvokedSkills).toEqual([QUALIFIED]);
+      expect(r.assertions.some((a) => !a.pass)).toBe(true);
+    } finally {
+      process.stderr.write = saved;
+    }
+  });
+});
+
 describe("a slash command the binary REFUSED is not an invocation", () => {
-  // Agent 2.1.284 refuses a resolved slash command in two ways, and answers with one of these texts
-  // (copied verbatim from the binary's strings; no kept run exhibits either, so these frames are built):
+  // Agent 2.1.284 refuses a resolved slash command in two ways; the lines are copied verbatim from the
+  // binary's strings:
   //   userInvocable === false → `This skill can only be invoked by Claude, not directly by users. Ask
   //                             Claude to use the "<name>" skill for you.`
   //   an unresolvable name    → `Unknown command: /<name>`
+  // The refusal SHAPE these frames use — the line as the whole result text, with no live model spend — is
+  // read from the binary's code and UNMEASURED live: no kept run exhibits either line, so they are built.
   const INV = S1.result.context.availableSkills;
   const NOT_USER_INVOCABLE =
     'This skill can only be invoked by Claude, not directly by users. Ask Claude to use the "claude-code-internals" skill for you.';
-  it("the not-user-invocable refusal in the run's text demotes the channel to []", () => {
-    expect(slashInvokedSkillIds(S1.result.prompt, INV, [NOT_USER_INVOCABLE, ""])).toEqual([]);
+  const NO_SPEND = { "claude-sonnet-5": { inputTokens: 0, outputTokens: 0 } };
+  const SPENT = S1.result.modelUsage;
+  it("the not-user-invocable refusal as the result text, with no model spend, demotes the channel to []", () => {
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { resultText: NOT_USER_INVOCABLE, modelUsage: NO_SPEND })).toEqual([]);
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { resultText: `  ${NOT_USER_INVOCABLE}\n`, modelUsage: {} })).toEqual([]);
   });
-  it("`Unknown command: /<token>` demotes it too", () => {
-    expect(slashInvokedSkillIds(S1.result.prompt, INV, [undefined, "Unknown command: /claude-code-internals"])).toEqual([]);
+  it("`Unknown command: /<token>` as the result text demotes it too", () => {
+    const u = { modelUsage: NO_SPEND };
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { ...u, resultText: "Unknown command: /claude-code-internals" })).toEqual([]);
+    expect(
+      slashInvokedSkillIds(S1.result.prompt, INV, { ...u, resultText: "Unknown command: /claude-code-internals. Did you mean /x?" }),
+    ).toEqual([]);
   });
-  it("an Unknown-command line for a DIFFERENT token does not", () => {
-    expect(slashInvokedSkillIds(S1.result.prompt, INV, ["Unknown command: /other"])).toEqual([QUALIFIED]);
+  it("the token is anchored: a line for a longer or different name does not demote", () => {
+    const u = { modelUsage: NO_SPEND };
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { ...u, resultText: "Unknown command: /claude-code-internalsX" })).toEqual([
+      QUALIFIED,
+    ]);
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { ...u, resultText: "Unknown command: /other" })).toEqual([QUALIFIED]);
   });
-  it("the real s1 answer text does not demote", () => {
+  it("a refusal line that does not START the result text does not demote", () => {
+    expect(
+      slashInvokedSkillIds(S1.result.prompt, INV, { resultText: `The binary says: ${NOT_USER_INVOCABLE}`, modelUsage: NO_SPEND }),
+    ).toEqual([QUALIFIED]);
+  });
+  it("a live model that spent output tokens means the skill ran, whatever the text says", () => {
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { resultText: NOT_USER_INVOCABLE, modelUsage: SPENT })).toEqual([QUALIFIED]);
+  });
+  it("absent modelUsage cannot show zero spend, so it never demotes", () => {
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { resultText: NOT_USER_INVOCABLE })).toEqual([QUALIFIED]);
+  });
+  it("the real s1 record does not demote", () => {
     const answer = (S1.events.find((e: any) => e.type === "result") as { result: string }).result;
-    expect(slashInvokedSkillIds(S1.result.prompt, INV, [answer, answer])).toEqual([QUALIFIED]);
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, { resultText: answer, modelUsage: SPENT })).toEqual([QUALIFIED]);
   });
   it("end to end on replay: a refused slash is a real negative, so no_skill_triggered passes", async () => {
     const saved = process.stderr.write;
@@ -197,7 +262,7 @@ describe("a slash command the binary REFUSED is not an invocation", () => {
           parent_tool_use_id: null,
           message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: NOT_USER_INVOCABLE }] },
         },
-        { type: "result", subtype: "success", is_error: false, num_turns: 0, result: NOT_USER_INVOCABLE },
+        { type: "result", subtype: "success", is_error: false, num_turns: 0, result: NOT_USER_INVOCABLE, modelUsage: {} },
       ];
       const cassette: any = {
         scenario: {

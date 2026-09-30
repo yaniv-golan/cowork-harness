@@ -1462,10 +1462,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // The slash-command channel: a prompt starting `/<staged skill>` runs that skill with no Skill tool_use.
     // Derived ONCE from this turn's prompt and the init inventory, and fed to both the evaluate() ctx and the
     // RunResult below, so the grade and the record cannot disagree.
-    const slashInvokedSkills = slashInvokedSkillIds(scenario.prompt, record.context.availableSkills, [
-      record.resultText,
-      record.transcript,
-    ]);
+    const slashInvokedSkills = slashInvokedSkillIds(scenario.prompt, record.context.availableSkills, {
+      resultText: record.resultText,
+      modelUsage: record.modelUsage,
+    });
 
     // Surface dropped egress proxy-log lines as evidence health (collected in the finally above; applied here
     // where `record` is definitely assigned). #39
@@ -2710,10 +2710,10 @@ export function buildPartialResult(args: {
   // args.pluginSkillRoots).
   // Read BEFORE the enrichment below collapses an absent inventory to [] — a slash prompt over an inventory
   // init never delivered is "cannot tell", not "no staged skill answered".
-  const slashInvokedSkills = slashInvokedSkillIds(args.prompt, args.record.context?.availableSkills, [
-    args.record.resultText,
-    args.record.transcript,
-  ]);
+  const slashInvokedSkills = slashInvokedSkillIds(args.prompt, args.record.context?.availableSkills, {
+    resultText: args.record.resultText,
+    modelUsage: args.record.modelUsage,
+  });
   const availableSkillIds = args.record.context?.availableSkills?.map((s) => s.id) ?? [];
   args.record.context = {
     ...args.record.context,

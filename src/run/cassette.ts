@@ -8001,10 +8001,10 @@ export async function replayCassette(
     // The slash-command channel from the FROZEN prompt (the one the recorded events answer, not an edited
     // on-disk scenario) and the re-driven init inventory — the same derivation the live lane runs, so a
     // replay reports the value the recording did. One local for both the ctx and the RunResult.
-    const slashInvokedSkills = slashInvokedSkillIds(cassette.scenario.prompt, rec.context?.availableSkills, [
-      rec.resultText,
-      rec.transcript,
-    ]);
+    const slashInvokedSkills = slashInvokedSkillIds(cassette.scenario.prompt, rec.context?.availableSkills, {
+      resultText: rec.resultText,
+      modelUsage: rec.modelUsage,
+    });
     const assertCtx: AssertContext = {
       transcript: rec.transcript,
       toolsCalled: rec.toolsCalled,

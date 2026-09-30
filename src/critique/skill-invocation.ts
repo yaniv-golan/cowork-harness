@@ -83,29 +83,51 @@ export function slashCommandSkillInvocation(
 export function slashInvokedSkillIds(
   prompt: string | undefined,
   availableSkills: readonly { id: string }[] | undefined,
-  runTexts: readonly (string | undefined)[] = [],
+  run: SlashRunEvidence = {},
 ): string[] | undefined {
   const s = slashCommandSkillInvocation(prompt, availableSkills);
   if (s.kind !== "skill") return s.kind === "none" ? [] : undefined;
-  // The inventory says the token names a staged skill; the binary can still refuse to run it. Its refusal
-  // is the run's own answer text, so a run that carries one ran nothing.
+  // The inventory says the token names a staged skill; the binary can still refuse to run it.
   const token = /^\/(\S+)/.exec(prompt ?? "")?.[1] ?? "";
-  return slashCommandRefused(token, runTexts) ? [] : [s.id];
+  return slashCommandRefused(token, run) ? [] : [s.id];
 }
 
-/** The binary's own refusal lines for a slash command it would not run (agent 2.1.284, verbatim from its
- *  strings): a skill with `user-invocable: false`, and a name its command registry does not resolve. In
- *  print mode the refusal comes back as the turn's (synthetic) answer, so the run's result text and main
- *  transcript carry it — the same frozen frames a replay re-drives. */
+/** What the refusal check reads: the turn's result text and the result frame's per-model usage. Only
+ *  these two, in every lane (`resultText` live and replay, `finalMessage` on a persisted result), so the
+ *  lanes cannot disagree about a refusal. */
+export interface SlashRunEvidence {
+  resultText?: string;
+  modelUsage?: Record<string, unknown>;
+}
+
+/** Agent 2.1.284's refusal lines for a slash command it will not run, verbatim from its strings: a skill
+ *  with `user-invocable: false`, and a name its command registry does not resolve. */
 export const SLASH_REFUSED_NOT_USER_INVOCABLE = "This skill can only be invoked by Claude, not directly by users.";
 const SLASH_REFUSED_UNKNOWN = "Unknown command: /";
 
-export function slashCommandRefused(token: string, runTexts: readonly (string | undefined)[]): boolean {
-  return runTexts.some(
-    (t) =>
-      typeof t === "string" &&
-      (t.includes(SLASH_REFUSED_NOT_USER_INVOCABLE) || (token !== "" && t.includes(`${SLASH_REFUSED_UNKNOWN}${token}`))),
-  );
+/** Did the binary refuse the slash command, rather than run it? Refused only when BOTH hold:
+ *   1. the trimmed result text STARTS with a refusal line — the not-user-invocable sentence, or
+ *      `Unknown command: /<token>` ending there or at `.`/whitespace (so `/x` is not matched by `/xyz`).
+ *      A skill whose answer merely QUOTES either line (a skill explaining the binary would) is not a
+ *      refusal: the check was `includes` once, and it demoted exactly that real invocation;
+ *   2. no live model spent output tokens — a refusal is produced locally and spends nothing, while a
+ *      skill that ran (s1: a fork answering under a `<synthetic>` main loop) shows its model in
+ *      `modelUsage`. Absent `modelUsage` cannot show zero spend, so it never counts as a refusal.
+ *  UNMEASURED against a real refusal: the shape above is read from the binary's code, not observed in a
+ *  run (one run of a `user-invocable: false` skill would settle where the line lands). */
+export function slashCommandRefused(token: string, run: SlashRunEvidence): boolean {
+  const text = run.resultText?.trim();
+  if (!text || !run.modelUsage) return false;
+  const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const refusal =
+    text.startsWith(SLASH_REFUSED_NOT_USER_INVOCABLE) ||
+    (token !== "" && new RegExp(`^${SLASH_REFUSED_UNKNOWN}${esc}(?:$|[.\\s])`).test(text));
+  if (!refusal) return false;
+  return !Object.entries(run.modelUsage).some(([model, u]) => {
+    if (model.startsWith("<") && model.endsWith(">")) return false;
+    const out = (u as { outputTokens?: unknown } | null)?.outputTokens;
+    return typeof out === "number" && out > 0;
+  });
 }
 
 /** The `Skill` calls a SUB-AGENT made during the turn, by the skill id each named — or `undefined` when
@@ -187,11 +209,12 @@ export function recordedSlashInvokedSkills(r: {
   slashInvokedSkills?: string[];
   prompt?: string;
   finalMessage?: string;
+  modelUsage?: Record<string, unknown>;
   context?: { availableSkills?: readonly { id: string }[] };
 }): string[] | undefined {
   if (r.slashInvokedSkills !== undefined) return r.slashInvokedSkills;
   // A chat's `prompt` is only its seed — the REPL messages after it were never recorded — so re-deriving
   // from it would claim a negative the record cannot support.
   if (r.mode === "chat") return undefined;
-  return slashInvokedSkillIds(r.prompt, r.context?.availableSkills, [r.finalMessage]);
+  return slashInvokedSkillIds(r.prompt, r.context?.availableSkills, { resultText: r.finalMessage, modelUsage: r.modelUsage });
 }
