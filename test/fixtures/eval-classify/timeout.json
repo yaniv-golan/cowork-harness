@@ -1,0 +1,25 @@
+{
+  "scenario": "fixture-timeout",
+  "result": "error",
+  "errorSource": "timeout",
+  "models": [
+    "claude-opus-5"
+  ],
+  "fingerprint": {
+    "contentSig": "c7f8639dd4a8fee02f2c269ad8a1784df1ed1c688e8e895a30ca6365e759aee2"
+  },
+  "assertions": [
+    {
+      "assertion": {
+        "skill_available": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "skill_triggered": "<redacted>"
+      },
+      "pass": true
+    }
+  ]
+}

@@ -1456,6 +1456,7 @@ function extractFromAsar(
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
     for (const f of checkSpawnContractFacts(bundle, bundleFiles)) flag(unknown, f);
+    for (const f of checkVmAgentStagingFacts(bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates, bundleFiles);
@@ -1853,6 +1854,157 @@ const PATH_GATE_MAP_LITERAL = `\\{Read:"file_path",Write:"file_path",Edit:"file_
 
 const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Desktop 2.16120.0's canUseTool terminal wrapper, verified against its definition. Returns the reason
+ *  the wrapper is NOT the judged-input pin, or null when it is. The real body is:
+ *
+ *      function Xd(e,n,r){if(r?.behavior!=="allow"||!t.jI.includes(e))return r;
+ *        let i=r.updatedInput,a=…differing keys…;
+ *        return a.length>0&&t.EZ.warn(`…pinned to the judged input…`),{...r,updatedInput:n}}
+ *
+ *  Pinned: the non-allow/non-gated passthrough guard FIRST (keyed on the same tool set the PreToolUse
+ *  matcher spreads), exactly one other return, and that return ending in `{...<answer>,updatedInput:<judged>}`
+ *  where <judged> is the wrapper's own 2nd parameter. No `behavior:` literal may appear — the wrapper
+ *  post-processes the original's answer and must never manufacture one. */
+function pinWrapperDefect(chunk: string, fn: string, gatedSetRef: string): string | null {
+  const hdr = chunk.match(new RegExp(`(?<![\\w$])(async )?function ${reEsc(fn)}\\(([\\w$]+),([\\w$]+),([\\w$]+)\\)\\{`));
+  const body = hdr ? braceBodyOf(chunk, hdr[0].slice(hdr[1] ? 6 : 0, -1)) : null;
+  if (!hdr || body === null) return `the terminal wrapper \`${fn}\` has no resolvable 3-parameter definition in the hook chunk`;
+  if (hdr[1]) return `the terminal wrapper \`${fn}\` is async — the chain would hand finish() a Promise`;
+  const [, , tool, judged, answer] = hdr;
+  const guard = new RegExp(
+    `^if\\(${reEsc(answer)}\\?\\.behavior!=="allow"\\|\\|!${reEsc(gatedSetRef)}\\.includes\\(${reEsc(tool)}\\)\\)return ${reEsc(answer)};`,
+  );
+  const g = body.match(guard);
+  if (!g) return `the terminal wrapper \`${fn}\` no longer opens with the non-allow / non-path-gated passthrough guard over ${gatedSetRef}`;
+  // After the guard the body is EXACTLY one `let` and the return. Anything else — a loop, an extra
+  // statement, a second `let` — is room to undo the pin between the guard and the pinned return.
+  const stmts = splitTopLevelStatements(body.slice(g[0].length));
+  if (stmts.length !== 2 || !stmts[0].startsWith("let ") || !stmts[1].startsWith("return "))
+    return `the terminal wrapper \`${fn}\` is no longer exactly one \`let\` plus the pinned return after its guard — classify the new statements`;
+  // The judged input may only be READ: `Object.keys(<judged>)`, `<judged>[<id>]`, and the final pin. Any
+  // other use — an assignment, a member/index write, `delete`, or passing it to a call (Object.assign) —
+  // can rewrite what the pin returns while the tail still reads `updatedInput:<judged>`.
+  const useDefect = judgedInputUseDefect(body, judged);
+  if (useDefect) return `the terminal wrapper \`${fn}\` ${useDefect} — the pinned input may no longer be the judged one`;
+  if (/behavior:/.test(body))
+    return `the terminal wrapper \`${fn}\` constructs its own permission behavior — a blanket decision, not a pin`;
+  if ((body.match(/(?<![\w$])return(?![\w$])/g) ?? []).length !== 2)
+    return `the terminal wrapper \`${fn}\` gained or lost a return path — only the guard and the pinned answer are admitted`;
+  if (!new RegExp(`\\{\\.\\.\\.${reEsc(answer)},updatedInput:${reEsc(judged)}\\}$`).test(body))
+    return `the terminal wrapper \`${fn}\` no longer ends by pinning updatedInput to the judged input (${judged}) — an approval could carry a rewritten path`;
+  return null;
+}
+
+/** Desktop 2.16120.0's link 3 managed-ask branch. Before that release an org-policy "ask" on a path-gated
+ *  file tool was a hard DENY (`if(<pred>(e,r))return <log>,{behavior:"deny",…}`); from it, the branch
+ *  falls through into the original callback — the permission prompt — whose answer the terminal then pins:
+ *
+ *      if(t.ev(e,r)){t.EZ.info(`… → pre-fork approval path (managed ask)`);return}
+ *
+ *  `<pred>` must resolve to the organization-policy predicate. Returns the defect, or null. */
+function managedAskDefect(op: string, chunk: string, files: Map<string, string>, defining: string | undefined): string | null {
+  const fn = op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
+  const hdr = fn ? chunk.match(new RegExp(`(?<![\\w$])function ${reEsc(fn)}\\(([\\w$]+),[\\w$]+,([\\w$]+)(?:,[\\w$]+)*\\)\\{`)) : null;
+  const body = hdr ? braceBodyOf(chunk, hdr[0].slice(0, -1)) : null;
+  if (!fn || !hdr || body === null) return `link 3 (\`${op.slice(0, 40)}\`) has no resolvable definition in the hook chunk`;
+  const [, tool, reason] = hdr;
+  const resolve = (ref: string) => {
+    const r = resolveNamespaceRef(ref, chunk, files);
+    if (r) return r;
+    const local = defining ? exportLocalOf(defining, ref.slice(ref.lastIndexOf(".") + 1)) : null;
+    return local && defining ? { chunk: defining, local } : null;
+  };
+  const isOrgPolicy = (ref: string) => {
+    const r = resolve(ref);
+    const b = r ? braceBodyOf(r.chunk, `function ${r.local}(`) : null;
+    return !!b && b.includes(`"Organization policy requires approval for this tool."`);
+  };
+  const refs = [
+    ...new Set(
+      [...body.matchAll(new RegExp(`(?<![\\w$.])([\\w$]+\\.[\\w$]+)\\(${reEsc(tool)},${reEsc(reason)}\\)`, "g"))].map((m) => m[1]),
+    ),
+  ].filter(isOrgPolicy);
+  // EVERY textual call of the predicate counts, not only `if(P(…))` — a second, conjoined deny
+  // (`if(P(e,r)&&…)return{behavior:"deny"…}`) or a reason rewrite (`P(e,r)&&(r=…)`) is a second decision.
+  const calls = refs.length === 1 ? body.split(`${refs[0]}(`).length - 1 : 0;
+  if (refs.length !== 1 || calls !== 1)
+    return `link 3 \`${fn}\` no longer consults the organization-policy managed-ask predicate exactly once — the managed-ask outcome changed`;
+  const at = body.indexOf(`if(${refs[0]}(${tool},${reason}))`);
+  const branch = new RegExp(
+    `^if\\(${reEsc(refs[0])}\\(${reEsc(tool)},${reEsc(reason)}\\)\\)\\{[\\w$]+(?:\\.[\\w$]+)*\\(\`[^\`]*\`\\);return\\}`,
+  );
+  if (at < 0 || !branch.test(body.slice(at)))
+    return `link 3 \`${fn}\`'s managed-ask branch is no longer a logged fall-through into the permission prompt (it may deny or allow outright)`;
+  // Nothing ahead of the branch may decide, or change what it sees. Allowed: the leading
+  // `if(!<set>.includes(<tool>))return;` and plain bindings; not a valued return (a decision that makes
+  // the branch dead code for that input) and not a write to the tool name or the reason.
+  const before = body.slice(0, at).replace(new RegExp(`^if\\(![\\w$]+(?:\\.[\\w$]+)?\\.includes\\(${reEsc(tool)}\\)\\)return;`), "");
+  if (/(?<![\w$])return(?![\w$;}])/.test(before))
+    return `link 3 \`${fn}\` returns a decision ahead of its managed-ask branch — the fall-through may be dead code`;
+  if (writesIdentifier(before, tool) || writesIdentifier(before, reason))
+    return `link 3 \`${fn}\` rewrites the tool name or the decision reason ahead of its managed-ask branch`;
+  return null;
+}
+
+const ASSIGN_OP = `\\s*(?:\\*\\*|<<|>>>?|&&|\\|\\||\\?\\?|[-+*/%&|^])?=(?![=>])`;
+
+/** True when `text` assigns to `id` itself or to a member/index of it, updates it, or deletes from it. */
+function writesIdentifier(text: string, id: string): boolean {
+  const e = reEsc(id);
+  return (
+    new RegExp(`(?<![\\w$.])${e}(?![\\w$])${ASSIGN_OP}`).test(text) ||
+    new RegExp(`(?<![\\w$.])${e}(?![\\w$])(?:\\[[^\\]]*\\]|\\.[\\w$]+)+${ASSIGN_OP}`).test(text) ||
+    new RegExp(`(?:\\+\\+|--)${e}(?![\\w$])|(?<![\\w$.])${e}(?![\\w$])(?:\\[[^\\]]*\\]|\\.[\\w$]+)*(?:\\+\\+|--)`).test(text) ||
+    new RegExp(`(?<![\\w$])delete ${e}(?![\\w$])`).test(text)
+  );
+}
+
+/** Allow-list of how the pin wrapper may use its judged input; returns the violation, or null. */
+function judgedInputUseDefect(body: string, judged: string): string | null {
+  const e = reEsc(judged);
+  for (const m of body.matchAll(new RegExp(`(?<![\\w$.])${e}(?![\\w$])`, "g"))) {
+    const before = body.slice(0, m.index);
+    const after = body.slice(m.index! + judged.length);
+    if (before.endsWith("Object.keys(") && after.startsWith(")")) continue;
+    if (before.endsWith("updatedInput:") && after === "}") continue;
+    const idx = after.match(/^\[[\w$]+\]/);
+    if (
+      idx &&
+      !new RegExp(`^${ASSIGN_OP}`).test(after.slice(idx[0].length)) &&
+      !/^(?:\+\+|--)/.test(after.slice(idx[0].length)) &&
+      !/(?:\+\+|--|delete )$/.test(before)
+    )
+      continue;
+    return `uses its judged input (${judged}) other than by reading it (\`${body.slice(Math.max(0, m.index! - 12), m.index! + judged.length + 12)}\`)`;
+  }
+  return null;
+}
+
+/** Split a function body into its top-level `;`-separated statements (literal- and bracket-aware). */
+function splitTopLevelStatements(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let i = 0;
+  while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = text[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === ";" && depth === 0) {
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+    i++;
+  }
+  if (start < text.length) out.push(text.slice(start));
+  return out;
+}
+
 /** The single identifier bound to the path-gate map in `chunk`, or null.
  *
  *  Requires EXACTLY ONE binding. With two, "the keys and the values came from the same map" becomes
@@ -2135,14 +2287,35 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     const calleeOf = (op: string) => op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
     const bodyOf = (fn: string) => braceBodyOf(consuming, `async function ${fn}(`) ?? braceBodyOf(consuming, `function ${fn}(`);
 
-    // (1) TERMINAL: must be exactly a call to the saved original, nothing wrapping it. Anchored `$` so
+    // (1) TERMINAL: exactly one of two admitted forms — a bare call to the saved original, or the judged-
+    //     input pin wrapping an awaited call of it (below). Both anchored `$` so
     //     `(K(e,t,n)??{behavior:"allow"})` — a blanket allow on fall-through — cannot pass as "calls it".
     const last = operands[operands.length - 1];
-    if (!new RegExp(`^(?:await\\s+)?${orig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\([^)]*\\)$`).test(last))
+    // Desktop 2.16120.0: the terminal may instead be `<F>(a,b,await <orig>(a,b,c))`, where <F> re-pins an
+    // ALLOW's updatedInput to the input that was judged (a TOCTOU pin: the permission card's answer can
+    // no longer carry a rewritten path). Admitted ONLY while <F>'s body is exactly that pin — see
+    // pinWrapperDefect. The inner `await` is mandatory: an un-awaited Promise has no `.behavior`, so the
+    // wrapper's guard would pass it through untouched and the pin would silently stop applying.
+    const wrapped = last.match(new RegExp(`^([\\w$]+)\\(([\\w$]+),([\\w$]+),await ${reEsc(orig)}\\(\\2,\\3,[\\w$]+(?:\\.[\\w$]+)?\\)\\)$`));
+    const bareTerminal = new RegExp(`^(?:await\\s+)?${reEsc(orig)}\\([^)]*\\)$`).test(last);
+    if (!bareTerminal && !wrapped)
       miss(
         "canUseTool chain terminal",
-        `the chain no longer ends in a bare call to the saved original (${orig}) — fall-through may be rewritten`,
+        `the chain no longer ends in a bare call to the saved original (${orig}), nor in the judged-input pin wrapping an awaited call of it — fall-through may be rewritten`,
       );
+    if (wrapped) {
+      const spreadId = consuming.match(installRe)![1];
+      const defect = pinWrapperDefect(consuming, wrapped[1], spreadId);
+      if (defect) miss("canUseTool chain terminal", defect);
+      // Link 3 (the link right before the terminal) — the same release flipped its managed-ask branch from
+      // a hard deny to a fall-through into the original callback. Pinned only on the wrapped build, so an
+      // older asar (bare terminal, deny form) still syncs. A flip back to deny, to an allow, or the branch
+      // vanishing is a permission-semantics change that must be classified, not absorbed.
+      if (operands.length >= 2) {
+        const defect3 = managedAskDefect(operands[operands.length - 2], consuming, files, defining);
+        if (defect3) miss("canUseTool managed-ask", defect3);
+      }
+    }
 
     // (0) WRAPPER (Desktop 1.32352.0, block form only). The chain is no longer the whole decision: a
     //     pre-pass runs FIRST and can deny outright, and a post-pass can turn the chain's ALLOW into a
@@ -3150,6 +3323,12 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   // 0 times in agent 2.1.241 and 6 times each in 2.1.246, so this is a live contract, not a dormant one.
   "CLAUDE_CODE_PROMPT_CACHE_TTL",
   "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL",
+  // Desktop 2.16120.0. UNCONDITIONAL in W2 (`…API_TIMEOUT_MS:String(<t>),PYTHONDONTWRITEBYTECODE:"1",
+  // CLAUDE_CODE_DISABLE_CRON:…`), first-party and 3p alike — the only insert in that builder. Same call as
+  // its W2 neighbours: every Cowork session receives it ⇒ pin. Effect: python under the agent's process
+  // tree stops writing __pycache__/.pyc. (The key's OTHER occurrence in the asar is the env-FORWARD regex
+  // list for MCP server processes, not a spawn setter.)
+  "PYTHONDONTWRITEBYTECODE",
   "USE_LOCAL_OAUTH",
   "USE_STAGING_OAUTH",
 ];
@@ -3694,6 +3873,62 @@ export function partitionSpawnFlags(flags: string[]): { deltas: string[]; notes:
   return { deltas, notes };
 }
 
+/** The innermost `function NAME(…){…}` whose body spans `at`, or null. Scans headers backwards. */
+function enclosingFunctionName(chunk: string, at: number): string | null {
+  const heads = [...chunk.slice(0, at).matchAll(/(?<![\w$])function ([\w$]+)\([^)]*\)\{/g)];
+  for (let k = heads.length - 1, tried = 0; k >= 0 && tried < 2000; k--, tried++) {
+    const h = heads[k];
+    const open = h.index! + h[0].length - 1;
+    const close = matchBrace(chunk, open);
+    if (close > at) return h[1];
+  }
+  return null;
+}
+
+/**
+ * The staged agent binary the harness runs is put on disk by Desktop's VM start: `startVM` runs the VM
+ * bundle download and `prepareForVM` (the SDK/agent staging) together, as one step:
+ *
+ *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
+ *
+ * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
+ * On this account the local VM now boots only because the cloud lane's device bash starts it, so this is
+ * the harness's sole agent supply — if Desktop drops the call or moves it off the startVM path, the agent
+ * stops being staged with nothing else noticing. Fail closed.
+ */
+export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const miss = (why: string) => flags.push(`vm agent staging anchor missing — ${why}`);
+  const STEP = 'stepStarted("download_and_sdk_prepare")';
+  const sites = [...files.values()].flatMap((c) => {
+    const out: { chunk: string; at: number }[] = [];
+    for (let i = c.indexOf(STEP); i >= 0; i = c.indexOf(STEP, i + 1)) out.push({ chunk: c, at: i });
+    return out;
+  });
+  if (sites.length !== 1) {
+    miss(`expected exactly one download_and_sdk_prepare step, found ${sites.length}`);
+    return flags;
+  }
+  const { chunk, at } = sites[0];
+  const all = chunk.slice(at + STEP.length).match(/^;let\[[\w$]+,[\w$]+\]=await Promise\.all\(\[([^\]]*)\]\)/);
+  if (!all) miss("the step no longer awaits a Promise.all([...]) right after it starts");
+  // Exact arity: the real call passes one identifier (`EG.prepareForVM(t)`, both 2.9939.4 and 2.16120.0).
+  // An added argument (e.g. an options object) could switch the staging off while the call stays present.
+  else if (!/(?:^|,)[\w$]+(?:\.[\w$]+)?\.prepareForVM\([\w$]+\)(?:,|$)/.test(all[1]))
+    miss("the download_and_sdk_prepare Promise.all no longer runs prepareForVM(<one argument>) — the agent binary may no longer be staged");
+  const holder = enclosingFunctionName(chunk, at);
+  const startChunk = [...files.values()].find((c) => /(?<![\w$])startVM:\(\)=>[\w$]+/.test(c));
+  const start = startChunk ? startChunk.match(/(?<![\w$])startVM:\(\)=>([\w$]+)/)![1] : null;
+  if (!holder) miss("the download_and_sdk_prepare step is not inside a resolvable function");
+  else if (!start || !startChunk) miss("no chunk exports startVM");
+  else if (holder !== start) {
+    const body = braceBodyOf(startChunk, `async function ${start}(`) ?? braceBodyOf(startChunk, `function ${start}(`);
+    if (!body || !new RegExp(`(?<![\\w$.])${reEsc(holder)}\\(`).test(body))
+      miss(`the download_and_sdk_prepare step (in ${holder}) is no longer reached from startVM (${start})`);
+  }
+  return flags;
+}
+
 /**
  * S-tier sentinel: the structural/curated spawn facts the generator does NOT produce (scalar options,
  * tools/allowedTools heads + tail-guards, the FnA delete def+application, the negative invariant, the
@@ -3860,16 +4095,51 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           const wrap = toolsSite.match(
             new RegExp(`function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`),
           );
+          // Desktop 2.16120.0: the sessionType term may instead be `(<s>.sessionType===void 0||<s>.sessionType==="scheduled")`
+          // with the scheduledTaskId term DROPPED — the scheduled-run restriction moved upstream (checked
+          // below). The body is now anchored at its END too (`…&&!<hipaa>()}`): as a prefix match, a
+          // widening appended after the last conjunct (`||!0`) passed silently.
+          const pred = wrap
+            ? toolsSite.match(
+                new RegExp(
+                  `function ${reEsc(wrap[3])}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&(?:\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0|(\\(\\1\\.sessionType===void 0\\|\\|\\1\\.sessionType==="scheduled"\\))(?:&&\\1\\.scheduledTaskId===void 0)?)&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?![\\w$]+(?:\\.[\\w$]+)?\\(\\)\\}`,
+                ),
+              )
+            : null;
           if (!wrap) miss("S6c Artifact gate", "the attended-turn wrapper body changed — _isUnattended may no longer restrict Artifact");
-          else if (
-            !new RegExp(
-              `function ${reEsc(wrap[3])}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?`,
-            ).test(toolsSite)
-          )
+          else if (!pred)
             miss(
               "S6c Artifact gate",
-              "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isBridgeSession/isDispatchChild before admitting the spread",
+              "the frame-artifacts predicate changed (a term was dropped, reordered or appended) — re-verify sessionType/scheduledTaskId/isBridgeSession/isDispatchChild before admitting the spread",
             );
+          else if (pred[3] !== undefined) {
+            // Scheduled form: scheduled runs keep the server's frameArtifactsEnabled only while
+            // `scheduledRunFrameArtifacts` (a key of coworkRuntimeConfig, gate 1978029737) allows it:
+            //     e.scheduledTaskId&&!xp()&&(e.frameArtifactsEnabled=void 0)
+            //     function xp(){return t.OU()&&t.AU("1978029737","scheduledRunFrameArtifacts",!0,t.TQ())}
+            // Without that clear site the predicate alone admits every scheduled run.
+            // ACCEPTED LIMIT: this is a PRESENCE check. It proves the gated clear exists, not that nothing
+            // later in the session-start path sets frameArtifactsEnabled back — an unconditional re-enable
+            // placed after the clear (`…=void 0),<s>.scheduledTaskId&&(<s>.frameArtifactsEnabled=!0)`)
+            // is NOT detected. Closing it needs flow analysis of the session-start function.
+            const clear = toolsSite.match(/([\w$]+)\.scheduledTaskId&&!([\w$]+)\(\)&&\(\1\.frameArtifactsEnabled=void 0\)/);
+            const readerBody = clear ? braceBodyOf(toolsSite, `function ${clear[2]}(`) : null;
+            if (!clear)
+              miss(
+                "S6c Artifact gate",
+                "the predicate admits scheduled sessions but the upstream scheduledTaskId clear of frameArtifactsEnabled is gone — scheduled runs would get Artifact unconditionally",
+              );
+            else if (
+              readerBody === null ||
+              !/^return [\w$]+(?:\.[\w$]+)?\(\)&&[\w$]+(?:\.[\w$]+)?\("1978029737","scheduledRunFrameArtifacts",!0(?:,[^;]*)?\)$/.test(
+                readerBody,
+              )
+            )
+              miss(
+                "S6c Artifact gate",
+                `the scheduled-run clear is no longer gated on key scheduledRunFrameArtifacts of gate 1978029737 (reader ${clear[2]}) — reclassify before admitting scheduled Artifact`,
+              );
+          }
           // S6e (B17): the trailing conjunct must still be the HIPAA-restriction reader. Resolving it is
           // what the old hard-coded `.r()` only pretended to do — that regex accepted ANY single-letter
           // member, so re-pointing the conjunct at a different export would have passed silently.

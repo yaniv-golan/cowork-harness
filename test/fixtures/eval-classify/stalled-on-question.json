@@ -1,0 +1,221 @@
+{
+  "scenario": "fixture-stalled-on-question",
+  "result": "success",
+  "resultSubtype": "success",
+  "stalledOnQuestion": true,
+  "models": [
+    "claude-sonnet-4-6"
+  ],
+  "modelFallbacks": [],
+  "modelPinHonored": true,
+  "fingerprint": {
+    "contentSig": "6cf01deee33aebad2b926be598f068ea0287f2eacefa8d54fda5735ab67b9dbe"
+  },
+  "assertions": [
+    {
+      "assertion": {
+        "tool_result_not_contains": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "user_visible_artifact": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "file_exists": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "file_exists": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_json": {
+          "artifact": "<redacted>",
+          "path": "<redacted>",
+          "gt": 0
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "subagent_dispatched": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "subagent_file_write": {
+          "path_suffix": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "subagent_dispatch_healthy": {
+          "type": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "transcript_matches": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "skill_triggered": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "computer_links_resolve": true
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "no_delete_in_outputs": true
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "subagent_tool_absent": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "gate_answers_delivered": true
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "questions_count_max": 10
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "dispatch_count_max": 6
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "max_turns": 140
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "tool_calls_max": 130
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "no_unexpected_files": [
+          "<redacted>",
+          "<redacted>",
+          "<redacted>",
+          "<redacted>"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "gate_answer_count_min": 1
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "transcript_not_matches": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "artifact_text": {
+          "artifact": "<redacted>",
+          "not_matches": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_text": {
+          "artifact": "<redacted>",
+          "not_matches": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_text": {
+          "artifact": "<redacted>",
+          "not_matches": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_text": {
+          "artifact": "<redacted>",
+          "not_matches": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_text": {
+          "artifact": "<redacted>",
+          "not_matches": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_text": {
+          "artifact": "<redacted>",
+          "not_matches": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "present_files_called": true
+      },
+      "pass": false
+    }
+  ]
+}

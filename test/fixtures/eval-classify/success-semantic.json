@@ -1,0 +1,77 @@
+{
+  "scenario": "fixture-success-semantic",
+  "result": "success",
+  "resultSubtype": "success",
+  "models": [
+    "claude-sonnet-5"
+  ],
+  "modelFallbacks": [],
+  "modelPinHonored": true,
+  "fingerprint": {
+    "contentSig": "3cdae94a1797dc3b298dbcb181ca1b7a09f03ee56f72f08b71715543552cbbee"
+  },
+  "assertions": [
+    {
+      "assertion": {
+        "skill_triggered": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "tool_no_error": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "max_tool_errors": 0
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "semantic_matches": {
+          "rubric": [
+            "claim 1",
+            "claim 2",
+            "claim 3",
+            "claim 4",
+            "claim 5"
+          ],
+          "min_pass": 3,
+          "judge_model": "<redacted>",
+          "include_subagent_text": false
+        }
+      },
+      "pass": true,
+      "semanticClaims": [
+        {
+          "index": 0,
+          "claim": "claim 1",
+          "pass": true
+        },
+        {
+          "index": 1,
+          "claim": "claim 2",
+          "pass": true
+        },
+        {
+          "index": 2,
+          "claim": "claim 3",
+          "pass": true
+        },
+        {
+          "index": 3,
+          "claim": "claim 4",
+          "pass": true
+        },
+        {
+          "index": 4,
+          "claim": "claim 5",
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

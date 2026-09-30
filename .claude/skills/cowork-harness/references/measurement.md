@@ -1,6 +1,6 @@
 # Measurement
 
-Tracks `cowork-harness 4.1.1` (baseline `desktop-2.9939.4`). Read it before comparing runs: `--repeat`, `--ablate-skill`, and the hygiene that keeps a batch valid.
+Tracks `cowork-harness 4.1.1` (baseline `desktop-2.16120.0`). Read it before comparing runs: `--repeat`, `--ablate-skill`, and the hygiene that keeps a batch valid.
 
 ### Measure — before/after, with/without (`--repeat`, `--ablate-skill`)
 

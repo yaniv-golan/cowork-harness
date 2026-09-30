@@ -106,7 +106,7 @@
   "preRunHashes": {},
   "scenarioSource": "dispatch-shell.yaml",
   "fingerprint": {
-    "baseline": "2.9939.4",
+    "baseline": "2.16120.0",
     "hashFormat": "jcs1",
     "promptAssetsHash": "267cb799c2e18b49"
   },
