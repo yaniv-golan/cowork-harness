@@ -181,6 +181,10 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
     `tmux` server, `code .`, or an ssh `ControlPersist` master left by a `git fetch` over ssh. A
     `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
     the next. On Windows only the agent process itself is stopped, as before.
+  - Each stop lists the host's processes with `ps` first, allowing up to 10 s and one more try after a
+    timeout, so a busy machine does not end the stop on an older listing. When the listing still fails, a
+    `::warning:: [teardown] could not list processes` line says so. A second Ctrl-C reuses the last listing
+    and exits at once.
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
   `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
   session file declares, not the substituted candidate the cell actually mounted, so every cell looked

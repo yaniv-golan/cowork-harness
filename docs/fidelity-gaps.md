@@ -774,6 +774,13 @@ that have already detached from the agent, found by an orphan sweep. Each proces
 the sweep off. `container` and `microvm` are unaffected: their agent and its processes end with the container
 or the guest.
 
+Each stop acts on a fresh `ps` listing of the host's processes, taken before the grace period starts. A listing
+may take up to 10 s and is taken once more if it times out (a busy Mac with ~1,300 processes has been measured
+at up to 2.4 s). If it still fails, the harness prints `::warning:: [teardown] could not list processes (ps
+failed)` and stops what an earlier listing showed, so a process the agent started after that listing can keep
+running. A second Ctrl-C does not list processes again; it acts on the last listing at once. Pressed in the
+terminal while the first stop's listing is still running, it also ends that listing, which then counts as failed.
+
 What differs from Cowork, and what the sweep can miss or wrongly kill:
 
 | Case | Effect |
