@@ -156,7 +156,8 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   everything it started and exits `130`, without a `result.json` — as an interrupted `run` does. Before, it
   took effect only after the agent finished the turn. A Ctrl-C at the `you>` prompt still ends the session
   and writes its result, and a first Ctrl-C while that result is being written waits for it (a second one
-  exits at once).
+  exits at once; a second signal sent with `kill` first waits for a process listing already running, up to
+  10 s).
 - **`replay --help`, `verify-cassettes --help` and the CI guide name the scriptable success signal.** In
   text mode both commands print nothing to stdout by design, and the exit code is the only signal. For a
   script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
@@ -187,10 +188,11 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
     `tmux` server, `code .`, or an ssh `ControlPersist` master left by a `git fetch` over ssh. A
     `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
     the next. On Windows only the agent process itself is stopped, as before.
-  - Each stop lists the host's processes with `ps` first, allowing up to 10 s and one more try after a
-    timeout, so a busy machine does not end the stop on an older listing. When the listing still fails, a
-    `::warning:: [teardown] could not list processes` line says so. A second Ctrl-C reuses the last listing
-    and exits at once.
+  - Each stop lists the host's processes with `ps` first, allowing up to 10 s, so a busy machine does not
+    end the stop on an older listing. At the end of a run a listing that timed out is taken once more;
+    after Ctrl-C or SIGTERM it is not. When the listing fails, a `::warning:: [teardown] could not list
+    processes` line says so. A second Ctrl-C reuses the last listing and exits at once; a second signal
+    sent with `kill` first waits for a listing already running, up to 10 s.
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
   `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
   session file declares, not the substituted candidate the cell actually mounted, so every cell looked

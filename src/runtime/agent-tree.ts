@@ -2,7 +2,7 @@ import { execFile, spawnSync, type SpawnOptions } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { sep } from "node:path";
 import { warn as ioWarn } from "../io.js";
-import { TERMINATION_GRACE_MS, type TerminableAgent } from "../termination.js";
+import { TERMINATION_GRACE_MS, terminationRequested, type TerminableAgent } from "../termination.js";
 
 /**
  * Stopping a host agent stops everything it started.
@@ -53,7 +53,8 @@ export const NO_ORPHAN_SWEEP_ENV = "COWORK_HARNESS_NO_ORPHAN_SWEEP";
  * The synchronous listing (at construction, on a `result` frame, and in every terminate/force-kill except a
  * second signal's) is what the stop acts on: when it fails, the stop falls back to an earlier listing and a
  * process started since then can survive. `ps -A` has been measured at 1.4–2.4 s on a loaded Mac with ~1,300
- * processes, so the limit is 10 s — about four times that — and a listing that timed out is taken once more.
+ * processes, so the limit is 10 s — about four times that — and a listing that timed out is taken once more
+ * (not once a signal is being handled; see `refreshAt`).
  * The listing runs before the grace period starts, so it never shortens the Desktop-matched settle and grace
  * windows; it does delay the start of the stop by that long.
  */
@@ -147,8 +148,10 @@ export interface AgentTreeDeps {
   env: NodeJS.ProcessEnv;
   now(): number;
   /** One consistent process listing, or undefined when `ps` failed. Synchronous: for the signal handler and
-   *  the teardown, which must not yield. */
-  snapshot(): ProcRow[] | undefined;
+   *  the teardown, which must not yield. `attempts` bounds the retries after a timeout. */
+  snapshot(o?: { attempts?: number }): ProcRow[] | undefined;
+  /** A termination signal is being handled (the termination handler owns the exit). */
+  signalled(): boolean;
   /** The same listing without blocking the event loop — the drive loop's per-frame refresh. */
   snapshotAsync(): Promise<ProcRow[] | undefined>;
   /** `process.kill`; a negative target is a process group. Must not throw. */
@@ -190,7 +193,8 @@ function defaultDeps(): AgentTreeDeps {
     uid: typeof process.getuid === "function" ? process.getuid() : -1,
     env: process.env,
     now: () => Date.now(),
-    snapshot: () => listProcessesSync(),
+    snapshot: (o) => listProcessesSync(o),
+    signalled: () => terminationRequested() !== undefined,
     snapshotAsync: () =>
       new Promise((res) =>
         execFile(
@@ -389,11 +393,13 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       });
   };
 
-  /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). */
-  const refreshAt = (t: number): boolean => {
+  /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). `stopping`: a
+   *  terminate/force-kill listing. Once a signal is being handled it gets ONE attempt: a second signal sent with
+   *  `kill` cannot be handled while a synchronous listing runs, so a retry would double how long it waits. */
+  const refreshAt = (t: number, stopping = false): boolean => {
     lastRefreshAt = t;
     syncListings++;
-    const rows = d.snapshot();
+    const rows = stopping && d.signalled() ? d.snapshot({ attempts: 1 }) : d.snapshot();
     if (!rows) return false;
     lastRows = rows;
     extend(rows);
@@ -406,10 +412,12 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
   const warnNoListing = () => {
     if (listingWarned) return;
     listingWarned = true;
+    // During a signal a second terminal Ctrl-C reaches the running `ps` too and ends it: not a `ps` fault.
+    const why = d.signalled() ? "ps failed or was interrupted" : "ps failed";
     d.warn(
       lastRows
-        ? `::warning:: [teardown] could not list processes (ps failed); stopping what the agent started from an earlier listing — a process it started since then may keep running\n`
-        : `::warning:: [teardown] could not list processes (ps failed); stopping the agent by pid only — processes it started may keep running\n`,
+        ? `::warning:: [teardown] could not list processes (${why}); stopping what the agent started from an earlier listing — a process it started since then may keep running\n`
+        : `::warning:: [teardown] could not list processes (${why}); stopping the agent by pid only — processes it started may keep running\n`,
     );
   };
 
@@ -511,7 +519,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       refreshAsyncAt(t);
     },
     terminate: () => {
-      if (!refreshAt(d.now())) warnNoListing();
+      if (!refreshAt(d.now(), true)) warnNoListing();
       try {
         child.stdin?.end();
       } catch {
@@ -523,7 +531,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     // Unconditional: it runs whether or not the leader is alive, because what it exists to reach — the tracked
     // groups and the orphans — outlives the leader. A second signal passes `fast` and reuses the last listing.
     forceKill: (o?: { fast?: boolean }) => {
-      if (!o?.fast && !refreshAt(d.now())) warnNoListing();
+      if (!o?.fast && !refreshAt(d.now(), true)) warnNoListing();
       const rows = lastRows;
       if (rows) {
         const reached = signalTracked(rows, "SIGKILL");

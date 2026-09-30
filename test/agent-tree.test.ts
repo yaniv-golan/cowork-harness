@@ -682,3 +682,45 @@ describe.skipIf(process.platform === "win32")("listProcessesSync — the teardow
     expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(1);
   });
 });
+
+// Once a signal is being handled, a listing that times out is not taken again: a second signal sent with
+// `kill` cannot be handled while a synchronous listing runs, so the signal path allows one attempt only.
+describe("the signal path lists with one attempt; the normal teardown with the retry", () => {
+  function recording(signalled: boolean) {
+    const h = harness();
+    const calls: Array<{ attempts?: number } | undefined> = [];
+    const snap = h.deps.snapshot!;
+    h.deps.snapshot = (o?: { attempts?: number }) => {
+      calls.push(o);
+      return snap(o);
+    };
+    h.deps.signalled = () => signalled;
+    return { h, calls };
+  }
+
+  it("after a signal: terminate() and forceKill() pass attempts: 1", () => {
+    const { h, calls } = recording(true);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    calls.length = 0;
+    a.terminate();
+    a.forceKill();
+    expect(calls).toEqual([{ attempts: 1 }, { attempts: 1 }]);
+  });
+
+  it("on the normal teardown: the default attempts (the retry) apply", () => {
+    const { h, calls } = recording(false);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    calls.length = 0;
+    a.terminate();
+    a.forceKill();
+    expect(calls.every((c) => c?.attempts === undefined)).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("a listing that fails after a signal says it may have been interrupted", () => {
+    const { h } = recording(true);
+    h.deps.snapshot = () => undefined; // e.g. a terminal Ctrl-C also reached the running `ps`
+    agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps).terminate();
+    expect(h.warnings.join("")).toMatch(/could not list processes \(ps failed or was interrupted\)/);
+  });
+});
