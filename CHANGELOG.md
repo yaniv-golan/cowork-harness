@@ -6,57 +6,84 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
+per-claim judge rationales, a fingerprint of what the judge was shown, and the judge's and the LLM
+decider's spend on every graded run. Full `/claude-api hillclimb` integration is coming in 4.3.
+
 ### Added
 
 - **`eval` — paired A/B evaluation of a skill edit (EXPERIMENTAL).**
   `cowork-harness eval <scenario.yaml | dir/> --arm before=<source> --arm after=<source>` runs every
   scenario with each of two versions of the session's `plugins.local_plugins` plugin and compares how often
   each assertion and each `semantic_matches` rubric claim passes. `eval report <eval-dir>` rebuilds the
-  report from the eval directory at no cost, byte-identical to the one the eval wrote. See
-  [docs/eval.md](./docs/eval.md).
+  report from the eval directory at no cost. See [docs/eval.md](./docs/eval.md); the companion skill
+  covers it in `references/eval.md` and Recipe 5.
   - An arm is a directory or `git:<ref>:<path>`. Each is copied once, before the first run, and every rep
     mounts the copy; a `git:` arm is read file by file from the commit.
-  - Runs are interleaved (A B, then B A, …), 5 reps per arm by default, with the agent and judge models
-    required to be concrete ids (`--model`, `--judge-model`).
+  - Runs are interleaved (A B, then B A, …), 5 reps per arm by default. The agent model (`--model`, else
+    the session's `model:`) and every judge model must be concrete ids, not aliases; `--judge-model` pins
+    one judge for every `semantic_matches` assert.
   - Each row reports B − A with a 95% Newcombe interval and a two-sided Fisher exact p, labelled
     `confirmed`/`possible` drop or rise (Benjamini-Hochberg by default, `--correction holm`),
     `no detectable change` with its minimum detectable difference, `underpowered` or `insufficient`.
     `--holdout` reports scenarios you did not tune against in their own section.
   - Each job's run id has the ordinary `local_…` shape and names neither the eval nor the arm, so both arms
-    see the same working directory shape and system prompt.
-  - Refused before any run (exit `2`): alias models, an eval directory inside a git work tree, identical
-    arms (unless `--allow-identical-arms`), an arm that contains the eval's own scenario or session files
-    (a symlink included), an `evals.json` or a symlink resolving outside it, and a scenario input a run
-    would refuse. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
+    see the same working directory shape and system prompt. The runs are ordinary indexed runs labelled
+    `eval:<eval-id>:<arm>`: `stats <scenario>` pools both arms, and `--group-by label` separates them.
+  - Refused before any run (exit `2`): alias models, `--reps` below 4 without `--allow-underpowered`, an
+    eval directory inside a git work tree, identical arms (unless `--allow-identical-arms`), an arm that
+    contains the eval's own scenario or session files (a symlink included), an `evals.json` or a symlink
+    resolving outside it, a scenario input a run would refuse, and a `--fail-on confirmed` that no row
+    could reach. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
   - Exit `0` when the eval completed, whatever drops the rows show; `--fail-on possible|confirmed` opts in
     to exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
-    differed across reps, and `3` when an arm snapshot could not be copied or failed its staging preflight. The report format, labels and
-    statistical defaults are experimental
+    differed across reps, and `3` when an arm snapshot could not be copied or failed its staging
+    preflight. The report format, labels and statistical defaults are experimental
     ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
 - **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so
-  `--keep-last` applies to them; `prune` warns that the eval's report links now point at deleted runs
+  `--keep-last` applies to them; `prune` warns that the eval's report links point at deleted runs
   (`eval report` still rebuilds the report from the eval dir).
-- **`semantic_matches` judge cost and prompt identity are recorded.** Each graded assert now carries:
-  - `RunResult.assertions[].judgeCostUsd`: the judge's spend, summed over both attempts when a malformed
-    grade is retried.
-  - `judgePromptHash`: 16 hex characters identifying the grading-prompt template. Two runs graded under
-    different prompt wording should not be compared.
-
-  The judge cost was previously discarded. It is recorded beside `cost.usd`, which remains the agent's
-  spend alone, and is absent (not `0`) when no judge call reported a cost. `stats` totals, percentiles
-  and `--max-budget-usd` still count the agent's spend only. The run index gains a matching
-  `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
-  cost to recover, so their rows stay without it, even after `stats --reindex`.
+- **Harness-side model spend is recorded beside the agent's.** `cost.usd` stays the agent's spend alone,
+  and `stats` totals, percentiles, `max_cost_usd` and `--max-budget-usd` still count only it.
+  - `RunResult.assertions[].judgeCostUsd` and `judgeUsage` (tokens): what the `semantic_matches` judge
+    spent grading that assert, summed over both attempts when a malformed grade is retried.
+  - `RunResult.deciderCostUsd` and `deciderUsage`: what the LLM decider (`on_unanswered: llm` /
+    `--decider-llm`) spent, summed over every completed call, including the call on a gate that then
+    failed to bind on a salvaged partial run. A call that threw and the transport's internal retries after
+    a failed exit report nothing and are not counted, so the figure is a floor.
+  - Each is absent (not `0`) when no call was priced. The run index gains `judgeCostUsd` (the sum over the
+    run's asserts) and `deciderCostUsd` per row, and `stats --runs` shows them beside each run's cost:
+    `judge=$…` and `decider=$…` in text, `judgeCostUsd`/`deciderCostUsd` on each JSON `runs[]` entry.
+  - Runs made before this release have no such spend to recover, so their rows stay without it, even
+    after `stats --reindex`.
+- **`semantic_matches` records what the judge was shown and under which prompt.** Each graded assert
+  carries:
+  - `assertions[].judgePromptHash`: 16 hex characters identifying the grading-prompt template. Two runs
+    graded under different prompt wording should not be compared.
+  - `assertions[].judgedDoc`: `{sha256, sections: [{kind, path?, sha256, chars}]}`, a fingerprint of the
+    exact document the judge received after scrubbing and every cap, part by part (`final`, `transcript`,
+    `subagent`, `authored` with its path, `scratch_note`, `health`). A later re-grade can compare against
+    it to prove it showed the judge the same bytes. It is recorded on an invalid grade too.
 - **`semantic_matches` records the judge's reason for each claim.** Each entry of
-  `RunResult.assertions[].semanticClaims[]` can now carry `rationale`: one sentence naming the evidence
-  for a pass, or what is missing for a fail. A failed assert's footer prints the rationale under each
-  failed claim.
-  - It is untrusted model text that can quote the judged document. Control characters are collapsed to spaces,
-    secrets are scrubbed, and it is then capped at 400 characters.
+  `RunResult.assertions[].semanticClaims[]` can carry `rationale`: one sentence naming the evidence for a
+  pass, or what is missing for a fail. A failed assert's footer prints the rationale under each failed
+  claim.
+  - It is untrusted model text that can quote the judged document. Control characters are collapsed to
+    spaces, secrets are scrubbed, and it is then capped at 400 characters.
   - It is advisory: its content never changes `pass`. A missing or non-string rationale is simply absent
     and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
     quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
     A literal newline or tab inside a rationale is tolerated.
+- **`RunResult.authoredCapture`** records the authored-file capture a live run made
+  (`{perFileBytes, totalBytes, scratchpadWalked}`), so the judged document's authored-file sections can be
+  recomposed under the same budget later.
+- **`RunResult.apiRetries`** counts the agent's own retried model calls, keeping the main loop and
+  sub-agents apart: `count`/`delayMs` from the `system` `api_retry` events, and
+  `subagentCount`/`subagentDelayMs` from the `tool_progress` frames that carry `subagent_retry` (the frame
+  sent when a retry resolves is not counted). Sub-agents run concurrently, so `subagentDelayMs` is backoff
+  summed across agents, not elapsed time; never add it to `delayMs`. All zeros means a stream was observed
+  with no retry; absent means none was observed (an agent that exited before its stream began, or a
+  cassette that could not be replayed to the end).
 - **`verify-cassettes` and `replay` note a cassette whose recording agent differs from the one its
   baseline pins for that tier.** The agent version is read from the recording's own `system/init` event
   (`claude_code_version`) and compared per tier with the baseline named in `fingerprint.baseline`:
@@ -76,46 +103,10 @@ All notable changes to this project are documented here. The format is based on
   line per cassette on stderr, under `--output-format json` too. Neither changes `ok` or the exit code. It
   works on existing cassettes without a re-record, and says nothing when the event carries no version or
   the baseline is not a committed one.
-- **The LLM decider's spend is recorded.** A run answered by the LLM decider (`on_unanswered: llm` /
-  `--decider-llm`) now carries `RunResult.deciderCostUsd` and `deciderUsage` (tokens): the usage every
-  completed decider call reported, including the call on a gate that then failed to bind on a salvaged
-  partial run. A call that threw and the transport's internal retries after a failed exit report nothing
-  and are not counted, so the figure is a floor. Like the judge's, it sits beside `cost.usd` and is never
-  added to it, and it is absent (not `0`) when no LLM decider answered or no call was priced. The run index gains `deciderCostUsd` per row.
-- **`stats --runs` shows harness-side spend beside each run's cost:** `judge=$…` and `decider=$…` in text,
-  `judgeCostUsd`/`deciderCostUsd` on each JSON `runs[]` entry. Totals and percentiles are unchanged.
-- **`semantic_matches` records the judge's tokens and what it was shown.** Each graded assert now carries:
-  - `assertions[].judgeUsage`: the judge's tokens, summed over both attempts when the call completed (the
-    same basis as `judgeCostUsd`).
-  - `assertions[].judgedDoc`: `{sha256, sections: [{kind, path?, sha256, chars}]}`, a fingerprint of the
-    exact document the judge received after scrubbing and every cap, part by part (`final`, `transcript`,
-    `subagent`, `authored` with its path, `scratch_note`, `health`). A later re-grade can compare against
-    it to prove it showed the judge the same bytes. It is recorded on an invalid grade too.
-- **`RunResult.authoredCapture`** records the authored-file capture a live run made
-  (`{perFileBytes, totalBytes, scratchpadWalked}`), so the judged document's authored-file sections can be
-  recomposed under the same budget later.
-- **`RunResult.apiRetries`** counts the agent's own retried model calls, which were previously ignored,
-  keeping the main loop and sub-agents apart: `count`/`delayMs` from the `system` `api_retry` events, and
-  `subagentCount`/`subagentDelayMs` from the `tool_progress` frames that carry `subagent_retry` (the frame
-  sent when a retry resolves is not counted). Sub-agents run concurrently, so `subagentDelayMs` is backoff
-  summed across agents, not elapsed time; never add it to `delayMs`. All zeros means a stream was observed
-  with no retry; absent means none was observed (an agent that exited before its stream began, or a
-  cassette that could not be replayed to the end).
 
 ### Changed
 
-- **The `semantic_matches` judge prompt now asks for a rationale before each verdict,** and tells the judge
-  to treat the candidate answer as data rather than instructions. Grades against the same rubric may
-  shift, so `judgePromptHash` changes. Compare before/after only between runs that share
-  `judgePromptHash`.
-- **A `semantic_matches` judge reply with a malformed `{"results": …}` group next to a valid grade is now
-  ambiguous and graded invalid** (retried once, then `judgeInvalid`). Before, the valid group was used. A
-  quote inside the judge's text could split its real grade, leaving a `{"results": …}` object quoted from
-  the judged document as the only valid group. A partial restatement of some claims is skipped when it
-  agrees with the full grade and is ambiguous when it contradicts it. An echo of the prompt's output
-  template, even a reformatted one, is still skipped.
-
-- **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), now what `latest` resolves to.
+- **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), which `latest` resolves to.
   - The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
     origin are unchanged from `desktop-2.9939.4`.
   - The recorded changes: `spawn.env` and `spawnEnvKeys` gain `PYTHONDONTWRITEBYTECODE` (below),
@@ -132,73 +123,51 @@ All notable changes to this project are documented here. The format is based on
   - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: none of them runs Python that
     could write bytecode, so the one spawn-env addition cannot change what they recorded.
     `verify-cassettes` and `replay --strict` pass on them.
-- **`PYTHONDONTWRITEBYTECODE=1` is now set in the agent spawn env**, as Desktop 2.16120.0 does for every
+- **`PYTHONDONTWRITEBYTECODE=1` is set in the agent spawn env**, as Desktop 2.16120.0 does for every
   Cowork session. On `container` and `microvm`, where the agent's own Bash runs, Python run by the agent
-  or a skill's scripts no longer writes `__pycache__`/`.pyc` files into mounted folders or outputs. On
+  or a skill's scripts does not write `__pycache__`/`.pyc` files into mounted folders or outputs. On
   `hostloop` it reaches the agent process, and the shell sidecar keeps its proxy-only env — as Desktop's
   host-loop VM bash gets `TZ` only. It comes from the pinned baseline, so a scenario pinned to an older
   baseline does not get it.
-- **`replay --help`, `verify-cassettes --help` and the CI guide now name the scriptable success signal.**
-  In text mode both commands print nothing to stdout by design, and the exit code is the only signal.
-  For a script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
-  envelope's `ok`, for example with `jq -e '.ok'`.
-- **The `lint-skill` size caps are re-verified against agent 2.1.284.** The values are unchanged. The
-  agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
-  and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
-
+- **The `semantic_matches` judge prompt asks for a rationale before each verdict,** and tells the judge
+  to treat the candidate answer as data rather than instructions. Grades against the same rubric may
+  shift from earlier releases. Runs graded before this release carry no `judgePromptHash`; compare
+  before/after only between runs that share one.
+- **A `semantic_matches` judge reply with a malformed `{"results": …}` group next to a valid grade is
+  ambiguous and graded invalid** (retried once, then `judgeInvalid`). Before, the valid group was used. A
+  quote inside the judge's text could split its real grade, leaving a `{"results": …}` object quoted from
+  the judged document as the only valid group. A partial restatement of some claims is skipped when it
+  agrees with the full grade and is ambiguous when it contradicts it. An echo of the prompt's output
+  template, even a reformatted one, is still skipped.
 - **At `protocol` and `hostloop` the agent has no controlling terminal.** It runs in its own session and
   process group, as Claude Desktop spawns it. A host tool that needs `/dev/tty` (an `ssh` password prompt,
   `sudo`, `gh auth login`) fails at once instead of waiting for input.
-- **The model can see `COWORK_HARNESS_RUN_TAG`** (`env` in a Bash call) at `protocol` and `hostloop`. Real
-  Cowork has no such variable, so a transcript can differ from Cowork's there.
+- **`COWORK_HARNESS_RUN_TAG` is set in the agent's environment at `protocol` and `hostloop`,** for the
+  orphan sweep (see Fixed). At `protocol` the model can see it (`env` in a Bash call); real Cowork has no
+  such variable, so a transcript can differ from Cowork's there.
 - **A host agent is stopped with Claude Desktop's timing.** At the end of a run the harness first waits up
   to 2 seconds for the agent to exit on its own; then SIGTERM, then SIGKILL after a grace period, which at
   `hostloop` is 5 seconds, as in Desktop (`protocol` keeps 2). On Ctrl-C at `hostloop` the sidecar
   container is removed after that grace period, not before it. A run's `durationMs` does not include this
   stop sequence.
-- **Closing the terminal (SIGHUP) now stops the run like SIGTERM** (exit `129`), off Windows: the agent's
-  own session no longer receives the terminal's hangup, so the harness passes it on.
+- **Closing the terminal (SIGHUP) stops the run like SIGTERM** (exit `129`), off Windows. The agent runs
+  in its own session and does not receive the terminal's hangup, so the harness passes it on.
 - **`chat`: a Ctrl-C during a turn stops the turn.** On a terminal, at every tier, it stops the agent and
   everything it started and exits `130`, without a `result.json` — as an interrupted `run` does. Before, it
   took effect only after the agent finished the turn. A Ctrl-C at the `you>` prompt still ends the session
   and writes its result, and a first Ctrl-C while that result is being written waits for it (a second one
   exits at once).
+- **`replay --help`, `verify-cassettes --help` and the CI guide name the scriptable success signal.** In
+  text mode both commands print nothing to stdout by design, and the exit code is the only signal. For a
+  script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
+  envelope's `ok`, for example with `jq -e '.ok'`.
+- **The `lint-skill` size caps are re-verified against agent 2.1.284.** The values are unchanged. The
+  agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
+  and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
 
 ### Fixed
 
-- **`critique` no longer fails on an `events.jsonl` line that is a JSON scalar** (such as `null`) while
-  reading sub-agent `Skill` calls; the line is skipped like a torn one.
-- **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
-  `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
-  session file declares, not the substituted candidate the cell actually mounted. Every cell therefore
-  looked identical. They now describe the mounted directory.
-  - Assertions and verdicts were not affected.
-  - `stats --skill-hash` / `--group-by skill-hash` merged all of a matrix's `skill_dirs` cells into one
-    group; they now separate.
-  - `verify-run` on a kept `skill_dirs` cell whose scenario has `answers:` now refuses (exit `2`, "the
-    kept run predates the current skill"), because it recomputes the fingerprint from the session file.
-    Previously it compared the wrong directory against itself and passed.
-- **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
-  as its own repeat batch, as documented in the scenario reference.
-- **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
-  them as unknown deltas. The host-loop permission chain now ends in a step that pins an approval's
-  input to the input that was judged, and an organization-policy "ask" on a file tool now reaches the
-  permission prompt instead of being denied; the Artifact tool gate now admits scheduled sessions, with
-  the scheduled-run restriction moved to a gate-controlled step at session start. Each new shape is
-  accepted only in its exact form: a blanket allow, a dropped `await`, a rewritten input, or a scheduled
-  form without its session-start restriction still fails `sync`.
-- **`sync` no longer passes a widening appended to the Artifact predicate.** The predicate was matched as a
-  prefix, so a trailing `||!0` after its last condition passed on every Desktop version; the whole body
-  is now matched.
-- **`sync` now fails if Desktop's VM start stops staging the agent.** The staged agent binary the harness
-  runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
-  moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
-  no longer staged.
-- **`list` printed baselines in directory order**, so `desktop-1.24012.11` came before `desktop-1.24012.9`
-  on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
-  the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
-  filename per line), and `latest: true` on that entry in `--output-format json`.
-- **Stopping a run at `protocol` or `hostloop` now stops the processes the agent started on the host** —
+- **Stopping a run at `protocol` or `hostloop` stops the processes the agent started on the host** —
   Bash-tool background jobs, hook commands and MCP servers — instead of leaving them running after the
   harness exits. This applies to Ctrl-C and SIGTERM, a timeout, stall or unanswered gate, and the normal end
   of a run. Behaviour changes that come with it are listed under Changed.
@@ -212,11 +181,38 @@ All notable changes to this project are documented here. The format is based on
     `tmux` server, `code .`, or an ssh `ControlPersist` master left by a `git fetch` over ssh. A
     `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
     the next. On Windows only the agent process itself is stopped, as before.
-
-### Internal
-
-- **Eval-gate** (`scripts/eval-gate.ts`, maintainer instrument, not shipped with the skill): a judge-prompt
-  mismatch against the baseline is now refused before any paid capture, and `--calibrate` refuses it too.
+- **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
+  `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
+  session file declares, not the substituted candidate the cell actually mounted, so every cell looked
+  identical. They describe the mounted directory.
+  - Assertions and verdicts were not affected.
+  - `stats --skill-hash` / `--group-by skill-hash` merged all of a matrix's `skill_dirs` cells into one
+    group; they separate.
+  - `verify-run` on a kept `skill_dirs` cell whose scenario has `answers:` refuses (exit `2`, "the kept
+    run predates the current skill"), because it recomputes the fingerprint from the session file.
+    Before, it compared the wrong directory against itself and passed.
+- **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
+  as its own repeat batch, as documented in the scenario reference.
+- **`list` printed baselines in directory order**, so `desktop-1.24012.11` came before `desktop-1.24012.9`
+  on macOS and the order was arbitrary on Linux. It prints them oldest → newest by version, and names the
+  one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
+  filename per line), and `latest: true` on that entry in `--output-format json`.
+- **`critique` no longer fails on an `events.jsonl` line that is a JSON scalar** (such as `null`) while
+  reading sub-agent `Skill` calls; the line is skipped like a torn one.
+- **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
+  them as unknown deltas. The host-loop permission chain ends in a step that pins an approval's input to
+  the input that was judged, and an organization-policy "ask" on a file tool reaches the permission
+  prompt instead of being denied; the Artifact tool gate admits scheduled sessions, with the
+  scheduled-run restriction moved to a gate-controlled step at session start. Each new shape is accepted
+  only in its exact form: a blanket allow, a dropped `await`, a rewritten input, or a scheduled form
+  without its session-start restriction still fails `sync`.
+- **`sync` no longer passes a widening appended to the Artifact predicate.** The predicate was matched as a
+  prefix, so a trailing `||!0` after its last condition passed on every Desktop version; the whole body
+  is matched.
+- **`sync` fails if Desktop's VM start stops staging the agent.** The staged agent binary the harness
+  runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
+  moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
+  no longer staged.
 
 ## [4.1.1] — 2026-09-29
 
