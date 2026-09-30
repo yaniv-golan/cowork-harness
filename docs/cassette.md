@@ -220,9 +220,13 @@ gate until you do one of two things:
   binary alone; if any of those changed, the recording was made against different behaviour and only a
   re-record is honest. `promptAssetsHash` is the one piece of record-time evidence here, and `rehash` does
   not recompute it, so a re-stamp does not and cannot confirm it. The agent binary is the one part the
-  tool does check: `verify-cassettes` and `replay` print an `agent-version:` note when the agent version
-  the recording's `system/init` event reports differs from the `agentVersion` of the baseline its
-  fingerprint names. The note does not fail the gate; re-record to clear it.
+  tool does check, where a baseline pins it: `verify-cassettes` and `replay` print an `agent-version:`
+  note when the agent version the recording's `system/init` event reports differs from the one the baseline
+  its fingerprint names pins for that tier. At `container` and `microvm` that is the baseline's
+  `agentVersion`; at `hostloop` it is the native agent's version in `agentBinary.nativeStagedPath`. At
+  `protocol` the agent is the `claude` on your `PATH`, which no baseline pins, so nothing is checked
+  there, and a `cowork` cassette that does not record its resolved tier is not checked either. The note
+  does not fail the gate; re-record to clear it.
 
 **It refuses rather than guessing.** `rehash` **errors** on a content mismatch, on unreadable sources, on
 a mode or agent-scope change, on `fileSigs` it cannot align entry-for-entry, and on a hand-authored digest

@@ -129,6 +129,24 @@ describe("agent-version note — every committed cassette", () => {
     } catch {
       pinned = undefined;
     }
+    // Tier-aware oracle: protocol runs the operator's unpinned host CLI (never noted); hostloop runs the
+    // NATIVE staged binary (compared against the version in its staged path); container/microvm run the
+    // pinned ELF (compared against agentVersion).
+    const tier: string | undefined = c.effectiveFidelity ?? c.scenario?.fidelity;
+    if (tier === "hostloop") {
+      const native = /claude-code\/([^/]+)\/claude\.app\/Contents\/MacOS\/claude$/.exec(
+        (() => {
+          try {
+            return (
+              loadBaseline(fpBaseline!.startsWith("desktop-") ? fpBaseline! : `desktop-${fpBaseline}`).agentBinary?.nativeStagedPath ?? ""
+            );
+          } catch {
+            return "";
+          }
+        })(),
+      )?.[1];
+      pinned = native;
+    } else if (tier !== "container" && tier !== "microvm") pinned = undefined;
     const expectFire = typeof recorded === "string" && pinned !== undefined && recorded !== pinned;
     expect(notesOf(c)).toHaveLength(expectFire ? 1 : 0);
 
@@ -139,6 +157,75 @@ describe("agent-version note — every committed cassette", () => {
       expect(n, `${file}: a changed recorded agent must be noted`).toHaveLength(1);
       expect(n[0]).toContain("0.0.0-mutated");
     }
+  });
+});
+
+// Per tier: which agent the recording actually ran decides what the init version is compared with.
+function committed(file: string): any {
+  return JSON.parse(readFileSync(file, "utf8"));
+}
+function withAgent(c: any, version: string, baseline?: string): any {
+  const events = (c.events as string[]).map((l) => {
+    try {
+      const m = JSON.parse(l);
+      if (m?.type === "system" && m?.subtype === "init") return JSON.stringify({ ...m, claude_code_version: version });
+    } catch {
+      /* not JSON — keep */
+    }
+    return l;
+  });
+  return { ...c, events, fingerprint: { ...c.fingerprint, ...(baseline ? { baseline } : {}) } };
+}
+const PROTOCOL = "examples/replays/example-multiselect-gate.cassette.json";
+const HOSTLOOP = "examples/replays/hostloop-computer-links.cassette.json";
+const CONTAINER = "test/fixtures/tool-call-dispatch/dispatch-shell.cassette.json";
+
+describe("agent-version note — per tier", () => {
+  it("the fixtures are the tiers this block claims", () => {
+    expect(committed(PROTOCOL).effectiveFidelity).toBe("protocol");
+    expect(committed(HOSTLOOP).effectiveFidelity).toBe("hostloop");
+    expect(committed(CONTAINER).effectiveFidelity).toBe("container");
+    // desktop-1.20186.0 is the case that tells the two pins apart: its VM agent and its staged native agent differ.
+    const b = loadBaseline("desktop-1.20186.0");
+    expect(b.agentVersion).toBe("2.1.202");
+    expect(b.agentBinary?.nativeStagedPath).toContain("/claude-code/2.1.205/claude.app/Contents/MacOS/claude");
+  });
+
+  it("protocol: SILENT on a mismatching version — the host CLI is unpinned by design", () => {
+    expect(computeAgentVersionNote(withAgent(committed(PROTOCOL), "0.0.0-mutated"))).toEqual([]);
+  });
+
+  it("hostloop: compared with the NATIVE staged version, not agentVersion — a match is silent", () => {
+    expect(computeAgentVersionNote(withAgent(committed(HOSTLOOP), "2.1.205", "desktop-1.20186.0"))).toEqual([]);
+  });
+
+  it("hostloop: a version that differs from the native pin is noted, naming the native pin", () => {
+    const n = computeAgentVersionNote(withAgent(committed(HOSTLOOP), "2.1.202", "desktop-1.20186.0"));
+    expect(n).toHaveLength(1);
+    expect(n[0]).toContain("2.1.202");
+    expect(n[0]).toContain("2.1.205");
+    expect(n[0]).toContain("COWORK_HOST_AGENT_BINARY");
+  });
+
+  it("hostloop: SILENT against a baseline that pins no native binary", () => {
+    expect(loadBaseline("desktop-1.11847.5").agentBinary?.nativeStagedPath).toBeUndefined();
+    expect(computeAgentVersionNote(withAgent(committed(HOSTLOOP), "0.0.0-mutated", "desktop-1.11847.5"))).toEqual([]);
+  });
+
+  it("container: compared with agentVersion as before", () => {
+    const c = committed(CONTAINER);
+    const pinned = loadBaseline(`desktop-${c.fingerprint.baseline}`).agentVersion;
+    expect(computeAgentVersionNote(withAgent(c, pinned))).toEqual([]);
+    const n = computeAgentVersionNote(withAgent(c, "0.0.0-mutated"));
+    expect(n).toHaveLength(1);
+    expect(n[0]).toContain(pinned);
+    expect(n[0]).toContain("COWORK_AGENT_BINARY");
+  });
+
+  it("a `cowork` cassette with no resolved tier is SILENT — which agent ran is unknown", () => {
+    const c = withAgent(committed(CONTAINER), "0.0.0-mutated");
+    delete c.effectiveFidelity;
+    expect(computeAgentVersionNote({ ...c, scenario: { ...c.scenario, fidelity: "cowork" } })).toEqual([]);
   });
 });
 
@@ -153,5 +240,32 @@ describe.skipIf(!existsSync(CLI))("agent-version note — verify-cassettes is no
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(env.ok).toBe(true);
     expect((env.results[0].notes as string[]).filter((n) => n.startsWith(NOTE))).toHaveLength(1);
+  });
+});
+
+// End to end through replay: the note is printed on stderr as a `::notice::` line, one per cassette for this
+// kind, so a batch whose cassettes were recorded by different agents shows every file and every version.
+describe.skipIf(!existsSync(CLI))("agent-version note — replay stderr", () => {
+  it("names each file and its own version; exit 0, ok: true", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cwh-agent-version-replay-"));
+    writeFileSync(
+      join(cwd, "a.cassette.json"),
+      JSON.stringify(cassette({ events: [init({ claude_code_version: "7.7.7", tools: ["mcp__skills__list_skills"] }), result] })),
+    );
+    writeFileSync(
+      join(cwd, "b.cassette.json"),
+      JSON.stringify(cassette({ events: [init({ claude_code_version: "8.8.8", tools: ["mcp__skills__list_skills"] }), result] })),
+    );
+    const r = spawnSync("node", [CLI, "replay", ".", "--output-format", "json"], { encoding: "utf8", cwd });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).ok).toBe(true);
+    const lines = r.stderr.split("\n").filter((l) => l.startsWith("::notice::") && l.endsWith("[agent-version]"));
+    expect(lines, r.stderr).toHaveLength(2);
+    const a = lines.find((l) => l.includes("a.cassette.json"));
+    const b = lines.find((l) => l.includes("b.cassette.json"));
+    expect(a, r.stderr).toContain("7.7.7");
+    expect(b, r.stderr).toContain("8.8.8");
+    expect(a).not.toContain("8.8.8");
+    expect(b).not.toContain("7.7.7");
   });
 });

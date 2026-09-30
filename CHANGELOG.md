@@ -29,16 +29,25 @@ All notable changes to this project are documented here. The format is based on
     and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
     quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
     A literal newline or tab inside a rationale is tolerated.
-- **`verify-cassettes` and `replay` note a cassette whose recording agent differs from its baseline's.**
-  The agent version is read from the recording's own `system/init` event (`claude_code_version`) and
-  compared with the `agentVersion` of the baseline named in `fingerprint.baseline`. The note states the
-  mismatch and lists its possible causes: a fingerprint re-stamped by hand across an agent bump, a
-  recording made under `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, or an accepted patch-bump substitution of
-  the staged agent binary. `verify-cassettes` reports it as an `agent-version:` entry in the result's
-  `notes[]` (a `[note]` line in text mode). `replay` has no `notes[]`: it prints a
-  `::notice:: [replay] … [agent-version]` line on stderr, under `--output-format json` too. Neither
-  changes `ok` or the exit code. It works on existing cassettes without a re-record, and says nothing when
-  the event carries no version or the baseline is not a committed one.
+- **`verify-cassettes` and `replay` note a cassette whose recording agent differs from the one its
+  baseline pins for that tier.** The agent version is read from the recording's own `system/init` event
+  (`claude_code_version`) and compared per tier with the baseline named in `fingerprint.baseline`:
+  - `container` and `microvm` run the staged VM agent, so they are compared with the baseline's
+    `agentVersion`.
+  - `hostloop` runs the staged native agent, which versions separately, so it is compared with the version
+    in the baseline's `agentBinary.nativeStagedPath`. A baseline without one gives no note.
+  - `protocol` runs the `claude` on your `PATH`, which no baseline pins, so it is never noted.
+  - A `cowork` cassette that does not record which tier it resolved to is never noted either.
+
+  The note states the mismatch and lists that tier's possible causes without picking one: a fingerprint
+  re-stamped by hand across an agent bump, a recording made under `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`,
+  an explicit binary override (`COWORK_AGENT_BINARY`, or `COWORK_HOST_AGENT_BINARY` at `hostloop`), and at
+  `hostloop` the patch-bump substitution of the native agent that is accepted by default.
+  `verify-cassettes` reports it as an `agent-version:` entry in the result's `notes[]` (a `[note]` line in
+  text mode). `replay` has no `notes[]`: it prints one `::notice:: [replay] <file> — … [agent-version]`
+  line per cassette on stderr, under `--output-format json` too. Neither changes `ok` or the exit code. It
+  works on existing cassettes without a re-record, and says nothing when the event carries no version or
+  the baseline is not a committed one.
 
 ### Changed
 

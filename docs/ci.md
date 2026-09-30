@@ -93,7 +93,9 @@ npx cowork-harness@^4 verify-cassettes cassettes/ | jq -e '.ok'
 npx cowork-harness@^4 replay cassettes/ | jq -e '.ok'
 ```
 
-`jq -e` exits non-zero when `ok` is `false`. The Action already runs both commands this way.
+`jq -e` exits non-zero when `ok` is `false`. The Action also passes `--output-format json` and exposes
+the envelope's `ok` as its `ok` output, but the job's pass or fail comes from the command's exit code,
+which it propagates.
 
 **Live lane, by design not oversight:** the action never downloads or stages the agent ELF itself.
 Pulling Anthropic's binary is a call about your own relationship with their distribution terms, so it
