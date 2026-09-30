@@ -48,20 +48,6 @@ export function scrub(text: string, secrets: string[]): string {
   return t;
 }
 
-/** Scrub every STRING VALUE of a JSON-shaped value (object keys untouched), returning a new value. Unlike
- *  `scrub` over serialized text, the result always serializes to valid JSON whatever the secret set — a
- *  secret equal to `true`, `1` or a quote cannot reach the structure. */
-export function scrubDeep<T>(value: T, secrets: string[]): T {
-  if (!secrets.length) return value;
-  const walk = (v: unknown): unknown => {
-    if (typeof v === "string") return scrub(v, secrets);
-    if (Array.isArray(v)) return v.map(walk);
-    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
-    return v;
-  };
-  return walk(value) as T;
-}
-
 /**
  * Like `scrub`, but additionally detects secrets embedded in whole-field encodings where
  * surrounding bytes shift the alphabet (base64(prefix + TOKEN + suffix), URI-encoded blobs).

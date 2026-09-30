@@ -21,12 +21,18 @@ All notable changes to this project are documented here. The format is based on
   syntax included, and can leave the output unparseable, so use `COWORK_HARNESS_SCRUB_VALUES` for real
   secret values only.
 - **A secret ending in a backslash left an invalid escape in `result.json`.** Of a secret's redacted
-  forms, the longest is now replaced first, so its JSON-escaped form is replaced whole.
-- **`eval` wrote unscrubbed text to `runs.jsonl`.** An errored rep's final message and the other result
-  fields in each line are now secret-scrubbed like the rep's `result.json`, and the final message is
-  scrubbed before its 300-character cap, so no partial secret is left at the cut. Values are scrubbed
-  before the line is serialized, so a line stays valid JSON whatever the secret set. `report.json` and
-  `report.md` are rebuilt from those lines.
+  forms, the longest is now replaced first, so its JSON-escaped form is replaced whole. A side effect:
+  `Bearer <token>` is now redacted whole, as `[REDACTED]` rather than `Bearer [REDACTED]`, in
+  `result.json`, `run.jsonl`, `trace.json` and newly recorded cassettes, so a new recording that asserts
+  on the word `Bearer` next to a token reads differently.
+- **`eval` wrote unscrubbed text to `runs.jsonl`.** The free-text fields of each line — an errored rep's
+  final message, the thrown error's message, and an unanswered gate's message and hint — are now
+  secret-scrubbed like the rep's `result.json`, and the final message is scrubbed before its
+  300-character cap, so no partial secret is left at the cut. The fields are scrubbed as values, so a line
+  stays valid JSON whatever the secret set. Authored assertions, rubric claims, and identifier and hash
+  fields are kept as written, because the report matches them against the eval's frozen scenario; a
+  scrubbed value that the scenario also asserts on (a `transcript_not_contains` canary) still grades.
+  `report.json` and `report.md` are rebuilt from those lines.
 
 ## [4.2.0] — 2026-09-30
 

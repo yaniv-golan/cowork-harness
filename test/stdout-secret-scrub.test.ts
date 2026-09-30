@@ -363,14 +363,20 @@ describe("scrub ordering and eval runs.jsonl validity", () => {
             rep: index,
             runId: `r${index}`,
             runDir: null,
-            result: { scenario: "q", result: "error", finalMessage: `said ${SECRET} and ${token}` },
+            thrown: { kind: "other", message: `boom ${SECRET}` },
+            result: {
+              scenario: "q",
+              result: "error",
+              finalMessage: `said ${SECRET} and ${token}`,
+              unansweredGate: { message: `asked ${SECRET}`, hint: `--answer ${SECRET}` },
+            },
             judge: { models: [], promptHashes: [] },
             grades: [
               {
                 source: "live",
                 assertions: [
                   { assertion: { result: "success" }, pass: true },
-                  { assertion: { result: "error" }, pass: false },
+                  { assertion: { transcript_not_contains: SECRET }, pass: false },
                 ],
               },
             ],
@@ -378,12 +384,71 @@ describe("scrub ordering and eval runs.jsonl validity", () => {
         const { lines, tornFinalLine } = readRunsLines(file);
         expect(tornFinalLine).toBe(false);
         expect(lines.map((l) => l.index)).toEqual([0, 1, 2]);
-        const body = readFileSync(file, "utf8");
-        expect(body.includes(SECRET)).toBe(false);
+        type L = {
+          thrown: { message: string };
+          result: { unansweredGate: { message: string; hint: string } };
+          grades: Array<{ assertions: Array<{ assertion: Record<string, unknown> }> }>;
+        };
+        const l0 = lines[0] as unknown as L;
+        expect(l0.thrown.message).toBe("boom [REDACTED]");
+        expect(l0.result.unansweredGate).toEqual({ message: "asked [REDACTED]", hint: "--answer [REDACTED]" });
+        // Authored assertions are join keys against the manifest's scenario: kept as written.
+        expect(l0.grades[0].assertions[1].assertion).toEqual({ transcript_not_contains: SECRET });
         expect((lines[0] as unknown as { result: { finalMessage: string } }).result.finalMessage).toBe("said [REDACTED] and [REDACTED]");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     });
   }
+});
+
+// The canary pattern: a scrubbed value that the scenario ALSO asserts on (`transcript_not_contains`). eval
+// joins each rep's graded assertion against the manifest's scenario as written, so runs.jsonl must keep
+// authored assertions verbatim — a scrubbed literal made the row `grade_misaligned`, dropped it, and failed
+// the eval after every rep was paid for.
+describe.runIf(can)("eval keeps authored assertions as written", () => {
+  it("a scrubbed canary asserted by transcript_not_contains stays a graded row (value 1)", async () => {
+    const CANARY = "CANARY-7f3a9c";
+    const f = makeStubFixture(STUB, { COWORK_HARNESS_SCRUB_VALUES: CANARY, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN });
+    try {
+      for (const d of ["declared", "a", "b"]) writePlugin(join(f.cwd, d, "demo"));
+      writeFileSync(join(f.cwd, "session.yaml"), "model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ./declared/demo\n");
+      writeFileSync(
+        join(f.cwd, "q.yaml"),
+        `baseline: latest\nsession: ./session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - transcript_not_contains: "${CANARY}"\n`,
+      );
+      const out = join(f.root, "eval");
+      const r = await cli(
+        f,
+        [
+          "eval",
+          "q.yaml",
+          "--arm",
+          "a=./a/demo",
+          "--arm",
+          "b=./b/demo",
+          "--reps",
+          "2",
+          "--allow-underpowered",
+          "--allow-identical-arms",
+          "--out",
+          out,
+          "--output-format",
+          "json",
+        ],
+        120_000,
+      );
+      const report = readFileSync(join(out, "report.json"), "utf8");
+      expect(report.includes("grade_misaligned"), report).toBe(false);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      const env = JSON.parse(r.stdout);
+      const row = env.sections.tuned.rows.find((x: { kind: string }) => x.kind === "assertion");
+      // Every rep of both arms graded as passing: value 1, none excluded.
+      expect({ k1: row.k1, n1: row.n1, k2: row.k2, n2: row.n2 }).toEqual({ k1: 2, n1: 2, k2: 2, n2: 2 });
+      // The authored literal is kept as written (the manifest's frozen scenario is not scrubbed either).
+      expect(readFileSync(join(out, "runs.jsonl"), "utf8")).toContain(`"transcript_not_contains":"${CANARY}"`);
+    } finally {
+      f.cleanup();
+    }
+  });
 });

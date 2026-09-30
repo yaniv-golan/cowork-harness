@@ -7,7 +7,7 @@ import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.j
 import type { RunResult } from "../types.js";
 import type { ClassifiableResult, RepEvidence } from "./classify.js";
 import { tildeify } from "../io.js";
-import { collectSecrets, scrub, scrubDeep } from "../secrets.js";
+import { collectSecrets, scrub } from "../secrets.js";
 
 export const RUNS_FILE = "runs.jsonl";
 
@@ -127,7 +127,7 @@ export function buildRunsLine(args: {
             ...(r.resultSubtype !== undefined ? { resultSubtype: r.resultSubtype } : {}),
             ...(r.result !== "success" && typeof r.finalMessage === "string"
               ? // Scrubbed BEFORE the cap: a secret straddling the cut would leave a prefix the line scrub
-                // in appendRunsLine can no longer match.
+                // in appendRunsLine (scrubRunsLineText) can no longer match.
                 { finalMessage: scrub(r.finalMessage, collectSecrets()).slice(0, FINAL_MESSAGE_MAX) }
               : {}),
             ...(r.stalledOnQuestion !== undefined ? { stalledOnQuestion: r.stalledOnQuestion } : {}),
@@ -151,13 +151,36 @@ export function buildRunsLine(args: {
   };
 }
 
-/** Appended secret-scrubbed, like each rep's result.json: the line is built from the in-memory RunResult,
- *  which `executeScenario` returns unscrubbed, and the report files are rebuilt from these lines. The
- *  string VALUES are scrubbed before serializing (never the serialized text), so the line stays valid JSON
- *  even when the secret set holds a JSON token such as `true` or `1` — an unparseable middle line makes
- *  `readRunsLines` throw after every rep was paid for, and an unparseable last one is dropped as torn. */
+/** The FREE-TEXT fields of a line, secret-scrubbed — the only fields that carry text the run produced:
+ *  `thrown.message`, `result.finalMessage`, `result.unansweredGate.message` / `.hint`. Everything else is
+ *  left as written ON PURPOSE: the authored assertions and claim text in `grades` are joined against the
+ *  manifest's unscrubbed scenario (`classify.ts`), so a rewritten literal misaligns the grade and drops the
+ *  row; `arm`/`scenario`/`runId`/`models`/hashes are join keys a short scrub value could corrupt; the
+ *  semantic `rationale` is scrubbed at capture. Scrubbing string values (never the serialized text) keeps
+ *  the line valid JSON whatever the secret set. */
+export function scrubRunsLineText(line: RunsLine, secrets: string[] = collectSecrets()): RunsLine {
+  if (!secrets.length) return line;
+  const out: RunsLine = { ...line };
+  if (line.thrown) out.thrown = { ...line.thrown, message: scrub(line.thrown.message, secrets) };
+  if (line.result) {
+    const r = { ...line.result };
+    if (typeof r.finalMessage === "string") r.finalMessage = scrub(r.finalMessage, secrets);
+    if (r.unansweredGate)
+      r.unansweredGate = {
+        ...r.unansweredGate,
+        message: scrub(r.unansweredGate.message, secrets),
+        ...(r.unansweredGate.hint !== undefined ? { hint: scrub(r.unansweredGate.hint, secrets) } : {}),
+      };
+    out.result = r;
+  }
+  return out;
+}
+
+/** Appended with its free-text fields secret-scrubbed ({@link scrubRunsLineText}), like each rep's
+ *  result.json: the line is built from the in-memory RunResult, which `executeScenario` returns
+ *  unscrubbed, and the report files are rebuilt from these lines. */
 export function appendRunsLine(file: string, line: RunsLine): void {
-  appendFileSync(file, JSON.stringify(scrubDeep(line, collectSecrets())) + "\n");
+  appendFileSync(file, JSON.stringify(scrubRunsLineText(line)) + "\n");
 }
 
 /** Read runs.jsonl, ordered by schedule index. A torn final line (a crash mid-append) is skipped and
