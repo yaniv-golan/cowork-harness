@@ -51,7 +51,7 @@ export const NO_ORPHAN_SWEEP_ENV = "COWORK_HARNESS_NO_ORPHAN_SWEEP";
 
 const PS_TIMEOUT_MS = 2000;
 const LSOF_TIMEOUT_MS = 2000;
-/** The drive loop refreshes at most this often (one `ps`, ~10-30 ms of blocked event loop). */
+/** tool_result frames refresh at most this often; a `result` frame always refreshes. */
 const REFRESH_MIN_INTERVAL_MS = 250;
 
 /** The spawn options every host agent spawn goes through: its own session (for the group kill) and the run tag (for the orphan sweep). */
@@ -414,7 +414,10 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     onFrame: (msg) => {
       if (!isRefreshFrame(msg)) return;
       const t = d.now();
-      if (t - lastRefreshAt < REFRESH_MIN_INTERVAL_MS) return;
+      // A `result` frame is never throttled: it is the last listing before the agent exits on the normal path,
+      // when everything it started is about to be reparented out of reach of the walk. Only the tool_result
+      // cadence is throttled.
+      if ((msg as { type?: unknown }).type !== "result" && t - lastRefreshAt < REFRESH_MIN_INTERVAL_MS) return;
       refreshAt(t);
     },
     terminate: () => {

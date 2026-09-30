@@ -310,6 +310,22 @@ describe("agentTreeAgent — refresh cadence", () => {
   });
 });
 
+describe("agentTreeAgent — the end-of-turn refresh", () => {
+  it("a result frame always refreshes, even right after another refresh (the last chance before teardown)", () => {
+    const h = harness();
+    let now = T0;
+    h.deps.now = () => now;
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    const s0 = h.snapshots; // the construction-time listing
+    now += 10;
+    a.onFrame({ type: "result", subtype: "success" });
+    expect(h.snapshots).toBe(s0 + 1);
+    now += 10;
+    a.onFrame({ type: "result", subtype: "success" });
+    expect(h.snapshots).toBe(s0 + 2);
+  });
+});
+
 describe("orphan sweep on macOS: same uid, ppid 1, no tty, started during the run, cwd under the work dir", () => {
   const orphan = (pid: number, over: Partial<ProcRow> = {}) => row(pid, 1, pid - 1, { comm: `orphan${pid}`, ...over });
 
