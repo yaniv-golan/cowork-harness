@@ -20,7 +20,7 @@ import { resolveInputs } from "../run/inputs.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { pMapBounded } from "../async-pool.js";
-import { pkgVersion } from "../run/envelope.js";
+import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
 import { resolveCritiquedSkillDir, gradedSkillNameFor } from "../critique/command.js";
 import { scenarioRows } from "./classify.js";
@@ -169,8 +169,13 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
   if (correction !== "bh" && correction !== "holm") throw new UsageError(`--correction must be bh or holm (got "${correction}")`);
   const failOn = values["--fail-on"] ?? "possible";
   if (failOn !== "possible" && failOn !== "confirmed") throw new UsageError(`--fail-on must be possible or confirmed (got "${failOn}")`);
-  const output = values["--output-format"] ?? (process.env.COWORK_HARNESS_OUTPUT_FORMAT === "json" ? "json" : "text");
-  if (output !== "text" && output !== "json") throw new UsageError(`--output-format must be "text" or "json" (got "${output}")`);
+  let output: "text" | "json";
+  try {
+    // The shared resolver: an explicit flag, else COWORK_HARNESS_OUTPUT_FORMAT.
+    output = "--output-format" in values ? parseOutputFormat([...argv]) : envOutputFormat();
+  } catch (e) {
+    throw new UsageError((e as Error).message);
+  }
   const onUnanswered = values["--on-unanswered"];
   if (onUnanswered !== undefined && onUnanswered !== "fail" && onUnanswered !== "first")
     throw new UsageError(`eval --on-unanswered must be fail or first (got "${onUnanswered}"; prompt would break the comparison)`);
@@ -595,7 +600,7 @@ function salvagedResult(dir: string): RunResult | undefined {
 /** `eval report <eval-dir>`: rebuild report.json / report.md from the dir alone ($0). */
 export function parseEvalReportArgs(argv: readonly string[]): { evalDir: string; output: "text" | "json"; globals: EvalArgs["globals"] } {
   const pos: string[] = [];
-  let output: "text" | "json" = process.env.COWORK_HARNESS_OUTPUT_FORMAT === "json" ? "json" : "text";
+  let output: "text" | "json" = envOutputFormat();
   const globals: EvalArgs["globals"] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
