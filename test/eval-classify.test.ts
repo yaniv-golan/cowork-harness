@@ -1,7 +1,7 @@
 // Per-rep classification for the paired evaluation: the termination decision table, bucket precedence,
 // and per-rep row extraction.
 //
-// Fixture provenance (test/fixtures/eval-classify/): nine files are EXCERPTS of real kept run dirs, one per
+// Fixture provenance (test/fixtures/eval-classify/): ten files are EXCERPTS of real kept run dirs, one per
 // shape the local corpus exhibits — a clean run with a graded semantic_matches, a stalled-on-question run,
 // an `exit`+`agent` crash, a `result`+`agent` error, a usage-limit result, a wall-clock timeout, a timeout
 // that overrode an earlier `exit`+`agent` classification, a stream that ended with no terminal event, and an
@@ -9,13 +9,16 @@
 // assertion was replaced by "<redacted>", rubric claims by "claim N", the unanswered-gate text by a
 // placeholder, and the scenario name by `fixture-<shape>`. The corpus holds NO spawn failure, protocol
 // break, `error_max_turns`, `decider_timeout` or recovered-then-succeeded run, so those rows are CONSTRUCTED
-// below rather than read from a fixture.
+// below rather than read from a fixture. The tenth, `public-scenario-aligned`, is a run of the repo's own
+// public e2e scenario kept with its assertions VERBATIM (the text is already public), so row alignment is
+// tested against the scenario loader rather than against the result itself.
 import { describe, it, expect, beforeEach } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../src/errors.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { hostPathTokenOccurrences } from "../src/run/host-path-tokens.js";
+import { loadScenarioPure } from "../src/run/execute.js";
 import type { Assertion, RunResult } from "../src/types.js";
 import {
   ERROR_SOURCES,
@@ -162,6 +165,7 @@ describe("real kept run shapes (sanitized excerpts)", () => {
     ["timeout-after-agent-error", "errored_agent"],
     ["no-result", "errored_agent"],
     ["unanswered-partial", "errored_agent"],
+    ["public-scenario-aligned", "valid"],
   ];
   for (const [name, want] of cases) {
     it(`${name} -> ${want}`, () => {
@@ -395,6 +399,18 @@ describe("repRowValues", () => {
     const r = validRep();
     r.assertions = [{ assertion: { result: "success" } as Assertion, pass: false, source: "staleness" }, ...r.assertions!];
     expect(byLabel(repRowValues(rows, assertions, classifyRep({ result: r }, expected), r)).result).toBe(1);
+  });
+  it("a real result lines up with its scenario as loaded through the real scenario loader", () => {
+    // Independent oracle: the frozen assertions come from the public YAML via `loadScenarioPure`, not from
+    // the result. If the Zod-parsed scenario ever stopped JSON-equalling the persisted assertion, every valid
+    // rep would be `grade_misaligned` and every row insufficient.
+    const scen = loadScenarioPure(join(import.meta.dirname, "..", "e2e", "scenarios", "smoke-semantic-evidence-files.yaml"));
+    const r = fixture("public-scenario-aligned");
+    const c = { ...classifyRep({ result: r }, {}), bucket: "valid" as const }; // the excerpt predates modelPinHonored
+    const vals = repRowValues(scenarioRows(scen.name, scen.assert ?? []), scen.assert ?? [], c, r);
+    expect(vals).toHaveLength(6);
+    expect(vals.map((v) => v.excluded)).toEqual(Array(6).fill(undefined));
+    expect(vals.map((v) => v.value)).toEqual([1, 1, 1, 1, 1, 1]);
   });
   it("reads the real semantic fixture's claim grades", () => {
     const r = fixture("success-semantic");
