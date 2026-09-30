@@ -14,10 +14,9 @@ import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
 import { loadBaseline } from "../baseline.js";
-import { parseScenarioFile, loadSessionFromFile, launchSourcesPreflight, slugForPath } from "../run/execute.js";
+import { parseScenarioFile, loadSessionFromFile, launchSourcesPreflight, runOutDir } from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
-import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
@@ -70,7 +69,8 @@ export interface EvalArgs {
   holdout: string[];
   includeUntracked: boolean;
   allowIdenticalArms: boolean;
-  failOn: "possible" | "confirmed";
+  /** Undefined: no gating — exit 0 whatever the eval found. */
+  failOn?: "possible" | "confirmed";
   out?: string;
   output: "text" | "json";
   quiet: boolean;
@@ -167,8 +167,9 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
   const alpha = values["--alpha"] !== undefined ? num("--alpha", values["--alpha"], (n) => n > 0 && n < 0.5, "a number in (0, 0.5)") : 0.05;
   const correction = values["--correction"] ?? "bh";
   if (correction !== "bh" && correction !== "holm") throw new UsageError(`--correction must be bh or holm (got "${correction}")`);
-  const failOn = values["--fail-on"] ?? "possible";
-  if (failOn !== "possible" && failOn !== "confirmed") throw new UsageError(`--fail-on must be possible or confirmed (got "${failOn}")`);
+  const failOn = values["--fail-on"];
+  if (failOn !== undefined && failOn !== "possible" && failOn !== "confirmed")
+    throw new UsageError(`--fail-on must be possible or confirmed (got "${failOn}")`);
   let output: "text" | "json";
   try {
     // The shared resolver: an explicit flag, else COWORK_HARNESS_OUTPUT_FORMAT.
@@ -202,7 +203,7 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
     holdout: repeated["--holdout"],
     includeUntracked: booleans.has("--include-untracked"),
     allowIdenticalArms: booleans.has("--allow-identical-arms"),
-    failOn,
+    ...(failOn !== undefined ? { failOn } : {}),
     ...(values["--out"] !== undefined ? { out: values["--out"] } : {}),
     output,
     quiet: booleans.has("--quiet"),
@@ -372,12 +373,12 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     // Snapshots.
     const pluginDecl = scenarios[0].session.plugins.local_plugins[0];
     const base = basename(expandHome(pluginDecl));
-    const snaps: Array<SnapshotInfo & { spec: ArmSpec; sourceDir?: string }> = specs.map((spec) => {
+    const snaps: Array<SnapshotInfo & { spec: ArmSpec }> = specs.map((spec) => {
       const dest = join(evalDir, "arms", spec.label, base);
       try {
         if (spec.source.kind === "dir") {
           const info = snapshotDirArm(resolve(cwd, spec.source.path), dest, args.includeUntracked, spec.raw);
-          return { ...info, spec, sourceDir: resolve(cwd, spec.source.path) };
+          return { ...info, spec };
         }
         const info = snapshotGitArm(spec.source, dest, cwd, spec.raw);
         return { ...info, spec };
@@ -394,16 +395,20 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
       );
 
     // Which skill's invocation the reps record: one derivation per arm, and the arms must agree.
+    // Not a refusal: a plugin with several skills (and no --skill), or a skill the arms name differently,
+    // only makes the per-rep invocation fact unobservable. It never affects a row.
     const skillNames = snaps.map((s) => {
       try {
         return gradedSkillNameFor(args.skill, resolveCritiquedSkillDir(s.dir, args.skill));
-      } catch (e) {
-        throw new UsageError(`arm ${s.spec.label}: ${(e as Error).message}`);
+      } catch {
+        return undefined;
       }
     });
-    if (skillNames[0] !== skillNames[1])
-      throw new UsageError(`the arms resolve different skills (${skillNames.map(String).join(" vs ")}); pass --skill <name>`);
-    const skill = skillNames[0] ?? null;
+    const skill = skillNames[0] !== undefined && skillNames[0] === skillNames[1] ? skillNames[0] : null;
+    if (skill === null)
+      say(
+        `[eval] no single skill to record invocation for (${args.skill ? `--skill ${args.skill} is not in both arms` : "pass --skill <name> to pick one"}): the per-rep invocation fact is unobservable`,
+      );
 
     // Per arm x scenario: the substituted session, its signature from the SAME fingerprint call a rep makes,
     // and the staging preflight over the substituted session.
@@ -515,7 +520,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
         alpha: args.alpha,
         q: BH_Q,
         correction: args.correction,
-        failOn: args.failOn,
+        failOn: args.failOn ?? null,
         concurrency: args.concurrency,
         includeUntracked: args.includeUntracked,
         allowIdenticalArms: args.allowIdenticalArms,
@@ -543,7 +548,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     await pMapBounded(jobs, args.concurrency, async (job) => {
       const s = scenarios[job.scenarioIndex];
       const session = sessions.get(`${job.arm}\0${job.scenario}`)!;
-      const expectedDir = join(runsWriteRoot(), slugForPath(s.scenario.name), `sess-${job.sessionId}`);
+      const expectedDir = runOutDir(s.scenario.name, job.runId);
       let result: RunResult | undefined;
       let thrown: unknown;
       try {
@@ -572,7 +577,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           arm: job.arm,
           scenario: job.scenario,
           rep: job.rep,
-          sessionId: job.sessionId,
+          runId: job.runId,
           runDir,
           result,
           thrown,

@@ -51,7 +51,8 @@ export interface EvalManifest {
     alpha: number;
     q: number;
     correction: Correction;
-    failOn: "possible" | "confirmed";
+    /** null: no gating. */
+    failOn: "possible" | "confirmed" | null;
     concurrency: number;
     includeUntracked: boolean;
     allowIdenticalArms: boolean;

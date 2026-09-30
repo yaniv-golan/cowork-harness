@@ -142,6 +142,11 @@ export interface ExecuteOptions {
   externalChannel?: DecisionChannel;
   /** stable session handle: pins the run dir + the agent's native session id (so it can be resumed). */
   sessionId?: string;
+  /** A PRE-ASSIGNED id for an ordinary, ephemeral run (the `local_<base36>` shape every unpinned run gets),
+   *  for a caller that must know the run dir before the run (a paired eval job). Unlike `sessionId` it is
+   *  not a resumable session and gets no `sess-` prefix, so the agent sees the same shape of cwd as any
+   *  other run. Refused when the run dir already exists — an id is never reused. */
+  runId?: string;
   /** resume a prior session of this id — reuse its persisted work dir + pass the agent's `--resume`. */
   resume?: boolean;
   /** --compact: suppress the INFORMATIONAL capability `::notice::` lines for shareable output. The
@@ -198,6 +203,13 @@ export interface ExecuteOptions {
  *  (128 + 1 + 8) and prevents names that share a 128-char prefix from colliding in the filesystem.
  *  Format: <up-to-128-char-prefix>-<8-hex-chars>
  */
+/** Where a run of `scenarioName` with run id `sessionId` (`local_…`, or `sess-…` when pinned) writes its
+ *  artifacts. The one derivation: a caller that needs a run's dir before the run (an eval job, to recover
+ *  an unanswered gate's salvaged result) calls this rather than re-assembling it. */
+export function runOutDir(scenarioName: string, sessionId: string): string {
+  return join(runsWriteRoot(), slugForPath(scenarioName), sessionId);
+}
+
 export function slugForPath(name: string): string {
   const full =
     name
@@ -512,11 +524,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     throw new UsageError(
       `--session-id "${opts.sessionId}" may contain only letters, digits, "_" or "-" (no path separators or other characters)`,
     );
+  if (opts.runId !== undefined) {
+    if (!/^local_[0-9a-z]{8,32}$/.test(opts.runId))
+      throw new UsageError(`run id "${opts.runId}" must be local_ followed by 8-32 base36 characters`);
+    if (opts.sessionId !== undefined || opts.resume)
+      throw new UsageError("a pre-assigned run id cannot be combined with --session-id or --resume");
+  }
   const stable = opts.sessionId ? `sess-${opts.sessionId}` : undefined;
-  const sessionId = stable ?? `local_${process.hrtime.bigint().toString(36)}`;
+  const sessionId = stable ?? opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
   // the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
   // "../x" can't place run artifacts outside runs/. The display name (scenario.name) is unchanged.
-  const outDir = join(runsWriteRoot(), slugForPath(scenario.name), sessionId);
+  const outDir = runOutDir(scenario.name, sessionId);
+  if (opts.runId !== undefined && existsSync(outDir))
+    throw new UsageError(`run id ${opts.runId} is already used by ${outDir}; a pre-assigned run id is never reused`);
   // The marker lives at outDir/.origin — ABOVE workRoot (outDir/work/...), so it's invisible to
   // collectArtifacts / file_exists / user_visible_artifact / the trace events.jsonl scan, and untouched
   // by cpSync staging. It MUST stay here; moving it into the staged tree would surface it as an artifact.

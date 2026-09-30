@@ -2087,7 +2087,7 @@ async function cmdEval(rawArgs: string[]) {
           o,
           extra: {
             session: spec.session,
-            sessionId: spec.job.sessionId,
+            runId: spec.job.runId,
             ...(spec.judgeModelOverride !== undefined ? { judgeModelOverride: spec.judgeModelOverride } : {}),
           },
           rethrowUnanswered: true,

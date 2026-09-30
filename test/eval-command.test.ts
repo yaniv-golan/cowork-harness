@@ -5,19 +5,31 @@
 // excerpt, and each is set the way a real run sets it:
 //   - `fingerprint` comes from the SAME `buildFingerprint(...)` call `executeScenario` makes, over the job's
 //     own session — so the drift test below is a real drift, not a string the test chose;
-//   - `outDir` is the pre-assigned `<runs-root>/<slug>/sess-<sessionId>` dir.
+//   - `outDir` is the pre-assigned run dir, from the same derivation `executeScenario` uses (`runOutDir`).
 // A per-arm behaviour may flip individual assertion bits (to create a drop to detect); every such flip is
 // named in the test that does it.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  readlinkSync,
+  symlinkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UsageError, UnansweredError } from "../src/errors.js";
 import type { RunResult } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
 import { buildFingerprint } from "../src/run/cassette.js";
-import { slugForPath } from "../src/run/execute.js";
+import { runOutDir } from "../src/run/execute.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { runEval, parseEvalArgs, EvalStagingError, type EvalJobSpec } from "../src/eval/command.js";
 import { writeEvalReport } from "../src/eval/report.js";
@@ -25,6 +37,7 @@ import { readRunsLines } from "../src/eval/runs.js";
 import { classifyRep } from "../src/eval/classify.js";
 import { repEvidenceOf } from "../src/eval/runs.js";
 import { isConcreteModelId } from "../src/run/model-provenance.js";
+import { tildeify } from "../src/io.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
 const fixture = (name: string): RunResult => JSON.parse(readFileSync(join(FX, `${name}.json`), "utf8")) as RunResult;
@@ -94,7 +107,7 @@ function fakeRunner(behaviour: Behaviour = (_s, r) => r, calls: EvalJobSpec[] = 
     calls.push(spec);
     const base = fixture(spec.scenario.name === "csv-metrics" ? "public-scenario-pinned" : "public-scenario-aligned");
     const baseline = loadBaseline(spec.scenario.baseline);
-    const outDir = join(runsRoot, slugForPath(spec.scenario.name), `sess-${spec.job.sessionId}`);
+    const outDir = runOutDir(spec.scenario.name, spec.job.runId);
     mkdirSync(outDir, { recursive: true });
     const r: RunResult = {
       ...base,
@@ -124,7 +137,7 @@ const deps = (runJob: (s: EvalJobSpec) => Promise<RunResult>, log: string[] = []
 });
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "eval-cmd-")));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "pe-cmd-")));
   runsRoot = join(root, "runs");
   for (const k of ["COWORK_HARNESS_RUNS_DIR", "COWORK_HARNESS_MODEL", "COWORK_HARNESS_JUDGE_MODEL", "COWORK_HARNESS_GITSET"])
     savedEnv[k] = process.env[k];
@@ -142,9 +155,10 @@ afterEach(() => {
 
 describe("eval: argument parsing", () => {
   const base = ["s.yaml", "--arm", "x", "--arm", "y"];
-  it("defaults: reps 5, concurrency 2, bh, fail-on possible", () => {
+  it("defaults: reps 5, concurrency 2, bh, and NO --fail-on gating", () => {
     const p = parseEvalArgs(base);
-    expect(p).toMatchObject({ reps: 5, concurrency: 2, correction: "bh", failOn: "possible", alpha: 0.05 });
+    expect(p).toMatchObject({ reps: 5, concurrency: 2, correction: "bh", alpha: 0.05 });
+    expect(p.failOn).toBeUndefined();
   });
   it("refuses fewer than 4 reps unless --allow-underpowered", () => {
     expect(() => parseEvalArgs([...base, "--reps", "3"])).toThrow(/--allow-underpowered/);
@@ -193,7 +207,8 @@ describe("eval: end to end over a fake runner", () => {
     for (const c of calls) {
       expect(c.session.plugins.local_plugins).toEqual([join(out.evalDir, "arms", c.job.arm, "csv-metrics")]);
       expect(c.runLabel).toBe(`eval:test1:${c.job.arm}`);
-      expect(c.job.sessionId).toMatch(/^[A-Za-z0-9_-]+$/);
+      // Shaped like an ordinary run's id (`local_<base36>`): nothing about the eval or the arm.
+      expect(c.job.runId).toMatch(/^local_[0-9a-z]{13}$/);
       expect(c.session.model).toBe("claude-sonnet-5");
     }
     for (const f of ["manifest.json", "runs.jsonl", "report.json", "report.md"]) expect(existsSync(join(out.evalDir, f))).toBe(true);
@@ -219,10 +234,29 @@ describe("eval: end to end over a fake runner", () => {
     expect(readFileSync(join(out.evalDir, "report.json")).equals(js)).toBe(true);
   });
 
-  it("a collapsed row is a drop: exit 1 under the default --fail-on possible, with evidence links", async () => {
+  it("a collapsed row is a drop: reported with evidence links, but the DEFAULT does not gate (exit 0)", async () => {
     const { scen, a, b } = setup();
     // Flip: arm `after` fails `tool_called: Bash` (index 2) in every rep.
-    const out = await runEval(args(scen, a, b), deps(fakeRunner((s, r) => (s.job.arm === "after" ? failAssertion(r, 2) : r))));
+    const flip = (s: EvalJobSpec, r: RunResult) => (s.job.arm === "after" ? failAssertion(r, 2) : r);
+    const dflt = await runEval(args(scen, a, b), deps(fakeRunner(flip)));
+    expect(dflt.report.sections.tuned!.rows.find((r) => r.assertionIndex === 2)!.label).toMatch(/drop$/);
+    expect(dflt.report.summary.failOnHit).toBe(false);
+    expect(dflt.report.summary.exitCode).toBe(0);
+    const out = await runEval(
+      parseEvalArgs([
+        scen,
+        "--arm",
+        `before=${a}`,
+        "--arm",
+        `after=${b}`,
+        "--out",
+        join(root, "eval-g"),
+        "--quiet",
+        "--fail-on",
+        "possible",
+      ]),
+      deps(fakeRunner(flip)),
+    );
     const row = out.report.sections.tuned!.rows.find((r) => r.assertionIndex === 2)!;
     expect(row).toMatchObject({ k1: 5, n1: 5, k2: 0, n2: 5, direction: "drop" });
     expect(row.label).toMatch(/drop$/);
@@ -234,11 +268,11 @@ describe("eval: end to end over a fake runner", () => {
     expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toMatch(/A drop is a signal to investigate, not proof/);
   });
 
-  it("a `possible` (unconfirmed) drop fails the eval under the DEFAULT --fail-on", async () => {
+  it("a `possible` (unconfirmed) drop fails the eval under --fail-on possible", async () => {
     const { scen, a, b } = setup();
     // Flip: `after` fails index 2 in 4 of 5 reps — p = 0.048: possible, not confirmed.
     const out = await runEval(
-      args(scen, a, b),
+      args(scen, a, b, ["--fail-on", "possible"]),
       deps(fakeRunner((s, r) => (s.job.arm === "after" && s.job.rep <= 4 ? failAssertion(r, 2) : r))),
     );
     expect(out.report.sections.tuned!.rows.find((r) => r.assertionIndex === 2)!.label).toBe("possible drop");
@@ -309,7 +343,7 @@ describe("eval: per-rep classification over the real excerpts", () => {
     const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
     const line = lines.find((l) => l.arm === "after" && l.rep === 2)!;
     expect(line.thrown).toEqual({ kind: "unanswered", message: "unanswered question" });
-    expect(line.runDir).toContain("sess-eval-test1-after-csv-metrics-r2");
+    expect(line.runDir).toBe(tildeify(runOutDir("csv-metrics", line.runId)));
     expect(line.result?.partial).toBe(true);
     expect(out.report.arms[1].buckets).toEqual({ errored_agent: 1, valid: 4 });
   });
@@ -720,7 +754,10 @@ const CLI = join(import.meta.dirname, "..", "dist", "cli.js");
 describe.skipIf(!existsSync(CLI))("eval: the CLI wrapper", () => {
   it("`eval report <dir> --output-format json` is byte-identical and exits with the report's code", async () => {
     const { scen, a, b } = setup();
-    const out = await runEval(args(scen, a, b), deps(fakeRunner((s, r) => (s.job.arm === "after" ? failAssertion(r, 2) : r))));
+    const out = await runEval(
+      args(scen, a, b, ["--fail-on", "possible"]),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" ? failAssertion(r, 2) : r))),
+    );
     const md = readFileSync(join(out.evalDir, "report.md"));
     const r = spawnSync("node", [CLI, "eval", "report", out.evalDir, "--output-format", "json"], { encoding: "utf8", cwd: root });
     expect(r.status, r.stderr).toBe(1);
@@ -759,5 +796,116 @@ describe.skipIf(!existsSync(CLI))("eval: the CLI wrapper", () => {
     );
     expect(r.status, r.stderr).toBe(2);
     expect(JSON.parse(r.stdout)).toMatchObject({ command: "eval", ok: false, error: { category: "usage" } });
+  });
+});
+
+describe("eval: the run id carries nothing about the eval or the arm", () => {
+  it("both arms' ids have one shape, and the rendered system prompt differs between arms only by that id", async () => {
+    const { scen, a, b } = setup();
+    const calls: EvalJobSpec[] = [];
+    const p = parseEvalArgs([scen, "--arm", `zqxbaseline=${a}`, "--arm", `zqxcandidate=${b}`, "--out", join(root, "eval"), "--quiet"]);
+    await runEval(p, deps(fakeRunner(undefined, calls)));
+    const { renderPrompts } = await import("../src/prompt.js");
+    const baseline = loadBaseline("latest");
+    for (const rep of [1, 2]) {
+      const pair = calls.filter((c) => c.job.rep === rep);
+      expect(pair).toHaveLength(2);
+      const rendered = pair.map((c) => {
+        for (const tier of ["container", "hostloop"] as const) {
+          const text = JSON.stringify(
+            renderPrompts(baseline, c.session, c.job.runId, undefined, {
+              effectiveFidelity: tier,
+              hostCwd: join(runOutDir(c.scenario.name, c.job.runId), "work", "session", "mnt"),
+            }),
+          );
+          expect(text).not.toMatch(/zqxbaseline|zqxcandidate|test1|eval/i);
+        }
+        expect(c.job.runId).not.toMatch(/zqx|eval|test1|csv/);
+        return JSON.stringify(renderPrompts(baseline, c.session, c.job.runId, undefined, { effectiveFidelity: "container" }))
+          .split(c.job.runId)
+          .join("<id>");
+      });
+      expect(rendered[0]).toBe(rendered[1]);
+    }
+  });
+});
+
+describe("eval: answer-key guard through links and git arms", () => {
+  it("a SYMLINK in an arm that resolves to one of the eval's scenario files is refused", async () => {
+    const { scen, a, b } = setup();
+    symlinkSync(join(scen, "csv-metrics.yaml"), join(b, "notes.yaml"));
+    await expect(runEval(args(scen, a, b), deps(fakeRunner()))).rejects.toThrow(/answer-key guard/);
+  });
+
+  it("any link resolving outside the snapshot is refused (it could reach answers, or change mid-eval)", async () => {
+    const { scen, a, b } = setup();
+    writeFileSync(join(root, "elsewhere.md"), "not an eval file");
+    symlinkSync(join(root, "elsewhere.md"), join(b, "shared.md"));
+    await expect(runEval(args(scen, a, b), deps(fakeRunner()))).rejects.toThrow(/answer-key guard.*symlink outside/);
+  });
+
+  it("a symlinked evals.json in an arm is refused", async () => {
+    const { scen, a, b } = setup();
+    writeFileSync(join(root, "evals.json"), "{}");
+    symlinkSync(join(root, "evals.json"), join(b, "evals.json"));
+    await expect(runEval(args(scen, a, b), deps(fakeRunner()))).rejects.toThrow(/answer-key guard.*evals json/);
+  });
+
+  it("a git: arm whose path holds the eval's scenario (in the working tree) is refused", async () => {
+    const { b } = setup();
+    const repo = join(root, "grepo2");
+    writePlugin(join(repo, "plugins", "csv-metrics"), "committed");
+    const scenDir = join(repo, "plugins", "csv-metrics", "evals");
+    mkdirSync(scenDir, { recursive: true });
+    writeFileSync(join(root, "session2.yaml"), "model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ./declared/csv-metrics\n");
+    writeFileSync(
+      join(scenDir, "csv-metrics.yaml"),
+      `baseline: latest\nsession: ${join(root, "session2.yaml")}\nfidelity: container\nprompt: analyze\n${CSV_ASSERTS}`,
+    );
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["add", "plugins/csv-metrics/.claude-plugin", "plugins/csv-metrics/skills"], { cwd: repo });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"], { cwd: repo });
+    const p = parseEvalArgs([
+      join(scenDir, "csv-metrics.yaml"),
+      "--arm",
+      "base=git:HEAD:plugins/csv-metrics",
+      "--arm",
+      `new=${b}`,
+      "--out",
+      join(root, "eval"),
+      "--quiet",
+    ]);
+    await expect(runEval(p, { ...deps(fakeRunner()), cwd: repo })).rejects.toThrow(/answer-key guard.*inside source/);
+  });
+});
+
+describe("eval: dir-arm snapshots keep symlinks verbatim", () => {
+  it("a relative link stays relative (it cannot reach back into the live source)", async () => {
+    const { scen, a, b } = setup();
+    symlinkSync("SKILL.md", join(b, "skills", "csv-metrics", "alias.md"));
+    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    const snapLink = join(out.evalDir, "arms", "after", "csv-metrics", "skills", "csv-metrics", "alias.md");
+    expect(lstatSync(snapLink).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(snapLink)).toBe("SKILL.md");
+  });
+});
+
+describe("eval: a plugin with several skills", () => {
+  it("runs without --skill; invocation is then unobservable", async () => {
+    const { scen, a, b } = setup();
+    for (const d of [a, b]) {
+      mkdirSync(join(d, "skills", "second"), { recursive: true });
+      writeFileSync(join(d, "skills", "second", "SKILL.md"), "---\nname: second\ndescription: d\n---\nx\n");
+    }
+    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    expect(out.manifest.skill).toBeNull();
+    const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
+    expect(lines.every((l) => l.evidence?.invoked === "unobservable")).toBe(true);
+    // --skill names one and records it.
+    const withSkill = await runEval(
+      parseEvalArgs([scen, "--arm", `before=${a}`, "--arm", `after=${b}`, "--out", join(root, "eval-s"), "--quiet", "--skill", "second"]),
+      deps(fakeRunner()),
+    );
+    expect(withSkill.manifest.skill).toBe("second");
   });
 });

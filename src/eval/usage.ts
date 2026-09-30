@@ -45,10 +45,13 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
                              separate held-out section — scenarios you tuned the skill against are weak evidence.
   --include-untracked        snapshot a directory arm's untracked files too (the raw walk); not with a git: arm
   --allow-identical-arms     run even when both arms hash identically (an A/A noise run)
-  --fail-on possible|confirmed  exit 1 on a drop at this level (default possible). At --reps 5 a single
-                             collapsed row reaches 'possible' but, with 13 or more rows under bh, cannot reach
-                             'confirmed' alone; the start-up notice prints how many rows 'confirmed' needs.
-  --skill <name>             the skill inside a multi-skill plugin whose invocation is recorded per rep
+  --fail-on possible|confirmed  opt in to gating: exit 1 on a drop at this level. Without it the exit code does
+                             not depend on what the rows show. At --reps 5 a single collapsed row reaches
+                             'possible' but, with 13 or more rows under bh, cannot reach 'confirmed' alone; the
+                             start-up notice prints how many rows 'confirmed' needs. An A/A run under
+                             --fail-on possible can exit 1 on noise.
+  --skill <name>             the skill whose invocation each rep records (needed for a plugin with several
+                             skills; without a single skill the invocation fact is 'unobservable')
   --out <dir>                the eval directory (default ~/.cowork-harness/evals/<eval-id>); refused inside a git
                              work tree, where the stager would mount the snapshots empty
   --on-unanswered fail|first, --decider-cmd '<helper>', --decider-dir <dir>   answer path, as on 'run'
@@ -56,6 +59,6 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --quiet                    no per-job progress lines
   --dotenv <path>, --run-dir <path>   as on every command
        No run label or session id is accepted: eval labels each run eval:<eval-id>:<arm> and gives each job its own session.
-       exit codes: 0 completed, no drop at the --fail-on level · 1 a drop at the --fail-on level, every row
-       insufficient, or the judge model differed across reps · 2 usage, or a refusal before any run ·
-       3 an arm snapshot failed its staging preflight`;
+       exit codes: 0 completed (with --fail-on: and no drop at that level) · 1 a drop at the --fail-on level,
+       every row insufficient, or the judge model differed across reps · 2 usage, or a refusal before any
+       run · 3 an arm snapshot could not be copied, or failed its staging preflight`;

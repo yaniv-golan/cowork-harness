@@ -353,9 +353,11 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const gatingRows = [...familyRows, ...(tuned?.derivedRows ?? []), ...(heldOut?.derivedRows ?? [])];
   const labels: Record<string, number> = {};
   for (const r of familyRows) labels[r.label] = (labels[r.label] ?? 0) + 1;
-  const failOnHit = gatingRows.some((r) =>
-    m.settings.failOn === "confirmed" ? r.label === "confirmed drop" : r.label === "possible drop" || r.label === "confirmed drop",
-  );
+  const failOnHit =
+    m.settings.failOn !== null &&
+    gatingRows.some((r) =>
+      m.settings.failOn === "confirmed" ? r.label === "confirmed drop" : r.label === "possible drop" || r.label === "confirmed drop",
+    );
   const allInsufficient = familyRows.length > 0 && familyRows.every((r) => r.label === "insufficient");
   const judgeDisagreement = judgeDisagreements.length > 0;
   const recordedIdx = new Set(lines.map((l) => l.index));
@@ -469,7 +471,7 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   const s = rep.settings;
   L.push(
     `Reps: ${s.reps} per arm per scenario, scheduled ABBA (rep 1 runs A then B, rep 2 B then A, …); a row needs ≥ ${s.threshold} valid reps per arm${s.allowUnderpowered ? " (--allow-underpowered)" : ""}. ` +
-      `Correction: ${s.correction === "bh" ? `bh (q = ${s.q}, fixed)` : "holm"}, within each section; alpha ${s.alpha}. --fail-on ${s.failOn}.`,
+      `Correction: ${s.correction === "bh" ? `bh (q = ${s.q}, fixed)` : "holm"}, within each section; alpha ${s.alpha}. ${s.failOn === null ? "No --fail-on: the exit code does not depend on what the rows show." : `--fail-on ${s.failOn}.`}`,
   );
   L.push("Family: claim sub-rows and non-semantic assertion rows. Roll-up and classification rows are shown separately.");
   L.push("No control arm: prior-answerable claims are not flagged.");

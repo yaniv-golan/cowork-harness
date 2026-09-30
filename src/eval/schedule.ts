@@ -13,16 +13,20 @@ export interface ScheduledJob {
   scenario: string;
   /** 1-based. */
   rep: number;
-  /** Pre-assigned, so the run dir is known before the run: `<runs-root>/<slug>/sess-<sessionId>`. */
-  sessionId: string;
+  /** Pre-assigned, so the run dir is known before the run (`runOutDir(scenario, runId)`). Shaped like any
+   *  ordinary run's id — `local_` + 13 base36 characters — and derived from a hash, so it names neither
+   *  the eval nor the arm: it becomes the agent's working directory, and a label there would be the one
+   *  token that differs between arms. Recomputable from (evalId, arm, scenario index, rep). */
+  runId: string;
 }
 
-/** A scenario name reduced to the session-id charset, with a short hash when that changed or truncated it
- *  (so two names that reduce alike still get distinct ids). */
-export function scenarioToken(name: string): string {
-  const cleaned = name.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "scenario";
-  if (cleaned === name && cleaned.length <= 40) return cleaned;
-  return `${cleaned.slice(0, 40)}-${createHash("sha256").update(name).digest("hex").slice(0, 6)}`;
+export function jobRunId(evalId: string, arm: string, scenarioIndex: number, rep: number): string {
+  const h = createHash("sha256")
+    .update([evalId, arm, String(scenarioIndex), String(rep)].join("\0"))
+    .digest("hex");
+  return `local_${BigInt(`0x${h.slice(0, 16)}`)
+    .toString(36)
+    .padStart(13, "0")}`;
 }
 
 export function buildSchedule(evalId: string, arms: readonly [string, string], scenarios: readonly string[], reps: number): ScheduledJob[] {
@@ -37,7 +41,7 @@ export function buildSchedule(evalId: string, arms: readonly [string, string], s
           scenarioIndex,
           scenario,
           rep,
-          sessionId: `eval-${evalId}-${arm}-${scenarioToken(scenario)}-r${rep}`,
+          runId: jobRunId(evalId, arm, scenarioIndex, rep),
         });
     });
   }

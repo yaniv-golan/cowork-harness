@@ -18,6 +18,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   statSync,
   symlinkSync,
@@ -124,6 +125,8 @@ export interface SnapshotInfo {
   dirty?: boolean;
   /** The source, `~`-relative for display and the manifest. */
   source: string;
+  /** The on-disk directory the answer-key guard's location check runs against (a git arm: `<toplevel>/<path>`). */
+  sourceDir?: string;
 }
 
 function countFiles(dir: string): number {
@@ -172,19 +175,30 @@ export function snapshotDirArm(srcPath: string, dest: string, includeUntracked: 
         throw new UsageError(
           `--arm ${raw}: ${tildeify(src)} has 0 git-tracked files — the stager delivers tracked files only, so this arm would mount EMPTY. 'git add' it, or pass --include-untracked.`,
         );
-      cpSync(src, dest, { recursive: true, filter: gitFilterFromSet(src, tracked) });
+      // verbatimSymlinks: a relative link stays relative (as a git: arm recreates it), so it cannot point back
+      // into the live source; the answer-key guard refuses any link that resolves outside the snapshot.
+      cpSync(src, dest, { recursive: true, verbatimSymlinks: true, filter: gitFilterFromSet(src, tracked) });
       return {
         dir: dest,
         fileCount: countFiles(dest),
         untrackedExcluded: untracked,
         fileSet: "git-tracked",
         source: tildeify(src),
+        sourceDir: src,
         ...commitFields,
       };
     }
   }
-  cpSync(src, dest, { recursive: true, filter: (s) => noGitDir(relative(src, s)) });
-  return { dir: dest, fileCount: countFiles(dest), untrackedExcluded: 0, fileSet: "raw-walk", source: tildeify(src), ...commitFields };
+  cpSync(src, dest, { recursive: true, verbatimSymlinks: true, filter: (s) => noGitDir(relative(src, s)) });
+  return {
+    dir: dest,
+    fileCount: countFiles(dest),
+    untrackedExcluded: 0,
+    fileSet: "raw-walk",
+    source: tildeify(src),
+    sourceDir: src,
+    ...commitFields,
+  };
 }
 
 /** Extract `git:<ref>:<path>` from the repository containing `cwd`. Git runs from argv (no shell) with the
@@ -233,7 +247,17 @@ export function snapshotGitArm(source: { ref: string; path: string }, dest: stri
     fileCount++;
   }
   if (fileCount === 0) throw new UsageError(`--arm ${raw}: no files under "${path}" at ${source.ref}`);
-  return { dir: dest, fileCount, untrackedExcluded: 0, fileSet: "git-commit", commit, source: `git:${source.ref}:${path}` };
+  return {
+    dir: dest,
+    fileCount,
+    untrackedExcluded: 0,
+    fileSet: "git-commit",
+    commit,
+    source: `git:${source.ref}:${path}`,
+    // The working-tree directory the path names: the answer-key guard's location check runs against it too
+    // (a scenario kept inside the plugin in the work tree is very likely committed there as well).
+    sourceDir: path === "." ? top : join(top, ...path.split("/")),
+  };
 }
 
 // ---- answer-key guard ------------------------------------------------------------------------------------
@@ -241,18 +265,30 @@ export function snapshotGitArm(source: { ref: string; path: string }, dest: stri
 export interface AnswerKeyFinding {
   arm: string;
   file: string;
-  reason: "inside_source" | "content_copy" | "evals_json";
+  reason: "inside_source" | "content_copy" | "evals_json" | "symlink_outside";
 }
 
 const sha256 = (buf: Buffer) => createHash("sha256").update(buf).digest("hex");
 
-function walkFiles(dir: string, out: string[] = []): string[] {
+/** Every entry under `dir`: regular files, and symlinks (not descended — a link into the snapshot reaches
+ *  a path the walk visits anyway, and one out of it is refused). */
+function walkEntries(dir: string, out: Array<{ path: string; link: boolean }> = []): Array<{ path: string; link: boolean }> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) walkFiles(p, out);
-    else if (e.isFile() || lstatSync(p).isFile()) out.push(p);
+    if (e.isSymbolicLink()) out.push({ path: p, link: true });
+    else if (e.isDirectory()) walkEntries(p, out);
+    else if (e.isFile()) out.push({ path: p, link: false });
   }
   return out;
+}
+
+/** Where a link points: its realpath when the target exists, else its lexical resolution. */
+function linkTarget(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(dirname(p), readlinkSync(p));
+  }
 }
 
 const realOr = (p: string) => {
@@ -283,9 +319,23 @@ export function answerKeyFindings(
       for (const e of evalReal)
         if (e.real === root || e.real.startsWith(root + sep)) findings.push({ arm: arm.label, file: e.file, reason: "inside_source" });
     }
-    for (const f of walkFiles(arm.snapshotDir)) {
+    const snapRoot = realOr(arm.snapshotDir);
+    for (const { path: f, link } of walkEntries(arm.snapshotDir)) {
       const rel = relative(arm.snapshotDir, f);
       if (f.split(sep).pop() === "evals.json") findings.push({ arm: arm.label, file: rel, reason: "evals_json" });
+      if (link) {
+        const target = linkTarget(f);
+        if (target !== snapRoot && !target.startsWith(snapRoot + sep))
+          findings.push({ arm: arm.label, file: `${rel} -> ${tildeify(target)}`, reason: "symlink_outside" });
+        const isFile = (() => {
+          try {
+            return statSync(f).isFile();
+          } catch {
+            return false;
+          }
+        })();
+        if (!isFile) continue;
+      }
       const hit = byHash.get(sha256(readFileSync(f)));
       if (hit !== undefined) findings.push({ arm: arm.label, file: `${rel} (a copy of ${tildeify(hit)})`, reason: "content_copy" });
     }

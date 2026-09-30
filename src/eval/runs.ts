@@ -39,7 +39,7 @@ export interface RunsLine {
   arm: string;
   scenario: string;
   rep: number;
-  sessionId: string;
+  runId: string;
   /** `~`-relative; null when the job never produced a run dir. */
   runDir: string | null;
   /** What the job threw, if anything. */
@@ -83,7 +83,7 @@ export function buildRunsLine(args: {
   arm: string;
   scenario: string;
   rep: number;
-  sessionId: string;
+  runId: string;
   runDir: string | undefined;
   result: RunResult | undefined;
   thrown: unknown;
@@ -107,7 +107,7 @@ export function buildRunsLine(args: {
     arm: args.arm,
     scenario: args.scenario,
     rep: args.rep,
-    sessionId: args.sessionId,
+    runId: args.runId,
     runDir: args.runDir !== undefined ? tildeify(args.runDir) : null,
     ...(args.thrown !== undefined
       ? { thrown: { kind: thrownKind(args.thrown), message: String((args.thrown as Error)?.message ?? args.thrown) } }
