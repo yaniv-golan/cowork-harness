@@ -64,7 +64,7 @@ export { isLosslessUtf8 } from "./artifacts.js";
 import { isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
-import { loadBaseline, BASELINES_DIR } from "../baseline.js";
+import { loadBaseline, pinnedNativeAgentVersion, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import {
@@ -2025,6 +2025,74 @@ function computeReplacedBuiltinNote(cassette: Cassette): string[] {
   ];
 }
 
+/** The agent build this cassette was recorded with, as the agent itself reported it in `system/init`
+ *  (`claude_code_version`), or `undefined` when the stream carries no such frame or the field is absent or
+ *  not a string. Same walk and the same "absent ⇒ no evidence" rule as recordedInitTools. */
+function recordedInitAgentVersion(cassette: Cassette): string | undefined {
+  if (!Array.isArray(cassette.events)) return undefined;
+  for (const line of cassette.events) {
+    let m: { type?: string; subtype?: string; claude_code_version?: unknown };
+    try {
+      m = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (m?.type !== "system" || m?.subtype !== "init") continue;
+    return typeof m.claude_code_version === "string" && m.claude_code_version.length > 0 ? m.claude_code_version : undefined;
+  }
+  return undefined;
+}
+
+/** NOTE (never a finding): the agent that recorded this stream is not the agent its fingerprint baseline
+ *  pins for the tier it ran at. Which pin applies depends on the tier, because each tier executes a
+ *  different agent:
+ *   - `container` / `microvm` execute the staged VM ELF, pinned by the baseline's `agentVersion`.
+ *   - `hostloop` executes the staged NATIVE binary, pinned by the `<ver>` in `agentBinary.nativeStagedPath`,
+ *     which versions independently of `agentVersion`. A baseline with no native pin gives no note.
+ *   - `protocol` executes the operator's host `claude` from PATH, which no baseline pins, so a difference
+ *     is expected and there is nothing to re-record against: never noted.
+ *   - an unresolved tier (a `cowork` cassette with no `effectiveFidelity`) could have run either agent, so it
+ *     is never noted rather than guessed at.
+ *  The note states the fact and lists that tier's possible causes without picking one: a
+ *  `fingerprint.baseline` re-stamped by hand across an agent bump, a recording made under
+ *  `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, the explicit binary override (`COWORK_AGENT_BINARY` for the ELF,
+ *  `COWORK_HOST_AGENT_BINARY` for the native binary), and at hostloop only the patch-bump substitution of the
+ *  native binary that `src/baseline.ts` accepts by default (the ELF resolver has no such default). None of
+ *  these is recorded in the cassette, and staleness compares the baseline NAME, not what the recording ran.
+ *
+ *  Derived from the init frame the cassette already freezes, not from a stamped field, so it works on every
+ *  cassette ever recorded and cannot disagree with the evidence. `fingerprint.baseline` holds either the bare
+ *  app version (`2.9939.4`) or a file stem (`desktop-1.18286.0`); both map to a committed baseline file.
+ *  Silent whenever any input is missing: no init version, no fingerprint, a baseline name that is not a
+ *  plain version or does not resolve to a committed file, or no pin for the tier. Exported for tests. */
+export function computeAgentVersionNote(cassette: Cassette): string[] {
+  const tier = (cassette.effectiveFidelity ?? cassette.scenario?.fidelity) as string | undefined;
+  if (tier !== "container" && tier !== "microvm" && tier !== "hostloop") return [];
+  const recorded = recordedInitAgentVersion(cassette);
+  const name = cassette.fingerprint?.baseline;
+  if (recorded === undefined || typeof name !== "string") return [];
+  const stem = /^desktop-\d+(?:\.\d+)*$/.test(name) ? name : /^\d+(?:\.\d+)*$/.test(name) ? `desktop-${name}` : undefined;
+  if (stem === undefined) return [];
+  let baseline: PlatformBaseline;
+  try {
+    baseline = loadBaseline(stem);
+  } catch {
+    return []; // no committed baseline by that name — nothing to compare against
+  }
+  const native = tier === "hostloop";
+  const pinned = native ? pinnedNativeAgentVersion(baseline) : baseline.agentVersion;
+  if (!pinned || pinned === recorded) return [];
+  const causes = native
+    ? `the recording ran under COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1, COWORK_HOST_AGENT_BINARY pointed at ` +
+      `another binary, or a same-major.minor patch bump of the staged native agent stood in for the pinned one`
+    : `the recording ran under COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1, or COWORK_AGENT_BINARY pointed at another binary`;
+  return [
+    `agent-version: recorded at ${tier} by agent ${recorded}, but its fingerprint names baseline ${name}, which pins ` +
+      `${native ? "the native agent" : "agent"} ${pinned}${native ? " (its staged native binary)" : ""}. Possible causes: the ` +
+      `fingerprint was re-stamped by hand across an agent bump, ${causes}. Re-record against the pinned agent to clear it.`,
+  ];
+}
+
 export function computeStaleness(
   cassette: Cassette,
   cassetteDir: string | undefined,
@@ -2032,7 +2100,12 @@ export function computeStaleness(
 ): { findings: StalenessFinding[]; notes: string[] } {
   const tier = computeTierStaleness(cassette);
   const findings: StalenessFinding[] = [...tier.findings];
-  const notes: string[] = [...tier.notes, ...computeDiscoverySurfaceNote(cassette), ...computeReplacedBuiltinNote(cassette)];
+  const notes: string[] = [
+    ...tier.notes,
+    ...computeDiscoverySurfaceNote(cassette),
+    ...computeReplacedBuiltinNote(cassette),
+    ...computeAgentVersionNote(cassette),
+  ];
   const fp = cassette.fingerprint;
   // BEFORE the fingerprint guard on purpose — same rationale as the tier check above: fingerprint-less
   // cassettes are the OLDEST, i.e. exactly the population the discovery-surface note targets.
@@ -5919,7 +5992,7 @@ export const REPLAY_USAGE =
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
   "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.\n" +
   "       --allow-failing waives that verdict gate WHOLESALE — including the skill-drift failure --assert-from forces on. So `--assert-from --write --allow-failing` will persist an assert block validated against a recording whose skill sources have since changed. Re-record instead when the drift is real; the flag is for a verdict you have read and understood.\n" +
-  "       text mode writes the footer to STDERR and nothing to stdout (a passing replay is 0 bytes) — machine output needs --output-format json. To tell YOUR failing asserts from injected drift/corruption findings, read verdict.failures[].kind (`assertion` vs `staleness`/`cassette-format`), not the exit code, which collapses them: jq '[.results[]? | .verdict.failures[]? | select(.kind==\"assertion\")] | length'.\n" +
+  "       text mode writes the footer to STDERR and nothing to stdout (a passing replay is 0 bytes): text is for humans and not a contract, and the exit code is its only signal. Machine output needs --output-format json, or COWORK_HARNESS_OUTPUT_FORMAT=json to set it for a whole CI job; gate on the envelope with jq -e '.ok'. To tell YOUR failing asserts from injected drift/corruption findings, read verdict.failures[].kind (`assertion` vs `staleness`/`cassette-format`), not the exit code, which collapses them: jq '[.results[]? | .verdict.failures[]? | select(.kind==\"assertion\")] | length'.\n" +
   '       --best-effort-future-cassette: override the refusal to replay a cassette recorded by a NEWER format version and attempt it anyway. `verify-cassettes` deliberately does NOT accept this flag — a verification gate has no "read it anyway" path. Cost: an older CLI reading a newer cassette can silently misread a scenario key it does not recognize — this is a best-effort escape hatch, not a safe one.';
 
 export async function cmdReplay(args: string[]) {
@@ -6085,13 +6158,22 @@ export async function cmdReplay(args: string[]) {
   let currentImage: AgentImageProvenance | undefined;
   const currentImageOnce = (): AgentImageProvenance =>
     (currentImage ??= resolveAgentImageProvenance(resolveContainerRuntime(), resolveAgentImage()));
-  // WS-C: collect staleness notes across the batch instead of printing the same constant string once per
-  // cassette. Keyed by the note's `kind:` prefix; the tail after the prefix is identical per kind, so one
-  // exemplar + a count is strictly more informative than N repetitions.
+  // Collect staleness notes across the batch instead of printing the same constant string once per
+  // cassette. Keyed by the note's `kind:` prefix; for most kinds the tail after the prefix is identical per
+  // kind, so one exemplar + a count is strictly more informative than N repetitions. The exception is a kind
+  // whose text carries per-cassette facts (`agent-version:` names that cassette's recorded and pinned
+  // versions): one exemplar would attach the first file's versions to the whole batch, so those are kept
+  // per file and printed one line each.
+  const PER_FILE_NOTE_KINDS = new Set(["agent-version"]);
   const notesByKind = new Map<string, { count: number; exemplar: string }>();
-  const collectNotes = (ns: string[]) => {
+  const perFileNotes: { file: string; kind: string; note: string }[] = [];
+  const collectNotes = (file: string, ns: string[]) => {
     for (const n of ns) {
       const kind = /^([a-z-]+):/.exec(n)?.[1] ?? "note";
+      if (PER_FILE_NOTE_KINDS.has(kind)) {
+        perFileNotes.push({ file, kind, note: n });
+        continue;
+      }
       const prev = notesByKind.get(kind);
       notesByKind.set(kind, { count: (prev?.count ?? 0) + 1, exemplar: prev?.exemplar ?? n });
     }
@@ -6263,7 +6345,7 @@ export async function cmdReplay(args: string[]) {
         cassetteDir: dirname(f),
         sessionOverride,
         bestEffortFutureCassette,
-        notesSink: collectNotes,
+        notesSink: (ns: string[]) => collectNotes(f, ns),
       });
     } catch (e) {
       log(`replay: ${f}: ${(e as Error)?.message ?? String(e)}`);
@@ -6312,6 +6394,8 @@ export async function cmdReplay(args: string[]) {
   const total = resolved.files.length;
   for (const [kind, { count, exemplar }] of notesByKind)
     warn(`::notice:: [replay] ${count}/${total} cassette(s) — ${exemplar.replace(new RegExp(`^${kind}:\\s*`), "")} [${kind}]\n`);
+  for (const { file, kind, note } of perFileNotes)
+    warn(`::notice:: [replay] ${file} — ${note.replace(new RegExp(`^${kind}:\\s*`), "")} [${kind}]\n`);
 
   if (json) out(jsonEnvelope("replay", results));
   return process.exit(worst);
@@ -6437,7 +6521,8 @@ export const VERIFY_CASSETTES_USAGE =
   "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
   "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.\n" +
   "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.\n" +
-  "       --session <file>: resolve the cassette's skill sources from THIS session instead of the recorded cassette-relative path. The escape hatch for a MOVED cassette: a cassette stores `session:` relative to its own directory, so any relocation (git mv, a repo reorg, a copy into another project) leaves staleness unverifiable with no way to say where the tree went. Supplies a SESSION, not bare directories, so the session-level `staleness.hash_ignore` and the rest of the hash boundary survive the override. One cassette at a time — refused for a directory batch, since each cassette may have been recorded against a different source. The resolved path is echoed on stderr: an override that silently pinned the wrong tree would manufacture false greens.";
+  "       --session <file>: resolve the cassette's skill sources from THIS session instead of the recorded cassette-relative path. The escape hatch for a MOVED cassette: a cassette stores `session:` relative to its own directory, so any relocation (git mv, a repo reorg, a copy into another project) leaves staleness unverifiable with no way to say where the tree went. Supplies a SESSION, not bare directories, so the session-level `staleness.hash_ignore` and the rest of the hash boundary survive the override. One cassette at a time — refused for a directory batch, since each cassette may have been recorded against a different source. The resolved path is echoed on stderr: an override that silently pinned the wrong tree would manufacture false greens.\n" +
+  "       text mode writes its report to STDERR and nothing to stdout: text is for humans and not a contract, and the exit code is its only signal. For a scriptable result use --output-format json, or COWORK_HARNESS_OUTPUT_FORMAT=json to set it for a whole CI job, and gate on the envelope with jq -e '.ok'.";
 
 // The full flag-coverage guard registry (P9) — see the UsageGuardEntry doc comment above RECORD_ALLOWLIST.
 // Defined here (after all three commands' consts exist) so it can reference them directly.

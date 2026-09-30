@@ -244,6 +244,14 @@ function nativeVersionFromPath(path: string): string | undefined {
   return ver || undefined;
 }
 
+/** The native agent version a baseline pins, read from the `<ver>` directory of
+ *  `agentBinary.nativeStagedPath` (`.../claude-code/<ver>/claude.app/Contents/MacOS/claude`). This is the
+ *  agent hostloop executes, and it versions independently of `agentVersion` (the VM ELF). `undefined` when
+ *  the baseline pins no native binary or the path is not that shape. Pure; never touches the filesystem. */
+export function pinnedNativeAgentVersion(baseline: PlatformBaseline): string | undefined {
+  return /\/claude-code\/([^/]+)\/claude\.app\/Contents\/MacOS\/claude$/.exec(baseline.agentBinary?.nativeStagedPath ?? "")?.[1];
+}
+
 /**
  * Classification of the NATIVE agent binary's staging state against its baseline pin — the single
  * source of truth shared by `resolveHostAgentBinary` and `doctor`'s `hostAgent` check so the two never

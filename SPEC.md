@@ -596,7 +596,7 @@ there are three families:
   `sections`, `summary`, `cost`, `stoppedEarly`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
   and `answer` (`gate`, `answers`).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
-  array, no wrapper object), **`boundary-check`**, **`init-redact`**, **`decide`**,
+  array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
   `{"done":true}` only once the run has written `done.json`, so one pass over a run still in progress
   ends on its last gate line with no terminal line; when the channel fails, the standard error envelope
