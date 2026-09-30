@@ -518,6 +518,10 @@ export interface RunRecord {
   // read as "the agent had no tools/connectors". availableSkills is re-derived from disk, so it's exempt.
   context: { tools?: string[]; mcpServers?: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
   contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
+  /** Sub-agent retried model calls seen on the stream (`tool_progress` + `subagent_retry`). Optional so a
+   *  record that was never driven (a truncated cassette's placeholder, a hand-built test record) reports
+   *  nothing rather than a false zero; `Run` initializes it to zeros before the drive. */
+  subagentRetries?: { count: number; delayMs: number };
   mcpErrors: Array<{ server: string; code?: number; message: string }>; // MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw)
   hookEvents: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>; // PreToolUse hook fire/block events (built-in Task hook + any custom hook bundle)
   /** Every GATED-file-tool tool_use (Read/Write/Edit/Glob/Grep/MultiEdit), raw paths as sent. The
@@ -728,6 +732,7 @@ export class Run {
       tasks: new Map(),
       context: {}, // tools/mcpServers stay undefined until system/init arrives (see the type comment); a pre-init crash → evidence-unavailable, not empty inventory
       contextEvents: [],
+      subagentRetries: { count: 0, delayMs: 0 },
       mcpErrors: [],
       hookEvents: [],
       fileToolAttempts: [],
@@ -1131,6 +1136,12 @@ export class Run {
             this.rec.errorSource ??= ev.source; // keep the first observed source; a later recovering result won't clear it
             this.rec.decisions.push({ kind: "tool", name: ev.source, decision: "error", by: "agent", detail: ev.message });
             break;
+          case "subagent_retry": {
+            const sr = (this.rec.subagentRetries ??= { count: 0, delayMs: 0 });
+            sr.count++;
+            if (typeof ev.delayMs === "number" && Number.isFinite(ev.delayMs) && ev.delayMs > 0) sr.delayMs += ev.delayMs;
+            break;
+          }
           case "system_event":
             this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
             // The agent switched models mid-run. Captured from the SDK's typed event rather than
