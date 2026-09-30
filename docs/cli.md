@@ -290,7 +290,7 @@ Two footnotes the table cannot carry:
 - a closed terminal (`SIGHUP`, not on Windows) is handled like `SIGTERM` and exits `129`;
 - an interrupted `chat` exits `130`/`143` the same way, without writing a `result.json`: a Ctrl-C during a turn
   stops the agent at once. A Ctrl-C at the `you>` prompt ends the session normally, and a first signal while
-  the session's result is being written waits for the write (a second exits at once).
+  the session's result is being written still writes it and then exits `130` (a second exits at once).
 
 After a run, the footer **echoes every auto-answered
 question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them

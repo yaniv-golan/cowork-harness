@@ -110,6 +110,7 @@ All notable changes to this project are documented here. The format is based on
   took effect only after the agent finished the turn. A Ctrl-C at the `you>` prompt still ends the session
   and writes its result, and a first Ctrl-C while that result is being written waits for it (a second one
   exits at once).
+
 ### Fixed
 
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
