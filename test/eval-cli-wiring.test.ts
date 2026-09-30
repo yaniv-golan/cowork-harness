@@ -170,7 +170,7 @@ describe.runIf(can)("eval through the real job wiring (stub agent)", () => {
       expect(env.arms.map((a: { buckets: unknown }) => a.buckets)).toEqual([{ errored_infra: 4 }, { errored_infra: 4 }]);
       expect(env.summary.erroredArms.map((e: { dominant: { rule: string } }) => e.dominant.rule)).toEqual(["auth", "auth"]);
       const md = readFileSync(join(r.out, "report.md"), "utf8");
-      expect(md).toMatch(/Every rep of arm a errored.*\(auth\) 4\/4/);
+      expect(md).toMatch(/Every rep of arm a in q errored.*\(auth\) 4\/4/);
       expect(md).not.toMatch(/\*\*no detectable change\*\*/);
     } finally {
       f.cleanup();

@@ -102,9 +102,18 @@ export interface EvalReport {
   }>;
   summary: {
     familyRows: number;
-    /** Arms whose every recorded rep is errored (infrastructure or the agent's): nothing was compared, so
-     *  every row is `insufficient` and the eval exits 1. `dominant` is the most frequent bucket and rule. */
-    erroredArms: Array<{ arm: string; reps: number; dominant: { bucket: RepBucket; rule: string; count: number } }>;
+    /** Each (arm, scenario) whose every recorded rep errored, with its most frequent bucket and rule.
+     *  `rowsInsufficient`: that scenario compared nothing — every rep of BOTH arms errored, or every rep of
+     *  this arm is infrastructure — so its rows are `insufficient` and the eval exits 1. An arm whose every
+     *  rep is the agent's own failure, against an arm with valid reps, is scored (a real drop) and listed
+     *  with `rowsInsufficient: false`. */
+    erroredArms: Array<{
+      arm: string;
+      scenario: string;
+      reps: number;
+      dominant: { bucket: RepBucket; rule: string; count: number };
+      rowsInsufficient: boolean;
+    }>;
     labels: Record<string, number>;
     allInsufficient: boolean;
     failOnHit: boolean;
@@ -141,13 +150,6 @@ function noteFor(r: FamilyRowOutput): string | undefined {
   return undefined;
 }
 
-/** A row of an eval in which an arm compared nothing: its counts stay visible, its verdict does not. */
-function asInsufficient(r: ReportRow): ReportRow {
-  const { p: _p, adjustedP: _a, mdd: _m, evidence: _e, note: _n, ...rest } = r;
-  (void _p, void _a, void _m, void _e, void _n);
-  return { ...rest, label: "insufficient" };
-}
-
 /** Derived rows are shown with their own test but never corrected, so at most `possible`. */
 function asDerived(r: FamilyRowOutput): FamilyRowOutput {
   const { adjustedP: _drop, ...rest } = r;
@@ -156,7 +158,15 @@ function asDerived(r: FamilyRowOutput): FamilyRowOutput {
   return { ...rest, label };
 }
 
-function sectionOf(m: EvalManifest, scenarioNames: string[], classified: ClassifiedLine[], threshold: number): ReportSection {
+/** `comparedNothing`: scenarios whose reps contribute to no row (see `erroredArms`) — their rows keep 0
+ *  reps, so they are `insufficient` and stay out of the correction family. */
+function sectionOf(
+  m: EvalManifest,
+  scenarioNames: string[],
+  classified: ClassifiedLine[],
+  threshold: number,
+  comparedNothing: ReadonlySet<string>,
+): ReportSection {
   const [A, B] = m.arms;
   const opts = { correction: m.settings.correction, q: m.settings.q, alpha: m.settings.alpha, threshold };
   const familyInputs: Array<{
@@ -179,7 +189,7 @@ function sectionOf(m: EvalManifest, scenarioNames: string[], classified: Classif
       ]),
     );
     for (const { line, c } of classified) {
-      if (line.scenario !== name) continue;
+      if (line.scenario !== name || comparedNothing.has(name)) continue;
       const ev = repEvidenceOf(line);
       for (const v of repRowValues(rows, scen.assertions, c, ev.result)) {
         if (v.value === undefined) continue;
@@ -322,31 +332,39 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const threshold = insufficientThreshold(m.settings.reps, m.settings.allowUnderpowered);
   const tunedNames = m.scenarios.filter((s) => !s.heldOut).map((s) => s.name);
   const heldNames = m.scenarios.filter((s) => s.heldOut).map((s) => s.name);
-  // An arm whose every rep errored compared nothing: an agent error scores 0 on every row, so without this
-  // an arm that never got a model (or crashed every time) reads as a clean "no detectable change" against a
-  // failing other arm, or as a flawless drop — either way the rows are not a comparison. Force them
-  // `insufficient`; the header names the dominant error.
-  const erroredArms = m.arms.flatMap((a) => {
-    const mine = classified.filter((x) => x.line.arm === a.label);
-    if (mine.length === 0 || !mine.every((x) => ERRORED.has(x.c.bucket))) return [];
-    const counts = new Map<string, { bucket: RepBucket; rule: string; count: number }>();
-    for (const x of mine) {
-      const k = `${x.c.bucket}\0${x.c.termination.rule}`;
-      const e = counts.get(k) ?? { bucket: x.c.bucket, rule: x.c.termination.rule, count: 0 };
-      e.count++;
-      counts.set(k, e);
-    }
-    const dominant = [...counts.values()].sort(
-      (p, q) => q.count - p.count || `${p.bucket}${p.rule}`.localeCompare(`${q.bucket}${q.rule}`),
-    )[0];
-    return [{ arm: a.label, reps: mine.length, dominant }];
-  });
-  const forceInsufficient = (s: ReportSection | null): ReportSection | null =>
-    s === null || erroredArms.length === 0
-      ? s
-      : { ...s, m: 0, confirmableRows: 0, rows: s.rows.map(asInsufficient), derivedRows: s.derivedRows.map(asInsufficient) };
-  const tuned = forceInsufficient(tunedNames.length ? sectionOf(m, tunedNames, classified, threshold) : null);
-  const heldOut = forceInsufficient(heldNames.length ? sectionOf(m, heldNames, classified, threshold) : null);
+  // Per (arm, scenario): every rep errored. A scenario compared nothing when every rep of BOTH arms errored
+  // (0 against 0 is not "no detectable change"), or when one arm's every rep is infrastructure (that arm
+  // never ran the skill). Its rows get no reps — `insufficient`, out of the family — and the eval exits 1.
+  // An arm whose every rep is the AGENT's failure against an arm with valid reps is a real regression (a
+  // skill that crashes every time) and is scored; the header still names it.
+  const allErrored = (arm: string, scenario: string) => {
+    const mine = classified.filter((x) => x.line.arm === arm && x.line.scenario === scenario);
+    return mine.length > 0 && mine.every((x) => ERRORED.has(x.c.bucket)) ? mine : null;
+  };
+  const erroredArms: EvalReport["summary"]["erroredArms"] = [];
+  for (const sc of m.scenarios) {
+    const per = m.arms.map((a) => allErrored(a.label, sc.name));
+    const both = per.every((x) => x !== null);
+    const anyAllInfra = per.some((x) => x !== null && x.every((y) => y.c.bucket === "errored_infra"));
+    m.arms.forEach((a, i) => {
+      const mine = per[i];
+      if (mine === null) return;
+      const counts = new Map<string, { bucket: RepBucket; rule: string; count: number }>();
+      for (const x of mine) {
+        const k = `${x.c.bucket}\0${x.c.termination.rule}`;
+        const e = counts.get(k) ?? { bucket: x.c.bucket, rule: x.c.termination.rule, count: 0 };
+        e.count++;
+        counts.set(k, e);
+      }
+      const dominant = [...counts.values()].sort(
+        (p, q) => q.count - p.count || `${p.bucket}${p.rule}`.localeCompare(`${q.bucket}${q.rule}`),
+      )[0];
+      erroredArms.push({ arm: a.label, scenario: sc.name, reps: mine.length, dominant, rowsInsufficient: both || anyAllInfra });
+    });
+  }
+  const comparedNothing = new Set(erroredArms.filter((e) => e.rowsInsufficient).map((e) => e.scenario));
+  const tuned = tunedNames.length ? sectionOf(m, tunedNames, classified, threshold, comparedNothing) : null;
+  const heldOut = heldNames.length ? sectionOf(m, heldNames, classified, threshold, comparedNothing) : null;
 
   const arms: ReportArm[] = m.arms.map((a) => {
     const mine = classified.filter((x) => x.line.arm === a.label);
@@ -437,7 +455,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       judgeDisagreement,
       missingJobs,
       tornFinalLine,
-      exitCode: failOnHit || allInsufficient || judgeDisagreement ? 1 : 0,
+      exitCode: failOnHit || allInsufficient || judgeDisagreement || comparedNothing.size > 0 ? 1 : 0,
     },
     cost: {
       agentUsd: sumFinite(lines.map((l) => l.result?.cost?.usd)),
@@ -511,6 +529,31 @@ function renderSection(title: string, s: ReportSection, rep: EvalReport): string
   return out;
 }
 
+/** What to check first, from the most frequent bucket and rule of an all-errored arm. */
+export function erroredHint(d: { bucket: RepBucket; rule: string }): string {
+  if (d.bucket === "errored_agent") return "The agent failed in every rep: read the run dirs.";
+  switch (d.rule) {
+    case "auth":
+      return "The agent could not sign in: check its credential for this tier (`cowork-harness doctor --tier <tier>`).";
+    case "usage_limit":
+    case "kind_usage_limit":
+      return "A usage or spend limit was hit: check the account's quota, then re-run.";
+    case "no_model_answered":
+      return "No model answered: check the agent's credential and the account's quota (`cowork-harness doctor --tier <tier>`).";
+    case "source_spawn":
+    case "thrown_boundary":
+      return "The agent could not be started: check this tier's prerequisites (`cowork-harness doctor --tier <tier>`).";
+    case "source_protocol":
+    case "kind_transport":
+      return "The connection to the agent or the API failed: check the network and re-run.";
+    case "source_decider_timeout":
+    case "thrown_decider_timeout":
+      return "The --decider-cmd / --decider-dir channel did not answer in time: check the helper.";
+    default:
+      return "A termination the classifier does not recognise: read the run dirs.";
+  }
+}
+
 const REDACTION_PLACEHOLDER = "@@EVAL_REDACTION_COUNT@@";
 
 export function renderReportMarkdown(rep: EvalReport): { text: string; redacted: number } {
@@ -569,7 +612,11 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   L.push("");
   for (const e of rep.summary.erroredArms)
     L.push(
-      `**⚠ Every rep of arm ${e.arm} errored** — ${e.dominant.bucket} (${e.dominant.rule}) ${e.dominant.count}/${e.reps}. Nothing was compared: every row is insufficient (exit 1).${e.dominant.bucket === "errored_infra" ? " Check the agent's credentials and quota (`cowork-harness doctor`)." : ""}`,
+      `**⚠ Every rep of arm ${e.arm} in ${e.scenario} errored** — ${e.dominant.bucket} (${e.dominant.rule}) ${e.dominant.count}/${e.reps}. ` +
+        (e.rowsInsufficient
+          ? `Nothing was compared: ${e.scenario}'s rows are insufficient (exit 1). `
+          : "Each of those reps is scored as failing every row (the other arm ran). ") +
+        erroredHint(e.dominant),
       "",
     );
   if (rep.judgeDisagreements.length) {

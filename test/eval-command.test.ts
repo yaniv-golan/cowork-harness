@@ -34,7 +34,7 @@ import { buildFingerprint } from "../src/run/cassette.js";
 import { runOutDir } from "../src/run/execute.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { runEval, parseEvalArgs, EvalStagingError, type EvalJobSpec } from "../src/eval/command.js";
-import { writeEvalReport } from "../src/eval/report.js";
+import { writeEvalReport, erroredHint } from "../src/eval/report.js";
 import { readRunsLines } from "../src/eval/runs.js";
 import { classifyRep } from "../src/eval/classify.js";
 import { repEvidenceOf } from "../src/eval/runs.js";
@@ -363,11 +363,13 @@ describe("eval: credential preflight (doctor's token check, before any run)", ()
   });
 });
 
-describe("eval: every rep of an arm errored — nothing was compared", () => {
+describe("eval: every rep of an arm errored, per scenario", () => {
   // The consumer's report: no usable credential, every rep of both arms "Not logged in", and the eval said
   // "no detectable change" and exited 0. The fake returns the REAL auth excerpt for every job.
-  const authRep = (_s: EvalJobSpec, r: RunResult) =>
-    ({ ...fixture("auth-exit"), outDir: r.outDir, fingerprint: r.fingerprint }) as RunResult;
+  const as = (name: string) => (_s: EvalJobSpec, r: RunResult) =>
+    ({ ...fixture(name), outDir: r.outDir, fingerprint: r.fingerprint }) as RunResult;
+  const authRep = as("auth-exit");
+  const md = (dir: string) => readFileSync(join(dir, "report.md"), "utf8");
 
   it("an auth failure in every rep is infrastructure, every row insufficient, exit 1, and the header names it", async () => {
     const { scen, a, b } = setup();
@@ -376,12 +378,13 @@ describe("eval: every rep of an arm errored — nothing was compared", () => {
     expect(out.report.reps.every((r) => r.rule === "auth")).toBe(true);
     expect(out.report.sections.tuned!.rows.every((r) => r.label === "insufficient")).toBe(true);
     expect(out.report.summary.exitCode).toBe(1);
+    const dominant = { bucket: "errored_infra", rule: "auth", count: 5 };
     expect(out.report.summary.erroredArms).toEqual([
-      { arm: "before", reps: 5, dominant: { bucket: "errored_infra", rule: "auth", count: 5 } },
-      { arm: "after", reps: 5, dominant: { bucket: "errored_infra", rule: "auth", count: 5 } },
+      { arm: "before", scenario: "csv-metrics", reps: 5, dominant, rowsInsufficient: true },
+      { arm: "after", scenario: "csv-metrics", reps: 5, dominant, rowsInsufficient: true },
     ]);
-    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
-    expect(md).toMatch(/Every rep of arm before errored.*errored_infra \(auth\) 5\/5/);
+    expect(md(out.evalDir)).toMatch(/Every rep of arm before in csv-metrics errored.*errored_infra \(auth\) 5\/5/);
+    expect(md(out.evalDir)).toMatch(/could not sign in.*doctor/);
     // The runs line keeps the agent's own text, which is what `auth` matches on a re-render.
     const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
     expect(lines[0].result?.finalMessage).toBe("Not logged in · Please run /login");
@@ -406,39 +409,77 @@ describe("eval: every rep of an arm errored — nothing was compared", () => {
     expect(rep.summary.exitCode).toBe(1);
   });
 
-  it("an arm whose every rep is the agent's error does not report a comparison: insufficient, exit 1", async () => {
-    const { scen, a, b } = setup();
-    const out = await runEval(
-      args(scen, a, b),
-      deps(
-        fakeRunner((s, r) =>
-          s.job.arm === "after" ? ({ ...fixture("timeout"), outDir: r.outDir, fingerprint: r.fingerprint } as RunResult) : r,
-        ),
-      ),
-    );
-    expect(out.report.arms[1].buckets).toEqual({ errored_agent: 5 });
-    expect(out.report.sections.tuned!.rows.every((r) => r.label === "insufficient")).toBe(true);
-    expect(out.report.summary.allInsufficient).toBe(true);
-    expect(out.report.summary.exitCode).toBe(1);
-    expect(out.report.summary.erroredArms).toEqual([
-      { arm: "after", reps: 5, dominant: { bucket: "errored_agent", rule: "source_timeout", count: 5 } },
+  it("one scenario erroring in BOTH arms is insufficient and exits 1, though another scenario compared fine", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const out = await runEval(args(scen, a, b), deps(fakeRunner((s, r) => (s.scenario.name === "csv-metrics" ? as("timeout")(s, r) : r))));
+    const rows = out.report.sections.tuned!.rows;
+    expect(rows.filter((r) => r.scenario === "csv-metrics").every((r) => r.label === "insufficient")).toBe(true);
+    expect(rows.filter((r) => r.scenario !== "csv-metrics").some((r) => r.label !== "insufficient")).toBe(true);
+    expect(out.report.summary.allInsufficient).toBe(false);
+    expect(out.report.summary.erroredArms.map((e) => [e.arm, e.scenario, e.rowsInsufficient])).toEqual([
+      ["before", "csv-metrics", true],
+      ["after", "csv-metrics", true],
     ]);
-    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toMatch(
-      /Every rep of arm after errored.*errored_agent \(source_timeout\) 5\/5/,
-    );
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(md(out.evalDir)).toMatch(/Every rep of arm after in csv-metrics errored.*source_timeout.*read the run dirs/);
   });
 
-  it("one arm with a single valid rep is not an all-errored arm", async () => {
+  it("an arm whose every rep is INFRASTRUCTURE compared nothing, even against a valid arm: insufficient, exit 1", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner((s, r) => (s.job.arm === "after" ? as("usage-limit")(s, r) : r))));
+    expect(out.report.sections.tuned!.rows.every((r) => r.label === "insufficient")).toBe(true);
+    expect(out.report.summary.erroredArms).toEqual([
+      {
+        arm: "after",
+        scenario: "csv-metrics",
+        reps: 5,
+        dominant: { bucket: "errored_infra", rule: "kind_usage_limit", count: 5 },
+        rowsInsufficient: true,
+      },
+    ]);
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(md(out.evalDir)).toMatch(/usage or spend limit.*quota/);
+  });
+
+  it("an arm whose every rep is the AGENT's error against a valid arm is scored: a real drop, named in the header", async () => {
+    // The skill crashes every rep: that is the regression an eval exists to catch, not an absence of data.
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner((s, r) => (s.job.arm === "after" ? as("timeout")(s, r) : r))));
+    expect(out.report.arms[1].buckets).toEqual({ errored_agent: 5 });
+    const row = out.report.sections.tuned!.rows[0];
+    expect(row).toMatchObject({ k1: 5, n1: 5, k2: 0, n2: 5 });
+    expect(row.label).toMatch(/drop$/);
+    expect(out.report.summary.erroredArms).toEqual([
+      {
+        arm: "after",
+        scenario: "csv-metrics",
+        reps: 5,
+        dominant: { bucket: "errored_agent", rule: "source_timeout", count: 5 },
+        rowsInsufficient: false,
+      },
+    ]);
+    expect(out.report.summary.exitCode).toBe(0); // no --fail-on: a drop does not gate
+    expect(md(out.evalDir)).toMatch(/Every rep of arm after in csv-metrics errored.*errored_agent \(source_timeout\) 5\/5.*scored/);
+  });
+
+  it("the header's hint follows the dominant rule", () => {
+    const hint = (bucket: "errored_infra" | "errored_agent", rule: string) => erroredHint({ bucket, rule });
+    expect(hint("errored_infra", "auth")).toMatch(/could not sign in/);
+    expect(hint("errored_infra", "usage_limit")).toMatch(/quota/);
+    expect(hint("errored_infra", "kind_usage_limit")).toMatch(/quota/);
+    expect(hint("errored_infra", "source_spawn")).toMatch(/could not be started/);
+    expect(hint("errored_infra", "kind_transport")).toMatch(/network/);
+    expect(hint("errored_infra", "thrown_decider_timeout")).toMatch(/decider/);
+    expect(hint("errored_infra", "thrown_other")).toMatch(/does not recognise/);
+    expect(hint("errored_agent", "source_timeout")).toMatch(/read the run dirs/);
+    for (const r of ["source_spawn", "kind_transport", "thrown_other"]) expect(hint("errored_infra", r)).not.toMatch(/quota|sign in/);
+  });
+
+  it("an arm with a single valid rep is not all-errored", async () => {
     const { scen, a, b } = setup();
     const out = await runEval(
       args(scen, a, b),
-      deps(
-        fakeRunner((s, r) =>
-          s.job.arm === "after" && s.job.rep > 1
-            ? ({ ...fixture("timeout"), outDir: r.outDir, fingerprint: r.fingerprint } as RunResult)
-            : r,
-        ),
-      ),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" && s.job.rep > 1 ? as("timeout")(s, r) : r))),
     );
     expect(out.report.summary.erroredArms).toEqual([]);
     expect(out.report.sections.tuned!.rows.some((r) => r.label !== "insufficient")).toBe(true);
@@ -452,21 +493,18 @@ describe("eval: per-rep classification over the real excerpts", () => {
       args(scen, a, b),
       deps(
         fakeRunner((s, r) => {
-          // One valid rep keeps `after` from being an all-errored arm (whose rows are forced insufficient), so
-          // this exercises the SCORING of the errored reps.
-          if (s.job.arm !== "after" || s.job.rep === 2) return r;
+          if (s.job.arm !== "after") return r;
           const fx = s.job.rep === 1 ? "usage-limit" : "timeout";
           return { ...fixture(fx), outDir: r.outDir, fingerprint: r.fingerprint } as RunResult;
         }),
       ),
     );
-    expect(out.report.arms[1].buckets).toEqual({ errored_agent: 3, errored_infra: 1, valid: 1 });
-    expect(out.report.summary.erroredArms).toEqual([]);
+    expect(out.report.arms[1].buckets).toEqual({ errored_agent: 4, errored_infra: 1 });
     const row = out.report.sections.tuned!.rows[0];
-    expect(row).toMatchObject({ k1: 5, n1: 5, k2: 1, n2: 4 });
+    expect(row).toMatchObject({ k1: 5, n1: 5, k2: 0, n2: 4 });
     expect(row.label).not.toBe("insufficient");
     const erroredRate = out.report.sections.tuned!.classificationRows.find((r) => r.kind === "errored_agent_rate")!;
-    expect(erroredRate).toMatchObject({ k1: 0, n1: 5, k2: 3, n2: 4 });
+    expect(erroredRate).toMatchObject({ k1: 0, n1: 5, k2: 4, n2: 4 });
   });
 
   it("an unanswered gate is the agent's error, and its salvaged result and dir are recorded", async () => {
