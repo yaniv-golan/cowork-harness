@@ -313,12 +313,27 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     }
   };
 
-  const refreshAt = (t: number) => {
+  /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). */
+  const refreshAt = (t: number): boolean => {
     lastRefreshAt = t;
     const rows = d.snapshot();
-    if (!rows) return;
+    if (!rows) return false;
     lastRows = rows;
     extend(rows);
+    return true;
+  };
+
+  // A stop that cannot list processes must say so: the run would otherwise end looking clean while what the
+  // agent started keeps running. Once per agent.
+  let listingWarned = false;
+  const warnNoListing = () => {
+    if (listingWarned) return;
+    listingWarned = true;
+    d.warn(
+      lastRows
+        ? `::warning:: [teardown] could not list processes (ps failed); stopping what the agent started from an earlier listing — a process it started since then may keep running\n`
+        : `::warning:: [teardown] could not list processes (ps failed); stopping the agent by pid only — processes it started may keep running\n`,
+    );
   };
 
   /** Signal every tracked, still-identical process: by group when that is safe, else by pid. Returns the pids
@@ -403,7 +418,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       refreshAt(t);
     },
     terminate: () => {
-      refreshAt(d.now());
+      if (!refreshAt(d.now())) warnNoListing();
       try {
         child.stdin?.end();
       } catch {
@@ -415,7 +430,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     // Unconditional: it runs whether or not the leader is alive, because what it exists to reach — the tracked
     // groups and the orphans — outlives the leader. A second signal passes `fast` and reuses the last listing.
     forceKill: (o?: { fast?: boolean }) => {
-      if (!o?.fast) refreshAt(d.now());
+      if (!o?.fast && !refreshAt(d.now())) warnNoListing();
       const rows = lastRows;
       if (rows) {
         const reached = signalTracked(rows, "SIGKILL");

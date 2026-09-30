@@ -258,6 +258,22 @@ describe("agentTreeAgent — descendant walk and group kill", () => {
     expect(h.kills.map(([t]) => t)).toContain(-300);
   });
 
+  it("a stop that cannot list processes says so once, and still kills the agent by pid", () => {
+    const h = harness();
+    h.deps.snapshot = () => {
+      h.snapshots++;
+      return undefined;
+    };
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
+    a.terminate();
+    a.forceKill();
+    expect(h.kills).toEqual([]);
+    expect(h.child.killed).toEqual(["SIGTERM", "SIGKILL"]);
+    const lines = h.warnings.filter((w) => w.includes("could not list processes"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^::warning:: \[teardown\] .*by pid only/);
+  });
+
   it("without detach (Windows) it signals the agent by pid only and never lists processes", () => {
     const h = harness({ detach: false });
     const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
