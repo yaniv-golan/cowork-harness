@@ -13,8 +13,10 @@ import type { Readable } from "node:stream";
 //       only the descendant walk finds it;
 //   (b) a non-detached child that ignores SIGTERM (an MCP server's shape), same attribution limits —
 //       found by the walk, killed through the agent's group;
-//   (c) an orphan `(sleep &)` in the work dir, carrying the run tag, reparented to init before anything can
-//       snapshot it — only the orphan sweep finds it;
+//   (c) an orphan `(sleep &)` in the work dir, carrying the run tag, from a detached shell (as the Bash tool
+//       spawns it) that exits at once: reparented to init and left in a dead, untracked group before anything
+//       can snapshot it — only the orphan sweep finds it. (From a NON-detached shell it would keep the agent's
+//       group and die with it, and this case would stop testing the sweep at all.);
 //   (d) optionally, a child the stub starts from its SIGTERM handler, after the last snapshot, outside the
 //       work dir and with no tag — only the kill of the agent's own group reaches it.
 // Every one inherits fd 3, a pipe back to this test. Death is observed as EOF on that pipe (fds close at
@@ -36,7 +38,7 @@ delete noTag.COWORK_HARNESS_RUN_TAG;
 const io = ["ignore", "ignore", "ignore", 3];
 spawn("sh", ["-c", \`sh "\${probe}" ready-a & wait\`], { detached: true, stdio: io, cwd: sibling, env: noTag });
 spawn("sh", ["-c", \`trap '' TERM; exec sh "\${probe}" ready-b\`], { stdio: io, cwd: sibling, env: noTag });
-spawn("sh", ["-c", \`(sh "\${probe}" ready-c &)\`], { stdio: io, cwd: work, env: process.env });
+spawn("sh", ["-c", \`(sh "\${probe}" ready-c &)\`], { detached: true, stdio: io, cwd: work, env: process.env });
 process.on("SIGTERM", () => {
   if (mode === "late-child") spawn("sh", [probe, "ready-d"], { stdio: io, cwd: sibling, env: noTag });
   setTimeout(() => process.exit(0), 150);
