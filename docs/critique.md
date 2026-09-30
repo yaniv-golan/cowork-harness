@@ -240,7 +240,7 @@ adjudicable". So:
   a user message rather than calling the tool, so a slash-command run shows `skillsInvoked: []` and is
   **not** a non-invocation. `false` means all three channels were observable and none fired. The field
   is **absent** when a channel could not be observed or the one that fired is ambiguous — an older
-  `result.json` with no prompt or skill inventory; an unreadable events slice; a top-level `Skill` call
+  `result.json` with no prompt, or a slash prompt on a run with no skill inventory; an unreadable events slice; a top-level `Skill` call
   whose id the record could not read; a bare `/name` that more than one staged skill answers to; or a
   plugin that ships both a command and a skill under one name (`commandShadowsSkill`), where the slash
   entry and the `Skill` tool launch either through one registry. Absent is never a synonym for `false`,

@@ -133,6 +133,9 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     authoredCapture: undefined, // chat runs no authored-file capture
     apiRetries: apiRetriesFrom(record),
     skillsInvoked: record.skillsInvoked,
+    // Cannot tell: a chat records only its seed prompt, never the REPL messages that followed, and any of
+    // those could have been a `/<skill>` command. Deriving from the seed alone would claim a negative.
+    slashInvokedSkills: undefined,
     skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: opts.durationMs,
     outDir: opts.outDir,

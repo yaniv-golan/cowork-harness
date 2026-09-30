@@ -515,6 +515,12 @@ export interface AssertContext {
   readonlyFolderRoots?: string[];
   /** Skill/plugin ids invoked via the Skill tool_use event, in call order (duplicates kept). */
   skillsInvoked: string[];
+  /** Staged skill ids the turn's prompt invoked by a leading slash command (`RunResult.slashInvokedSkills`)
+   *  — the binary expands those itself and emits no `Skill` tool_use, so `skillsInvoked` never sees them.
+   *  `[]` = the prompt invoked no staged skill by slash (a real negative); `undefined` = cannot tell (no
+   *  prompt, a slash prompt with no skill inventory, or a bare name more than one staged skill answers to).
+   *  Required so every lane states it: an unwired lane must not read as "no slash invocation". */
+  slashInvokedSkills: string[] | undefined;
   /** Whether the agent's init tool list included "Skill". False/never-observed means
    *  skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift) and must fail
    *  as evidence-unavailable rather than risk a false negative. */
@@ -1967,18 +1973,23 @@ function check(
   if (a.skill_triggered !== undefined) {
     const c = compileUserRegex(a.skill_triggered);
     if ("error" in c) results.push(fail(`skill_triggered: bad regex "${a.skill_triggered}": ${c.error}`));
+    // A slash-invoked skill is positive evidence on its own: the binary expanded it without the Skill tool,
+    // so neither the tool-availability guard nor the tool_use list has anything to say about it.
+    else if (ctx.slashInvokedSkills?.some((s) => c.re.test(s))) results.push(ok());
     else if (!ctx.skillToolAvailable)
       results.push(
         fail(
           `evidence unavailable: this agent's init tool list has no "Skill" tool — cannot evaluate skill_triggered (agent-version drift?)`,
         ),
       );
-    else
+    else if (ctx.skillsInvoked.some((s) => c.re.test(s))) results.push(ok());
+    else if (ctx.slashInvokedSkills === undefined)
       results.push(
-        ctx.skillsInvoked.some((s) => c.re.test(s))
-          ? ok()
-          : fail(`no invoked skill matched "${a.skill_triggered}" (invoked: ${ctx.skillsInvoked.join(", ") || "none"})`),
+        fail(
+          `evidence unavailable: cannot tell whether the prompt's leading slash command invoked a staged skill (no prompt, no skill inventory, or a bare name more than one staged skill answers to) — cannot evaluate skill_triggered`,
+        ),
       );
+    else results.push(fail(`no invoked skill matched "${a.skill_triggered}" (invoked: ${ctx.skillsInvoked.join(", ") || "none"})`));
   }
   if (a.max_cost_usd !== undefined)
     results.push(
@@ -2224,6 +2235,12 @@ function check(
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);
     if ("error" in c) results.push(fail(`no_skill_triggered: bad regex "${a.no_skill_triggered}": ${c.error}`));
+    else if (ctx.slashInvokedSkills?.some((s) => c.re.test(s)))
+      results.push(
+        fail(
+          `skill unexpectedly triggered matching "${a.no_skill_triggered}" (invoked by the prompt's slash command: ${ctx.slashInvokedSkills.join(", ")})`,
+        ),
+      );
     else if (!ctx.skillToolAvailable)
       results.push(
         fail(
@@ -2232,10 +2249,16 @@ function check(
       );
     else if (ctx.skillsInvokedMissing)
       results.push(fail(`evidence unavailable: skill invocation list absent from result.json — cannot evaluate no_skill_triggered`));
-    else
+    else if (ctx.skillsInvoked.some((s) => c.re.test(s)))
+      results.push(fail(`skill unexpectedly triggered matching "${a.no_skill_triggered}"`));
+    // Never a vacuous pass: a slash prompt we could not resolve may have run exactly this skill.
+    else if (ctx.slashInvokedSkills === undefined)
       results.push(
-        !ctx.skillsInvoked.some((s) => c.re.test(s)) ? ok() : fail(`skill unexpectedly triggered matching "${a.no_skill_triggered}"`),
+        fail(
+          `evidence unavailable: cannot tell whether the prompt's leading slash command invoked a staged skill (no prompt, no skill inventory, or a bare name more than one staged skill answers to) — cannot evaluate no_skill_triggered`,
+        ),
       );
+    else results.push(ok());
   }
   if (a.skill_available !== undefined) {
     const c = compileUserRegex(a.skill_available);

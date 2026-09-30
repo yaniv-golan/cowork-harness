@@ -3,6 +3,7 @@ import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS }
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
 import { deriveModelProvenance, noModelProvenance } from "./model-provenance.js";
+import { slashInvokedSkillIds } from "../critique/skill-invocation.js";
 import { warn, writeAllSync, tildeify } from "../io.js";
 import {
   readFileSync,
@@ -5517,6 +5518,7 @@ function replayErrorResult(file: string): RunResult {
     missingCapabilityUse: undefined,
     gateProvenance: undefined,
     skillsInvoked: undefined,
+    slashInvokedSkills: undefined, // no re-drive, so neither the prompt nor the inventory was observed
     skillToolAvailable: undefined,
     tasks: undefined,
     context: undefined,
@@ -7996,6 +7998,10 @@ export async function replayCassette(
     // evaluate() ctx and the returned RunResult can't disagree about which baseline semantics were used
     // (moot for replay's own no_unexpected_files — the materialized tree has no real symlinks — but honest).
     const replayLinkAware = (cassette.cassetteVersion ?? 0) >= 10;
+    // The slash-command channel from the FROZEN prompt (the one the recorded events answer, not an edited
+    // on-disk scenario) and the re-driven init inventory — the same derivation the live lane runs, so a
+    // replay reports the value the recording did. One local for both the ctx and the RunResult.
+    const slashInvokedSkills = slashInvokedSkillIds(cassette.scenario.prompt, rec.context?.availableSkills);
     const assertCtx: AssertContext = {
       transcript: rec.transcript,
       toolsCalled: rec.toolsCalled,
@@ -8048,6 +8054,7 @@ export async function replayCassette(
       truncatedPaths: replayTruncatedPaths,
       linkPaths: replayLinkPaths, // replay-only: file_exists/user_visible_artifact fail-closed on a link entry (placeholder ≠ resolution)
       skillsInvoked: rec.skillsInvoked,
+      slashInvokedSkills,
       skillToolAvailable: rec.initTools.includes("Skill"),
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       tasks: Array.from(rec.tasks.values()),
@@ -8424,6 +8431,7 @@ export async function replayCassette(
       // `minimalRec()` carries no retry tally, so this is absent there, never a false zero.
       apiRetries: truncatedMsg ? undefined : apiRetriesFrom(rec),
       skillsInvoked: rec.skillsInvoked,
+      slashInvokedSkills,
       skillToolAvailable: rec.initTools.includes("Skill"),
       outDir: "(replay)",
       // Class-tagged staleness + skip counts, surfaced to JSON callers (the gate decision already happened

@@ -213,6 +213,26 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
   moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
   no longer staged.
+- **`skill_triggered` and `no_skill_triggered` count a skill run by a slash command.** A prompt that starts
+  with `/<skill> …` or `/<plugin>:<skill> …` runs the skill with no `Skill` tool call — the agent expands the
+  command itself, and a `context: fork` skill forks directly — so `skill_triggered` failed on a run where
+  the skill ran, and `no_skill_triggered` passed on it. Both now resolve the prompt's leading token against
+  the init frame's skill inventory, by the same rule `critique` and `eval` already used.
+  - `result.json` gains `slashInvokedSkills`: the staged skill the prompt ran that way (`[]` when none,
+    absent when the harness cannot tell). `skillsInvoked` still lists `Skill` tool calls only. Replay
+    derives the field from the recorded prompt, and `verify-run` derives it for a kept run written before
+    the field existed.
+  - A bare `/name` that more than one staged skill answers to, or a slash prompt on a run that delivered
+    no skill inventory, makes both keys fail as evidence unavailable rather than pass or fail.
+  - The `[provenance]` banner shows `skill=offered,invoked(slash)` instead of `offered,NOT-invoked`. When
+    the main loop carried only the agent's `<synthetic>` marker, `model=unknown` is followed by the model
+    ids in `modelUsage`; the JSON `provenance.model` stays `unknown`.
+  - New `lint` warning `slash-prompt-forked-result-anchor`: a `/<skill>` prompt with a `tool_result_*`
+    anchored on `forked execution`. That text is the `Skill` tool's result and does not exist when the skill
+    was run by slash command.
+  - `critique`'s `skillInvocationObserved` no longer goes absent for a prompt with no leading slash on a run
+    that delivered no skill inventory: such a prompt cannot invoke a skill by slash command, whatever the
+    inventory.
 
 ## [4.1.1] — 2026-09-29
 

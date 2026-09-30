@@ -46,6 +46,7 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
     toolResultTexts: [],
     skillsInvoked: [],
     skillToolAvailable: true,
+    slashInvokedSkills: [],
     // Default: a run WITH a pre-run manifest that authored nothing.
     preRunHashes: {},
     authoredFiles: [],

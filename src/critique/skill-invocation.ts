@@ -34,8 +34,8 @@ export function matchesSkillId(observedId: string, selector: string, pluginName?
 }
 
 /** What a prompt's leading slash token turned out to be. `unobservable` means the run did not record
- *  what we would need (an older `result.json` with no prompt, or an init frame that delivered no skill
- *  inventory), OR the token is a bare name that more than one staged skill answers to — distinct from
+ *  what we would need (an older `result.json` with no prompt, or a slash prompt whose init frame delivered
+ *  no skill inventory), OR the token is a bare name that more than one staged skill answers to — distinct from
  *  `none`, which is a real negative. */
 export type SlashInvocation = { kind: "skill"; id: string } | { kind: "none" } | { kind: "unobservable" };
 
@@ -58,9 +58,11 @@ export function slashCommandSkillInvocation(
   prompt: string | undefined,
   availableSkills: readonly { id: string }[] | undefined,
 ): SlashInvocation {
-  if (prompt === undefined || availableSkills === undefined) return { kind: "unobservable" };
+  if (prompt === undefined) return { kind: "unobservable" };
   const m = /^\/(\S+)/.exec(prompt);
+  // No leading slash: the binary expands nothing, so this is a real negative whatever the inventory says.
   if (!m) return { kind: "none" };
+  if (availableSkills === undefined) return { kind: "unobservable" };
   const token = m[1];
   const ids = availableSkills.map((s) => s.id);
   if (ids.includes(token)) return { kind: "skill", id: token };
@@ -71,6 +73,19 @@ export function slashCommandSkillInvocation(
   if (bySuffix.length === 1) return { kind: "skill", id: bySuffix[0] };
   if (bySuffix.length > 1) return { kind: "unobservable" }; // the binary picked one; the record does not say which
   return { kind: "none" };
+}
+
+/** `slashCommandSkillInvocation` as a record field: the staged skill ids a prompt invoked by slash command.
+ *  `[id]` = the binary expanded that skill itself (no `Skill` tool_use is emitted for it); `[]` = the prompt
+ *  invoked no staged skill by slash; `undefined` = cannot tell (no prompt, a slash prompt with no inventory,
+ *  or a bare name more than one staged skill answers to). The one conversion every lane uses, so the live
+ *  run, a replay and a kept-run re-check cannot disagree about the channel. */
+export function slashInvokedSkillIds(
+  prompt: string | undefined,
+  availableSkills: readonly { id: string }[] | undefined,
+): string[] | undefined {
+  const s = slashCommandSkillInvocation(prompt, availableSkills);
+  return s.kind === "skill" ? [s.id] : s.kind === "none" ? [] : undefined;
 }
 
 /** The `Skill` calls a SUB-AGENT made during the turn, by the skill id each named — or `undefined` when
@@ -142,4 +157,20 @@ export function observedSkillInvocation(
   // A top-level Skill call whose id the fold could not read is "cannot tell", not "not this skill".
   if (skillActivity.some((e) => e?.skillId === "(unknown)")) return undefined;
   return false;
+}
+
+/** A persisted run's slash channel: the recorded `slashInvokedSkills`, or — on a `result.json` written
+ *  before that field existed — the same derivation over the prompt and inventory the record already
+ *  carries. Shared by the kept-run re-check and the provenance banner so the two cannot disagree. */
+export function recordedSlashInvokedSkills(r: {
+  mode?: string;
+  slashInvokedSkills?: string[];
+  prompt?: string;
+  context?: { availableSkills?: readonly { id: string }[] };
+}): string[] | undefined {
+  if (r.slashInvokedSkills !== undefined) return r.slashInvokedSkills;
+  // A chat's `prompt` is only its seed — the REPL messages after it were never recorded — so re-deriving
+  // from it would claim a negative the record cannot support.
+  if (r.mode === "chat") return undefined;
+  return slashInvokedSkillIds(r.prompt, r.context?.availableSkills);
 }

@@ -1,0 +1,139 @@
+{
+  "result": {
+    "scenario": "s3-no-slash",
+    "prompt": "What determines which files are displayed to the user at the end of a response?",
+    "result": "success",
+    "skillsInvoked": [
+      "claude-code-internals"
+    ],
+    "skillToolAvailable": true,
+    "models": [
+      "claude-sonnet-5"
+    ],
+    "modelUsage": {
+      "claude-sonnet-5": {
+        "inputTokens": 26,
+        "outputTokens": 4957
+      }
+    },
+    "subagents": [],
+    "toolCounts": {
+      "Skill": 1,
+      "ToolSearch": 1,
+      "mcp__workspace__bash": 9
+    },
+    "context": {
+      "availableSkills": [
+        {
+          "id": "deep-research"
+        },
+        {
+          "id": "claude-code-internals:claude-code-internals"
+        },
+        {
+          "id": "design"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/private/var/empty",
+      "session_id": "00000000-0000-0000-0000-000000000000",
+      "tools": [
+        "Task",
+        "AskUserQuestion",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Skill",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskStop",
+        "TaskUpdate",
+        "ToolSearch",
+        "WebSearch",
+        "Write",
+        "mcp__cowork__present_files",
+        "mcp__plugins__list_plugins",
+        "mcp__plugins__search_plugins",
+        "mcp__plugins__suggest_plugin_install",
+        "mcp__skills__list_skills",
+        "mcp__skills__suggest_skills",
+        "mcp__workspace__bash",
+        "mcp__workspace__web_fetch"
+      ],
+      "mcp_servers": [],
+      "skills": [
+        "deep-research",
+        "claude-code-internals:claude-code-internals",
+        "design"
+      ]
+    },
+    {
+      "type": "assistant",
+      "parent_tool_use_id": null,
+      "message": {
+        "model": "claude-sonnet-5",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_014D8Tpwz8pc5eBYVoLeokHq",
+            "name": "Skill",
+            "input": {
+              "skill": "claude-code-internals",
+              "args": "file delivery mechanism - what determines which files are displayed to the user at the end of a response, computer:// links, outputs folder"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "parent_tool_use_id": null,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_014D8Tpwz8pc5eBYVoLeokHq",
+            "content": "Skill \"claude-code-internals\" completed (forked execution).\n\nResult:\nI have enough to synthesize a complete answer. Note it does not directly ask about writing "
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "parent_tool_use_id": null,
+      "message": {
+        "model": "claude-sonnet-5",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "In this environment (Cowork Desktop), the rule is specific and mechanical: a file link only renders as an openable `computer://` link with a file card if the file actually exists at that absolute path"
+          }
+        ]
+      }
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "num_turns": 2,
+      "session_id": "00000000-0000-0000-0000-000000000000",
+      "result": "In this environment (Cowork Desktop), the rule is specific and mechanical: a file link only renders as an openable `computer://` link with a file card if the file actually exists at that absolute path",
+      "modelUsage": {
+        "claude-sonnet-5": {
+          "inputTokens": 26,
+          "outputTokens": 4957
+        }
+      }
+    }
+  ]
+}
