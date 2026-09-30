@@ -20,6 +20,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  rmSync,
   readFileSync,
   realpathSync,
   writeFileSync,
@@ -1002,5 +1003,49 @@ describe("eval: discovery, preflight and small persistence fixes", () => {
       process.env.PATH = saved;
     }
     expect(isInsideGitWorkTree(join(root, "somewhere"))).toBe(false);
+  });
+});
+
+describe("eval: wiring the in-process runs cannot see by default", () => {
+  it("--correction reaches the labels: one collapse among 7 rows is confirmed under bh, only possible under holm", async () => {
+    const { scen, a, b } = setup();
+    const flip = (s: EvalJobSpec, r: RunResult) => (s.job.arm === "after" ? failAssertion(r, 2) : r);
+    const bh = await runEval(args(scen, a, b), deps(fakeRunner(flip)));
+    const rb = bh.report.sections.tuned!.rows.find((r) => r.assertionIndex === 2)!;
+    expect(rb.label).toBe("confirmed drop");
+    expect(rb.interval!.upper).toBeLessThan(0); // B - A: a drop is negative
+    const p = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval-h"),
+      "--quiet",
+      "--correction",
+      "holm",
+    ]);
+    const ho = await runEval(p, deps(fakeRunner(flip)));
+    expect(ho.report.sections.tuned!.rows.find((r) => r.assertionIndex === 2)!.label).toBe("possible drop");
+  });
+
+  it("a drop on a semantic roll-up row alone gates --fail-on possible (and is never confirmed)", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    // Flip: only the semantic assertion's own pass (index 3) in `after`; its claims stay passing.
+    const flip = (s: EvalJobSpec, r: RunResult) => (s.job.arm === "after" && s.scenario.name !== "csv-metrics" ? failAssertion(r, 3) : r);
+    const out = await runEval(args(scen, a, b, ["--fail-on", "possible"]), deps(fakeRunner(flip)));
+    const rollup = out.report.sections.tuned!.derivedRows[0];
+    expect(rollup).toMatchObject({ kind: "semantic_rollup", k1: 5, k2: 0, label: "possible drop" });
+    expect(out.report.sections.tuned!.rows.every((r) => !r.label.endsWith("drop"))).toBe(true);
+    expect(out.report.summary.failOnHit).toBe(true);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("the preflight checks the arm's SUBSTITUTED session: a declared plugin dir that does not exist is fine", async () => {
+    const { scen, a, b } = setup();
+    rmSync(join(root, "declared"), { recursive: true });
+    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    expect(out.report.arms.map((x) => x.buckets)).toEqual([{ valid: 5 }, { valid: 5 }]);
   });
 });
