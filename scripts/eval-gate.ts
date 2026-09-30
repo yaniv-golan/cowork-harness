@@ -23,7 +23,7 @@ import { isLiveModelId } from "../src/types.js";
 const SKILL = "cowork-harness";
 const ALPHA = 0.05;
 const MIN_VALID = 4; // a scenario with fewer valid+invoked reps than this errors the capture loud
-const BASELINE = resolve("test/evals/baseline/profile.json");
+const DEFAULT_BASELINE = resolve("test/evals/baseline/profile.json");
 const SCENARIO_DIR = resolve("test/evals/scenarios");
 const HARNESS_VERSION = (JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { version?: string }).version ?? "unknown";
 const today = (): string => new Date().toISOString().slice(0, 10);
@@ -509,7 +509,7 @@ interface Capture {
   answererModel: string | null;
 }
 
-async function capture(reps: number, dotenv: string | undefined, ablate: boolean, concurrency: number): Promise<Capture> {
+async function captureLive(reps: number, dotenv: string | undefined, ablate: boolean, concurrency: number): Promise<Capture> {
   const files = scenarioFiles();
   const jobs: { name: string; file: string }[] = [];
   for (const file of files) for (let i = 0; i < reps; i++) jobs.push({ name: basename(file, ".yaml"), file });
@@ -628,8 +628,16 @@ export function calibrateScenario(scenario: string, baseline: ScenarioProfile, a
   }
 }
 
-async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
+/** Test seams for `main`: the paid `capture` and the baseline path. Production passes neither. */
+export interface MainDeps {
+  capture?: typeof captureLive;
+  baseline?: string;
+}
+
+/** Exported (with `MainDeps`) so a test can prove a refusal fires before any paid capture. */
+export async function main(argv: string[] = process.argv.slice(2), deps: MainDeps = {}): Promise<void> {
+  const capture = deps.capture ?? captureLive;
+  const BASELINE = deps.baseline ?? DEFAULT_BASELINE;
   const flag = (n: string) => argv.includes(n);
   const val = (n: string) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
   const reps = positiveIntFlag(val("--reps"), flag("--calibrate") ? 4 : 6, "--reps");
@@ -637,10 +645,25 @@ async function main(): Promise<void> {
   const concurrency = positiveIntFlag(val("--concurrency"), 4, "--concurrency");
   const allowUnmatched = flag("--allow-unmatched");
 
+  // Refuse across a judge-prompt change: a prompt edit silently shifts every pass rate, invisible to the
+  // model guard. Checked BEFORE the paid capture — the baseline's recorded hash is all it needs.
+  const refuseOnPromptChange = (meta: ProfileMeta, what: string): boolean => {
+    const m = judgePromptMismatch(meta, JUDGE_PROMPT_HASH);
+    if (!m) return false;
+    process.stderr.write(
+      `[eval-gate] REFUSING to ${what} — the judge prompt changed since this baseline was recorded ` +
+        `(${m}); every pass rate may have shifted. Re-record with --rebaseline.\n`,
+    );
+    process.exitCode = 1;
+    return true;
+  };
+
   if (flag("--calibrate")) {
     // Ablation: a claim that still passes WITHOUT the skill is not discriminating → excluded from the gate.
-    const ablated = await capture(reps, dotenv, true, concurrency);
     const file = readProfileFile(BASELINE);
+    // Ablated reps graded under the current prompt must not be merged into a baseline graded under another.
+    if (refuseOnPromptChange(file.__meta__, "calibrate")) return;
+    const ablated = await capture(reps, dotenv, true, concurrency);
     const base = file.scenarios;
     const forced: string[] = [];
     for (const [scen, sp] of Object.entries(ablated.scenarios)) {
@@ -679,6 +702,7 @@ async function main(): Promise<void> {
 
   // Gate.
   const baseFile = readProfileFile(BASELINE);
+  if (refuseOnPromptChange(baseFile.__meta__, "gate")) return;
   const cap = await capture(reps, dotenv, false, concurrency);
   // Refuse to diff across a model change — otherwise the gate reports model drift as a skill regression.
   const mism = modelMismatch(baseFile.__meta__, cap.judgeModel, cap.answererModel);
@@ -686,16 +710,6 @@ async function main(): Promise<void> {
     process.stderr.write(
       `[eval-gate] REFUSING to gate — candidate models differ from the baseline's provenance, so a diff would measure model behavior, not skill quality:\n  ${mism}\n` +
         `  Re-record the baseline (--rebaseline) under the current models, or restore the pinned models, then retry.\n`,
-    );
-    process.exitCode = 1;
-    return;
-  }
-  // Refuse across a judge-prompt change too (M1).
-  const promptMism = judgePromptMismatch(baseFile.__meta__, JUDGE_PROMPT_HASH);
-  if (promptMism) {
-    process.stderr.write(
-      `[eval-gate] REFUSING to gate — the judge prompt changed since this baseline was recorded ` +
-        `(${promptMism}); every pass rate may have shifted. Re-record with --rebaseline.\n`,
     );
     process.exitCode = 1;
     return;

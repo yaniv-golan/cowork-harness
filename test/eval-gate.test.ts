@@ -1,5 +1,5 @@
-import { describe, it, expect, afterAll } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { describe, it, expect, afterAll, vi } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -8,6 +8,7 @@ import {
   aggregateScenario,
   modelMismatch,
   judgePromptMismatch,
+  main,
   parseFraction,
   readProfileFile,
   singleModel,
@@ -116,6 +117,46 @@ describe("judgePromptMismatch — the gate's same-judge-prompt precondition", ()
   it("a legacy baseline with no recorded hash does not block", () => {
     expect(judgePromptMismatch(meta({ judgePromptHash: null }), "bbbbbbbbbbbbbbbb")).toBeNull();
   });
+});
+
+describe("main — a judge-prompt refusal fires BEFORE any paid capture", () => {
+  const dir = mkdtempSync(join(tmpdir(), "eval-gate-main-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const staleBaseline = (): string => {
+    const p = join(dir, `profile-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(
+      p,
+      JSON.stringify({
+        __meta__: { judgeModel: "m", answererModel: "a", judgePromptHash: "0000000000000000", harnessVersion: "1.0.0", date: "2026-07-10" },
+        scenarios: {
+          "eval-a": { reps: 6, skillInvoked: "6/6", validReps: 6, errored: 0, claims: [{ index: 0, claim: "x", pass: "6/6" }] },
+        },
+      }),
+    );
+    return p;
+  };
+
+  for (const mode of [[], ["--calibrate"]]) {
+    it(`${mode[0] ?? "gate"}: refuses on a stale judgePromptHash without calling capture, leaving the baseline untouched`, async () => {
+      const baseline = staleBaseline();
+      const before = readFileSync(baseline, "utf8");
+      const capture = vi.fn(async () => {
+        throw new Error("capture must not run");
+      });
+      const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const prevExit = process.exitCode;
+      try {
+        await main(mode, { capture, baseline });
+        expect(capture).not.toHaveBeenCalled();
+        expect(process.exitCode).toBe(1);
+        expect(err.mock.calls.map((c) => String(c[0])).join("")).toMatch(/REFUSING.*judge prompt changed/);
+        expect(readFileSync(baseline, "utf8")).toBe(before);
+      } finally {
+        err.mockRestore();
+        process.exitCode = prevExit;
+      }
+    });
+  }
 });
 
 describe("modelMismatch — the gate's same-model precondition", () => {
