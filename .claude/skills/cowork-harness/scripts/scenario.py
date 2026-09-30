@@ -800,6 +800,55 @@ def _lint_prompt_slash(doc, path):
     return findings
 
 
+_TOOL_RESULT_KEYS = ("tool_result_contains", "tool_result_not_contains", "tool_result_matches", "tool_result_not_matches")
+
+
+def _lint_slash_prompt_forked_anchor(doc, items, path):
+    """W: a `/<skill>` prompt paired with a tool_result_* anchored on `forked execution`.
+
+    `Skill "<name>" completed (forked execution).` is the `Skill` TOOL RESULT a `context: fork` skill
+    returns when the MODEL invokes it. A prompt whose first character is `/` naming a staged skill is
+    expanded by the agent binary itself: no `Skill` tool_use is emitted and the fork runs directly, so that
+    result text never exists. A positive tool_result_* anchored on it then fails on a working skill, and a
+    negative one passes vacuously. Measured on real hostloop runs of one fork skill (agent 2.1.284): the
+    bare and plugin-qualified slash prompts both ran the skill with no `Skill` call; a plain prompt got one.
+
+    Registration is not checkable statically, so the rule fires on any command-shaped leading token and the
+    message says "if". It is deliberately narrow: only the fork-result anchor, since `skill_triggered` /
+    `no_skill_triggered` already count a slash-invoked skill. First character only, matching the harness's
+    own slash detector (a prompt with leading whitespace is not expanded).
+    """
+    prompt = doc.get("prompt")
+    if not isinstance(prompt, str):
+        return []
+    m = re.match(r"/(\S+)", prompt)
+    if not m:
+        return []
+    name = m.group(1)
+    if not _SLASH_CMD_NAME_RE.match(name) or name.lower() in _SLASH_PATH_WORDS:
+        return []
+    findings = []
+    for key in _TOOL_RESULT_KEYS:
+        for v in _assert_values(items, key):
+            if not isinstance(v, str) or "forked execution" not in v.replace("\\", "").lower():
+                continue
+            findings.append(
+                Finding(
+                    "WARN",
+                    "slash-prompt-forked-result-anchor",
+                    f"`prompt:` starts with `/{name}` and `{key}` anchors on `forked execution`. If `/{name}` is a "
+                    "staged skill, the agent expands the command itself — no `Skill` tool call, so the "
+                    "`completed (forked execution)` tool result never exists: a positive check fails on a working "
+                    "skill and a negative one passes vacuously.",
+                    f"Assert the invocation with `skill_triggered: '{name.split(':')[-1]}'` (it counts a slash-invoked "
+                    "skill) and the answer with `transcript_matches`; or drop the slash if "
+                    "the scenario means to test the model invoking the skill through the `Skill` tool.",
+                    path,
+                )
+            )
+    return findings
+
+
 # --- the object form of tool_called / tool_not_called, and transcript_* values shaped like a command ---
 
 # `transcript_*` reads top-level assistant prose ONLY — never a tool_use — so a value shaped like a shell
@@ -1237,6 +1286,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
     # linter stays offline — the message carries the gate fact instead of reading a baseline).
     findings.extend(_lint_tool_call_object_form(items, fidelity, path))
     findings.extend(_lint_transcript_command_shaped(items, path))
+    # W: a `/<skill>` prompt never produces the `Skill` fork tool result — see _lint_slash_prompt_forked_anchor.
+    findings.extend(_lint_slash_prompt_forked_anchor(doc, items, path))
     if "transcript_no_host_path" in assert_keys:
         if fidelity in ("hostloop", "protocol"):
             findings.append(
@@ -1955,6 +2006,7 @@ LINT_RULES = {
     "reference-access-contradiction": "ERROR",
     "regex-double-quoted": "WARN",
     "replay-noop": "WARN",
+    "slash-prompt-forked-result-anchor": "WARN",
     "tool-called-always-passes": "INFO",
     "tool-input-regex-redactable": "WARN",
     "tool-input-shell-tier": "INFO",

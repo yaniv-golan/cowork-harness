@@ -251,6 +251,7 @@ cowork-harness lint scenarios/*.yaml
 | `reference-access-contradiction` | ERROR | one reference under both `reference_read` and `no_observed_reference_access` |
 | `regex-double-quoted` | WARN | a double-quoted regex with an unescaped backslash (YAML strips it) |
 | `replay-noop` | WARN | every assertion is live-only or a verdict modifier, so a replay gate verifies nothing |
+| `slash-prompt-forked-result-anchor` | WARN | a `prompt:` starting with `/<skill>` plus a `tool_result_*` anchored on `forked execution` — a slash-invoked skill makes no `Skill` call, so that tool result never exists; assert `skill_triggered` instead |
 | `tool-called-always-passes` | INFO | `tool_called` with `count: {min: 0}` and no `max` — it asserts nothing |
 | `tool-input-regex-redactable` | WARN | a `tool_not_called` input literal the redaction policy rewrites in the committed cassette (or a policy pattern it cannot check offline) |
 | `tool-input-shell-tier` | INFO | the object form with `tool: Bash` and a `command` on `hostloop` / `cowork`, where shell runs as `mcp__workspace__bash` — list both |
