@@ -1,0 +1,73 @@
+{
+  "train_ids": [
+    "extract-table",
+    "long-answer"
+  ],
+  "test_ids": [
+    "summarize-report"
+  ],
+  "harness_paths": [
+    "scenarios/extract-table.yaml",
+    "scenarios/summarize-report.yaml",
+    "scenarios/long-answer.yaml"
+  ],
+  "metrics": [
+    {
+      "id": "pass",
+      "kind": "binary",
+      "label": "Pass"
+    },
+    {
+      "id": "a0",
+      "kind": "binary",
+      "label": "a0 artifact"
+    },
+    {
+      "id": "a1_c0",
+      "kind": "binary",
+      "label": "a1 claim 1"
+    },
+    {
+      "id": "a1_c1",
+      "kind": "binary",
+      "label": "a1 claim 2"
+    }
+  ],
+  "perf_fields": [
+    {
+      "id": "cost_usd",
+      "label": "Cost",
+      "unit": "$"
+    },
+    {
+      "id": "latency_s",
+      "label": "Latency",
+      "unit": "s"
+    },
+    {
+      "id": "in_tokens",
+      "label": "In tokens"
+    },
+    {
+      "id": "out_tokens",
+      "label": "Out tokens"
+    },
+    {
+      "id": "tool_calls",
+      "label": "Tool calls"
+    },
+    {
+      "id": "web_searches",
+      "label": "Web searches"
+    },
+    {
+      "id": "skill_invoked",
+      "label": "Skill used"
+    },
+    {
+      "id": "decider_usd",
+      "label": "Decider",
+      "unit": "$"
+    }
+  ]
+}

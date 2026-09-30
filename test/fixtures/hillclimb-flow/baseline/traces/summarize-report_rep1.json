@@ -1,0 +1,41 @@
+[
+  {
+    "role": "system",
+    "content": "[Cowork system prompt withheld — baseline desktop-2.9939.4, decoded sha256 a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf; harness append sha256 5b0f7a1c9e2d4f6a8b3c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a]"
+  },
+  {
+    "role": "user",
+    "content": "Write a three-bullet summary of the project status to summary.md."
+  },
+  {
+    "role": "tool_call",
+    "name": "Read",
+    "content": "{\n  \"file_path\": \"/sessions/job/mnt/uploads/input\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "name": "Read",
+    "content": "quarter,revenue\n..."
+  },
+  {
+    "role": "tool_call",
+    "name": "Write",
+    "content": "{\n  \"file_path\": \"/sessions/job/mnt/outputs/summary.md\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "name": "Write",
+    "content": "File written."
+  },
+  {
+    "role": "assistant",
+    "content": "Done.",
+    "attachments": [
+      {
+        "kind": "text",
+        "ref": "baseline/out/summarize-report_rep1/summary.md",
+        "alt": "summary.md"
+      }
+    ]
+  }
+]
