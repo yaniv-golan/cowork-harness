@@ -40,6 +40,7 @@ import { classifyRep } from "../src/eval/classify.js";
 import { repEvidenceOf } from "../src/eval/runs.js";
 import { isConcreteModelId } from "../src/run/model-provenance.js";
 import { tildeify } from "../src/io.js";
+import { hostPathTokens } from "../src/run/host-path-tokens.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
 const fixture = (name: string): RunResult => JSON.parse(readFileSync(join(FX, `${name}.json`), "utf8")) as RunResult;
@@ -697,12 +698,27 @@ describe("eval: sections, refusals and the report text", () => {
   });
 
   it("report.md is redacted: a host path outside $HOME becomes <host-path>, and the count is in the header", async () => {
+    // The host path is a FIXED host-shaped string, not derived from os.tmpdir(): the temp dir is host-shaped on
+    // macOS (/var/folders/…) but is bare /tmp on Linux, which the host-path scan deliberately does not treat as a
+    // host path — a fixture built from it cannot fail there. The run dirs reach report.md as evidence links, so
+    // arm `after` fails a row in every rep (to flag it) and every run reports a dir under /Users/alice.
     const { scen, a, b } = setup();
-    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner((s, r) => {
+          const moved = { ...r, outDir: `/Users/alice/runs/csv-metrics/${s.job.runId}` };
+          return s.job.arm === "after" ? failAssertion(moved, 2) : moved;
+        }),
+      ),
+    );
     const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
-    expect(md).not.toContain(root);
-    expect(md).toMatch(/Host paths redacted: [1-9]\d*\./);
+    expect(md).toMatch(/Evidence \(run dirs/);
+    expect(md).not.toContain("/Users/alice");
     expect(md).toContain("<host-path>");
+    expect(md).toMatch(/Host paths redacted: [1-9]\d*\./);
+    // Nothing host-shaped survives, whichever platform's temp dir the eval dir lives in.
+    expect(hostPathTokens(md)).toEqual([]);
   });
 
   it("the header carries the required lines", async () => {
