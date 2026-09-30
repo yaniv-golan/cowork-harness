@@ -1,0 +1,34 @@
+{
+  "scenario": "fixture-slash-success-synthetic",
+  "result": "success",
+  "resultSubtype": "success",
+  "finalMessage": "<redacted>",
+  "models": [
+    "<synthetic>"
+  ],
+  "modelFallbacks": [],
+  "fingerprint": {
+    "contentSig": "67082f91846ba3969baa36dff45fa69b6b74954a0380dbcafae5a272521887cf"
+  },
+  "cost": {
+    "usd": 0.09333870000000001
+  },
+  "usage": {
+    "turns": 0
+  },
+  "durationMs": 32093,
+  "assertions": [
+    {
+      "assertion": {
+        "skill_triggered": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "tool_result_matches": "<redacted>"
+      },
+      "pass": false
+    }
+  ]
+}

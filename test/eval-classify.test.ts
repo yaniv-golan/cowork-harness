@@ -1,21 +1,33 @@
 // Per-rep classification for the paired evaluation: the termination decision table, bucket precedence,
 // and per-rep row extraction.
 //
-// Fixture provenance (test/fixtures/eval-classify/): all eleven files are EXCERPTS of real kept run dirs. Nine
+// Fixture provenance (test/fixtures/eval-classify/): every file is an EXCERPT of a real kept run dir. Eight
 // are one per shape the local corpus exhibits — a clean run with a graded semantic_matches, a stalled-on-question run,
-// an `exit`+`agent` crash, a `result`+`agent` error, a usage-limit result, a wall-clock timeout, a timeout
-// that overrode an earlier `exit`+`agent` classification, a stream that ended with no terminal event, and an
-// unanswered-gate partial. Only the fields the classifier reads were kept; every string inside an
-// assertion was replaced by "<redacted>", rubric claims by "claim N", the unanswered-gate text by a
-// placeholder, and the scenario name by `fixture-<shape>`. The corpus holds NO spawn failure, protocol
-// break, `error_max_turns`, `decider_timeout` or recovered-then-succeeded run, so those rows are CONSTRUCTED
-// below rather than read from a fixture. The tenth, `public-scenario-aligned`, is a run of the repo's own
-// public e2e scenario kept with its assertions VERBATIM (the text is already public), so row alignment is
-// tested against the scenario loader rather than against the result itself. `public-scenario-pinned` is a
-// run of the public csv-metrics example, also verbatim, and the only fixture that carries every field the
-// precedence reads (modelPinHonored: true, a contentSig) plus cost/turns/duration for the medians.
+// an `exit`+`agent` crash, a usage-limit result, a wall-clock timeout, a timeout that overrode an earlier
+// `exit`+`agent` classification, a stream that ended with no terminal event, and an unanswered-gate partial.
+// Only the fields the classifier reads were kept; every string inside an assertion was replaced by
+// "<redacted>", rubric claims by "claim N", the unanswered-gate text by a placeholder, and the scenario name by
+// `fixture-<shape>`. The corpus holds NO spawn failure, protocol break, `error_max_turns`, `decider_timeout`,
+// recovered-then-succeeded run, or `result`+`agent` error with a live model, so those rows are CONSTRUCTED
+// below rather than read from a fixture. `public-scenario-aligned` is a run of the repo's own public e2e
+// scenario kept with its assertions VERBATIM (the text is already public), so row alignment is tested against
+// the scenario loader rather than against the result itself. `public-scenario-pinned` is a run of the public
+// csv-metrics example, also verbatim, and carries every field the precedence reads (modelPinHonored: true, a
+// contentSig) plus cost/turns/duration for the medians.
 //
-// Staleness, stated rather than patched: the timeout, no-result, exit-agent, result-agent, usage-limit and
+// No model answered (searched 2026-09-30, every kept result.json): all 49 `error` runs whose `models` holds
+// only `<synthetic>` are authentication or spend/usage-limit failures, every one with `cost.usd` 0 and an
+// empty `modelUsage`; the synthetic-only SUCCESSES (a `/plugin:skill` slash-command run) all cost > 0. The
+// auth excerpts keep their `finalMessage` verbatim — the agent's own text, the signature the classifier
+// matches: `auth-exit` (`Not logged in · Please run /login`, the nonzero-exit shape), `auth-result` (the
+// same text as an is_error result), `auth-required` (`Authentication required · Sign in again to continue`).
+// `spend-limit-exit` is a spend-limit message on the exit path (which `usage_limit` never covers), its reset
+// time redacted. `slash-success-synthetic` is a successful slash-command run whose `models` is synthetic-only
+// too, kept to prove that shape is NOT read as "no model answered". The former `result-agent` excerpt (a
+// `result`+`agent` error with synthetic-only models and no finalMessage/cost kept) was that same auth
+// shape — every kept instance of it is — and is replaced by `auth-result`, which keeps the fields now read.
+//
+// Staleness, stated rather than patched: the timeout, no-result, exit-agent, usage-limit and
 // unanswered-partial excerpts carry NO modelPinHonored (those runs produced no live model evidence), and the
 // kept corpus holds no newer timeout or no_result run that does (searched 2026-09-30: the five newest are
 // 2026-08-25..30, all without it). Under the precedence that is harmless for an errored rep — an agent
@@ -184,7 +196,11 @@ describe("real kept run shapes (sanitized excerpts)", () => {
     ["success-semantic", "valid"],
     ["stalled-on-question", "errored_agent"],
     ["exit-agent", "errored_agent"],
-    ["result-agent", "errored_agent"],
+    ["auth-exit", "errored_infra"],
+    ["auth-result", "errored_infra"],
+    ["auth-required", "errored_infra"],
+    ["spend-limit-exit", "errored_infra"],
+    ["slash-success-synthetic", "valid"],
     ["usage-limit", "errored_infra"],
     ["timeout", "errored_agent"],
     ["timeout-after-agent-error", "errored_agent"],
@@ -211,6 +227,52 @@ describe("real kept run shapes (sanitized excerpts)", () => {
       expect(hostPathTokenOccurrences(text), f).toEqual([]);
       expect(text, f).not.toMatch(/\/Users\/|\/home\/|\/private\/|\\Users\\|sk-ant-|yaniv/i);
     }
+  });
+});
+
+describe("no model answered: an authentication or spend failure is infrastructure, not the skill", () => {
+  it("the real auth excerpts are errored_infra with rule `auth`, whatever their errorSource", () => {
+    for (const name of ["auth-exit", "auth-result", "auth-required"]) {
+      expect(classifyTermination({ result: fixture(name) }), name).toMatchObject({
+        bucket: "errored_infra",
+        rule: "auth",
+        unclassified: false,
+      });
+    }
+  });
+  it("the auth signature holds after a live model answered (a token that expires mid-run)", () => {
+    const r = { ...fixture("auth-exit"), models: ["claude-sonnet-5", "<synthetic>"], cost: { usd: 0.4 } };
+    expect(classifyTermination({ result: r })).toMatchObject({ bucket: "errored_infra", rule: "auth" });
+  });
+  it("a synthetic-only, zero-cost error with no auth text is errored_infra `no_model_answered`", () => {
+    expect(classifyTermination({ result: fixture("spend-limit-exit") })).toMatchObject({
+      bucket: "errored_infra",
+      rule: "no_model_answered",
+      ambiguousExit: false,
+    });
+  });
+  it("an old runs line with no finalMessage still reaches infra through the model evidence", () => {
+    const { finalMessage: _drop, ...old } = fixture("auth-exit");
+    void _drop;
+    expect(classifyTermination({ result: old })).toMatchObject({ bucket: "errored_infra", rule: "no_model_answered" });
+  });
+  it("a synthetic-only SUCCESS (a slash-command run) is not read as no model answered", () => {
+    expect(classifyTermination({ result: fixture("slash-success-synthetic") })).toMatchObject({ bucket: "valid", rule: "success" });
+  });
+  it("synthetic-only models with spend, or no model evidence at all, keep the agent's error", () => {
+    // Spend means a model answered (the slash-command shape, then an error); absent or empty `models` is
+    // "no evidence", and a first-turn crash of the skill must stay scored (see below).
+    const spent = { ...fixture("auth-exit"), finalMessage: "boom", cost: { usd: 0.09 } };
+    expect(classifyTermination({ result: spent })).toMatchObject({ bucket: "errored_agent" });
+    for (const models of [undefined, []]) {
+      const r = { ...fixture("auth-exit"), finalMessage: "boom", models };
+      expect(classifyTermination({ result: r }), JSON.stringify(models)).toMatchObject({ bucket: "errored_agent" });
+    }
+    const noCost = { ...fixture("auth-exit"), finalMessage: "boom", cost: undefined };
+    expect(classifyTermination({ result: noCost })).toMatchObject({ bucket: "errored_agent" });
+  });
+  it("classifyRep puts an auth rep in errored_infra, never errored_agent or model_mismatch", () => {
+    expect(classifyRep({ result: fixture("auth-exit") }, {}).bucket).toBe("errored_infra");
   });
 });
 
@@ -338,7 +400,10 @@ describe("classifyRep over the real fixtures, unpatched", () => {
     ["public-scenario-pinned", "valid"],
     ["success-semantic", "valid"],
     ["public-scenario-aligned", "model_mismatch"], // success with no model evidence
-    ["result-agent", "errored_agent"], // models ["<synthetic>"], no modelPinHonored
+    ["auth-exit", "errored_infra"], // models ["<synthetic>"], cost 0, "Not logged in"
+    ["auth-result", "errored_infra"],
+    ["auth-required", "errored_infra"],
+    ["spend-limit-exit", "errored_infra"], // no auth text: no model answered
     ["exit-agent", "errored_agent"],
     ["timeout", "errored_agent"],
     ["timeout-after-agent-error", "errored_agent"],
@@ -358,8 +423,11 @@ describe("classifyRep over the real fixtures, unpatched", () => {
     expect(classifyRep({ result: pinned }, pinnedSig).bucket).toBe("valid");
     expect(classifyRep({ result: pinned }, { contentSig: "0".repeat(64) }).bucket).toBe("arm_source_drift");
   });
-  it("result-agent really has no live model evidence", () => {
-    expect(fixture("result-agent").models).toEqual(["<synthetic>"]);
+  it("the auth and spend-limit excerpts really have no live model evidence and no spend", () => {
+    for (const name of ["auth-exit", "auth-result", "auth-required", "spend-limit-exit"]) {
+      expect(fixture(name).models, name).toEqual(["<synthetic>"]);
+      expect(fixture(name).cost, name).toEqual({ usd: 0 });
+    }
   });
 });
 
