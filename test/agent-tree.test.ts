@@ -167,7 +167,7 @@ describe("handlerOwnsAgent — which tiers the termination handler stops", () =>
   });
 });
 
-describe("agentTreeAgent — descendant walk (L2) and group kill (L1)", () => {
+describe("agentTreeAgent — descendant walk and group kill", () => {
   it("terminate() SIGTERMs the agent's group and each descendant's group; forceKill() SIGKILLs them", () => {
     const rows = [
       ...base(),
@@ -294,7 +294,7 @@ describe("agentTreeAgent — refresh cadence", () => {
   });
 });
 
-describe("orphan sweep (L3) on macOS: same uid, ppid 1, no tty, started during the run, cwd under the work dir", () => {
+describe("orphan sweep on macOS: same uid, ppid 1, no tty, started during the run, cwd under the work dir", () => {
   const orphan = (pid: number, over: Partial<ProcRow> = {}) => row(pid, 1, pid - 1, { comm: `orphan${pid}`, ...over });
 
   function sweep(rows: ProcRow[], cwds: Record<number, string>, env: NodeJS.ProcessEnv = {}, workDir: string | null = WORK) {
@@ -395,7 +395,7 @@ describe("orphan sweep (L3) on macOS: same uid, ppid 1, no tty, started during t
   });
 });
 
-describe("orphan sweep (L3) on Linux: the run's env tag, never the cwd", () => {
+describe("orphan sweep on Linux: the run's env tag, never the cwd", () => {
   function linux(tag: string, environs: Record<number, string>, rows: ProcRow[], workDir: string | null = WORK) {
     const h = harness({ rows: [...base(), ...rows], platform: "linux" });
     h.deps.procPids = () => Object.keys(environs).map(Number);

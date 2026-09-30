@@ -11,15 +11,15 @@ import type { TerminableAgent } from "../termination.js";
  * background jobs, hook commands, stdio MCP servers — are host processes too. Signalling the agent's pid
  * alone leaves all of them running (reparented to init, their process groups intact). Three layers find them:
  *
- *  - **L1 — the agent's own group.** The agent is spawned `detached` (its own session and process group, as
+ *  - **The agent's own group.** The agent is spawned `detached` (its own session and process group, as
  *    Claude Desktop spawns it), so anything it starts without `detached` — MCP servers, hooks — shares that
  *    group and dies with one group signal, even after the agent itself has exited, as long as a member lives.
- *  - **L2 — the descendant walk.** One `ps` listing, a tree built in JS, walked from the agent and from every
+ *  - **The descendant walk.** One `ps` listing, a tree built in JS, walked from the agent and from every
  *    process already tracked. It finds children that made their own group (the Bash tool spawns its shell
  *    `detached`) and signals each one's group, so the shell's later children go with it. Tracked entries are
  *    identities — `(pid, start time)` — never bare pids: an entry whose start time changed is a recycled pid,
  *    and is dropped rather than walked or signalled.
- *  - **L3 — the orphan sweep.** A Bash call like `sleep 999 &` leaves the `sleep` reparented to init within
+ *  - **The orphan sweep.** A Bash call like `sleep 999 &` leaves the `sleep` reparented to init within
  *    milliseconds, before any walk can see it. Ancestry cannot attribute it, so the sweep attributes by what
  *    the orphan still carries. Linux: the run's `COWORK_HARNESS_RUN_TAG=<token>` in `/proc/<pid>/environ`
  *    (the cwd is never consulted there). macOS, which exposes no other process's environment: same uid ∧
@@ -54,7 +54,7 @@ const LSOF_TIMEOUT_MS = 2000;
 /** The drive loop refreshes at most this often (one `ps`, ~10-30 ms of blocked event loop). */
 const REFRESH_MIN_INTERVAL_MS = 250;
 
-/** The spawn options every host agent spawn goes through: its own session (see L1) and the run tag (L3). */
+/** The spawn options every host agent spawn goes through: its own session (for the group kill) and the run tag (for the orphan sweep). */
 export function agentSpawnOptions<T extends SpawnOptions>(opts: T, runTag: string): T & { detached: boolean; env: NodeJS.ProcessEnv } {
   return { ...opts, detached: AGENT_DETACHED, env: { ...(opts.env ?? process.env), [RUN_TAG_ENV]: runTag } };
 }
@@ -248,7 +248,7 @@ export interface TreeAgent extends TerminableAgent {
 /** Frames that mark a point where the agent may have started (or be about to reap) a process. Partial-message
  *  `stream_event` frames never count — they arrive many times a second.
  *  A `tool_result` refresh cannot see a `(sleep &)` orphan (it is reparented before the result arrives) —
- *  that is L3's job; this cadence exists for MCP servers and the shells of long-running tool calls. */
+ *  that is the orphan sweep's job; this cadence exists for MCP servers and the shells of long-running tool calls. */
 function isRefreshFrame(msg: unknown): boolean {
   const m = msg as { type?: unknown; message?: { content?: unknown } } | null;
   if (!m || typeof m !== "object") return false;
