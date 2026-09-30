@@ -137,7 +137,7 @@ fields to a server-side narrowing it didn't ask for.
 compares unlike things. Two flags query the run-identity fields directly:
 
 ```bash
-cowork-harness stats my-scenario --group-by skill-hash   # one row per generation — the A/B in one command
+cowork-harness stats my-scenario --group-by skill-hash   # one row per generation (for a controlled A/B, see eval.md)
 cowork-harness stats my-scenario --skill-hash 8fc999c77cdf   # or narrow to one generation
 cowork-harness stats my-scenario --label gen-2               # …by the human tag instead
 ```
@@ -149,6 +149,10 @@ construction so it's never conditionally omitted the way `skillHash`/`runLabel` 
 without opening its `result.json`. It selects **exactly** the rows the summary above it aggregated (same
 filter path), and adds a `runs` array to the JSON envelope; without the flag that key is absent. `fidelity`
 is JSON-only — the text-mode run line (`formatRunLine`) is unchanged.
+
+An [`eval`](./eval.md)'s runs are indexed like any `run`, labelled `eval:<eval-id>:<arm>`, so `stats
+<scenario>` pools both of its arms; separate them with `--group-by label` (or `skill-hash`). For a
+before/after verdict, read the eval's own report rather than these rows.
 
 `--group-by` accepts `scenario` (default) | `skill-hash` | `label` | `fidelity`. When a window you did NOT
 narrow spans more than one generation, `stats` says so on stderr (`::warning:: … spans N skill

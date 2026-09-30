@@ -22,12 +22,20 @@ All notable changes to this project are documented here. The format is based on
     `confirmed`/`possible` drop or rise (Benjamini-Hochberg by default, `--correction holm`),
     `no detectable change` with its minimum detectable difference, `underpowered` or `insufficient`.
     `--holdout` reports scenarios you did not tune against in their own section.
+  - Each job's run id has the ordinary `local_…` shape and names neither the eval nor the arm, so both arms
+    see the same working directory shape and system prompt.
   - Refused before any run (exit `2`): alias models, an eval directory inside a git work tree, identical
-    arms (unless `--allow-identical-arms`), and an arm that contains the eval's own scenario or session
-    files or an `evals.json`.
-  - Exit `1` on a drop at the `--fail-on` level (default `possible`), when every row is `insufficient`, or
-    when the judge model differed across reps. The report format, labels and statistical defaults are
-    experimental ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
+    arms (unless `--allow-identical-arms`), an arm that contains the eval's own scenario or session files
+    (a symlink included), an `evals.json` or a symlink resolving outside it, and a scenario input a run
+    would refuse. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
+  - Exit `0` when the eval completed, whatever the rows show; `--fail-on possible|confirmed` opts in to
+    exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
+    differed across reps, and `3` when an arm snapshot could not be copied. The report format, labels and
+    statistical defaults are experimental
+    ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
+- **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so
+  `--keep-last` applies to them; `prune` warns that the eval's report links now point at deleted runs
+  (`eval report` still rebuilds the report from the eval dir).
 - **`semantic_matches` judge cost and prompt identity are recorded.** Each graded assert now carries:
   - `RunResult.assertions[].judgeCostUsd`: the judge's spend, summed over both attempts when a malformed
     grade is retried.
@@ -89,6 +97,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique` no longer fails on an `events.jsonl` line that is a JSON scalar** (such as `null`) while
+  reading sub-agent `Skill` calls; the line is skipped like a torn one.
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
   `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
   session file declares, not the substituted candidate the cell actually mounted. Every cell therefore

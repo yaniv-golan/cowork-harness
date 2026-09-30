@@ -25,6 +25,11 @@ Every ablated run is stamped `ablated: true` in `result.json` and carries `ablat
 What the harness gives you here is the run execution and the control arm — designing the comparison
 (scrubbing giveaways, shuffling, judging blind, unblinding only after grading) is still yours.
 
+**"Did my edit change it?"** → `cowork-harness eval` (EXPERIMENTAL): the version before your edit and the
+one after, interleaved, with the agent and judge models pinned, compared per assertion and per rubric
+claim with an exact test. It is a regression signal to investigate, not proof — see
+[`eval.md`](eval.md) and Recipe 5 step 6 in [`task-recipes.md`](task-recipes.md).
+
 ### Tool timing — what `toolDurations` measures
 
 `result.json`'s `toolDurations` and `trace <run> --view tool-durations` report, per tool, the **wall gap

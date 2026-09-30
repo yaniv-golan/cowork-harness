@@ -198,7 +198,9 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    correct claim can pass one rep and miss the next. A claim's baseline is its pass *rate* (3/3, 2/3), read
    from `RunResult.assertions[].semanticClaims`. Do **not** chase single-run all-pass — set `min_pass` to
    the reliably-hit core for a green verdict, and treat the per-claim rates as the real signal. (N=1
-   routinely mislabels a stable 0/3 as "intermittent" and vice-versa.)
+   routinely mislabels a stable 0/3 as "intermittent" and vice-versa.) `eval` (step 6) defaults to 5 reps
+   per arm and refuses fewer than 4 without `--allow-underpowered`: below that, no exact test can flag
+   even a total collapse.
 5. **Check discrimination — does the skill actually help?** Run one rep with the skill NOT installed and
    compare. `--ablate-skill` is the flag for it: it empties every skill/plugin discovery source for
    **that one invocation**, so the agent answers from its own priors, and stamps the result
@@ -207,8 +209,8 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    A/B — and the rollup labels it `PASS [ABLATED — control arm]` so you cannot bank it as one. A not-invoked rep is not a control:
    outside `--ablate-skill` it can still read the source (see step 3). If the answer still scores high without the skill, that claim is
    answerable from priors and tests the model, not your skill — strengthen it (a skill-specific fact) or
-   drop it. Everything past "run both arms" — scrubbing giveaways, shuffling, judging blind, unblinding
-   after grading — is yours to build; the harness supplies the runs and the control. Before you trust any
+   drop it. The harness supplies the runs, this with/without control and, for a before/after of two
+   versions, the paired `eval` of step 6; scrubbing giveaways and judging blind stay with you. Before you trust any
    comparison, measure your scenarios' own noise: `eval` with the SAME source as both arms
    (`--allow-identical-arms`) shows how far the rates move when nothing changed.
 6. **Gate a change with `eval` — a paired comparison of the two versions.** Hand-diffing two profiles

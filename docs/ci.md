@@ -79,6 +79,12 @@ no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^4 criti
 `jq -e` IS the gate: the flag itself exits 0 on a measurement even over the ceiling. The number is a
 floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)).
 
+**A live pre-merge comparison.** [`eval`](./eval.md) runs your scenarios against the version on the base
+branch and the one in the PR, interleaved, on the same self-hosted runner the live lane needs. It exits
+`0` whatever the rows show unless you pass `--fail-on possible|confirmed`; with it, exit `1` fails the job
+on a drop at that level. It is EXPERIMENTAL, and at 10 runs per scenario at the defaults it is a
+deliberate, priced step rather than a per-push check.
+
 **Live lane, by design not oversight:** the action never downloads or stages the agent ELF itself.
 Pulling Anthropic's binary is a call about your own relationship with their distribution terms, so it
 stays a step in *your* workflow, not something a third-party action automates for you. A self-hosted-runner
