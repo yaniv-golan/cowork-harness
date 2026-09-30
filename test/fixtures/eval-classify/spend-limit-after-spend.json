@@ -1,0 +1,59 @@
+{
+  "scenario": "fixture-spend-limit-after-spend",
+  "result": "error",
+  "errorSource": "exit",
+  "resultErrorKind": "agent",
+  "resultSubtype": "success",
+  "finalMessage": "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets <redacted>",
+  "models": [
+    "claude-opus-5",
+    "<synthetic>"
+  ],
+  "modelFallbacks": [],
+  "modelPinHonored": true,
+  "fingerprint": {
+    "contentSig": "9a8590f35360abf7e92de885493c41b0387a1dbce5e3bf808ac380c01feb995c"
+  },
+  "cost": {
+    "usd": 26.355910999999985
+  },
+  "usage": {
+    "turns": 73
+  },
+  "durationMs": 1650084,
+  "assertions": [
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "skill_triggered": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "questions_count_max": 1
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "user_visible_artifact": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "artifact_text": {
+          "artifact": "<redacted>",
+          "matches": "<redacted>"
+        }
+      },
+      "pass": false
+    }
+  ]
+}

@@ -22,7 +22,8 @@
 // matches: `auth-exit` (`Not logged in · Please run /login`, the nonzero-exit shape), `auth-result` (the
 // same text as an is_error result), `auth-required` (`Authentication required · Sign in again to continue`).
 // `spend-limit-exit` is a spend-limit message on the exit path (which `usage_limit` never covers), its reset
-// time redacted; `usage-limit-synthetic` is the same message on the result path, which the harness already
+// time redacted; `spend-limit-after-spend` is the same message on the exit path of a run a live model had
+// already spent on (deliverable-composition; a critique session in the corpus has the same shape); `usage-limit-synthetic` is the same message on the result path, which the harness already
 // classifies `usage_limit` — it must keep that name rather than fall to the catch-all. `slash-success-synthetic` is a successful slash-command run whose `models` is synthetic-only
 // too, kept to prove that shape is NOT read as "no model answered". The former `result-agent` excerpt (a
 // `result`+`agent` error with synthetic-only models and no finalMessage/cost kept) was that same auth
@@ -203,6 +204,7 @@ describe("real kept run shapes (sanitized excerpts)", () => {
     ["auth-required", "errored_infra"],
     ["spend-limit-exit", "errored_infra"],
     ["usage-limit-synthetic", "errored_infra"],
+    ["spend-limit-after-spend", "errored_infra"],
     ["slash-success-synthetic", "valid"],
     ["usage-limit", "errored_infra"],
     ["timeout", "errored_agent"],
@@ -247,12 +249,18 @@ describe("no model answered: an authentication or spend failure is infrastructur
     const r = { ...fixture("auth-exit"), models: ["claude-sonnet-5", "<synthetic>"], cost: { usd: 0.4 } };
     expect(classifyTermination({ result: r })).toMatchObject({ bucket: "errored_infra", rule: "auth" });
   });
-  it("a synthetic-only, zero-cost error with no auth text is errored_infra `no_model_answered`", () => {
-    expect(classifyTermination({ result: fixture("spend-limit-exit") })).toMatchObject({
-      bucket: "errored_infra",
-      rule: "no_model_answered",
-      ambiguousExit: false,
-    });
+  it("a spend/usage limit on the exit path is errored_infra `usage_limit`, before or after a model spent", () => {
+    for (const name of ["spend-limit-exit", "spend-limit-after-spend"])
+      expect(classifyTermination({ result: fixture(name) }), name).toMatchObject({
+        bucket: "errored_infra",
+        rule: "usage_limit",
+        ambiguousExit: false,
+      });
+  });
+  it("a synthetic-only, zero-cost error with no recognised text is errored_infra `no_model_answered`", () => {
+    const { finalMessage: _drop, ...r } = fixture("spend-limit-exit");
+    void _drop;
+    expect(classifyTermination({ result: r })).toMatchObject({ bucket: "errored_infra", rule: "no_model_answered" });
   });
   it("an old runs line with no finalMessage still reaches infra through the model evidence", () => {
     const { finalMessage: _drop, ...old } = fixture("auth-exit");
@@ -421,7 +429,8 @@ describe("classifyRep over the real fixtures, unpatched", () => {
     ["auth-exit", "errored_infra"], // models ["<synthetic>"], cost 0, "Not logged in"
     ["auth-result", "errored_infra"],
     ["auth-required", "errored_infra"],
-    ["spend-limit-exit", "errored_infra"], // no auth text: no model answered
+    ["spend-limit-exit", "errored_infra"], // the terminal spend-limit text
+    ["spend-limit-after-spend", "errored_infra"], // the same text after a live model spent
     ["exit-agent", "errored_agent"],
     ["timeout", "errored_agent"],
     ["timeout-after-agent-error", "errored_agent"],
