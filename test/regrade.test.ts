@@ -275,11 +275,23 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(out.runs[0].differingSections).toEqual([]);
   });
 
-  it("one authored file mutated in the kept mnt/ → false, naming that path", async () => {
+  it("one authored file mutated in the kept mnt/ → false, naming that path (graded only with allowDocDrift)", async () => {
     const k = await keptRun({ author: writeReport });
     writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
-    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    const judge = judgeFactory(() => true);
+    const refused = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    expect(refused).toMatchObject({ ok: false, kind: "runtime" });
+    if (refused.ok) throw new Error("expected a refusal");
+    expect(refused.message).toMatch(/^regrade: .*the rebuilt judged document differs from the one the live judge read/);
+    expect(refused.message).toContain("assert 0: changed authored outputs/report.md");
+    expect(refused.message).toContain("--allow-doc-drift");
+    expect(refused.message).toMatch(/\(can't verify ⇒ not green\)$/);
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(k)).toEqual([]);
+
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
     if (!out.ok) throw new Error(out.message);
+    expect(judge.calls).toHaveLength(1);
     expect(out.runs[0].docMatchesLive).toBe(false);
     expect(out.runs[0].differingSections).toEqual([{ assertionIndex: 0, kind: "authored", path: "outputs/report.md", change: "changed" }]);
     const file = JSON.parse(readFileSync(join(k.runDir, "turns", "1", "regrade", regradeFiles(k)[0]), "utf8"));
@@ -332,6 +344,54 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     const over = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, authoredTotalBytes: 4096 }));
     if (!over.ok) throw new Error(over.message);
     expect(over.runs[0].docMatchesLive).toBe("scope_changed");
+  });
+
+  it("a secret this process does not scrub, but the live run did, is refused as drift before it reaches the judge", async () => {
+    const SECRET = "sk-test-live-only-91f0";
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    const k = await keptRun({ author: (w) => writeFileSync(join(w, "outputs", "report.md"), `token: ${SECRET}\nrisk: concentration\n`) });
+    delete process.env.COWORK_HARNESS_SCRUB_VALUES; // this process no longer knows it
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain("COWORK_HARNESS_SCRUB_VALUES");
+    expect(out.message).not.toContain(SECRET);
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it("scope_changed and unknown are not drift: both grade", async () => {
+    const k = await keptRun({ author: writeReport });
+    const judge = judgeFactory(() => true);
+    const scoped = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 4096 }));
+    if (!scoped.ok) throw new Error(scoped.message);
+    expect(scoped.runs[0].docMatchesLive).toBe("scope_changed");
+    // An edited file under a changed scope is still scope_changed, never refused.
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const scopedDrift = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 4096 }));
+    if (!scopedDrift.ok) throw new Error(scopedDrift.message);
+    expect(scopedDrift.runs[0].docMatchesLive).toBe("scope_changed");
+
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    for (const a of r.assertions) delete a.judgedDoc;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const unknown = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    if (!unknown.ok) throw new Error(unknown.message);
+    expect(unknown.runs[0].docMatchesLive).toBe("unknown");
+    expect(judge.calls).toHaveLength(3);
+  });
+
+  it("a batch whose second dir drifts judges nothing, not even the first", async () => {
+    const good = await keptRun({ author: writeReport });
+    const drifted = await keptRun({ author: writeReport });
+    writeFileSync(join(drifted.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [good.runDir, drifted.runDir], scenarioFile: good.scenarioFile, makeJudge: judge.make });
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain(drifted.runDir);
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(good)).toEqual([]);
   });
 
   it("a run with no persisted judgedDoc → unknown, never true", async () => {
@@ -616,6 +676,16 @@ describe.skipIf(!existsSync(CLI))("regrade CLI", () => {
     expect(t.code).toBe(2);
     expect(t.stdout).toBe("");
     expect(t.stderr).toContain("evidence unavailable");
+  });
+
+  it("--allow-doc-drift is accepted (the refusal that follows is the run's, not a usage error)", async () => {
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    delete r.authoredCapture;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const j = cli(["regrade", k.runDir, "--scenario", k.scenarioFile, "--allow-doc-drift", "--output-format", "json"]);
+    expect(j.code).toBe(2);
+    expect(JSON.parse(j.stdout)).toMatchObject({ command: "regrade", ok: false, error: { category: "runtime" } });
   });
 
   it("a non-numeric --authored-total-bytes is a usage error", () => {

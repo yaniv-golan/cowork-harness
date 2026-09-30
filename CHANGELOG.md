@@ -19,6 +19,10 @@ All notable changes to this project are documented here. The format is based on
     run recorded: `true`, `false` (the differing sections are listed by kind and path; an authored file changed
     since the run, a different scrub set, or a sub-agent section can each cause it), `scope_changed` (the
     evidence scope or budget changed), or `unknown` (the run recorded no fingerprint).
+  - The comparison runs before any judge call, and a `false` is refused: the judge would read different bytes
+    than the live judge did, possibly including a value the live run scrubbed and this process does not.
+    `--allow-doc-drift` grades anyway, with a warning. `scope_changed` and `unknown` grade; a run that recorded
+    no fingerprint cannot be checked for drift or for an unscrubbed secret.
   - The grade is written to `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json` (layout
     experimental), scrubbed as a whole document and stamped with `harnessVersion`. `result.json` is never
     modified and no run-index row is added. The same run dir named twice is graded once.
@@ -27,7 +31,8 @@ All notable changes to this project are documented here. The format is based on
     `invalidGrades`, apart from failures.
   - `--judge-model` grades every assert with one model; an alias such as `opus` is refused.
   - Exit `0` when every re-graded assert passes, `1` when any fails or is judge-invalid, `2` on usage or a
-    refusal: a multi-turn, partial, replay or chat run dir, a pruned work dir, a missing transcript sidecar, or
+    refusal: a multi-turn, partial, replay or chat run dir, a pruned work dir, a missing transcript sidecar, a
+    rebuilt document that differs from the live one (without `--allow-doc-drift`), or
     a run recorded before `authoredCapture` existed (accepted with `--authored-total-bytes <N>`). Refusals are
     decided for every run dir before any judge call. A failure writing a regrade file after earlier run dirs
     were graded also exits `2`.

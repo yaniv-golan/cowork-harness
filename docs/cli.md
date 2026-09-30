@@ -269,7 +269,7 @@ a TTY, `fail` when piped/CI) and `run` is always `fail`.
 
 ### Re-grading a kept run (`regrade`)
 
-`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--judge-model <model-id>] [--authored-total-bytes <N>] [--output-format json]`
+`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--judge-model <model-id>] [--authored-total-bytes <N>] [--allow-doc-drift] [--output-format json]`
 
 `verify-run` re-checks assertions but never calls the semantic judge, so a `semantic_matches` assert cannot be
 re-graded with it. `regrade` does exactly that: it rebuilds the judged document from the kept run dir and grades
@@ -290,8 +290,14 @@ not run again; the judge call is the only spend.
   `evidence_files` or `include_subagent_text`, or the capture budget, changed, so a different document is
   expected), or `unknown` (the run recorded no fingerprint). A `false` says only that the bytes differ, not why:
   an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
-  cause it, and the listed sections are what tell them apart. It is printed as a warning: that grade is not
-  comparable with the live one.
+  cause it, and the listed sections are what tell them apart.
+- **Drift is checked before the judge is called.** The comparison runs first, for every run dir, before any judge
+  call. A `false` is refused (exit `2`), naming the differing sections: the judge would be handed different
+  bytes than the live judge read, and one cause is a value the live run scrubbed that this process does not, so
+  refusing is also what keeps that value from being sent. `--allow-doc-drift` grades anyway; the grade is then
+  reported with `docMatchesLive: false` and a warning that it is not comparable with the live one.
+  `scope_changed` and `unknown` are not refused. A run that recorded no fingerprint (`unknown`) cannot be checked
+  at all — neither for drift nor for an unscrubbed secret — so its document goes to the judge unchecked.
 - **Output.** Each run dir gets `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`, holding the re-graded
   asserts (per-claim grades and rationales, judge model, usage, cost, prompt hash and document fingerprint),
   `docMatchesLive` with the differing sections, the not-re-graded asserts, the `harnessVersion` that wrote it,
@@ -312,7 +318,8 @@ not run again; the judge call is the only spend.
   an alias such as `opus` is refused, because it resolves to whatever is newest at call time.
 - **Refusals (exit `2`, before any judge call; one refused run dir stops the whole batch):** a multi-turn run dir,
   a partial, replay or chat run, a pruned work dir, a missing or unreadable transcript sidecar (`run.jsonl` — the
-  transcript is a section of the judged document), a scenario with no `semantic_matches` assert, and a run
+  transcript is a section of the judged document), a rebuilt document that differs from the live one (unless
+  `--allow-doc-drift`), a scenario with no `semantic_matches` assert, and a run
   recorded before `authoredCapture` existed. For the last, pass `--authored-total-bytes` with the budget that run
   used (`65536` unless `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` was set); on a newer run the flag overrides the
   recorded budget and the result is reported as `scope_changed`.

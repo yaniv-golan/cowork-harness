@@ -7,7 +7,9 @@
  * `evidence_files` union as priority globs, and THIS process's secret set — every section of the judged
  * document is scrubbed with it before it leaves, but a value only the live run knew to scrub is not. Whether
  * that rebuilt document is the one the live judge read is then MEASURED, not assumed: each assert's
- * recomposed fingerprint is compared, section by section, with the `judgedDoc` the live run persisted.
+ * recomposed fingerprint is compared, section by section, with the `judgedDoc` the live run persisted —
+ * BEFORE any judge call, so a document that differs (`docMatchesLive: false`) is refused unless the caller
+ * passes `--allow-doc-drift`, and again after, over what the judge was handed, for the report.
  *
  * The result is written beside the run (`turns/<N>/regrade/<promptHash>-<judgeModel>-<iso>.json`).
  * `result.json` is never modified and no run-index row is added — a re-grade is not a run, and indexing it
@@ -16,7 +18,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { evaluate, runSemanticJudges, type AssertContext } from "../assert.js";
+import { composeJudgedDocument, evaluate, runSemanticJudges, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { tildeify, writeAllSync } from "../io.js";
@@ -29,7 +31,7 @@ import { parseScenarioFile } from "./execute.js";
 import { turnArtifactPath, turnWriteDir } from "./turn-layout.js";
 import { assertContextFromRunDir } from "./verify-context.js";
 import { isConcreteModelId } from "./model-provenance.js";
-import { REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
+import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
 export { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
@@ -96,6 +98,9 @@ export interface RegradeOptions {
   judgeModel?: string;
   /** Capture budget for a run that did not persist `authoredCapture`. */
   authoredTotalBytes?: number;
+  /** Grade even when the rebuilt document differs from the live one (`docMatchesLive: false`), which is
+   *  otherwise refused before any judge call. */
+  allowDocDrift?: boolean;
   /** Test seam: the judge factory `judgesForRun` builds from (default: the real judge). */
   makeJudge?: Parameters<typeof judgesForRun>[1];
   /** Test seam: the clock that names the output file. */
@@ -160,6 +165,51 @@ function diffSections(live: JudgedDocFingerprint, now: JudgedDocFingerprint, ass
   return out;
 }
 
+type LiveResult = RunResult["assertions"][number];
+
+/** How the live run's semantic asserts are compared with this re-grade's: the live asserts, and whether the
+ *  shared capture moved (a changed budget, or a changed `evidence_files` union) — either makes every
+ *  document differ by design. */
+interface LiveSide {
+  liveSemantic: LiveResult[];
+  captureMoved: boolean;
+}
+
+function liveSide(result: RunResult, sc: Scenario, budgetChanged: boolean): LiveSide {
+  const liveSemantic = (result.assertions ?? []).filter((r) => r.assertion?.semantic_matches !== undefined);
+  const captureMoved = budgetChanged || !sameSet(evidenceUnion(liveSemantic.map((r) => r.assertion)), evidenceUnion(sc.assert));
+  return { liveSemantic, captureMoved };
+}
+
+/** Compare one assert's document (`now`) with the one its live counterpart's judge read. Used twice with the
+ *  same inputs: before any judge call, over the document composed for the drift check, and after, over the
+ *  fingerprint of the document the judge was actually handed — the reported value. */
+function compareWithLive(
+  a: Assertion,
+  ordinal: number,
+  assertionIndex: number,
+  now: JudgedDocFingerprint | undefined,
+  live: LiveSide,
+): { match: DocMatch; differing: DifferingSection[] } {
+  // The document is a function of the shared capture and the assert's own scope, so any live assert with
+  // the same own scope read the same document. With none, the one at the same position among the
+  // semantic asserts is compared, for the section list, and the scope is reported changed.
+  const key = ownScopeKey(a.semantic_matches!);
+  const sameScope = live.liveSemantic.filter((r) => ownScopeKey(r.assertion.semantic_matches!) === key);
+  const counterpart = sameScope.find((r) => r.judgedDoc) ?? sameScope[0] ?? live.liveSemantic[ordinal];
+  const scopeChanged = sameScope.length === 0 || live.captureMoved;
+  if (!counterpart || !counterpart.judgedDoc || !now) return { match: scopeChanged ? "scope_changed" : "unknown", differing: [] };
+  const differing = diffSections(counterpart.judgedDoc, now, assertionIndex);
+  const match: DocMatch = scopeChanged
+    ? "scope_changed"
+    : differing.length === 0 && counterpart.judgedDoc.sha256 === now.sha256
+      ? true
+      : false;
+  return { match, differing };
+}
+
+const sectionLabel = (d: DifferingSection): string => `${d.change} ${d.kind}${d.path !== undefined ? ` ${d.path}` : ""}`;
+
 function aggregate(matches: DocMatch[]): DocMatch {
   if (matches.includes(false)) return false;
   if (matches.includes("scope_changed")) return "scope_changed";
@@ -187,10 +237,9 @@ interface Prepared {
   runDir: string;
   turn: number;
   ctx: AssertContext;
-  result: RunResult;
   resultSha256: string;
   budget: RegradeRunReport["authoredCapture"];
-  budgetChanged: boolean;
+  live: LiveSide;
 }
 
 /**
@@ -273,14 +322,53 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       if (second.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
       return refuse(second.kind, second.message);
     }
+    const live = liveSide(
+      second.result,
+      sc,
+      persisted !== undefined && opts.authoredTotalBytes !== undefined && opts.authoredTotalBytes !== persisted.totalBytes,
+    );
+
+    // Drift check, before any judge call: compose each assert's document exactly as `runSemanticJudges` will
+    // (same ctx, same two per-assert inputs) and compare it with the live one. A `false` means the judge would
+    // be handed different bytes than the live judge read — possibly a value the live run scrubbed and this
+    // process does not know — so nothing is sent unless the caller accepts that. `scope_changed` (a changed
+    // scope or budget) and `unknown` (no live fingerprint to compare with) are not drift and grade.
+    if (!opts.allowDocDrift) {
+      const drift = sc.assert
+        .filter((a) => a.semantic_matches !== undefined)
+        .flatMap((a, ordinal) => {
+          const fp = composeJudgedDocument(
+            second.ctx,
+            a.semantic_matches!.include_subagent_text === true,
+            a.semantic_matches!.evidence_files,
+          ).fingerprint;
+          const c = compareWithLive(a, ordinal, sc.assert.indexOf(a), fp, live);
+          return c.match === false ? [c.differing] : [];
+        });
+      if (drift.length)
+        return refuse(
+          "runtime",
+          `${CMD}: ${dir}: the rebuilt judged document differs from the one the live judge read ` +
+            `(${
+              drift
+                .flat()
+                .map((d) => `assert ${d.assertionIndex}: ${sectionLabel(d)}`)
+                .join("; ") || "whole-document hash"
+            }). ` +
+            `An authored file changed in the kept work dir since the run, a different secret-scrub set in this process ` +
+            `(which can mean a value the live run scrubbed is NOT scrubbed here — compare COWORK_HARNESS_SCRUB_VALUES / ` +
+            `COWORK_HARNESS_SCRUB_KEYS with the live run's), or a sub-agent section can each cause it. Nothing was sent ` +
+            `to the judge; pass --allow-doc-drift to grade anyway. (can't verify ⇒ not green)`,
+        );
+    }
+
     prepared.push({
       runDir,
       turn: second.turn,
       ctx: second.ctx,
-      result: second.result,
       resultSha256: sha256Hex(readFileSync(turnArtifactPath(runDir, second.turn, "result.json"))),
       budget,
-      budgetChanged: persisted !== undefined && opts.authoredTotalBytes !== undefined && opts.authoredTotalBytes !== persisted.totalBytes,
+      live,
     });
   }
 
@@ -293,35 +381,17 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     await runSemanticJudges(semantic, p.ctx, judge, judgeFor);
     const graded = evaluate(semantic, p.ctx);
 
-    const liveSemantic = (p.result.assertions ?? []).filter((r) => r.assertion?.semantic_matches !== undefined);
-    const captureMoved = p.budgetChanged || !sameSet(evidenceUnion(liveSemantic.map((r) => r.assertion)), evidenceUnion(sc.assert));
     const differing: DifferingSection[] = [];
     const assertions: RegradedAssertion[] = graded.map((g, ordinal) => {
       const a = semantic[ordinal];
       const assertionIndex = sc.assert.indexOf(a);
-      const now = p.ctx.judgedDocs?.get(a);
-      // The document is a function of the shared capture and the assert's own scope, so any live assert with
-      // the same own scope read the same document. With none, the one at the same position among the
-      // semantic asserts is compared, for the section list, and the scope is reported changed.
-      const key = ownScopeKey(a.semantic_matches!);
-      const sameScope = liveSemantic.filter((r) => ownScopeKey(r.assertion.semantic_matches!) === key);
-      const counterpart = sameScope.find((r) => r.judgedDoc) ?? sameScope[0] ?? liveSemantic[ordinal];
-      let match: DocMatch;
-      if (!counterpart || !counterpart.judgedDoc || !now) match = sameScope.length === 0 || captureMoved ? "scope_changed" : "unknown";
-      else {
-        const diff = diffSections(counterpart.judgedDoc, now, assertionIndex);
-        differing.push(...diff);
-        match =
-          sameScope.length === 0 || captureMoved
-            ? "scope_changed"
-            : diff.length === 0 && counterpart.judgedDoc.sha256 === now.sha256
-              ? true
-              : false;
-      }
+      // Over the fingerprint of what the judge was handed, not the drift check's copy.
+      const c = compareWithLive(a, ordinal, assertionIndex, p.ctx.judgedDocs?.get(a), p.live);
+      differing.push(...c.differing);
       return {
         assertionIndex,
         ...g,
-        docMatchesLive: match,
+        docMatchesLive: c.match,
       } as RegradedAssertion;
     });
     const docMatchesLive = aggregate(assertions.map((a) => a.docMatchesLive));
@@ -390,7 +460,7 @@ const usd = (s: JudgeSpend): string =>
 const log = (s: string) => writeAllSync(2, s + "\n");
 
 function docMatchLine(r: RegradeRunReport): string {
-  const where = (d: DifferingSection) => `${d.change} ${d.kind}${d.path !== undefined ? ` ${d.path}` : ""}`;
+  const where = sectionLabel;
   switch (r.docMatchesLive) {
     case true:
       return "· judged document: identical to the one the live judge read";
@@ -414,7 +484,12 @@ export async function cmdRegrade(args: string[]): Promise<never> {
   try {
     p = parseArgs(
       args,
-      withCommandGlobals({ values: [...REGRADE_VALUE_FLAGS], enums: { "--output-format": ["text", "json"] }, noDashValue: ["--scenario"] }),
+      withCommandGlobals({
+        booleans: [...REGRADE_BOOLEAN_FLAGS],
+        values: [...REGRADE_VALUE_FLAGS],
+        enums: { "--output-format": ["text", "json"] },
+        noDashValue: ["--scenario"],
+      }),
     );
   } catch (e) {
     return fail(CMD, "usage", (e as Error).message, undefined, json);
@@ -436,7 +511,13 @@ export async function cmdRegrade(args: string[]): Promise<never> {
       );
     authoredTotalBytes = n;
   }
-  const outcome = await regradeRuns({ runDirs: p.positionals, scenarioFile, judgeModel: p.options["--judge-model"], authoredTotalBytes });
+  const outcome = await regradeRuns({
+    runDirs: p.positionals,
+    scenarioFile,
+    judgeModel: p.options["--judge-model"],
+    authoredTotalBytes,
+    allowDocDrift: p.flags["--allow-doc-drift"] === true,
+  });
   if (!outcome.ok) return fail(CMD, outcome.kind, outcome.message, undefined, json);
   if (json) writeAllSync(1, regradeEnvelope(outcome) + "\n");
   else {

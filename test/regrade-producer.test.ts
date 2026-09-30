@@ -92,15 +92,26 @@ describe.runIf(can)("regrade over a producer-written run dir", () => {
     }
   }, 60_000);
 
-  it("the same comparison reports false once the authored file changes (the instrument can say no)", async () => {
+  it("once the authored file changes the drift is refused, and reported false when graded anyway (the instrument can say no)", async () => {
     const { f, dir, live } = await producedRun();
     try {
       writeFileSync(join(live.workDir, "outputs", "report.md"), "# Report\nThe main risk is churn.\n");
+      // Refused before the judge by default; graded (and reported false) when the caller accepts the drift.
+      const calls: string[] = [];
+      const refused = await regradeRuns({
+        runDirs: [dir],
+        scenarioFile: f.scenario,
+        makeJudge: judgeDouble(calls),
+        judgeModel: JUDGE_MODEL,
+      });
+      expect(refused).toMatchObject({ ok: false, kind: "runtime" });
+      expect(calls).toHaveLength(0);
       const out = await regradeRuns({
         runDirs: [dir],
         scenarioFile: f.scenario,
-        makeJudge: judgeDouble([]),
+        makeJudge: judgeDouble(calls),
         judgeModel: JUDGE_MODEL,
+        allowDocDrift: true,
       });
       if (!out.ok) throw new Error(out.message);
       expect(out.runs[0].docMatchesLive).toBe(false);

@@ -654,9 +654,12 @@ every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `fa
 recorded (`unknown` when it recorded none, never `true`); `differingSections[]` entries are
 `{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
 passed. `docMatchesLive: false` says the bytes differ, not why (an authored file changed since the run, a
-different secret-scrub set, a sub-agent section). **Exit codes:** `0` every re-graded assert passes · `1` any
+different secret-scrub set, a sub-agent section); the comparison runs before any judge call and a `false` is
+refused unless `--allow-doc-drift` is passed (`scope_changed` and `unknown` are never refused, and an `unknown`
+run cannot be checked for drift or for an unscrubbed secret). **Exit codes:** `0` every re-graded assert passes · `1` any
 fails or is judge-invalid · `2` usage, or a refusal (a multi-turn, partial, replay or chat run dir, a pruned work
-dir, a missing transcript sidecar, a run that did not record `authoredCapture` without `--authored-total-bytes`,
+dir, a missing transcript sidecar, a rebuilt document that differs from the live one without
+`--allow-doc-drift`, a run that did not record `authoredCapture` without `--authored-total-bytes`,
 an alias judge model, a scenario with no `semantic_matches`), or a failure writing a regrade file after earlier
 run dirs were graded; a refusal is the shared error envelope, decided for every run dir before any judge call.
 `result.json` is never modified.
