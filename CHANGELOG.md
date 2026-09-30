@@ -10,8 +10,9 @@ All notable changes to this project are documented here. The format is based on
 
 - **`eval` honours `allow_stall`.** A scenario whose intended terminal state is a question asserts
   `allow_stall: true`, which `run` and `replay` accept as the opt-out from the `stalled` verdict. `eval`
-  ignored it and classified every stalled rep, in both arms, as the agent's failure, so every row failed
-  and the scenario compared nothing. Such a rep is now graded like any completed run (rule
+  ignored it and classified every stalled rep as the agent's failure, scoring it 0 on every row. A
+  scenario whose every rep stalled in both arms compared nothing and the eval exited 1; one that stalled
+  in only some reps had those reps scored 0. Such a rep is now graded like any completed run (rule
   `stall_allowed` in `report.json`). A stall in a scenario without `allow_stall` still fails every row.
   `eval report <eval-dir>` applies the fix to an existing eval dir at no cost.
 

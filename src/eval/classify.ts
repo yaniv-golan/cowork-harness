@@ -136,27 +136,27 @@ function thrownKind(e: unknown): ThrownKind {
 /** The termination decision table: valid, the agent's error (counted as failing every row), or
  *  infrastructure (excluded). Evaluated in this order:
  *
- *  | evidence                                                           | bucket          |
- *  |--------------------------------------------------------------------|-----------------|
- *  | thrown DeciderTimeoutError                                         | errored_infra   |
- *  | thrown BoundaryError                                               | errored_infra   |
- *  | thrown UnansweredError                                             | errored_agent   |
- *  | thrown anything else / no result at all                            | unclassified    |
- *  | success, errorSource absent or `agent`, no kind, stalled, allow_stall | valid (stall_allowed) |
- *  | success, errorSource absent or `agent`, no kind, stalled           | errored_agent   |
- *  | success, errorSource absent or `agent`, no kind                    | valid           |
- *  | success, any other errorSource or any kind                         | unclassified    |
- *  | error, errorSource spawn / protocol / decider_timeout              | errored_infra   |
- *  | error, kind transport / usage_limit                                | errored_infra   |
- *  | error, `<synthetic>` in models, finalMessage an auth failure       | errored_infra (auth) |
- *  | error, `<synthetic>` in models, finalMessage a terminal limit      | errored_infra (usage_limit) |
- *  | error, models only `<synthetic>`, cost 0 (no model answered)       | errored_infra (no_model_answered) |
- *  | error, errorSource timeout / no_result                             | errored_agent   |
- *  | error, errorSource result, kind agent (any subtype)                | errored_agent   |
- *  | error, errorSource exit, kind agent                                | errored_agent, ambiguousExit |
- *  | error, errorSource agent, no kind (partial, or no terminal event)  | errored_agent   |
- *  | error, no errorSource, no kind, partial or unansweredGate          | errored_agent   |
- *  | anything else                                                      | unclassified    |
+ *  | evidence                                                              | bucket                            |
+ *  |-----------------------------------------------------------------------|-----------------------------------|
+ *  | thrown DeciderTimeoutError                                            | errored_infra                     |
+ *  | thrown BoundaryError                                                  | errored_infra                     |
+ *  | thrown UnansweredError                                                | errored_agent                     |
+ *  | thrown anything else / no result at all                               | unclassified                      |
+ *  | success, errorSource absent or `agent`, no kind, stalled, allow_stall | valid (stall_allowed)             |
+ *  | success, errorSource absent or `agent`, no kind, stalled              | errored_agent                     |
+ *  | success, errorSource absent or `agent`, no kind                       | valid                             |
+ *  | success, any other errorSource or any kind                            | unclassified                      |
+ *  | error, errorSource spawn / protocol / decider_timeout                 | errored_infra                     |
+ *  | error, kind transport / usage_limit                                   | errored_infra                     |
+ *  | error, `<synthetic>` in models, finalMessage an auth failure          | errored_infra (auth)              |
+ *  | error, `<synthetic>` in models, finalMessage a terminal limit         | errored_infra (usage_limit)       |
+ *  | error, models only `<synthetic>`, cost 0 (no model answered)          | errored_infra (no_model_answered) |
+ *  | error, errorSource timeout / no_result                                | errored_agent                     |
+ *  | error, errorSource result, kind agent (any subtype)                   | errored_agent                     |
+ *  | error, errorSource exit, kind agent                                   | errored_agent, ambiguousExit      |
+ *  | error, errorSource agent, no kind (partial, or no terminal event)     | errored_agent                     |
+ *  | error, no errorSource, no kind, partial or unansweredGate             | errored_agent                     |
+ *  | anything else                                                         | unclassified                      |
  */
 export function classifyTermination(ev: RepEvidence): TerminationClassification {
   const r = ev.result;
