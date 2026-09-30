@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
-import { unionReferenceAccesses } from "./run/run.js";
-import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
+import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml, YAMLParseError } from "yaml";
 import {
@@ -43,7 +42,7 @@ import {
   type RunContext,
 } from "./decide/decider.js";
 import { claudeCliComplete } from "./decide/llm-transport.js";
-import { toDecisionRequest, questionLabel, type DecisionRequest } from "./agent/session.js";
+import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName, vmProvisioned, type VmProvisioning } from "./runtime/lima.js";
 import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
 import { sync, canonicalizeEnv, syncedNetworkBlock } from "./sync/cowork-sync.js";
@@ -62,8 +61,7 @@ import {
   VERIFY_CASSETTES_USAGE,
 } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
-import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./run/artifacts.js";
-import { readPreRunManifestOrigin, readPreRunManifestStats } from "./run/pre-run-manifest.js";
+import { assertContextFromRunDir, parseGatesFromEvents, readTranscriptSidecar } from "./run/verify-context.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint, cmdLintSkill, cmdScaffoldFlagBuilt, isFlagBuiltScaffold, SCAFFOLD_VALUE_FLAGS } from "./run/scenario-tool.js";
 import {
@@ -173,7 +171,7 @@ import {
 } from "./run/matrix.js";
 import { pMapBounded } from "./async-pool.js";
 import { computeVerdict } from "./run/verdict.js";
-import { evaluate, hostMatches, budgetFields, toolResultEvidence, type AssertContext, expandExpectDenied } from "./assert.js";
+import { evaluate, hostMatches, budgetFields, type AssertContext, expandExpectDenied } from "./assert.js";
 import {
   spawnChannel,
   fileChannel,
@@ -4217,81 +4215,6 @@ function cmdScaffold(args: string[]) {
   else if (outPath === undefined) out(yaml);
 }
 
-/** Read the persisted transcript from a kept run's `run.jsonl` (the `{t:"transcript"}` line).
- *  Returns `null` when the sidecar is absent or unreadable — distinct from an empty-but-present transcript.
- *  Returns `""` when the file is readable but contains no transcript line (run produced no model output). */
-function readTranscriptSidecar(file: string): string | null {
-  try {
-    for (const line of readFileSync(file, "utf8").split("\n")) {
-      if (!line.trim()) continue;
-      const o = JSON.parse(line);
-      if (o && o.t === "transcript") return String(o.text ?? "");
-    }
-    return ""; // file readable but no transcript line — empty transcript (not missing)
-  } catch {
-    return null;
-  }
-}
-
-/** Read the AskUserQuestion question texts from a kept run's `trace.json` (`questions` array).
- *  Returns `null` when the sidecar is absent or unreadable — distinct from a run with zero questions. */
-function readQuestionsSidecar(file: string): string[] | null {
-  try {
-    const t = JSON.parse(readFileSync(file, "utf8"));
-    if (Array.isArray(t.questions)) return t.questions.map(String);
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Reconstruct the AskUserQuestion gates (WITH their offered options) a kept run actually fired,
- *  from its `events.jsonl` (the verbatim child→driver stream — the only sidecar that retains options; the
- *  distilled trace.json drops them). Returns `{ gates, corruptLines }`, or `null` if events.jsonl is
- *  absent/unreadable (distinct from "present but zero gates" → `{ gates: [], corruptLines: 0 }`).
- *
- *  Two deliberate decisions, both because this is a certification command and refuses rather than guesses:
- *  (a) a real events.jsonl can legitimately contain raw, non-JSON agent stdout lines (the child→driver stream
- *  is persisted verbatim before parsing) — so `corruptLines` counts ONLY a JSON.parse failure or a
- *  `toDecisionRequest` throw on an otherwise-`control_request`-typed frame, never a valid-JSON line that
- *  simply isn't a gate (e.g. an `assistant` event); the caller refuses when `corruptLines > 0` rather than
- *  silently skipping, because a present-but-fully-corrupt file is otherwise indistinguishable from "zero
- *  gates fired" and would false-green answer-coverage at 0/0. (b) the live lane (`scanEvents`) stays
- *  warn-only for this same class of evidence gap — this asymmetry with verify-run's hard refusal is
- *  intentional: a live run has already happened and a warn is the most a post-hoc scan can do, but
- *  verify-run is the tool a user runs specifically to certify a scenario as green, so it fails closed. */
-function parseGatesFromEvents(file: string): { gates: DecisionRequest[]; corruptLines: number } | null {
-  let text: string;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch {
-    return null;
-  }
-  const gates: DecisionRequest[] = [];
-  let corruptLines = 0;
-  for (const line of text.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    let msg: unknown;
-    try {
-      msg = JSON.parse(t);
-    } catch {
-      corruptLines++;
-      continue;
-    }
-    if ((msg as { type?: string })?.type !== "control_request") continue;
-    let req: DecisionRequest | null = null;
-    try {
-      req = toDecisionRequest(msg);
-    } catch {
-      corruptLines++; // malformed control_request frame — untrustworthy, counted; caller decides
-      continue;
-    }
-    if (req && req.kind === "question") gates.push(req);
-  }
-  return { gates, corruptLines };
-}
-
 /** The question text used to label a gate in answer-coverage output. */
 function gateQuestionLabel(req: DecisionRequest): string {
   if (req.kind !== "question") return "(gate)";
@@ -4334,323 +4257,23 @@ async function cmdVerifyRun(args: string[]) {
       isJsonOutput(args),
     );
   }
-  // Shape-gate FIRST, before loading anything: a legacy/mixed/pre-completion dir gets a message naming
-  // what it IS (see turn-layout.ts's preLayoutMessage), not a generic "no result.json" that reads as
-  // corruption when the file is sitting right there at the root.
-  // A path the caller named that does not exist is their input (usage); a directory that exists but holds
-  // no completed run is the prior run's state (runtime, below).
-  if (!existsSync(runDir)) return fail("verify-run", "usage", `verify-run: run dir not found: ${runDir}`, undefined, json);
-  if (!statSync(runDir).isDirectory()) return fail("verify-run", "usage", `verify-run: not a run dir (a file): ${runDir}`, undefined, json);
-  let turns: number[];
-  try {
-    turns = requireTurns(runDir, "verify-run");
-  } catch (e) {
-    return fail("verify-run", "runtime", (e as Error).message, undefined, isJsonOutput(args));
+  // Evidence loading (run-dir refusals, the scenario load, the AssertContext rebuild) is shared with every
+  // other consumer that re-grades a kept run; see src/run/verify-context.ts.
+  const loaded = assertContextFromRunDir(runDir, () => parseScenarioFile(scenarioFile));
+  if (!loaded.ok) {
+    if (loaded.kind === "scenario") {
+      // The scenario file is the caller's input: absent or not loadable is a usage error, as it is for `run`.
+      return fail(
+        "verify-run",
+        "usage",
+        `verify-run: cannot load scenario ${scenarioFile}: ${(loaded.error as Error).message}`,
+        undefined,
+        isJsonOutput(args),
+      );
+    }
+    return fail("verify-run", loaded.kind, loaded.message, undefined, isJsonOutput(args));
   }
-  // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
-  // caller's scenario describes. Checked on the TURN COUNT (before loading any result), not a `result.turn`
-  // field read off whichever turn we'd otherwise load — RunResult.turn is documented absent on some lanes,
-  // so a field-based check silently passed a multi-turn dir whose latest result happened to omit it.
-  //
-  // This command reads TURN 1. For a `critique` dir that is the GRADED task turn, not the reflection one —
-  // so on a genuinely single-turn dir (the only case that survives this refusal) turn 1 IS the run's only
-  // completion, and there is no ambiguity left to resolve. Today's cumulative gate scan at least fails
-  // LOUDLY on the other turn's unmatched gates; scoping this command to "whichever turn is latest" instead
-  // would have turned that into a silent PASS against a transcript the scenario never described. Refusing
-  // is the fail-closed reading: an ambiguous target is not a verified one.
-  //
-  // Deliberately no turn selector yet — that is a new CLI surface (flag disposition, docs, tests) and this
-  // guard is worth having before it. The message names the addressable files so the caller is not stuck.
-  if (turns.length > 1) {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: ${runDir} holds ${turns.length} turns (a --resume session, or a \`critique\` task+reflection pair). ` +
-        `This command reads turn 1 only — for a critique dir that is the graded task turn, not the reflection one, ` +
-        `so it cannot tell which turn your scenario describes when there is more than one. Verify a single-turn ` +
-        `run dir instead; the graded turn is addressable as result.graded.json or turns/1/result.json for inspection. ` +
-        `(can't verify ⇒ not green)`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-  const resultPath = turnArtifactPath(runDir, turns[0], "result.json");
-  if (!existsSync(resultPath)) {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: no result.json under ${resultPath} (turn ${turns[0]} directory exists with no completed ` +
-        `result — a crash between run.jsonl and result.json, or a run still in flight)`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-  let result: RunResult;
-  try {
-    result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
-  } catch (e) {
-    return fail("verify-run", "runtime", `verify-run: cannot read ${resultPath}: ${(e as Error).message}`, undefined, isJsonOutput(args));
-  }
-  // JSON.parse alone would let `{}` (or any foreign/truncated-then-hand-fixed JSON) through, and
-  // the `result.result === "error" ? "error" : "success"` collapse below would then certify
-  // garbage as success. Gate on the one field the verdict hinges on. Everything else is
-  // deliberately lenient: absent optional fields degrade loudly via the evidence-missing flags.
-  const resultField = (result as { result?: unknown }).result;
-  if (resultField !== "success" && resultField !== "error") {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: ${resultPath} is structurally invalid — \`result\` is ${JSON.stringify(resultField)}, ` +
-        `expected "success" | "error" (truncated, hand-edited, or not harness-written). (can't verify ⇒ not green)`,
-      undefined,
-      json,
-    );
-  }
-  // A partial run did NOT complete (it exited on an unanswered gate). Its assertion outcome is empty and its
-  // artifacts are pre-failure, so re-evaluating asserts against it would vouch for a run that never finished.
-  // Refuse rather than false-fail or false-pass.
-  if (result.partial) {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: ${runDir} is a PARTIAL run — it did not complete (exited on an unanswered gate). ` +
-        `Re-run to completion before verifying. (can't verify ⇒ not green)`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-  // A `command:"replay"` result is a RE-CHECK of a recorded cassette, not run evidence (same rule
-  // as the stats indexer, which never indexes replay rows). Certifying it would launder a re-check into a
-  // fresh verification. Keyed on `command`, not `workspaceFiles` — an old live result.json that simply
-  // lacks workspaceFiles must keep verifying (absent optional fields degrade loud via the evidence flags).
-  if (result.command === "replay") {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: ${resultPath} was produced by \`replay\` (command:"replay") — a replay is a ` +
-        `re-check of a recorded cassette, not run evidence; verify the original live run dir, or re-run live. ` +
-        `(can't verify ⇒ not green)`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-  // A chat result carries no assertions and no verdict by contract (RunResult.mode doc) — reading it as
-  // pass/fail is forbidden to consumers, including this one. Chat dirs DO persist result.json, so unlike
-  // the replay case this is reachable with an ordinary on-disk run dir.
-  if (result.mode === "chat") {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: ${runDir} is a CHAT session (mode:"chat") — chat results carry no assertions or ` +
-        `verdict and must not be read as pass/fail. (can't verify ⇒ not green)`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-  let scenario;
-  try {
-    scenario = parseScenarioFile(scenarioFile);
-  } catch (e) {
-    // The scenario file is the caller's input: absent or not loadable is a usage error, as it is for `run`.
-    return fail(
-      "verify-run",
-      "usage",
-      `verify-run: cannot load scenario ${scenarioFile}: ${(e as Error).message}`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-
-  const workRoot = result.workDir ?? "";
-  const scan = result.scan ?? { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
-  // FS-class assertions resolve under workRoot; if it's gone we can't faithfully re-check them — refuse
-  // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
-  // belongs here too: on a missing workRoot its post-run walk returns [] → zero created files → a vacuous
-  // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
-  const FS_KEYS: (keyof Assertion)[] = [
-    "file_exists",
-    // Both read the run's real tree: artifact_text scans a body, file_absent proves a path is not there.
-    // file_absent is the one that MUST be here — with no work dir, existsSync returns false for every
-    // path and it would pass vacuously, the same false-green no_unexpected_files is listed for.
-    "artifact_text",
-    "file_absent",
-    "user_visible_artifact",
-    "artifact_json",
-    "no_unexpected_files",
-    "input_unmodified",
-    // no_lost_write_back re-reads the run's authored sources from workRoot (recomputed below) — a missing
-    // work dir can't be faithfully re-checked, so refuse rather than false-fail.
-    "no_lost_write_back",
-  ];
-  const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
-  if (hasFsAssert && !existsSync(workRoot)) {
-    return fail(
-      "verify-run",
-      "runtime",
-      `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
-        `(file_exists/file_absent/artifact_json/artifact_text/user_visible_artifact/no_unexpected_files/input_unmodified/no_lost_write_back) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
-      undefined,
-      isJsonOutput(args),
-    );
-  }
-
-  // Through the seam, same turn the result above was read from (turns[0] — the guard above already
-  // refused anything with more than one).
-  const vrTurn = turns[0];
-  const sidecarTranscript = readTranscriptSidecar(turnArtifactPath(runDir, vrTurn, "run.jsonl"));
-  const sidecarQuestions = readQuestionsSidecar(turnArtifactPath(runDir, vrTurn, "trace.json"));
-
-  // `question_options` grades the option SET a gate offered, and the distilled trace.json drops options
-  // (see parseGatesFromEvents' own doc) — so this lane reads `events.jsonl` directly. Deliberately NOT
-  // the answer-coverage call below: that one is gated on `scenario.answers.length > 0`, so a scenario
-  // asserting option order with no scripted answers (`on_unanswered: first`, an LLM-decided gate, a
-  // post-hoc check on a kept run) would silently reach the evaluator with no evidence at all. Parsed only
-  // when the key is asserted — a full events.jsonl read is not free on a long run.
-  const wantsGateOptions = scenario.assert.some((a) => a.question_options !== undefined || a.question_context !== undefined);
-  const parsedGates = wantsGateOptions ? parseGatesFromEvents(join(runDir, "events.jsonl")) : undefined;
-  // Absent file OR any unparseable frame ⇒ evidence-missing, never a partial set graded as complete:
-  // a present-but-corrupt events.jsonl is otherwise indistinguishable from "these were all the gates".
-  const gateOptionsMissing = wantsGateOptions && (!parsedGates || parsedGates.corruptLines > 0);
-  const vrGateOptions = parsedGates
-    ? (parsedGates.gates as DecisionRequest[]).flatMap((g) =>
-        g.kind === "question"
-          ? g.questions.map((q) => ({
-              question: questionLabel(q),
-              options: (q.options ?? []).map((o) => ({
-                label: o.label,
-                ...(o.description === undefined ? {} : { description: o.description }),
-              })),
-              ...(q.multiSelect === undefined ? {} : { multiSelect: q.multiSelect }),
-            }))
-          : [],
-      )
-    : undefined;
-
-  // no_lost_write_back needs the run's authored-file set. It isn't persisted in result.json, so recompute it
-  // from the KEPT work dir (verify-run re-checks on the same machine, exactly as input_unmodified re-hashes
-  // the real tree under workRoot). The FS_KEYS refusal above already handled a missing work dir; only
-  // recompute when the key is actually asserted (a live connected folder walk is not free). Absent here
-  // (key not asserted) → authoredFiles stays undefined, harmless for every other assertion.
-  const wantsWriteBackCheck = scenario.assert.some((a) => a.no_lost_write_back !== undefined);
-  const recomputedAuthored =
-    wantsWriteBackCheck && existsSync(workRoot)
-      ? captureAuthoredFilesWithHealth(
-          workRoot,
-          result.userVisibleRoots ?? ["outputs", ".projects"],
-          result.readonlyFolderRoots ?? [],
-          result.preRunHashes,
-          {
-            scratchpadRoot: workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined,
-            preRunStats: readPreRunManifestStats(runDir),
-          },
-        )
-      : undefined;
-
-  const ctx: AssertContext = {
-    transcript: sidecarTranscript ?? "",
-    toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
-    subagentTools: new Set((result.subagents ?? []).flatMap((s) => (s.toolsUsed ?? []).map((d) => d.name))),
-    egress: result.egress ?? [],
-    egressMissing: result.egress === undefined, // absent field (old result.json) ≠ a run that made zero egress attempts
-    result: result.result === "error" ? "error" : "success",
-    workRoot,
-    // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
-    // Fall back to the legacy prefix for old result.json that predates the field.
-    userVisiblePrefixes: result.userVisibleRoots ?? ["outputs", ".projects"],
-    lane: result.lane,
-    // Read-only folder inputs are captured body-less; keep artifact_json's verdict identical to the
-    // replay lane (evidence-unavailable) instead of parsing the real on-disk input here.
-    readonlyFolderRoots: result.readonlyFolderRoots ?? [],
-    // result.json is the single source: every writer populates the field from the run's own
-    // pre-run-manifest.json, so a missing field means the baseline genuinely doesn't exist
-    // (pre-field run, or the run never captured) — evidence-unavailable, loud.
-    preRunPaths: result.preRunPaths,
-    // A pre-#38 result.json has no preRunLinkAware ⇒ undefined ⇒ no_unexpected_files excludes links from the
-    // post walk, so re-verifying an old run dir doesn't false-stray its pre-existing symlinks.
-    preRunLinkAware: result.preRunLinkAware,
-    preRunHashes: result.preRunHashes,
-    // baseline provenance. Prefer the value persisted in result.json; fall back to reading it straight
-    // from the run dir's pre-run-manifest.json so re-verifying an OLD run dir (whose result.json predates
-    // the field) still fails evidence-unavailable on a local-unreadable baseline instead of diffing it.
-    preRunOrigin: result.preRunOrigin ?? readPreRunManifestOrigin(runDir),
-    // Recomputed above (only when no_lost_write_back is asserted) from the kept work dir. undefined when the
-    // key isn't asserted — no_lost_write_back then never runs, so the undefined is never read.
-    authoredFiles: recomputedAuthored?.files,
-    authoredFilesHealth:
-      recomputedAuthored && authoredFilesHealthNonEmpty(recomputedAuthored.health) ? recomputedAuthored.health : undefined,
-    outputsDeletes: scan.outputsDeletes,
-    // read from the persisted result, never recomputed — a result written before these existed has neither,
-    // which the tiering reads as unknown and fails closed.
-    outputsDeleteBasis: result.scan?.outputsDeleteBasis,
-    fsDiff: result.fsDiff,
-    mountDeletes: scan.mountDeletes ?? [],
-    questions: sidecarQuestions ?? [],
-    gateOptions: vrGateOptions,
-    gateOptionsMissing,
-    hostPathLeaked: scan.hostPathLeaked,
-    selfHealRan: scan.selfHealRan,
-    subagents: result.subagents ?? [],
-    gateDeliveries: result.gateDeliveries ?? [],
-    gateDeliveriesMissing: result.gateDeliveries === undefined,
-    toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
-    toolResultsTruncated: (result.toolResults ?? []).map((r) => r.assertText === undefined),
-    // undefined (not []) when result.toolResults itself is absent — an old/partial result.json,
-    // distinct from a genuine empty array — mirrors toolResultsMissing's own undefined-preserving convention.
-    toolResults: result.toolResults?.map(toolResultEvidence),
-    // Read, never re-derived: `Run` is the one place that classifies a call's origin. An older result.json
-    // has no field — the object form of tool_called then fails evidence-unavailable (toolCallsMissing).
-    toolCalls: result.toolCalls,
-    toolCallsMissing: result.toolCalls === undefined,
-    toolErrors: result.toolErrors,
-    transcriptMissing: sidecarTranscript === null,
-    questionsMissing: sidecarQuestions === null,
-    // Evidence-missing flags: set ONLY when the underlying field is undefined (partial/old result.json),
-    // not when it is a legitimately-empty {}/[]. The producer serializes these unconditionally
-    // (execute.ts), so in the verify-run lane `undefined` reliably means the evidence is absent — not
-    // that the run produced none. Negative/absence assertions then fail loud instead of vacuously green.
-    toolResultsMissing: result.toolResults === undefined,
-    toolsCalledMissing: result.toolCounts === undefined,
-    // Left `undefined` when result.json carries no list (an older run, or one with no observable tool
-    // stream) — which is exactly what makes both reference keys fail evidence-unavailable here rather
-    // than pass vacuously off a missing field.
-    referencesAccessed: unionReferenceAccesses(result),
-    subagentsMissing: result.subagents === undefined,
-    // Derive from `result.scan` directly — NOT the `scan` local, which already collapsed undefined into
-    // the `{outputsDeletes:[],hostPathLeaked:false,selfHealRan:false}` default above.
-    scanMissing: result.scan === undefined,
-    skillsInvoked: result.skillsInvoked ?? [],
-    skillsInvokedMissing: result.skillsInvoked === undefined,
-    // `skillToolAvailable` predates being persisted on older result.json too; default true rather than
-    // false so an old run's skill_triggered doesn't spuriously read as evidence-unavailable for the WRONG
-    // reason (agent-tool-drift) when the real reason is just "this field didn't exist yet".
-    skillToolAvailable: result.skillToolAvailable ?? true,
-    skillActivity: result.skillActivity,
-    tasks: result.tasks,
-    // Context/Connectors panel — backs skill_available/connector_available/tool_available.
-    // result.json's own `context` was fully populated at RunResult-assembly time, so this is a
-    // straight read-through (no timing gap unlike the live evaluate() ctx in execute.ts).
-    availableSkills: result.context?.availableSkills,
-    mcpServers: result.context?.mcpServers,
-    availableTools: result.context?.tools,
-    contextEvents: result.contextEvents,
-    mcpErrors: result.mcpErrors,
-    resources: result.resources,
-    hookEvents: result.hookEvents,
-    fileToolAttempts: result.fileToolAttempts,
-    pathDenials: result.pathDenials,
-    presentedFiles: result.presentedFiles,
-    presentFilesCalls: result.presentFilesCalls,
-    evidenceErrors: result.evidenceErrors,
-    effectiveFidelity: result.effectiveFidelity,
-    // verify-run re-checks a kept run dir on the SAME machine that ran it — grouped with the live
-    // execute.ts lane (both check a host-shaped computer:// link's path directly). result.json doesn't
-    // persist each connected folder's real host source path, so `workRoot` (the run's own mnt root,
-    // already required above for FS-class asserts) is the only host root verify-run can reconstruct —
-    // a host-shaped link pointing outside it (or with workRoot unset) resolves as evidence-unavailable
-    // rather than falling back to an unconstrained existsSync (see computer-links.ts).
-    linkResolution: { mode: "live", hostRoots: workRoot ? [workRoot] : [] },
-    ...budgetFields(result),
-  };
+  const { ctx, result, scenario, sidecarTranscript, sidecarQuestions } = loaded;
 
   const assertions = evaluate(scenario.assert, ctx);
   // Same helper the live run uses (evaluate() does not handle expect_denied). Passing ctx.egressMissing
