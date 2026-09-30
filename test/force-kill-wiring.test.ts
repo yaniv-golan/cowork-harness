@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import readline from "node:readline";
 import { makeContainerPhaseReap } from "../src/run/execute.js";
-import { wireChatInterrupt, ttyTurns } from "../src/run/chat.js";
+import { wireChatInterrupt, ttyTurns, trackChatAgent } from "../src/run/chat.js";
+import type { ChildProcess } from "node:child_process";
 
 // Where the process-tree kill is wired in. The tree agent itself is covered by agent-tree(.live).test.ts;
 // these pin that each stop site hands the agent to it instead of SIGKILLing one pid.
@@ -106,10 +107,39 @@ describe("stop sites route through the tree kill", () => {
     expect((execute.match(bare) ?? []).length).toBeLessThanOrEqual(2);
   });
 
-  it("chat installs the termination handler and registers the agent at protocol and hostloop", () => {
-    expect(chat).toContain("installTerminationHandler()");
-    expect(chat).toContain("registerAgent(");
+  it("chat's host agent is installed with the termination handler as a process tree, with its tier's grace", () => {
+    for (const [fidelity, grace] of [
+      ["protocol", 2000],
+      ["hostloop", 5000],
+    ] as const) {
+      const log: string[] = [];
+      let registered: (() => unknown) | undefined;
+      const fakeTree = { graceMs: undefined as number | undefined };
+      const t = trackChatAgent(fidelity, { child: {} as ChildProcess, runTag: "rtest", workDir: "/w" }, 1, {
+        install: () => log.push("install"),
+        register: (get) => {
+          registered = get;
+          log.push("register");
+          return () => log.push("deregister");
+        },
+        tree: ((_c: unknown, o: { graceMs?: number }) => ((fakeTree.graceMs = o.graceMs), fakeTree)) as never,
+      });
+      expect(log).toEqual(["install", "register"]);
+      expect(registered?.()).toBe(t.tree);
+      expect(fakeTree.graceMs).toBe(grace);
+      t.deregister();
+      expect(log).toEqual(["install", "register", "deregister"]);
+    }
+    // and cmdChat uses it at both host tiers, and wires the terminal Ctrl-C
+    expect(chat.match(/trackAgent\(/g)?.length).toBeGreaterThanOrEqual(2);
     expect(chat).toContain("wireChatInterrupt(rl");
+  });
+
+  it("the Ctrl-C thunk is handed the real hostloop teardown mark, in run and chat", () => {
+    for (const src of [execute, chat]) {
+      const call = src.slice(src.indexOf("makeContainerPhaseReap({"), src.indexOf("makeContainerPhaseReap({") + 400);
+      expect(call).toMatch(/markTearingDown: \(\) => hostloopMarkTearingDown\?\.\(\)/);
+    }
   });
 
   it("run and chat leave the host-agent stop sequence out of durationMs", () => {

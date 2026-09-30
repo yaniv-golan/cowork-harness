@@ -381,15 +381,10 @@ export async function cmdChat(args: string[]) {
     spawned: { child: import("node:child_process").ChildProcess; runTag: string; workDir?: string },
     startedAtMs: number,
   ) => {
-    treeAgent = agentTreeAgent(spawned.child, {
-      runTag: spawned.runTag,
-      runStartMs: startedAtMs,
-      workDir: spawned.workDir,
-      graceMs: hostAgentStopTiming(fidelity).graceMs,
-    });
-    installTerminationHandler();
-    deregisterAgent = registerAgent(() => treeAgent);
-    return treeAgent;
+    const t = trackChatAgent(fidelity, spawned, startedAtMs);
+    treeAgent = t.tree;
+    deregisterAgent = t.deregister;
+    return t.tree;
   };
   // same web_fetch provenance wiring as execute.ts — ref created before spawn, filled after Run.
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
@@ -643,6 +638,27 @@ export async function cmdChat(args: string[]) {
   } finally {
     releaseExit?.();
   }
+}
+
+/** Wrap chat's host agent (protocol, hostloop) as a process tree and hand it to the termination handler —
+ *  installed here, because a `protocol` chat has no egress sidecar to install it. */
+export function trackChatAgent(
+  fidelity: string,
+  spawned: { child: import("node:child_process").ChildProcess; runTag: string; workDir?: string },
+  startedAtMs: number,
+  deps: { install: () => void; register: (get: () => TreeAgent | undefined) => () => void; tree?: typeof agentTreeAgent } = {
+    install: installTerminationHandler,
+    register: registerAgent,
+  },
+): { tree: TreeAgent; deregister: () => void } {
+  const tree = (deps.tree ?? agentTreeAgent)(spawned.child, {
+    runTag: spawned.runTag,
+    runStartMs: startedAtMs,
+    workDir: spawned.workDir,
+    graceMs: hostAgentStopTiming(fidelity).graceMs,
+  });
+  deps.install();
+  return { tree, deregister: deps.register(() => tree) };
 }
 
 /** Route a terminal Ctrl-C (readline's `SIGINT` event): mid-turn → `forward` (the termination handler); at the
