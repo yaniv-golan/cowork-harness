@@ -1,0 +1,67 @@
+{
+  "scenario": "fixture-usage-limit",
+  "result": "error",
+  "errorSource": "result",
+  "resultErrorKind": "usage_limit",
+  "resultSubtype": "success",
+  "models": [
+    "claude-opus-4-8",
+    "<synthetic>"
+  ],
+  "modelFallbacks": [],
+  "modelPinHonored": true,
+  "assertions": [
+    {
+      "assertion": {
+        "result": "<redacted>"
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "subagent_dispatched": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "dispatch_count_max": 3
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "subagent_file_write": {
+          "path_suffix": "<redacted>"
+        }
+      },
+      "pass": false
+    },
+    {
+      "assertion": {
+        "file_exists": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "subagent_tool_used": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "subagent_tool_used": "<redacted>"
+      },
+      "pass": true
+    },
+    {
+      "assertion": {
+        "subagent_output_contains": {
+          "contains": "<redacted>"
+        }
+      },
+      "pass": true
+    }
+  ]
+}
