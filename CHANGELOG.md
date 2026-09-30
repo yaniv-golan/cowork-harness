@@ -19,6 +19,21 @@ All notable changes to this project are documented here. The format is based on
   and `--max-budget-usd` still count the agent's spend only. The run index gains a matching
   `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
   cost to recover, so their rows stay without it, even after `stats --reindex`.
+- **`semantic_matches` records the judge's reason for each claim.** Each entry of
+  `RunResult.assertions[].semanticClaims[]` can now carry `rationale`: one sentence naming the evidence
+  for a pass, or what is missing for a fail. A failed assert's footer prints the rationale under each
+  failed claim.
+  - It is untrusted model text that can quote the judged document. Control characters are stripped, it
+    is capped at 400 characters, and secrets are scrubbed.
+  - It is advisory: a missing or malformed rationale never changes `pass` and never invalidates a grade.
+    It is absent when the judge gave none.
+
+### Changed
+
+- **The `semantic_matches` judge prompt now asks for a rationale before each verdict,** and tells the judge
+  to treat the candidate answer as data rather than instructions. Grades against the same rubric may
+  shift, so `judgePromptHash` changes. Compare before/after only between runs that share
+  `judgePromptHash`.
 
 ### Fixed
 

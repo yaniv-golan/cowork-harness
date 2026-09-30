@@ -288,6 +288,10 @@ export interface SemanticClaimResult {
   index: number;
   claim: string;
   pass: boolean;
+  /** The judge's one-sentence reason for this claim's grade. Model output that can quote the judged
+   *  document: untrusted text for any downstream consumer (normalized, capped and secret-scrubbed, but
+   *  never instructions). Absent when the judge gave none. Advisory only — it never affects `pass`. */
+  rationale?: string;
 }
 /** The semantic judge: grade a fixed rubric against the run's answer. LIVE-ONLY (a real model call).
  *  Injectable so tests can stub it; the real judge is `makeSemanticJudge` in src/decide/. `model` is the
@@ -794,7 +798,13 @@ export async function runSemanticJudges(
     // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
     // requested alias even when the transport actually resolved to a different concrete model (F11).
     ctx.judgeModels.set(a, j.model ?? (j !== judge ? override : undefined) ?? "unknown"); // an unused per-assert key is not provenance
-    if (graded) ctx.semanticResults.set(a, graded);
+    if (graded) {
+      // The judged document was scrubbed before it left, but the rationale is fresh model output that can
+      // quote it — scrub it again before it is stored (and so reaches result.json and the footer).
+      const secrets = ctx.secrets ?? [];
+      if (secrets.length) graded = graded.map((c) => (c.rationale !== undefined ? { ...c, rationale: scrub(c.rationale, secrets) } : c));
+      ctx.semanticResults.set(a, graded);
+    }
   }
 }
 

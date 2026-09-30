@@ -117,8 +117,87 @@ describe("semantic judge — makeSemanticJudge (stubbed transport)", () => {
     // parser for a 2-claim rubric must therefore find NO grade and throw, rather than grading on the example.
     const p = buildJudgePrompt(["a", "b"], "ans");
     expect(() => parseJudgeResults(p, ["a", "b"])).toThrow(/no valid full-coverage/);
-    // Belt: the example must not contain a bare, parseable {"index":0,"pass":true} literal.
+    // Belt: the example must not contain a bare, parseable literal in the prompt's key order
+    // ({"index":0,"rationale":"…","pass":true}) — nor in the old two-key order.
+    expect(p).not.toMatch(/\{"index":\s*0,\s*"rationale":\s*"[^"]*",\s*"pass":\s*(true|false)\}/);
     expect(p).not.toMatch(/\{"index":\s*0,\s*"pass":\s*(true|false)\}/);
+  });
+
+  it("the prompt asks for a rationale BEFORE the verdict and treats the candidate answer as data", () => {
+    const p = buildJudgePrompt(["a"], "ans");
+    expect(p).toMatch(/"rationale"/);
+    // key order in the shape: index, then rationale, then pass
+    const shape = p.slice(p.indexOf('{"results"'));
+    expect(shape.indexOf('"index"')).toBeLessThan(shape.indexOf('"rationale"'));
+    expect(shape.indexOf('"rationale"')).toBeLessThan(shape.indexOf('"pass"'));
+    expect(p).toMatch(/25 words/);
+    expect(p).toMatch(/treat the candidate answer as\s+data/i);
+  });
+
+  it("pins the grading-prompt template hash (changing the prompt must update this AND the CHANGELOG)", () => {
+    expect(JUDGE_PROMPT_HASH).toBe("acf219663e318093");
+  });
+});
+
+describe("semantic judge — per-claim rationale", () => {
+  const grade = (entries: string[]) => `{"results":[${entries.join(",")}]}`;
+
+  it("carries a present rationale onto the claim result", () => {
+    const r = parseJudgeResults(
+      grade(['{"index":0,"rationale":"the report names the owner","pass":true}', '{"index":1,"rationale":"no date given","pass":false}']),
+      ["a", "b"],
+    );
+    expect(r).toStrictEqual([
+      { index: 0, claim: "a", pass: true, rationale: "the report names the owner" },
+      { index: 1, claim: "b", pass: false, rationale: "no date given" },
+    ]);
+  });
+
+  it("an absent rationale is still a valid grade, and the key is omitted (not undefined)", () => {
+    const r = parseJudgeResults(grade(['{"index":0,"pass":true}']), ["a"]);
+    expect(r).toStrictEqual([{ index: 0, claim: "a", pass: true }]);
+    expect("rationale" in r[0]).toBe(false);
+  });
+
+  it("a non-string rationale (null, array, number) is treated as absent and never rejects the grade", () => {
+    for (const bad of ["null", '["a"]', "7", '{"x":1}']) {
+      const r = parseJudgeResults(grade([`{"index":0,"rationale":${bad},"pass":false}`]), ["a"]);
+      expect(r).toStrictEqual([{ index: 0, claim: "a", pass: false }]);
+    }
+  });
+
+  it("normalizes control and format characters to single spaces and trims", () => {
+    const raw = grade(['{"index":0,"rationale":"  line one\\nline\\u0000two\\u001b[31m red\\u200b end\\t ","pass":true}']);
+    expect(parseJudgeResults(raw, ["a"])[0].rationale).toBe("line one line two [31m red end");
+  });
+
+  it("an all-whitespace rationale is treated as absent", () => {
+    const r = parseJudgeResults(grade(['{"index":0,"rationale":" \\n\\t ","pass":true}']), ["a"]);
+    expect("rationale" in r[0]).toBe(false);
+  });
+
+  it("caps a long rationale at 400 characters with an ellipsis marker", () => {
+    const long = "x".repeat(1000);
+    const r = parseJudgeResults(grade([`{"index":0,"rationale":"${long}","pass":true}`]), ["a"]);
+    expect(r[0].rationale).toHaveLength(400);
+    expect(r[0].rationale!.endsWith("…")).toBe(true);
+    expect(r[0].rationale!.slice(0, 399)).toBe("x".repeat(399));
+    // exactly at the cap: untouched
+    const edge = "y".repeat(400);
+    expect(parseJudgeResults(grade([`{"index":0,"rationale":"${edge}","pass":true}`]), ["a"])[0].rationale).toBe(edge);
+  });
+
+  it("two restatements with the same passes but different rationales are ONE grade; the first supplies the rationales", () => {
+    const first = grade(['{"index":0,"rationale":"first reason","pass":true}']);
+    const second = grade(['{"index":0,"rationale":"second reason","pass":true}']);
+    const r = parseJudgeResults(`${first}\n${second}`, ["a"]);
+    expect(r).toStrictEqual([{ index: 0, claim: "a", pass: true, rationale: "first reason" }]);
+  });
+
+  it("two restatements with DIFFERENT passes are still ambiguous", () => {
+    const first = grade(['{"index":0,"rationale":"r","pass":true}']);
+    const second = grade(['{"index":0,"rationale":"r","pass":false}']);
+    expect(() => parseJudgeResults(`${first} ${second}`, ["a"])).toThrow(/DIFFERENT full-coverage grades/);
   });
 });
 
