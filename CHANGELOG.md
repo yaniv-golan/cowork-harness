@@ -33,13 +33,20 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   - Refused before any run (exit `2`): alias models, `--reps` below 4 without `--allow-underpowered`, an
     eval directory inside a git work tree, identical arms (unless `--allow-identical-arms`), an arm that
     contains the eval's own scenario or session files (a symlink included), an `evals.json` or a symlink
-    resolving outside it, a scenario input a run would refuse, and a `--fail-on confirmed` that no row
-    could reach. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
+    resolving outside it, a scenario input a run would refuse, a session without exactly one
+    `plugins.local_plugins` entry, and a `--fail-on confirmed` that no row could reach. In a scenario
+    directory, YAML with no `prompt:` (a session file) is skipped.
   - Exit `0` when the eval completed, whatever drops the rows show; `--fail-on possible|confirmed` opts in
     to exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
     differed across reps, and `3` when an arm snapshot could not be copied or failed its staging
     preflight. The report format, labels and statistical defaults are experimental
     ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
+- **A credential loaded from the install's own `.env` is named on stderr.** When `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` comes from `<install>/.env` while the CLI runs from another
+  directory — for example `node <clone>/dist/cli.js` — one `[env] using <names> from <file>` line says which
+  file, and never prints a value. A `--dotenv` after the subcommand that replaces that credential adds a
+  second line naming its file. Every other `.env` load stays silent. See the `.env` notes in
+  [docs/cli.md](./docs/cli.md).
 - **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so
   `--keep-last` applies to them; `prune` warns that the eval's report links point at deleted runs
   (`eval report` still rebuilds the report from the eval dir).
@@ -165,12 +172,6 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
 - **The `lint-skill` size caps are re-verified against agent 2.1.284.** The values are unchanged. The
   agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
   and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
-
-- **A credential loaded from the install's own `.env` is named on stderr.** When `CLAUDE_CODE_OAUTH_TOKEN`,
-  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` comes from `<install>/.env` while the CLI runs from another
-  directory — for example `node <clone>/dist/cli.js` — one `[env] using <names> from <file>` line says which
-  file, and never prints a value. Every other `.env` load stays silent. See the `.env` notes in
-  [docs/cli.md](./docs/cli.md).
 
 ### Fixed
 
