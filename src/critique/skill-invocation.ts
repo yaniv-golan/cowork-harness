@@ -83,9 +83,29 @@ export function slashCommandSkillInvocation(
 export function slashInvokedSkillIds(
   prompt: string | undefined,
   availableSkills: readonly { id: string }[] | undefined,
+  runTexts: readonly (string | undefined)[] = [],
 ): string[] | undefined {
   const s = slashCommandSkillInvocation(prompt, availableSkills);
-  return s.kind === "skill" ? [s.id] : s.kind === "none" ? [] : undefined;
+  if (s.kind !== "skill") return s.kind === "none" ? [] : undefined;
+  // The inventory says the token names a staged skill; the binary can still refuse to run it. Its refusal
+  // is the run's own answer text, so a run that carries one ran nothing.
+  const token = /^\/(\S+)/.exec(prompt ?? "")?.[1] ?? "";
+  return slashCommandRefused(token, runTexts) ? [] : [s.id];
+}
+
+/** The binary's own refusal lines for a slash command it would not run (agent 2.1.284, verbatim from its
+ *  strings): a skill with `user-invocable: false`, and a name its command registry does not resolve. In
+ *  print mode the refusal comes back as the turn's (synthetic) answer, so the run's result text and main
+ *  transcript carry it — the same frozen frames a replay re-drives. */
+export const SLASH_REFUSED_NOT_USER_INVOCABLE = "This skill can only be invoked by Claude, not directly by users.";
+const SLASH_REFUSED_UNKNOWN = "Unknown command: /";
+
+export function slashCommandRefused(token: string, runTexts: readonly (string | undefined)[]): boolean {
+  return runTexts.some(
+    (t) =>
+      typeof t === "string" &&
+      (t.includes(SLASH_REFUSED_NOT_USER_INVOCABLE) || (token !== "" && t.includes(`${SLASH_REFUSED_UNKNOWN}${token}`))),
+  );
 }
 
 /** The `Skill` calls a SUB-AGENT made during the turn, by the skill id each named — or `undefined` when
@@ -166,11 +186,12 @@ export function recordedSlashInvokedSkills(r: {
   mode?: string;
   slashInvokedSkills?: string[];
   prompt?: string;
+  finalMessage?: string;
   context?: { availableSkills?: readonly { id: string }[] };
 }): string[] | undefined {
   if (r.slashInvokedSkills !== undefined) return r.slashInvokedSkills;
   // A chat's `prompt` is only its seed — the REPL messages after it were never recorded — so re-deriving
   // from it would claim a negative the record cannot support.
   if (r.mode === "chat") return undefined;
-  return slashInvokedSkillIds(r.prompt, r.context?.availableSkills);
+  return slashInvokedSkillIds(r.prompt, r.context?.availableSkills, [r.finalMessage]);
 }

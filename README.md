@@ -155,18 +155,19 @@ A real one, from someone dogfooding a skill of their own. The prompt named their
 run came back green and the answer read fine. The record said otherwise:
 
 ```text
-skillsInvoked: []          # no Skill tool call…
-slashInvokedSkills: []     # …and no `/<skill>` prompt: offered and never invoked
+skillsInvoked: []          # the skill was offered and never invoked
 toolCounts:    {}          # zero tools — it never read anything
 finalMessage:  "This is a quick syntax question, not a full skill-creation
                 workflow, so I'll just answer it directly."
 ```
 
-The model declined the skill and answered from its own knowledge. (Both lists matter: a prompt that
-starts with `/<skill>` runs the skill with no `Skill` call, so it leaves `skillsInvoked` empty and
-records the skill in `slashInvokedSkills` instead.) The guidance being tested was
+The model declined the skill and answered from its own knowledge. The guidance being tested was
 correct and simply never consulted — so the run was measuring the model, not the skill. No transcript
 of the *answer* would have shown that, because the answer was fine.
+
+That record predates `slashInvokedSkills`; today's harness would also record `slashInvokedSkills: []`
+there. Read both before concluding "never invoked": a prompt that starts with `/<skill>` runs the skill
+with no `Skill` call, so it leaves `skillsInvoked` empty and records the skill in `slashInvokedSkills`.
 
 They widened the skill's description in response, re-ran the same probe, and it now invokes — then
 pinned the fix with a scenario so it cannot regress silently. **That is the loop this is for:** find a

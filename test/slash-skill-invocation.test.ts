@@ -142,6 +142,86 @@ describe("skill_triggered / no_skill_triggered count a slash-invoked skill", () 
   });
 });
 
+describe("an anchored bare regex matches the slash channel the way it matches a bare Skill call", () => {
+  // The slash channel records the inventory's QUALIFIED id; the Skill-tool channel records what the model
+  // passed, often bare (s3: `skill: "claude-code-internals"`). A regex written against the bare name must
+  // see the slash invocation too, or `no_skill_triggered: '^name$'` passes on a run where the skill ran.
+  it("no_skill_triggered: '^claude-code-internals$' FAILS on s1", () => {
+    expect(only(evaluate([{ no_skill_triggered: "^claude-code-internals$" }], ctxOf(S1))).pass).toBe(false);
+  });
+  it("skill_triggered: '^claude-code-internals$' PASSES on s1 and s2", () => {
+    expect(only(evaluate([{ skill_triggered: "^claude-code-internals$" }], ctxOf(S1))).pass).toBe(true);
+    expect(only(evaluate([{ skill_triggered: "^claude-code-internals$" }], ctxOf(S2))).pass).toBe(true);
+  });
+  it("the qualified form still matches, and an unrelated anchored name still does not", () => {
+    expect(only(evaluate([{ skill_triggered: "^claude-code-internals:claude-code-internals$" }], ctxOf(S1))).pass).toBe(true);
+    expect(only(evaluate([{ no_skill_triggered: "^deep-research$" }], ctxOf(S1))).pass).toBe(true);
+  });
+  it("the skill_triggered FAIL message names the slash channel too", () => {
+    const r = only(evaluate([{ skill_triggered: "^deep-research$" }], ctxOf(S1)));
+    expect(r.pass).toBe(false);
+    expect(r.message).toContain("claude-code-internals:claude-code-internals");
+  });
+});
+
+describe("a slash command the binary REFUSED is not an invocation", () => {
+  // Agent 2.1.284 refuses a resolved slash command in two ways, and answers with one of these texts
+  // (copied verbatim from the binary's strings; no kept run exhibits either, so these frames are built):
+  //   userInvocable === false → `This skill can only be invoked by Claude, not directly by users. Ask
+  //                             Claude to use the "<name>" skill for you.`
+  //   an unresolvable name    → `Unknown command: /<name>`
+  const INV = S1.result.context.availableSkills;
+  const NOT_USER_INVOCABLE =
+    'This skill can only be invoked by Claude, not directly by users. Ask Claude to use the "claude-code-internals" skill for you.';
+  it("the not-user-invocable refusal in the run's text demotes the channel to []", () => {
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, [NOT_USER_INVOCABLE, ""])).toEqual([]);
+  });
+  it("`Unknown command: /<token>` demotes it too", () => {
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, [undefined, "Unknown command: /claude-code-internals"])).toEqual([]);
+  });
+  it("an Unknown-command line for a DIFFERENT token does not", () => {
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, ["Unknown command: /other"])).toEqual([QUALIFIED]);
+  });
+  it("the real s1 answer text does not demote", () => {
+    const answer = (S1.events.find((e: any) => e.type === "result") as { result: string }).result;
+    expect(slashInvokedSkillIds(S1.result.prompt, INV, [answer, answer])).toEqual([QUALIFIED]);
+  });
+  it("end to end on replay: a refused slash is a real negative, so no_skill_triggered passes", async () => {
+    const saved = process.stderr.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      const events = [
+        S1.events[0],
+        {
+          type: "assistant",
+          parent_tool_use_id: null,
+          message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: NOT_USER_INVOCABLE }] },
+        },
+        { type: "result", subtype: "success", is_error: false, num_turns: 0, result: NOT_USER_INVOCABLE },
+      ];
+      const cassette: any = {
+        scenario: {
+          name: "refused",
+          baseline: "latest",
+          session: "(inline)",
+          fidelity: "hostloop",
+          prompt: S1.result.prompt,
+          answers: [],
+          expect_denied: [],
+          assert: [{ no_skill_triggered: "claude-code-internals" }],
+        },
+        events: events.map((e) => JSON.stringify(e)),
+        controlOut: [],
+      };
+      const r = await replayCassette(cassette);
+      expect(r.slashInvokedSkills).toEqual([]);
+      expect(r.assertions.every((a) => a.pass)).toBe(true);
+    } finally {
+      process.stderr.write = saved;
+    }
+  });
+});
+
 describe("verify-run over a kept run dir recovers the slash channel from result.json", () => {
   const scenario = (assert: unknown[]): Scenario =>
     ({

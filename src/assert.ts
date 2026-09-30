@@ -1273,6 +1273,14 @@ function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
   };
 }
 
+/** Does a skill_triggered-family regex match a SLASH-invoked skill? The slash channel records the
+ *  inventory's qualified id (`plugin:skill`), while the Skill-tool channel records what the model passed —
+ *  often the bare name — so an anchored `^skill$` written against the bare name must be tried against the
+ *  qualified id's bare suffix too, or a negative control passes on a run where the skill ran. */
+function slashMatches(re: RegExp, ids: string[] | undefined): boolean {
+  return (ids ?? []).some((id) => re.test(id) || re.test(id.slice(id.lastIndexOf(":") + 1)));
+}
+
 /**
  * Evaluate EVERY present key (AND semantics) — a multi-key assertion passes iff all of its
  * keys pass. (The previous first-key-wins `if (a.X) return …` chain silently ignored every key
@@ -1975,7 +1983,7 @@ function check(
     if ("error" in c) results.push(fail(`skill_triggered: bad regex "${a.skill_triggered}": ${c.error}`));
     // A slash-invoked skill is positive evidence on its own: the binary expanded it without the Skill tool,
     // so neither the tool-availability guard nor the tool_use list has anything to say about it.
-    else if (ctx.slashInvokedSkills?.some((s) => c.re.test(s))) results.push(ok());
+    else if (slashMatches(c.re, ctx.slashInvokedSkills)) results.push(ok());
     else if (!ctx.skillToolAvailable)
       results.push(
         fail(
@@ -1989,7 +1997,12 @@ function check(
           `evidence unavailable: cannot tell whether the prompt's leading slash command invoked a staged skill (no prompt, no skill inventory, or a bare name more than one staged skill answers to) — cannot evaluate skill_triggered`,
         ),
       );
-    else results.push(fail(`no invoked skill matched "${a.skill_triggered}" (invoked: ${ctx.skillsInvoked.join(", ") || "none"})`));
+    else
+      results.push(
+        fail(
+          `no invoked skill matched "${a.skill_triggered}" (invoked: ${ctx.skillsInvoked.join(", ") || "none"}; by slash command: ${ctx.slashInvokedSkills.join(", ") || "none"})`,
+        ),
+      );
   }
   if (a.max_cost_usd !== undefined)
     results.push(
@@ -2235,10 +2248,10 @@ function check(
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);
     if ("error" in c) results.push(fail(`no_skill_triggered: bad regex "${a.no_skill_triggered}": ${c.error}`));
-    else if (ctx.slashInvokedSkills?.some((s) => c.re.test(s)))
+    else if (slashMatches(c.re, ctx.slashInvokedSkills))
       results.push(
         fail(
-          `skill unexpectedly triggered matching "${a.no_skill_triggered}" (invoked by the prompt's slash command: ${ctx.slashInvokedSkills.join(", ")})`,
+          `skill unexpectedly triggered matching "${a.no_skill_triggered}" (invoked by the prompt's slash command: ${(ctx.slashInvokedSkills ?? []).join(", ")})`,
         ),
       );
     else if (!ctx.skillToolAvailable)
