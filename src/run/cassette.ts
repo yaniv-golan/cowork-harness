@@ -2043,9 +2043,11 @@ function recordedInitAgentVersion(cassette: Cassette): string | undefined {
 }
 
 /** NOTE (never a finding): the agent that recorded this stream is not the agent its fingerprint baseline
- *  pins. The usual cause is a `fingerprint.baseline` re-stamped by hand across an agent bump, which files a
- *  stream from one agent build under a baseline that describes another; nothing else would notice, because
- *  staleness compares the baseline NAME, not what the recording ran.
+ *  pins. The note states that fact and lists the possible causes without picking one: a `fingerprint.baseline`
+ *  re-stamped by hand across an agent bump, a recording made under `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, or
+ *  a patch-bump substitution of the staged agent binary (which `src/baseline.ts` accepts without recording it
+ *  in the cassette). Nothing else would notice, because staleness compares the baseline NAME, not what the
+ *  recording ran.
  *
  *  Derived from the init frame the cassette already freezes, not from a stamped field, so it works on every
  *  cassette ever recorded and cannot disagree with the evidence. `fingerprint.baseline` holds either the bare
@@ -2067,8 +2069,9 @@ export function computeAgentVersionNote(cassette: Cassette): string[] {
   if (!pinned || pinned === recorded) return [];
   return [
     `agent-version: recorded by agent ${recorded}, but its fingerprint names baseline ${name}, which pins agent ` +
-      `${pinned}. The fingerprint was most likely re-stamped across an agent bump, so this stream is not what ` +
-      `that baseline's agent produces. Re-record to clear it.`,
+      `${pinned}. Possible causes: the fingerprint was re-stamped by hand across an agent bump, the recording ` +
+      `ran under COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1, or a same-major.minor patch bump of the staged agent ` +
+      `binary stood in for the pinned one. Re-record against the pinned agent to clear it.`,
   ];
 }
 

@@ -235,6 +235,13 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     fail your gate. *Fix:* nothing, unless the scenario asserts `tool_available` on
     `mcp__skills__*`/`mcp__plugins__*`; then re-record. It stays silent at `microvm`/`protocol`, where
     re-recording would never produce those tools anyway.
+    A sibling **`agent-version:` note** means the agent version the cassette's own `system/init` event
+    reports differs from the `agentVersion` of the baseline its `fingerprint.baseline` names. *Why:* one of
+    a fingerprint re-stamped by hand across an agent bump, a recording made under
+    `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, or an accepted patch-bump substitution of the staged agent
+    binary; the note lists all three and does not pick one. It is non-gating too: `verify-cassettes` puts it
+    in the result's `notes[]`, and `replay` prints it as a `::notice:: [replay] … [agent-version]` line on
+    stderr (also under `--output-format json`). *Fix:* re-record against the pinned agent.
 
 24. **Never name the file-delivery tool in a `SKILL.md`.** *Why:* Cowork has **two**, one per product
     lane, and an agent only sees the one for the surface it is on. The desktop-local sandbox this harness

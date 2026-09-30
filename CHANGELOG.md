@@ -31,10 +31,14 @@ All notable changes to this project are documented here. The format is based on
     A literal newline or tab inside a rationale is tolerated.
 - **`verify-cassettes` and `replay` note a cassette whose recording agent differs from its baseline's.**
   The agent version is read from the recording's own `system/init` event (`claude_code_version`) and
-  compared with the `agentVersion` of the baseline named in `fingerprint.baseline`. A mismatch usually
-  means the fingerprint was re-stamped by hand across an agent bump. It is an `agent-version:` entry in
-  `notes[]`: it does not change `ok` or the exit code. It works on existing cassettes without a
-  re-record, and says nothing when the event carries no version or the baseline is not a committed one.
+  compared with the `agentVersion` of the baseline named in `fingerprint.baseline`. The note states the
+  mismatch and lists its possible causes: a fingerprint re-stamped by hand across an agent bump, a
+  recording made under `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, or an accepted patch-bump substitution of
+  the staged agent binary. `verify-cassettes` reports it as an `agent-version:` entry in the result's
+  `notes[]` (a `[note]` line in text mode). `replay` has no `notes[]`: it prints a
+  `::notice:: [replay] … [agent-version]` line on stderr, under `--output-format json` too. Neither
+  changes `ok` or the exit code. It works on existing cassettes without a re-record, and says nothing when
+  the event carries no version or the baseline is not a committed one.
 
 ### Changed
 
@@ -76,8 +80,9 @@ All notable changes to this project are documented here. The format is based on
   In text mode both commands print nothing to stdout by design, and the exit code is the only signal.
   For a script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
   envelope's `ok`, for example with `jq -e '.ok'`.
-- **The documented read and skill-listing size caps are re-verified against agent 2.1.284.** The values
-  are unchanged; the docs now say which agent version they were read from.
+- **The `lint-skill` size caps are re-verified against agent 2.1.284.** The values are unchanged. The
+  agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
+  and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
 
 ### Fixed
 
