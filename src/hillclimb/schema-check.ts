@@ -12,7 +12,7 @@
 // Two profiles:
 //   - "schema":  only what the published sources state.
 //   - "harness" (default): adds the conventions cowork-harness's own runner writes on top: `rep` always present,
-//     `grade` always the dict form, `status` only "ok" or "truncated" (as the scaffold writes it), explanation
+//     `grade` always the dict form, `status` always "ok" or "truncated" (as the scaffold writes it), explanation
 //     keys a subset of grade keys, and judge rationale marked untrusted. A flow written by some other runner
 //     should be checked with "schema".
 //
@@ -402,6 +402,8 @@ function checkRow(
 
   // SCHEMA.md: `status` is present only when not 'ok' (e.g. 'truncated'); the scaffold writes "ok" or
   // "truncated" on every row. The report keeps any other value out of the means.
+  if (r.status === undefined && profile === "harness")
+    c.error("row.status", file, 'no status: our runner, like the scaffold, writes "ok" or "truncated" on every row', line);
   if (r.status !== undefined && r.status !== "ok" && r.status !== "truncated") {
     const msg = `status ${JSON.stringify(r.status)} is neither "ok" nor "truncated": the report keeps this rep out of the means`;
     if (profile === "harness") c.error("row.status", file, msg, line);

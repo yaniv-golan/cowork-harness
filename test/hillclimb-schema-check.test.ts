@@ -302,7 +302,7 @@ describe("schema-check: row fields", () => {
     );
   });
 
-  it("status: ok, truncated or absent are accepted in both profiles", () => {
+  it("status: ok and truncated are accepted in both profiles", () => {
     for (const profile of ["harness", "schema"] as const) {
       expect(
         check(
@@ -316,15 +316,15 @@ describe("schema-check: row fields", () => {
           profile,
         ).findings,
       ).toEqual([]);
-      expect(
-        check(
-          withRow((row) => {
-            delete row.status;
-          }),
-          profile,
-        ).findings,
-      ).toEqual([]);
     }
+  });
+
+  it("status: absent is an error in the harness profile (scaffold parity), allowed in the schema profile", () => {
+    const absent = withRow((row) => {
+      delete row.status;
+    });
+    expectOnly(check(absent), "error", "row.status");
+    expect(check(absent, "schema").findings).toEqual([]);
   });
 
   it("status: any other value is an error in the harness profile, a note in the schema profile", () => {
