@@ -247,9 +247,9 @@ describe("insufficient threshold", () => {
     expect(insufficientThreshold(5, false)).toBe(4);
     expect(insufficientThreshold(10, false)).toBe(4);
   });
-  it("allowUnderpowered lowers it to one valid rep per arm at every reps", () => {
+  it("allowUnderpowered lowers it to two valid reps per arm (n = 1 is meaningless)", () => {
     for (const reps of [1, 2, 3, 4, 5, 10]) {
-      expect(insufficientThreshold(reps, true)).toBe(1);
+      expect(insufficientThreshold(reps, true)).toBe(2);
       expect(insufficientThreshold(reps, true)).toBeLessThanOrEqual(insufficientThreshold(reps, false));
     }
   });
@@ -276,8 +276,8 @@ describe("row labels", () => {
     expect(labelRow({ ...base, k1: 1, n1: 5, k2: 5, n2: 5, p: 1 / 21, adjustedP: 0.3 }).label).toBe("possible rise");
   });
   it("`confirmed` implies `possible`: a corrected value within q never confirms a p above alpha", () => {
-    // m = 1 under BH: adjusted p = p = 0.1 <= q = 0.10, but 0.1 > alpha = 0.05.
-    expect(labelRow({ ...base, threshold: 2, k1: 3, n1: 3, k2: 0, n2: 3, p: 0.1, adjustedP: 0.1 }).label).toBe("no detectable change");
+    // 5/5 vs 2/5: p = 1/6 > alpha, even if a caller hands in an adjusted value within q.
+    expect(labelRow({ ...base, k1: 5, n1: 5, k2: 2, n2: 5, p: 1 / 6, adjustedP: 0.09 }).label).toBe("no detectable change");
   });
   it("no detectable change otherwise; a tie has no direction even if a p were small", () => {
     expect(labelRow({ ...base, k1: 5, n1: 5, k2: 3, n2: 5, p: 0.44, adjustedP: 0.9 })).toMatchObject({
@@ -289,13 +289,16 @@ describe("row labels", () => {
       direction: "none",
     });
   });
-  it("reports whether this row's own floor exceeds alpha (a `no detectable change` there is untestable)", () => {
+  it("`underpowered` replaces `no detectable change` when the row's own floor exceeds alpha", () => {
     const r3 = labelRow({ ...base, threshold: 2, k1: 3, n1: 3, k2: 0, n2: 3, p: 0.1, adjustedP: 0.1 });
-    expect(r3.label).toBe("no detectable change");
+    expect(r3.label).toBe("underpowered");
     expect(r3.floor).toBeCloseTo(0.1, 12);
-    expect(r3.floorExceedsAlpha).toBe(true);
-    const r5 = labelRow({ ...base, k1: 5, n1: 5, k2: 5, n2: 5, p: 1, adjustedP: 1 });
-    expect(r5.floorExceedsAlpha).toBe(false);
+    expect(labelRow({ ...base, threshold: 2, k1: 2, n1: 2, k2: 2, n2: 2, p: 1, adjustedP: 1 }).label).toBe("underpowered");
+    expect(labelRow({ ...base, k1: 5, n1: 5, k2: 5, n2: 5, p: 1, adjustedP: 1 }).label).toBe("no detectable change");
+    expect(r3).not.toHaveProperty("floorExceedsAlpha");
+  });
+  it("insufficient still wins over underpowered", () => {
+    expect(labelRow({ ...base, k1: 3, n1: 3, k2: 0, n2: 3, p: 0.1, adjustedP: undefined }).label).toBe("insufficient");
   });
 });
 
@@ -335,6 +338,15 @@ describe("evaluateFamily", () => {
     const out = evaluateFamily(rows, { correction: "holm", q: 0.1, alpha: 0.05, threshold: 4 });
     expect(out.rows[0].adjustedP).toBeCloseTo(2 / 126, 12);
     expect(out.rows[0].label).toBe("confirmed drop");
+  });
+  it("under allowUnderpowered a 3/3 vs 0/3 row is `underpowered`, never `no detectable change`", () => {
+    const out = evaluateFamily([{ id: "x", k1: 3, n1: 3, k2: 0, n2: 3 }], {
+      correction: "bh",
+      q: 0.1,
+      alpha: 0.05,
+      threshold: insufficientThreshold(3, true),
+    });
+    expect(out.rows[0].label).toBe("underpowered");
   });
   it("an empty family is well-defined", () => {
     const out = evaluateFamily([], { correction: "bh", q: 0.1, alpha: 0.05, threshold: 4 });

@@ -193,14 +193,22 @@ export function minimumDetectableDifference(k1: number, n1: number, n2: number, 
 
 /** Fewest valid reps an arm needs for a row to be tested: max(2, min(4, reps - 1)), so `--reps 5` tolerates
  *  one lost rep per arm and one infrastructure error cannot turn every row of `--reps 4` insufficient.
- *  `allowUnderpowered` lowers it to one valid rep per arm; such rows are labelled, and their floor reported,
- *  rather than dropped. */
+ *  `allowUnderpowered` lowers it to two valid reps per arm (one rep is not a rate); rows whose floor then
+ *  exceeds alpha are labelled `underpowered`, never `no detectable change`. */
 export function insufficientThreshold(reps: number, allowUnderpowered: boolean): number {
-  if (allowUnderpowered) return 1;
+  if (allowUnderpowered) return 2;
   return Math.max(2, Math.min(4, reps - 1));
 }
 
-export type RowLabel = "confirmed drop" | "confirmed rise" | "possible drop" | "possible rise" | "no detectable change" | "insufficient";
+/** The label is the row's verdict: `--fail-on` and the renderer consume it, nothing else.
+ *  - `confirmed` is a SUBSET of `possible`: it needs the corrected value within its level AND the unadjusted
+ *    p <= alpha. That is stricter than plain BH at q = 0.10, which alone could confirm a row with
+ *    alpha < p <= q; a row the per-row test does not flag is never confirmed.
+ *  - `underpowered` replaces `no detectable change` whenever no table at this row's sizes can reach alpha
+ *    (its attainable floor > alpha): the row was never testable, so "no change" would read as a clean pass.
+ *  - `insufficient`: an arm has fewer valid reps than the threshold. */
+export type RowLabel =
+  "confirmed drop" | "confirmed rise" | "possible drop" | "possible rise" | "no detectable change" | "underpowered" | "insufficient";
 export type Direction = "drop" | "rise" | "none";
 
 export interface LabelInput {
@@ -223,16 +231,15 @@ export interface LabelOutput {
   direction: Direction;
   /** This row's attainable floor (1 when an arm has no valid rep). */
   floor: number;
-  /** True when no table at these sizes can reach alpha: a `no detectable change` here means untestable. */
-  floorExceedsAlpha: boolean;
 }
 
 export function labelRow(i: LabelInput): LabelOutput {
   const cmp = i.n1 > 0 && i.n2 > 0 ? i.k2 * i.n1 - i.k1 * i.n2 : 0;
   const direction: Direction = cmp < 0 ? "drop" : cmp > 0 ? "rise" : "none";
   const floor = i.n1 > 0 && i.n2 > 0 ? attainableFloor(i.n1, i.n2) : 1;
-  const base = { direction, floor, floorExceedsAlpha: floor > i.alpha };
+  const base = { direction, floor };
   if (i.n1 < i.threshold || i.n2 < i.threshold) return { ...base, label: "insufficient" };
+  if (floor > i.alpha) return { ...base, label: "underpowered" };
   if (direction === "none" || i.p > i.alpha) return { ...base, label: "no detectable change" };
   if (i.adjustedP !== undefined && i.adjustedP <= i.level) return { ...base, label: `confirmed ${direction}` };
   return { ...base, label: `possible ${direction}` };
@@ -247,7 +254,8 @@ export interface FamilyRowInput {
 }
 
 export interface FamilyRowOutput extends FamilyRowInput, LabelOutput {
-  /** Undefined only when an arm has no valid rep. */
+  /** Undefined only when an arm has no valid rep. On an `insufficient` row it is computed but is NOT a
+   *  tested value (the row is outside the family and uncorrected): a renderer must not print it as one. */
   p?: number;
   /** Undefined when the row is `insufficient` (not in the correction family). */
   adjustedP?: number;
@@ -270,7 +278,9 @@ export interface FamilyOutput {
 }
 
 /** Test, correct and label one family (one report section). Insufficient rows are reported with their rates
- *  but kept out of the correction, so an untestable row cannot raise every other row's threshold. */
+ *  but kept out of the correction, so an untestable row cannot raise every other row's threshold.
+ *  `underpowered` rows DO count in m (the family is every tested row of the section): they have enough reps
+ *  to be tested, just not enough to reach alpha, and dropping them would make m depend on the outcome. */
 export function evaluateFamily(rows: readonly FamilyRowInput[], o: FamilyOptions): FamilyOutput {
   const measured = rows.map((r) => {
     const hasBoth = r.n1 > 0 && r.n2 > 0;

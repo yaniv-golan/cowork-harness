@@ -11,7 +11,15 @@
 // break, `error_max_turns`, `decider_timeout` or recovered-then-succeeded run, so those rows are CONSTRUCTED
 // below rather than read from a fixture. The tenth, `public-scenario-aligned`, is a run of the repo's own
 // public e2e scenario kept with its assertions VERBATIM (the text is already public), so row alignment is
-// tested against the scenario loader rather than against the result itself.
+// tested against the scenario loader rather than against the result itself. `public-scenario-pinned` is a
+// run of the public csv-metrics example, also verbatim, and the only fixture that carries every field the
+// precedence reads (modelPinHonored: true, a contentSig) plus cost/turns/duration for the medians.
+//
+// Staleness, stated rather than patched: the timeout, no-result, exit-agent, result-agent, usage-limit and
+// unanswered-partial excerpts carry NO modelPinHonored (those runs produced no live model evidence), and the
+// kept corpus holds no newer timeout or no_result run that does (searched 2026-09-30: the five newest are
+// 2026-08-25..30, all without it). Under the precedence that is harmless for an errored rep — an agent
+// error ranks above model_mismatch — and the precedence tests below use these fixtures unpatched.
 import { describe, it, expect, beforeEach } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,6 +28,7 @@ import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { hostPathTokenOccurrences } from "../src/run/host-path-tokens.js";
 import { loadScenarioPure } from "../src/run/execute.js";
 import type { Assertion, RunResult } from "../src/types.js";
+import { evaluateFamily, insufficientThreshold } from "../src/eval/stats.js";
 import {
   ERROR_SOURCES,
   RESULT_ERROR_KINDS,
@@ -29,7 +38,9 @@ import {
   normalizeClaim,
   scenarioRows,
   repRowValues,
+  armMedians,
   type ClassifiableResult,
+  type RepBucket,
   type TerminationBucket,
 } from "../src/eval/classify.js";
 
@@ -39,6 +50,10 @@ const fixture = (name: string): ClassifiableResult => JSON.parse(readFileSync(jo
 type ErrorSource = NonNullable<RunResult["errorSource"]>;
 type ResultErrorKind = NonNullable<RunResult["resultErrorKind"]>;
 
+// The only patched classification in this file is `public-scenario-aligned`'s (a success with no
+// modelPinHonored, so it is model_mismatch by the rules); the loader test overrides its bucket to valid to
+// test row ALIGNMENT, and says so.
+//
 // A Record over the type's literal union: adding an `errorSource` member to types.ts fails `npm run
 // typecheck` here until it gets a row below, and the runtime loop then checks that row against the table.
 const ERROR_ROWS: Record<ErrorSource, Record<ResultErrorKind | "-", string>> = {
@@ -49,10 +64,12 @@ const ERROR_ROWS: Record<ErrorSource, Record<ResultErrorKind | "-", string>> = {
   no_result: { "-": "errored_agent", transport: "errored_infra", agent: "errored_agent", usage_limit: "errored_infra" },
   result: { "-": "unclassified", transport: "errored_infra", agent: "errored_agent", usage_limit: "errored_infra" },
   exit: { "-": "unclassified", transport: "errored_infra", agent: "errored_agent", usage_limit: "errored_infra" },
-  // An `error` result whose only source is the non-fatal `agent` event: no producer ends a run there (a
-  // fatal path overwrites it, and a stream that just stops is `no_result`), so the table cannot say whose
-  // fault it is.
-  agent: { "-": "unclassified", transport: "errored_infra", agent: "unclassified", usage_limit: "errored_infra" },
+  // An `error` result whose first source was a non-fatal `agent` event: `errorSource ??= "agent"` survives
+  // (run.ts), so an unanswered-gate partial, or a stream that then ends with no terminal event (the
+  // `no_result` stamp only fires when no source is set), both persist exactly this shape with no kind. Both
+  // are the agent's. A kind of `agent` here has no producer (every path that sets it also sets a fatal
+  // source), so it stays unclassified.
+  agent: { "-": "errored_agent", transport: "errored_infra", agent: "unclassified", usage_limit: "errored_infra" },
 };
 
 const expectBucket = (got: ReturnType<typeof classifyTermination>, want: string): void => {
@@ -103,6 +120,14 @@ describe("the literal unions the table is exhaustive over", () => {
     expectBucket(classifyTermination({ result: { result: "error", resultErrorKind: "agent" } }), "unclassified");
     expectBucket(classifyTermination({ result: { result: "error", resultErrorKind: "transport" } }), "errored_infra");
     expectBucket(classifyTermination({ result: { result: "error", resultErrorKind: "usage_limit", partial: true } }), "errored_infra");
+  });
+  it("an unanswered partial or a no-terminal-event end AFTER a non-fatal agent error is the agent's", () => {
+    // execute.ts's partial builder copies the record's errorSource with resultErrorKind undefined.
+    expectBucket(
+      classifyTermination({ result: { result: "error", errorSource: "agent", partial: true, unansweredGate: { message: "m" } } }),
+      "errored_agent",
+    );
+    expectBucket(classifyTermination({ result: { result: "error", errorSource: "agent" } }), "errored_agent");
   });
   it("a decider_timeout partial is infrastructure, not an unanswered gate", () => {
     expectBucket(
@@ -166,6 +191,7 @@ describe("real kept run shapes (sanitized excerpts)", () => {
     ["no-result", "errored_agent"],
     ["unanswered-partial", "errored_agent"],
     ["public-scenario-aligned", "valid"],
+    ["public-scenario-pinned", "valid"],
   ];
   for (const [name, want] of cases) {
     it(`${name} -> ${want}`, () => {
@@ -239,7 +265,7 @@ function validRep(over: Partial<ClassifiableResult> = {}): ClassifiableResult {
 }
 const expected = { contentSig: SIG, judgePromptHash: JUDGE_PROMPT_HASH };
 
-describe("classifyRep precedence: infra > drift > model > prompt > agent > judge_invalid > valid", () => {
+describe("classifyRep precedence: infra > agent > drift > prompt > model > judge_invalid > valid", () => {
   it("a clean rep is valid", () => {
     expect(classifyRep({ result: validRep() }, expected).bucket).toBe("valid");
   });
@@ -253,30 +279,40 @@ describe("classifyRep precedence: infra > drift > model > prompt > agent > judge
     });
     expect(classifyRep({ result: r }, expected).bucket).toBe("errored_infra");
   });
-  it("arm_source_drift beats model and prompt mismatch", () => {
+  it("an agent error beats drift, prompt and model mismatch (it is scored 0, not excluded)", () => {
+    const r = validRep({ result: "error", errorSource: "timeout", fingerprint: { contentSig: "other" }, modelPinHonored: false });
+    expect(classifyRep({ result: r }, { ...expected, judgePromptHash: "0000000000000000" }).bucket).toBe("errored_agent");
+  });
+  it("an agent-errored rep with NO model evidence is errored_agent, not model_mismatch", () => {
+    const crash = validRep({ result: "error", errorSource: "result", resultErrorKind: "agent", models: [], modelPinHonored: undefined });
+    expect(classifyRep({ result: crash }, expected).bucket).toBe("errored_agent");
+  });
+  it("a thrown UnansweredError with no result reaches errored_agent", () => {
+    expect(classifyRep({ thrown: new UnansweredError("no rule", "hint") }, expected).bucket).toBe("errored_agent");
+  });
+  it("arm_source_drift needs an OBSERVED sig that differs; a missing sig is not drift", () => {
+    expect(classifyRep({ result: validRep({ fingerprint: { contentSig: "other" } }) }, expected).bucket).toBe("arm_source_drift");
+    expect(classifyRep({ result: validRep({ fingerprint: undefined }) }, expected).bucket).toBe("valid");
+    expect(classifyRep({ result: validRep({ fingerprint: {} }) }, expected).bucket).toBe("valid");
+  });
+  it("drift beats prompt mismatch, which beats model mismatch", () => {
     const r = validRep({ fingerprint: { contentSig: "other" }, modelPinHonored: false });
     expect(classifyRep({ result: r }, { ...expected, judgePromptHash: "0000000000000000" }).bucket).toBe("arm_source_drift");
-  });
-  it("a missing contentSig is drift when the arm's sig is known (cannot verify is not a pass)", () => {
-    expect(classifyRep({ result: validRep({ fingerprint: undefined }) }, expected).bucket).toBe("arm_source_drift");
-    expect(classifyRep({ result: validRep({ fingerprint: undefined }) }, { judgePromptHash: JUDGE_PROMPT_HASH }).bucket).toBe("valid");
-  });
-  it("model_mismatch on modelPinHonored false OR undefined, and it beats prompt mismatch", () => {
-    expect(classifyRep({ result: validRep({ modelPinHonored: false }) }, expected).bucket).toBe("model_mismatch");
-    expect(classifyRep({ result: validRep({ modelPinHonored: undefined }) }, expected).bucket).toBe("model_mismatch");
     expect(classifyRep({ result: validRep({ modelPinHonored: false }) }, { ...expected, judgePromptHash: "0000000000000000" }).bucket).toBe(
-      "model_mismatch",
+      "judge_prompt_mismatch",
     );
   });
-  it("judge_prompt_mismatch when a graded assertion's hash differs from, or omits, the expected one", () => {
+  it("model_mismatch on modelPinHonored false; on undefined only for a success-shaped rep", () => {
+    expect(classifyRep({ result: validRep({ modelPinHonored: false }) }, expected).bucket).toBe("model_mismatch");
+    expect(classifyRep({ result: validRep({ modelPinHonored: undefined }) }, expected).bucket).toBe("model_mismatch");
+  });
+  it("judge_prompt_mismatch needs an OBSERVED hash that differs; a missing hash is not a mismatch", () => {
     expect(classifyRep({ result: validRep() }, { ...expected, judgePromptHash: "0000000000000000" }).bucket).toBe("judge_prompt_mismatch");
     const noHash = validRep();
     delete noHash.assertions![1].judgePromptHash;
-    expect(classifyRep({ result: noHash }, expected).bucket).toBe("judge_prompt_mismatch");
+    expect(classifyRep({ result: noHash }, expected).bucket).toBe("valid");
   });
-  it("prompt mismatch beats an agent error; an agent error beats judge_invalid", () => {
-    const agentErr = validRep({ result: "error", errorSource: "timeout" });
-    expect(classifyRep({ result: agentErr }, { ...expected, judgePromptHash: "0000000000000000" }).bucket).toBe("judge_prompt_mismatch");
+  it("an agent error beats judge_invalid", () => {
     const agentErrInvalid = validRep({ result: "error", errorSource: "timeout" });
     agentErrInvalid.assertions![1].judgeInvalid = true;
     expect(classifyRep({ result: agentErrInvalid }, expected).bucket).toBe("errored_agent");
@@ -292,6 +328,79 @@ describe("classifyRep precedence: infra > drift > model > prompt > agent > judge
     const c = classifyRep({ result: validRep({ result: "error", errorSource: "exit", resultErrorKind: "agent" }) }, expected);
     expect(c.bucket).toBe("errored_agent");
     expect(c.termination).toMatchObject({ errorSource: "exit", ambiguousExit: true, unclassified: false });
+  });
+});
+
+describe("classifyRep over the real fixtures, unpatched", () => {
+  const pinned = fixture("public-scenario-pinned");
+  const pinnedSig = { contentSig: pinned.fingerprint!.contentSig };
+  const cases: Array<[string, RepBucket]> = [
+    ["public-scenario-pinned", "valid"],
+    ["success-semantic", "valid"],
+    ["public-scenario-aligned", "model_mismatch"], // success with no model evidence
+    ["result-agent", "errored_agent"], // models ["<synthetic>"], no modelPinHonored
+    ["exit-agent", "errored_agent"],
+    ["timeout", "errored_agent"],
+    ["timeout-after-agent-error", "errored_agent"],
+    ["no-result", "errored_agent"],
+    ["unanswered-partial", "errored_agent"],
+    ["stalled-on-question", "errored_agent"],
+    ["usage-limit", "errored_infra"],
+  ];
+  for (const [name, want] of cases) {
+    it(`${name} -> ${want} (with an arm sig that the rep does not match)`, () => {
+      expect(classifyRep({ result: fixture(name) }, { contentSig: "not-this-arm" }).bucket).toBe(
+        want === "valid" ? "arm_source_drift" : want,
+      );
+    });
+  }
+  it("the pinned public run is valid against its own arm sig, and drift against another", () => {
+    expect(classifyRep({ result: pinned }, pinnedSig).bucket).toBe("valid");
+    expect(classifyRep({ result: pinned }, { contentSig: "0".repeat(64) }).bucket).toBe("arm_source_drift");
+  });
+  it("result-agent really has no live model evidence", () => {
+    expect(fixture("result-agent").models).toEqual(["<synthetic>"]);
+  });
+});
+
+describe("the reviewer's scenario: first-turn crashes are scored, not excluded", () => {
+  it("5 of 10 B reps crash with models: [] -> each counts 0, and the row is a possible drop (p = 21/646)", () => {
+    const scen = [plainAssertion];
+    const rows = scenarioRows("s", scen);
+    const ok = (): ClassifiableResult => ({
+      result: "success",
+      modelPinHonored: true,
+      fingerprint: { contentSig: SIG },
+      assertions: [{ assertion: plainAssertion, pass: true }],
+    });
+    const crash = (): ClassifiableResult => ({
+      result: "error",
+      errorSource: "result",
+      resultErrorKind: "agent",
+      models: [],
+      assertions: [],
+    });
+    const tally = (reps: ClassifiableResult[]) => {
+      const vals = reps.flatMap((r) => repRowValues(rows, scen, classifyRep({ result: r }, { contentSig: SIG }), r));
+      expect(vals.every((v) => v.excluded === undefined)).toBe(true);
+      return { k: vals.filter((v) => v.value === 1).length, n: vals.length };
+    };
+    const a = tally(Array.from({ length: 10 }, ok));
+    const b = tally([...Array.from({ length: 5 }, ok), ...Array.from({ length: 5 }, crash)]);
+    expect([a, b]).toEqual([
+      { k: 10, n: 10 },
+      { k: 5, n: 10 },
+    ]);
+    // Four other rows at 10/10 both arms make m = 5: adjusted 5 * 21/646 = 0.1625 > q, so `possible`.
+    const fam = evaluateFamily(
+      [
+        { id: "r", k1: a.k, n1: a.n, k2: b.k, n2: b.n },
+        ...Array.from({ length: 4 }, (_, i) => ({ id: `f${i}`, k1: 10, n1: 10, k2: 10, n2: 10 })),
+      ],
+      { correction: "bh", q: 0.1, alpha: 0.05, threshold: insufficientThreshold(10, false) },
+    );
+    expect(fam.rows[0].p).toBeCloseTo(21 / 646, 12);
+    expect(fam.rows[0].label).toBe("possible drop");
   });
 });
 
@@ -406,11 +515,21 @@ describe("repRowValues", () => {
     // rep would be `grade_misaligned` and every row insufficient.
     const scen = loadScenarioPure(join(import.meta.dirname, "..", "e2e", "scenarios", "smoke-semantic-evidence-files.yaml"));
     const r = fixture("public-scenario-aligned");
-    const c = { ...classifyRep({ result: r }, {}), bucket: "valid" as const }; // the excerpt predates modelPinHonored
+    // PATCHED: this success carries no modelPinHonored, so by the rules it is model_mismatch (tested above);
+    // the bucket is overridden here to test row alignment alone. The unpatched case is the next test.
+    const c = { ...classifyRep({ result: r }, {}), bucket: "valid" as const };
     const vals = repRowValues(scenarioRows(scen.name, scen.assert ?? []), scen.assert ?? [], c, r);
     expect(vals).toHaveLength(6);
     expect(vals.map((v) => v.excluded)).toEqual(Array(6).fill(undefined));
     expect(vals.map((v) => v.value)).toEqual([1, 1, 1, 1, 1, 1]);
+  });
+  it("a pinned real run lines up with its loaded scenario, unpatched", () => {
+    const scen = loadScenarioPure(join(import.meta.dirname, "..", "examples", "scenarios", "csv-metrics.yaml"));
+    const r = fixture("public-scenario-pinned");
+    const c = classifyRep({ result: r }, { contentSig: r.fingerprint!.contentSig });
+    expect(c.bucket).toBe("valid");
+    const vals = repRowValues(scenarioRows(scen.name, scen.assert ?? []), scen.assert ?? [], c, r);
+    expect(vals.map((v) => v.value)).toEqual(Array(scen.assert!.length).fill(1));
   });
   it("reads the real semantic fixture's claim grades", () => {
     const r = fixture("success-semantic");
@@ -421,5 +540,44 @@ describe("repRowValues", () => {
     expect(claims).toHaveLength(5);
     expect(claims.every((v) => v.value === 0 || v.value === 1)).toBe(true);
     expect(vals.filter((v) => v.row.kind !== "claim").map((v) => v.value)).toEqual([1, 1, 1, 1]);
+  });
+});
+
+describe("armMedians — descriptive, over valid + judge_invalid + errored_agent reps", () => {
+  const rep = (bucket: RepBucket, over: Partial<ClassifiableResult>) => ({ bucket, result: { result: "success" as const, ...over } });
+  it("medians each metric over the eligible reps that carry it, with the count it covers", () => {
+    const m = armMedians([
+      rep("valid", {
+        cost: { usd: 1 },
+        usage: { turns: 3 },
+        durationMs: 100,
+        assertions: [{ assertion: semAssertion, pass: true, judgeCostUsd: 0.1 }],
+      }),
+      rep("errored_agent", { cost: { usd: 3 }, usage: { turns: 9 }, durationMs: 300 }),
+      rep("judge_invalid", {
+        cost: { usd: 2 },
+        durationMs: 200,
+        assertions: [
+          { assertion: semAssertion, pass: false, judgeCostUsd: 0.2 },
+          { assertion: semAssertion, pass: true, judgeCostUsd: 0.1 },
+        ],
+      }),
+      rep("errored_infra", { cost: { usd: 99 }, usage: { turns: 99 }, durationMs: 9999 }),
+      rep("model_mismatch", { cost: { usd: 99 } }),
+    ]);
+    expect(m.eligibleReps).toBe(3);
+    expect(m.costUsd).toEqual({ median: 2, n: 3 });
+    expect(m.turns).toEqual({ median: 6, n: 2 }); // even count: mean of the middle two
+    expect(m.durationMs).toEqual({ median: 200, n: 3 });
+    expect(m.judgeCostUsd.n).toBe(2); // the errored rep has no priced judge call: unpriced is not $0
+    expect(m.judgeCostUsd.median).toBeCloseTo(0.2, 12); // median of 0.1 and 0.3
+  });
+  it("a metric no eligible rep carries has no median", () => {
+    expect(armMedians([rep("valid", {})]).costUsd).toEqual({ median: undefined, n: 0 });
+    expect(armMedians([]).eligibleReps).toBe(0);
+  });
+  it("reads the real pinned fixture's telemetry", () => {
+    const m = armMedians([{ bucket: "valid", result: fixture("public-scenario-pinned") }]);
+    expect(m).toMatchObject({ costUsd: { median: 0.216095, n: 1 }, turns: { median: 7, n: 1 }, durationMs: { median: 23472, n: 1 } });
   });
 });

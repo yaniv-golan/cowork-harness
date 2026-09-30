@@ -55,9 +55,12 @@ export type ClassifiableResult = Partial<
 > & {
   result: RunResult["result"];
   fingerprint?: { contentSig?: string };
+  cost?: { usd?: number };
+  usage?: { turns?: number };
+  durationMs?: number;
   assertions?: Array<
     Pick<RunResult["assertions"][number], "assertion" | "pass"> &
-      Partial<Pick<RunResult["assertions"][number], "source" | "semanticClaims" | "judgeInvalid" | "judgePromptHash">>
+      Partial<Pick<RunResult["assertions"][number], "source" | "semanticClaims" | "judgeInvalid" | "judgePromptHash" | "judgeCostUsd">>
   >;
 };
 
@@ -82,8 +85,8 @@ export interface TerminationClassification {
 }
 
 /** How an `error` result's `errorSource` decides the bucket before the kind is consulted. `by_kind` defers
- *  to `resultErrorKind`; `unknown` means no producer ends a run there. */
-const ERROR_SOURCE_RULE: Record<ErrorSource, "infra" | "agent" | "by_kind" | "unknown"> = {
+ *  to `resultErrorKind` (only `agent` is the agent's); `agent_if_no_kind` is the agent's only with no kind. */
+const ERROR_SOURCE_RULE: Record<ErrorSource, "infra" | "agent" | "by_kind" | "agent_if_no_kind"> = {
   spawn: "infra", // the harness could not start the agent (Docker, a missing staged binary)
   protocol: "infra", // the stream-json channel broke
   decider_timeout: "infra", // a --decider-cmd / --decider-dir channel did not answer within its backstop
@@ -91,7 +94,10 @@ const ERROR_SOURCE_RULE: Record<ErrorSource, "infra" | "agent" | "by_kind" | "un
   no_result: "agent", // the stream ended with no terminal event (turn/time exhaustion)
   result: "by_kind", // the SDK's own is_error result
   exit: "by_kind", // a nonzero child exit
-  agent: "unknown", // a non-fatal agent event; a run that ENDS in error keeps a fatal source instead
+  // A non-fatal agent event came first and `errorSource ??= "agent"` kept it (run.ts): an unanswered-gate
+  // partial and a stream that then ended with no terminal event (the `no_result` stamp only fires when no
+  // source is set) both persist this with NO kind, and both are the agent's. A kind here has no producer.
+  agent: "agent_if_no_kind",
 };
 
 const INFRA_KINDS: ReadonlySet<ResultErrorKind> = new Set(["transport", "usage_limit"]);
@@ -122,6 +128,7 @@ function thrownKind(e: unknown): ThrownKind {
  *  | error, errorSource timeout / no_result                             | errored_agent   |
  *  | error, errorSource result, kind agent (any subtype)                | errored_agent   |
  *  | error, errorSource exit, kind agent                                | errored_agent, ambiguousExit |
+ *  | error, errorSource agent, no kind (partial, or no terminal event)  | errored_agent   |
  *  | error, no errorSource, no kind, partial or unansweredGate          | errored_agent   |
  *  | anything else                                                      | unclassified    |
  */
@@ -173,6 +180,12 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
     if (rule === "by_kind" && kind === "agent") {
       return source === "exit" ? out("errored_agent", "exit_agent", { ambiguousExit: true }) : out("errored_agent", `${source}_agent`);
     }
+    if (rule === "agent_if_no_kind" && kind === undefined) {
+      return out(
+        "errored_agent",
+        r.partial === true || r.unansweredGate !== undefined ? "agent_then_unanswered_gate" : "agent_then_no_result",
+      );
+    }
     return unclassified(`source_${source}_kind_${kind ?? "none"}`);
   }
 
@@ -203,30 +216,36 @@ export interface RepClassification {
 /** Assertions the harness injected (staleness, cassette-format, coverage) are not the author's rows. */
 const authoredGrades = (r: ClassifiableResult | undefined) => (r?.assertions ?? []).filter((a) => a.source === undefined);
 
-/** Does any graded `semantic_matches` carry a prompt identity other than the expected one? A graded assert
- *  that carries none cannot be verified, and cannot-verify is not a pass. */
+/** Does any graded `semantic_matches` carry an OBSERVED prompt identity other than the expected one? */
 function promptMismatch(r: ClassifiableResult | undefined, expected: string): boolean {
   return authoredGrades(r).some(
-    (a) => a.assertion.semantic_matches !== undefined && a.semanticClaims !== undefined && a.judgePromptHash !== expected,
+    (a) => a.assertion.semantic_matches !== undefined && a.judgePromptHash !== undefined && a.judgePromptHash !== expected,
   );
 }
 
 /** One bucket per rep, in fixed precedence:
- *  errored_infra > arm_source_drift > model_mismatch > judge_prompt_mismatch > errored_agent > judge_invalid > valid.
+ *  errored_infra > errored_agent > arm_source_drift > judge_prompt_mismatch > model_mismatch > judge_invalid > valid.
  *
- *  `model_mismatch` reads the persisted `modelPinHonored` — the output of `deriveModelProvenance`, the one
- *  producer — so a report re-rendered from disk agrees with the run. It fires on `false` AND on `undefined`
- *  (no model evidence). Because it precedes `errored_agent`, an agent-errored rep with no model evidence is
- *  excluded as `model_mismatch` rather than scored 0. */
+ *  Only POSITIVE evidence excludes a rep. An agent error ranks above every exclusion, so a skill change that
+ *  crashes on the first turn (no model evidence, no grades) is scored 0 on every row rather than silently
+ *  removed from the denominator. Then:
+ *  - `arm_source_drift` needs an OBSERVED `fingerprint.contentSig` that differs from the arm's; a missing sig
+ *    is not drift.
+ *  - `judge_prompt_mismatch` needs a graded `semantic_matches` whose OBSERVED `judgePromptHash` differs.
+ *  - `model_mismatch` on `modelPinHonored === false`, or on `undefined` — which can only reach here on a
+ *    success-shaped rep, where no model evidence means the pin cannot be vouched for. It reads the persisted
+ *    value that `deriveModelProvenance` (the one producer) stamped, so a report re-rendered from disk agrees
+ *    with the run. */
 export function classifyRep(ev: RepEvidence, expected: ArmExpectations): RepClassification {
   const termination = classifyTermination(ev);
   const r = ev.result;
   const bucket = ((): RepBucket => {
     if (termination.bucket === "errored_infra") return "errored_infra";
-    if (expected.contentSig !== undefined && r?.fingerprint?.contentSig !== expected.contentSig) return "arm_source_drift";
-    if (r?.modelPinHonored !== true) return "model_mismatch";
-    if (expected.judgePromptHash !== undefined && promptMismatch(r, expected.judgePromptHash)) return "judge_prompt_mismatch";
     if (termination.bucket === "errored_agent") return "errored_agent";
+    const observedSig = r?.fingerprint?.contentSig;
+    if (expected.contentSig !== undefined && observedSig !== undefined && observedSig !== expected.contentSig) return "arm_source_drift";
+    if (expected.judgePromptHash !== undefined && promptMismatch(r, expected.judgePromptHash)) return "judge_prompt_mismatch";
+    if (r?.modelPinHonored !== true) return "model_mismatch";
     return invalidIndexes(r).length > 0 ? "judge_invalid" : "valid";
   })();
   return { bucket, termination, judgeInvalidAssertions: bucket === "judge_invalid" ? invalidIndexes(r) : [] };
@@ -342,4 +361,52 @@ export function repRowValues(
     if (normalizeClaim(claim.claim) !== row.claim) return { row, excluded: "grade_misaligned" };
     return { row, value: bit(claim.pass) };
   });
+}
+
+// ---- descriptive per-arm medians ---------------------------------------------------------------------------
+
+export interface MedianStat {
+  /** Undefined when no eligible rep carries the metric. */
+  median?: number;
+  /** How many reps the median covers (eligible reps that carry the metric). */
+  n: number;
+}
+
+export interface ArmMedians {
+  /** Reps the medians are drawn from: valid, judge_invalid and errored_agent (the reps that ran as the arm). */
+  eligibleReps: number;
+  costUsd: MedianStat;
+  /** Per rep, the sum of its priced judge calls; a rep with none is unpriced, not $0, and is not counted. */
+  judgeCostUsd: MedianStat;
+  turns: MedianStat;
+  durationMs: MedianStat;
+}
+
+const MEDIAN_BUCKETS: ReadonlySet<RepBucket> = new Set(["valid", "judge_invalid", "errored_agent"]);
+
+function median(values: number[]): MedianStat {
+  if (values.length === 0) return { median: undefined, n: 0 };
+  const v = [...values].sort((a, b) => a - b);
+  const mid = v.length >> 1;
+  return { median: v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2, n: v.length };
+}
+
+const finite = (x: number | undefined): x is number => typeof x === "number" && Number.isFinite(x);
+
+/** Descriptive medians of cost, judge cost, turns and duration for one arm — no test is run on them.
+ *  Drawn from valid, judge_invalid and errored_agent reps: the same reps that are scored, so an arm whose
+ *  change makes runs crash early shows it here too. Infrastructure and excluded reps are left out. */
+export function armMedians(reps: ReadonlyArray<{ bucket: RepBucket; result?: ClassifiableResult }>): ArmMedians {
+  const eligible = reps.filter((x) => MEDIAN_BUCKETS.has(x.bucket)).map((x) => x.result);
+  const pick = (f: (r: ClassifiableResult) => number | undefined) => median(eligible.map((r) => (r ? f(r) : undefined)).filter(finite));
+  return {
+    eligibleReps: eligible.length,
+    costUsd: pick((r) => r.cost?.usd),
+    judgeCostUsd: pick((r) => {
+      const priced = (r.assertions ?? []).map((a) => a.judgeCostUsd).filter(finite);
+      return priced.length ? priced.reduce((a, b) => a + b, 0) : undefined;
+    }),
+    turns: pick((r) => r.usage?.turns),
+    durationMs: pick((r) => r.durationMs),
+  };
 }
