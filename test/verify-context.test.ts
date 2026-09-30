@@ -1,13 +1,30 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { assertContextFromRunDir } from "../src/run/verify-context.js";
 import { captureAuthoredFilesWithHealth } from "../src/run/artifacts.js";
-import { capturePreRunManifest, readPreRunManifestHashes, readPreRunManifestStats } from "../src/run/pre-run-manifest.js";
+import { authoredCaptureOpts } from "../src/run/authored-capture-opts.js";
+import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
 import { composeJudgedDocument } from "../src/assert.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import type { LaunchPlan } from "../src/session.js";
+
+// Record every call into the real capture (it still runs — this only observes the options it was given).
+const captureCalls = vi.hoisted(() => [] as unknown[][]);
+vi.mock("../src/run/artifacts.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("../src/run/artifacts.js")>();
+  return {
+    ...orig,
+    captureAuthoredFilesWithHealth: (...args: Parameters<typeof orig.captureAuthoredFilesWithHealth>) => {
+      captureCalls.push(args);
+      return orig.captureAuthoredFilesWithHealth(...args);
+    },
+  };
+});
+beforeEach(() => {
+  captureCalls.length = 0;
+});
 
 // The kept-run AssertContext rebuild shared by verify-run and anything else that re-grades a kept run.
 // Every fixture here is a REAL tree on disk: a pre-run manifest captured by the production function over a
@@ -36,7 +53,7 @@ interface Kept {
 
 /** A kept single-turn run dir. `author` runs AFTER the pre-run manifest is captured, so what it writes is
  *  classified authored; `outputs/input.md` exists before it and is not. */
-function keptRun(author: (workRoot: string) => void): Kept {
+function keptRun(author: (workRoot: string) => void, extra: Record<string, unknown> = {}): Kept {
   const runDir = mkdtempSync(join(tmpdir(), "cwh-vc-"));
   const workRoot = join(runDir, "work", "session", "mnt");
   mkdirSync(join(workRoot, "outputs"), { recursive: true });
@@ -60,6 +77,7 @@ function keptRun(author: (workRoot: string) => void): Kept {
     userVisibleRoots: ["outputs"],
     readonlyFolderRoots: [],
     preRunHashes: readPreRunManifestHashes(runDir),
+    ...extra,
   };
   const t1 = join(runDir, "turns", "1");
   mkdirSync(t1, { recursive: true });
@@ -97,10 +115,10 @@ describe("assertContextFromRunDir: refuses a pruned work dir", () => {
     const k = keptRun((w) => writeFileSync(join(w, "outputs", "report.md"), "r"));
     rmSync(join(k.runDir, "work"), { recursive: true, force: true });
     const s = parseScenarioFile(scenarioFile(k.runDir, SEMANTIC_ONLY));
-    const r = assertContextFromRunDir(k.runDir, s, { recomputeAuthored: "semantic", command: "regrade" });
+    const r = assertContextFromRunDir(k.runDir, s, { recomputeAuthored: "semantic", command: "other-cmd" });
     if (r.ok || r.kind === "scenario") throw new Error("expected a refusal");
     expect(r.kind).toBe("runtime");
-    expect(r.message).toMatch(/^regrade: work dir not found \(/);
+    expect(r.message).toMatch(/^other-cmd: work dir not found \(/);
     expect(r.message).toContain("semantic_matches");
   });
 
@@ -145,20 +163,28 @@ describe("assertContextFromRunDir: recomputeAuthored 'semantic' reproduces the l
   const priorityGlobs = ["outputs/report.md"];
   const totalBytes = 30 * 1024;
 
-  it("matches captureAuthoredFilesWithHealth called with the live run's own options", () => {
+  it("the live run builds its capture options with the shared derivation", () => {
+    // What makes the oracle below the LIVE code rather than a copy of it.
+    const exec = readFileSync(resolve("src/run/execute.ts"), "utf8");
+    const call = exec.slice(exec.indexOf("const authored = captureAuthoredFilesWithHealth("));
+    expect(call.length, "execute.ts's authored capture moved or was renamed — re-anchor").toBeLessThan(exec.length);
+    expect(call.slice(0, call.indexOf(");\n"))).toMatch(/authoredCaptureOpts\(\{/);
+  });
+
+  it("calls the capture with exactly the shared live option derivation", () => {
     const k = keptRun(author);
     const s = parseScenarioFile(scenarioFile(k.runDir, SEMANTIC_ONLY));
     const r = assertContextFromRunDir(k.runDir, s, { recomputeAuthored: "semantic", priorityGlobs, totalBytes });
     if (!r.ok) throw new Error(`unexpected refusal: ${JSON.stringify(r)}`);
 
-    // The live call's option literal (execute.ts), over the same kept tree.
-    const live = captureAuthoredFilesWithHealth(k.workRoot, ["outputs"], [], readPreRunManifestHashes(k.runDir), {
-      scratchpadRoot: dirname(k.workRoot),
-      resume: false,
-      preRunStats: readPreRunManifestStats(k.runDir),
-      priorityGlobs,
-      totalBytes,
-    });
+    // The builder's one capture call, argument for argument, against what the live run would pass for the
+    // same tree (a kept run is never a resume: multi-turn dirs are refused).
+    expect(captureCalls).toHaveLength(1);
+    const hashes = readPreRunManifestHashes(k.runDir);
+    const liveOpts = authoredCaptureOpts({ workRoot: k.workRoot, runDir: k.runDir, priorityGlobs, totalBytes });
+    expect(captureCalls[0]).toEqual([k.workRoot, ["outputs"], [], hashes, liveOpts]);
+
+    const live = captureAuthoredFilesWithHealth(k.workRoot, ["outputs"], [], hashes, liveOpts);
     expect(r.ctx.authoredFiles).toEqual(live.files);
     const report = r.ctx.authoredFiles!.find((f) => f.path === "outputs/report.md");
     expect(report).toBeDefined();
@@ -179,13 +205,13 @@ describe("assertContextFromRunDir: recomputeAuthored 'semantic' reproduces the l
     const s = parseScenarioFile(scenarioFile(k.runDir, SEMANTIC_ONLY));
     const r = assertContextFromRunDir(k.runDir, s, { recomputeAuthored: "semantic", priorityGlobs, totalBytes, perFileBytes: 512 });
     if (!r.ok) throw new Error("unexpected refusal");
-    const expected = captureAuthoredFilesWithHealth(k.workRoot, ["outputs"], [], readPreRunManifestHashes(k.runDir), {
-      scratchpadRoot: dirname(k.workRoot),
-      preRunStats: readPreRunManifestStats(k.runDir),
-      priorityGlobs,
-      totalBytes,
-      perFileBytes: 512,
-    });
+    const expected = captureAuthoredFilesWithHealth(
+      k.workRoot,
+      ["outputs"],
+      [],
+      readPreRunManifestHashes(k.runDir),
+      authoredCaptureOpts({ workRoot: k.workRoot, runDir: k.runDir, priorityGlobs, totalBytes, perFileBytes: 512 }),
+    );
     expect(r.ctx.authoredFiles).toEqual(expected.files);
     // The non-priority intermediates file is cut at the per-file cap, not at the remaining total.
     const junk = r.ctx.authoredFiles!.find((f) => f.path === "outputs/_work/junk.md");
@@ -222,5 +248,43 @@ describe("assertContextFromRunDir: secrets scrub the authored-file section", () 
     const without = assertContextFromRunDir(k.runDir, s, { recomputeAuthored: "semantic" });
     if (!without.ok) throw new Error("unexpected refusal");
     expect(composeJudgedDocument(without.ctx).doc).toContain(SECRET);
+  });
+});
+
+const WRITE_BACK_ONLY = `  - no_lost_write_back: true\n`;
+
+describe("assertContextFromRunDir: which asserted keys recapture authored files", () => {
+  const author = (w: string) => writeFileSync(join(w, "outputs", "report.md"), "# Report\n");
+  const cases: Array<[mode: "no_lost_write_back" | "semantic" | "both" | undefined, yaml: string, captures: boolean]> = [
+    [undefined, WRITE_BACK_ONLY, true],
+    [undefined, SEMANTIC_ONLY, false],
+    ["semantic", SEMANTIC_ONLY, true],
+    // "semantic" is semantic-only: it does not recapture for no_lost_write_back.
+    ["semantic", WRITE_BACK_ONLY, false],
+    ["both", SEMANTIC_ONLY, true],
+    ["both", WRITE_BACK_ONLY, true],
+  ];
+  for (const [mode, yaml, captures] of cases) {
+    it(`mode ${mode ?? "(default)"} + ${yaml === SEMANTIC_ONLY ? "semantic_matches" : "no_lost_write_back"} → ${captures ? "captures" : "no capture"}`, () => {
+      const k = keptRun(author);
+      const s = parseScenarioFile(scenarioFile(k.runDir, yaml));
+      const r = assertContextFromRunDir(k.runDir, s, mode ? { recomputeAuthored: mode } : {});
+      if (!r.ok) throw new Error(`unexpected refusal: ${JSON.stringify(r)}`);
+      expect(captureCalls).toHaveLength(captures ? 1 : 0);
+      if (captures) expect(r.ctx.authoredFiles?.map((f) => f.path)).toEqual(["outputs/report.md"]);
+      else expect(r.ctx.authoredFiles).toBeUndefined();
+    });
+  }
+});
+
+describe("assertContextFromRunDir: the final answer reaches the judged document", () => {
+  it("carries result.json's finalMessage, so the rebuilt document has the live run's Final answer section", () => {
+    const FINAL = "The concentration risk is 62% in one customer.";
+    const k = keptRun((w) => writeFileSync(join(w, "outputs", "report.md"), "# Report\n"), { finalMessage: FINAL });
+    const s = parseScenarioFile(scenarioFile(k.runDir, SEMANTIC_ONLY));
+    const r = assertContextFromRunDir(k.runDir, s, { recomputeAuthored: "semantic" });
+    if (!r.ok) throw new Error(`unexpected refusal: ${JSON.stringify(r)}`);
+    expect(r.ctx.finalMessage).toBe(FINAL);
+    expect(composeJudgedDocument(r.ctx).doc).toContain(`## Final answer\n${FINAL}`);
   });
 });

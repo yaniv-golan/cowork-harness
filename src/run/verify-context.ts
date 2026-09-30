@@ -7,12 +7,13 @@
  * Every message is the text `verify-run` has always printed; `opts.command` only swaps the leading label.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { join } from "node:path";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "../agent/session.js";
 import { budgetFields, toolResultEvidence, type AssertContext } from "../assert.js";
 import type { Assertion, RunResult, Scenario } from "../types.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./artifacts.js";
-import { readPreRunManifestOrigin, readPreRunManifestStats } from "./pre-run-manifest.js";
+import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
+import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { unionReferenceAccesses } from "./run.js";
 import { requireTurns, turnArtifactPath } from "./turn-layout.js";
 
@@ -310,13 +311,13 @@ export function assertContextFromRunDir(
           result.userVisibleRoots ?? ["outputs", ".projects"],
           result.readonlyFolderRoots ?? [],
           result.preRunHashes,
-          {
-            scratchpadRoot: workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined,
-            preRunStats: readPreRunManifestStats(runDir),
-            ...(opts.priorityGlobs?.length ? { priorityGlobs: opts.priorityGlobs } : {}),
-            ...(opts.totalBytes !== undefined ? { totalBytes: opts.totalBytes } : {}),
-            ...(opts.perFileBytes !== undefined ? { perFileBytes: opts.perFileBytes } : {}),
-          },
+          authoredCaptureOpts({
+            workRoot,
+            runDir,
+            priorityGlobs: opts.priorityGlobs,
+            totalBytes: opts.totalBytes,
+            perFileBytes: opts.perFileBytes,
+          }),
         )
       : undefined;
 
@@ -354,6 +355,9 @@ export function assertContextFromRunDir(
 
   const ctx: AssertContext = {
     transcript: sidecarTranscript ?? "",
+    // The judged document's "Final answer" section — the live ctx carries the same value (the SDK result
+    // text), persisted in result.json and scrubbed at write.
+    finalMessage: result.finalMessage,
     toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
     subagentTools: new Set((result.subagents ?? []).flatMap((s) => (s.toolsUsed ?? []).map((d) => d.name))),
     egress: result.egress ?? [],
