@@ -404,7 +404,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
   const killLine = (pid: number, comm: string, where: string) =>
     d.warn(`::warning:: [teardown] orphan sweep killed pid ${pid} (${comm}) ${where}\n`);
 
-  const sweep = (rows: ProcRow[], reached: Set<number>) => {
+  const sweep = (rows: ProcRow[], reached: Set<number>, fast: boolean) => {
     if (d.env[NO_ORPHAN_SWEEP_ENV] === "1") return;
     const guard = harnessGuard(rows, d.selfPid);
     const skip = (pid: number) => guard.pids.has(pid) || reached.has(pid);
@@ -434,6 +434,11 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
         !isTracked(r),
     );
     if (!candidates.length) return;
+    if (fast) {
+      // A second signal promises an immediate exit; lsof can take seconds.
+      d.warn(`::warning:: [teardown] orphan sweep skipped on the second signal: ${candidates.length} candidate(s) not checked\n`);
+      return;
+    }
     const cwds = d.lsofCwd(candidates.map((r) => r.pid));
     if (!(cwds instanceof Map)) {
       d.warn(`::warning:: [teardown] orphan sweep skipped: could not read process cwds (${cwds.error})\n`);
@@ -492,7 +497,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       const rows = lastRows;
       if (rows) {
         const reached = signalTracked(rows, "SIGKILL");
-        sweep(rows, reached);
+        sweep(rows, reached, !!o?.fast);
       }
       signalLeader("SIGKILL");
     },

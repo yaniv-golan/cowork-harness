@@ -191,6 +191,35 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(died).toBe(true);
   });
 
+  it("a second signal exits at once with a real host-agent process tree registered", async () => {
+    const AGENT_TREE = JSON.stringify(resolve("src/runtime/agent-tree.ts"));
+    const r = await runScript(`
+      import { installTerminationHandler, registerAgent } from ${TERMINATION};
+      import { agentSpawnOptions, agentTreeAgent } from ${AGENT_TREE};
+      import { spawn } from "node:child_process";
+      import { mkdirSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      installTerminationHandler();
+      const work = join($DIR, "work");
+      mkdirSync(work);
+      const runStartMs = Date.now();
+      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"],
+        agentSpawnOptions({ cwd: work, env: process.env, stdio: ["pipe", "ignore", "ignore", 3] }, "r" + process.pid));
+      writeFileSync(join($DIR, "child.pid"), String(child.pid));
+      registerAgent(() => agentTreeAgent(child, { runTag: "r" + process.pid, runStartMs, workDir: work }));
+      let sentAt = 0;
+      process.on("exit", () => writeFileSync(join($DIR, "ms"), String(Date.now() - sentAt)));
+      setTimeout(() => { sentAt = Date.now(); process.kill(process.pid, "SIGINT"); }, 300);
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 500);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.status, r.stderr).toBe(130);
+    expect(Number(readFileSync(join(r.dir, "ms"), "utf8"))).toBeLessThan(1000);
+    const died = await r.eof();
+    reap(r.dir);
+    expect(died).toBe(true);
+  });
+
   it("the exit status stays 128+signo when normal flow calls process.exit during the grace period", async () => {
     const r = await runScript(`
       import { installTerminationHandler, registerAgent, childProcessAgent } from ${TERMINATION};

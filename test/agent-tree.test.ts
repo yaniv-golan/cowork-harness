@@ -504,6 +504,18 @@ describe("orphan sweep on macOS: same uid, ppid 1, no tty, started during the ru
     expect(h.lsofCalls.flat()).not.toContain(907);
   });
 
+  it("a second-signal force-kill ({ fast }) skips lsof, which can take seconds", () => {
+    const h = harness({ rows: [...base(), orphan(908)] });
+    h.deps.lsofCwd = (pids) => {
+      h.lsofCalls.push([...pids]);
+      return new Map(pids.map((p) => [p, WORK]));
+    };
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
+    a.forceKill({ fast: true });
+    expect(h.lsofCalls).toEqual([]);
+    expect(h.child.killed).toContain("SIGKILL");
+  });
+
   it("an lsof failure skips the sweep with a warning and never throws", () => {
     const h = harness({ rows: [...base(), orphan(931)] });
     h.deps.lsofCwd = () => ({ error: "spawnSync lsof ENOENT" });
