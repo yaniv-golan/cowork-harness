@@ -913,7 +913,7 @@
     },
     "authoredCapture": {
       "type": "object",
-      "description": "The authored-file capture budget this run actually used: perFileBytes (the cap on an incidental file) and totalBytes (COWORK_HARNESS_AUTHORED_TOTAL_BYTES / --authored-total-bytes, else the default). A semantic_matches judge's authored-file sections were drawn under this budget. Absent when no capture ran (chat, replay, a salvaged partial run).",
+      "description": "The authored-file capture budget this run actually used: perFileBytes (the cap on an incidental file) and totalBytes (COWORK_HARNESS_AUTHORED_TOTAL_BYTES, else the default). A semantic_matches judge's authored-file sections were drawn under this budget. Absent when no capture ran (chat, replay, a salvaged partial run).",
       "required": ["perFileBytes", "totalBytes"],
       "properties": {
         "perFileBytes": {

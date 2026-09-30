@@ -1983,7 +1983,7 @@ export interface RunResult {
   /** Tokens behind `deciderCostUsd`, same basis. Absent when no call reported token counters. */
   deciderUsage?: TokenUsage;
   /** The authored-file capture budget this run actually used: `perFileBytes` (the cap on an incidental
-   *  file) and `totalBytes` (`COWORK_HARNESS_AUTHORED_TOTAL_BYTES` / `--authored-total-bytes`, else the
+   *  file) and `totalBytes` (`COWORK_HARNESS_AUTHORED_TOTAL_BYTES`, else the
    *  default). The authored-file sections of a `semantic_matches` judge's document were drawn under this
    *  budget, so recomposing that document later needs it. Absent when no capture ran (chat, replay, a
    *  salvaged partial run). */
