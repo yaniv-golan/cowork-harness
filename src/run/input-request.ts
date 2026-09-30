@@ -69,10 +69,15 @@ const REQUEST_VERB = String.raw`(?:share|provide|send|upload|attach|paste|confir
 
 /** The cue that the requested input comes back to the agent. Required by every imperative shape. */
 const CUE =
-  /\bso (?:that )?I\b|\band I(?:'ll| will)\b|\bto (?:proceed|continue|get started)\b|\bhere\b|\bwith me\b|\bto me\b|\bfor me to\b|\bin (?:the )?chat\b|\brepl(?:y|ies)\b|\byou(?:'d| would) like (?:me )?to\b|\byou (?:want|need) me to\b/i;
+  /\bso (?:that )?I\b|\band I(?:'ll| will)\b|\bto (?:proceed|continue|get started)\b|\b(?:paste|share|upload|drop|reply|type|send)\b[^.!?]*\bhere\b|\bhere[.!]?$|\bwith me\b|\bto me\b|\bfor me to\b|\bin (?:the )?chat\b|\brepl(?:y|ies)\b|\byou(?:'d| would) like (?:me )?to\b|\byou (?:want|need) me to\b/i;
 
 /** Polite closers after completed work, and hand-offs to someone else. Checked FIRST; a match vetoes every
  *  imperative shape below. */
+/** A third party the input is aimed at ("with the team", "to the founders", "with the CFO"). A named list,
+ *  not any "to/with the <noun>": "Please reply with the numbers so I can…" is a real request. "with me" /
+ *  "to me" are cues, not recipients. */
+const RECIPIENT =
+  /\b(?:to|with) (?:(?:the|our|his|her|their|your) (?:\w+ )?(?:team|teams|board|cfo|ceo|coo|founders?|co-?founders?|partners?|investors?|lawyers?|counsel|attorneys?|accountants?|clients?|customers?|managers?|colleagues|stakeholders|committee|auditors?|advisors?|group|syndicate|lps?)|him|them|everyone|anyone)\b/i;
 const CLOSER =
   /\b(?:any (?:feedback|thoughts|questions|comments|changes)|your (?:feedback|thoughts|questions|comments)|thoughts|feedback|what you think|feel free|don't hesitate|do not hesitate|happy to|with your|to your|before (?:signing|sending)|whichever|how it goes|a shout)\b|^(?:please\s+|just\s+)?(?:let me know|tell me) if\b|^if you\b/i;
 
@@ -104,11 +109,18 @@ export function endsOnRequestForInput(text: string | undefined): boolean {
   if (last === undefined) return false;
   if (endsInQuestionMark(last)) return true;
   if (TRAILER.test(last)) return s.length >= 2 && endsInQuestionMark(s[s.length - 2]);
-  if (last.length > MAX_SENTENCE || CLOSER.test(last)) return false;
+  if (last.length > MAX_SENTENCE || CLOSER.test(last) || RECIPIENT.test(last)) return false;
   if (I_NEED.test(last) || ONCE_YOU.test(last)) return true;
   if (ONCE_I_HAVE.test(last)) {
     const prev = s[s.length - 2];
-    return prev !== undefined && prev.length <= MAX_SENTENCE && PRIOR_REQUEST.test(prev) && CUE.test(prev) && !CLOSER.test(prev);
+    return (
+      prev !== undefined &&
+      prev.length <= MAX_SENTENCE &&
+      PRIOR_REQUEST.test(prev) &&
+      CUE.test(prev) &&
+      !CLOSER.test(prev) &&
+      !RECIPIENT.test(prev)
+    );
   }
   return IMPERATIVE.test(last) && CUE.test(last);
 }

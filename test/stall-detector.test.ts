@@ -203,6 +203,8 @@ describe("stall detector: a closing request for input without a `?`", () => {
     ["'I need … to proceed'", "I need the closing date of the round to proceed."],
     ["a request wrapped in bold", "**Please provide the valuation cap so I can finish the model.**"],
     ["a bold question (the raw `?` test misses the trailing `**`)", "**Which scenario should I model?**"],
+    ["'here' as the last word", "Please paste the cap table here."],
+    ["'with the <thing>' is not a recipient", "Please reply with the numbers so I can finish the model."],
     ["a question followed by an emoji", "Which of the two models should I use? 🙂"],
     ["'(A or B?)' at the very end", "I can model it either way (pre-money or post-money?)"],
   ])("%s → stalled", async (_label, text) => {
@@ -231,6 +233,13 @@ describe("stall detector: a closing request for input without a `?`", () => {
     "Please confirm the numbers look right before sending to investors.",
     "I'll need more data before I can make a firm call, but the base case is solid.",
     "When I have the numbers, I'll update the table.",
+    // hand-offs to a third party: the cue ("here", "to proceed", "and I'll") binds to someone else's action
+    "Please pick the version you like; both are here in outputs/.",
+    "Please share the attached report with the team here.",
+    "Please confirm the assumptions with the CFO to continue the diligence.",
+    "Please provide this summary to the founders to proceed with the close.",
+    "Please send this to the team to get started on the rollout.",
+    "Please send the deck to the partners and I'll follow up with the numbers next week.",
     // quoted or generated text is not the agent asking in its own voice
     "Here is the snippet:\n\n```\nPlease share your valuation so I can run the numbers.\n```",
     "The founder wrote:\n\n> Please share your valuation so I can run the numbers.",

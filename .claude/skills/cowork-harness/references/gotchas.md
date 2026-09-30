@@ -125,11 +125,13 @@ authorable). Reach for this list when debugging a run's behavior, that one while
       a request that says the input comes back to the agent — `Please`/`Kindly` + share, provide, send,
       upload, attach, paste, confirm, specify, tell me, give me, reply with, choose, pick, select, or
       `Let me know which…`/`whether…`, WITH a cue (`so I…`, `and I'll…`, `to proceed`, `here`,
-      `with me`, `to me`, `in chat`, `reply`, `you'd like me to`); `Once you share…, I'll…`; a whole
+      `with me`, `to me`, `in chat`, `reply`, `you'd like me to`; `here` only after share/paste/upload/drop/
+      reply/type/send or as the last word); `Once you share…, I'll…`; a whole
       sentence `I need X to proceed`/`…before I can Y`; or `Once I have the file, I'll…` right after a
       sentence asking for it. Never counted: polite closers and hand-offs (`Let me know if…`,
       `Feel free…`, `thoughts`, `feedback`, `with your`/`to your`, `before sending`, `whichever`,
-      `how it goes`, `If you…`), a closing code block or `>` blockquote, or a request earlier than the
+      `how it goes`, `If you…`), a hand-off to a named third party (`with the team`, `to the founders`,
+      `with the CFO`), a closing code block or `>` blockquote, or a request earlier than the
       closing sentence. With no gate only the raw `?` counts. The request test is English-only.
     - The signal is a **tool-position heuristic**, not deliverable detection, so it is imprecise both
       ways:

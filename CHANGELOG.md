@@ -19,16 +19,17 @@ All notable changes to this project are documented here. The format is based on
     - it asks for specific input AND says the input comes back to the agent: `Please`/`Kindly` + share,
       provide, send, upload, attach, paste, confirm, specify, tell me, give me, reply with, choose, pick
       or select, or `Let me know which…`/`whether…`, with a cue such as `so I…`, `and I'll…`,
-      `to proceed`, `here`, `with me`, `to me`, `in chat`, `reply`, `you'd like me to`;
+      `to proceed`, `with me`, `to me`, `in chat`, `reply`, `you'd like me to`, or `here` after share,
+      paste, upload, drop, reply, type or send, or as the last word;
     - `Once you share…, I'll…`; `I need X to proceed` or `…before I can <do Y>` ending the sentence; or
       `Once I have the file, I'll…` right after a sentence that asked for it.
   - Never counted: a polite closer or a hand-off (`Let me know if…`, `Feel free…`, `thoughts`, `feedback`,
     `with your`/`to your`, `before sending`, `whichever`, `how it goes`, a sentence starting `If you…`), a
-    closing code block or `>` blockquote, and any request earlier than the closing sentence. With no gate,
+    hand-off to a named third party (`with the team`, `to the founders`, `with the CFO`), a closing code block or `>` blockquote, and any request earlier than the closing sentence. With no gate,
     a run still stalls only on a trailing `?`, so a plain answer cannot fail on its wording. The request
     test is English-only; in any other language only the `?` test applies.
   - The other conditions are unchanged: the run succeeded and no tool ran after the last gate.
-    `allow_stall: true` / `--allow-stall` still opt out of the verdict.
+    `allow_stall: true` / `--allow-stall` still opt out on `run` and `replay`.
   - `replay` re-derives the check from the recording, so an existing cassette with this ending fails on
     replay too.
   - Under `eval`, a newly stalled rep is `errored_agent`, which fails every row; `allow_stall` does not
