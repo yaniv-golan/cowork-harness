@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   agentTreeAgent,
   agentSpawnOptions,
   handlerOwnsAgent,
   hostAgentStopTiming,
+  listProcessesSync,
   parseLsofCwd,
   parsePsSnapshot,
   RUN_TAG_ENV,
@@ -624,5 +628,107 @@ describe("orphan sweep on Linux: the run's env tag, never the cwd", () => {
     const tag = token();
     const h = linux(tag, { [SELF]: `${RUN_TAG_ENV}=${tag}\0` }, []);
     expect(h.kills.map(([t]) => t)).not.toContain(SELF);
+  });
+});
+
+// The synchronous listing the teardown and a first signal take. Under heavy load `ps -A` has been measured at
+// 1.4–2.4 s with ~1,300 processes, so the limit must sit well above that, and a timeout is tried once more
+// before the stop falls back to an earlier listing. The stubs are executable scripts standing in for `ps`;
+// `exec sleep` makes the sleep the process the timeout kills, so none is left behind.
+describe.skipIf(process.platform === "win32")("listProcessesSync — the teardown's process listing", () => {
+  const ROWS = [
+    "    1     0     1     0 ??       Wed Sep 30 11:00:00 2026     launchd",
+    `  ${SELF}   ${PARENT}   ${SELF}   ${ME} ??       Wed Sep 30 11:59:00 2026     node`,
+    `  ${AGENT}   ${SELF}   ${AGENT}   ${ME} ??       Wed Sep 30 12:00:05 2026     claude`,
+  ].join("\\n");
+  function stub(body: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "ps-stub-"));
+    const f = join(dir, "ps");
+    writeFileSync(f, `#!/bin/sh\n${body}\n`);
+    chmodSync(f, 0o755);
+    return f;
+  }
+
+  it("a listing slower than 2 s but under the limit succeeds, and the stop prints no warning", () => {
+    const ps = stub(`sleep 2.5\nprintf '${ROWS}\\n'`);
+    const h = harness();
+    let listings = 0;
+    h.deps.snapshot = () => {
+      listings++;
+      return listProcessesSync({ ps });
+    };
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps); // lists once at construction
+    a.terminate(); // and again here
+    expect(listings).toBe(2);
+    expect(h.warnings.filter((w) => w.includes("could not list"))).toEqual([]);
+    expect(h.kills).toContainEqual([-AGENT, "SIGTERM"]);
+  }, 15_000);
+
+  it("a listing that times out once is taken again and succeeds", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ps-once-"));
+    const marker = join(dir, "first-call");
+    const ps = stub(`if [ ! -e '${marker}' ]; then : > '${marker}'; exec sleep 30; fi\nprintf '${ROWS}\\n'`);
+    const rows = listProcessesSync({ ps, timeoutMs: 3000 });
+    // The limit leaves the stub's shell room to start under load; the first call then sleeps far past it.
+    expect(existsSync(marker)).toBe(true); // the first attempt ran and was cut off
+    expect(rows?.map((r) => r.pid)).toEqual([1, SELF, AGENT]);
+  }, 15_000);
+
+  it("a listing that fails without timing out is not retried", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ps-fail-"));
+    const count = join(dir, "calls");
+    const ps = stub(`echo x >> '${count}'\nexit 1`);
+    expect(listProcessesSync({ ps })).toBeUndefined();
+    expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(1);
+  });
+});
+
+// Once a signal is being handled, a listing that times out is not taken again: a second signal sent with
+// `kill` cannot be handled while a synchronous listing runs, so the signal path allows one attempt only.
+describe("the signal path lists with one attempt; the normal teardown with the retry", () => {
+  function recording(signalled: boolean) {
+    const h = harness();
+    const calls: Array<{ attempts?: number } | undefined> = [];
+    const snap = h.deps.snapshot!;
+    h.deps.snapshot = (o?: { attempts?: number }) => {
+      calls.push(o);
+      return snap(o);
+    };
+    h.deps.signalled = () => signalled;
+    return { h, calls };
+  }
+
+  it("after a signal: terminate() and forceKill() pass attempts: 1", () => {
+    const { h, calls } = recording(true);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    calls.length = 0;
+    a.terminate();
+    a.forceKill();
+    expect(calls).toEqual([{ attempts: 1 }, { attempts: 1 }]);
+  });
+
+  it("on the normal teardown: the default attempts (the retry) apply", () => {
+    const { h, calls } = recording(false);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    calls.length = 0;
+    a.terminate();
+    a.forceKill();
+    expect(calls.every((c) => c?.attempts === undefined)).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("after a signal: a result frame's listing passes attempts: 1 too", () => {
+    const { h, calls } = recording(true);
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    calls.length = 0;
+    a.onFrame({ type: "result" });
+    expect(calls).toEqual([{ attempts: 1 }]);
+  });
+
+  it("a listing that fails after a signal says it may have been interrupted", () => {
+    const { h } = recording(true);
+    h.deps.snapshot = () => undefined; // e.g. a terminal Ctrl-C also reached the running `ps`
+    agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps).terminate();
+    expect(h.warnings.join("")).toMatch(/could not list processes \(ps failed or was interrupted\)/);
   });
 });

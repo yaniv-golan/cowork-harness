@@ -156,6 +156,8 @@ The rows are checked in that order, and the first that matches decides. Two cons
   refused: the agent could read the answers.
 - **The scenarios' inputs**, as a run checks them, over each arm's snapshot: every input path, and a
   `tool_not_called` the scenario's tier can never violate.
+- **The plugin under test** must be the session's one `plugins.local_plugins` entry; a session that
+  declares it only under `remote_plugins` is refused (see [Lane note](#lane-note)).
 - **`--fail-on confirmed`** when no row could reach `confirmed` at this `--reps` and correction.
 - **The agent credential**, for every tier the scenarios run at, by the same check
   `cowork-harness doctor --tier <tier>` prints as its `token` row: a failing check refuses the eval with
@@ -205,9 +207,22 @@ Judged per scenario, for each arm:
 
 ## Lane note
 
-`eval` compares behaviour inside the harness, and that comparison does not depend on which Cowork lane
-you target. Assertions about the environment itself — paths, `present_files`, what lands in `outputs/`
-— describe the local lane.
+`eval` compares two versions of one plugin under the same conditions, but those conditions include where
+the plugin is mounted, and that is not the same for every way Cowork delivers a plugin. `eval` swaps only
+a `plugins.local_plugins` entry, mounted at `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>`
+(Cowork's local-uploads channel). A plugin installed through Cowork's UI is served from
+`mnt/.remote-plugins/plugin_<id>` instead — `plugins.remote_plugins` in a session (see
+[session.md](./session.md)). A skill that locates its own files at runtime sees a different path under
+each, so a result for the `local_plugins` layout does not carry over to the installed one unless the skill
+finds its files the same way under both.
+
+A session that declares its plugin only under `plugins.remote_plugins` is refused (exit `2`: the session
+must declare exactly one `plugins.local_plugins` entry). To compare such a plugin, point `eval` at a copy
+of the session that declares the same directory under `local_plugins` instead, and check the skill's own
+path handling separately with an ordinary `run` of the `remote_plugins` session.
+
+Assertions about the environment itself — paths, `present_files`, what lands in `outputs/` — describe the
+local lane.
 
 ## Files, and `prune`
 

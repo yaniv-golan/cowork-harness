@@ -2,7 +2,7 @@ import { execFile, spawnSync, type SpawnOptions } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { sep } from "node:path";
 import { warn as ioWarn } from "../io.js";
-import { TERMINATION_GRACE_MS, type TerminableAgent } from "../termination.js";
+import { TERMINATION_GRACE_MS, terminationRequested, type TerminableAgent } from "../termination.js";
 
 /**
  * Stopping a host agent stops everything it started.
@@ -49,7 +49,21 @@ export const AGENT_DETACHED = process.platform !== "win32";
 export const RUN_TAG_ENV = "COWORK_HARNESS_RUN_TAG";
 export const NO_ORPHAN_SWEEP_ENV = "COWORK_HARNESS_NO_ORPHAN_SWEEP";
 
-const PS_TIMEOUT_MS = 2000;
+/**
+ * The synchronous listing (at construction, on a `result` frame, and in every terminate/force-kill except a
+ * second signal's) is what the stop acts on: when it fails, the stop falls back to an earlier listing and a
+ * process started since then can survive. `ps -A` has been measured at 1.4–2.4 s on a loaded Mac with ~1,300
+ * processes, so the limit is 10 s — about four times that — and a listing that timed out is taken once more
+ * (not once a signal is being handled; see `refreshAt`).
+ * The listing runs before the grace period starts, so it never shortens the Desktop-matched settle and grace
+ * windows; it does delay the start of the stop by that long.
+ */
+const PS_SYNC_TIMEOUT_MS = 10_000;
+const PS_SYNC_ATTEMPTS = 2;
+/** The drive loop's asynchronous refresh keeps a short limit. A refresh that times out is harmless — the next
+ *  synchronous listing covers it — and refreshes are throttled, not serialized, so a long limit would let
+ *  overlapping `ps -A` runs pile up under exactly the load that makes them slow. */
+const PS_ASYNC_TIMEOUT_MS = 2000;
 const LSOF_TIMEOUT_MS = 2000;
 /** tool_result frames refresh at most this often; a `result` frame always refreshes. */
 const REFRESH_MIN_INTERVAL_MS = 250;
@@ -134,8 +148,10 @@ export interface AgentTreeDeps {
   env: NodeJS.ProcessEnv;
   now(): number;
   /** One consistent process listing, or undefined when `ps` failed. Synchronous: for the signal handler and
-   *  the teardown, which must not yield. */
-  snapshot(): ProcRow[] | undefined;
+   *  the teardown, which must not yield. `attempts` bounds the retries after a timeout. */
+  snapshot(o?: { attempts?: number }): ProcRow[] | undefined;
+  /** A termination signal is being handled (the termination handler owns the exit). */
+  signalled(): boolean;
   /** The same listing without blocking the event loop — the drive loop's per-frame refresh. */
   snapshotAsync(): Promise<ProcRow[] | undefined>;
   /** `process.kill`; a negative target is a process group. Must not throw. */
@@ -151,6 +167,24 @@ const PS_ARGS = ["-A", "-o", "pid=,ppid=,pgid=,uid=,tty=,lstart=,comm="];
 const PS_ENV = () => ({ ...process.env, LC_ALL: "C" });
 const PS_MAX_BUFFER = 16 * 1024 * 1024;
 
+/** One synchronous process listing, or undefined when `ps` failed. A listing that timed out is taken again,
+ *  `attempts` times in all; any other failure (a non-zero exit, a missing `ps`, a `ps` killed by a signal —
+ *  a terminal Ctrl-C reaches it too) is not retried. `ps` is overridable for tests. */
+export function listProcessesSync(o: { timeoutMs?: number; attempts?: number; ps?: string } = {}): ProcRow[] | undefined {
+  const attempts = Math.max(1, o.attempts ?? PS_SYNC_ATTEMPTS);
+  for (let i = 0; i < attempts; i++) {
+    const r = spawnSync(o.ps ?? "ps", PS_ARGS, {
+      encoding: "utf8",
+      timeout: o.timeoutMs ?? PS_SYNC_TIMEOUT_MS,
+      env: PS_ENV(),
+      maxBuffer: PS_MAX_BUFFER,
+    });
+    if (!r.error && r.status === 0 && typeof r.stdout === "string") return parsePsSnapshot(r.stdout);
+    if ((r.error as NodeJS.ErrnoException | undefined)?.code !== "ETIMEDOUT") return undefined;
+  }
+  return undefined;
+}
+
 function defaultDeps(): AgentTreeDeps {
   return {
     platform: process.platform,
@@ -159,15 +193,15 @@ function defaultDeps(): AgentTreeDeps {
     uid: typeof process.getuid === "function" ? process.getuid() : -1,
     env: process.env,
     now: () => Date.now(),
-    snapshot: () => {
-      const r = spawnSync("ps", PS_ARGS, { encoding: "utf8", timeout: PS_TIMEOUT_MS, env: PS_ENV(), maxBuffer: PS_MAX_BUFFER });
-      if (r.error || r.status !== 0 || typeof r.stdout !== "string") return undefined;
-      return parsePsSnapshot(r.stdout);
-    },
+    snapshot: (o) => listProcessesSync(o),
+    signalled: () => terminationRequested() !== undefined,
     snapshotAsync: () =>
       new Promise((res) =>
-        execFile("ps", PS_ARGS, { encoding: "utf8", timeout: PS_TIMEOUT_MS, env: PS_ENV(), maxBuffer: PS_MAX_BUFFER }, (err, stdout) =>
-          res(err ? undefined : parsePsSnapshot(stdout)),
+        execFile(
+          "ps",
+          PS_ARGS,
+          { encoding: "utf8", timeout: PS_ASYNC_TIMEOUT_MS, env: PS_ENV(), maxBuffer: PS_MAX_BUFFER },
+          (err, stdout) => res(err ? undefined : parsePsSnapshot(stdout)),
         ),
       ),
     kill: (target, sig) => {
@@ -359,11 +393,14 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
       });
   };
 
-  /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). */
+  /** Returns false when `ps` failed (the tracked set is then whatever the last listing gave). Once a signal is
+   *  being handled, every synchronous listing (a stop's, or a `result` frame's during the grace wait) gets ONE
+   *  attempt: a second signal sent with `kill` cannot be handled while one runs, so a retry would double how
+   *  long it waits. */
   const refreshAt = (t: number): boolean => {
     lastRefreshAt = t;
     syncListings++;
-    const rows = d.snapshot();
+    const rows = d.signalled() ? d.snapshot({ attempts: 1 }) : d.snapshot();
     if (!rows) return false;
     lastRows = rows;
     extend(rows);
@@ -376,10 +413,12 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
   const warnNoListing = () => {
     if (listingWarned) return;
     listingWarned = true;
+    // During a signal a second terminal Ctrl-C reaches the running `ps` too and ends it: not a `ps` fault.
+    const why = d.signalled() ? "ps failed or was interrupted" : "ps failed";
     d.warn(
       lastRows
-        ? `::warning:: [teardown] could not list processes (ps failed); stopping what the agent started from an earlier listing — a process it started since then may keep running\n`
-        : `::warning:: [teardown] could not list processes (ps failed); stopping the agent by pid only — processes it started may keep running\n`,
+        ? `::warning:: [teardown] could not list processes (${why}); stopping what the agent started from an earlier listing — a process it started since then may keep running\n`
+        : `::warning:: [teardown] could not list processes (${why}); stopping the agent by pid only — processes it started may keep running\n`,
     );
   };
 

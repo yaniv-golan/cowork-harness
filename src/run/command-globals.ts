@@ -19,7 +19,8 @@ import { parseDotenv, DotenvReadError } from "../dotenv.js";
 import { expandUserPath } from "../session.js";
 import type { ArgSpec, ParsedArgs } from "../cli-args.js";
 import { fail, envOutputFormat } from "./envelope.js";
-import { writeAllSync } from "../io.js";
+import { writeAllSync, tildeify } from "../io.js";
+import { resolve } from "node:path";
 
 const log = (s: string) => writeAllSync(2, s + "\n");
 
@@ -35,6 +36,8 @@ interface EnvState {
   protectedKeys: Set<string>;
   /** Which of the two flags were already given before the subcommand. */
   leading: Record<CommandGlobalFlag, boolean>;
+  /** Credential keys main() loaded from the install's own .env (and named on stderr as coming from there). */
+  installCredentials: Set<string>;
 }
 let state: EnvState | undefined;
 const applied = new Set<CommandGlobalFlag>();
@@ -47,7 +50,13 @@ export function setRunsDir(value: string): void {
 
 /** Called once by main(), after the leading flags are handled and BEFORE any .env file is loaded. */
 export function recordLeadingGlobals(leading: Record<CommandGlobalFlag, boolean>): void {
-  state = { protectedKeys: new Set(Object.keys(process.env)), leading };
+  state = { protectedKeys: new Set(Object.keys(process.env)), leading, installCredentials: new Set() };
+}
+
+/** Called by main() with the credential keys it loaded from the install's .env, so a per-command --dotenv
+ *  that replaces one can correct the `[env] using … from <install>/.env` line main() already printed. */
+export function recordInstallCredentials(keys: string[]): void {
+  if (state) state.installCredentials = new Set(keys);
 }
 
 /** Apply one per-command `--dotenv` / `--run-dir`. `value` is the flag's value as the command's parser read it. */
@@ -75,9 +84,11 @@ export function applyCommandGlobal(command: string, flag: CommandGlobalFlag, val
   const effective = envOutputFormat;
   const before = effective();
   const loaded: string[] = [];
+  const replacedInstall: string[] = [];
   for (const [key, val] of entries) {
     if (protectedKeys.has(key)) continue;
     if (process.env[key] !== val) loaded.push(key);
+    if (state?.installCredentials.has(key)) replacedInstall.push(key);
     process.env[key] = val;
   }
   // The output format is decided before a command's flags are parsed (its error envelope has to be), so a
@@ -93,6 +104,8 @@ export function applyCommandGlobal(command: string, flag: CommandGlobalFlag, val
     );
   // The same line, and the same condition (an explicit --dotenv always reports), as the leading form in main().
   if (loaded.length) log(`[env] loaded ${loaded.length} var(s): ${loaded.join(", ")}`);
+  // main() named these as coming from the install's .env before this flag was parsed; say where they come from now.
+  if (replacedInstall.length) log(`[env] ${replacedInstall.join(", ")} from ${tildeify(resolve(value))} (replacing the install's .env)`);
 }
 
 /** For a `parseArgs` command: accept the two flags (repeatable, so a duplicate is reported rather than

@@ -16,6 +16,10 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
   root). The FIRST arm is the baseline; a drop is the second arm passing less often.
 - Only the session's single `plugins.local_plugins` entry is substituted. Each arm is copied once, before
   the first run, and every rep mounts the copy.
+- The plugin is mounted at the `local_plugins` path (`mnt/.local-plugins/marketplaces/<marketplace>/<plugin>`),
+  not the `remote_plugins` path a UI-installed plugin has (`mnt/.remote-plugins/plugin_<id>`). A skill that
+  locates its own files at runtime sees a different path under each, so the comparison holds for the
+  `local_plugins` layout only.
 - scenarios × 2 × `--reps` live runs (10 per scenario at the default `--reps 5`), interleaved, plus one judge
   call per `semantic_matches` assert per run. The start-up line prints the job count. No budget flag.
 - In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
@@ -56,7 +60,10 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
 - `--fail-on confirmed` when no row could reach `confirmed` at this `--reps`;
 - no usable agent credential for a scenario's tier — the same check as `doctor --tier <tier>`'s `token` row,
   with its fix. A Keychain login or a `.credentials.json` in the config dir, without an env/.env token,
-  passes only at `protocol`.
+  passes only at `protocol`;
+- a session whose plugin is declared only under `plugins.remote_plugins` (the session must declare exactly
+  one `local_plugins` entry). Workaround: eval a copy of the session that declares the same directory under
+  `local_plugins`, and check the `remote_plugins` path handling with an ordinary `run`.
 
 ## Exit codes
 

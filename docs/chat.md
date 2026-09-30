@@ -84,7 +84,8 @@ session's result. Ctrl-C while the agent is working on a turn (including at a pe
 stops the agent and everything it started, then exits with status 130 without writing a result, like an
 interrupted `run`. After `/exit` (or EOF), a first Ctrl-C while the session is being torn down and its result written does not
 discard it: the result is still written, then the session exits with status 130. A second Ctrl-C exits at once,
-without the result.
+without the result (a second signal sent with `kill` instead first waits for a process listing already running,
+up to 10 s).
 
 ## Mount paths
 
