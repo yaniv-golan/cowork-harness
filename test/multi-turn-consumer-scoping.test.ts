@@ -56,10 +56,17 @@ describe("verify-run refuses a multi-turn dir", () => {
   // scenario describes the GRADED one — so certifying it would vouch for the wrong turn. The rejected
   // alternative (scope this command to "the latest turn") would have turned today's LOUD false-fail into
   // a SILENT false-green, which is the one direction this project must never move in.
-  const FULL = readFileSyncSafe("src/cli.ts");
-  // Scope to cmdVerifyRun's body: `parseGatesFromEvents`'s DEFINITION sits earlier in the file than the
+  // verify-run's run-dir refusals live in the kept-run context builder it calls.
+  const FULL = readFileSyncSafe("src/run/verify-context.ts");
+  // Scope to the builder's body: `parseGatesFromEvents`'s DEFINITION sits earlier in the file than the
   // guard, so a whole-file position check compares against the wrong occurrence (it did, first run).
-  const SRC = FULL.slice(FULL.indexOf("async function cmdVerifyRun"));
+  const start = FULL.indexOf("export function assertContextFromRunDir(");
+  const SRC = FULL.slice(start);
+
+  it("found the builder (an anchor matching nothing would slice the whole file)", () => {
+    expect(start, "assertContextFromRunDir moved or was renamed — re-anchor").toBeGreaterThan(-1);
+    expect(readFileSyncSafe("src/cli.ts"), "verify-run no longer calls the builder").toMatch(/assertContextFromRunDir\(runDir,/);
+  });
 
   it("has a turn>1 refusal at all", () => {
     // The guard used to key off a `result.turn` field read off whichever turn happened to load — now it's

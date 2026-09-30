@@ -94,6 +94,7 @@ import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, typ
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
+import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import {
   classifyWorkspaceFilesWithHealth,
@@ -109,7 +110,6 @@ import {
   readPreRunManifestHashes,
   readPreRunManifestLinkAware,
   readPreRunManifestOrigin,
-  readPreRunManifestStats,
   readOutputsBaseline,
   type OutputsBaseline,
 } from "./pre-run-manifest.js";
@@ -1444,7 +1444,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // while the harness bind-mounts the whole session dir, so these files persist and can be graded as
     // authored. That is correct for the semantic judge (the run did write them) and wrong as a model of
     // delivery. `user_visible_artifact` is unaffected: it checks user-visible ROOTS, not this set.
-    const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
+    // (The scratchpad root — the parent of `mnt` — is derived in `authoredCaptureOpts`.)
     // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
     // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
     // unavailable is safer than misattribution). #17
@@ -1453,15 +1453,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // drains the whole budget before the deliverable is reached — and the judge is then refused over
     // files no rubric mentions. The union across every `semantic_matches`: one capture serves them all.
     const priorityGlobs = [...new Set(scenario.assert.flatMap((a) => a.semantic_matches?.evidence_files ?? []))];
-    const authored = captureAuthoredFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
-      scratchpadRoot,
-      resume: plan.resume,
-      // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
-      // UNCHANGED rather than either mis-attributed as authored or silently dropped from evidence. #15/#12
-      preRunStats: readPreRunManifestStats(outDir),
-      ...(priorityGlobs.length ? { priorityGlobs } : {}),
-      totalBytes: authoredTotalBytes(),
-    });
+    // One option derivation shared with the kept-run context builder, so a re-grade captures what this did.
+    const authored = captureAuthoredFilesWithHealth(
+      workRoot,
+      userVisibleRoots,
+      readonlyFolderRoots,
+      preRunHashes,
+      authoredCaptureOpts({ workRoot, runDir: outDir, resume: plan.resume, priorityGlobs, totalBytes: authoredTotalBytes() }),
+    );
 
     const assertCtx: AssertContext = {
       transcript: record.transcript,
@@ -1541,7 +1540,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       effectiveFidelity,
       // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
       // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
-      // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
+      // this same "live" mode (see assertContextFromRunDir in verify-context.ts).
       linkResolution: {
         mode: "live",
         hostRoots: [join(resolve(outDir), "work", "session", "mnt"), ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath)],
