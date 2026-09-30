@@ -1,7 +1,18 @@
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve, relative, isAbsolute, sep, dirname, extname } from "node:path";
-import type { Assertion, RunResult, UsageInfo, CostInfo, OutputsFsDiff, ToolCalledObject, ToolNotCalledObject } from "./types.js";
+import type {
+  Assertion,
+  RunResult,
+  UsageInfo,
+  CostInfo,
+  OutputsFsDiff,
+  ToolCalledObject,
+  ToolNotCalledObject,
+  TokenUsage,
+  JudgedDocFingerprint,
+} from "./types.js";
+import { addTokenUsage } from "./decide/usage.js";
 import { checkToolCallObject, routedToolGlobs } from "./tool-call-assert.js";
 import { outputsDeleteTier, outputsDeleteEntries } from "./run/outputs-delete-tier.js";
 import { VERDICT_MODIFIER_KEYS } from "./types.js";
@@ -303,6 +314,9 @@ export type SemanticJudge = ((rubric: string[], answer: string) => Promise<Seman
   /** USD cost of the judge's most recent call, set per call (cleared when the call spent nothing it could
    *  price). `undefined` = unpriced, never $0. A stub may omit it. */
   lastCostUsd?: number;
+  /** Tokens of the judge's most recent call, set per call alongside `lastCostUsd` (cleared when the call
+   *  reported none). A stub may omit it. */
+  lastUsage?: TokenUsage;
   /** Identity of the grading-prompt template this judge uses (`JUDGE_PROMPT_HASH`). A stub may omit it. */
   promptHash?: string;
 };
@@ -326,6 +340,10 @@ export interface AssertContext {
   /** Total judge spend per `semantic_matches` assert, summed over every attempt (the grade is retried once).
    *  Absent for an assert where no attempt was priced. Populated by runSemanticJudges. */
   judgeCosts?: Map<Assertion, number>;
+  /** Judge tokens per assert, summed over every attempt — populated by runSemanticJudges beside `judgeCosts`. */
+  judgeUsages?: Map<Assertion, TokenUsage>;
+  /** Fingerprint of the document each assert's judge received — populated by runSemanticJudges. */
+  judgedDocs?: Map<Assertion, JudgedDocFingerprint>;
   /** The grading-prompt template hash of the judge that graded each assert. Populated by runSemanticJudges. */
   judgePromptHashes?: Map<Assertion, string>;
   /** `semantic_matches` asserts whose judge grade was INVALID (malformed/ambiguous after a retry) —
@@ -746,6 +764,8 @@ export async function runSemanticJudges(
   if (!ctx.semanticResults) ctx.semanticResults = new Map();
   if (!ctx.judgeModels) ctx.judgeModels = new Map();
   if (!ctx.judgeCosts) ctx.judgeCosts = new Map();
+  if (!ctx.judgeUsages) ctx.judgeUsages = new Map();
+  if (!ctx.judgedDocs) ctx.judgedDocs = new Map();
   if (!ctx.judgePromptHashes) ctx.judgePromptHashes = new Map();
   if (!ctx.judgeInvalid) ctx.judgeInvalid = new Set();
   if (!ctx.semanticDocInfo) ctx.semanticDocInfo = new Map();
@@ -779,6 +799,7 @@ export async function runSemanticJudges(
     // mark the rep INVALID (not absent): the check surfaces it so a consumer counts it, never drops it.
     let graded: SemanticClaimResult[] | undefined;
     let cost: number | undefined; // summed over BOTH attempts — a retried grade is paid twice
+    let tokens: TokenUsage | undefined; // same basis as `cost`
     for (let attempt = 0; attempt < 2 && graded === undefined; attempt++) {
       try {
         graded = await j(a.semantic_matches.rubric, answer);
@@ -791,9 +812,13 @@ export async function runSemanticJudges(
         }
       } finally {
         if (typeof j.lastCostUsd === "number") cost = (cost ?? 0) + j.lastCostUsd;
+        tokens = addTokenUsage(tokens, j.lastUsage);
       }
     }
+    // The judge was handed `answer` — fingerprint exactly that, whatever the grade's outcome.
+    ctx.judgedDocs.set(a, built.fingerprint);
     if (cost !== undefined) ctx.judgeCosts.set(a, cost);
+    if (tokens !== undefined) ctx.judgeUsages.set(a, tokens);
     if (j.promptHash) ctx.judgePromptHashes.set(a, j.promptHash);
     // Record provenance AFTER the call, not before: `j.model` may be a factory-time alias (e.g. "opus")
     // until the transport resolves it per-call to a concrete id (`makeSemanticJudge` mutates `.model` onto
@@ -882,15 +907,22 @@ export function composeJudgedDocument(
   ctx: AssertContext,
   includeSubagentText = false,
   scopeGlobs?: string[],
-): { doc: string; evidenceCut: boolean; healthNoteCut: boolean; overflowSection?: string } {
+): { doc: string; evidenceCut: boolean; healthNoteCut: boolean; overflowSection?: string; fingerprint: JudgedDocFingerprint } {
   // SCRUB BEFORE CAP: scrub is exact-string replacement, so a secret straddling a cap boundary would
   // be truncated mid-token and slip past scrub into the doc sent to the (external) judge. Scrub each raw
   // section FIRST, then cap the already-redacted text — capping redacted content can never re-expose a secret.
   const secrets = ctx.secrets ?? [];
   const s = (t: string): string => (secrets.length ? scrub(t, secrets) : t);
   const parts: string[] = [];
-  if (ctx.finalMessage) parts.push(`## Final answer\n${capForJudge(s(ctx.finalMessage), JUDGE_FINAL_CAP)}`);
-  parts.push(`## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
+  // What each entry of `parts` is, index-aligned — the section list of the fingerprint. Pushed together
+  // with its part, so the two cannot fall out of step.
+  const kinds: Array<{ kind: JudgedDocFingerprint["sections"][number]["kind"]; path?: string }> = [];
+  const push = (kind: JudgedDocFingerprint["sections"][number]["kind"], text: string, path?: string): void => {
+    parts.push(text);
+    kinds.push(path !== undefined ? { kind, path } : { kind });
+  };
+  if (ctx.finalMessage) push("final", `## Final answer\n${capForJudge(s(ctx.finalMessage), JUDGE_FINAL_CAP)}`);
+  push("transcript", `## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
   // OPT-IN sub-agent text. `ctx.transcript` carries top-level assistant_text ONLY (run.ts drops any
   // event with a parentToolUseId), so for a fan-out skill the bulk of the actual work is invisible to
   // the judge. This folds it back in on request. Two deliberate constraints:
@@ -909,7 +941,7 @@ export function composeJudgedDocument(
         .join("\n\n");
       if (!text) continue;
       const label = sa.description ?? sa.resolvedAgentType ?? sa.dispatchAgentType ?? `#${i + 1}`;
-      parts.push(`## Sub-agent output: ${s(label)}\n${capForJudge(s(text), JUDGE_SUBAGENT_CAP)}`);
+      push("subagent", `## Sub-agent output: ${s(label)}\n${capForJudge(s(text), JUDGE_SUBAGENT_CAP)}`);
     }
   }
   // AUTHORED is not DELIVERED. The capture deliberately includes the scratchpad (the run DID write those
@@ -938,10 +970,11 @@ export function composeJudgedDocument(
     const scratch = !scratchIsUserVisible && f.path.startsWith(SCRATCHPAD_PREFIX);
     sawScratch ||= scratch;
     const tag = scratch ? " — SCRATCH, NOT delivered to the user" : "";
-    parts.push(`## Authored file: ${s(f.path)}${tag}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);
+    push("authored", `## Authored file: ${s(f.path)}${tag}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`, f.path);
   }
   if (sawScratch)
-    parts.push(
+    push(
+      "scratch_note",
       "## Note on scratch files\nFiles marked SCRATCH were written to the session's scratch area, which is " +
         "discarded and never reaches the user. Treat them as working intermediates: they are evidence of what " +
         "the run DID, and are NOT evidence that anything was delivered, saved, shared, or produced for the user.",
@@ -977,7 +1010,8 @@ export function composeJudgedDocument(
     if (h?.readErrors.length)
       notes.push(`- ${h!.readErrors.length} authored file(s) could NOT be read back: ${s(h!.readErrors.map((e) => e.path).join(", "))}`);
     if (h?.scratchpadSkippedOnResume) notes.push(`- scratchpad deliverables were not captured (this is a --resume turn; #17)`);
-    parts.push(
+    push(
+      "health",
       `## Evidence health (INCOMPLETE)\nThe authored-file evidence above is NOT complete — do NOT infer content is absent just because it is not shown here:\n${notes.join("\n")}`,
     );
   }
@@ -1010,7 +1044,30 @@ export function composeJudgedDocument(
         overflowSection = parts[i].split("\n", 1)[0].replace(/^## /, "");
         break;
       }
-  return { doc: capForJudge(doc, JUDGE_DOC_CAP), evidenceCut, healthNoteCut, overflowSection }; // aggregate backstop
+  const sent = capForJudge(doc, JUDGE_DOC_CAP); // aggregate backstop
+  return { doc: sent, evidenceCut, healthNoteCut, overflowSection, fingerprint: fingerprintJudgedDoc(sent, parts, kinds) };
+}
+
+const sha256Hex = (t: string): string => createHash("sha256").update(t, "utf8").digest("hex");
+
+/** Fingerprint the document as SENT. Each section is hashed over the slice of `sent` it occupies, so a
+ *  part cut by the aggregate cap is hashed over what survived and a part wholly past the cut is omitted —
+ *  both fall out of slicing the sent text rather than being special-cased. Below the cap, `sent` is the
+ *  plain join, so the slices are the parts themselves. */
+function fingerprintJudgedDoc(
+  sent: string,
+  parts: string[],
+  kinds: Array<{ kind: JudgedDocFingerprint["sections"][number]["kind"]; path?: string }>,
+): JudgedDocFingerprint {
+  const limit = Math.min(sent.length, JUDGE_DOC_CAP);
+  const sections: JudgedDocFingerprint["sections"] = [];
+  let off = 0;
+  for (let i = 0; i < parts.length && off < limit; i++) {
+    const slice = sent.slice(off, Math.min(off + parts[i].length, limit));
+    sections.push({ ...kinds[i], sha256: sha256Hex(slice), chars: slice.length });
+    off += parts[i].length + 2; // the "\n\n" join
+  }
+  return { sha256: sha256Hex(sent), sections };
 }
 
 // A passing check may carry an optional `evidence` string — the concrete file/value/tool/link that
@@ -1229,6 +1286,8 @@ function check(
   semanticClaims?: SemanticClaimResult[];
   judgeModel?: string;
   judgeCostUsd?: number;
+  judgeUsage?: TokenUsage;
+  judgedDoc?: JudgedDocFingerprint;
   judgePromptHash?: string;
   judgeInvalid?: boolean;
   semanticEvidence?: SemanticEvidence;
@@ -3232,12 +3291,16 @@ function check(
   const judgeModel = a.semantic_matches !== undefined ? ctx.judgeModels?.get(a) : undefined;
   const judgeInvalid = a.semantic_matches !== undefined && ctx.judgeInvalid?.has(a) ? true : undefined;
   const judgeCostUsd = a.semantic_matches !== undefined ? ctx.judgeCosts?.get(a) : undefined;
+  const judgeUsage = a.semantic_matches !== undefined ? ctx.judgeUsages?.get(a) : undefined;
+  const judgedDoc = a.semantic_matches !== undefined ? ctx.judgedDocs?.get(a) : undefined;
   const judgePromptHash = a.semantic_matches !== undefined ? ctx.judgePromptHashes?.get(a) : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
     ...(semanticClaims ? { semanticClaims } : {}),
     ...(judgeModel ? { judgeModel } : {}),
     ...(judgeCostUsd !== undefined ? { judgeCostUsd } : {}),
+    ...(judgeUsage ? { judgeUsage } : {}),
+    ...(judgedDoc ? { judgedDoc } : {}),
     ...(judgePromptHash ? { judgePromptHash } : {}),
     ...(judgeInvalid ? { judgeInvalid } : {}),
     ...(semanticEvidence ? { semanticEvidence } : {}),

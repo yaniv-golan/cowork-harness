@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { RunResult } from "../types.js";
 import { infraErrorsForResult, evidenceErrorsForResult, type RunRecord } from "./run.js";
 import { assembleRunResult } from "./assemble-run-result.js";
+import { apiRetriesFrom } from "./api-retries.js";
 import { classifyWorkspaceFilesWithHealth, trustedWorkspaceFiles } from "./artifacts.js";
 import { readTimeline } from "../agent/timeline.js";
 import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
@@ -127,6 +128,10 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     subagents: timeline ? attributeSubagentSkills(record.subagents, timeline.events) : record.subagents,
     usage: record.usage,
     cost: record.cost,
+    deciderCostUsd: undefined, // the chat lane has no decider — the human answers
+    deciderUsage: undefined,
+    authoredCapture: undefined, // chat runs no authored-file capture
+    apiRetries: apiRetriesFrom(record.contextEvents),
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: opts.durationMs,

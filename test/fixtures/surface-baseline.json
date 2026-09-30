@@ -2087,6 +2087,17 @@
       ".ablated": {
         "type": "boolean"
       },
+      ".apiRetries": {
+        "type": "object"
+      },
+      ".apiRetries.count": {
+        "type": "integer",
+        "required": true
+      },
+      ".apiRetries.delayMs": {
+        "type": "number",
+        "required": true
+      },
       ".artifacts": {
         "type": "array"
       },
@@ -2103,6 +2114,17 @@
       },
       ".assertions": {
         "type": "array",
+        "required": true
+      },
+      ".authoredCapture": {
+        "type": "object"
+      },
+      ".authoredCapture.perFileBytes": {
+        "type": "integer",
+        "required": true
+      },
+      ".authoredCapture.totalBytes": {
+        "type": "integer",
         "required": true
       },
       ".baseline": {
@@ -2159,6 +2181,28 @@
       },
       ".cost.usd": {
         "type": "number"
+      },
+      ".deciderCostUsd": {
+        "type": "number"
+      },
+      ".deciderUsage": {
+        "type": "object"
+      },
+      ".deciderUsage.cache_creation_input_tokens": {
+        "type": "integer",
+        "required": true
+      },
+      ".deciderUsage.cache_read_input_tokens": {
+        "type": "integer",
+        "required": true
+      },
+      ".deciderUsage.input_tokens": {
+        "type": "integer",
+        "required": true
+      },
+      ".deciderUsage.output_tokens": {
+        "type": "integer",
+        "required": true
       },
       ".decisions": {
         "type": "array",

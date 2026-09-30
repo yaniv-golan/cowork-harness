@@ -883,6 +883,64 @@
         }
       }
     },
+    "deciderCostUsd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "USD the LLM decider (on_unanswered: llm / --decider-llm) spent answering this run's gates, summed over every call and every model key the transport reported. Reported BESIDE cost.usd (the agent's spend), never folded into it. Absent when no LLM decider answered, or none of its calls was priced (unpriced is not $0). Live lane only."
+    },
+    "deciderUsage": {
+      "type": "object",
+      "description": "Tokens behind deciderCostUsd, same basis (every call, every model key). Absent when no call reported token counters.",
+      "required": ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"],
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "authoredCapture": {
+      "type": "object",
+      "description": "The authored-file capture budget this run actually used: perFileBytes (the cap on an incidental file) and totalBytes (COWORK_HARNESS_AUTHORED_TOTAL_BYTES / --authored-total-bytes, else the default). A semantic_matches judge's authored-file sections were drawn under this budget. Absent when no capture ran (chat, replay, a salvaged partial run).",
+      "required": ["perFileBytes", "totalBytes"],
+      "properties": {
+        "perFileBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "apiRetries": {
+      "type": "object",
+      "description": "The agent's own API retries: count = system events with subtype api_retry on the stream, delayMs = the sum of their retry_delay_ms. {count: 0, delayMs: 0} = a stream was observed and held none; absent = no stream was observed.",
+      "required": ["count", "delayMs"],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "delayMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
     "durationMs": {
       "type": "number"
     },

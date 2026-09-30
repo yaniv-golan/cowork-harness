@@ -62,6 +62,7 @@ import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 export { isLosslessUtf8 } from "./artifacts.js";
 import { isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
+import { apiRetriesFrom } from "./api-retries.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
@@ -5402,6 +5403,10 @@ function replayErrorResult(file: string): RunResult {
     nonReproducibleAnswers: undefined,
     usage: undefined,
     cost: undefined,
+    deciderCostUsd: undefined, // no run happened
+    deciderUsage: undefined,
+    authoredCapture: undefined,
+    apiRetries: undefined, // no stream was observed — absent, not zero
     fingerprint: undefined,
     workDir: undefined,
     outputsDir: undefined,
@@ -8315,6 +8320,10 @@ export async function replayCassette(
       // them deterministically from the same events, so this is a content key, not a live-only one.
       usage: rec.usage,
       cost: rec.cost,
+      deciderCostUsd: undefined, // replay answers from the frozen recording; no model call is made
+      deciderUsage: undefined,
+      authoredCapture: undefined, // replay runs no authored-file capture
+      apiRetries: apiRetriesFrom(rec.contextEvents), // re-derived from the frozen stream, like compaction_occurred
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),
       outDir: "(replay)",

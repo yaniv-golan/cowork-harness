@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
+import { makeSemanticJudge } from "../src/decide/semantic-judge.js";
+import type { Complete } from "../src/decide/decider.js";
 import { evaluate, runSemanticJudges, type AssertContext, type SemanticJudge } from "../src/assert.js";
 import { LIVE_ONLY_KEYS } from "../src/run/cassette.js";
 import type { Assertion } from "../src/types.js";
@@ -176,5 +179,137 @@ describe("semantic_matches — judgeModel provenance fallback", () => {
     const c = ctx({ transcript: "alpha" });
     await runSemanticJudges([a], c, modelless); // no factory: the run-level judge graded
     expect(evaluate([a], c)[0].judgeModel).toBe("unknown");
+  });
+});
+
+describe("semantic_matches — judge token usage on the assertion result", () => {
+  const GRADE = '{"results":[{"index":0,"pass":true}]}';
+
+  it("sums judgeUsage over BOTH attempts of a retried grade, every model key included", async () => {
+    const replies = [
+      { text: "not json", usage: { main: { inputTokens: 100, outputTokens: 4, cacheReadInputTokens: 10, costUSD: 0.01 } } },
+      {
+        text: GRADE,
+        usage: {
+          main: { inputTokens: 200, outputTokens: 6, cacheCreationInputTokens: 5, costUSD: 0.02 },
+          aux: { inputTokens: 1, costUSD: 0.001 },
+        },
+      },
+    ];
+    let n = 0;
+    const complete: Complete = async () => ({ ...replies[n++]!, model: "m" });
+    const a = sem(["alpha"]);
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, makeSemanticJudge({ complete }));
+    const r = evaluate([a], c)[0];
+    expect(n).toBe(2);
+    expect(r.judgeUsage).toEqual({ input_tokens: 301, output_tokens: 10, cache_read_input_tokens: 10, cache_creation_input_tokens: 5 });
+    expect(r.judgeCostUsd).toBeCloseTo(0.031, 10);
+  });
+
+  it("omits judgeUsage when no attempt reported token counters", async () => {
+    const a = sem(["alpha"]);
+    const c = ctx({ transcript: "alpha" });
+    await runSemanticJudges([a], c, makeSemanticJudge({ complete: async () => ({ text: GRADE, model: "m" }) }));
+    expect(evaluate([a], c)[0]).not.toHaveProperty("judgeUsage");
+  });
+});
+
+describe("semantic_matches — judgedDoc fingerprints the document the judge actually received", () => {
+  const sha = (t: string): string => createHash("sha256").update(t, "utf8").digest("hex");
+  /** A judge double that CAPTURES the answer it was handed — the oracle is what left the harness, not a
+   *  recomputation through the function under test. */
+  function capturing(): { judge: SemanticJudge; received: string[] } {
+    const received: string[] = [];
+    const judge: SemanticJudge = async (rubric, answer) => {
+      received.push(answer);
+      return rubric.map((claim, index) => ({ index, claim, pass: true }));
+    };
+    return { judge, received };
+  }
+  /** Walk the received document by each section's `chars` (sections are joined by a blank line) and
+   *  check every section's hash against the slice of the RECEIVED text it claims to cover. */
+  function walk(doc: string, sections: Array<{ sha256: string; chars: number }>): void {
+    let off = 0;
+    for (const s of sections) {
+      expect(sha(doc.slice(off, off + s.chars))).toBe(s.sha256);
+      off += s.chars + 2;
+    }
+  }
+
+  it("top-level sha256 equals the received document; sections name each part (kind, path) and hash its received bytes", async () => {
+    const { judge, received } = capturing();
+    const a = sem(["alpha"]);
+    const c = ctx({
+      transcript: "the transcript says alpha",
+      finalMessage: "final: alpha with TOKEN-XYZ inside",
+      secrets: ["TOKEN-XYZ"],
+      authoredFiles: [
+        { path: "outputs/report.md", content: "# Report\nalpha" },
+        { path: "scratchpad/notes.txt", content: "draft", truncated: true },
+      ],
+    } as Partial<AssertContext>);
+    await runSemanticJudges([a], c, judge);
+    const r = evaluate([a], c)[0];
+    expect(received).toHaveLength(1);
+    const doc = received[0]!;
+    expect(doc).not.toContain("TOKEN-XYZ"); // the fingerprint covers the SCRUBBED bytes that left
+    expect(r.judgedDoc?.sha256).toBe(sha(doc));
+    expect(r.judgedDoc?.sections.map((s) => [s.kind, s.path])).toEqual([
+      ["final", undefined],
+      ["transcript", undefined],
+      ["authored", "outputs/report.md"],
+      ["authored", "scratchpad/notes.txt"],
+      ["scratch_note", undefined],
+      ["health", undefined],
+    ]);
+    walk(doc, r.judgedDoc!.sections);
+    // Without an aggregate cut the sections tile the document exactly.
+    const total = r.judgedDoc!.sections.reduce((n, s) => n + s.chars, 0) + 2 * (r.judgedDoc!.sections.length - 1);
+    expect(total).toBe(doc.length);
+  });
+
+  it("includes sub-agent sections only for the assert that opted in", async () => {
+    const { judge, received } = capturing();
+    const plain = sem(["alpha"]);
+    const withSub: Assertion = { semantic_matches: { rubric: ["alpha"], include_subagent_text: true } };
+    const c = ctx({
+      transcript: "alpha",
+      subagents: [{ description: "worker", reasoning: [{ kind: "text", text: "sub-agent found alpha" }] }] as AssertContext["subagents"],
+    });
+    await runSemanticJudges([plain, withSub], c, judge);
+    const [r1, r2] = evaluate([plain, withSub], c);
+    expect(r1.judgedDoc?.sha256).toBe(sha(received[0]!));
+    expect(r2.judgedDoc?.sha256).toBe(sha(received[1]!));
+    expect(r1.judgedDoc?.sections.map((s) => s.kind)).toEqual(["transcript"]);
+    expect(r2.judgedDoc?.sections.map((s) => s.kind)).toEqual(["transcript", "subagent"]);
+    walk(received[1]!, r2.judgedDoc!.sections);
+  });
+
+  it("past the aggregate cap: the hash is still of the received (cut) document, and sections stop at the cut", async () => {
+    const { judge, received } = capturing();
+    const a = sem(["alpha"]);
+    const c = ctx({
+      transcript: "alpha",
+      authoredFiles: [
+        { path: "outputs/big.md", content: "x".repeat(300 * 1024) },
+        { path: "outputs/after.md", content: "never reached" },
+      ],
+    });
+    await runSemanticJudges([a], c, judge);
+    const r = evaluate([a], c)[0];
+    const doc = received[0]!;
+    expect(doc).toMatch(/chars truncated for the judge input budget/);
+    expect(r.judgedDoc?.sha256).toBe(sha(doc));
+    const kinds = r.judgedDoc!.sections.map((s) => s.path ?? s.kind);
+    expect(kinds).toEqual(["transcript", "outputs/big.md"]); // the file wholly past the cut is not a section
+    walk(doc, r.judgedDoc!.sections);
+    const big = r.judgedDoc!.sections[1]!;
+    expect(big.chars).toBeLessThan(300 * 1024); // clipped to what the judge saw
+  });
+
+  it("is absent on an assert the judge never graded", () => {
+    const a = sem(["alpha"]);
+    expect(evaluate([a], ctx({ transcript: "alpha" }))[0]).not.toHaveProperty("judgedDoc");
   });
 });

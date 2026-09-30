@@ -125,6 +125,10 @@ const full: RunResult = {
   // `turns` and correctly stays permissive under the strictened pass too.
   usage: { turns: 3 },
   cost: { usd: 0.01, raw: { total_cost_usd: 0.01 } },
+  deciderCostUsd: 0.004,
+  deciderUsage: { input_tokens: 900, output_tokens: 12, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+  authoredCapture: { perFileBytes: 16384, totalBytes: 65536 },
+  apiRetries: { count: 1, delayMs: 593 },
   durationMs: 1234,
   fingerprint: {
     baseline: "1.18286.0",
@@ -218,6 +222,20 @@ describe("schema/run-result.json", () => {
     expect(validateStrict(withExtra)).toBe(false);
     // the published (permissive) schema does NOT catch this — that's exactly the gap the strict pass closes
     expect(validatePublished(withExtra)).toBe(true);
+  });
+
+  it("the harness-side spend and retry fields reject negative or fractional counts", () => {
+    const bad: Array<[string, Record<string, unknown>]> = [
+      ["deciderCostUsd", { deciderCostUsd: -0.01 }],
+      ["deciderUsage", { deciderUsage: { ...full.deciderUsage!, input_tokens: -1 } }],
+      ["deciderUsage", { deciderUsage: { ...full.deciderUsage!, output_tokens: 1.5 } }],
+      ["authoredCapture", { authoredCapture: { perFileBytes: 0, totalBytes: 65536 } }],
+      ["apiRetries", { apiRetries: { count: -1, delayMs: 0 } }],
+      ["apiRetries", { apiRetries: { count: 1, delayMs: -5 } }],
+    ];
+    for (const [field, over] of bad) expect(validatePublished({ ...full, ...over }), `${field} ${JSON.stringify(over)}`).toBe(false);
+    // …and a zero is a real value, not an error: no retries, a free call.
+    expect(validatePublished({ ...full, apiRetries: { count: 0, delayMs: 0 }, deciderCostUsd: 0 })).toBe(true);
   });
 
   it("every errorSource the type allows validates, including decider_timeout (an unanswered-gate partial whose decider channel timed out)", () => {

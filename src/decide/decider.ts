@@ -6,6 +6,7 @@ import type { DecisionRequest, DecisionResponse } from "../agent/session.js";
 import type { DecisionChannel } from "./external-channel.js";
 import { scrub } from "../secrets.js";
 import { compileUserRegex } from "../regex.js";
+import { addCost, addTokenUsage, usageCostUsd, usageTokens, type TokenUsage } from "./usage.js";
 
 /**
  * Decider: policy for the agent's `decision` events. Deciders return a
@@ -506,13 +507,34 @@ export class LlmDecider implements Decider {
     private secrets: string[] = [],
   ) {}
 
+  /** Spend across every model call this decider made — summed from the transport's usage map, every model
+   *  key included. `undefined` until a call reports a price: unpriced is never $0. */
+  private spentUsd: number | undefined;
+  private spentTokens: TokenUsage | undefined;
+  costUsd(): number | undefined {
+    return this.spentUsd;
+  }
+  usage(): TokenUsage | undefined {
+    return this.spentTokens ? { ...this.spentTokens } : undefined;
+  }
+
+  /** The ONE path to the model. Tallies the spend as soon as the call returns, BEFORE the reply is parsed:
+   *  a reply that then fails to bind (UnansweredError) was still paid for, and the salvaged partial run is
+   *  exactly where that spend must not vanish. */
+  private async ask(prompt: string): Promise<CompleteResult> {
+    const res = await this.complete(scrub(prompt, this.secrets), this.model);
+    this.spentUsd = addCost(this.spentUsd, usageCostUsd(res.usage));
+    this.spentTokens = addTokenUsage(this.spentTokens, usageTokens(res.usage));
+    return res;
+  }
+
   async decide(req: DecisionRequest, ctx?: RunContext): Promise<Decision | Abstain> {
     // Options-bearing permission (web_fetch approval): the LLM judges the stochastic gate and picks a grant
     // label. Ordinary (optionless) permissions → ABSTAIN (parity default handles them).
     if (req.kind === "permission") {
       if (!req.options) return ABSTAIN;
       const labels = req.options.map((o) => o.label);
-      const { text: raw, model: permModel } = await this.complete(scrub(this.permPrompt(req, ctx), this.secrets), this.model);
+      const { text: raw, model: permModel } = await this.ask(this.permPrompt(req, ctx));
       // Echo backstop, at parity with the question path's `echoPrefixMatch` tier: the model often
       // parrots the offered option plus a self-glossed tail past a `:` boundary ("Allow once: fetch
       // this URL one time"). Bind the echoed label instead of failing loud. The OTHER:/suffix tiers are
@@ -556,7 +578,7 @@ export class LlmDecider implements Decider {
       // the pinned AskUserQuestion path) — symmetric with ScriptedDecider/ExternalDecider's labels.length===0
       // passthrough.
       if (labels.length === 0) {
-        const freeRes = await this.complete(scrub(this.freeTextPrompt(text, ctx), this.secrets), this.model);
+        const freeRes = await this.ask(this.freeTextPrompt(text, ctx));
         resolvedModel = freeRes.model;
         const free = freeRes.text.trim();
         if (free === "")
@@ -570,7 +592,7 @@ export class LlmDecider implements Decider {
         continue;
       }
       const multi = q.multiSelect === true;
-      const labelRes = await this.complete(scrub(this.prompt(text, q.options, multi, ctx), this.secrets), this.model);
+      const labelRes = await this.ask(this.prompt(text, q.options, multi, ctx));
       resolvedModel = labelRes.model;
       const raw = labelRes.text;
       // MULTI-SELECT (the index protocol is the ONLY accepted form): a comma-list of bare, in-range option
