@@ -12,17 +12,18 @@ All notable changes to this project are documented here. The format is based on
   The sub-agents' reasoning was read from their transcripts only after the judge had run, so the judge
   got no sub-agent text on any live run, although `result.json` recorded `subagents[].reasoning`
   afterwards. The reasoning is now read before the judge runs, at `container`, `hostloop` and `microvm`,
-  and now also at `protocol` under managed config (`COWORK_MANAGED_CONFIG=1` with a token, or
-  `ANTHROPIC_API_KEY`), which previously captured no sub-agent reasoning at all. `protocol` without
-  managed config still captures none: the host agent then uses your real config dir, which the harness
-  does not read. A grade recorded before this fix did not see the sub-agent text, and its `judgedDoc`
+  and now also at `protocol` under managed config (`ANTHROPIC_API_KEY`, `COWORK_MANAGED_CONFIG=1`, or a
+  `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_AUTH_TOKEN` in the environment unless `COWORK_MANAGED_CONFIG=0`),
+  which previously captured no sub-agent reasoning at all. `protocol` without managed config, or with a
+  managed config dir that is your own, still captures none: the harness does not read your real config
+  dir. A grade recorded before this fix did not see the sub-agent text, and its `judgedDoc`
   (where recorded) lists no `subagent` section; re-run a scenario that uses `include_subagent_text:
   true` to grade it with the sub-agent text.
   - When `include_subagent_text: true` is set, the run dispatched sub-agents, and none of them has
     captured reasoning, the run now prints a `::warning::` saying the judge saw no sub-agent text and
     why. The judged document is unchanged.
   - A sub-agent's reasoning and web searches now appear in the `subagent` entries of `run.jsonl` and
-    `trace.json` on every live run, including a run salvaged after an unanswered gate. Before, they
+    `trace.json` whenever the reasoning is captured, including on a run salvaged after an unanswered gate. Before, they
     appeared there only when the run had no usable timeline.
 
 ## [4.2.0] — 2026-09-30
