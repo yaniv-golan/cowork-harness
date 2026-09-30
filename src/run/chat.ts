@@ -24,7 +24,9 @@ import { ResourceSampler, makeSampleOnce, resolveIntervalMs } from "../runtime/r
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { buildChatResult } from "./chat-result.js";
-import { writeTrace, scrubRawRunLogs, beginTurn } from "./execute.js";
+import { writeTrace, scrubRawRunLogs, beginTurn, makeContainerPhaseReap, reapAgentOnTeardown } from "./execute.js";
+import { installTerminationHandler, registerAgent } from "../termination.js";
+import { agentTreeAgent, type TreeAgent } from "../runtime/agent-tree.js";
 import { turnWriteDir } from "./turn-layout.js";
 import { appendIndexRow, indexRowFromResult } from "./run-index.js";
 import { scrub, collectSecrets } from "../secrets.js";
@@ -357,20 +359,32 @@ export async function cmdChat(args: string[]) {
   // binary directly with no container/process id to probe, so it legitimately never gets one.
   let resourceSampler: ResourceSampler | undefined;
   // Ctrl-C — reap the agent container in the "container" phase (before the sidecar's network teardown).
+  // At hostloop the native agent is the termination handler's (registered below), not this thunk's.
   const deregisterContainerReap = sidecar
     ? registerCleanup({
         phase: "container",
-        run: () => {
-          try {
-            child?.kill?.("SIGKILL");
-          } catch {
-            /* already gone */
-          }
-          hostloopMarkTearingDown?.();
-          if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
-        },
+        run: makeContainerPhaseReap({
+          fidelity,
+          child: () => child,
+          containerName: () => containerName,
+          markTearingDown: () => hostloopMarkTearingDown?.(),
+          rm: (name) => spawnSync(runner, ["rm", "-f", name], { stdio: "ignore" }),
+        }),
       })
     : undefined;
+  // The host agent (protocol, hostloop) and everything it starts: stopped by the termination handler on a
+  // signal (SIGTERM, grace, force-kill of the whole tree), and by reapAgentOnTeardown at the end.
+  let treeAgent: TreeAgent | undefined;
+  let deregisterAgent: (() => void) | undefined;
+  const trackAgent = (
+    spawned: { child: import("node:child_process").ChildProcess; runTag: string; workDir?: string },
+    startedAtMs: number,
+  ) => {
+    treeAgent = agentTreeAgent(spawned.child, { runTag: spawned.runTag, runStartMs: startedAtMs, workDir: spawned.workDir });
+    installTerminationHandler();
+    deregisterAgent = registerAgent(() => treeAgent);
+    return treeAgent;
+  };
   // same web_fetch provenance wiring as execute.ts — ref created before spawn, filled after Run.
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt", false);
@@ -391,6 +405,12 @@ export async function cmdChat(args: string[]) {
   // prompter (PromptDecider). Two interfaces would race for the same stdin → undefined input routing.
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string) => new Promise<string>((resolve) => rl.question(prompt, (a) => resolve(a.trim())));
+  // On a terminal, readline turns Ctrl-C into its own event and never raises SIGINT, so without this a
+  // mid-turn Ctrl-C would only take effect after the agent finished its turn. Mid-turn (including at a
+  // gate prompt) it goes to the termination handler, which stops the agent and exits; at the `you>` prompt
+  // it ends the session like EOF, so the result is still written.
+  const turnPrompt = { open: false };
+  wireChatInterrupt(rl, { atTurnPrompt: () => turnPrompt.open, forward: () => process.kill(process.pid, "SIGINT") });
   // ONE display translator, shared by all three fidelity branches below (protocol/hostloop/container each
   // build their own `makeRenderer(renderPlan)` off this SAME plan object) — the hostloop gate lives in the
   // closure, not at each instantiation site, so wiring all three uniformly costs nothing (the closure
@@ -416,15 +436,20 @@ export async function cmdChat(args: string[]) {
   let stopHeartbeat: (() => void) | undefined;
   try {
     if (fidelity === "protocol") {
-      child = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend }).child;
+      const startedAtMs = Date.now();
+      const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend, runTag: runToken });
+      child = proto.child;
+      const tree = trackAgent(proto, startedAtMs);
       const agent = new LiveAgentSession(child as any, outDir);
+      agent.observeFrames((msg) => tree.onFrame(msg));
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, { tier: "protocol" }));
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl, turnPrompt)), chatDriveOpts(prompts, { tier: "protocol" }));
     } else if (fidelity === "hostloop") {
       // honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
+      const startedAtMs = Date.now();
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
         runToken,
@@ -437,6 +462,7 @@ export async function cmdChat(args: string[]) {
         proactiveSkillSuggestEnabled,
       });
       child = hl.child;
+      const tree = trackAgent({ child: hl.child, runTag: hl.runTag }, startedAtMs); // no work dir: see execute.ts
       containerName = hl.containerName;
       hostloopInfraErrors = hl.infraErrors;
       hostloopMarkTearingDown = hl.markTearingDown;
@@ -457,6 +483,7 @@ export async function cmdChat(args: string[]) {
         (msg) => log(msg),
       );
       const agent = new LiveAgentSession(hl.child as any, outDir);
+      agent.observeFrames((msg) => tree.onFrame(msg));
       // Production interposes the canUseTool path gate BEFORE the user-facing callback (xe ?? Qt ?? Se);
       // the harness analog is FIRST in the Chain — Chain stops at the first non-abstain, so any later
       // placement would let the scripted/default/prompt deciders preempt a production-shaped deny.
@@ -506,7 +533,7 @@ export async function cmdChat(args: string[]) {
         };
       }
       record = await run.drive(
-        withSeedPrompt(seedPrompt, ttyTurns(rl)),
+        withSeedPrompt(seedPrompt, ttyTurns(rl, turnPrompt)),
         chatDriveOpts(prompts, { tier: "hostloop", sdkMcp: hl.sdkMcp, hooks: hl.hooks }),
       );
     } else {
@@ -537,7 +564,10 @@ export async function cmdChat(args: string[]) {
       const run = new Run(agent, decider, [renderer], sessionId);
       run.setSessionRoot(ct.sessionRoot); // VM path — same space the agent reports (see execute.ts)
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, { tier: "container", sdkMcp: ct.sdkMcp }));
+      record = await run.drive(
+        withSeedPrompt(seedPrompt, ttyTurns(rl, turnPrompt)),
+        chatDriveOpts(prompts, { tier: "container", sdkMcp: ct.sdkMcp }),
+      );
     }
   } finally {
     stopHeartbeat?.();
@@ -547,12 +577,10 @@ export async function cmdChat(args: string[]) {
     // first sample land in resources.jsonl before buildChatResult's foldResources() reads it, below.
     await resourceSampler?.stop();
     deregisterContainerReap?.(); // normal path owns the reap below
-    // Reap the agent container first (mirrors execute.ts hardening).
-    try {
-      child?.kill?.("SIGKILL");
-    } catch {
-      /* already gone */
-    }
+    // Reap the agent first (mirrors execute.ts). protocol/hostloop: the host agent's whole process tree —
+    // reached here after the last turn (a mid-turn Ctrl-C goes through the termination handler instead);
+    // container: the docker client, then the container by name below.
+    await reapAgentOnTeardown({ microvm: false, agent: treeAgent, child, deregister: deregisterAgent });
     // mark BEFORE the forced removal below — this session's own `docker rm -f` makes the hostloop
     // sidecar exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra
     // failure (see watchHostLoopSidecar's doc comment).
@@ -604,6 +632,15 @@ export async function cmdChat(args: string[]) {
   }
 }
 
+/** Route a terminal Ctrl-C (readline's `SIGINT` event): mid-turn → `forward` (the termination handler); at the
+ *  turn prompt → close the interface, which ends the session the way EOF does. */
+export function wireChatInterrupt(rl: readline.Interface, o: { atTurnPrompt: () => boolean; forward: () => void }): void {
+  rl.on("SIGINT", () => {
+    if (o.atTurnPrompt()) rl.close();
+    else o.forward();
+  });
+}
+
 /** Prepend an optional seed prompt before yielding from the TTY turn generator. */
 async function* withSeedPrompt(seed: string | undefined, turns: AsyncGenerator<string>): AsyncGenerator<string> {
   if (seed) yield seed;
@@ -612,7 +649,7 @@ async function* withSeedPrompt(seed: string | undefined, turns: AsyncGenerator<s
 
 /** Async generator of user turns read from the TTY until EOF / `/exit`. Uses the caller's shared
  *  readline interface (the same one PromptDecider prompts gates on) — cmdChat owns its lifetime. */
-async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
+async function* ttyTurns(rl: readline.Interface, turnPrompt: { open: boolean }): AsyncGenerator<string> {
   // Track EOF once: with a piped/non-interactive stdin the interface can `close` while a turn is
   // still being processed, so the NEXT ask() must not call rl.question() on a closed interface
   // (that throws ERR_USE_AFTER_CLOSE). The per-turn close listener is removed when a line arrives
@@ -628,8 +665,13 @@ async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
       // generator's `once("close")` listener above is even registered — so the flag can miss it. Calling
       // rl.question() on an already-closed interface throws ERR_USE_AFTER_CLOSE; treat closed as EOF → null.
       if (closed || (rl as unknown as { closed?: boolean }).closed) return res(null);
-      const onClose = () => res(null);
+      const onClose = () => {
+        turnPrompt.open = false;
+        res(null);
+      };
+      turnPrompt.open = true;
       rl.question("\nyou> ", (a) => {
+        turnPrompt.open = false;
         rl.removeListener("close", onClose);
         res(a);
       });

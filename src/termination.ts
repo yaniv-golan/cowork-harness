@@ -17,11 +17,14 @@ import { warn } from "./io.js";
  *  3. ask every registered agent to terminate;
  *  4. wait until they have all exited, bounded by {@link TERMINATION_GRACE_MS} — IMMEDIATELY when there are
  *     none, so a Ctrl-C of a command with no agent (`decide`, `chat`, a post-run phase) is not delayed —
- *     then force-kill any survivor, including one registered during the wait;
+ *     then force-kill: every agent that declares `unconditionalForceKill` (a host agent's process tree, whose
+ *     children outlive the leader — see `agent-tree.ts`), and any other agent still alive, including one
+ *     registered during the wait;
  *  5. run the `egress` steps (container/network reaping);
  *  6. `process.exit(128 + signo)`, which runs every `"exit"` hook (status sweep, helper sweep, done markers).
  *
- * A second signal during the wait skips straight to force-kill + egress + exit.
+ * A second signal during the wait skips straight to force-kill + egress + exit, and passes `{ fast: true }` so
+ * the force-kill reuses what it already knows instead of listing processes again.
  *
  * Leaf-ish on purpose (imports only `io.js`) so the egress, decider and run layers can all register here
  * without an import cycle. Installation is lazy and idempotent: nothing listens until a caller that owns
@@ -36,14 +39,18 @@ export interface TerminableAgent {
   alive(): boolean;
   /** The polite request (SIGTERM, or the tier's equivalent). Must be synchronous and must not throw. */
   terminate(): void;
-  /** The last resort (SIGKILL, or the tier's equivalent). Must be synchronous and must not throw. */
-  forceKill(): void;
+  /** The last resort (SIGKILL, or the tier's equivalent). Must be synchronous and must not throw. `fast`: a
+   *  second signal is waiting on it — skip any work that is not the kill itself. */
+  forceKill(opts?: { fast?: boolean }): void;
+  /** Force-kill even when {@link alive} is false. For an agent whose process tree outlives its leader; left
+   *  unset where the force-kill is expensive and pointless once the agent is gone (a guest-side VM kill). */
+  readonly unconditionalForceKill?: boolean;
   /** Resolves when the agent has exited. */
   exited(): Promise<void>;
 }
 
-/** The plain case: an agent that is a direct child process, signalled by PID (never by group — the
- *  protocol agent is not a group leader, so a group signal would miss it). */
+/** The plain case: a child process signalled by PID alone. The host agents (protocol, hostloop) use
+ *  `agentTreeAgent` instead, which also stops everything the agent started. */
 export function childProcessAgent(child: ChildProcess): TerminableAgent {
   const running = () => child.exitCode === null && child.signalCode === null;
   const exited = new Promise<void>((res) => {
@@ -118,10 +125,28 @@ function liveAgents(): TerminableAgent[] {
   return out;
 }
 
-function finish(sig: NodeJS.Signals): void {
+function registeredAgents(): TerminableAgent[] {
+  const out: TerminableAgent[] = [];
+  for (const get of agents) {
+    try {
+      const a = get();
+      if (a) out.push(a);
+    } catch {
+      /* not resolvable — nothing to stop */
+    }
+  }
+  return out;
+}
+
+function finish(sig: NodeJS.Signals, fast = false): void {
   if (finished) return;
   finished = true;
-  for (const a of liveAgents()) a.forceKill();
+  for (const a of registeredAgents())
+    try {
+      if (a.unconditionalForceKill || a.alive()) a.forceKill(fast ? { fast: true } : undefined);
+    } catch {
+      /* best-effort during teardown */
+    }
   runSteps("egress", sig);
   process.exit(128 + (constants.signals[sig] ?? 0));
 }
@@ -129,7 +154,7 @@ function finish(sig: NodeJS.Signals): void {
 function onSignal(sig: NodeJS.Signals): void {
   if (terminating) {
     // A second signal: stop waiting.
-    finish(terminating);
+    finish(terminating, true);
     return;
   }
   terminating = sig;

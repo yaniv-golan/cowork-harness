@@ -297,7 +297,7 @@ describe("agentTreeAgent — refresh cadence", () => {
 describe("orphan sweep (L3) on macOS: same uid, ppid 1, no tty, started during the run, cwd under the work dir", () => {
   const orphan = (pid: number, over: Partial<ProcRow> = {}) => row(pid, 1, pid - 1, { comm: `orphan${pid}`, ...over });
 
-  function sweep(rows: ProcRow[], cwds: Record<number, string>, env: NodeJS.ProcessEnv = {}, workDir: string | undefined = WORK) {
+  function sweep(rows: ProcRow[], cwds: Record<number, string>, env: NodeJS.ProcessEnv = {}, workDir: string | null = WORK) {
     const h = harness({ rows: [...base(), ...rows], env });
     h.deps.lsofCwd = (pids) => {
       h.lsofCalls.push([...pids]);
@@ -389,14 +389,14 @@ describe("orphan sweep (L3) on macOS: same uid, ppid 1, no tty, started during t
   });
 
   it("no work dir (hostloop) means no macOS sweep", () => {
-    const h = sweep([orphan(951)], { 951: WORK }, {}, undefined);
+    const h = sweep([orphan(951)], { 951: WORK }, {}, null);
     expect(h.lsofCalls).toEqual([]);
     expect(killedPids(h)).toEqual([]);
   });
 });
 
 describe("orphan sweep (L3) on Linux: the run's env tag, never the cwd", () => {
-  function linux(tag: string, environs: Record<number, string>, rows: ProcRow[], workDir: string | undefined = WORK) {
+  function linux(tag: string, environs: Record<number, string>, rows: ProcRow[], workDir: string | null = WORK) {
     const h = harness({ rows: [...base(), ...rows], platform: "linux" });
     h.deps.procPids = () => Object.keys(environs).map(Number);
     h.deps.procEnviron = (pid) => environs[pid];
@@ -432,7 +432,7 @@ describe("orphan sweep (L3) on Linux: the run's env tag, never the cwd", () => {
 
   it("sweeps by tag at hostloop too (no work dir)", () => {
     const tag = token();
-    const h = linux(tag, { 966: `${RUN_TAG_ENV}=${tag}\0` }, [row(966, 1, 966)], undefined);
+    const h = linux(tag, { 966: `${RUN_TAG_ENV}=${tag}\0` }, [row(966, 1, 966)], null);
     expect(killedPids(h)).toEqual([966]);
   });
 

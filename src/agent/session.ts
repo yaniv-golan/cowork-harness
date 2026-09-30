@@ -686,6 +686,8 @@ export class LiveAgentSession implements AgentSession {
    *  `delivered:true` but whose actual stdin write later failed (EPIPE / destroyed pipe) — populated by
    *  `recordUndelivered()`. See `hasUndeliveredReconciliation`'s doc comment. */
   private reconciledUndelivered = new Set<string>();
+  /** See {@link observeFrames}. */
+  private frameObserver?: (msg: unknown) => void;
 
   constructor(
     private proc: ChildProcessByStdio<Writable, Readable, Readable>,
@@ -711,6 +713,12 @@ export class LiveAgentSession implements AgentSession {
       // else: the error fired before/after the generator — log it but don't throw
       else if (!this.closing) this.events.write(JSON.stringify({ _emu: "stdin_error", message: String(e) }) + "\n");
     });
+  }
+
+  /** Observe every parsed stdout frame, before translation. Used to refresh the host agent's process-tree
+   *  snapshot at result / tool_result frames; an observer that throws is ignored. */
+  observeFrames(fn: (msg: unknown) => void): void {
+    this.frameObserver = fn;
   }
 
   /**
@@ -797,6 +805,11 @@ export class LiveAgentSession implements AgentSession {
         } catch {
           yield { type: "raw", line };
           continue;
+        }
+        try {
+          this.frameObserver?.(msg);
+        } catch {
+          /* an observer never breaks the stream */
         }
         try {
           for await (const ev of this.translate(msg)) {
