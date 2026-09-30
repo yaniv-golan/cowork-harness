@@ -52,8 +52,8 @@ All notable changes to this project are documented here. The format is based on
   `subagentCount`/`subagentDelayMs` from the `tool_progress` frames that carry `subagent_retry` (the frame
   sent when a retry resolves is not counted). Sub-agents run concurrently, so `subagentDelayMs` is backoff
   summed across agents, not elapsed time; never add it to `delayMs`. All zeros means a stream was observed
-  with no retry; absent means none was observed (including a cassette that could not be replayed to the
-  end).
+  with no retry; absent means none was observed (an agent that exited before its stream began, or a
+  cassette that could not be replayed to the end).
 
 ### Changed
 

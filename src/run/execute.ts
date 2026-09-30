@@ -1805,7 +1805,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       deciderCostUsd: llmDecider?.costUsd(),
       deciderUsage: llmDecider?.usage(),
       authoredCapture: { ...authored.budget, scratchpadWalked: authored.scratchpadWalked }, // what the capture above actually did
-      apiRetries: apiRetriesFrom(record.contextEvents, record.subagentRetries),
+      apiRetries: apiRetriesFrom(record),
       skillsInvoked: record.skillsInvoked,
       skillToolAvailable: record.initTools.includes("Skill"),
       durationMs: Date.now() - startedAt,
@@ -2657,7 +2657,7 @@ export function buildPartialResult(args: {
     deciderCostUsd: args.deciderCostUsd,
     deciderUsage: args.deciderUsage,
     authoredCapture: undefined, // the salvage lane runs no authored-file capture
-    apiRetries: apiRetriesFrom(record.contextEvents, record.subagentRetries),
+    apiRetries: apiRetriesFrom(record),
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: args.durationMs,

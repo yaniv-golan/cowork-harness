@@ -30,6 +30,8 @@ const envelope = (reply: string) =>
       "claude-sonnet-5": { inputTokens: 1200, outputTokens: 3, cacheReadInputTokens: 40, cacheCreationInputTokens: 7, costUSD: 0.0125 },
     },
   });
+// A real agent opens its stream with system/init; apiRetries is only reported once a stream was observed.
+const INIT = JSON.stringify({ type: "system", subtype: "init", tools: [], skills: [] });
 const RESULT = JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "done", num_turns: 1 });
 
 function stub(reply: string, preamble = ""): string {
@@ -42,7 +44,12 @@ function stub(reply: string, preamble = ""): string {
 }
 
 function scenario(f: StubFixture, extra: string): void {
-  writeFileSync(f.scenario, `baseline: latest\nfidelity: protocol\nprompt: say hi\n${extra}assert:\n  - result: success\n`);
+  // The stub reads no config dir, so the L0 host-config guard is opted out (a verdict modifier): that keeps the exit code a
+  // real signal for this lane instead of a guaranteed 1.
+  writeFileSync(
+    f.scenario,
+    `baseline: latest\nfidelity: protocol\nprompt: say hi\n${extra}assert:\n  - result: success\n  - allow_l0_host_config_contamination: true\n`,
+  );
 }
 
 function result(f: StubFixture): any {
@@ -59,6 +66,20 @@ async function run(f: StubFixture) {
 }
 
 describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes", () => {
+  it("an agent that dies before any stream arrives reports apiRetries absent, not zeros", async () => {
+    const f = makeStubFixture("exit 1");
+    try {
+      scenario(f, "");
+      const r = await run(f);
+      const res = result(f);
+      expect(res, r.stderr).toBeDefined();
+      expect(res.result).toBe("error");
+      expect(res).not.toHaveProperty("apiRetries");
+    } finally {
+      f.cleanup();
+    }
+  });
+
   it("success lane: a gate the LLM decider answered records its cost and tokens", async () => {
     const f = makeStubFixture(stub("A"), { COWORK_HARNESS_LLM_RETRIES: "0" });
     try {
@@ -76,6 +97,7 @@ describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes",
         cache_creation_input_tokens: 7,
       });
       expect(res.result, r.stderr).toBe("success");
+      expect(r.code, r.stderr).toBe(0);
     } finally {
       f.cleanup();
     }
@@ -99,7 +121,9 @@ describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes",
   it("a scripted answer spends nothing on a decider: both fields are absent, not zero", async () => {
     // The agent's side of this run replays the real retry frames from the api-retry fixture, so the live
     // lane's apiRetries wiring is exercised too (1 main-loop retry of 537 ms; 19 sub-agent retries).
-    const f = makeStubFixture(stub("A", `cat '${resolve("test/fixtures/api-retry/subagent-retry.events.jsonl")}'`));
+    const f = makeStubFixture(
+      stub("A", `printf '%s\\n' '${INIT}'; cat '${resolve("test/fixtures/api-retry/subagent-retry.events.jsonl")}'`),
+    );
     try {
       scenario(f, "answers:\n  - when_question: Pick\n    choose: A\n");
       const r = await run(f);
@@ -110,6 +134,7 @@ describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes",
       expect(res).not.toHaveProperty("deciderUsage");
       expect(res.apiRetries).toEqual({ count: 1, delayMs: 537, subagentCount: 19, subagentDelayMs: 244519 });
       expect(res.result, r.stderr).toBe("success");
+      expect(r.code, r.stderr).toBe(0);
     } finally {
       f.cleanup();
     }

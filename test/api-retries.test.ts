@@ -63,7 +63,7 @@ describe("apiRetries — the agent's own API retries, counted from the real stre
     const events = FRAMES.flatMap((l) => parseMessage(JSON.parse(l)));
     expect(events.map((e) => e.type)).toEqual(["system_event", "system_event", "system_event", "system_event"]);
     const contextEvents = events.map((e) => ({ subtype: (e as any).subtype, data: (e as any).data }));
-    expect(apiRetriesFrom(contextEvents, { count: 0, delayMs: 0 })).toEqual({
+    expect(apiRetriesFrom({ contextEvents, subagentRetries: { count: 0, delayMs: 0 }, context: { tools: [] } })).toEqual({
       count: 4,
       delayMs: 2231,
       subagentCount: 0,
@@ -72,13 +72,21 @@ describe("apiRetries — the agent's own API retries, counted from the real stre
   });
 
   it("absent when no stream was observed; a frame without a numeric delay still counts", () => {
-    expect(apiRetriesFrom(undefined, { count: 0, delayMs: 0 })).toBeUndefined();
-    expect(apiRetriesFrom([], undefined)).toBeUndefined(); // sub-agent side not observed → never a false zero
+    const seen = { tools: [] };
+    expect(apiRetriesFrom({ subagentRetries: { count: 0, delayMs: 0 }, context: seen })).toBeUndefined();
+    expect(apiRetriesFrom({ contextEvents: [], context: seen })).toBeUndefined(); // sub-agent side not observed → never a false zero
+    // Tallies initialised but no system/init ever arrived (the agent died before its stream): absent, not zeros.
+    expect(apiRetriesFrom({ contextEvents: [], subagentRetries: { count: 0, delayMs: 0 }, context: {} })).toBeUndefined();
     const ce = [
       { subtype: "api_retry", data: { attempt: 2 } },
       { subtype: "compact_boundary", data: {} },
     ];
-    expect(apiRetriesFrom(ce, { count: 0, delayMs: 0 })).toEqual({ count: 1, delayMs: 0, subagentCount: 0, subagentDelayMs: 0 });
+    expect(apiRetriesFrom({ contextEvents: ce, subagentRetries: { count: 0, delayMs: 0 }, context: seen })).toEqual({
+      count: 1,
+      delayMs: 0,
+      subagentCount: 0,
+      subagentDelayMs: 0,
+    });
   });
 });
 

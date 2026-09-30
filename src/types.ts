@@ -1999,8 +1999,9 @@ export interface RunResult {
    *    agent emits when such a retry resolves carries none and is not counted). Sub-agents run
    *    concurrently, so `subagentDelayMs` is backoff summed across agents, NOT wall-clock time; never add
    *    it to `delayMs`.
-   *  All zeros = a stream was observed with no retry of either kind; absent = no stream was observed (a
-   *  cassette that could not be driven, the error-replay lane). */
+   *  All zeros = a stream was observed with no retry of either kind; absent = no stream was observed (no
+   *  `system/init` frame arrived: an agent that died before its stream began, a cassette that could not
+   *  be driven, the error-replay lane). */
   apiRetries?: { count: number; delayMs: number; subagentCount: number; subagentDelayMs: number };
   durationMs?: number;
   // Skill/plugin staleness fingerprint at run time. Persisted so `verify-run` can detect a kept run that
