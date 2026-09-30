@@ -1349,6 +1349,10 @@ def test_fork_anchor_flagged_on_slash_prompt(tmp_path, prompt):
         "  - tool_result_contains: 'completed (forked execution)'\n",
         "  - tool_result_not_contains: 'forked execution'\n",
         "  - tool_result_not_matches: 'forked execution'\n",
+        # regex spellings of the same anchor
+        "  - tool_result_matches: 'completed \\(forked\\s+execution\\)'\n",
+        "  - tool_result_matches: 'forked.execution'\n",
+        "  - tool_result_matches: 'Forked\\sExecution'\n",
     ],
 )
 def test_fork_anchor_flagged_for_every_tool_result_key(tmp_path, assert_yaml):

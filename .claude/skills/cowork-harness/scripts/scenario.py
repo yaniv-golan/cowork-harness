@@ -801,6 +801,9 @@ def _lint_prompt_slash(doc, path):
 
 
 _TOOL_RESULT_KEYS = ("tool_result_contains", "tool_result_not_contains", "tool_result_matches", "tool_result_not_matches")
+# `forked execution` as a literal or as a regex spells the gap: a space, an escaped space, `\s`, `.`, or
+# `[\s\S]`, optionally quantified (`\s+`, `.*`).
+_FORKED_EXECUTION_RE = re.compile(r"forked(?: |\\ |\\s|\.|\[\\s\\S\])[+*?]?execution", re.IGNORECASE)
 
 
 def _lint_slash_prompt_forked_anchor(doc, items, path):
@@ -830,7 +833,7 @@ def _lint_slash_prompt_forked_anchor(doc, items, path):
     findings = []
     for key in _TOOL_RESULT_KEYS:
         for v in _assert_values(items, key):
-            if not isinstance(v, str) or "forked execution" not in v.replace("\\", "").lower():
+            if not isinstance(v, str) or not _FORKED_EXECUTION_RE.search(v):
                 continue
             findings.append(
                 Finding(
