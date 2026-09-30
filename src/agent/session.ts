@@ -118,6 +118,10 @@ export type AgentEvent =
   | { type: "infra_error"; message: string; source?: string } // an infrastructure frame (e.g. VM/egress sidecar crash) appended to events.jsonl outside the SDK stream; `source` distinguishes a dead supervisor from a single failed exec (absent on rows recorded before it existed)
   | { type: "raw"; line: string }
   | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
+  // A SUB-AGENT's retried model call. It rides a `tool_progress` frame carrying `subagent_retry`, parented to
+  // the dispatching Agent tool_use — not the main loop's `system/api_retry`. The twin frame the agent emits
+  // when the retry resolves carries no `subagent_retry` and yields nothing, as do heartbeats.
+  | { type: "subagent_retry"; parentToolUseId?: string; agentId?: string; attempt?: number; delayMs?: number; errorStatus?: number | null }
   | { type: "mcp_error"; server: string; code?: number; message: string } // an MCP round-trip the harness answered with a JSON-RPC error
   | {
       type: "hook_event";
@@ -1222,6 +1226,19 @@ export function parseMessage(msg: any): AgentEvent[] {
         // structurally instead of dropped. `data` carries the raw message minus the type/subtype envelope.
         ev.push({ type: "system_event", subtype: msg.subtype, data: systemEventData(msg) });
       break;
+    case "tool_progress": {
+      const r = msg.subagent_retry;
+      if (r && typeof r === "object")
+        ev.push({
+          type: "subagent_retry",
+          ...(typeof msg.parent_tool_use_id === "string" ? { parentToolUseId: msg.parent_tool_use_id } : {}),
+          ...(typeof r.agent_id === "string" ? { agentId: r.agent_id } : {}),
+          ...(typeof r.attempt === "number" ? { attempt: r.attempt } : {}),
+          ...(typeof r.retry_delay_ms === "number" ? { delayMs: r.retry_delay_ms } : {}),
+          ...(typeof r.error_status === "number" || r.error_status === null ? { errorStatus: r.error_status } : {}),
+        });
+      break;
+    }
     case "control_request": {
       const dr = toDecisionRequest(msg);
       if (dr) ev.push({ type: "decision", request: dr });

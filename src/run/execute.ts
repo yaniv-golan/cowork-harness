@@ -27,6 +27,7 @@ import {
 // the cycle is intrinsic — kept runtime-only rather than refactored.
 import { buildFingerprint, skillCommit } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
+import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
 import { loadBaseline } from "../baseline.js";
 import {
@@ -811,6 +812,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let resourceSampler: ResourceSampler | undefined;
   let microvmProxyPort: number | undefined;
   let record: RunRecord;
+  // The run's LLM decider, kept past the drive so its spend reaches the result (success AND salvage lanes).
+  let llmDecider: LlmDecider | undefined;
   let unansweredErr: UnansweredError | undefined; // set when a gate whiffs — drives the salvage branch below
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container
   let containerName: string | undefined;
@@ -1080,6 +1083,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
       const llmTerminal =
         onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
+      llmDecider = llmTerminal; // an instance that is never consulted reports no spend (undefined), not $0
       const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
       const policyDecider =
         opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
@@ -1358,6 +1362,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         onUnanswered,
         nonDeterministicHint: opts.nonDeterministicHint,
         externalChannel: !!opts.externalChannel,
+        // The decider most often spent money on exactly the gate that whiffed — keep it on the salvage.
+        deciderCostUsd: llmDecider?.costUsd(),
+        deciderUsage: llmDecider?.usage(),
       });
       // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
       // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
@@ -1794,6 +1801,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       nonReproducibleAnswers: record.unanswered,
       usage: record.usage,
       cost: record.cost,
+      deciderCostUsd: llmDecider?.costUsd(),
+      deciderUsage: llmDecider?.usage(),
+      authoredCapture: { ...authored.budget, scratchpadWalked: authored.scratchpadWalked }, // what the capture above actually did
+      apiRetries: apiRetriesFrom(record),
       skillsInvoked: record.skillsInvoked,
       skillToolAvailable: record.initTools.includes("Skill"),
       durationMs: Date.now() - startedAt,
@@ -2540,6 +2551,9 @@ export function buildPartialResult(args: {
   onUnanswered?: OnUnanswered;
   nonDeterministicHint?: boolean;
   externalChannel?: boolean;
+  /** The LLM decider's spend up to the whiff — see `RunResult.deciderCostUsd`. Absent = none recorded. */
+  deciderCostUsd?: number;
+  deciderUsage?: RunResult["deciderUsage"];
 }): RunResult {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
@@ -2639,6 +2653,10 @@ export function buildPartialResult(args: {
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,
+    deciderCostUsd: args.deciderCostUsd,
+    deciderUsage: args.deciderUsage,
+    authoredCapture: undefined, // the salvage lane runs no authored-file capture
+    apiRetries: apiRetriesFrom(record),
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: args.durationMs,

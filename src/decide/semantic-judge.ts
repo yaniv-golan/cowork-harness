@@ -3,6 +3,7 @@ import { claudeCliComplete } from "./llm-transport.js";
 import type { Complete } from "./decider.js";
 import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
 import { scrub } from "../secrets.js";
+import { usageCostUsd, usageTokens } from "./usage.js";
 
 // A semantic judge grades a FIXED, authored rubric against a run's answer, one claim at a time, by
 // INDEX. It reuses the same host `claude -p --output-format json` transport as the LLM decider
@@ -95,18 +96,6 @@ export const JUDGE_PROMPT_HASH = createHash("sha256")
   .update(buildJudgePrompt(["<c0>", "<c1>", "<c2>"], "<ANSWER>"))
   .digest("hex")
   .slice(0, 16);
-
-/** Total `costUSD` across every per-model entry of a transport usage map (the transport can make an
- *  auxiliary call under a second model key — that is real spend). `undefined` when no entry is priced:
- *  unpriced is not $0. */
-function usageCostUsd(usage: Record<string, unknown> | undefined): number | undefined {
-  let total: number | undefined;
-  for (const m of Object.values(usage ?? {})) {
-    const c = (m as { costUSD?: unknown } | null)?.costUSD;
-    if (typeof c === "number" && Number.isFinite(c)) total = (total ?? 0) + c;
-  }
-  return total;
-}
 
 /** Longest rationale kept per claim, in characters, including the trailing ellipsis marker. */
 const RATIONALE_CAP = 400;
@@ -284,8 +273,10 @@ export function makeSemanticJudge(opts: { model?: string; complete?: Complete } 
     // Cleared before the await so a transport throw never leaves the PREVIOUS call's cost behind; set
     // before parsing so a call whose grade then fails to parse still reports what it spent.
     judge.lastCostUsd = undefined;
+    judge.lastUsage = undefined;
     const { text, model: resolvedModel, usage } = await complete(buildJudgePrompt(rubric, answer), requestedModel);
     judge.lastCostUsd = usageCostUsd(usage);
+    judge.lastUsage = usageTokens(usage);
     // Stash the per-call RESOLVED model onto the judge (mutated synchronously before this async fn
     // resolves) so a caller reading `judge.model` AFTER awaiting this call sees what actually graded,
     // not the factory-time alias. This is the only way to thread a per-call, async-resolved value out of

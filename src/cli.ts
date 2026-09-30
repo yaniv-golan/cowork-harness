@@ -3396,6 +3396,9 @@ function formatRunLine(r: RunListEntry): string {
     r.turn !== undefined && r.turn > 1 ? `turn=${r.turn}` : null,
     r.critiqueRole ? `critique=${r.critiqueRole}` : null,
     r.costUsd !== undefined ? `$${r.costUsd.toFixed(4)}` : null,
+    // Harness-side spend, beside the agent's and never added to it (see docs/stats.md).
+    r.judgeCostUsd !== undefined ? `judge=$${r.judgeCostUsd.toFixed(4)}` : null,
+    r.deciderCostUsd !== undefined ? `decider=$${r.deciderCostUsd.toFixed(4)}` : null,
     r.durationMs !== undefined ? `${(r.durationMs / 1000).toFixed(1)}s` : null,
     r.pruned ? "(pruned)" : null,
   ].filter(Boolean);

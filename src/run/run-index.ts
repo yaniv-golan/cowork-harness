@@ -64,6 +64,9 @@ export interface RunIndexRow {
   /** `semantic_matches` judge spend, summed over `RunResult.assertions[].judgeCostUsd`. Separate model calls
    *  from the agent's — NOT part of `costUsd`. Absent when no assert carried a priced judge call. */
   judgeCostUsd?: number;
+  /** The LLM decider's spend (`RunResult.deciderCostUsd`). Separate model calls from the agent's — NOT part
+   *  of `costUsd`. Absent when no LLM decider answered or none of its calls was priced. */
+  deciderCostUsd?: number;
   durationMs?: number;
   partial: boolean;
   nonDeterministic: boolean;
@@ -166,6 +169,7 @@ export function indexRowFromResult(
     cacheReadTokens,
     modelCostUsd,
     judgeCostUsd,
+    deciderCostUsd: result.deciderCostUsd,
     durationMs: result.durationMs,
     partial: opts.partial,
     nonDeterministic: !!result.nonDeterministic,
@@ -1027,6 +1031,9 @@ export interface RunListEntry {
   turn?: number;
   critiqueRole?: RunIndexRow["critiqueRole"];
   costUsd?: number;
+  /** The row's `judgeCostUsd` / `deciderCostUsd`: harness-side model spend beside the agent's `costUsd`. */
+  judgeCostUsd?: number;
+  deciderCostUsd?: number;
   durationMs?: number;
   outDir: string;
   pruned: boolean; // outDir no longer on disk — the row is history, the evidence is gone
@@ -1054,6 +1061,8 @@ export function listRuns(rows: RunIndexRow[], filters: StatsFilters): { runs: Ru
       ...(r.turn !== undefined ? { turn: r.turn } : {}),
       ...(r.critiqueRole !== undefined ? { critiqueRole: r.critiqueRole } : {}),
       ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
+      ...(r.judgeCostUsd !== undefined ? { judgeCostUsd: r.judgeCostUsd } : {}),
+      ...(r.deciderCostUsd !== undefined ? { deciderCostUsd: r.deciderCostUsd } : {}),
       ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
       outDir: r.outDir,
       pruned: !existsSync(r.outDir),
