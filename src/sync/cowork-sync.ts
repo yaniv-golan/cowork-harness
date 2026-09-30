@@ -1853,6 +1853,71 @@ const PATH_GATE_MAP_LITERAL = `\\{Read:"file_path",Write:"file_path",Edit:"file_
 
 const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Desktop 2.16120.0's canUseTool terminal wrapper, verified against its definition. Returns the reason
+ *  the wrapper is NOT the judged-input pin, or null when it is. The real body is:
+ *
+ *      function Xd(e,n,r){if(r?.behavior!=="allow"||!t.jI.includes(e))return r;
+ *        let i=r.updatedInput,a=…differing keys…;
+ *        return a.length>0&&t.EZ.warn(`…pinned to the judged input…`),{...r,updatedInput:n}}
+ *
+ *  Pinned: the non-allow/non-gated passthrough guard FIRST (keyed on the same tool set the PreToolUse
+ *  matcher spreads), exactly one other return, and that return ending in `{...<answer>,updatedInput:<judged>}`
+ *  where <judged> is the wrapper's own 2nd parameter. No `behavior:` literal may appear — the wrapper
+ *  post-processes the original's answer and must never manufacture one. */
+function pinWrapperDefect(chunk: string, fn: string, gatedSetRef: string): string | null {
+  const hdr = chunk.match(new RegExp(`(?<![\\w$])(async )?function ${reEsc(fn)}\\(([\\w$]+),([\\w$]+),([\\w$]+)\\)\\{`));
+  const body = hdr ? braceBodyOf(chunk, hdr[0].slice(hdr[1] ? 6 : 0, -1)) : null;
+  if (!hdr || body === null) return `the terminal wrapper \`${fn}\` has no resolvable 3-parameter definition in the hook chunk`;
+  if (hdr[1]) return `the terminal wrapper \`${fn}\` is async — the chain would hand finish() a Promise`;
+  const [, , tool, judged, answer] = hdr;
+  const guard = new RegExp(
+    `^if\\(${reEsc(answer)}\\?\\.behavior!=="allow"\\|\\|!${reEsc(gatedSetRef)}\\.includes\\(${reEsc(tool)}\\)\\)return ${reEsc(answer)};`,
+  );
+  if (!guard.test(body))
+    return `the terminal wrapper \`${fn}\` no longer opens with the non-allow / non-path-gated passthrough guard over ${gatedSetRef}`;
+  if (/behavior:/.test(body))
+    return `the terminal wrapper \`${fn}\` constructs its own permission behavior — a blanket decision, not a pin`;
+  if ((body.match(/(?<![\w$])return(?![\w$])/g) ?? []).length !== 2)
+    return `the terminal wrapper \`${fn}\` gained or lost a return path — only the guard and the pinned answer are admitted`;
+  if (!new RegExp(`\\{\\.\\.\\.${reEsc(answer)},updatedInput:${reEsc(judged)}\\}$`).test(body))
+    return `the terminal wrapper \`${fn}\` no longer ends by pinning updatedInput to the judged input (${judged}) — an approval could carry a rewritten path`;
+  return null;
+}
+
+/** Desktop 2.16120.0's link 3 managed-ask branch. Before that release an org-policy "ask" on a path-gated
+ *  file tool was a hard DENY (`if(<pred>(e,r))return <log>,{behavior:"deny",…}`); from it, the branch
+ *  falls through into the original callback — the permission prompt — whose answer the terminal then pins:
+ *
+ *      if(t.ev(e,r)){t.EZ.info(`… → pre-fork approval path (managed ask)`);return}
+ *
+ *  `<pred>` must resolve to the organization-policy predicate. Returns the defect, or null. */
+function managedAskDefect(op: string, chunk: string, files: Map<string, string>, defining: string | undefined): string | null {
+  const fn = op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
+  const hdr = fn ? chunk.match(new RegExp(`(?<![\\w$])function ${reEsc(fn)}\\(([\\w$]+),[\\w$]+,([\\w$]+)(?:,[\\w$]+)*\\)\\{`)) : null;
+  const body = hdr ? braceBodyOf(chunk, hdr[0].slice(0, -1)) : null;
+  if (!fn || !hdr || body === null) return `link 3 (\`${op.slice(0, 40)}\`) has no resolvable definition in the hook chunk`;
+  const [, tool, reason] = hdr;
+  const resolve = (ref: string) => {
+    const r = resolveNamespaceRef(ref, chunk, files);
+    if (r) return r;
+    const local = defining ? exportLocalOf(defining, ref.slice(ref.lastIndexOf(".") + 1)) : null;
+    return local && defining ? { chunk: defining, local } : null;
+  };
+  const preds = [...body.matchAll(new RegExp(`if\\(([\\w$]+\\.[\\w$]+)\\(${reEsc(tool)},${reEsc(reason)}\\)\\)`, "g"))].filter((m) => {
+    const r = resolve(m[1]);
+    const b = r ? braceBodyOf(r.chunk, `function ${r.local}(`) : null;
+    return !!b && b.includes(`"Organization policy requires approval for this tool."`);
+  });
+  if (preds.length !== 1)
+    return `link 3 \`${fn}\` no longer branches exactly once on the organization-policy managed-ask predicate — the managed-ask outcome changed`;
+  const branch = new RegExp(
+    `^if\\(${reEsc(preds[0][1])}\\(${reEsc(tool)},${reEsc(reason)}\\)\\)\\{[\\w$]+(?:\\.[\\w$]+)*\\(\`[^\`]*\`\\);return\\}`,
+  );
+  if (!branch.test(body.slice(preds[0].index)))
+    return `link 3 \`${fn}\`'s managed-ask branch is no longer a logged fall-through into the permission prompt (it may deny or allow outright)`;
+  return null;
+}
+
 /** The single identifier bound to the path-gate map in `chunk`, or null.
  *
  *  Requires EXACTLY ONE binding. With two, "the keys and the values came from the same map" becomes
@@ -2138,11 +2203,31 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     // (1) TERMINAL: must be exactly a call to the saved original, nothing wrapping it. Anchored `$` so
     //     `(K(e,t,n)??{behavior:"allow"})` — a blanket allow on fall-through — cannot pass as "calls it".
     const last = operands[operands.length - 1];
-    if (!new RegExp(`^(?:await\\s+)?${orig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\([^)]*\\)$`).test(last))
+    // Desktop 2.16120.0: the terminal may instead be `<F>(a,b,await <orig>(a,b,c))`, where <F> re-pins an
+    // ALLOW's updatedInput to the input that was judged (a TOCTOU pin: the permission card's answer can
+    // no longer carry a rewritten path). Admitted ONLY while <F>'s body is exactly that pin — see
+    // pinWrapperDefect. The inner `await` is mandatory: an un-awaited Promise has no `.behavior`, so the
+    // wrapper's guard would pass it through untouched and the pin would silently stop applying.
+    const wrapped = last.match(new RegExp(`^([\\w$]+)\\(([\\w$]+),([\\w$]+),await ${reEsc(orig)}\\(\\2,\\3,[\\w$]+(?:\\.[\\w$]+)?\\)\\)$`));
+    const bareTerminal = new RegExp(`^(?:await\\s+)?${reEsc(orig)}\\([^)]*\\)$`).test(last);
+    if (!bareTerminal && !wrapped)
       miss(
         "canUseTool chain terminal",
-        `the chain no longer ends in a bare call to the saved original (${orig}) — fall-through may be rewritten`,
+        `the chain no longer ends in a bare call to the saved original (${orig}), nor in the judged-input pin wrapping an awaited call of it — fall-through may be rewritten`,
       );
+    if (wrapped) {
+      const spreadId = consuming.match(installRe)![1];
+      const defect = pinWrapperDefect(consuming, wrapped[1], spreadId);
+      if (defect) miss("canUseTool chain terminal", defect);
+      // Link 3 (the link right before the terminal) — the same release flipped its managed-ask branch from
+      // a hard deny to a fall-through into the original callback. Pinned only on the wrapped build, so an
+      // older asar (bare terminal, deny form) still syncs. A flip back to deny, to an allow, or the branch
+      // vanishing is a permission-semantics change that must be classified, not absorbed.
+      if (operands.length >= 2) {
+        const defect3 = managedAskDefect(operands[operands.length - 2], consuming, files, defining);
+        if (defect3) miss("canUseTool managed-ask", defect3);
+      }
+    }
 
     // (0) WRAPPER (Desktop 1.32352.0, block form only). The chain is no longer the whole decision: a
     //     pre-pass runs FIRST and can deny outright, and a post-pass can turn the chain's ALLOW into a

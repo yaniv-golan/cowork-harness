@@ -2472,6 +2472,119 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
     expect(checkPathHookFacts(blockFiles())).toEqual([]);
   });
 
+  // Desktop 2.16120.0: the chain's terminal is no longer a bare call of the saved original — its answer
+  // passes through a post-processor that re-pins an ALLOW's `updatedInput` to the input that was judged
+  // (`Xd(e,n,await Ve(e,n,r))`). The same release flipped link 3's managed-ask branch from a hard deny to
+  // a fall-through into the original callback (the permission prompt). The wrapper is admitted only while
+  // its body is exactly that pin; link 3's new branch is pinned too, because the terminal rule alone cannot
+  // see a deny→prompt (or deny→allow) flip inside a link body.
+  const MANAGED_ASK_FALLTHROUGH = "if(t.Ma(e,r)){t.EZ.info(`[canUseTool:HostLoop] ${e} → pre-fork approval path (managed ask)`);return}";
+  const PIN_WRAPPER =
+    `function Xw(e,n,r){if(r?.behavior!=="allow"||!t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS.includes(e))return r;` +
+    `let i=r.updatedInput,a=i===void 0?[]:Object.keys(i).filter((k=>i[k]!==n[k]));` +
+    "return a.length>0&&t.EZ.warn(`${e} allow pinned to the judged input (${a.length} key(s))`),{...r,updatedInput:n}}";
+  const wrappedFiles = (mutate?: (s: string) => string, mutateDefining?: (s: string) => string) =>
+    pathHookFiles({
+      defining: (d) => {
+        const withPred = d.replace(
+          "export{",
+          `function Mak(e,t){return t==="Organization policy requires approval for this tool."||t===void 0&&Rq(e)}export{Mak as Ma,`,
+        );
+        return mutateDefining ? mutateDefining(withPred) : withPred;
+      },
+      consuming: (c) => {
+        const swapped = c
+          .replace(/const Se=e\.canUseTool;[\s\S]*$/, blockBodyInstall())
+          .replace("??await Se(g,S,k);", "??Xw(g,S,await Se(g,S,k));")
+          .replace("function Qt(e,o,r,n){return ", `function Qt(e,o,r,n){${MANAGED_ASK_FALLTHROUGH}return `)
+          .concat(PIN_WRAPPER);
+        return mutate ? mutate(swapped) : swapped;
+      },
+    });
+
+  it("2.16120.0 shape: pin-wrapped terminal + managed-ask fall-through → no flags", () => {
+    expect(checkPathHookFacts(wrappedFiles())).toEqual([]);
+  });
+
+  it("back-compat: a bare terminal with the pre-2.16120.0 managed-ask DENY in link 3 stays clean", () => {
+    const denyForm = blockFiles((s) =>
+      s.replace(
+        "function Qt(e,o,r,n){return ",
+        'function Qt(e,o,r,n){if(t.Ma(e,r))return t.EZ.info(`${e} → deny (managed ask)`),{behavior:"deny",message:`${e} requires per-call approval under the organization\'s tool policy`};return ',
+      ),
+    );
+    expect(checkPathHookFacts(denyForm)).toEqual([]);
+  });
+
+  const WRAP_MUT: ReadonlyArray<readonly [string, (s: string) => string, string]> = [
+    [
+      "P1 blanket allow appended after the wrapper",
+      (s) => s.replace("??Xw(g,S,await Se(g,S,k));", '??Xw(g,S,await Se(g,S,k))??{behavior:"allow"};'),
+      "canUseTool chain terminal",
+    ],
+    // A Promise is never nullish and has no `.behavior`, so the guard returns it untouched — the pin is
+    // gone and `finish()` receives a Promise.
+    [
+      "P2 inner call of the original not awaited",
+      (s) => s.replace("Xw(g,S,await Se(g,S,k))", "Xw(g,S,Se(g,S,k))"),
+      "canUseTool chain terminal",
+    ],
+    [
+      'P3 wrapper body gains a behavior:"allow" literal',
+      (s) => s.replace("let i=r.updatedInput,", 'if(e==="Read")return{behavior:"allow",updatedInput:n};let i=r.updatedInput,'),
+      "canUseTool chain terminal",
+    ],
+    // Keeps the card's rewritten input — the pre-2.16120.0 semantics, silently.
+    [
+      "P4 updatedInput taken from the card's answer",
+      (s) => s.replace("{...r,updatedInput:n}}", "{...r,updatedInput:i}}"),
+      "canUseTool chain terminal",
+    ],
+    ["P5 wrapper does not resolve in the hook chunk", (s) => s.replace("Xw(g,S,await", "Xq(g,S,await"), "canUseTool chain terminal"],
+    [
+      "P6 passthrough guard dropped (every answer is rewritten)",
+      (s) => s.replace('if(r?.behavior!=="allow"||!t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS.includes(e))return r;', ""),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P7 wrapper pins a different input than the original judged",
+      (s) => s.replace("Xw(g,S,await Se(g,S,k))", "Xw(g,T,await Se(g,S,k))"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P8 passthrough guard keyed on a different tool set",
+      (s) => s.replace("||!t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS.includes(e))", "||!t.SOME_OTHER_SET.includes(e))"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "L1 managed-ask branch flipped back to a hard deny",
+      (s) =>
+        s.replace(
+          MANAGED_ASK_FALLTHROUGH,
+          'if(t.Ma(e,r))return t.EZ.info(`${e} → deny`),{behavior:"deny",message:"requires per-call approval"};',
+        ),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L2 managed-ask branch returns an allow",
+      (s) => s.replace("(managed ask)`);return}", '(managed ask)`);return{behavior:"allow",updatedInput:o}}'),
+      "canUseTool managed-ask",
+    ],
+    ["L3 managed-ask branch removed", (s) => s.replace(MANAGED_ASK_FALLTHROUGH, ""), "canUseTool managed-ask"],
+  ];
+  it.each(WRAP_MUT)("2.16120.0 wrapper mutation %s fails loud (%#)", (_label, mutate, expected) => {
+    expect(checkPathHookFacts(wrappedFiles(mutate)).join("\n")).toContain(expected);
+  });
+
+  it("MUTATION: the managed-ask predicate no longer resolves to the organization-policy check → flags", () => {
+    const f = wrappedFiles(undefined, (d) => d.replace("Organization policy requires approval for this tool.", "something else"));
+    expect(checkPathHookFacts(f).join("\n")).toContain("canUseTool managed-ask");
+  });
+
+  it("`$`-named pin wrapper still resolves", () => {
+    expect(checkPathHookFacts(wrappedFiles((s) => s.replaceAll("Xw(", "$w(")))).toEqual([]);
+  });
+
   // `$`-named pre-pass, pre-pass result and chain link (Desktop 2.9939.2 emits `$`-initial names). The
   // captured names reach `new RegExp`; unescaped, the result checks false-flag a healthy build and the
   // two await checks can never match, so an un-awaited async call would pass in silence.
