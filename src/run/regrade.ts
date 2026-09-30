@@ -206,7 +206,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     const runDir = resolve(dir);
     // First pass: the builder's run-dir refusals (multi-turn, partial, replay, chat…) and the persisted result,
     // which carries the budget the second pass needs.
-    const first = assertContextFromRunDir(runDir, loadScenario, { command: CMD });
+    const first = assertContextFromRunDir(dir, loadScenario, { command: CMD }); // messages echo the path as given
     if (!first.ok) {
       if (first.kind === "scenario")
         return refuse("usage", `${CMD}: cannot load scenario ${opts.scenarioFile}: ${(first.error as Error).message}`);
@@ -232,7 +232,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     if (!persisted && opts.authoredTotalBytes === undefined)
       return refuse(
         "runtime",
-        `${CMD}: ${runDir} does not record the authored-file capture budget its live judge used (no authoredCapture in result.json — ` +
+        `${CMD}: ${dir} does not record the authored-file capture budget its live judge used (no authoredCapture in result.json — ` +
           `recorded by an older harness), so the judged document cannot be rebuilt as the judge saw it — evidence unavailable. ` +
           `Pass --authored-total-bytes <N> with the budget that run used (${DEFAULT_AUTHORED_TOTAL_BYTES} unless COWORK_HARNESS_AUTHORED_TOTAL_BYTES was set). ` +
           `(can't verify ⇒ not green)`,
@@ -247,7 +247,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     // Second pass: the evidence as the live run captured it — its budget, the scenario's evidence_files
     // union, and this process's secrets (the live run scrubbed with its own; a secret it knew of and this
     // process does not is the one gap a kept run cannot close).
-    const second = assertContextFromRunDir(runDir, sc, {
+    const second = assertContextFromRunDir(dir, sc, {
       command: CMD,
       recomputeAuthored: "both",
       secrets: collectSecrets(),
@@ -255,11 +255,11 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       totalBytes,
       ...(persisted ? { perFileBytes: persisted.perFileBytes } : {}),
     });
-    if (!second.ok)
-      return refuse(
-        second.kind === "scenario" ? "usage" : second.kind,
-        second.kind === "scenario" ? `${CMD}: cannot load scenario` : second.message,
-      );
+    // The scenario is passed as an object here, so the builder cannot return its loader-failure arm.
+    if (!second.ok) {
+      if (second.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
+      return refuse(second.kind, second.message);
+    }
     prepared.push({
       runDir,
       turn: second.turn,
