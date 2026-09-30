@@ -166,6 +166,14 @@ export function modelMismatch(base: ProfileMeta, candJudge: string | null, candA
   return bad.length ? bad.join("; ") : null;
 }
 
+/** Null iff the baseline was graded under the current judge-prompt template; otherwise a loud reason the
+ *  gate must refuse to diff — a prompt edit silently shifts every pass rate, invisible to the model guard.
+ *  A null recorded hash (legacy baseline) is treated as unknown and does not block. Exported for unit tests. */
+export function judgePromptMismatch(base: ProfileMeta, current: string): string | null {
+  if (!base.judgePromptHash || base.judgePromptHash === current) return null;
+  return `baseline ${base.judgePromptHash} vs current ${current}`;
+}
+
 /** Identity of a rubric claim for baseline↔candidate matching — the claim text, whitespace-normalized so a
  *  reflow doesn't unmatch, but otherwise exact (any wording change unmatches → forces a rebaseline).
  *  Null-safe: a malformed claim (missing text) collapses to "" and simply won't match, never crashes. */
@@ -682,12 +690,12 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  // Refuse across a judge-prompt change too (M1) — a prompt edit silently shifts every pass rate, invisible
-  // to the model guard. A null recorded hash (legacy baseline) is treated as unknown and does not block.
-  if (baseFile.__meta__.judgePromptHash && baseFile.__meta__.judgePromptHash !== JUDGE_PROMPT_HASH) {
+  // Refuse across a judge-prompt change too (M1).
+  const promptMism = judgePromptMismatch(baseFile.__meta__, JUDGE_PROMPT_HASH);
+  if (promptMism) {
     process.stderr.write(
       `[eval-gate] REFUSING to gate — the judge prompt changed since this baseline was recorded ` +
-        `(baseline ${baseFile.__meta__.judgePromptHash} vs current ${JUDGE_PROMPT_HASH}); every pass rate may have shifted. Re-record with --rebaseline.\n`,
+        `(${promptMism}); every pass rate may have shifted. Re-record with --rebaseline.\n`,
     );
     process.exitCode = 1;
     return;

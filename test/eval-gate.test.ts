@@ -7,6 +7,7 @@ import {
   bucketDiff,
   aggregateScenario,
   modelMismatch,
+  judgePromptMismatch,
   parseFraction,
   readProfileFile,
   singleModel,
@@ -92,6 +93,28 @@ describe("bucketDiff — trigger-rate uses the Fisher test, not a crude threshol
   });
   it("does not fire when the baseline itself was not reliably invoking (<0.8)", () => {
     expect(trig("3/6", "0/6")).toBe(0); // baseline never reliably fired → nothing to regress from
+  });
+});
+
+describe("judgePromptMismatch — the gate's same-judge-prompt precondition", () => {
+  const meta = (over: Partial<ProfileMeta> = {}): ProfileMeta => ({
+    judgeModel: "claude-opus-4-8",
+    answererModel: "claude-sonnet-5",
+    judgePromptHash: "aaaaaaaaaaaaaaaa",
+    harnessVersion: "0.27.0",
+    date: "2026-07-09",
+    ...over,
+  });
+  it("refuses (a reason naming both hashes) when the baseline was graded under a different prompt", () => {
+    const m = judgePromptMismatch(meta(), "bbbbbbbbbbbbbbbb");
+    expect(m).toMatch(/aaaaaaaaaaaaaaaa/);
+    expect(m).toMatch(/bbbbbbbbbbbbbbbb/);
+  });
+  it("passes (null) when the hashes match", () => {
+    expect(judgePromptMismatch(meta(), "aaaaaaaaaaaaaaaa")).toBeNull();
+  });
+  it("a legacy baseline with no recorded hash does not block", () => {
+    expect(judgePromptMismatch(meta({ judgePromptHash: null }), "bbbbbbbbbbbbbbbb")).toBeNull();
   });
 });
 

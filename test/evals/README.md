@@ -42,7 +42,9 @@ npm run eval-gate -- --dotenv .env
 (p ≈ 0.12) lands in **Inconclusive** by design — escalate it with `--reps 12`. A separate
 **trigger-rate** check catches the skill no longer firing at all. The gate **refuses to diff** if the
 candidate's judge or answerer model differs from the baseline's recorded provenance (that would measure
-model drift, not skill quality) — re-record with `--rebaseline` after any intended model change.
+model drift, not skill quality) — re-record with `--rebaseline` after any intended model change. It
+also refuses when the baseline was graded under a different judge-prompt template (its recorded
+`judgePromptHash` differs from the current one), since a prompt change can shift every pass rate.
 
 **Detection power is honest, not oversold.** At N=6 the gate reliably catches *strong* degradation;
 *subtle* degradation relies on the `--reps 12` escalation and the human `-`-line review of the skill diff.
