@@ -119,9 +119,15 @@ it landed in.
 | the agent could not authenticate: its reply is `Not logged in · Please run /login` or `Authentication required · Sign in again to continue` | excluded as infrastructure, reported (rule `auth`) |
 | a usage or spend limit reported as the agent's final message (`You've hit your … limit`, out of usage credits, …) — including on a nonzero exit, and after a model has already spent | excluded as infrastructure, reported (rule `usage_limit`) |
 | no model answered: every model the run reported is the agent's own `<synthetic>` marker and it cost $0 | excluded as infrastructure, reported (rule `no_model_answered`) |
+| a stalled question in a scenario that asserts `allow_stall: true` | counted as a run that completed (rule `stall_allowed`): its assertions are graded, and the pin and judge rows still apply |
 | the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
+
+A **stall** is a run that ended on a question with no tool work after its last gate — what `run` and
+`replay` fail as the `stalled` verdict signal. `eval` applies the same opt-out: in a scenario that asserts
+`allow_stall: true` (its intended terminal state is a question), a stalled rep's assertions are graded
+like those of any completed run. Without it, the stall is the agent's failure and fails every row.
 
 The `auth` and `usage_limit` rows need the reply to come from the agent itself, which writes it as a
 `<synthetic>` turn. A skill's own message that merely reads like one ("You've reached your daily limit

@@ -120,6 +120,10 @@ function noModelAnswered(r: ClassifiableResult): boolean {
   return Array.isArray(r.models) && r.models.length > 0 && !r.models.some(isLiveModelId) && r.cost?.usd === 0;
 }
 
+/** The scenario asserted `allow_stall: true` — the `stalled` verdict's opt-out, read exactly as verdict.ts
+ *  reads it (any graded assertion carrying the modifier, alone or beside another key). */
+const stallAllowed = (r: ClassifiableResult): boolean => (r.assertions ?? []).some((a) => a.assertion.allow_stall === true);
+
 type ThrownKind = "decider_timeout" | "boundary" | "unanswered" | "other";
 function thrownKind(e: unknown): ThrownKind {
   // Subclass first: a DeciderTimeoutError IS an UnansweredError, and it is the answerer's failure, not the skill's.
@@ -138,6 +142,7 @@ function thrownKind(e: unknown): ThrownKind {
  *  | thrown BoundaryError                                               | errored_infra   |
  *  | thrown UnansweredError                                             | errored_agent   |
  *  | thrown anything else / no result at all                            | unclassified    |
+ *  | success, errorSource absent or `agent`, no kind, stalled, allow_stall | valid (stall_allowed) |
  *  | success, errorSource absent or `agent`, no kind, stalled           | errored_agent   |
  *  | success, errorSource absent or `agent`, no kind                    | valid           |
  *  | success, any other errorSource or any kind                         | unclassified    |
@@ -188,7 +193,11 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
 
   if (r.result === "success") {
     if ((source === undefined || source === "agent") && kind === undefined) {
-      return r.stalledOnQuestion === true ? out("errored_agent", "stalled_on_question") : out("valid", "success");
+      if (r.stalledOnQuestion !== true) return out("valid", "success");
+      // A stall is the agent's own failure unless the scenario opted out: the same predicate the `stalled`
+      // verdict signal uses (verdict.ts), over the same graded assertions, so `eval` agrees with `run`/`replay`.
+      // A scenario whose intended terminal state is a question then has its assertions graded like any other.
+      return stallAllowed(r) ? out("valid", "stall_allowed") : out("errored_agent", "stalled_on_question");
     }
     return unclassified("success_with_error_fields");
   }

@@ -44,6 +44,7 @@ import { loadScenarioPure } from "../src/run/execute.js";
 import { deriveModelProvenance } from "../src/run/model-provenance.js";
 import type { Assertion, RunResult } from "../src/types.js";
 import { evaluateFamily, insufficientThreshold } from "../src/eval/stats.js";
+import { buildRunsLine, repEvidenceOf } from "../src/eval/runs.js";
 import {
   ERROR_SOURCES,
   RESULT_ERROR_KINDS,
@@ -686,5 +687,85 @@ describe("armMedians — descriptive, over valid + judge_invalid + errored_agent
   it("reads the real pinned fixture's telemetry", () => {
     const m = armMedians([{ bucket: "valid", result: fixture("public-scenario-pinned") }]);
     expect(m).toMatchObject({ costUsd: { median: 0.216095, n: 1 }, turns: { median: 7, n: 1 }, durationMs: { median: 23472, n: 1 } });
+  });
+});
+
+// ---- allow_stall -------------------------------------------------------------------------------------------
+
+// `allow_stall: true` is the scenario's opt-out from the `stalled` verdict (verdict.ts reads it off the graded
+// assertions). A scenario whose intended terminal state is a question stalls in EVERY rep of both arms, so a
+// classifier that ignored it scored every row 0 in both arms: uninformative, and reported as agent failure.
+describe("allow_stall: a stall the scenario opted out of is graded, not errored_agent", () => {
+  const stallOptOut = { assertion: { allow_stall: true } as Assertion, pass: true };
+  const withOptOut = (r: ClassifiableResult, optOut = stallOptOut): ClassifiableResult => ({
+    ...r,
+    assertions: [...(r.assertions ?? []), optOut],
+  });
+
+  it("the real stalled fixture with allow_stall appended is valid, rule stall_allowed", () => {
+    const r = withOptOut(fixture("stalled-on-question"));
+    expect(classifyTermination({ result: r })).toMatchObject({ bucket: "valid", rule: "stall_allowed", unclassified: false });
+    expect(classifyRep({ result: r }, { contentSig: r.fingerprint!.contentSig }).bucket).toBe("valid");
+  });
+  it("its rows are the graded pass bits (a mix of 1s and 0s), not errored_agent's all-zero vector", () => {
+    const r = withOptOut(fixture("stalled-on-question"));
+    const scen = r.assertions!.map((a) => a.assertion);
+    const rows = scenarioRows("fixture-stalled-on-question", scen);
+    const vals = repRowValues(rows, scen, classifyRep({ result: r }, { contentSig: r.fingerprint!.contentSig }), r);
+    expect(vals.map((v) => v.value)).toEqual(r.assertions!.map((a) => (a.pass ? 1 : 0)));
+    expect(vals.some((v) => v.value === 0) && vals.some((v) => v.value === 1)).toBe(true);
+  });
+  it("the combined form ({ result, allow_stall } in one assertion) opts out too, as it does in the verdict", () => {
+    const combined = { assertion: { result: "success", allow_stall: true } as Assertion, pass: true };
+    const r = validRep({ stalledOnQuestion: true, assertions: [combined, ...validRep().assertions!] });
+    expect(classifyRep({ result: r }, expected).bucket).toBe("valid");
+    const scen = r.assertions!.map((a) => a.assertion);
+    const vals = repRowValues(scenarioRows("s", scen), scen, classifyRep({ result: r }, expected), r);
+    expect(vals.map((v) => v.value)).toEqual([1, 1, 1, 1, 0]);
+  });
+  it("survives the runs.jsonl round trip (eval report re-renders an eval dir from it)", () => {
+    const r = withOptOut(fixture("stalled-on-question"));
+    const line = JSON.parse(
+      JSON.stringify(
+        buildRunsLine({
+          index: 0,
+          arm: "A",
+          scenario: "fixture-stalled-on-question",
+          rep: 0,
+          runId: "run-0",
+          runDir: undefined,
+          result: r as unknown as RunResult,
+          thrown: undefined,
+          evidence: undefined,
+        }),
+      ),
+    );
+    const c = classifyRep(repEvidenceOf(line), { contentSig: r.fingerprint!.contentSig });
+    expect(c.bucket).toBe("valid");
+    expect(c.termination.rule).toBe("stall_allowed");
+  });
+  it("without allow_stall a stall is still errored_agent (fixture and constructed)", () => {
+    expect(classifyTermination({ result: fixture("stalled-on-question") })).toMatchObject({
+      bucket: "errored_agent",
+      rule: "stalled_on_question",
+    });
+    const r = validRep({ stalledOnQuestion: true });
+    expect(classifyRep({ result: r }, expected).bucket).toBe("errored_agent");
+    // the opt-out is `true` only; a falsy spelling (rejected by the schema) never suppresses
+    const bogus = withOptOut(r, { assertion: { allow_stall: false } as unknown as Assertion, pass: true });
+    expect(classifyRep({ result: bogus }, expected).bucket).toBe("errored_agent");
+  });
+  it("allow_stall on a rep that did not stall changes nothing: same bucket, rule, and rows", () => {
+    const plain = validRep();
+    const opted = withOptOut(plain);
+    expect(classifyTermination({ result: opted })).toMatchObject({ bucket: "valid", rule: "success" });
+    const scen = opted.assertions!.map((a) => a.assertion);
+    const rows = scenarioRows("s", scen);
+    expect(repRowValues(rows, scen, classifyRep({ result: opted }, expected), opted).map((v) => v.value)).toEqual([1, 1, 1, 0, 1]);
+    expect(classifyRep({ result: { ...plain, stalledOnQuestion: false } }, expected).bucket).toBe("valid");
+  });
+  it("allow_stall does not rescue an error result", () => {
+    const r = withOptOut(validRep({ result: "error", errorSource: "timeout", stalledOnQuestion: true }));
+    expect(classifyRep({ result: r }, expected).bucket).toBe("errored_agent");
   });
 });

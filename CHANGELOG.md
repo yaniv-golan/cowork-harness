@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`eval` honours `allow_stall`.** A scenario whose intended terminal state is a question asserts
+  `allow_stall: true`, which `run` and `replay` accept as the opt-out from the `stalled` verdict. `eval`
+  ignored it and classified every stalled rep, in both arms, as the agent's failure, so every row failed
+  and the scenario compared nothing. Such a rep is now graded like any completed run (rule
+  `stall_allowed` in `report.json`). A stall in a scenario without `allow_stall` still fails every row.
+  `eval report <eval-dir>` applies the fix to an existing eval dir at no cost.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
