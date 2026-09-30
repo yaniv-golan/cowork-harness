@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`eval` — paired A/B evaluation of a skill edit (EXPERIMENTAL).**
+  `cowork-harness eval <scenario.yaml | dir/> --arm before=<source> --arm after=<source>` runs every
+  scenario with each of two versions of the session's `plugins.local_plugins` plugin and compares how often
+  each assertion and each `semantic_matches` rubric claim passes. `eval report <eval-dir>` rebuilds the
+  report from the eval directory at no cost, byte-identical to the one the eval wrote. See
+  [docs/eval.md](./docs/eval.md).
+  - An arm is a directory or `git:<ref>:<path>`. Each is copied once, before the first run, and every rep
+    mounts the copy; a `git:` arm is read file by file from the commit.
+  - Runs are interleaved (A B, then B A, …), 5 reps per arm by default, with the agent and judge models
+    required to be concrete ids (`--model`, `--judge-model`).
+  - Each row reports B − A with a 95% Newcombe interval and a two-sided Fisher exact p, labelled
+    `confirmed`/`possible` drop or rise (Benjamini-Hochberg by default, `--correction holm`),
+    `no detectable change` with its minimum detectable difference, `underpowered` or `insufficient`.
+    `--holdout` reports scenarios you did not tune against in their own section.
+  - Refused before any run (exit `2`): alias models, an eval directory inside a git work tree, identical
+    arms (unless `--allow-identical-arms`), and an arm that contains the eval's own scenario or session
+    files or an `evals.json`.
+  - Exit `1` on a drop at the `--fail-on` level (default `possible`), when every row is `insufficient`, or
+    when the judge model differed across reps. The report format, labels and statistical defaults are
+    experimental ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
 - **`semantic_matches` judge cost and prompt identity are recorded.** Each graded assert now carries:
   - `RunResult.assertions[].judgeCostUsd`: the judge's spend, summed over both attempts when a malformed
     grade is retried.
