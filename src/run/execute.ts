@@ -2252,15 +2252,25 @@ export function ablateSession<T extends { plugins: Record<string, unknown>; skil
 export function launchSourcesPreflight(
   scenario: Scenario,
   modelOverride: string | undefined,
-  opts: { quiet?: boolean; ablateSkill?: boolean; baseline?: PlatformBaseline } = {},
+  opts: {
+    quiet?: boolean;
+    ablateSkill?: boolean;
+    baseline?: PlatformBaseline;
+    /** The session the run will ACTUALLY use, when the caller substitutes one (`ExecuteOptions.session`,
+     *  e.g. an eval arm's snapshot in place of the declared plugin dir). Without it this preflights the
+     *  session FILE's sources — the original dir — and passes vacuously on a broken substitute. */
+    session?: ReturnType<typeof loadSession>;
+  } = {},
 ): void {
   let loaded: ReturnType<typeof loadSession>;
-  try {
-    loaded = loadSessionFromFile(scenario.session);
-  } catch (e) {
-    if (e instanceof UsageError) throw e;
-    return;
-  }
+  if (opts.session !== undefined) loaded = opts.session;
+  else
+    try {
+      loaded = loadSessionFromFile(scenario.session);
+    } catch (e) {
+      if (e instanceof UsageError) throw e;
+      return;
+    }
   const model = resolvePinnedModel(modelOverride, loaded.model, envModelDefault());
   const withModel = model !== undefined && model !== loaded.model ? applySessionOverrides(loaded, { model }) : loaded;
   const session = opts.ablateSkill ? ablateSession(withModel) : withModel;

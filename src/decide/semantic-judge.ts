@@ -16,7 +16,7 @@ import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
 const JUDGE_MODEL_FALLBACK = "claude-opus-4-8";
 /** Read at USE, never at import: main() loads `.env` files (and a --dotenv) after the modules are imported,
  *  so an import-time read could never see a value set there. */
-function defaultJudgeModel(): string {
+export function defaultJudgeModel(): string {
   return process.env.COWORK_HARNESS_JUDGE_MODEL || JUDGE_MODEL_FALLBACK;
 }
 
