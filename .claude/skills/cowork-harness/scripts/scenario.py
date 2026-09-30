@@ -3065,7 +3065,7 @@ def _lint_skill_corpus_size(md_path):
 #
 # Body cap only: the re-attach estimate counts UTF-16 units and the rule counts UTF-8 BYTES, which are never
 # fewer, so it errs early. The reference cap has no such guarantee — it rests on the measured ratio above.
-_SKILL_SIZE_CAPS_VERIFIED = "binary-verified against agent 2.1.281 (VM ELF and native, both read)"
+_SKILL_SIZE_CAPS_VERIFIED = "binary-verified against agent 2.1.284 (VM ELF and native, both read)"
 _SKILL_BODY_REATTACH_CAP = 19_000
 _SKILL_BODY_NOTICE_RATIO = 0.8
 _SKILL_REFERENCE_READ_CAP = 60_000
