@@ -1307,6 +1307,17 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(fixture())).toEqual([]);
   });
 
+  // Desktop 2.16120.0: W2 gained an UNCONDITIONAL `PYTHONDONTWRITEBYTECODE:"1"` (first-party and 3p alike),
+  // between API_TIMEOUT_MS and DISABLE_CRON. Pinned like its W2 neighbours, so it enters spawn.env and
+  // reaches every tier's agent spawn env by the baseline spread.
+  it('2.16120.0: the unconditional W2 PYTHONDONTWRITEBYTECODE key is PINNED to "1" (not an unknown-key hard fail)', () => {
+    const w2 = fixture().replace("API_TIMEOUT_MS:String(FKd),", 'API_TIMEOUT_MS:String(FKd),PYTHONDONTWRITEBYTECODE:"1",');
+    expect(w2).toContain("PYTHONDONTWRITEBYTECODE");
+    const { env, flags } = deriveSpawnEnv(w2, greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).toEqual({ ...EXPECTED_GREEN, PYTHONDONTWRITEBYTECODE: "1" });
+  });
+
   // 1b. Minifier-rename regression: the gate-check helper's name is minifier-assigned and changed
   // At→et across a Desktop build. Renaming every helper call must leave derivation byte-identical —
   // in particular the off-gate 434204418 spread must still be blanked so MCP_CONNECTION_NONBLOCKING

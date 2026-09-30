@@ -3235,6 +3235,12 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   // 0 times in agent 2.1.241 and 6 times each in 2.1.246, so this is a live contract, not a dormant one.
   "CLAUDE_CODE_PROMPT_CACHE_TTL",
   "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL",
+  // Desktop 2.16120.0. UNCONDITIONAL in W2 (`…API_TIMEOUT_MS:String(<t>),PYTHONDONTWRITEBYTECODE:"1",
+  // CLAUDE_CODE_DISABLE_CRON:…`), first-party and 3p alike — the only insert in that builder. Same call as
+  // its W2 neighbours: every Cowork session receives it ⇒ pin. Effect: python under the agent's process
+  // tree stops writing __pycache__/.pyc. (The key's OTHER occurrence in the asar is the env-FORWARD regex
+  // list for MCP server processes, not a spawn setter.)
+  "PYTHONDONTWRITEBYTECODE",
   "USE_LOCAL_OAUTH",
   "USE_STAGING_OAUTH",
 ];
