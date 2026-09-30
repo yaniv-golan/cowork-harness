@@ -292,6 +292,26 @@ describe("agentTreeAgent — descendant walk and group kill", () => {
     expect(lines[0]).toMatch(/^::warning:: \[teardown\] .*by pid only/);
   });
 
+  it("a stop whose own listing fails uses the earlier one, and says so once", () => {
+    const rows = [...base(), row(300, AGENT, 300)];
+    const h = harness({ rows });
+    let fail = false;
+    h.deps.snapshot = () => {
+      h.snapshots++;
+      return fail ? undefined : rows.map((r) => ({ ...r }));
+    };
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0 }, h.deps);
+    a.refresh();
+    fail = true;
+    a.terminate();
+    a.forceKill();
+    expect(h.kills).toContainEqual([-300, "SIGTERM"]);
+    expect(h.kills).toContainEqual([-300, "SIGKILL"]);
+    const lines = h.warnings.filter((w) => w.includes("could not list processes"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^::warning:: \[teardown\] .*from an earlier listing/);
+  });
+
   it("without detach (Windows) it signals the agent by pid only and never lists processes", () => {
     const h = harness({ detach: false });
     const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
@@ -464,12 +484,24 @@ describe("orphan sweep on macOS: same uid, ppid 1, no tty, started during the ru
   it("a process the descendant walk already killed is not reported again as an orphan", () => {
     const rows = [row(300, AGENT, 300), row(301, 300, 300)];
     const h = harness({ rows: [...base(), ...rows] });
+    h.deps.lsofCwd = (pids) => new Map(pids.map((p) => [p, WORK])); // before construction: deps are read then
     const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
     a.refresh();
-    h.setRows([...base(), row(300, 1, 300), row(301, 300, 300)]);
-    h.deps.lsofCwd = (pids) => new Map(pids.map((p) => [p, WORK]));
+    // 300 is reparented to init (ppid 1) with its cwd in the work dir, like any orphan; 906 is a real orphan.
+    h.setRows([...base(), row(300, 1, 300), row(301, 300, 300), orphan(906)]);
     a.forceKill();
-    expect(h.warnings.filter((w) => w.includes("orphan sweep"))).toEqual([]);
+    const swept = h.warnings.filter((w) => w.includes("orphan sweep killed"));
+    expect(swept).toHaveLength(1); // the sweep ran …
+    expect(swept[0]).toContain("pid 906"); // … and reported only the real orphan
+  });
+
+  it("an orphan in the harness's own process group is never swept, even with its cwd in the work dir", () => {
+    const h = harness({ rows: [...base(), row(907, 1, SELF, { comm: "harness-grandchild" })] });
+    h.deps.lsofCwd = (pids) => new Map(pids.map((p) => [p, WORK]));
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
+    a.forceKill();
+    expect(h.kills.map(([t]) => t)).not.toContain(907);
+    expect(h.lsofCalls.flat()).not.toContain(907);
   });
 
   it("an lsof failure skips the sweep with a warning and never throws", () => {
