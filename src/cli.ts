@@ -14,6 +14,7 @@ import {
   type PlatformBaseline,
 } from "./types.js";
 import { writeAllSync, tildeify } from "./io.js";
+import { SECRET_ENV_KEYS } from "./runtime/host-env.js";
 import {
   loadBaseline,
   BASELINES_DIR,
@@ -77,6 +78,7 @@ import {
   applyParsedCommandGlobals,
   isCommandGlobalFlag,
   recordLeadingGlobals,
+  recordInstallCredentials,
   setRunsDir,
   stripCommandGlobals,
   withCommandGlobals,
@@ -876,18 +878,33 @@ async function main() {
       fail("cowork-harness", "usage", (err as Error).message, undefined, isJsonOutput(argv));
     }
   }
-  const autoSources = [resolve(process.cwd(), ".env"), packageRootEnv];
-  for (const f of autoSources) {
+  const autoSources = [
+    { file: resolve(process.cwd(), ".env"), install: false },
+    { file: packageRootEnv, install: true },
+  ];
+  let packageRootCredentials: string[] = [];
+  for (const { file: f, install } of autoSources) {
     const key = resolve(f);
     if (seenSources.has(key)) continue; // don't double-load when cwd (or --dotenv) === install dir
     seenSources.add(key);
-    loadedEnv.push(...loadDotenv(f));
+    const keys = loadDotenv(f);
+    loadedEnv.push(...keys);
+    if (install) packageRootCredentials = keys.filter((k) => SECRET_ENV_KEYS.has(k));
   }
   // Only surface env-loading when it's non-obvious — an explicit --dotenv, or debug. The common
   // auto-load (./.env / install .env) stays silent: auth either works or fails loudly. (Feedback: the
   // line was repetitive noise across many invocations.)
   if (loadedEnv.length && (explicitEnvFile || process.env.COWORK_HARNESS_DEBUG))
     log(`[env] loaded ${loadedEnv.length} var(s): ${loadedEnv.join(", ")}`);
+  // One exception to that silence: a credential that came from the INSTALL's .env while running from some
+  // other directory. That file is easy to forget (a clone's .env, used by `node <clone>/dist/cli.js` from
+  // anywhere), and the run is billed to it. Names only, never values. A credential already exported, given
+  // with a leading --dotenv or in ./.env is never loaded from here, and cwd === install dir skipped the file
+  // above. A --dotenv AFTER the subcommand is applied later, by the command's parser, and may replace it:
+  // applyCommandGlobal (run/command-globals.ts) then prints a correcting line naming that file.
+  recordInstallCredentials(packageRootCredentials);
+  if (packageRootCredentials.length)
+    log(`[env] using ${packageRootCredentials.join(", ")} from ${tildeify(packageRootEnv)} (the install's .env, not this directory's)`);
 
   const [cmd, ...rest] = argv;
   if (cmd === "--version" || cmd === "-v") return void out(pkgVersion());
