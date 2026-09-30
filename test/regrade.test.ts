@@ -198,6 +198,17 @@ function opts(k: Kept, extra: Partial<RegradeOptions> = {}): RegradeOptions {
   return { runDirs: [k.runDir], scenarioFile: k.scenarioFile, ...extra };
 }
 
+/** Capture what the code under test writes to stderr (the `::warning::` lines). */
+function captureStderr() {
+  const orig = process.stderr.write.bind(process.stderr);
+  let buf = "";
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    return true;
+  }) as typeof process.stderr.write;
+  return { text: () => buf, restore: () => void (process.stderr.write = orig) };
+}
+
 function regradeFiles(k: Kept): string[] {
   const d = join(k.runDir, "turns", "1", "regrade");
   return existsSync(d) ? readdirSync(d).sort() : [];
@@ -385,6 +396,95 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     const flagged = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 4096 }));
     expect(flagged).toMatchObject({ ok: false, kind: "runtime" });
     expect(judge.calls).toHaveLength(0);
+  });
+
+  it("content only a larger budget brings in is graded, warned about, and listed as unchecked", async () => {
+    // Live: a 150-byte budget cuts z-notes.md (it sorts last). Re-grade: a far larger budget captures it whole —
+    // content the live judge never read, so no live fingerprint can vouch for it.
+    const SECRET = "sk-test-budget-probe-3f19";
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "z-notes.md"), `notes: ${SECRET}\n${"n".repeat(400)}\n`);
+      },
+      assertYaml: `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
+      totalBytes: 150,
+    });
+    const judge = judgeFactory(() => true);
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 1_000_000 }));
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(judge.calls).toHaveLength(1);
+    expect(out.runs[0].docMatchesLive).toBe("scope_changed");
+    expect(out.runs[0].uncheckedSections).toContainEqual({ assertionIndex: 0, kind: "authored", path: "outputs/z-notes.md" });
+    expect(stderr.text()).toMatch(
+      /::warning:: regrade: .*never read by the live judge.*outputs\/z-notes\.md.*never checked for drift or for a secret the live run scrubbed/s,
+    );
+    const file = JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8"));
+    expect(file.uncheckedSections).toEqual(out.runs[0].uncheckedSections);
+  });
+
+  it("content only a widened scope brings in is warned about and listed as unchecked", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+      assertYaml: SCOPED,
+    });
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns({
+        runDirs: [k.runDir],
+        scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scn9-")), WIDER),
+        makeJudge: judgeFactory(() => true).make,
+      });
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "authored", path: "outputs/appendix.md" }]);
+    expect(stderr.text()).toContain("outputs/appendix.md");
+  });
+
+  it("an unchanged scope has no unchecked sections and no warning", async () => {
+    const k = await keptRun({ author: writeReport });
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].uncheckedSections).toEqual([]);
+    expect(stderr.text()).not.toContain("never read by the live judge");
+  });
+
+  it("a live scope on a file over the per-file cap, re-graded unscoped, grades rather than refuses", async () => {
+    // Live, the scope exempts report.md from the 16 KiB per-file cap. The live document must be rebuilt with
+    // the LIVE union as priority globs, or it would read the file capped and report a false drift.
+    const big = `# Report\n${"The main risk is customer concentration.\n".repeat(600)}`;
+    expect(big.length).toBeGreaterThan(16 * 1024);
+    const k = await keptRun({ author: (w) => writeFileSync(join(w, "outputs", "report.md"), big), assertYaml: SCOPED });
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(
+        mkdtempSync(join(tmpdir(), "cwh-rg-scn10-")),
+        `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
+      ),
+      makeJudge: judge.make,
+    });
+    if (!out.ok) throw new Error(out.message);
+    expect(judge.calls).toHaveLength(1);
+    expect(out.runs[0].docMatchesLive).toBe("scope_changed");
   });
 
   it("scope_changed and unknown are not drift: both grade", async () => {

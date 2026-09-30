@@ -20,10 +20,15 @@ All notable changes to this project are documented here. The format is based on
     since the run, a different scrub set, or a sub-agent section can each cause it), `scope_changed` (the
     evidence scope or budget changed), or `unknown` (the run recorded no fingerprint).
   - Before any judge call, each live assert's document is rebuilt from the live run's own inputs (its scope,
-    the live `evidence_files` union, the recorded budget) and compared with its `judgedDoc`; any difference is
+    the live `evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture`
+    existed, the `--authored-total-bytes` value you pass) and compared with its `judgedDoc`; any difference is
     refused, whatever the new scenario's scope — it can mean a value the live run scrubbed and this process does
-    not. `--allow-doc-drift` grades anyway, with a warning. Not checked: a run that recorded no fingerprint
-    (neither for drift nor for an unscrubbed secret), and content only a new scope brings in.
+    not. So a changed scope or an `--authored-total-bytes` override does not skip the check of what the live
+    judge read. `--allow-doc-drift` grades anyway, with a warning.
+  - Not checked: a live assert that recorded no `judgedDoc` (`unknown`), neither for drift nor for an unscrubbed
+    secret; and content only a widened scope or a larger `--authored-total-bytes` brings in. That content is
+    graded, named in a warning before the judge call, and listed in `uncheckedSections`; this process's scrub set
+    is all that protects it.
   - The grade is written to `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json` (layout
     experimental), scrubbed as a whole document and stamped with `harnessVersion` and `scenarioSha256`.
     `result.json` is never modified and no run-index row is added. The same run dir named twice, or through a

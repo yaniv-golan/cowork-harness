@@ -294,17 +294,20 @@ not run again; the judge call is the only spend.
 - **Drift is checked before the judge is called, from the live run's own inputs.** For every run dir, before any
   judge call, each LIVE `semantic_matches` assert that recorded a `judgedDoc` has its document rebuilt from the
   live inputs — its own `evidence_files` and `include_subagent_text`, the live run's `evidence_files` union and
-  its recorded capture budget — scrubbed with this process's secrets, and compared with that `judgedDoc`. Any
+  its recorded capture budget (for a run recorded before `authoredCapture` existed, the `--authored-total-bytes`
+  value you pass) — scrubbed with this process's secrets, and compared with that `judgedDoc`. Any
   difference is refused (exit `2`), naming the live assert and the differing sections: an authored file changed
   since the run, a sub-agent section, or a value the live run scrubbed that this process does not (refusing is
   what keeps that value from being sent). This check does not depend on the new scenario, so a changed scope or
-  an `--authored-total-bytes` override (`scope_changed`) does not skip it. `--allow-doc-drift` grades anyway; the
-  grade is then reported with its own `docMatchesLive` and, when that is `false`, a warning.
-  **What is not checked:** a live assert that recorded no `judgedDoc` — a run with none (`unknown`) is not checked
-  at all, neither for drift nor for an unscrubbed secret; and content that only the NEW scope brings in (a file
-  the live judge never read has nothing to be compared with, so a secret in it that this process does not know
-  is not detected). For a run recorded before `authoredCapture` existed, the live budget is the
-  `--authored-total-bytes` you pass.
+  an `--authored-total-bytes` override (`scope_changed`) does not skip the check of what the live judge read.
+  `--allow-doc-drift` grades anyway; the grade is then reported with its own `docMatchesLive` and, when that is
+  `false`, a warning.
+  **What is not checked:** a live assert that recorded no `judgedDoc` (`unknown`) — neither for drift nor for an
+  unscrubbed secret; and content that only a widened `evidence_files` scope or a larger `--authored-total-bytes`
+  brings in (a file the live cap left out, or a larger part of one). The live judge never read that content, so
+  nothing can be compared with it and a secret in it that this process does not know is not detected. It is not
+  refused: it is graded, named in a `::warning::` before the judge call, and listed in `uncheckedSections`
+  (`{assertionIndex, kind, path?}`, in the file and on each `runs[]` entry).
 - **Output.** Each run dir gets `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`, holding the re-graded
   asserts (per-claim grades and rationales, judge model, usage, cost, prompt hash and document fingerprint),
   `docMatchesLive` with the differing sections, the not-re-graded asserts, the `harnessVersion` that wrote it,
@@ -313,7 +316,7 @@ not run again; the judge call is the only spend.
   different judge models sit side by side. `result.json` is never modified
   and no run-index row is written, so `stats` does not count a re-grade as a run. The same run dir named twice,
   or reached through a symlink, is graded once. The JSON envelope, the text report and every refusal message are
-  scrubbed with the same secret set.
+  scrubbed with the same secret set. Each `runs[]` entry of the JSON envelope carries `scenarioSha256` too.
 - **Spend and invalid grades.** The file, each `runs[]` entry and the JSON envelope carry `judgeCostUsd` (the
   sum of the priced judge calls, retries included; absent when none was priced — unpriced is never `$0`) and
   `unpricedGrades` (how many grades had no price; when it is above `0` the total is a floor). The envelope's

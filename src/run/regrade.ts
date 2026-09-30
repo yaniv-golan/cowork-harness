@@ -22,7 +22,7 @@ import { join, resolve } from "node:path";
 import { composeJudgedDocument, evaluate, runSemanticJudges, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
-import { tildeify, writeAllSync } from "../io.js";
+import { tildeify, warn, writeAllSync } from "../io.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import type { Assertion, JudgedDocFingerprint, RunResult, Scenario } from "../types.js";
 import { DEFAULT_AUTHORED_TOTAL_BYTES, parseAuthoredTotalBytes } from "./artifacts.js";
@@ -81,6 +81,9 @@ export interface RegradeRunReport extends JudgeSpend {
   scenarioSha256: string;
   regradeFile: string;
   pass: boolean;
+  /** Sections of the graded documents no live `judgedDoc` carried, so the drift check could not vouch for them
+   *  (see `uncheckedSections`). Warned before the judge call, never refused. */
+  uncheckedSections: UncheckedSection[];
   /** Asserts whose grade is INVALID (the judge failed twice, e.g. an outage or a malformed grade) — counted
    *  apart from failures: an invalid grade says nothing about the run. It still makes `pass` false. */
   invalidGrades: number;
@@ -230,21 +233,24 @@ function liveDocDrift(
   budget: { totalBytes: number; perFileBytes?: number },
   sameInputs: AssertContext | undefined,
 ): { drift: Array<{ liveIndex: number; sections: DifferingSection[] }> } | { refusal: { kind: "usage" | "runtime"; message: string } } {
-  const live = (result.assertions ?? [])
+  // The capture is built from EVERY live semantic assert (its priority globs are their union, as execute.ts
+  // builds it), but only those that recorded a `judgedDoc` have anything to be compared with.
+  const allLive = (result.assertions ?? [])
     .map((r, liveIndex) => ({ r, liveIndex }))
-    .filter(({ r }) => r.assertion?.semantic_matches !== undefined && r.judgedDoc !== undefined);
+    .filter(({ r }) => r.assertion?.semantic_matches !== undefined);
+  const live = allLive.filter(({ r }) => r.judgedDoc !== undefined);
   if (live.length === 0) return { drift: [] };
   let ctx = sameInputs;
   if (!ctx) {
     // The live asserts stand in for the scenario: the builder reads only `assert` to decide what to capture.
     const built = assertContextFromRunDir(
       runDir,
-      { ...sc, assert: live.map(({ r }) => r.assertion) },
+      { ...sc, assert: allLive.map(({ r }) => r.assertion) },
       {
         command: CMD,
         recomputeAuthored: "semantic",
         secrets,
-        priorityGlobs: evidenceUnion(live.map(({ r }) => r.assertion)),
+        priorityGlobs: evidenceUnion(allLive.map(({ r }) => r.assertion)),
         totalBytes: budget.totalBytes,
         ...(budget.perFileBytes !== undefined ? { perFileBytes: budget.perFileBytes } : {}),
       },
@@ -269,6 +275,49 @@ function liveDocDrift(
     if (sections.length || r.judgedDoc!.sha256 !== fp.sha256) drift.push({ liveIndex, sections });
   }
   return { drift };
+}
+
+/** A section of a graded document that no live `judgedDoc` vouches for. */
+export interface UncheckedSection {
+  /** Index of the assert in the new scenario's `assert:` list. */
+  assertionIndex: number;
+  kind: JudgedDocFingerprint["sections"][number]["kind"];
+  path?: string;
+}
+
+/**
+ * The sections of the NEW documents that the drift check cannot vouch for: content that no live `judgedDoc`
+ * carried. A section is covered when some live document has one of the same kind and path with the same
+ * bytes; a non-authored section (final answer, transcript, health note…) is also covered when it is no longer
+ * than a live one of its kind, since those carry no file content a scope could newly bring in. What is left is
+ * content a widened `evidence_files` scope or a larger budget pulled in — never compared with anything, so
+ * neither a drift nor a value the live run scrubbed and this process does not can be detected in it.
+ * Empty when the run recorded no `judgedDoc` at all: that run is `unknown`, and unchecked as a whole.
+ */
+function uncheckedSections(semantic: Assertion[], sc: Scenario, ctx: AssertContext, result: RunResult): UncheckedSection[] {
+  const liveSections = (result.assertions ?? []).flatMap((r) =>
+    r.assertion?.semantic_matches !== undefined && r.judgedDoc ? r.judgedDoc.sections : [],
+  );
+  if (liveSections.length === 0) return [];
+  const exact = new Set(liveSections.map((s) => `${s.kind}\0${s.path ?? ""}\0${s.sha256}`));
+  const longest = new Map<string, number>();
+  for (const s of liveSections) longest.set(s.kind, Math.max(longest.get(s.kind) ?? 0, s.chars));
+  const out: UncheckedSection[] = [];
+  const seen = new Set<string>();
+  for (const a of semantic) {
+    const sm = a.semantic_matches!;
+    const fp = composeJudgedDocument(ctx, sm.include_subagent_text === true, sm.evidence_files).fingerprint;
+    const assertionIndex = sc.assert.indexOf(a);
+    for (const s of fp.sections) {
+      if (exact.has(`${s.kind}\0${s.path ?? ""}\0${s.sha256}`)) continue;
+      if (s.kind !== "authored" && s.kind !== "subagent" && s.chars <= (longest.get(s.kind) ?? -1)) continue;
+      const key = `${assertionIndex}\0${s.kind}\0${s.path ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ assertionIndex, kind: s.kind, ...(s.path !== undefined ? { path: s.path } : {}) });
+    }
+  }
+  return out;
 }
 
 const sectionLabel = (d: DifferingSection): string => `${d.change} ${d.kind}${d.path !== undefined ? ` ${d.path}` : ""}`;
@@ -298,6 +347,8 @@ function writeNew(dir: string, stem: string, body: string): string {
 
 interface Prepared {
   runDir: string;
+  dirAsGiven: string;
+  unchecked: UncheckedSection[];
   turn: number;
   ctx: AssertContext;
   resultSha256: string;
@@ -427,8 +478,15 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
 
     prepared.push({
       runDir,
+      dirAsGiven: dir,
       turn: second.turn,
       ctx: second.ctx,
+      unchecked: uncheckedSections(
+        sc.assert.filter((a) => a.semantic_matches !== undefined),
+        sc,
+        second.ctx,
+        second.result,
+      ),
       resultSha256: sha256Hex(readFileSync(turnArtifactPath(runDir, second.turn, "result.json"))),
       budget,
       live,
@@ -439,6 +497,17 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
   const semantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
   const runs: RegradeRunReport[] = [];
   for (const p of prepared) {
+    // Not refused — a widened scope or a larger budget is a legitimate re-grade — but said before the spend.
+    if (p.unchecked.length)
+      warn(
+        scrub(
+          `::warning:: ${CMD}: ${p.dirAsGiven}: ${p.unchecked.length} section(s) of the graded document were never read by the live judge ` +
+            `(${p.unchecked.map((u) => `assert ${u.assertionIndex}: ${u.kind}${u.path !== undefined ? ` ${u.path}` : ""}`).join(", ")}) — ` +
+            `brought in by a widened evidence_files scope or a larger --authored-total-bytes. They were never checked for drift or for a ` +
+            `secret the live run scrubbed; this process's scrub set is all that protects them.`,
+          secrets,
+        ),
+      );
     const { judge, judgeFor } = judgesForRun({ modelOverride: opts.judgeModel }, opts.makeJudge);
     // The SAME array to both calls: `check` reads the judge's results back by assertion identity.
     await runSemanticJudges(semantic, p.ctx, judge, judgeFor);
@@ -485,6 +554,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       // An all-invalid round (a judge outage) is still written, and these counts are what tell it apart from
       // a failing grade without walking `assertions[]`.
       regraded: assertions.length,
+      uncheckedSections: p.unchecked,
       invalidGrades,
       ...spend,
       assertions,
@@ -502,6 +572,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       pass,
       invalidGrades,
       ...spend,
+      uncheckedSections: p.unchecked,
       docMatchesLive,
       differingSections: differing,
       assertions,
@@ -591,9 +662,13 @@ export async function cmdRegrade(args: string[]): Promise<never> {
       }),
     );
   } catch (e) {
-    return fail(CMD, "usage", (e as Error).message, undefined, json);
+    // An argument error echoes what was typed, so it is scrubbed like every other message this command prints.
+    return fail(CMD, "usage", scrub((e as Error).message, collectSecrets()), undefined, json);
   }
   applyParsedCommandGlobals(CMD, p, json);
+  // One secret set for the re-grade and everything this command prints (after the globals, so a --dotenv
+  // file's scrub settings count): the rubric and the judge's messages echo scenario text.
+  const secrets = collectSecrets();
   const scenarioFile = p.options["--scenario"];
   if (p.positionals.length === 0 || !scenarioFile) return fail(CMD, "usage", REGRADE_USAGE, undefined, json);
   let authoredTotalBytes: number | undefined;
@@ -604,15 +679,12 @@ export async function cmdRegrade(args: string[]): Promise<never> {
       return fail(
         CMD,
         "usage",
-        `--authored-total-bytes must be a whole number of bytes >= 1 (got ${JSON.stringify(rawBudget)})`,
+        scrub(`--authored-total-bytes must be a whole number of bytes >= 1 (got ${JSON.stringify(rawBudget)})`, secrets),
         undefined,
         json,
       );
     authoredTotalBytes = n;
   }
-  // One secret set for the re-grade and everything this command prints: the rubric and the judge's messages
-  // echo scenario text, which reaches the claim lines and the envelope unscrubbed otherwise.
-  const secrets = collectSecrets();
   const outcome = await regradeRuns({
     secrets,
     runDirs: p.positionals,

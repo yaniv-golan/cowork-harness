@@ -643,8 +643,8 @@ collision) prints the error envelope instead, as before.
 
 **`regrade`** re-grades a kept run's `semantic_matches` asserts with the judge and prints one payload-shaped
 document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`. Each `runs[]` entry is one run dir:
-`{runDir, turn, scenarioSha256, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, docMatchesLive,
-differingSections[], assertions[], notRegraded[], authoredCapture}`, and the document's top level also carries
+`{runDir, turn, scenarioSha256, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, uncheckedSections[],
+docMatchesLive, differingSections[], assertions[], notRegraded[], authoredCapture}`, and the document's top level also carries
 `judgeCostUsd?` and `unpricedGrades` summed over every run dir. `runs[]` holds only graded run dirs: a refusal
 refuses the whole batch and prints the error envelope instead. `scenarioSha256` is the SHA-256 of the scenario
 file's bytes. `judgeCostUsd` is the sum of the priced judge
@@ -658,10 +658,12 @@ recorded (`unknown` when it recorded none, never `true`); `differingSections[]` 
 passed. `docMatchesLive: false` says the bytes differ, not why (an authored file changed since the run, a
 different secret-scrub set, a sub-agent section). The refusal is decided separately, before any judge call:
 each live assert that recorded a `judgedDoc` is rebuilt from the live run's own inputs (its scope, the live
-`evidence_files` union, the recorded budget) with this process's secrets, and any difference refuses unless
-`--allow-doc-drift` is passed — whatever the new scenario's scope. A run that recorded no `judgedDoc` is not
-checked (neither for drift nor for an unscrubbed secret), nor is content that only a new scope brings in. The
-envelope is scrubbed with the same secret set as the file. **Exit codes:** `0` every re-graded assert passes · `1` any
+`evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture` existed, the
+`--authored-total-bytes` value passed) with this process's secrets, and any difference refuses unless
+`--allow-doc-drift` is passed — whatever the new scenario's scope. Not checked: a live assert that recorded no
+`judgedDoc` (`unknown`), neither for drift nor for an unscrubbed secret; and content only a widened scope or a
+larger `--authored-total-bytes` brings in, which is graded, warned about and listed in `uncheckedSections[]`
+(`{assertionIndex, kind, path?}`). The envelope is scrubbed with the same secret set as the file. **Exit codes:** `0` every re-graded assert passes · `1` any
 fails or is judge-invalid · `2` usage, or a refusal (a multi-turn, partial, replay or chat run dir, a pruned work
 dir, a missing transcript sidecar, a live document whose rebuild differs from its `judgedDoc` without
 `--allow-doc-drift`, a run that did not record `authoredCapture` without `--authored-total-bytes`,
