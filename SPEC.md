@@ -641,6 +641,50 @@ unless `--allow-budget-stop`. `--rerecord-stale` with nothing stale prints `ok: 
 A refusal before the first recording (no credentials, an unresolved model, the budget pre-flight, a slug
 collision) prints the error envelope instead, as before.
 
+**`--max-budget-usd` in JSON: the `budget` marker and `error.code`.** The cap is a fact about the
+invocation, not about any one `RunResult`, so it is published on the envelope frame — beside `ok` and
+`error`, on every family (`results[]`-bearing, payload-shaped, and the error envelope) — as a top-level
+`budget` key, whenever a `--max-budget-usd` pre-flight ran: `run` (a file, `<dir/>`, `--matrix`), `skill`,
+and `record` (a file, `<dir/>`, `--rerecord-stale`, and both `--dry-run` arms). It is **absent** when no cap
+was passed and on a `--repeat` lane, which skips the pre-flight and enforces a running total instead
+(reported as `rollups[].stoppedEarly: "budget"`). One shape, used in both places below:
+
+```jsonc
+"budget": {
+  "capUsd": 0.5,                       // the --max-budget-usd value
+  "basis": "single" | "batch",         // single: each scenario's OWN worst observed cost vs the cap (run, skill,
+                                       //   a record file, each scenario of run <dir/>); batch: the SUM over a
+                                       //   record <dir/> / --rerecord-stale batch vs the cap
+  "enforced": true | false | "lower_bound",
+                                       // true: every scenario was priced. false (single): at least one scenario
+                                       //   had no history and ran with NO cap. "lower_bound" (batch): unpriced
+                                       //   scenarios contributed $0, so the cap was checked against a lower bound
+  "reason?": "no_history",             // present exactly when enforced !== true
+  "estimateUsd?": 0.31,                // single: the largest worst-observed cost among the priced scenarios;
+                                       //   batch: the summed estimate. Absent when nothing was priced
+  "unpriced": ["<scenario>"],          // scenarios with no priced history in runsDir's index; [] when enforced
+  "runsDir": "<abs path>",             // the runs root whose index.jsonl was read
+  "runsDirRedirected": bool            // --run-dir / COWORK_HARNESS_RUNS_DIR moved it off the default
+}
+```
+
+History is read from `runsDir`'s index only; a `--run-dir` that points somewhere new each invocation
+therefore starts every scenario unpriced. When `runsDirRedirected` is true the stderr warning says so and
+names `--run-dir` / `COWORK_HARNESS_RUNS_DIR` as the cause (the flag works by setting the variable, so the
+two are not distinguished).
+
+A budget **refusal** is the error envelope with `error.category: "runtime"` (unchanged), plus
+**`error.code: "budget_exceeded"`** and **`error.budget`** — the same shape as above, describing the
+estimate that was refused (`enforced` is `true`, or `"lower_bound"` when the known part of a batch alone
+exceeds the cap). Exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`). `error.code` narrows a
+category and never replaces one; it is **absent** on every other error, so `error.code ===
+"budget_exceeded"` is the whole test for "refused on cost" and a load failure is never mistaken for it.
+When the refusal replaces a payload envelope, that payload's findings stay on the error envelope as the
+same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `target`, `scenarios`,
+`skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
+`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`. (Through 4.2.0
+these went to stderr only, and the message prose was the only discriminator.)
+
 The command lists above are illustrative, not a frozen contract — this is not a single universal
 envelope across every command, so check a given command's own section (or grep its
 `jsonEnvelope`/`jsonPayloadEnvelope` call site in `src/run/envelope.ts`/`src/cli.ts`) for its exact
@@ -733,7 +777,8 @@ assertions (never user-authored themselves):
 ```jsonc
 { "tool":"cowork-harness","version":"...","command":"...","ok":false,
   "results":[],  // [] except record's post-run refusal: the refused run, beside the non-null error
-  "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string" } }
+  "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string",
+             "code?": "budget_exceeded", "budget?": { /* §11 --max-budget-usd */ } } }
 ```
 Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryError`→`boundary`).
 `results` is `[]` with one exception: when `record` refuses to write a cassette after the agent finished,
@@ -983,7 +1028,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
 - **Baseline JSON shape** — the `baselines/desktop-*.json` field structure (CI's committed source of
   truth; consumers commit and diff these).
 - **RunResult envelope** — `schema/run-result.json` under `--output-format json` (§11): the
-  `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0). Renaming or removing a key, or
+  `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0), and the `--max-budget-usd`
+  `budget` marker and `error.code` values (§11). Renaming or removing a key, or
   changing what an existing key means, is breaking; adding one is not. For `toolDurations` (keyed by tool
   name) the set of entries is not the key's meaning: adding an entry, such as a tool listed with
   `calls: 0`, is additive. This is stated per key, not for every map — `toolCounts`, for example, lists

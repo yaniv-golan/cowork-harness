@@ -5,10 +5,12 @@
  * `cli.ts` — `cli.ts` already imports `cmdRecord` FROM `cassette.ts`, so a call in that direction would
  * be a cycle. Everything here is leaf-module-only for the same reason.
  */
-import { writeAllSync } from "../io.js";
-import { fail } from "./envelope.js";
+import { resolve } from "node:path";
+import { tildeify, writeAllSync } from "../io.js";
+import { fail, type JsonErrorExtras } from "./envelope.js";
 import { readIndex, scenarioCostHistory } from "./run-index.js";
-import { runsRoot } from "./trace-view.js";
+import { defaultRunsHome, runsRoot } from "./trace-view.js";
+import { recordBudgetStatus, type BudgetStatus } from "./budget-status.js";
 
 /** Human-facing line on stderr. `cli.ts` has its own module-scope `log` that is not importable; this is
  *  the same one-liner, kept local so the extraction stays leaf-only. */
@@ -19,6 +21,37 @@ const log = (s: string) => writeAllSync(2, s + "\n");
  *  keep `fail()`'s `runtime` default of `2`. The category stays `runtime` on every command. */
 function budgetRefusalExitCode(command: string): 1 | undefined {
   return command === "record" ? 1 : undefined;
+}
+
+/** Where the history came from, and whether `--run-dir` / `COWORK_HARNESS_RUNS_DIR` moved it. The flag
+ *  works by setting the variable, so the two cannot be told apart here — messages name both. Plain
+ *  `resolve` on both sides, never `realpath`: the question is "did the user point somewhere else", and a
+ *  symlinked tmpdir (macOS `/tmp` → `/private/tmp`) is not a different answer to it. */
+export function runsDirInfo(): { runsDir: string; runsDirRedirected: boolean } {
+  const runsDir = runsRoot();
+  return { runsDir, runsDirRedirected: resolve(runsDir) !== resolve(defaultRunsHome()) };
+}
+
+/** The clause a missing-history warning appends. With a redirected runs root the likeliest cause is not
+ *  "this scenario never ran" but "it ran into a different runs root" — the history is keyed by where runs
+ *  were WRITTEN, so a fresh `--run-dir` per invocation starts every scenario unpriced, every time. */
+let causeNoted = false;
+function noHistoryCause(): string {
+  const { runsDir, runsDirRedirected } = runsDirInfo();
+  // Once per process: `run <dir/>` pre-flights each scenario on its own, and the cause is the same for
+  // every one of them — repeating it per line would bury the scenario names it is attached to.
+  if (!runsDirRedirected || causeNoted) return "";
+  causeNoted = true;
+  return (
+    ` The runs root is redirected to ${tildeify(runsDir)} (--run-dir / COWORK_HARNESS_RUNS_DIR), and priced history is read ` +
+    `from that root's index only — reuse one runs dir across invocations so the cap has history to enforce against.`
+  );
+}
+
+/** The error extras a budget refusal carries: `error.code` + `error.budget`, plus any payload findings
+ *  the refusal's envelope would otherwise lose. */
+function refusalExtras(budget: BudgetStatus, payload?: Record<string, unknown>): JsonErrorExtras {
+  return { error: { code: "budget_exceeded", budget }, ...(payload ? { payload } : {}) };
 }
 
 /** Worst observed cost for a scenario, or `undefined` when it has never been priced. The WORST rather
@@ -48,18 +81,44 @@ export function pricedRunCount(scenario: string): number {
  * says so and proceeds rather than either blocking a first run or pretending the cap is enforced. That
  * mirrors the batch lane's own missing-telemetry degradation in `runRepeatBatch`.
  */
-export function preflightBudget(command: string, scenario: string, maxBudgetUsd: number, json: boolean): void {
+export function preflightBudget(
+  command: string,
+  scenario: string,
+  maxBudgetUsd: number,
+  json: boolean,
+  refusalPayload?: Record<string, unknown>,
+): void {
   const history = scenarioCostHistory(readIndex(runsRoot()), scenario);
   if (history.length === 0) {
+    recordBudgetStatus({
+      capUsd: maxBudgetUsd,
+      basis: "single",
+      enforced: false,
+      reason: "no_history",
+      unpriced: [scenario],
+      ...runsDirInfo(),
+    });
     log(
       `::warning:: --max-budget-usd: no priced run history for "${scenario}" — cannot pre-flight this run, proceeding UNCAPPED. ` +
-        `(A single run has no mid-run cost signal to abort on; the cap becomes enforceable once this scenario has run once.)`,
+        `(A single run has no mid-run cost signal to abort on; the cap becomes enforceable once this scenario has run once.)` +
+        noHistoryCause(),
     );
     return;
   }
   // The WORST observed cost, not the median: this is a refusal gate, and an estimate that under-predicts
   // lets through exactly the expensive run the flag was reached for.
   const worst = Math.max(...history);
+  const status: BudgetStatus = {
+    capUsd: maxBudgetUsd,
+    basis: "single",
+    enforced: true,
+    estimateUsd: worst,
+    unpriced: [],
+    ...runsDirInfo(),
+  };
+  // Recorded BEFORE a refusal can exit, so the top-level `budget` key is on the refusal's envelope too —
+  // its presence must not depend on whether an earlier scenario happened to record one.
+  recordBudgetStatus(status);
   if (worst > maxBudgetUsd)
     fail(
       command,
@@ -68,6 +127,8 @@ export function preflightBudget(command: string, scenario: string, maxBudgetUsd:
       `Raise the cap, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history — a single run cannot be aborted mid-flight on cost (no live cost signal exists).`,
       json,
       budgetRefusalExitCode(command),
+      undefined,
+      refusalExtras(status, refusalPayload),
     );
 }
 
@@ -197,13 +258,30 @@ export function batchCostEstimateLine(
  * have no history" is a materially weaker statement than the single-run case and must not be reported
  * with the same sentence.
  */
-export function preflightBatchBudget(command: string, scenarios: string[], maxBudgetUsd: number, json: boolean): void {
+export function preflightBatchBudget(
+  command: string,
+  scenarios: string[],
+  maxBudgetUsd: number,
+  json: boolean,
+  refusalPayload?: Record<string, unknown>,
+): void {
   const { known, unpriced } = estimateBatchCost(scenarios);
+  const status: BudgetStatus = {
+    capUsd: maxBudgetUsd,
+    basis: "batch",
+    enforced: unpriced.length ? "lower_bound" : true,
+    ...(unpriced.length ? { reason: "no_history" as const } : {}),
+    ...(unpriced.length < scenarios.length ? { estimateUsd: known } : {}),
+    unpriced,
+    ...runsDirInfo(),
+  };
+  recordBudgetStatus(status); // before any refusal can exit — see preflightBudget
   if (unpriced.length)
     log(
       `::warning:: --max-budget-usd: ${unpriced.length}/${scenarios.length} scenario(s) have no priced run history and contribute $0 to the estimate ` +
         `(${unpriced.slice(0, 5).join(", ")}${unpriced.length > 5 ? `, +${unpriced.length - 5} more` : ""}) — ` +
-        `the batch total below is a LOWER BOUND, so the cap is weaker than it looks until those have run once.`,
+        `the batch total below is a LOWER BOUND, so the cap is weaker than it looks until those have run once.` +
+        noHistoryCause(),
     );
   // Report the total on the PASSING path too. A cap that silently permits tells the user nothing about
   // how close they came, and deriving the number by bisecting the cap is not a workflow.
@@ -217,5 +295,9 @@ export function preflightBatchBudget(command: string, scenarios: string[], maxBu
       `Raise the cap, narrow the batch, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate summed from per-scenario history — costs are not abortable mid-run (no live cost signal exists).`,
       json,
       budgetRefusalExitCode(command),
+      undefined,
+      // A refusal over a lower bound is still a refusal (the known part alone exceeds the cap), so
+      // `enforced` is whatever the estimate was — `unpriced[]` says which scenarios it did not include.
+      refusalExtras(status, refusalPayload),
     );
 }
