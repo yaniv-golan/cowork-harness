@@ -12,6 +12,7 @@ import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { collectSecrets } from "../src/secrets.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import type { LaunchPlan } from "../src/session.js";
+import { slashInvokedSkillIds } from "../src/critique/skill-invocation.js";
 
 // `regrade` re-grades a KEPT run's semantic_matches asserts. Every fixture is a real tree: a pre-run manifest
 // captured by the production function, files authored after it, and a result.json whose `assertions[]` and
@@ -125,6 +126,8 @@ async function keptRun(opts: {
     readPreRunManifestHashes(runDir),
     authoredCaptureOpts({ workRoot, runDir, priorityGlobs, totalBytes: opts.totalBytes ?? DEFAULT_AUTHORED_TOTAL_BYTES }),
   );
+  // The live producer's value for this prompt (no leading slash command, no staged skills).
+  const slashInvokedSkills = slashInvokedSkillIds(scenario.prompt, [], { resultText: FINAL });
   const liveCtx: AssertContext = {
     transcript: TRANSCRIPT,
     finalMessage: FINAL,
@@ -146,6 +149,7 @@ async function keptRun(opts: {
     toolResultTexts: [],
     skillsInvoked: [],
     skillToolAvailable: true,
+    slashInvokedSkills,
   };
   const live = opts.liveJudge ?? judgeFactory(() => false);
   const j = live.make();
@@ -154,6 +158,8 @@ async function keptRun(opts: {
 
   const result = {
     scenario: "rg",
+    prompt: scenario.prompt,
+    slashInvokedSkills,
     fidelity: "container",
     result: "success",
     decisions: [],

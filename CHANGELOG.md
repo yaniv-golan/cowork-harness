@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` asserts** with
+  the judge, without running the agent again; the judge call is the only spend. `verify-run` never calls the
+  judge, so a rubric change previously meant a paid re-run.
+  - The judged document is rebuilt from the kept run dir with the capture budget the live run recorded
+    (`authoredCapture`), the scenario's `evidence_files` as priority globs, and every section secret-scrubbed.
+  - `docMatchesLive` reports whether the rebuilt document equals, section by section, the `judgedDoc` the live
+    run recorded: `true`, `false` (the differing sections are listed by kind and path), `scope_changed` (the
+    evidence scope or budget changed), or `unknown` (the run recorded no fingerprint).
+  - The grade is written to `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json` (layout
+    experimental). `result.json` is never modified and no run-index row is added.
+  - `--judge-model` grades every assert with one model; an alias such as `opus` is refused.
+  - Exit `0` when every re-graded assert passes, `1` when any fails, `2` on usage or a refusal: a multi-turn,
+    partial, replay or chat run dir, a pruned work dir, or a run recorded before `authoredCapture` existed
+    (accepted with `--authored-total-bytes <N>`). Refusals are decided for every run dir before any judge call.
+  - `--output-format json` prints one payload document with a `runs[]` array.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
@@ -49,21 +67,6 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
 
 ### Added
 
-- **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` asserts** with
-  the judge, without running the agent again; the judge call is the only spend. `verify-run` never calls the
-  judge, so a rubric change previously meant a paid re-run.
-  - The judged document is rebuilt from the kept run dir with the capture budget the live run recorded
-    (`authoredCapture`), the scenario's `evidence_files` as priority globs, and every section secret-scrubbed.
-  - `docMatchesLive` reports whether the rebuilt document equals, section by section, the `judgedDoc` the live
-    run recorded: `true`, `false` (the differing sections are listed by kind and path), `scope_changed` (the
-    evidence scope or budget changed), or `unknown` (the run recorded no fingerprint).
-  - The grade is written to `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json` (layout
-    experimental). `result.json` is never modified and no run-index row is added.
-  - `--judge-model` grades every assert with one model; an alias such as `opus` is refused.
-  - Exit `0` when every re-graded assert passes, `1` when any fails, `2` on usage or a refusal: a multi-turn,
-    partial, replay or chat run dir, a pruned work dir, or a run recorded before `authoredCapture` existed
-    (accepted with `--authored-total-bytes <N>`). Refusals are decided for every run dir before any judge call.
-  - `--output-format json` prints one payload document with a `runs[]` array.
 - **`eval` — paired A/B evaluation of a skill edit (EXPERIMENTAL).**
   `cowork-harness eval <scenario.yaml | dir/> --arm before=<source> --arm after=<source>` runs every
   scenario with each of two versions of the session's `plugins.local_plugins` plugin and compares how often
