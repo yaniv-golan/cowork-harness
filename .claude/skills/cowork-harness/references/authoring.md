@@ -284,7 +284,7 @@ WARN `lint-skill-ignore-invalid`, as is any other malformed marker. An unclosed 
 `lint-skill-ignore-unclosed`, and one that suppresses nothing is INFO `lint-skill-ignore-unused`.
 
 **A marker is an edit to `SKILL.md`, and it costs what any edit costs.** The skill hash covers the file's
-content, so adding or moving a marker stales every cassette of that skill (a paid re-record to clear), and
+content (unless the session's `staleness.hash_ignore` excludes it), so adding or moving a marker stales every cassette of that skill (a paid re-record to clear), and
 the agent reads the marker text like the rest of the file, which counts toward the re-attach cap. When
 either cost matters, prefer `--ignore-rule <rule>=<glob>`, which lives in your CI command and touches
 neither; it suppresses the rule for the whole file, so pair it with a check on `lint-skill --json`'s
