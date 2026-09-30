@@ -452,17 +452,21 @@ describe("eval: per-rep classification over the real excerpts", () => {
       args(scen, a, b),
       deps(
         fakeRunner((s, r) => {
-          if (s.job.arm !== "after") return r;
+          // One valid rep keeps `after` from being an all-errored arm (whose rows are forced insufficient), so
+          // this exercises the SCORING of the errored reps.
+          if (s.job.arm !== "after" || s.job.rep === 2) return r;
           const fx = s.job.rep === 1 ? "usage-limit" : "timeout";
           return { ...fixture(fx), outDir: r.outDir, fingerprint: r.fingerprint } as RunResult;
         }),
       ),
     );
-    expect(out.report.arms[1].buckets).toEqual({ errored_agent: 4, errored_infra: 1 });
+    expect(out.report.arms[1].buckets).toEqual({ errored_agent: 3, errored_infra: 1, valid: 1 });
+    expect(out.report.summary.erroredArms).toEqual([]);
     const row = out.report.sections.tuned!.rows[0];
-    expect(row).toMatchObject({ k1: 5, n1: 5, k2: 0, n2: 4 });
+    expect(row).toMatchObject({ k1: 5, n1: 5, k2: 1, n2: 4 });
+    expect(row.label).not.toBe("insufficient");
     const erroredRate = out.report.sections.tuned!.classificationRows.find((r) => r.kind === "errored_agent_rate")!;
-    expect(erroredRate).toMatchObject({ k1: 0, n1: 5, k2: 4, n2: 4 });
+    expect(erroredRate).toMatchObject({ k1: 0, n1: 5, k2: 3, n2: 4 });
   });
 
   it("an unanswered gate is the agent's error, and its salvaged result and dir are recorded", async () => {
