@@ -35,19 +35,22 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
     contains the eval's own scenario or session files (a symlink included), an `evals.json` or a symlink
     resolving outside it, a scenario input a run would refuse, a `--fail-on confirmed` that no row
     could reach, and no usable agent credential for a scenario's tier — decided by the same check as
-    `doctor --tier <tier>`'s `token` row, whose message and fix the refusal prints (a Keychain login with
-    no env/.env token passes only at `protocol`). In a scenario directory, YAML with no `prompt:` (a
-    session file) is skipped.
-  - A rep in which no model answered is excluded as infrastructure, not scored as the skill failing: the
-    agent's own authentication-failure reply (`Not logged in · Please run /login`, `Authentication
-    required · Sign in again to continue`; rule `auth`), or an error whose only models are `<synthetic>`
-    and which cost $0 (rule `no_model_answered`). An agent-caused failure outranks a pin exclusion, so a
-    crash with no model evidence still fails every row.
+    `doctor --tier <tier>`'s `token` row, whose message and fix the refusal prints (a Keychain login or a
+    config-dir `.credentials.json` with no env/.env token passes only at `protocol`). In a scenario
+    directory, YAML with no `prompt:` (a session file) is skipped.
+  - A rep that failed on the account rather than the skill is excluded as infrastructure, not scored as
+    the skill failing: the agent's own authentication-failure reply (`Not logged in · Please run /login`,
+    `Authentication required · Sign in again to continue`; rule `auth`), a usage or spend limit as its
+    final message, including on a nonzero exit after a model has spent (rule `usage_limit`), or an error
+    whose only models are `<synthetic>` and which cost $0 (rule `no_model_answered`). An agent-caused
+    failure outranks a pin exclusion, so a crash with no model evidence still fails every row.
   - Exit `0` when the eval completed, whatever drops the rows show; `--fail-on possible|confirmed` opts in
     to exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
-    differed across reps; an arm in which every rep errored compared nothing, so its eval reports every row
-    `insufficient`, names the arm and its most frequent error in the header (`summary.erroredArms`), and
-    exits `1`. Exit `3` when an arm snapshot could not be copied or failed its staging preflight. The
+    differed across reps, or when a scenario compared nothing: every rep of both arms errored, or every
+    rep of one arm is infrastructure — its rows are `insufficient`. An arm whose every rep is the agent's
+    own failure against an arm that ran is scored (a real drop). Each all-errored arm and scenario is named
+    in the header with its most frequent error and a matching hint (`summary.erroredArms`). Exit `3` when
+    an arm snapshot could not be copied or failed its staging preflight. The
     report format, labels and statistical defaults are experimental
     ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
 - **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so
@@ -213,6 +216,11 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   model in `models`, the run's `modelUsage` now decides, only when unambiguous: `true` when the concrete
   pinned id is the only or the dominant billed model, `false` when the single billed model is another,
   and absent otherwise (an alias pin, a tie, the pin missing among several).
+- **`doctor --tier protocol` accepts a signed-in config dir.** With no env/.env token, a
+  `.credentials.json` in the config dir (`CLAUDE_CONFIG_DIR`, else `~/.claude`) now makes the token check
+  a warning instead of a failure at `protocol`, as a macOS Keychain login already did: that tier keeps the
+  real config dir, so the agent signs itself in. Only the file's existence is checked. Other tiers still
+  require an env/.env token.
 - **`stats --group-by label` gives the right reason for runs it leaves out.** It explained a run with no
   label with the skill-hash reason (no fingerprint, nothing to hash). It says a run carries a label only
   when started with `--label`, or by `eval`.

@@ -98,9 +98,10 @@ The header states what every number depends on:
   where a drop is);
 - **per arm**: each rep's bucket, an `errorSource` histogram, and a loud **UNCLASSIFIED** count for any
   termination the classifier does not recognise (excluded — read those run dirs);
-- **an arm in which every rep errored**, named with its most frequent bucket and rule — for example
-  `errored_infra (auth) 5/5`. Nothing was compared, so every row is `insufficient` (see
-  [Exit codes](#exit-codes)); `report.json` lists these under `summary.erroredArms`;
+- **every (arm, scenario) in which every rep errored**, named with its most frequent bucket and rule —
+  for example `errored_infra (auth) 5/5` — and a hint that follows the rule (sign-in, quota, start-up,
+  network, decider, or read the run dirs). Whether that scenario's rows were compared is stated on the
+  line (see [below](#when-every-rep-errored)); `report.json` lists these under `summary.erroredArms`;
 - per-arm medians of cost, judge cost, turns and duration (descriptive, no test);
 - "no control arm: prior-answerable claims are not flagged".
 
@@ -115,7 +116,9 @@ it landed in.
 |---|---|
 | ran to completion | valid |
 | infrastructure: a spawn or protocol failure, a transport error, a usage limit, a decider timeout | excluded, reported |
-| no model answered: the agent could not authenticate (its reply is `Not logged in · Please run /login` or `Authentication required · Sign in again to continue`), or every model it reported is its own `<synthetic>` marker and the run cost $0 (a spend limit, say) | excluded as infrastructure, reported (rule `auth` or `no_model_answered`) |
+| the agent could not authenticate: its reply is `Not logged in · Please run /login` or `Authentication required · Sign in again to continue` | excluded as infrastructure, reported (rule `auth`) |
+| a usage or spend limit reported as the agent's final message (`You've hit your … limit`, out of usage credits, …) — including on a nonzero exit, and after a model has already spent | excluded as infrastructure, reported (rule `usage_limit`) |
+| no model answered: every model the run reported is the agent's own `<synthetic>` marker and it cost $0 | excluded as infrastructure, reported (rule `no_model_answered`) |
 | the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
@@ -153,9 +156,10 @@ The rows are checked in that order, and the first that matches decides. Two cons
 - **The agent credential**, for every tier the scenarios run at, by the same check
   `cowork-harness doctor --tier <tier>` prints as its `token` row: a failing check refuses the eval with
   doctor's message and fix. A token in the environment or `.env` passes at every tier. Without one, a
-  Claude Code login in the macOS Keychain is enough only at `protocol` (which keeps your real config dir,
-  so the agent signs itself in; doctor shows it as a warning); every other tier gives the agent a managed
-  config dir, and there it is refused. The check cannot see a token that is present but expired — a rep
+  Claude Code login — in the macOS Keychain, or a `.credentials.json` in the config dir
+  (`CLAUDE_CONFIG_DIR`, else `~/.claude`; only its existence is checked) — is enough only at `protocol`,
+  which keeps your real config dir, so the agent signs itself in; doctor shows it as a warning. Every
+  other tier gives the agent a managed config dir, and there it is refused. The check cannot see a token that is present but expired — a rep
   that then fails to authenticate is excluded as infrastructure (above).
 
 A refused eval leaves nothing in its eval dir.
@@ -163,15 +167,25 @@ A refused eval leaves nothing in its eval dir.
 ## Exit codes
 
 - `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
-  result, an arm in which every rep errored, or a judge disagreement still exits 1 — see below.)
+  result, a scenario that compared nothing, or a judge disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
   classification rows do not); with `--fail-on confirmed`, a `confirmed` drop. Also, with or without it:
-  every row `insufficient`, or the judge model differed across reps. An arm in which **every** rep
-  errored — infrastructure or the agent's own failure, in any mix — compared nothing, so every row of the
-  eval is reported `insufficient` and this rule applies; the header names the arm and its most frequent
-  error. An A/A run under `--fail-on possible` can exit 1 on noise alone.
+  every row `insufficient`, a scenario that compared nothing (below), or the judge model differed across
+  reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
 - `2` — usage, or any refusal before the first run.
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
+
+### When every rep errored
+
+Judged per scenario, for each arm:
+
+- **Every rep of both arms errored** (infrastructure or the agent's own failure, in any mix): 0 against 0
+  is not a comparison. The scenario's rows get no reps, so they are `insufficient`, and the eval exits 1.
+- **Every rep of one arm is infrastructure**: that arm never ran the skill. Same outcome.
+- **Every rep of one arm is the agent's own failure, and the other arm has valid reps**: a skill that
+  crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
+  every row) and the rows show the drop. The header still names the arm and its error; the exit code
+  follows the usual rules.
 
 ## Picking scenarios
 

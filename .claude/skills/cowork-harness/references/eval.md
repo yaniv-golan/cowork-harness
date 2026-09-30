@@ -33,13 +33,16 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
 
 A drop is a signal to investigate, not proof: open the run dirs the report links for that row. In order,
 first match wins: an infrastructure failure is excluded and reported — including a rep where no model
-answered (the agent's `Not logged in` / `Authentication required` reply, rule `auth`; or only
+answered (the agent's `Not logged in` / `Authentication required` reply, rule `auth`; a usage or
+spend limit as its final message, even on a nonzero exit after spend, rule `usage_limit`; or only
 `<synthetic>` models at $0, rule `no_model_answered`). An agent-caused failure (timeout, max turns,
 unanswered question, crash) then fails every row of its rep, even with its pin unknown. Only after that
 are a pin the agent did not honour (false, or unknown on a rep that completed) and a snapshot that changed
 excluded and reported. A loud UNCLASSIFIED count means a termination the classifier does not know — read
-those runs. If EVERY rep of an arm errored, the header says so (`Every rep of arm <label> errored — …`),
-every row is `insufficient`, and the eval exits 1: nothing was compared.
+those runs. Per scenario: if EVERY rep of both arms errored, or every rep of one arm is infrastructure,
+that scenario compared nothing — its rows are `insufficient` and the eval exits 1. If one arm's every rep
+is the agent's own failure and the other arm ran, the reps are scored (a real drop). Either way the header
+names the arm, scenario, dominant error and a matching hint (`Every rep of arm <label> in <scenario> errored — …`).
 
 ## Refused before any run (exit 2)
 
@@ -51,12 +54,13 @@ every row is `insufficient`, and the eval exits 1: nothing was compared.
 - a scenario input a run would refuse (a missing path, a `tool_not_called` the tier can never violate);
 - `--fail-on confirmed` when no row could reach `confirmed` at this `--reps`;
 - no usable agent credential for a scenario's tier — the same check as `doctor --tier <tier>`'s `token` row,
-  with its fix. A Keychain login without an env/.env token passes only at `protocol`.
+  with its fix. A Keychain login or a `.credentials.json` in the config dir, without an env/.env token,
+  passes only at `protocol`.
 
 ## Exit codes
 
 `0` completed — no drop fails the eval unless you pass `--fail-on`. `1` a drop at the `--fail-on` level,
-every row `insufficient` (including an arm whose every rep errored), or the judge model differed across reps (an A/A run under `--fail-on possible`
+every row `insufficient`, a scenario that compared nothing, or the judge model differed across reps (an A/A run under `--fail-on possible`
 can exit 1 on noise). `2` usage or a refusal. `3` an arm snapshot could not be copied or staged.
 
 ## Files
