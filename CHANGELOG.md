@@ -29,7 +29,6 @@ All notable changes to this project are documented here. The format is based on
     and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
     quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
     A literal newline or tab inside a rationale is tolerated.
-
 - **`verify-cassettes` and `replay` note a cassette whose recording agent differs from its baseline's.**
   The agent version is read from the recording's own `system/init` event (`claude_code_version`) and
   compared with the `agentVersion` of the baseline named in `fingerprint.baseline`. A mismatch usually
@@ -73,6 +72,12 @@ All notable changes to this project are documented here. The format is based on
   `hostloop` it reaches the agent process, and the shell sidecar keeps its proxy-only env — as Desktop's
   host-loop VM bash gets `TZ` only. It comes from the pinned baseline, so a scenario pinned to an older
   baseline does not get it.
+- **`replay --help`, `verify-cassettes --help` and the CI guide now name the scriptable success signal.**
+  In text mode both commands print nothing to stdout by design, and the exit code is the only signal.
+  For a script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
+  envelope's `ok`, for example with `jq -e '.ok'`.
+- **The documented read and skill-listing size caps are re-verified against agent 2.1.284.** The values
+  are unchanged; the docs now say which agent version they were read from.
 
 ### Fixed
 
@@ -86,14 +91,6 @@ All notable changes to this project are documented here. The format is based on
   - `verify-run` on a kept `skill_dirs` cell whose scenario has `answers:` now refuses (exit `2`, "the
     kept run predates the current skill"), because it recomputes the fingerprint from the session file.
     Previously it compared the wrong directory against itself and passed.
-- **`list` printed baselines in directory order**, so `desktop-1.24012.11` came before `desktop-1.24012.9`
-  on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
-  the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
-  filename per line), and `latest: true` on that entry in `--output-format json`.
-- **`replay --help`, `verify-cassettes --help` and the CI guide now name the scriptable success signal.**
-  In text mode both commands print nothing to stdout by design, and the exit code is the only signal.
-  For a script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
-  envelope's `ok`, for example with `jq -e '.ok'`.
 - **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
   as its own repeat batch, as documented in the scenario reference.
 - **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
@@ -110,6 +107,10 @@ All notable changes to this project are documented here. The format is based on
   runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
   moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
   no longer staged.
+- **`list` printed baselines in directory order**, so `desktop-1.24012.11` came before `desktop-1.24012.9`
+  on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
+  the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
+  filename per line), and `latest: true` on that entry in `--output-format json`.
 
 ### Internal
 
@@ -1966,6 +1967,7 @@ shows the population and its age, and a human decides what to re-read.
 
 ### Changed
 
+
 - `CLAUDE_CODE_MODEL_CATALOG` (new, third-party-only branch) is allowlisted, matching the standing rule for
   third-party-only keys.
 - **`design` added to the host-inventory scan's known-built-in skill roster.** It surfaced as a finding on
@@ -1979,6 +1981,7 @@ shows the population and its age, and a human decides what to re-read.
 - **All three committed cassettes in `examples/replays/` are re-recorded against `desktop-2.2553.1`**, each reporting no behavioural change versus the recording it replaced. The `protocol` fixture was recorded on the hermetic managed config dir (`ANTHROPIC_API_KEY` path) and the `container` one in a sealed container; `verify-cassettes` reports zero host-inventory findings on all three.
 - **A full live pass was run against `desktop-2.2553.1` / agent 2.1.275**, all four suites and all four tiers: `boundary-check` 6/6; e2e self-tests 9/9 including `smoke-l2-microvm` in a real VM and `smoke-multiselect-deciderdir` through the `--decider-llm` path; `npm run test:live` 19 tests, 18 passed, 1 failed, **0 skipped** (the previous pass had one skip — the hostloop `critique` case — which this pass exercised for the first time and which found the transport defect fixed above); `run examples/scenarios/` 7/7. The one live red is a pre-existing `live-matrix` case on old baselines where the model sometimes answers as text instead of calling `AskUserQuestion` — model variance, re-run and flipped, logged for hardening.
 - **`test/model-provenance.test.ts`'s pre-coverage-note test now builds its own fixture.** Every committed cassette now carries `model` coverage, so no shipped fixture emits the note the test reads. Rather than asserting the note's shape only when one happens to be present — a test that could not fail — it rewrites a real cassette's session fingerprint to the pre-`model` hash in a temp tree that preserves the relative session layout.
+
 
 ## [3.5.0] — 2026-09-06
 
@@ -2374,6 +2377,7 @@ live inference**. The evidence above is one machine and one account, which is no
   document is still capped at 262144 chars, so past that point only scoping helps; (3) if the overflow is
   sub-agent text, set `include_subagent_text: false`. The failure message names which of these applies.
 
+
 - **`agentBinary.manifestChecksumMatch` was cross-checking the wrong release channel, and had been for a
   month.** `sync` hard-coded the *stable* versioned manifest path. Desktop also stages release
   **candidates**, served only from `…/claude-code-releases/rc/<commit>/`, so for agent `2.1.255` the
@@ -2488,6 +2492,7 @@ live inference**. The evidence above is one machine and one account, which is no
   absent from the baseline's `spawn.env` (still 24 keys). `sync` refused to write until it was
   classified, which is the refusal working as intended.
 
+
 ## [3.2.1] — 2026-09-02
 
 ### Parity
@@ -2522,6 +2527,7 @@ live inference**. The evidence above is one machine and one account, which is no
   PATH — while the identical command from `/tmp` printed 3.2.0. The step now takes the `--version` reading
   from outside the repo, then `npm i -g`s the published version so the repo-root `doctor`/`replay` checks
   run against the artifact under test.
+
 
 ## [3.2.0] — 2026-09-01
 
@@ -2724,6 +2730,7 @@ live inference**. The evidence above is one machine and one account, which is no
   shipping a repo with mismatched floors. All three are now registered, and the test pinning that list
   carries the reason.
 
+
 - **22 dead anchor links introduced by the README router split, and the guard gap that let them ship.**
   Moving 11 `##` sections out of README left every `](#slug)` link pointing at them dangling — 19 in
   README (including two badges and the two nav lines the page opened with), plus one each in `AGENTS.md`,
@@ -2799,6 +2806,7 @@ live inference**. The evidence above is one machine and one account, which is no
   read, so a pinned `plugins.config_dir` is caught even with the managed branch nominally active. A
   `skills.local`-only protocol run that previously passed can now fail, and a sealed protocol run with
   plugins that previously failed now passes.
+
 
 ### Added
 
@@ -3231,6 +3239,7 @@ live inference**. The evidence above is one machine and one account, which is no
   binary). Nothing in the harness parses a path out of a `Write` result; this is recorded so nothing
   starts, since such an assertion would be reading something production does not emit. Cowork's own
   chat-surface prompt claims the opposite, so the product's description of its own tool is wrong here.
+
 
 ## [2.3.0] — 2026-08-26
 
@@ -4317,6 +4326,7 @@ what it always documented — so they ship in a minor:
   `--rerecord-stale` pass and make the escape flag reflexive. That warn path was the gap the record-time
   quarantine above now covers, so both documents now say which is which.
 
+
 - **Platform baseline `desktop-1.34493.1` (agent `2.1.237`).** The Cowork system prompt, both sub-agent
   append branches, all 28 pinned gate states, the VM egress policy and the 22-key spawn env are all
   unchanged — re-derived from the new bundle rather than inferred from an absent diff row (only the
@@ -4466,6 +4476,7 @@ what it always documented — so they ship in a minor:
   Not scheduled: no multi-root cassette exists in any reachable corpus (32 cassettes on the widest
   denominator across three repos), and no session declares 2+ plugin/skill roots. Pinned by tests in
   `test/skill-hash.test.ts` so the eventual fix is a deliberate change.
+
 
 ## [1.25.0] — 2026-08-20
 
@@ -4719,6 +4730,7 @@ what it always documented — so they ship in a minor:
 
 ### Added
 
+
 - **`verdict.failures[]` entries carry a `kind`, so "did MY assertions fail?" is answerable from the
   envelope.** A consumer was scraping stderr for this, because the only available discriminator was
   whether an entry carried an `assertion` key — and that was wrong in **both** directions. `verify-run`
@@ -4827,6 +4839,7 @@ what it always documented — so they ship in a minor:
   `positional-choose-order` advisory, which stops telling you to compare option order by hand.
 
 ### Changed
+
 
 - **A `scripts/`-grounded `not-adjudicable` now says WHY it could not be decided.** `scripts/` is
   outside the evaluator's corpus by design — it grades authored guidance (`SKILL.md`, `references/**`,
@@ -4938,6 +4951,7 @@ what it always documented — so they ship in a minor:
   end-to-end pass does **not** cover, which is what shipping a baseline is supposed to force.
 
 ### Fixed
+
 
 - **`assertions --list` was advertised as emitting each key's replay class. It does not.** The
   bundled skill's CI recipe offered the JSON form as the authoritative substitute for hand-typed key
@@ -5544,6 +5558,7 @@ what it always documented — so they ship in a minor:
   divergence — it stages from a git-tracked, immutable-per-run source, so there is no mid-run mutation
   for it to observe.
 
+
 - **The agent image's base layer is pinned by digest.** `docker/Dockerfile.agent` builds
   `FROM ubuntu:22.04@sha256:3b06811b…` instead of the floating `22.04` tag. This Dockerfile has no
   `COPY`/`ADD` — every byte comes from the base plus apt and pip — so with a floating base, rebuilding
@@ -5585,6 +5600,7 @@ what it always documented — so they ship in a minor:
   rather than a failed assertion. Assertion *outcomes* are unchanged — only the message, and only in the
   cases that were previously indistinguishable.
 
+
 - **Two documented networking overrides never worked.** `COWORK_EGRESS_PROXY` and
   `COWORK_DOCKER_NETWORK` sat behind values the caller always supplies — every container-like tier builds
   its egress sidecar before spawning, so the env branch could not execute in any tier, and `microvm`
@@ -5600,6 +5616,7 @@ what it always documented — so they ship in a minor:
   read-only for parity. `SPEC.md` §3.4 and `dockerRunArgv`'s own doc comment both claimed no agent binary
   is bind-mounted there, which was false since the host/VM split; both now say what actually happens —
   no agent *argv* runs in the sidecar, but the ELF *is* bound.
+
 
 - **`hostloop` `bash` had no egress at all — a regression dating to v0.21.0.** The VM sidecar that `bash`
   runs in via `docker exec` was spawned with an empty env on a Docker network with no route off-box, so
@@ -5619,6 +5636,7 @@ what it always documented — so they ship in a minor:
   host refused; the reachable half is load-bearing, because a sidecar with no egress also refuses
   everything and is otherwise indistinguishable from working enforcement.
 
+
 - **The egress proxy intercepted the sandbox's own loopback traffic.** The spawn env set
   `HTTP_PROXY`/`http_proxy` (and the HTTPS pair) with no `NO_PROXY`, so a proxy-honouring client asking
   for `http://localhost:PORT` had the request diverted to the allowlist proxy — which lives in a
@@ -5634,6 +5652,7 @@ what it always documented — so they ship in a minor:
   UPPERCASE proxy vars, and curl honours `http_proxy` in lower case only for `http://` URLs (the
   CVE-2016-5385 mitigation) — so plain-HTTP probes went unproxied. The probe and the agent spawn now
   derive their proxy env from one shared definition and cannot diverge.
+
 
 - **A blank `COWORK_AGENT_IMAGE` or `COWORK_CONTAINER_RUNTIME` produced an empty ref instead of the
   default.** Both were resolved with `process.env.X ?? "default"`, which passes `""` straight through, so
@@ -6882,6 +6901,7 @@ docs taught it. Most of what follows is that root cause; one new flag and one ne
   matching the evaluator transport; `--timeout` still raises it further, and the byte cap and process-group
   kill remain the real runaway guards.
 
+
 - **`critique` graded skills against a fraction of their own references.** The evidence package shared one
   8 KiB budget across ALL `references/**` files, filled in filename-sort order — so the alphabetically
   first file took what it needed and every later file was dropped whole. Measured across nine real runs on
@@ -7028,6 +7048,7 @@ caps were rationing the cheap term — but it is an increase, and a batch budget
   which the recorder has been emitting. The gap was invisible because the cassette that would have
   exposed it could not be re-recorded. Both are now declared (additive and corrective — the producer,
   the TS types and `docs/cassette.md` already promised them; no `cassetteVersion` bump).
+
 
 - **`sync`'s per-model effort extractor silently dropped `disallowThinkingDisabled`.**
   `parseModelEntryBody` read only `effortLevels`/`recommended`/`modes`, because the field had appeared
