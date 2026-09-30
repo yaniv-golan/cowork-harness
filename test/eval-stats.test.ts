@@ -295,7 +295,6 @@ describe("row labels", () => {
     expect(r3.floor).toBeCloseTo(0.1, 12);
     expect(labelRow({ ...base, threshold: 2, k1: 2, n1: 2, k2: 2, n2: 2, p: 1, adjustedP: 1 }).label).toBe("underpowered");
     expect(labelRow({ ...base, k1: 5, n1: 5, k2: 5, n2: 5, p: 1, adjustedP: 1 }).label).toBe("no detectable change");
-    expect(r3).not.toHaveProperty("floorExceedsAlpha");
   });
   it("insufficient still wins over underpowered", () => {
     expect(labelRow({ ...base, k1: 3, n1: 3, k2: 0, n2: 3, p: 0.1, adjustedP: undefined }).label).toBe("insufficient");

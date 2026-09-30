@@ -1,8 +1,8 @@
 // Per-rep classification for the paired evaluation: the termination decision table, bucket precedence,
 // and per-rep row extraction.
 //
-// Fixture provenance (test/fixtures/eval-classify/): ten files are EXCERPTS of real kept run dirs, one per
-// shape the local corpus exhibits — a clean run with a graded semantic_matches, a stalled-on-question run,
+// Fixture provenance (test/fixtures/eval-classify/): all eleven files are EXCERPTS of real kept run dirs. Nine
+// are one per shape the local corpus exhibits — a clean run with a graded semantic_matches, a stalled-on-question run,
 // an `exit`+`agent` crash, a `result`+`agent` error, a usage-limit result, a wall-clock timeout, a timeout
 // that overrode an earlier `exit`+`agent` classification, a stream that ended with no terminal event, and an
 // unanswered-gate partial. Only the fields the classifier reads were kept; every string inside an
@@ -363,7 +363,7 @@ describe("classifyRep over the real fixtures, unpatched", () => {
   });
 });
 
-describe("the reviewer's scenario: first-turn crashes are scored, not excluded", () => {
+describe("first-turn crashes are scored, not excluded", () => {
   it("5 of 10 B reps crash with models: [] -> each counts 0, and the row is a possible drop (p = 21/646)", () => {
     const scen = [plainAssertion];
     const rows = scenarioRows("s", scen);

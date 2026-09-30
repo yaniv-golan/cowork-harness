@@ -317,8 +317,7 @@ export function scenarioRows(scenario: string, assertions: readonly Assertion[])
 }
 
 export type RowExclusion =
-  | Exclude<RepBucket, "valid" | "errored_agent" | "judge_invalid">
-  | "judge_invalid"
+  | Exclude<RepBucket, "valid" | "errored_agent">
   /** The rep has no grade at this assertion index. */
   | "grade_missing"
   /** The grade at this index is for a different assertion than the frozen scenario's. */

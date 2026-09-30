@@ -224,6 +224,8 @@ export interface LabelInput {
   /** The corrected value's level: BH's q, or alpha under Holm. */
   level: number;
   threshold: number;
+  /** The row's attainable floor when the caller already computed it; derived from n1/n2 otherwise. */
+  floor?: number;
 }
 
 export interface LabelOutput {
@@ -236,7 +238,7 @@ export interface LabelOutput {
 export function labelRow(i: LabelInput): LabelOutput {
   const cmp = i.n1 > 0 && i.n2 > 0 ? i.k2 * i.n1 - i.k1 * i.n2 : 0;
   const direction: Direction = cmp < 0 ? "drop" : cmp > 0 ? "rise" : "none";
-  const floor = i.n1 > 0 && i.n2 > 0 ? attainableFloor(i.n1, i.n2) : 1;
+  const floor = i.floor ?? (i.n1 > 0 && i.n2 > 0 ? attainableFloor(i.n1, i.n2) : 1);
   const base = { direction, floor };
   if (i.n1 < i.threshold || i.n2 < i.threshold) return { ...base, label: "insufficient" };
   if (floor > i.alpha) return { ...base, label: "underpowered" };
@@ -300,7 +302,7 @@ export function evaluateFamily(rows: readonly FamilyRowInput[], o: FamilyOptions
   const level = correctionLevel(o);
   const out = measured.map((x): FamilyRowOutput => {
     const adjustedP = adjustedById.get(x.r.id);
-    const lab = labelRow({ ...x.r, p: x.p ?? 1, adjustedP, alpha: o.alpha, level, threshold: o.threshold });
+    const lab = labelRow({ ...x.r, p: x.p ?? 1, adjustedP, alpha: o.alpha, level, threshold: o.threshold, floor: x.floor });
     return {
       ...x.r,
       ...lab,
