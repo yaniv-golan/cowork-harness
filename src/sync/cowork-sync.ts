@@ -1873,8 +1873,18 @@ function pinWrapperDefect(chunk: string, fn: string, gatedSetRef: string): strin
   const guard = new RegExp(
     `^if\\(${reEsc(answer)}\\?\\.behavior!=="allow"\\|\\|!${reEsc(gatedSetRef)}\\.includes\\(${reEsc(tool)}\\)\\)return ${reEsc(answer)};`,
   );
-  if (!guard.test(body))
-    return `the terminal wrapper \`${fn}\` no longer opens with the non-allow / non-path-gated passthrough guard over ${gatedSetRef}`;
+  const g = body.match(guard);
+  if (!g) return `the terminal wrapper \`${fn}\` no longer opens with the non-allow / non-path-gated passthrough guard over ${gatedSetRef}`;
+  // After the guard the body is EXACTLY one `let` and the return. Anything else — a loop, an extra
+  // statement, a second `let` — is room to undo the pin between the guard and the pinned return.
+  const stmts = splitTopLevelStatements(body.slice(g[0].length));
+  if (stmts.length !== 2 || !stmts[0].startsWith("let ") || !stmts[1].startsWith("return "))
+    return `the terminal wrapper \`${fn}\` is no longer exactly one \`let\` plus the pinned return after its guard — classify the new statements`;
+  // The judged input may only be READ: `Object.keys(<judged>)`, `<judged>[<id>]`, and the final pin. Any
+  // other use — an assignment, a member/index write, `delete`, or passing it to a call (Object.assign) —
+  // can rewrite what the pin returns while the tail still reads `updatedInput:<judged>`.
+  const useDefect = judgedInputUseDefect(body, judged);
+  if (useDefect) return `the terminal wrapper \`${fn}\` ${useDefect} — the pinned input may no longer be the judged one`;
   if (/behavior:/.test(body))
     return `the terminal wrapper \`${fn}\` constructs its own permission behavior — a blanket decision, not a pin`;
   if ((body.match(/(?<![\w$])return(?![\w$])/g) ?? []).length !== 2)
@@ -1903,19 +1913,96 @@ function managedAskDefect(op: string, chunk: string, files: Map<string, string>,
     const local = defining ? exportLocalOf(defining, ref.slice(ref.lastIndexOf(".") + 1)) : null;
     return local && defining ? { chunk: defining, local } : null;
   };
-  const preds = [...body.matchAll(new RegExp(`if\\(([\\w$]+\\.[\\w$]+)\\(${reEsc(tool)},${reEsc(reason)}\\)\\)`, "g"))].filter((m) => {
-    const r = resolve(m[1]);
+  const isOrgPolicy = (ref: string) => {
+    const r = resolve(ref);
     const b = r ? braceBodyOf(r.chunk, `function ${r.local}(`) : null;
     return !!b && b.includes(`"Organization policy requires approval for this tool."`);
-  });
-  if (preds.length !== 1)
-    return `link 3 \`${fn}\` no longer branches exactly once on the organization-policy managed-ask predicate — the managed-ask outcome changed`;
+  };
+  const refs = [
+    ...new Set(
+      [...body.matchAll(new RegExp(`(?<![\\w$.])([\\w$]+\\.[\\w$]+)\\(${reEsc(tool)},${reEsc(reason)}\\)`, "g"))].map((m) => m[1]),
+    ),
+  ].filter(isOrgPolicy);
+  // EVERY textual call of the predicate counts, not only `if(P(…))` — a second, conjoined deny
+  // (`if(P(e,r)&&…)return{behavior:"deny"…}`) or a reason rewrite (`P(e,r)&&(r=…)`) is a second decision.
+  const calls = refs.length === 1 ? body.split(`${refs[0]}(`).length - 1 : 0;
+  if (refs.length !== 1 || calls !== 1)
+    return `link 3 \`${fn}\` no longer consults the organization-policy managed-ask predicate exactly once — the managed-ask outcome changed`;
+  const at = body.indexOf(`if(${refs[0]}(${tool},${reason}))`);
   const branch = new RegExp(
-    `^if\\(${reEsc(preds[0][1])}\\(${reEsc(tool)},${reEsc(reason)}\\)\\)\\{[\\w$]+(?:\\.[\\w$]+)*\\(\`[^\`]*\`\\);return\\}`,
+    `^if\\(${reEsc(refs[0])}\\(${reEsc(tool)},${reEsc(reason)}\\)\\)\\{[\\w$]+(?:\\.[\\w$]+)*\\(\`[^\`]*\`\\);return\\}`,
   );
-  if (!branch.test(body.slice(preds[0].index)))
+  if (at < 0 || !branch.test(body.slice(at)))
     return `link 3 \`${fn}\`'s managed-ask branch is no longer a logged fall-through into the permission prompt (it may deny or allow outright)`;
+  // Nothing ahead of the branch may decide, or change what it sees. Allowed: the leading
+  // `if(!<set>.includes(<tool>))return;` and plain bindings; not a valued return (a decision that makes
+  // the branch dead code for that input) and not a write to the tool name or the reason.
+  const before = body.slice(0, at).replace(new RegExp(`^if\\(![\\w$]+(?:\\.[\\w$]+)?\\.includes\\(${reEsc(tool)}\\)\\)return;`), "");
+  if (/(?<![\w$])return(?![\w$;}])/.test(before))
+    return `link 3 \`${fn}\` returns a decision ahead of its managed-ask branch — the fall-through may be dead code`;
+  if (writesIdentifier(before, tool) || writesIdentifier(before, reason))
+    return `link 3 \`${fn}\` rewrites the tool name or the decision reason ahead of its managed-ask branch`;
   return null;
+}
+
+const ASSIGN_OP = `\\s*(?:\\*\\*|<<|>>>?|&&|\\|\\||\\?\\?|[-+*/%&|^])?=(?![=>])`;
+
+/** True when `text` assigns to `id` itself or to a member/index of it, updates it, or deletes from it. */
+function writesIdentifier(text: string, id: string): boolean {
+  const e = reEsc(id);
+  const b = `(?<![\\w$.])${e}(?![\\w$])`;
+  return (
+    new RegExp(`${b}${ASSIGN_OP}`).test(text) ||
+    new RegExp(`${b}(?:\\[[^\\]]*\\]|\\.[\\w$]+)+${ASSIGN_OP}`).test(text) ||
+    new RegExp(`(?:\\+\\+|--)${e}(?![\\w$])|${b}(?:\\[[^\\]]*\\]|\\.[\\w$]+)*(?:\\+\\+|--)`).test(text) ||
+    new RegExp(`(?<![\\w$])delete ${e}(?![\\w$])`).test(text)
+  );
+}
+
+/** Allow-list of how the pin wrapper may use its judged input; returns the violation, or null. */
+function judgedInputUseDefect(body: string, judged: string): string | null {
+  const e = reEsc(judged);
+  for (const m of body.matchAll(new RegExp(`(?<![\\w$.])${e}(?![\\w$])`, "g"))) {
+    const before = body.slice(0, m.index);
+    const after = body.slice(m.index! + judged.length);
+    if (before.endsWith("Object.keys(") && after.startsWith(")")) continue;
+    if (before.endsWith("updatedInput:") && after === "}") continue;
+    const idx = after.match(/^\[[\w$]+\]/);
+    if (
+      idx &&
+      !new RegExp(`^${ASSIGN_OP}`).test(after.slice(idx[0].length)) &&
+      !/^(?:\+\+|--)/.test(after.slice(idx[0].length)) &&
+      !/(?:\+\+|--|delete )$/.test(before)
+    )
+      continue;
+    return `uses its judged input (${judged}) other than by reading it (\`${body.slice(Math.max(0, m.index! - 12), m.index! + judged.length + 12)}\`)`;
+  }
+  return null;
+}
+
+/** Split a function body into its top-level `;`-separated statements (literal- and bracket-aware). */
+function splitTopLevelStatements(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let i = 0;
+  while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = text[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === ";" && depth === 0) {
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+    i++;
+  }
+  if (start < text.length) out.push(text.slice(start));
+  return out;
 }
 
 /** The single identifier bound to the path-gate map in `chunk`, or null.

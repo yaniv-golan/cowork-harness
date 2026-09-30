@@ -2652,6 +2652,58 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
       "canUseTool managed-ask",
     ],
     ["L3 managed-ask branch removed", (s) => s.replace(MANAGED_ASK_FALLTHROUGH, ""), "canUseTool managed-ask"],
+    // Undoing the pin BETWEEN the guard and the pinned return. Each keeps the guard, the return count and
+    // the `{...r,updatedInput:n}` tail intact, so only a check on writes to the judged input sees them.
+    [
+      "P9 judged input reassigned to the card's answer (n=i) before the pin",
+      (s) => s.replace("let i=r.updatedInput,a=", "let i=r.updatedInput;n=i;let a="),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P10 judged input reassigned inside the single let",
+      (s) => s.replace("let i=r.updatedInput,a=", "let i=(n=r.updatedInput),a="),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P11 card keys merged into the judged input (Object.assign)",
+      (s) => s.replace("return a.length>0&&", "return Object.assign(n,i??{}),a.length>0&&"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P12 differing keys copied into the judged input (for..of)",
+      (s) => s.replace("return a.length>0&&", "for(const k of a)n[k]=i[k];return a.length>0&&"),
+      "canUseTool chain terminal",
+    ],
+    [
+      "P13 a judged-input key deleted",
+      (s) => s.replace("return a.length>0&&", "return delete n.file_path,a.length>0&&"),
+      "canUseTool chain terminal",
+    ],
+    // Link 3: a second decision on the same predicate, a reason rewrite, or the branch made dead code.
+    [
+      "L4 a hard deny on the same predicate placed before the fall-through",
+      (s) =>
+        s.replace(
+          MANAGED_ASK_FALLTHROUGH,
+          'if(t.Ma(e,r)&&o!==void 0)return{behavior:"deny",message:"per-call approval"};' + MANAGED_ASK_FALLTHROUGH,
+        ),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L5 reason rewritten on the predicate before the branch",
+      (s) => s.replace(MANAGED_ASK_FALLTHROUGH, "t.Ma(e,r)&&(r=Zt);" + MANAGED_ASK_FALLTHROUGH),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L6 the fall-through made dead code behind a deny return",
+      (s) => s.replace(MANAGED_ASK_FALLTHROUGH, 'if(o!==void 0)return{behavior:"deny",message:"outside"};' + MANAGED_ASK_FALLTHROUGH),
+      "canUseTool managed-ask",
+    ],
+    [
+      "L7 tool name rewritten before the branch",
+      (s) => s.replace(MANAGED_ASK_FALLTHROUGH, 'e="Glob";' + MANAGED_ASK_FALLTHROUGH),
+      "canUseTool managed-ask",
+    ],
   ];
   it.each(WRAP_MUT)("2.16120.0 wrapper mutation %s fails loud (%#)", (_label, mutate, expected) => {
     expect(checkPathHookFacts(wrappedFiles(mutate)).join("\n")).toContain(expected);
