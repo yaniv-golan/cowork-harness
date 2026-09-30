@@ -641,6 +641,11 @@ unless `--allow-budget-stop`. `--rerecord-stale` with nothing stale prints `ok: 
 A refusal before the first recording (no credentials, an unresolved model, the budget pre-flight, a slug
 collision) prints the error envelope instead, as before.
 
+The command lists above are illustrative, not a frozen contract — this is not a single universal
+envelope across every command, so check a given command's own section (or grep its
+`jsonEnvelope`/`jsonPayloadEnvelope` call site in `src/run/envelope.ts`/`src/cli.ts`) for its exact
+shape before parsing it generically.
+
 **`--max-budget-usd` in JSON: the `budget` marker and `error.code`.** The cap is a fact about the
 invocation, not about any one `RunResult`, so it is published on the envelope frame — beside `ok` and
 `error`, on every family (`results[]`-bearing, payload-shaped, and the error envelope) — as a top-level
@@ -684,11 +689,8 @@ same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `targ
 `skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
 `inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`. (Through 4.2.0
 these went to stderr only, and the message prose was the only discriminator.)
-
-The command lists above are illustrative, not a frozen contract — this is not a single universal
-envelope across every command, so check a given command's own section (or grep its
-`jsonEnvelope`/`jsonPayloadEnvelope` call site in `src/run/envelope.ts`/`src/cli.ts`) for its exact
-shape before parsing it generically.
+On `run <dir/>` each scenario is pre-flighted on its own, so the top-level `budget` (merged across every
+scenario checked so far) can differ from `error.budget`, which describes the refused scenario only.
 
 `ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass) && computeVerdict(r).pass)`.
 `result:"success"` and passing assertions are necessary but **not sufficient** — `computeVerdict` adds a
@@ -777,6 +779,7 @@ assertions (never user-authored themselves):
 ```jsonc
 { "tool":"cowork-harness","version":"...","command":"...","ok":false,
   "results":[],  // [] except record's post-run refusal: the refused run, beside the non-null error
+  "budget?": { /* §11 --max-budget-usd marker — present when a pre-flight ran */ },
   "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string",
              "code?": "budget_exceeded", "budget?": { /* §11 --max-budget-usd */ } } }
 ```

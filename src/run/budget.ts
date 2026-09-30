@@ -10,7 +10,7 @@ import { tildeify, writeAllSync } from "../io.js";
 import { fail, type JsonErrorExtras } from "./envelope.js";
 import { readIndex, scenarioCostHistory } from "./run-index.js";
 import { defaultRunsHome, runsRoot } from "./trace-view.js";
-import { recordBudgetStatus, type BudgetStatus } from "./budget-status.js";
+import { claimRunsDirCauseNote, recordBudgetStatus, type BudgetStatus } from "./budget-status.js";
 
 /** Human-facing line on stderr. `cli.ts` has its own module-scope `log` that is not importable; this is
  *  the same one-liner, kept local so the extraction stays leaf-only. */
@@ -35,13 +35,11 @@ export function runsDirInfo(): { runsDir: string; runsDirRedirected: boolean } {
 /** The clause a missing-history warning appends. With a redirected runs root the likeliest cause is not
  *  "this scenario never ran" but "it ran into a different runs root" — the history is keyed by where runs
  *  were WRITTEN, so a fresh `--run-dir` per invocation starts every scenario unpriced, every time. */
-let causeNoted = false;
 function noHistoryCause(): string {
   const { runsDir, runsDirRedirected } = runsDirInfo();
   // Once per process: `run <dir/>` pre-flights each scenario on its own, and the cause is the same for
   // every one of them — repeating it per line would bury the scenario names it is attached to.
-  if (!runsDirRedirected || causeNoted) return "";
-  causeNoted = true;
+  if (!runsDirRedirected || !claimRunsDirCauseNote()) return "";
   return (
     ` The runs root is redirected to ${tildeify(runsDir)} (--run-dir / COWORK_HARNESS_RUNS_DIR), and priced history is read ` +
     `from that root's index only — reuse one runs dir across invocations so the cap has history to enforce against.`

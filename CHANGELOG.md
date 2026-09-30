@@ -9,9 +9,9 @@ All notable changes to this project are documented here. The format is based on
 ### Added
 
 - **`--output-format json` now says whether `--max-budget-usd` was actually enforced.** Every envelope
-  from `run`, `skill` and `record` (every arm, `--dry-run` included) carries a top-level `budget` object
-  when a cap was passed: `{capUsd, basis, enforced, reason?, estimateUsd?, unpriced[], runsDir,
-  runsDirRedirected}`. `enforced: false` means at least one scenario had no priced history and ran with
+  from `run`, `skill` and `record` (every `record` arm, including `record`'s `--dry-run` arms; `skill
+  --dry-run` runs no pre-flight) carries a top-level `budget` object when a cap was passed: `{capUsd,
+  basis, enforced, reason?, estimateUsd?, unpriced[], runsDir, runsDirRedirected}`. `enforced: false` means at least one scenario had no priced history and ran with
   no cap at all; `"lower_bound"` means a `record` batch was checked against an estimate that counted its
   unpriced scenarios as $0. Previously an uncapped run was visible only as a stderr warning. Absent
   without `--max-budget-usd`, and on `--repeat`, whose running-total cap is reported in `rollups[]`

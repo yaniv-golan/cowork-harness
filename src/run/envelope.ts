@@ -8,6 +8,15 @@ import { deriveOutcome } from "./outcome.js";
 import { writeAllSync } from "../io.js";
 import { budgetStatus, type BudgetStatus } from "./budget-status.js";
 
+/** The `--max-budget-usd` marker as a frame fragment: `{budget}` when a pre-flight recorded a status, `{}`
+ *  otherwise — so a command payload that ever carries its own `budget` key is not overwritten with
+ *  `undefined` on an invocation that passed no cap. Spread AFTER a payload: when a status exists it is a
+ *  frame key, like `ok`, and wins. */
+function budgetFrame(): { budget?: BudgetStatus } {
+  const b = budgetStatus();
+  return b === undefined ? {} : { budget: b };
+}
+
 // Synchronous fd writes (match cli.ts / doctor.ts). writeAllSync retries EAGAIN and loops on short
 // writes so the whole payload lands before process.exit on a pipe (see src/io.ts).
 const out = (s: string) => writeAllSync(1, s + "\n");
@@ -125,9 +134,7 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
     matrix,
     matrixRepeat,
     ...extra,
-    // What `--max-budget-usd` enforced (absent when no pre-flight ran). AFTER `extra`: it is a frame key,
-    // like `ok`, so no command's payload can shadow it.
-    budget: budgetStatus(),
+    ...budgetFrame(),
     error: null,
   };
 }
@@ -138,7 +145,7 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
  *  (there is no `RunResult` to judge — `ok` is the caller's own success criterion, e.g. rehash `ok` =
  *  zero migration errors). Keeps a single machine-readable envelope shape across every command. */
 export function jsonPayloadEnvelope(command: string, ok: boolean, payload: Record<string, unknown>): string {
-  return JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command, ok, ...payload, budget: budgetStatus(), error: null });
+  return JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command, ok, ...payload, ...budgetFrame(), error: null });
 }
 
 /** The standardized machine envelope emitted by every `--output-format json` command. COMPACT
@@ -177,13 +184,14 @@ export function jsonError(
   extras: JsonErrorExtras = {},
 ): string {
   return JSON.stringify({
+    // Payload findings FIRST, so none of them can overwrite a frame key below.
+    ...extras.payload,
     tool: "cowork-harness",
     version: pkgVersion(),
     command,
     ok: false,
     results,
-    ...extras.payload,
-    budget: budgetStatus(),
+    ...budgetFrame(),
     error: { category, message, ...(hint ? { hint } : {}), ...extras.error },
   });
 }

@@ -41,6 +41,7 @@ export interface BudgetStatus {
 }
 
 let current: BudgetStatus | undefined;
+let causeNoted = false;
 
 /** Fold one pre-flight's outcome into the invocation's status. `run <dir/>` pre-flights each scenario on
  *  its own, so this MERGES: the union of `unpriced`, the largest `estimateUsd`, and `enforced` true only
@@ -73,7 +74,17 @@ export function budgetStatus(): BudgetStatus | undefined {
   return current;
 }
 
-/** Test seam: forget any recorded status. */
+/** True the FIRST time it is called in a process, false after: the redirected-runs-dir cause is the same
+ *  for every scenario of `run <dir/>`, so the warning states it once. Lives here so the reset below
+ *  clears it with the status. */
+export function claimRunsDirCauseNote(): boolean {
+  if (causeNoted) return false;
+  causeNoted = true;
+  return true;
+}
+
+/** Test seam: forget any recorded status, and re-arm the once-per-process runs-dir cause note. */
 export function resetBudgetStatus(): void {
   current = undefined;
+  causeNoted = false;
 }

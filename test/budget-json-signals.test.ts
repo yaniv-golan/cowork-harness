@@ -1,17 +1,21 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
-import { recordBudgetStatus, budgetStatus, resetBudgetStatus } from "../src/run/budget-status.js";
+import { recordBudgetStatus, budgetStatus, resetBudgetStatus, type BudgetStatus } from "../src/run/budget-status.js";
+import { jsonEnvelope, jsonError, jsonPayloadEnvelope } from "../src/run/envelope.js";
 
 // `--max-budget-usd` in the JSON channel: an UNCAPPED run is marked in the envelope (top-level `budget`),
 // and a budget REFUSAL is told apart from a load failure by `error.code: "budget_exceeded"` + `error.budget`.
 //
-// Everything here is TOKEN-FREE. The refusals fire before any spawn. The uncapped `run`/`skill` cases reach
-// the pre-flight and are then stopped by a malformed COWORK_HARNESS_AUTHORED_TOTAL_BYTES, which
-// `executeScenario` validates before it creates a run dir or spawns anything — so the envelope under test is
-// the real CLI's, with the marker the real pre-flight armed, and nothing is paid for.
+// Everything here is TOKEN-FREE, behind TWO independent guards on every spawned CLI:
+//  1. COWORK_HARNESS_FORBID_SPAWN=1 (set explicitly in `cli()`): the harness refuses to stage or launch an
+//     agent at all, so no test here can reach a paid run even if a gate under test lets it through.
+//  2. For the uncapped `run`/`skill` cases, a malformed COWORK_HARNESS_AUTHORED_TOTAL_BYTES, which
+//     `executeScenario` rejects after the budget pre-flight but before it creates a run dir or reaches a
+//     spawn — so the envelope under test is the real CLI's, with the marker the real pre-flight armed.
+// The refusals fire before any spawn by construction.
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 
@@ -48,7 +52,9 @@ function scenarioYaml(name: string): string {
  *  DEFAULT runs root under a throwaway HOME, so the developer's real `~/.cowork-harness/runs` is never read
  *  or written. */
 function cli(args: string[], root: string | null, extraEnv: Record<string, string> = {}) {
-  const env: Record<string, string | undefined> = { ...process.env, ...PINNED, ...extraEnv };
+  // FORBID_SPAWN is set explicitly rather than inherited from the unit-lane setup file, so this file stays
+  // spawn-safe however it is run.
+  const env: Record<string, string | undefined> = { ...process.env, ...PINNED, ...extraEnv, COWORK_HARNESS_FORBID_SPAWN: "1" };
   delete env.COWORK_HARNESS_RUNS_DIR;
   delete env.COWORK_HARNESS_OUTPUT_FORMAT;
   if (root === null) env.HOME = tmp("budget-home-");
@@ -293,6 +299,7 @@ describe.skipIf(!can)("--max-budget-usd refusal is distinguishable in JSON (`err
 
 describe("recordBudgetStatus — merging per-scenario pre-flights", () => {
   beforeEach(() => resetBudgetStatus());
+  afterEach(() => resetBudgetStatus());
   const base = { capUsd: 1, runsDir: "/r", runsDirRedirected: false };
 
   it("stays enforced while every scenario is priced, keeping the largest estimate", () => {
@@ -310,5 +317,39 @@ describe("recordBudgetStatus — merging per-scenario pre-flights", () => {
 
   it("is undefined until a pre-flight records something", () => {
     expect(budgetStatus()).toBeUndefined();
+  });
+});
+
+describe("the shared envelope builders publish the recorded status", () => {
+  beforeEach(() => resetBudgetStatus());
+  afterEach(() => resetBudgetStatus());
+  const status: BudgetStatus = {
+    capUsd: 2,
+    basis: "single",
+    enforced: false,
+    reason: "no_history",
+    unpriced: ["s"],
+    runsDir: "/r",
+    runsDirRedirected: true,
+  };
+
+  it("results[] envelope (`jsonEnvelope`): `budget` equals the status, and is absent after a reset", () => {
+    recordBudgetStatus(status);
+    expect(JSON.parse(jsonEnvelope("run", [], {})).budget).toEqual(status);
+    resetBudgetStatus();
+    expect("budget" in JSON.parse(jsonEnvelope("run", [], {}))).toBe(false);
+  });
+
+  it("payload envelope: a payload's own `budget` key survives when no status exists, and loses to one that does", () => {
+    expect(JSON.parse(jsonPayloadEnvelope("x", true, { budget: "payload" })).budget).toBe("payload");
+    recordBudgetStatus(status);
+    expect(JSON.parse(jsonPayloadEnvelope("x", true, { budget: "payload" })).budget).toEqual(status);
+  });
+
+  it("error envelope: payload findings cannot overwrite a frame key", () => {
+    const e = JSON.parse(jsonError("record", "runtime", "m", undefined, [], { payload: { ok: true, results: ["x"], broken: [1] } }));
+    expect(e.ok).toBe(false);
+    expect(e.results).toEqual([]);
+    expect(e.broken).toEqual([1]);
   });
 });
