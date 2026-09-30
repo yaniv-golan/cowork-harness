@@ -28,24 +28,12 @@ import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { parseScenarioFile } from "./execute.js";
 import { turnArtifactPath, turnWriteDir } from "./turn-layout.js";
 import { assertContextFromRunDir } from "./verify-context.js";
+import { isConcreteModelId } from "./model-provenance.js";
 import { REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
 export { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
 const CMD = "regrade";
-
-// dedupe with isConcreteModelId: this is the same check (a family alias or a mode alias names no single
-// model; `[1m]` is a context-window selector on the same model). Replace with the shared helper when it lands.
-const FAMILY_ALIASES = ["sonnet", "opus", "haiku", "fable"];
-const UNRESOLVABLE_ALIASES = ["best", "opusplan"];
-function isConcreteJudgeModel(id: string | undefined): id is string {
-  if (id === undefined) return false;
-  const n = id
-    .trim()
-    .replace(/\[\dm\]$/i, "")
-    .toLowerCase();
-  return n !== "" && !FAMILY_ALIASES.includes(n) && !UNRESOLVABLE_ALIASES.includes(n);
-}
 
 /** Whether the re-grade's judged document is the one the live judge read. See REGRADE_USAGE. */
 export type DocMatch = true | false | "scope_changed" | "unknown";
@@ -193,7 +181,7 @@ interface Prepared {
 export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome> {
   const refuse = (kind: "usage" | "runtime", message: string): RegradeOutcome => ({ ok: false, kind, message });
   if (opts.runDirs.length === 0) return refuse("usage", REGRADE_USAGE);
-  if (opts.judgeModel !== undefined && !isConcreteJudgeModel(opts.judgeModel))
+  if (opts.judgeModel !== undefined && !isConcreteModelId(opts.judgeModel))
     return refuse(
       "usage",
       `${CMD}: --judge-model "${opts.judgeModel}" is an alias; pass a concrete model id (e.g. claude-opus-4-8) so the grade names the model that made it`,
@@ -219,7 +207,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       const bad = sc.assert.flatMap((a, i) => {
         if (!a.semantic_matches) return [];
         const m = a.semantic_matches.judge_model ?? defaultJudgeModel();
-        return isConcreteJudgeModel(m) ? [] : [`assertion ${i}: "${m}"`];
+        return isConcreteModelId(m) ? [] : [`assertion ${i}: "${m}"`];
       });
       if (bad.length)
         return refuse(
