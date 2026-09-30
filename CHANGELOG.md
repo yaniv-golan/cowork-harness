@@ -23,7 +23,7 @@ All notable changes to this project are documented here. The format is based on
   `RunResult.assertions[].semanticClaims[]` can now carry `rationale`: one sentence naming the evidence
   for a pass, or what is missing for a fail. A failed assert's footer prints the rationale under each
   failed claim.
-  - It is untrusted model text that can quote the judged document. Control characters are stripped,
+  - It is untrusted model text that can quote the judged document. Control characters are collapsed to spaces,
     secrets are scrubbed, and it is then capped at 400 characters.
   - It is advisory: its content never changes `pass`. A missing or non-string rationale is simply absent
     and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
@@ -39,7 +39,9 @@ All notable changes to this project are documented here. The format is based on
 - **A `semantic_matches` judge reply with a malformed `{"results": …}` group next to a valid grade is now
   ambiguous and graded invalid** (retried once, then `judgeInvalid`). Before, the valid group was used. A
   quote inside the judge's text could split its real grade, leaving a `{"results": …}` object quoted from
-  the judged document as the only valid group.
+  the judged document as the only valid group. A partial restatement of some claims is skipped when it
+  agrees with the full grade and is ambiguous when it contradicts it. An echo of the prompt's output
+  template, even a reformatted one, is still skipped.
 
 ### Fixed
 
@@ -55,6 +57,11 @@ All notable changes to this project are documented here. The format is based on
     Previously it compared the wrong directory against itself and passed.
 - **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
   as its own repeat batch, as documented in the scenario reference.
+
+### Internal
+
+- **Eval-gate** (`scripts/eval-gate.ts`, maintainer instrument, not shipped with the skill): a judge-prompt
+  mismatch against the baseline is now refused before any paid capture, and `--calibrate` refuses it too.
 
 ## [4.1.1] — 2026-09-29
 

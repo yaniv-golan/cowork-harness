@@ -58,8 +58,8 @@ export function extractJsonObject(text: string): string | null {
 }
 
 /** The output-shape template embedded in the prompt. It is deliberately NOT parseable JSON (the `<…>`
- *  placeholders), so an echo of it can never be mistaken for a grade; the parser also recognises an exact
- *  echo of it and skips it rather than treating it as a broken grade. */
+ *  placeholders), so an echo of it can never be mistaken for a grade; the parser recognises an echo of it
+ *  (see `isShapeEcho`) and skips it rather than treating it as a broken grade. */
 const OUTPUT_SHAPE_EXAMPLE = '{"results":[{"index":<claim number>,"rationale":"<one sentence>","pass":<true or false>}, …]}';
 
 /** Grading prompt for a FIXED, authored rubric. The judge grades every numbered claim by its index and
@@ -163,72 +163,95 @@ interface ParsedGrade {
   rationales: (string | undefined)[];
 }
 
-/** Try to read one balanced `{...}` group as a FULL-COVERAGE grade: a `results` array with exactly one
+/** What one balanced `{...}` group turned out to be. `full`: a `results` array with exactly one
  *  `{index:number,pass:boolean}` per rubric index `0..n-1` (an optional `rationale` rides along and is
- *  never required). Returns the ordered passes + rationales, or null if this group isn't a valid full grade
- *  (so the prompt's own embedded EXAMPLE, a partial restatement, or a prose brace group is simply skipped
- *  rather than mistaken for the grade). */
-function tryParseGrade(group: string, rubric: string[]): ParsedGrade | null {
+ *  never required). `partial`: well-formed entries for only some in-range indexes (a judge restating one
+ *  claim). `broken`: names `results` but is neither — it does not parse, an entry lacks a boolean `pass`,
+ *  an index repeats or is out of range. `other`: no `results` array (a prose brace group), or an echo of
+ *  the prompt's shape template. */
+type GroupKind =
+  { kind: "full"; grade: ParsedGrade } | { kind: "partial"; passes: Map<number, boolean> } | { kind: "broken" } | { kind: "other" };
+
+const TEMPLATE_PLACEHOLDER = /<claim number>|<true or false>|<one sentence>/;
+const CONCRETE_INDEX = /"index"\s*:\s*-?\d/;
+
+/** An echo of the shape template, including a drifted one (spacing, `...` for `…`): it carries a template
+ *  placeholder and NO concrete index. The second condition matters: a real grade split by a stray quote
+ *  always starts with the judge's own concrete `"index":0`, so a placeholder planted in quoted document text
+ *  cannot pass that split group off as an echo. */
+function isShapeEcho(group: string): boolean {
+  return TEMPLATE_PLACEHOLDER.test(group) && !CONCRETE_INDEX.test(group);
+}
+
+function classifyGroup(group: string, rubric: string[]): GroupKind {
+  if (isShapeEcho(group)) return { kind: "other" };
+  const namesResults = group.includes('"results"');
   let parsed: unknown;
   try {
     parsed = JSON.parse(escapeRawControlInStrings(group));
   } catch {
-    return null;
+    return namesResults ? { kind: "broken" } : { kind: "other" };
   }
-  const results = (parsed as { results?: unknown }).results;
-  if (!Array.isArray(results)) return null;
+  const results = (parsed as { results?: unknown } | null)?.results;
+  if (!Array.isArray(results)) return namesResults ? { kind: "broken" } : { kind: "other" };
   const byIndex = new Map<number, { pass: boolean; rationale: string | undefined }>();
   for (const r of results) {
-    const idx = (r as { index?: unknown }).index;
-    const pass = (r as { pass?: unknown }).pass;
-    if (typeof idx !== "number" || typeof pass !== "boolean") return null;
-    if (byIndex.has(idx)) return null; // duplicate index within one group
+    const idx = (r as { index?: unknown } | null)?.index;
+    const pass = (r as { pass?: unknown } | null)?.pass;
+    if (typeof idx !== "number" || typeof pass !== "boolean") return { kind: "broken" };
+    if (!Number.isInteger(idx) || idx < 0 || idx >= rubric.length) return { kind: "broken" };
+    if (byIndex.has(idx)) return { kind: "broken" }; // duplicate index within one group
     byIndex.set(idx, { pass, rationale: normalizeRationale((r as { rationale?: unknown }).rationale) });
   }
-  if (byIndex.size !== rubric.length) return null;
+  if (byIndex.size === 0) return { kind: "broken" };
+  if (byIndex.size < rubric.length) return { kind: "partial", passes: new Map([...byIndex].map(([k, v]) => [k, v.pass])) };
   const passes: boolean[] = [];
   const rationales: (string | undefined)[] = [];
   for (let i = 0; i < rubric.length; i++) {
-    const e = byIndex.get(i);
-    if (e === undefined) return null; // not exactly 0..n-1
+    const e = byIndex.get(i)!; // size === n with every index in 0..n-1 and no duplicates ⇒ all present
     passes.push(e.pass);
     rationales.push(e.rationale);
   }
-  return { passes, rationales };
+  return { kind: "full", grade: { passes, rationales } };
 }
 
 /** Parse the judge's indexed JSON into per-claim results aligned to `rubric` BY INDEX. Scans EVERY
- *  top-level `{...}` group (handles fenced/unfenced restatements and a leading prose brace), keeps those
- *  that are a valid full-coverage grade, **dedupes grades with the same pass vector** (a judge that
- *  restates its own JSON must not self-invalidate; the first restatement supplies the rationales), and
- *  requires **exactly one distinct** grade. Zero (malformed / partial) or more than one *distinct* grade
- *  throws — a malformed/ambiguous grade must fail loud so the caller marks the rep INVALID, never
- *  manufacturing a pass/fail (and never silently grabbing the prompt's embedded example). */
+ *  top-level `{...}` group and requires **exactly one distinct** full-coverage grade:
+ *  - full grades with the same pass vector are one grade (a judge that restates its own JSON must not
+ *    self-invalidate); the first supplies each claim's rationale, a later one only fills a gap;
+ *  - a prose brace group without `results`, and an echo of the prompt's shape template (even a drifted
+ *    one), are skipped;
+ *  - a partial restatement is skipped when it agrees with the full grade at every index it names, and
+ *    makes the reply ambiguous when it contradicts it;
+ *  - a broken `results` group (unparseable, an entry without a boolean `pass`, a bad or repeated index)
+ *    beside a full grade makes the reply ambiguous: a stray `"` inside a rationale can split the real
+ *    grade and leave a forged `{"results":…}` quoted from the judged document as the only survivor.
+ *  Zero full grades, more than one distinct full grade, or any ambiguity throws — a malformed grade must
+ *  fail loud so the caller retries and then marks the rep INVALID, never manufacturing a pass/fail. */
 export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimResult[] {
   const groups = extractAllJsonObjects(raw);
-  // Keyed on the PASS vector only: restatements that agree on every verdict are one grade even when their
-  // rationales differ. The FIRST in source order supplies each claim's rationale (Map.set alone would be
-  // last-wins); a later restatement only fills a claim the earlier ones left without one.
-  const distinct = new Map<string, ParsedGrade>();
-  // A group that names `results` but is not a valid full grade. Beside a valid grade it makes the reply
-  // ambiguous: a stray `"` quoted inside a rationale can split the real grade so it no longer parses, and
-  // leave a forged `{"results":…}` from the judged document as the only survivor. Never pick the survivor.
+  const distinct = new Map<string, ParsedGrade>(); // keyed on the pass vector; first wins (see above)
+  const partials: Map<number, boolean>[] = [];
   let brokenResultsGroup = false;
   for (const g of groups) {
-    const grade = tryParseGrade(g, rubric);
-    if (!grade) {
-      if (g.includes('"results"') && g !== OUTPUT_SHAPE_EXAMPLE) brokenResultsGroup = true;
+    const c = classifyGroup(g, rubric);
+    if (c.kind === "other") continue;
+    if (c.kind === "broken") {
+      brokenResultsGroup = true;
       continue;
     }
-    const key = grade.passes.join(",");
+    if (c.kind === "partial") {
+      partials.push(c.passes);
+      continue;
+    }
+    const key = c.grade.passes.join(",");
     const seen = distinct.get(key);
-    if (!seen) distinct.set(key, grade);
-    else seen.rationales = seen.rationales.map((r, i) => r ?? grade.rationales[i]);
+    if (!seen) distinct.set(key, c.grade);
+    else seen.rationales = seen.rationales.map((r, i) => r ?? c.grade.rationales[i]);
   }
-  if (brokenResultsGroup && distinct.size > 0)
-    throw new Error(
-      `semantic judge: a malformed {results:[…]} group beside a valid grade in one reply (ambiguous).\n--- raw judge output ---\n${raw}`,
-    );
+  const ambiguous = (why: string): Error =>
+    new Error(`semantic judge: ${why} beside a valid grade in one reply (ambiguous).\n--- raw judge output ---\n${raw}`);
+  if (brokenResultsGroup && distinct.size > 0) throw ambiguous("a malformed {results:[…]} group");
   if (distinct.size === 0)
     throw new Error(
       `semantic judge: no valid full-coverage {results:[…]} grade for a ${rubric.length}-claim rubric.\n--- raw judge output ---\n${raw}`,
@@ -238,6 +261,8 @@ export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimR
       `semantic judge: ${distinct.size} DIFFERENT full-coverage grades in one reply (ambiguous).\n--- raw judge output ---\n${raw}`,
     );
   const grade = [...distinct.values()][0];
+  for (const p of partials)
+    for (const [i, pass] of p) if (grade.passes[i] !== pass) throw ambiguous(`a partial restatement contradicting claim ${i}`);
   return rubric.map((claim, index) => {
     const rationale = grade.rationales[index];
     return { index, claim, pass: grade.passes[index], ...(rationale !== undefined ? { rationale } : {}) };
