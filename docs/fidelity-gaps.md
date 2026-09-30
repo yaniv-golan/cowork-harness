@@ -784,7 +784,8 @@ What differs from Cowork, and what the sweep can miss or wrongly kill:
 | macOS: how the sweep attributes a process | macOS exposes no other process's environment, so a candidate must be owned by you, detached from any terminal, reparented to init, started during the run, and working inside the run's work dir; the harness itself and its ancestry never qualify. At `hostloop` there is no macOS sweep: its Bash runs in the sidecar, which `docker rm -f` ends. |
 | macOS: a background process that changed directory out of the work dir | Not found. |
 | macOS: a process that acquired its own terminal (the model ran `tmux` or `script` in a Bash call) | Not found. |
-| macOS: a `tmux` or `screen` server started during the run from inside the work dir | Killed — it matches every condition. One started before the run, or from a terminal that is still open, is not. |
+| macOS: any process that daemonizes (detaches from its terminal) during the run while its working directory is inside the work dir — yours or the agent's | Killed — it matches every condition. Examples: a `tmux` or `screen` server, a server started with `nohup … &` from a shell with no terminal, an editor launcher such as `code .`, and an ssh connection-sharing master (`ControlMaster`/`ControlPersist`) left behind by a `git fetch` over ssh — any other ssh session sharing that master loses its connection. A process started before the run, or one still attached to an open terminal, is not a candidate. |
+| Linux: a daemon the agent started, such as that ssh connection-sharing master | Killed: it carries the run's tag. Anything else sharing it loses it, as on macOS. |
 | A host tool that opens `/dev/tty` (`ssh` password prompt, `sudo`, `gh auth login`) | Fails instead of prompting, as under Desktop: the agent has no controlling terminal. |
 | Windows | Only the agent process itself is stopped. |
 

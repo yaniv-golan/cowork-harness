@@ -152,7 +152,8 @@ All notable changes to this project are documented here. The format is based on
     the run's work dir. Each process the sweep kills prints a `::warning::` line;
     `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` turns the sweep off.
   - Known limits: on macOS a background process that changed directory out of the run's work dir is not
-    found, and a command that daemonizes from inside the work dir during the run is stopped. A
+    found, and any command that daemonizes from inside the work dir during the run is stopped — for example a
+    `tmux` server, `code .`, or an ssh `ControlPersist` master left by a `git fetch` over ssh. A
     `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
     the next. On Windows only the agent process itself is stopped, as before.
 
