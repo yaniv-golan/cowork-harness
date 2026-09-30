@@ -1456,6 +1456,7 @@ function extractFromAsar(
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
     for (const f of checkSpawnContractFacts(bundle, bundleFiles)) flag(unknown, f);
+    for (const f of checkVmAgentStagingFacts(bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates, bundleFiles);
@@ -3878,6 +3879,60 @@ export function partitionSpawnFlags(flags: string[]): { deltas: string[]; notes:
  * two prompt-asset delivery shapes). Any anchor miss → a flag naming the field (re-derive the anchor).
  * Pure over the bundle string, mirroring checkMountModeFacts.
  */
+/** The innermost `function NAME(…){…}` whose body spans `at`, or null. Scans headers backwards. */
+function enclosingFunctionName(chunk: string, at: number): string | null {
+  const heads = [...chunk.slice(0, at).matchAll(/(?<![\w$])function ([\w$]+)\([^)]*\)\{/g)];
+  for (let k = heads.length - 1, tried = 0; k >= 0 && tried < 2000; k--, tried++) {
+    const h = heads[k];
+    const open = h.index! + h[0].length - 1;
+    const close = matchBrace(chunk, open);
+    if (close > at) return h[1];
+  }
+  return null;
+}
+
+/**
+ * The staged agent binary the harness runs is put on disk by Desktop's VM start: `startVM` runs the VM
+ * bundle download and `prepareForVM` (the SDK/agent staging) together, as one step:
+ *
+ *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
+ *
+ * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
+ * On this account the local VM now boots only because the cloud lane's device bash starts it, so this is
+ * the harness's sole agent supply — if Desktop drops the call or moves it off the startVM path, the agent
+ * stops being staged with nothing else noticing. Fail closed.
+ */
+export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const miss = (why: string) => flags.push(`vm agent staging anchor missing — ${why}`);
+  const STEP = 'stepStarted("download_and_sdk_prepare")';
+  const sites = [...files.values()].flatMap((c) => {
+    const out: { chunk: string; at: number }[] = [];
+    for (let i = c.indexOf(STEP); i >= 0; i = c.indexOf(STEP, i + 1)) out.push({ chunk: c, at: i });
+    return out;
+  });
+  if (sites.length !== 1) {
+    miss(`expected exactly one download_and_sdk_prepare step, found ${sites.length}`);
+    return flags;
+  }
+  const { chunk, at } = sites[0];
+  const all = chunk.slice(at + STEP.length).match(/^;let\[[\w$]+,[\w$]+\]=await Promise\.all\(\[([^\]]*)\]\)/);
+  if (!all) miss("the step no longer awaits a Promise.all([...]) right after it starts");
+  else if (!/(?:^|,)[\w$]+(?:\.[\w$]+)?\.prepareForVM\([^()]*\)(?:,|$)/.test(all[1]))
+    miss("the download_and_sdk_prepare Promise.all no longer runs prepareForVM — the agent binary may no longer be staged");
+  const holder = enclosingFunctionName(chunk, at);
+  const startChunk = [...files.values()].find((c) => /(?<![\w$])startVM:\(\)=>[\w$]+/.test(c));
+  const start = startChunk ? startChunk.match(/(?<![\w$])startVM:\(\)=>([\w$]+)/)![1] : null;
+  if (!holder) miss("the download_and_sdk_prepare step is not inside a resolvable function");
+  else if (!start || !startChunk) miss("no chunk exports startVM");
+  else if (holder !== start) {
+    const body = braceBodyOf(startChunk, `async function ${start}(`) ?? braceBodyOf(startChunk, `function ${start}(`);
+    if (!body || !new RegExp(`(?<![\\w$.])${reEsc(holder)}\\(`).test(body))
+      miss(`the download_and_sdk_prepare step (in ${holder}) is no longer reached from startVM (${start})`);
+  }
+  return flags;
+}
+
 export function checkSpawnContractFacts(bundle: string, files?: Map<string, string>): string[] {
   const flags: string[] = [];
   const w1 = twoAnchorWindow(bundle, "env:{CLAUDE_CONFIG_DIR", ",systemPrompt:");
@@ -4061,6 +4116,10 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
             //     e.scheduledTaskId&&!xp()&&(e.frameArtifactsEnabled=void 0)
             //     function xp(){return t.OU()&&t.AU("1978029737","scheduledRunFrameArtifacts",!0,t.TQ())}
             // Without that clear site the predicate alone admits every scheduled run.
+            // ACCEPTED LIMIT: this is a PRESENCE check. It proves the gated clear exists, not that nothing
+            // later in the session-start path sets frameArtifactsEnabled back — an unconditional re-enable
+            // placed after the clear (`…=void 0),<s>.scheduledTaskId&&(<s>.frameArtifactsEnabled=!0)`)
+            // is NOT detected. Closing it needs flow analysis of the session-start function.
             const clear = toolsSite.match(/([\w$]+)\.scheduledTaskId&&!([\w$]+)\(\)&&\(\1\.frameArtifactsEnabled=void 0\)/);
             const readerBody = clear ? braceBodyOf(toolsSite, `function ${clear[2]}(`) : null;
             if (!clear)

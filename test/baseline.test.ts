@@ -60,7 +60,7 @@ import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
-import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
+import { checkPathHookFacts, checkVmAgentStagingFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -3633,5 +3633,46 @@ describe("committed baselines: provenance.desktopInitSurface is allowlisted and 
     // Tautological on sync-written data (sync stamps both sides); guards hand edits and cross-file copies.
     expect(block.agentVersion).toBe(b.agentVersion);
     expect(block.appVersion).toBe(b.appVersion);
+  });
+});
+
+// The harness's staged agent binary arrives on disk only because Desktop's VM start stages it: `startVM`
+// runs the bundle download and `prepareForVM` (the SDK/agent staging) together in the
+// `download_and_sdk_prepare` step. If Desktop drops that call or moves it off the startVM path, the
+// agent supply stops silently — so it is a fail-closed sync fact.
+describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
+  const vmChunk = (mutate?: (s: string) => string) => {
+    const c =
+      `var Ex={isVMDownloaded:()=>UJ,startVM:()=>KJ,stopVM:()=>JJ};` +
+      `async function Uwr(e,t,n){let s=tr();try{s.stepStarted("download_and_sdk_prepare");` +
+      `let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);if(!h.ready){let e=Error(h.error??"SDK preparation failed");throw s.stepFailed("download_and_sdk_prepare",e),e}` +
+      `s.stepCompleted("download_and_sdk_prepare")}catch(e){throw e}}` +
+      `async function KJ(e,t){if(DJ)return DJ.promise;let i=new AbortController;return QCr=DJ,Uwr(e,i,t).catch((e=>{throw e}))}` +
+      `async function Other(){return 1}`;
+    return new Map([["index.chunk-main.js", mutate ? mutate(c) : c]]);
+  };
+  it("clean: the prepare step sits on the startVM path", () => {
+    expect(checkVmAgentStagingFacts(vmChunk())).toEqual([]);
+  });
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkVmAgentStagingFacts(files)).toEqual([]);
+  });
+  const MUT: ReadonlyArray<readonly [string, (s: string) => string]> = [
+    ["V1 prepareForVM dropped from the Promise.all", (s) => s.replace("[BJ(e,t),EG.prepareForVM(t)]", "[BJ(e,t)]")],
+    [
+      "V2 prepareForVM moved out of the Promise.all",
+      (s) => s.replace("[BJ(e,t),EG.prepareForVM(t)]", "[BJ(e,t),Promise.resolve({ready:!0})]"),
+    ],
+    [
+      "V3 the prepare step moved out of the startVM path",
+      (s) => s.replace("Uwr(e,i,t).catch(", "Nope(e,i,t).catch(").replace("async function Other(){", "async function Nope(){"),
+    ],
+    ["V4 the step marker is gone", (s) => s.replaceAll("download_and_sdk_prepare", "download_only")],
+    ["V5 the startVM export is gone", (s) => s.replace("startVM:()=>KJ,", "")],
+  ];
+  it.each(MUT)("mutation %s fails loud (%#)", (_label, mutate) => {
+    expect(checkVmAgentStagingFacts(vmChunk(mutate)).join("\n")).toContain("vm agent staging");
   });
 });

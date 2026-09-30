@@ -43,6 +43,7 @@ describe("the version gate", () => {
       "desktop-2.7032.0": true,
       "desktop-2.9939.2": true,
       "desktop-2.9939.4": true,
+      "desktop-2.16120.0": true,
     };
     for (const [n, want] of Object.entries(expected)) expect(pc.hostLoopUsesSystemEmptyCwd(loadBaseline(n)), n).toBe(want);
     expect(pc.hostLoopUsesSystemEmptyCwd({ appVersion: "2.7031.99" } as never)).toBe(false);
