@@ -27,9 +27,12 @@ const hostloopSrc = readFileSync(join(SRC, "runtime", "hostloop.ts"), "utf8");
  *  offset and requires strict mark→rm alternation, so a swapped-order teardown path breaks the pairing
  *  rather than silently matching against some OTHER path's mark call. */
 function assertMarkPrecedesForcedRemoval(src: string) {
-  const markIdxs = [...src.matchAll(/hostloopMarkTearingDown\?\.\(\)/g)].map((m) => m.index!);
+  // Statement calls only — the thunk factory is handed the mark as a callback (`markTearingDown: () => …`).
+  const markIdxs = [...src.matchAll(/^\s*hostloopMarkTearingDown\?\.\(\);/gm)].map((m) => m.index!);
   const rmIdxs = [...src.matchAll(/spawnSync\(runner,\s*\["rm",\s*"-f",\s*containerName\]/g)].map((m) => m.index!);
-  expect(rmIdxs.length).toBeGreaterThanOrEqual(2); // both the Ctrl-C thunk and the normal-path finally
+  // The normal-path finally. The Ctrl-C thunk's own mark-then-remove order lives in makeContainerPhaseReap
+  // (execute.ts), shared by run and chat, and is pinned behaviourally in force-kill-wiring.test.ts.
+  expect(rmIdxs.length).toBeGreaterThanOrEqual(1);
   const events = [...markIdxs.map((idx) => ({ idx, kind: "mark" as const })), ...rmIdxs.map((idx) => ({ idx, kind: "rm" as const }))].sort(
     (a, b) => a.idx - b.idx,
   );
@@ -77,8 +80,8 @@ describe("hostloop sidecar infra errors reach the live RunRecord", () => {
   });
 
   it("execute.ts marks the sidecar as tearing-down before every forced container removal", () => {
-    // Both the normal-path finally and the Ctrl-C cleanup thunk must call this before their own
-    // `docker rm -f`, or a naive fix reds every hostloop run (see hostloop.ts's watchHostLoopSidecar doc).
+    // The normal-path finally must call this before its own `docker rm -f`, or a naive fix reds every
+    // hostloop run (see hostloop.ts's watchHostLoopSidecar doc). The Ctrl-C thunk: makeContainerPhaseReap.
     assertMarkPrecedesForcedRemoval(executeSrc);
   });
 

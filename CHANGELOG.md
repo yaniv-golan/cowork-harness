@@ -146,6 +146,24 @@ All notable changes to this project are documented here. The format is based on
   agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
   and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
 
+- **At `protocol` and `hostloop` the agent has no controlling terminal.** It runs in its own session and
+  process group, as Claude Desktop spawns it. A host tool that needs `/dev/tty` (an `ssh` password prompt,
+  `sudo`, `gh auth login`) fails at once instead of waiting for input.
+- **The model can see `COWORK_HARNESS_RUN_TAG`** (`env` in a Bash call) at `protocol` and `hostloop`. Real
+  Cowork has no such variable, so a transcript can differ from Cowork's there.
+- **A host agent is stopped with Claude Desktop's timing.** At the end of a run the harness first waits up
+  to 2 seconds for the agent to exit on its own; then SIGTERM, then SIGKILL after a grace period, which at
+  `hostloop` is 5 seconds, as in Desktop (`protocol` keeps 2). On Ctrl-C at `hostloop` the sidecar
+  container is removed after that grace period, not before it. A run's `durationMs` does not include this
+  stop sequence.
+- **Closing the terminal (SIGHUP) now stops the run like SIGTERM** (exit `129`), off Windows: the agent's
+  own session no longer receives the terminal's hangup, so the harness passes it on.
+- **`chat`: a Ctrl-C during a turn stops the turn.** On a terminal, at every tier, it stops the agent and
+  everything it started and exits `130`, without a `result.json` — as an interrupted `run` does. Before, it
+  took effect only after the agent finished the turn. A Ctrl-C at the `you>` prompt still ends the session
+  and writes its result, and a first Ctrl-C while that result is being written waits for it (a second one
+  exits at once).
+
 ### Fixed
 
 - **`critique` no longer fails on an `events.jsonl` line that is a JSON scalar** (such as `null`) while
@@ -180,6 +198,20 @@ All notable changes to this project are documented here. The format is based on
   on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
   the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
   filename per line), and `latest: true` on that entry in `--output-format json`.
+- **Stopping a run at `protocol` or `hostloop` now stops the processes the agent started on the host** —
+  Bash-tool background jobs, hook commands and MCP servers — instead of leaving them running after the
+  harness exits. This applies to Ctrl-C and SIGTERM, a timeout, stall or unanswered gate, and the normal end
+  of a run. Behaviour changes that come with it are listed under Changed.
+  - A background process that has already detached from the agent is found by an orphan sweep. On Linux
+    the sweep matches `COWORK_HARNESS_RUN_TAG`, a per-run variable in the agent's environment. On macOS it
+    matches processes owned by you, detached from any terminal, started during the run and working inside
+    the run's work dir. Each process the sweep kills prints a `::warning::` line;
+    `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` turns the sweep off.
+  - Known limits: on macOS a background process that changed directory out of the run's work dir is not
+    found, and any command that daemonizes from inside the work dir during the run is stopped — for example a
+    `tmux` server, `code .`, or an ssh `ControlPersist` master left by a `git fetch` over ssh. A
+    `--session-id … --resume` chain cannot rely on a background process surviving from one invocation to
+    the next. On Windows only the agent process itself is stopped, as before.
 
 ### Internal
 

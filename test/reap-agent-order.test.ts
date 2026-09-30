@@ -45,11 +45,49 @@ describe("reapAgentOnTeardown", () => {
     expect(registeredDuringWait).toBe(true);
   });
 
-  it("non-microvm: no guest kill, SIGKILL the child, then de-register", async () => {
+  it("tree agent still running: wait, SIGTERM the tree, wait the grace, force-kill it, and only then de-register", async () => {
     const log: string[] = [];
     await reapAgentOnTeardown({
       microvm: false,
       agent: fakeAgent(log),
+      child: { kill: (s?: NodeJS.Signals) => void log.push(`child ${s}`) },
+      deregister: () => log.push("deregister"),
+      settleMs: 10,
+      graceMs: 10,
+    });
+    // The leader dies with the tree (forceKill ends with a pid SIGKILL of a surviving leader); a bare
+    // child SIGKILL here would leave every process the agent started running.
+    expect(log).toEqual(["terminate", "forceKill", "deregister"]);
+  });
+
+  it("tree agent: without an explicit grace it waits the agent's own grace period (hostloop's is longer)", async () => {
+    const log: string[] = [];
+    const agent = { ...fakeAgent(log), graceMs: 300 };
+    const t = Date.now();
+    await reapAgentOnTeardown({ microvm: false, agent, deregister: () => log.push("deregister"), settleMs: 10 });
+    const ms = Date.now() - t;
+    expect(log).toEqual(["terminate", "forceKill", "deregister"]);
+    expect(ms).toBeGreaterThanOrEqual(290);
+    expect(ms).toBeLessThan(1500);
+  });
+
+  it("tree agent whose leader already exited: no SIGTERM round, the tree is still force-killed", async () => {
+    const log: string[] = [];
+    const agent = fakeAgent(log);
+    agent.alive = () => false;
+    await reapAgentOnTeardown({
+      microvm: false,
+      agent,
+      child: { kill: (s?: NodeJS.Signals) => void log.push(`child ${s}`) },
+      deregister: () => log.push("deregister"),
+    });
+    expect(log).toEqual(["forceKill", "deregister"]);
+  });
+
+  it("container (no host agent): SIGKILL the docker client, then de-register", async () => {
+    const log: string[] = [];
+    await reapAgentOnTeardown({
+      microvm: false,
       child: { kill: (s?: NodeJS.Signals) => void log.push(`child ${s}`) },
       deregister: () => log.push("deregister"),
     });
@@ -67,5 +105,22 @@ describe("reapAgentOnTeardown", () => {
       deregister: () => log.push("deregister"),
     });
     expect(log).toEqual(["child", "deregister"]);
+  });
+
+  it("reports the time the host-agent stop sequence took, so a run's durationMs can leave it out", async () => {
+    const tree = await reapAgentOnTeardown({ microvm: false, agent: fakeAgent([]), settleMs: 60, graceMs: 60 });
+    expect(tree).toBeGreaterThanOrEqual(110);
+    expect(tree).toBeLessThan(1500);
+    const container = await reapAgentOnTeardown({ microvm: false, child: { kill: () => {} } });
+    expect(container).toBe(0);
+  });
+
+  it("tree agent: the force-kill waits for the drive loop's last asynchronous listing to land", async () => {
+    const log: string[] = [];
+    const agent = fakeAgent(log);
+    agent.alive = () => false;
+    agent.idle = () => new Promise<void>((res) => setTimeout(() => (log.push("listing landed"), res()), 50));
+    await reapAgentOnTeardown({ microvm: false, agent, deregister: () => log.push("deregister") });
+    expect(log).toEqual(["listing landed", "forceKill", "deregister"]);
   });
 });

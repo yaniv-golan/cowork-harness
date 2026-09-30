@@ -37,9 +37,13 @@ namespace.
 4. **Crash safety net:** if the process unwinds via an uncaught throw, or receives `SIGINT`/`SIGTERM`, before
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
    `status.json` never gets stuck reporting `"running"` for a process that's actually gone. On a signal the
-   harness first stops the agent, then exits 130 (`SIGINT`) or 143 (`SIGTERM`). On `protocol`/`microvm` it
-   sends SIGTERM and SIGKILLs after 2 s; on `container`/`hostloop` the agent is killed at once, with the
-   container reap. On `microvm` the kill is sent inside the VM, because killing the host `limactl` client
+   harness first stops the agent, then exits 130 (`SIGINT`), 143 (`SIGTERM`) or 129 (`SIGHUP`, a closed
+   terminal; not on Windows). On `protocol`/`hostloop`/`microvm`
+   it sends SIGTERM and SIGKILLs after a grace period (5 s at `hostloop`, as Claude Desktop stops its agent;
+   2 s otherwise); at `protocol` and `hostloop` that covers every host process the agent
+   started, not only the agent (see [fidelity-gaps.md](./fidelity-gaps.md#stopping-a-host-tier-run-stops-the-processes-the-agent-started)).
+   On `container` the agent is killed at once, with the container reap; at `hostloop` the sidecar container is
+   removed after the agent's grace period. On `microvm` the kill is sent inside the VM, because killing the host `limactl` client
    does not reach the guest process (verified against a live microVM). A second signal skips the wait. An interrupt while the run waits on a
    `--decider-cmd` gate is not reported as an unanswered gate: the run ends like any other interrupt
    (exit 130/143, `status.json` `"error"`, no `result.json`).

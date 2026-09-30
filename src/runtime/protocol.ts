@@ -11,6 +11,7 @@ import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { pluginDirArgs } from "./argv.js";
+import { agentSpawnOptions } from "./agent-tree.js";
 
 /**
  * Pure builder for L0's spawn env. Protocol spawns the host `claude` over the OPERATOR's full shell env
@@ -95,7 +96,7 @@ export function spawnProtocol(
   baseline: PlatformBaseline,
   plan: LaunchPlan,
   outDir: string,
-  opts: { systemPromptAppend?: string } = {},
+  opts: { systemPromptAppend?: string; runTag?: string } = {},
 ) {
   const work = join(outDir, "work");
   mkdirSync(join(work, "uploads"), { recursive: true });
@@ -219,5 +220,9 @@ export function spawnProtocol(
     );
   }
 
-  return { child: spawn("claude", args, { cwd: work, env, stdio: ["pipe", "pipe", "pipe"] }), l0HostConfigContamination };
+  // Detached, as Desktop spawns its agent, and tagged with the run's token: both are how a teardown finds
+  // every process the agent starts (see agent-tree.ts). The tag is decided here and returned, never re-derived.
+  const runTag = opts.runTag ?? `r${process.hrtime.bigint().toString(36)}`;
+  const child = spawn("claude", args, agentSpawnOptions({ cwd: work, env, stdio: ["pipe", "pipe", "pipe"] as const }, runTag));
+  return { child, l0HostConfigContamination, runTag, workDir: work };
 }

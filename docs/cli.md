@@ -287,6 +287,10 @@ Two footnotes the table cannot carry:
   per-command, `rehash` spending `4` on PARTIAL does not consume that reservation (SPEC §11).
 - an interrupted `run`/`skill`/`record` exits `130` (`SIGINT`) or `143` (`SIGTERM`), after stopping the agent
   and marking the run `"error"` in `status.json` — the shell convention for a signal, outside the table.
+- a closed terminal (`SIGHUP`, not on Windows) is handled like `SIGTERM` and exits `129`;
+- an interrupted `chat` exits `130`/`143` the same way, without writing a `result.json`: a Ctrl-C during a turn
+  stops the agent at once. A Ctrl-C at the `you>` prompt ends the session normally, and a first signal while
+  the session's result is being written still writes it and then exits `130` (a second exits at once).
 
 After a run, the footer **echoes every auto-answered
 question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them
@@ -568,6 +572,8 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HOST_AGENT_BINARY=<path>` — override the auto-detected staged **native macOS** agent binary the `hostloop` tier spawns directly (distinct from `COWORK_AGENT_BINARY`, the container ELF).
 - `COWORK_HARNESS_VERIFY_AGENT_SHA=0` — skip the default sha256 integrity check of the resolved agent ELF against the baseline's recorded hash (on by default).
 - `COWORK_HARNESS_FORBID_SPAWN=1` — refuse to launch a model anywhere the harness would: `run`/`skill`/`record` stop after every load-time check (before any image probe, egress sidecar or spawn), `chat` before its egress sidecar or agent spawn (and `chat --raw` before its `docker run`), and the `--decider-llm` transport before `claude -p`. The fast test lane sets it so a regressed load-time refusal fails red instead of launching a real agent; it has no other use.
+- `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` — at `protocol` and `hostloop`, turn off the orphan sweep that runs when a run ends: the search for background processes the agent started that have already detached from it (on Linux by `COWORK_HARNESS_RUN_TAG`, on macOS by owner, terminal, start time and working directory). The agent's own process group and its descendants are still stopped. See [fidelity-gaps.md](./fidelity-gaps.md#stopping-a-host-tier-run-stops-the-processes-the-agent-started).
+- `COWORK_HARNESS_RUN_TAG` — set BY the harness, not read from your environment: a per-run value in the host agent's environment at `protocol` and `hostloop`, inherited by every process the agent starts, so the Linux orphan sweep can find them. The model can see it with `env`; real Cowork has no such variable.
 - `COWORK_SKIP_CAPABILITY_PROBE=1` — skip the per-run capability probe (the harness otherwise probes the agent image/VM for the document/OCR/Office capabilities the real Cowork rootfs ships and **fails a run that uses one the image omits** — a likely false negative; suppress per-scenario with `allow_missing_capability: true`, or rebuild full parity).
 
 ### Deciders and dialogs

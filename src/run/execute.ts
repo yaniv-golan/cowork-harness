@@ -51,7 +51,8 @@ import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safet
 import { warnUnservedHookEvents, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
-import { installTerminationHandler, registerAgent, childProcessAgent, parkIfTerminating, type TerminableAgent } from "../termination.js";
+import { installTerminationHandler, registerAgent, parkIfTerminating, TERMINATION_GRACE_MS, type TerminableAgent } from "../termination.js";
+import { agentTreeAgent, handlerOwnsAgent, hostAgentStopTiming, type TreeAgent } from "../runtime/agent-tree.js";
 import {
   probeImageOmitted,
   probeMicrovmOmitted,
@@ -838,7 +839,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
-  let signalAgent: TerminableAgent | undefined; // what the termination handler stops (protocol/microvm)
+  let signalAgent: TerminableAgent | undefined; // what the termination handler stops (protocol/hostloop/microvm)
+  let agentStopMs = 0; // time spent stopping the host agent's tree, left out of durationMs (see reapAgentOnTeardown)
+  let treeAgent: TreeAgent | undefined; // the host agent's process tree (protocol/hostloop) — refreshed from the drive loop
   let deregisterAgent: (() => void) | undefined;
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
   // Container's web_fetch is host-routed too, so its decisions cannot come from the proxy log and must
@@ -922,11 +925,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
       // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
       // so a renderPrompts throw skipped teardown and orphaned the resource.)
-      // The agents the termination handler stops on a signal: protocol's host `claude` and the microvm's
-      // guest agent. container/hostloop are NOT registered — their Ctrl-C reap thunk (below) already
-      // SIGKILLs the agent and removes the container at once, and a SIGTERM grace would only delay it (a
-      // container PID 1 without a handler ignores SIGTERM).
-      if (!containerLike) deregisterAgent = registerAgent(() => signalAgent);
+      // The agents the termination handler stops on a signal: protocol's and hostloop's host agent (with
+      // everything it started — see agent-tree.ts) and the microvm's guest agent. container is NOT registered:
+      // its Ctrl-C reap thunk (below) SIGKILLs the docker client and removes the container, which ends every
+      // process in it, and a SIGTERM grace would only delay that (a container PID 1 without a handler ignores
+      // SIGTERM). The hostloop sidecar is still removed by that thunk, which the handler runs AFTER the
+      // agent's grace and force-kill (the "container" phase runs inside its "egress" step).
+      if (handlerOwnsAgent(effectiveFidelity)) deregisterAgent = registerAgent(() => signalAgent);
       if (containerLike) {
         // thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
         // concurrent executeScenario calls don't stomp each other's values.
@@ -937,18 +942,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // double-run it (and the reap is idempotent regardless).
         deregisterContainerReap = registerCleanup({
           phase: "container",
-          run: () => {
-            try {
-              child?.kill?.("SIGKILL");
-            } catch {
-              /* already gone */
-            }
-            // mark BEFORE the forced removal below — a Ctrl-C reap kills the hostloop sidecar exactly
-            // like the normal-path teardown does, and that forced exit must not be misreported as a
-            // mid-run infra failure (see watchHostLoopSidecar's doc comment).
-            hostloopMarkTearingDown?.();
-            if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
-          },
+          run: makeContainerPhaseReap({
+            fidelity: effectiveFidelity,
+            child: () => child,
+            containerName: () => containerName,
+            markTearingDown: () => hostloopMarkTearingDown?.(),
+            rm: (name) => spawnSync(runner, ["rm", "-f", name], { stdio: "ignore" }),
+          }),
         });
       } else if (effectiveFidelity === "microvm") {
         // Bind the proxy first (port 0 → OS assigns), then read the actual port back from the live socket.
@@ -1013,6 +1013,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // tiers that serve present_files supply one; the others keep the cwd fallback (see setSessionRoot).
       let spawnedSessionRoot: string | undefined;
       let spawnedAgentCwd: string | undefined; // set only when the agent runs deliberately outside the session tree
+      const agentSpawnedAtMs = Date.now(); // the orphan sweep ignores anything that started before this
       if (effectiveFidelity === "hostloop") {
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -1026,6 +1027,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           proactiveSkillSuggestEnabled,
         });
         child = hl.child;
+        // No work dir: hostloop's Bash runs in the sidecar (ended by `rm -f`) and its host agent sits outside
+        // the session tree; its host children are hooks and MCP servers, which the group kill and walk reach.
+        signalAgent = treeAgent = agentTreeAgent(hl.child, {
+          runTag: hl.runTag,
+          runStartMs: agentSpawnedAtMs,
+          graceMs: hostAgentStopTiming("hostloop").graceMs,
+        });
         sdkMcp = hl.sdkMcp;
         containerName = hl.containerName;
         hostEgress = hl.hostEgress;
@@ -1073,9 +1081,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       } else {
         // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
         // capture l0HostConfigContamination so computeVerdict can fail the run when plugins are configured.
-        const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
+        const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend, runTag: runToken });
         child = proto.child;
-        signalAgent = childProcessAgent(proto.child);
+        signalAgent = treeAgent = agentTreeAgent(proto.child, {
+          runTag: proto.runTag,
+          runStartMs: agentSpawnedAtMs,
+          workDir: proto.workDir,
+        });
         l0HostConfigContamination = proto.l0HostConfigContamination;
         if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
           warn(
@@ -1100,6 +1112,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       }
 
       const sessionT = new LiveAgentSession(child as any, outDir);
+      if (treeAgent) sessionT.observeFrames((msg) => treeAgent!.onFrame(msg));
       // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
       const llmTerminal =
         onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
@@ -1180,7 +1193,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // orphan a running container holding the network. On the success path the child has already
       // exited (--rm), so these are no-ops.
       deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
-      await reapAgentOnTeardown({ microvm: effectiveFidelity === "microvm", agent: signalAgent, child, deregister: deregisterAgent });
+      agentStopMs = await reapAgentOnTeardown({
+        microvm: effectiveFidelity === "microvm",
+        agent: signalAgent,
+        child,
+        deregister: deregisterAgent,
+      });
       // mark BEFORE the forced removal below — this run's own `docker rm -f` makes the hostloop sidecar
       // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
@@ -1376,7 +1394,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         readonlyFolderRoots,
         effectiveFidelity,
         egress,
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt - agentStopMs,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
         fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
         onUnanswered,
@@ -1827,7 +1845,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       apiRetries: apiRetriesFrom(record),
       skillsInvoked: record.skillsInvoked,
       skillToolAvailable: record.initTools.includes("Skill"),
-      durationMs: Date.now() - startedAt,
+      durationMs: Date.now() - startedAt - agentStopMs,
       outDir,
       workDir: workRoot,
       outputsDir: join(workRoot, "outputs"),
@@ -2515,6 +2533,35 @@ function writeRunJsonl(
  *  the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its populated
  *  `artifacts[]` as a passing run. */
 /**
+ * The Ctrl-C "container"-phase thunk, shared by `run` and `chat`: SIGKILL the container tier's `docker run`
+ * client, mark the hostloop sidecar as tearing down, and remove the container. At hostloop the native agent
+ * is NOT killed here — the termination handler owns it (SIGTERM, grace, then its whole process tree), and runs
+ * this thunk only after that.
+ */
+export function makeContainerPhaseReap(p: {
+  fidelity: string;
+  child: () => { kill?: (s?: NodeJS.Signals) => void } | undefined;
+  containerName: () => string | undefined;
+  markTearingDown: () => void;
+  rm: (name: string) => void;
+}): () => void {
+  return () => {
+    if (!handlerOwnsAgent(p.fidelity))
+      try {
+        p.child()?.kill?.("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    // mark BEFORE the forced removal below — a Ctrl-C reap kills the hostloop sidecar exactly like the
+    // normal-path teardown does, and that forced exit must not be misreported as a mid-run infra failure
+    // (see watchHostLoopSidecar's doc comment).
+    p.markTearingDown();
+    const name = p.containerName();
+    if (name) p.rm(name);
+  };
+}
+
+/**
  * The normal-path (success, salvage, crash) agent teardown, extracted so its ORDER is testable.
  *
  * microvm: SIGKILLing the host `limactl shell` client alone leaves the guest agent running (and the client's
@@ -2523,6 +2570,17 @@ function writeRunJsonl(
  * a wasted VM round-trip. (Residual: `drive()` returns when the agent's stdout closes, not when the client
  * exits, so a client that lingers past the wait gets the guest KILL even on success — only an agent still
  * flushing its session store after closing stdout would notice.)
+ *
+ * A host agent's process tree (protocol, hostloop): Claude Desktop's own stop sequence — wait up to 2 s for
+ * the agent to exit on its own; if it is still running (a salvaged, timed-out or stalled run), SIGTERM it and
+ * everything it started and wait out the agent's grace period (5 s at hostloop, as Desktop's). Then force-kill the tree UNCONDITIONALLY — on the success
+ * path the agent has exited, but a background job, hook or MCP server it started has not.
+ *
+ * container: SIGKILL the `docker run` client (the container itself is removed by the caller).
+ *
+ * Returns how long the host-agent stop sequence took (0 for microvm and container), so `durationMs` can leave
+ * it out: it is teardown, and before the process-tree stop existed it cost nothing, so a run's duration
+ * keeps one meaning across versions.
  *
  * De-register LAST. Until the agent is dead a signal must still find it registered: a signal that lands in
  * the wait above would otherwise see no agent, exit at once, and leave the guest agent running. A signal
@@ -2534,17 +2592,41 @@ export async function reapAgentOnTeardown(p: {
   child?: { kill?: (s?: NodeJS.Signals) => void };
   deregister?: () => void;
   settleMs?: number;
-}): Promise<void> {
-  if (p.microvm && p.agent?.alive()) {
-    await Promise.race([p.agent.exited(), new Promise((r) => setTimeout(r, p.settleMs ?? 1000).unref())]);
-    if (p.agent.alive()) p.agent.forceKill();
-  }
-  try {
-    p.child?.kill?.("SIGKILL");
-  } catch {
-    /* already gone */
+  graceMs?: number;
+}): Promise<number> {
+  let agentStopMs = 0;
+  const wait = (a: TerminableAgent, ms: number) => Promise.race([a.exited(), new Promise((r) => setTimeout(r, ms).unref())]);
+  if (p.microvm) {
+    if (p.agent?.alive()) {
+      await wait(p.agent, p.settleMs ?? 1000);
+      if (p.agent.alive()) p.agent.forceKill();
+    }
+    try {
+      p.child?.kill?.("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  } else if (p.agent) {
+    const t0 = Date.now();
+    await p.agent.idle?.(); // the drive loop's last (asynchronous) listing, taken at the final result frame
+    if (p.agent.alive()) {
+      await wait(p.agent, p.settleMs ?? 2000);
+      if (p.agent.alive()) {
+        p.agent.terminate();
+        await wait(p.agent, p.graceMs ?? p.agent.graceMs ?? TERMINATION_GRACE_MS);
+      }
+    }
+    p.agent.forceKill();
+    agentStopMs = Date.now() - t0;
+  } else {
+    try {
+      p.child?.kill?.("SIGKILL");
+    } catch {
+      /* already gone */
+    }
   }
   p.deregister?.();
+  return agentStopMs;
 }
 
 export function buildPartialResult(args: {

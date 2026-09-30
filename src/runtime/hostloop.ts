@@ -23,6 +23,7 @@ const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars } from "./argv.js";
+import { agentSpawnOptions } from "./agent-tree.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
@@ -394,11 +395,14 @@ export function spawnHostLoop(
     },
   };
 
-  const child = spawn(agentNativeHost, nativeArgs, {
-    cwd: cwds.agentProcessCwd,
-    env: nativeEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  // Detached, as Desktop spawns its agent, and tagged with the run's token: both are how a teardown finds
+  // every host process the agent starts — hooks, MCP servers (see agent-tree.ts). Returned, never re-derived.
+  const runTag = opts.runToken ?? sessionId;
+  const child = spawn(
+    agentNativeHost,
+    nativeArgs,
+    agentSpawnOptions({ cwd: cwds.agentProcessCwd, env: nativeEnv, stdio: ["pipe", "pipe", "pipe"] as const }, runTag),
+  );
 
   // The VM sidecar container: bash/web_fetch's `docker exec` target. No agent inside it (the agent is
   // the native `child` above) — it runs a keep-alive command (dockerRunArgv's default when `agentArgv` is
@@ -518,6 +522,7 @@ export function spawnHostLoop(
     hostEgress,
     infraErrors,
     markTearingDown,
+    runTag,
     sessionRoot: sessionHost,
     ...(processCwd !== undefined ? { agentProcessCwd: processCwd } : {}),
   };
