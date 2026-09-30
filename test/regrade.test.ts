@@ -379,6 +379,19 @@ describe("regrade: refusals (exit 2), all before any judge call", () => {
     expect(judge.calls).toHaveLength(0);
   });
 
+  it("a missing transcript sidecar is refused, not graded over an empty transcript", async () => {
+    const k = await keptRun({ author: writeReport });
+    rmSync(join(k.runDir, "turns", "1", "run.jsonl"));
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toMatch(/^regrade: no readable transcript sidecar/);
+    expect(out.message).toMatch(/\(can't verify ⇒ not green\)$/);
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(k)).toEqual([]);
+  });
+
   it("a multi-turn run dir is refused", async () => {
     const k = await keptRun({ author: writeReport });
     mkdirSync(join(k.runDir, "turns", "2"));
@@ -442,6 +455,120 @@ describe("regrade: secrets", () => {
     expect(judge.calls[0].answer).not.toContain(SECRET);
     // Scrubbed identically on both sides, so the document still matches the live one.
     expect(out.runs[0].docMatchesLive).toBe(true);
+  });
+});
+
+describe("regrade: spend, provenance and invalid grades", () => {
+  it("the regrade file carries harnessVersion, the per-run judge spend, and the counts", async () => {
+    const k = await keptRun({ author: writeReport, assertYaml: `${SCOPED}  - semantic_matches:\n      rubric: ["another claim"]\n` });
+    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    if (!out.ok) throw new Error(out.message);
+    const file = JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8"));
+    expect(file.harnessVersion).toBe(JSON.parse(regradeEnvelope(out)).version);
+    expect(file.judgeCostUsd).toBeCloseTo(0.0246);
+    expect(file.unpricedGrades).toBe(0);
+    expect(file).toMatchObject({ regraded: 2, invalidGrades: 0 });
+    expect(out.runs[0].judgeCostUsd).toBeCloseTo(0.0246);
+  });
+
+  it("an unpriced grade leaves the total a floor, and none priced leaves it absent — never $0", async () => {
+    const k = await keptRun({ author: writeReport, assertYaml: `${SCOPED}  - semantic_matches:\n      rubric: ["another claim"]\n` });
+    let n = 0;
+    const half = (o?: { model?: string }): SemanticJudge => {
+      const j = judgeFactory(() => true).make(o);
+      const inner: SemanticJudge = async (rubric, answer) => {
+        const r = await j(rubric, answer);
+        inner.lastCostUsd = n++ === 0 ? 0.01 : undefined;
+        return r;
+      };
+      inner.model = j.model;
+      inner.promptHash = j.promptHash;
+      return inner;
+    };
+    const out = await regradeRuns(opts(k, { makeJudge: half }));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].judgeCostUsd).toBeCloseTo(0.01);
+    expect(out.runs[0].unpricedGrades).toBe(1);
+
+    const none = (o?: { model?: string }): SemanticJudge => {
+      const j = judgeFactory(() => true).make(o);
+      const inner: SemanticJudge = async (rubric, answer) => j(rubric, answer);
+      inner.model = j.model;
+      inner.promptHash = j.promptHash;
+      return inner;
+    };
+    const unpriced = await regradeRuns(opts(k, { makeJudge: none }));
+    if (!unpriced.ok) throw new Error(unpriced.message);
+    expect(unpriced.runs[0].judgeCostUsd).toBeUndefined();
+    expect(unpriced.runs[0].unpricedGrades).toBe(2);
+    const env = JSON.parse(regradeEnvelope(unpriced));
+    expect(env.judgeCostUsd).toBeUndefined();
+    expect(env.unpricedGrades).toBe(2);
+  });
+
+  it("the envelope carries the overall spend across run dirs", async () => {
+    const a = await keptRun({ author: writeReport });
+    const b = await keptRun({ author: writeReport });
+    const out = await regradeRuns({
+      runDirs: [a.runDir, b.runDir],
+      scenarioFile: a.scenarioFile,
+      makeJudge: judgeFactory(() => true).make,
+    });
+    if (!out.ok) throw new Error(out.message);
+    const env = JSON.parse(regradeEnvelope(out));
+    expect(env.judgeCostUsd).toBeCloseTo(0.0246);
+    expect(env.unpricedGrades).toBe(0);
+    expect(env.runs.map((r: { judgeCostUsd: number }) => r.judgeCostUsd)).toEqual([expect.closeTo(0.0123), expect.closeTo(0.0123)]);
+  });
+
+  it("an all-invalid round is written, exits 1, and says so in the file", async () => {
+    const k = await keptRun({ author: writeReport });
+    const broken = (o?: { model?: string }): SemanticJudge => {
+      const j: SemanticJudge = async () => {
+        j.lastCostUsd = 0.002; // a failed attempt is still paid
+        throw new Error("judge transport down");
+      };
+      j.model = o?.model ?? "claude-opus-4-8";
+      j.promptHash = JUDGE_PROMPT_HASH;
+      return j;
+    };
+    const out = await regradeRuns(opts(k, { makeJudge: broken }));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.exitCode).toBe(1);
+    expect(out.runs[0].invalidGrades).toBe(1);
+    const file = JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8"));
+    expect(file).toMatchObject({ regraded: 1, invalidGrades: 1 });
+    expect(file.assertions[0].judgeInvalid).toBe(true);
+    expect(file.judgeCostUsd).toBeCloseTo(0.004); // two attempts
+  });
+
+  it("the written file is scrubbed as a whole document with this process's secrets", async () => {
+    // A secret the judged document never carries (it is only in the scenario's rubric) still leaves the file scrubbed.
+    const SECRET = "sk-test-rubric-only-4b2d";
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    const k = await keptRun({ author: writeReport });
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(
+        mkdtempSync(join(tmpdir(), "cwh-rg-scn5-")),
+        `  - semantic_matches:\n      rubric: ["the report never mentions ${SECRET}"]\n      evidence_files: ["outputs/report.md"]\n`,
+      ),
+      makeJudge: judgeFactory(() => true).make,
+    });
+    if (!out.ok) throw new Error(out.message);
+    const text = readFileSync(out.runs[0].regradeFile, "utf8");
+    expect(text).not.toContain(SECRET);
+    expect(text).toContain("[REDACTED]");
+  });
+
+  it("the same run dir named twice is graded once", async () => {
+    const k = await keptRun({ author: writeReport });
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [k.runDir, join(k.runDir, ".")], scenarioFile: k.scenarioFile, makeJudge: judge.make });
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs).toHaveLength(1);
+    expect(judge.calls).toHaveLength(1);
+    expect(regradeFiles(k)).toHaveLength(1);
   });
 });
 

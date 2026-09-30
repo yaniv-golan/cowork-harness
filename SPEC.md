@@ -643,17 +643,23 @@ collision) prints the error envelope instead, as before.
 
 **`regrade`** re-grades a kept run's `semantic_matches` asserts with the judge and prints one payload-shaped
 document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`. Each `runs[]` entry is one run dir:
-`{runDir, turn, regradeFile, pass, docMatchesLive, differingSections[], assertions[], notRegraded[],
-authoredCapture}`. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
+`{runDir, turn, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, docMatchesLive,
+differingSections[], assertions[], notRegraded[], authoredCapture}`, and the document's top level also carries
+`judgeCostUsd?` and `unpricedGrades` summed over every run dir. `judgeCostUsd` is the sum of the priced judge
+calls and is absent when none was priced (never `0` for unknown); `unpricedGrades > 0` makes it a floor.
+`invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
 `assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
 every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `false` | `"scope_changed"` |
 `"unknown"`: whether the recomposed judged document equals, section for section, the `judgedDoc` the live run
 recorded (`unknown` when it recorded none, never `true`); `differingSections[]` entries are
 `{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
-passed. **Exit codes:** `0` every re-graded assert passes · `1` any fails · `2` usage, or a refusal (a
-multi-turn, partial, replay or chat run dir, a pruned work dir, a run that did not record `authoredCapture`
-without `--authored-total-bytes`, an alias judge model, a scenario with no `semantic_matches`); a refusal is
-the shared error envelope, decided for every run dir before any judge call. `result.json` is never modified.
+passed. `docMatchesLive: false` says the bytes differ, not why (an authored file changed since the run, a
+different secret-scrub set, a sub-agent section). **Exit codes:** `0` every re-graded assert passes · `1` any
+fails or is judge-invalid · `2` usage, or a refusal (a multi-turn, partial, replay or chat run dir, a pruned work
+dir, a missing transcript sidecar, a run that did not record `authoredCapture` without `--authored-total-bytes`,
+an alias judge model, a scenario with no `semantic_matches`), or a failure writing a regrade file after earlier
+run dirs were graded; a refusal is the shared error envelope, decided for every run dir before any judge call.
+`result.json` is never modified.
 
 The command lists above are illustrative, not a frozen contract — this is not a single universal
 envelope across every command, so check a given command's own section (or grep its

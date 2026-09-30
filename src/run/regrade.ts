@@ -4,10 +4,10 @@
  *
  * The evidence is rebuilt by the shared kept-run builder (`assertContextFromRunDir`) with the inputs the live
  * run's capture used: the persisted capture budget (`result.json` `authoredCapture`), the scenario's
- * `evidence_files` union as priority globs, and this process's secret set, so every section of the judged
- * document is scrubbed before it leaves. Whether that rebuilt document is the one the live judge read is
- * then MEASURED, not assumed: each assert's recomposed fingerprint is compared, section by section, with the
- * `judgedDoc` the live run persisted.
+ * `evidence_files` union as priority globs, and THIS process's secret set — every section of the judged
+ * document is scrubbed with it before it leaves, but a value only the live run knew to scrub is not. Whether
+ * that rebuilt document is the one the live judge read is then MEASURED, not assumed: each assert's
+ * recomposed fingerprint is compared, section by section, with the `judgedDoc` the live run persisted.
  *
  * The result is written beside the run (`turns/<N>/regrade/<promptHash>-<judgeModel>-<iso>.json`).
  * `result.json` is never modified and no run-index row is added — a re-grade is not a run, and indexing it
@@ -20,11 +20,11 @@ import { evaluate, runSemanticJudges, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { tildeify, writeAllSync } from "../io.js";
-import { collectSecrets } from "../secrets.js";
+import { collectSecrets, scrub } from "../secrets.js";
 import type { Assertion, JudgedDocFingerprint, RunResult, Scenario } from "../types.js";
 import { DEFAULT_AUTHORED_TOTAL_BYTES, parseAuthoredTotalBytes } from "./artifacts.js";
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
-import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
+import { fail, isJsonOutput, jsonPayloadEnvelope, pkgVersion } from "./envelope.js";
 import { parseScenarioFile } from "./execute.js";
 import { turnArtifactPath, turnWriteDir } from "./turn-layout.js";
 import { assertContextFromRunDir } from "./verify-context.js";
@@ -64,11 +64,21 @@ export interface RegradedAssertion {
   docMatchesLive: DocMatch;
 }
 
-export interface RegradeRunReport {
+/** Judge spend over a set of grades: the sum of the priced ones (`undefined` when none was priced — unpriced
+ *  is not $0), and how many were unpriced. With `unpricedGrades > 0` the sum is a FLOOR. */
+export interface JudgeSpend {
+  judgeCostUsd?: number;
+  unpricedGrades: number;
+}
+
+export interface RegradeRunReport extends JudgeSpend {
   runDir: string;
   turn: number;
   regradeFile: string;
   pass: boolean;
+  /** Asserts whose grade is INVALID (the judge failed twice, e.g. an outage or a malformed grade) — counted
+   *  apart from failures: an invalid grade says nothing about the run. It still makes `pass` false. */
+  invalidGrades: number;
   docMatchesLive: DocMatch;
   differingSections: DifferingSection[];
   assertions: RegradedAssertion[];
@@ -93,6 +103,15 @@ export interface RegradeOptions {
 }
 
 const sha256Hex = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
+
+/** Same basis as the run index's `judgeCostUsd` and `stats`' `unpricedRuns`. */
+export function judgeSpend(grades: ReadonlyArray<{ judgeCostUsd?: number }>): JudgeSpend {
+  const priced = grades.flatMap((g) => (typeof g.judgeCostUsd === "number" ? [g.judgeCostUsd] : []));
+  return {
+    ...(priced.length ? { judgeCostUsd: priced.reduce((sum, c) => sum + c, 0) } : {}),
+    unpricedGrades: grades.length - priced.length,
+  };
+}
 
 /** What the judged document depends on besides the shared capture: an assert's own sub-agent opt-in and its
  *  `evidence_files` scope (order-free; an empty list is unscoped, as `scopeAuthoredEvidence` reads it). */
@@ -189,9 +208,14 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
 
   let scenario: Scenario | undefined;
   const loadScenario = (): Scenario => (scenario ??= parseScenarioFile(opts.scenarioFile));
+  // ONE secret set for the judged document and the written file, so the two cannot disagree.
+  const secrets = collectSecrets();
   const prepared: Prepared[] = [];
+  const seen = new Set<string>();
   for (const dir of opts.runDirs) {
     const runDir = resolve(dir);
+    if (seen.has(runDir)) continue; // the same dir named twice is graded (and paid for) once
+    seen.add(runDir);
     // First pass: the builder's run-dir refusals (multi-turn, partial, replay, chat…) and the persisted result,
     // which carries the budget the second pass needs.
     const first = assertContextFromRunDir(dir, loadScenario, { command: CMD }); // messages echo the path as given
@@ -234,11 +258,12 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
 
     // Second pass: the evidence as the live run captured it — its budget, the scenario's evidence_files
     // union, and this process's secrets (the live run scrubbed with its own; a secret it knew of and this
-    // process does not is the one gap a kept run cannot close).
+    // process does not is the one gap a kept run cannot close). A missing transcript sidecar or work dir is
+    // refused here, by the builder: both are sections of the judged document.
     const second = assertContextFromRunDir(dir, sc, {
       command: CMD,
       recomputeAuthored: "both",
-      secrets: collectSecrets(),
+      secrets,
       priorityGlobs: evidenceUnion(sc.assert),
       totalBytes,
       ...(persisted ? { perFileBytes: persisted.perFileBytes } : {}),
@@ -304,6 +329,8 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       a.semantic_matches !== undefined ? [] : [{ assertionIndex: i, keys: Object.keys(a) }],
     );
     const pass = assertions.every((a) => a.pass);
+    const spend = judgeSpend(assertions);
+    const invalidGrades = assertions.filter((a) => a.judgeInvalid === true).length;
 
     const models = [...new Set(assertions.map((a) => a.judgeModel ?? "unknown"))];
     const hashes = [...new Set(assertions.map((a) => a.judgePromptHash ?? "no-prompt-hash"))];
@@ -315,21 +342,31 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     mkdirSync(dir, { recursive: true });
     const body = {
       command: CMD,
+      harnessVersion: pkgVersion(),
       regradedAt: at,
       scenario: sc.name,
       authoredCapture: p.budget,
       docMatchesLive,
       differingSections: differing,
+      // An all-invalid round (a judge outage) is still written, and these counts are what tell it apart from
+      // a failing grade without walking `assertions[]`.
+      regraded: assertions.length,
+      invalidGrades,
+      ...spend,
       assertions,
       notRegraded,
       original: { resultSha256: p.resultSha256, turn: p.turn },
     };
-    const regradeFile = writeNew(dir, stem, JSON.stringify(body, null, 2) + "\n");
+    // Scrubbed as a whole document, as result.json is: the rationales are scrubbed at grade time, but the
+    // rubric and messages echo scenario text, and one pass over the serialized body leaves no field out.
+    const regradeFile = writeNew(dir, stem, scrub(JSON.stringify(body, null, 2), secrets) + "\n");
     runs.push({
       runDir: p.runDir,
       turn: p.turn,
       regradeFile,
       pass,
+      invalidGrades,
+      ...spend,
       docMatchesLive,
       differingSections: differing,
       assertions,
@@ -342,8 +379,13 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
 
 /** The `--output-format json` document for a completed re-grade (payload-shaped: `runs[]`, not `results[]`). */
 export function regradeEnvelope(outcome: Extract<RegradeOutcome, { ok: true }>): string {
-  return jsonPayloadEnvelope(CMD, outcome.exitCode === 0, { runs: outcome.runs });
+  return jsonPayloadEnvelope(CMD, outcome.exitCode === 0, { ...judgeSpend(outcome.runs.flatMap((r) => r.assertions)), runs: outcome.runs });
 }
+
+const usd = (s: JudgeSpend): string =>
+  s.judgeCostUsd === undefined
+    ? "unpriced"
+    : `$${s.judgeCostUsd.toFixed(4)}${s.unpricedGrades > 0 ? ` (${s.unpricedGrades} unpriced — a floor)` : ""}`;
 
 const log = (s: string) => writeAllSync(2, s + "\n");
 
@@ -359,7 +401,9 @@ function docMatchLine(r: RegradeRunReport): string {
         r.differingSections.length ? ` (${r.differingSections.map(where).join(", ")})` : ""
       }`;
     case false:
-      return `::warning:: judged document DIFFERS from the one the live judge read — this grade is not comparable with the live one: ${r.differingSections.map(where).join(", ") || "whole-document hash"}`;
+      // Neutral about the cause on purpose: an authored file changed in the kept work dir, a secret this process
+      // scrubs differently, and a sub-agent section all surface here, and the section list is what tells them apart.
+      return `::warning:: judged document DIFFERS from the one the live judge read — this grade is not comparable with the live one. Differing: ${r.differingSections.map(where).join(", ") || "whole-document hash"}`;
   }
 }
 
@@ -406,14 +450,19 @@ export async function cmdRegrade(args: string[]): Promise<never> {
       }
       if (r.notRegraded.length) log(`· not re-graded: ${r.notRegraded.map((n) => n.keys.join("+")).join(", ")}`);
       log(docMatchLine(r));
+      log(`· judge spend: ${usd(r)}`);
       log(`· wrote ${tildeify(r.regradeFile)}`);
     }
     const total = outcome.runs.flatMap((r) => r.assertions);
-    const failed = total.filter((a) => !a.pass).length;
+    const invalid = total.filter((a) => a.judgeInvalid === true).length;
+    const failed = total.filter((a) => !a.pass && a.judgeInvalid !== true).length;
+    const spend = `judge spend ${usd(judgeSpend(total))}`;
     log(
-      failed === 0
-        ? `✓ regrade: all ${total.length} re-graded assertion(s) pass`
-        : `✗ regrade: ${failed}/${total.length} re-graded assertion(s) failed`,
+      failed === 0 && invalid === 0
+        ? `✓ regrade: all ${total.length} re-graded assertion(s) pass · ${spend}`
+        : `✗ regrade: ${failed}/${total.length} re-graded assertion(s) failed` +
+            (invalid ? `, ${invalid} ungraded (judge invalid — not a verdict on the run)` : "") +
+            ` · ${spend}`,
     );
   }
   return process.exit(outcome.exitCode);

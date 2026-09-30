@@ -278,27 +278,47 @@ not run again; the judge call is the only spend.
 
 - **The document is rebuilt the way the live run built it.** The authored files are recaptured from the kept work
   dir with the budget the live run recorded (`result.json` `authoredCapture`) and with the scenario's
-  `evidence_files` as priority globs, and every section is secret-scrubbed before it reaches the judge.
+  `evidence_files` as priority globs. Every section is scrubbed before it reaches the judge, but with **this
+  process's** secret set (the known credential variables plus `COWORK_HARNESS_SCRUB_KEYS` /
+  `COWORK_HARNESS_SCRUB_VALUES` as set now), not the live run's: a value the live run scrubbed that this process
+  does not know is **not** scrubbed. Run `regrade` with the same scrub settings as the live run. A different scrub
+  set also changes the scrubbed bytes, so it shows up as `docMatchesLive: false` from redaction alone, not from
+  any change in the evidence.
 - **Whether it matches is measured, not assumed.** Each assert's document is fingerprinted and compared, section
   by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
-  (they differ; the differing sections are listed by kind and path — for example an authored file edited in the
-  work dir since the run), `scope_changed` (the rubric's `evidence_files` or `include_subagent_text`, or the
-  capture budget, changed, so a different document is expected), or `unknown` (the run recorded no fingerprint).
-  A `false` is printed as a warning: that grade is not comparable with the live one.
+  (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's
+  `evidence_files` or `include_subagent_text`, or the capture budget, changed, so a different document is
+  expected), or `unknown` (the run recorded no fingerprint). A `false` says only that the bytes differ, not why:
+  an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
+  cause it, and the listed sections are what tell them apart. It is printed as a warning: that grade is not
+  comparable with the live one.
 - **Output.** Each run dir gets `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`, holding the re-graded
   asserts (per-claim grades and rationales, judge model, usage, cost, prompt hash and document fingerprint),
-  `docMatchesLive` with the differing sections, the not-re-graded asserts, and the SHA-256 of the `result.json`
-  it was graded against. Re-grades with different judge models sit side by side. `result.json` is never modified
-  and no run-index row is written, so `stats` does not count a re-grade as a run.
+  `docMatchesLive` with the differing sections, the not-re-graded asserts, the `harnessVersion` that wrote it,
+  and the SHA-256 of the `result.json` it was graded against. The whole file is scrubbed with the same secret set
+  before it is written. Re-grades with different judge models sit side by side. `result.json` is never modified
+  and no run-index row is written, so `stats` does not count a re-grade as a run. The same run dir named twice
+  is graded once.
+- **Spend and invalid grades.** The file, each `runs[]` entry and the JSON envelope carry `judgeCostUsd` (the
+  sum of the priced judge calls, retries included; absent when none was priced — unpriced is never `$0`) and
+  `unpricedGrades` (how many grades had no price; when it is above `0` the total is a floor). The envelope's
+  top-level pair covers every run dir. The file and each `runs[]` entry also carry `invalidGrades`: asserts the
+  judge could not grade (it failed twice — an outage or a malformed grade), and the file carries `regraded`, the
+  number of asserts graded. A round in which every grade is invalid is still written, with
+  `invalidGrades` equal to `regraded`, so a judge outage can be told apart from a failing grade. The text report
+  counts invalid grades separately from failures and prints the judge spend per run and in total.
 - **Judge model.** `--judge-model` grades every assert with one model; without it each assert's `judge_model`,
   else `COWORK_HARNESS_JUDGE_MODEL`, else the default applies. Either way the model must name exactly one model —
   an alias such as `opus` is refused, because it resolves to whatever is newest at call time.
 - **Refusals (exit `2`, before any judge call; one refused run dir stops the whole batch):** a multi-turn run dir,
-  a partial, replay or chat run, a pruned work dir, a scenario with no `semantic_matches` assert, and a run
+  a partial, replay or chat run, a pruned work dir, a missing or unreadable transcript sidecar (`run.jsonl` — the
+  transcript is a section of the judged document), a scenario with no `semantic_matches` assert, and a run
   recorded before `authoredCapture` existed. For the last, pass `--authored-total-bytes` with the budget that run
   used (`65536` unless `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` was set); on a newer run the flag overrides the
   recorded budget and the result is reported as `scope_changed`.
-- **Exit codes:** `0` every re-graded assert passes · `1` any fails · `2` usage or refusal. Text mode writes its
+- **Exit codes:** `0` every re-graded assert passes · `1` any fails or is judge-invalid · `2` usage or refusal,
+  and also a failure writing a regrade file after earlier run dirs were already graded (their files stay
+  written; the judge calls for them were spent). Text mode writes its
   report to stderr; `--output-format json` prints one payload document (`{tool, version, command, ok, runs[],
   error}`) on stdout.
 
