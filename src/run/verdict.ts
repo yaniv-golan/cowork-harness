@@ -2,6 +2,7 @@ import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
+import { endsOnRequestForInput } from "./input-request.js";
 import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified } from "./outputs-delete-tier.js";
 
 export interface VerdictSignal {
@@ -310,7 +311,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     });
   }
 
-  // a run that ended on an unanswered plain-text question is a hard fail on BOTH lanes (the flag is
+  // a run that ended on an unanswered plain-text question or request for input is a hard fail on BOTH lanes (the flag is
   // re-derived by run.ts's detector on the live run AND the replay re-drive, so a recorded stall fails replay
   // too). `result:"success"` alone is too generous — the SDK turn didn't error, but the agent asked for input
   // and stopped, so the task did not complete. Opt out with allow_stall when ending on a question is intended.
@@ -323,7 +324,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       code: "stalled",
       severity: "fail",
       message:
-        "run ended on an unanswered question — the agent asked for input and stopped; the task did not complete. " +
+        "run ended on an unanswered question or request for input — the agent asked for input and stopped; the task did not complete. " +
         `Script the answer (answer: / --answer / a decider), or ${stallOptOut} if ending on a question is intended.`,
     });
   }
@@ -355,9 +356,13 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           "or assert allow_missing_capability: true if the fallback is equivalent.",
       });
 
-    // (live, heuristic) the agent's final answer contains a question and the run produced no deliverable — a
+    // (live, heuristic) the agent's final answer asks for input and the run produced no deliverable — a
     // likely conversational dead-end that still exited result:"success". WARN, never fail. Strictly weaker
-    // sibling of `stalled` (run.ts's strict trailing-`?`/no-tools detector); mutually exclusive by construction.
+    // sibling of `stalled` (run.ts's detector: a closing `?` or input request with no tool work after the
+    // last gate); mutually exclusive by construction. "Asks for input" = a `?` anywhere, OR the same
+    // closing-sentence input request `stalled` uses (input-request.ts), under the same condition that an
+    // AskUserQuestion gate fired — so a `?`-free "Please share X…" after post-gate tool work lands here
+    // instead of in neither signal.
     const openEnded = !result.assertions.some((a) =>
       Object.entries(a.assertion).some(
         ([k, v]) => v !== undefined && k !== "result" && !(VERDICT_MODIFIER_KEYS as readonly string[]).includes(k),
@@ -374,7 +379,9 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       // its presence as "the run produced something" would suppress this warning on the lane where the
       // question matters most.
       !result.workspaceFiles.some((f) => f.class === "output" && locationDelivers(result.lane)) &&
-      /\?(?![\w=&/#])/.test(result.finalMessage ?? "") // a '?' not followed by a URL-query/path char
+      // a '?' not followed by a URL-query/path char, or a `?`-free closing request for input
+      (/\?(?![\w=&/#])/.test(result.finalMessage ?? "") ||
+        ((result.toolCounts?.["AskUserQuestion"] ?? 0) > 0 && endsOnRequestForInput(result.finalMessage)))
     )
       signals.push({
         code: "ended_with_question",

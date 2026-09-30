@@ -114,11 +114,20 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     artifacts/content.**
     - A turn that ends on a plain-text re-ask ("which file did you mean?") still reports
       `result: success`.
-    - The harness catches this with a **`stalled`** verdict signal: a run that ends on a question and
+    - The harness catches this with a **`stalled`** verdict signal: a run that ends asking for input and
       did **no productive work after its last gate** — both the no-gate case ("which file?" with no
       tool calls) AND the *answered-gate-then-re-ask* case (the agent answers an `AskUserQuestion`,
       then asks again in plain text and stops). Suppress with `allow_stall: true` if ending on a
       question is intended.
+    - "Asking for input" is read from the final turn's **closing sentence**: it ends in `?`, or — only
+      once an `AskUserQuestion` gate has fired — it is a request without one: `Please`/`Kindly` +
+      share, provide, send, upload, attach, paste, confirm, specify, tell me, give me, reply with,
+      choose, pick, select; `Let me know which…`/`whether…`; `Once you share…, I'll…` / `Once I have the
+      file, I'll…`; `I need X to proceed`/`before I can…`; or a `?` followed only by a `For example: …`
+      or parenthetical aside. A polite closer never counts: `Let me know if…`, `Feel free…`, `any
+      feedback/questions`, `what you think`, `happy to`, or a sentence starting `If you…`. A request
+      anywhere but the closing sentence is not read, and a run with no gate stalls only on a trailing
+      `?`.
     - The signal is a **tool-position heuristic**, not deliverable detection, so it is imprecise both
       ways:
       - **False negative:** a post-gate tool *call* clears the flag whether it **succeeded or
@@ -291,12 +300,13 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     directly, with `skillActivity` empty.
 
 27. **`stalled` also fails a complete answer that closes by offering a follow-up.** *Why:* the
-    `stalled` guard fires when a run's final message ends in `?` with no productive tool call after the
-    last gate — which includes a complete answer that closes by *offering* a follow-up ("want me to run
-    this through a structured pass?"). *Fix:* read the final message before believing `stalled`. If
-    ending on a question is intended, opt out: `allow_stall: true` in a scenario's `assert:` block, or
-    `--allow-stall` on `skill` / `probe-dispatch`, which have no `assert:` block. The failure message
-    names the spelling for the lane you ran.
+    `stalled` guard fires when a run's final message ends on a question (or a closing request for input
+    — see gotcha 13) with no productive tool call after the last gate — which includes a complete answer
+    that closes by *offering* a follow-up ("want me to run this through a structured pass?"). *Fix:* read
+    the final message before believing `stalled`. If ending on a question is intended, opt out:
+    `allow_stall: true` in a scenario's `assert:` block, or `--allow-stall` on `skill` /
+    `probe-dispatch`, which have no `assert:` block. The failure message names the spelling for the lane
+    you ran.
 
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the

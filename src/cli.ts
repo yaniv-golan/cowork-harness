@@ -466,7 +466,7 @@ Output:
   --allow-missing-capability       don't fail the verdict when the (partial 'core') image omits a capability
                                    the skill used but real Cowork ships — open-ended-run equivalent of a
                                    scenario asserting allow_missing_capability: true
-  --allow-stall                    don't fail the verdict when the run ends on a question (the \`stalled\` signal) —
+  --allow-stall                    don't fail the verdict when the run ends asking for input (the \`stalled\` signal) —
                                    open-ended-run equivalent of a scenario asserting allow_stall: true
   --allow-host-hooks              consent to running a staged plugin's hooks as native host processes at
                                   protocol (no container sandbox); refused loud otherwise
@@ -2562,7 +2562,7 @@ Probe tuning:
                                  refused (exit 2)
   --expect-write <suffix>         narrow "delivered" to a sub-agent write whose path ends with this suffix
                                  (default: ANY sub-agent-origin write under the dispatch's own toolUseId)
-  --allow-stall                  don't fail the verdict when the run ends on a question (the \`stalled\` signal) —
+  --allow-stall                  don't fail the verdict when the run ends asking for input (the \`stalled\` signal) —
                                  the equivalent of a scenario asserting allow_stall: true
 
 Answering / common flags (inherited from the shared flag set, honored here too):

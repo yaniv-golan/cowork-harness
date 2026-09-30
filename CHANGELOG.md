@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Verdict change: `stalled` now fails a run that ends by asking for input without a `?`, on `run` and on
+  `replay`.** After an `AskUserQuestion` gate, a run that closed on "Please share your pre-money valuation
+  and the total amount you're raising so I can run the numbers." passed, while the same run ending "…for
+  the Series A?" failed. The check only looked for a trailing `?`.
+  - Once a gate has fired, the final turn's closing sentence now also counts when it asks for specific
+    input: `Please`/`Kindly` + share, provide, send, upload, attach, paste, confirm, specify, tell me,
+    give me, reply with, choose, pick or select; `Let me know which…`/`whether…`; `Once you share…, I'll…`
+    or `Once I have the file, I'll…`; `I need X to proceed`/`before I can…`; or a question followed only
+    by a `For example: …` or parenthetical aside.
+  - A polite closer never counts: `Let me know if…`, `Feel free…`, `any feedback/questions`, `what you
+    think`, `happy to`, or a sentence starting `If you…`. A run with no gate still stalls only on a
+    trailing `?`, so a plain answer cannot fail on its wording.
+  - The other conditions are unchanged: the run succeeded and no tool ran after the last gate.
+    `allow_stall: true` / `--allow-stall` still opt out.
+  - `replay` re-derives the check from the recording, so an existing cassette with this ending fails on
+    replay too. Replaying the 5 cassettes committed here and 11 from a consumer skill suite with the old
+    and new check changed no verdict.
+  - The live-lane `ended_with_question` warning uses the same test under the same gate condition. A
+    `?`-free request made after post-gate tool work, which raised nothing, now warns. A run that used to
+    warn `ended_with_question` and matches the new shape now fails `stalled` instead.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
