@@ -131,7 +131,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     deciderCostUsd: undefined, // the chat lane has no decider — the human answers
     deciderUsage: undefined,
     authoredCapture: undefined, // chat runs no authored-file capture
-    apiRetries: apiRetriesFrom(record.contextEvents),
+    apiRetries: apiRetriesFrom(record.contextEvents, record.subagentRetries),
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: opts.durationMs,

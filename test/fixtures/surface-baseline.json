@@ -2098,6 +2098,14 @@
         "type": "number",
         "required": true
       },
+      ".apiRetries.subagentCount": {
+        "type": "integer",
+        "required": true
+      },
+      ".apiRetries.subagentDelayMs": {
+        "type": "number",
+        "required": true
+      },
       ".artifacts": {
         "type": "array"
       },
@@ -2121,6 +2129,10 @@
       },
       ".authoredCapture.perFileBytes": {
         "type": "integer",
+        "required": true
+      },
+      ".authoredCapture.scratchpadWalked": {
+        "type": "boolean",
         "required": true
       },
       ".authoredCapture.totalBytes": {

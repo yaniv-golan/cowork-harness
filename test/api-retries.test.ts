@@ -17,7 +17,7 @@ const INIT = JSON.stringify({ type: "system", subtype: "init", tools: [], skills
 const RESULT = JSON.stringify({ type: "result", subtype: "success", is_error: false });
 const LIVE = loadBaseline("latest").appVersion;
 
-async function replay(events: string[]) {
+async function replay(events: string[], controlOut: string[] = []) {
   const orig = process.stderr.write.bind(process.stderr);
   process.stderr.write = (() => true) as typeof process.stderr.write;
   try {
@@ -33,7 +33,7 @@ async function replay(events: string[]) {
         assert: [{ result: "success" }],
       },
       events,
-      controlOut: [],
+      controlOut,
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       fingerprint: { baseline: LIVE },
@@ -46,36 +46,89 @@ async function replay(events: string[]) {
 describe("apiRetries — the agent's own API retries, counted from the real stream frame", () => {
   it("a real stream holding one api_retry frame: count 1, its retry_delay_ms", async () => {
     const r = await replay([INIT, FRAMES[0]!, RESULT]);
-    expect(r.apiRetries).toEqual({ count: 1, delayMs: 593 });
+    expect(r.apiRetries).toEqual({ count: 1, delayMs: 593, subagentCount: 0, subagentDelayMs: 0 });
   });
 
   it("sums every frame (the four real frames, from four runs, in one stream)", async () => {
     const r = await replay([INIT, ...FRAMES, RESULT]);
-    expect(r.apiRetries).toEqual({ count: 4, delayMs: 593 + 537 + 580 + 521 });
+    expect(r.apiRetries).toEqual({ count: 4, delayMs: 593 + 537 + 580 + 521, subagentCount: 0, subagentDelayMs: 0 });
   });
 
-  it("a driven stream with no retry is {0, 0} — a real zero, not absence", async () => {
+  it("a driven stream with no retry of either kind is all zeros — a real zero, not absence", async () => {
     const r = await replay([INIT, RESULT]);
-    expect(r.apiRetries).toEqual({ count: 0, delayMs: 0 });
+    expect(r.apiRetries).toEqual({ count: 0, delayMs: 0, subagentCount: 0, subagentDelayMs: 0 });
   });
 
   it("the fold reads the parser's own output: every fixture frame surfaces as a system_event", () => {
     const events = FRAMES.flatMap((l) => parseMessage(JSON.parse(l)));
     expect(events.map((e) => e.type)).toEqual(["system_event", "system_event", "system_event", "system_event"]);
     const contextEvents = events.map((e) => ({ subtype: (e as any).subtype, data: (e as any).data }));
-    expect(apiRetriesFrom(contextEvents)).toEqual({ count: 4, delayMs: 2231 });
+    expect(apiRetriesFrom(contextEvents, { count: 0, delayMs: 0 })).toEqual({
+      count: 4,
+      delayMs: 2231,
+      subagentCount: 0,
+      subagentDelayMs: 0,
+    });
   });
 
   it("absent when no stream was observed; a frame without a numeric delay still counts", () => {
-    expect(apiRetriesFrom(undefined)).toBeUndefined();
-    expect(
-      apiRetriesFrom([
-        { subtype: "api_retry", data: { attempt: 2 } },
-        { subtype: "compact_boundary", data: {} },
-      ]),
-    ).toEqual({
-      count: 1,
-      delayMs: 0,
+    expect(apiRetriesFrom(undefined, { count: 0, delayMs: 0 })).toBeUndefined();
+    expect(apiRetriesFrom([], undefined)).toBeUndefined(); // sub-agent side not observed → never a false zero
+    const ce = [
+      { subtype: "api_retry", data: { attempt: 2 } },
+      { subtype: "compact_boundary", data: {} },
+    ];
+    expect(apiRetriesFrom(ce, { count: 0, delayMs: 0 })).toEqual({ count: 1, delayMs: 0, subagentCount: 0, subagentDelayMs: 0 });
+  });
+});
+
+// Sub-agent retries arrive on a DIFFERENT frame: `tool_progress` carrying `subagent_retry` (parented to the
+// dispatching Agent tool_use). When the retry resolves, the agent emits a twin frame with the same shape
+// minus `subagent_retry`; heartbeats are `tool_progress` too. This excerpt is every non-heartbeat
+// `tool_progress` frame, the first two heartbeats and the one `api_retry` frame of ONE kept live run, copied
+// verbatim in stream order: 19 retry frames (delays summing to 244519 ms), 3 resolved twins, 1 main-loop
+// retry of 537 ms. The expected numbers were counted from the file outside this code.
+const SUB = readFileSync("test/fixtures/api-retry/subagent-retry.events.jsonl", "utf8")
+  .split("\n")
+  .filter((l) => l.trim().length > 0);
+
+describe("apiRetries — sub-agent retries, kept apart from the main loop's", () => {
+  it("counts sub-agent retry frames separately; resolved twins and heartbeats do not count", async () => {
+    const r = await replay([INIT, ...SUB, RESULT]);
+    expect(r.apiRetries).toEqual({ count: 1, delayMs: 537, subagentCount: 19, subagentDelayMs: 244519 });
+  });
+
+  it("a stream of only resolved twins and heartbeats has zero sub-agent retries", async () => {
+    const quiet = SUB.filter((l) => !l.includes('"subagent_retry"') && !l.includes('"api_retry"'));
+    expect(quiet.length).toBe(5); // 3 twins + 2 heartbeats — the filter really kept frames
+    const r = await replay([INIT, ...quiet, RESULT]);
+    expect(r.apiRetries).toEqual({ count: 0, delayMs: 0, subagentCount: 0, subagentDelayMs: 0 });
+  });
+
+  it("the parser emits one subagent_retry event per retry frame and nothing for a twin or heartbeat", () => {
+    const events = SUB.flatMap((l) => parseMessage(JSON.parse(l)));
+    const retries = events.filter((e) => e.type === "subagent_retry");
+    expect(retries).toHaveLength(19);
+    expect(events.filter((e) => e.type !== "system_event")).toHaveLength(19); // twins/heartbeats emit nothing
+    expect(retries[0]).toMatchObject({ delayMs: expect.any(Number), parentToolUseId: expect.any(String) });
+  });
+
+  it("a truncated cassette (never driven) reports apiRetries as absent, not zero", async () => {
+    const QUESTION = JSON.stringify({
+      type: "control_request",
+      request_id: "q1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        input: { questions: [{ question: "Which format?", options: [{ label: "Markdown" }, { label: "PDF" }] }] },
+      },
     });
+    const OTHER = JSON.stringify({
+      type: "control_response",
+      response: { request_id: "other", subtype: "success", response: { behavior: "allow" } },
+    });
+    const r = await replay([JSON.stringify({ type: "system", subtype: "init", tools: ["AskUserQuestion"] }), ...SUB, QUESTION], [OTHER]);
+    expect(r.assertions?.some((a) => /truncated cassette/.test(a.message ?? ""))).toBe(true);
+    expect(r.apiRetries).toBeUndefined();
   });
 });

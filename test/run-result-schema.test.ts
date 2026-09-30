@@ -127,8 +127,8 @@ const full: RunResult = {
   cost: { usd: 0.01, raw: { total_cost_usd: 0.01 } },
   deciderCostUsd: 0.004,
   deciderUsage: { input_tokens: 900, output_tokens: 12, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-  authoredCapture: { perFileBytes: 16384, totalBytes: 65536 },
-  apiRetries: { count: 1, delayMs: 593 },
+  authoredCapture: { perFileBytes: 16384, totalBytes: 65536, scratchpadWalked: true },
+  apiRetries: { count: 1, delayMs: 593, subagentCount: 19, subagentDelayMs: 244519 },
   durationMs: 1234,
   fingerprint: {
     baseline: "1.18286.0",
@@ -229,13 +229,19 @@ describe("schema/run-result.json", () => {
       ["deciderCostUsd", { deciderCostUsd: -0.01 }],
       ["deciderUsage", { deciderUsage: { ...full.deciderUsage!, input_tokens: -1 } }],
       ["deciderUsage", { deciderUsage: { ...full.deciderUsage!, output_tokens: 1.5 } }],
-      ["authoredCapture", { authoredCapture: { perFileBytes: 0, totalBytes: 65536 } }],
-      ["apiRetries", { apiRetries: { count: -1, delayMs: 0 } }],
-      ["apiRetries", { apiRetries: { count: 1, delayMs: -5 } }],
+      ["authoredCapture", { authoredCapture: { ...full.authoredCapture!, perFileBytes: 0 } }],
+      ["authoredCapture", { authoredCapture: { perFileBytes: 16384, totalBytes: 65536 } }],
+      ["apiRetries", { apiRetries: { ...full.apiRetries!, count: -1 } }],
+      ["apiRetries", { apiRetries: { ...full.apiRetries!, delayMs: -5 } }],
+      ["apiRetries", { apiRetries: { ...full.apiRetries!, subagentCount: -1 } }],
+      ["apiRetries", { apiRetries: { ...full.apiRetries!, subagentDelayMs: -1 } }],
+      ["apiRetries", { apiRetries: { count: 1, delayMs: 0 } }],
     ];
     for (const [field, over] of bad) expect(validatePublished({ ...full, ...over }), `${field} ${JSON.stringify(over)}`).toBe(false);
     // …and a zero is a real value, not an error: no retries, a free call.
-    expect(validatePublished({ ...full, apiRetries: { count: 0, delayMs: 0 }, deciderCostUsd: 0 })).toBe(true);
+    expect(
+      validatePublished({ ...full, apiRetries: { count: 0, delayMs: 0, subagentCount: 0, subagentDelayMs: 0 }, deciderCostUsd: 0 }),
+    ).toBe(true);
   });
 
   it("every errorSource the type allows validates, including decider_timeout (an unanswered-gate partial whose decider channel timed out)", () => {

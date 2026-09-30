@@ -1714,8 +1714,8 @@ export interface RunResult {
      *  grade is retried once, and both calls are paid). Reported BESIDE `cost.usd` (the agent's spend),
      *  never folded into it. Absent when no attempt was priced — unpriced is not $0. Live lane only. */
     judgeCostUsd?: number;
-    /** Tokens the judge used grading this `semantic_matches` assert, summed over every attempt and every
-     *  model key the transport reported (the same basis as `judgeCostUsd`). Absent when no attempt reported
+    /** Tokens the judge used grading this `semantic_matches` assert, summed over every attempt whose call
+     *  completed and every model key the transport reported (the same basis as `judgeCostUsd`). Absent when no attempt reported
      *  token counters. Live lane only. */
     judgeUsage?: TokenUsage;
     /** A fingerprint of the exact document this assert's judge received (after secret scrubbing and every
@@ -1975,8 +1975,10 @@ export interface RunResult {
   nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
   usage?: UsageInfo;
   cost?: CostInfo;
-  /** USD the LLM decider (`on_unanswered: llm` / `--decider-llm`) spent answering this run's gates, summed
-   *  over every call and every model key the transport reported. Reported BESIDE `cost.usd` (the agent's
+  /** USD the LLM decider (`on_unanswered: llm` / `--decider-llm`) spent answering this run's gates: the sum,
+   *  over every model key, of the usage each COMPLETED transport call reported. Not counted: a call that
+   *  threw (timeout, spawn failure, an envelope that did not parse) and the transport's own internal retries
+   *  after a non-zero exit, which report no usage — so this is a floor, never an overcount. Reported BESIDE `cost.usd` (the agent's
    *  spend), never folded into it. Absent when no LLM decider answered, or none of its calls was priced —
    *  unpriced is not $0. Live lane only. */
   deciderCostUsd?: number;
@@ -1985,14 +1987,21 @@ export interface RunResult {
   /** The authored-file capture budget this run actually used: `perFileBytes` (the cap on an incidental
    *  file) and `totalBytes` (`COWORK_HARNESS_AUTHORED_TOTAL_BYTES`, else the
    *  default). The authored-file sections of a `semantic_matches` judge's document were drawn under this
-   *  budget, so recomposing that document later needs it. Absent when no capture ran (chat, replay, a
-   *  salvaged partial run). */
-  authoredCapture?: { perFileBytes: number; totalBytes: number };
-  /** The agent's own API retries: one per `system` event with `subtype: "api_retry"` on the stream, and the
-   *  sum of their `retry_delay_ms`. The agent retries a failed model call internally, so a run can be slow
-   *  or costly because of retries it never reports elsewhere. `{count: 0, delayMs: 0}` = a stream was
-   *  observed and held none; absent = no stream was observed. */
-  apiRetries?: { count: number; delayMs: number };
+   *  budget, so recomposing that document later needs it. `scratchpadWalked` says whether session-root
+   *  (`scratchpad/…`) files were candidates at all — false on a `--resume` turn or a tier with no such
+   *  layout. Absent when no capture ran (chat, replay, a salvaged partial run). */
+  authoredCapture?: { perFileBytes: number; totalBytes: number; scratchpadWalked: boolean };
+  /** The agent's own retried model calls, which it reports nowhere else — a run can be slow or costly
+   *  because of them. Main loop and sub-agents are kept apart:
+   *  - `count`/`delayMs`: `system` events with `subtype: "api_retry"`, and the sum of their
+   *    `retry_delay_ms`. The main loop is sequential, so `delayMs` is time the run spent waiting.
+   *  - `subagentCount`/`subagentDelayMs`: `tool_progress` frames carrying `subagent_retry` (the frame the
+   *    agent emits when such a retry resolves carries none and is not counted). Sub-agents run
+   *    concurrently, so `subagentDelayMs` is backoff summed across agents, NOT wall-clock time; never add
+   *    it to `delayMs`.
+   *  All zeros = a stream was observed with no retry of either kind; absent = no stream was observed (a
+   *  cassette that could not be driven, the error-replay lane). */
+  apiRetries?: { count: number; delayMs: number; subagentCount: number; subagentDelayMs: number };
   durationMs?: number;
   // Skill/plugin staleness fingerprint at run time. Persisted so `verify-run` can detect a kept run that
   // predates a skill change (its gate snapshot is stale → don't vouch for answer-coverage against it).

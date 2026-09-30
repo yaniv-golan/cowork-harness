@@ -8323,7 +8323,9 @@ export async function replayCassette(
       deciderCostUsd: undefined, // replay answers from the frozen recording; no model call is made
       deciderUsage: undefined,
       authoredCapture: undefined, // replay runs no authored-file capture
-      apiRetries: apiRetriesFrom(rec.contextEvents), // re-derived from the frozen stream, like compaction_occurred
+      // Re-derived from the frozen stream, like compaction_occurred. A TRUNCATED cassette was never driven:
+      // `minimalRec()` carries no retry tally, so this is absent there, never a false zero.
+      apiRetries: truncatedMsg ? undefined : apiRetriesFrom(rec.contextEvents, rec.subagentRetries),
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),
       outDir: "(replay)",
