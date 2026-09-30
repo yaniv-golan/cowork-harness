@@ -138,6 +138,7 @@ describe("capturePreRunManifest", () => {
       toolResultTexts: [],
       skillsInvoked: [],
       skillToolAvailable: true,
+      slashInvokedSkills: [],
     });
     expect(passing.pass).toBe(false);
     const strayPart = passing.message!.split(" (allow:")[0]!;
@@ -182,6 +183,7 @@ describe("capturePreRunManifest", () => {
       toolResultTexts: [],
       skillsInvoked: [],
       skillToolAvailable: true,
+      slashInvokedSkills: [],
     });
     expect(passing.pass).toBe(true);
   });

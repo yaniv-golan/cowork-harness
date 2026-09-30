@@ -1307,6 +1307,77 @@ def test_prompt_slash_absent_when_leading(tmp_path):
     assert [x for x in scenario.lint_file(str(f)) if x.rule == "prompt-slash-not-leading"] == []
 
 
+# --- slash-prompt-forked-result-anchor -------------------------------------------------------------
+# `completed (forked execution)` is the `Skill` TOOL RESULT a `context: fork` skill returns. A prompt that
+# starts with `/<skill>` runs the skill with no `Skill` call, so that text never exists: a positive
+# tool_result_* anchored on it fails on a working skill, and a negative one passes vacuously. Measured on
+# three real hostloop runs of the same fork skill (bare slash, qualified slash, no slash).
+
+_FORK_RULE = "slash-prompt-forked-result-anchor"
+
+
+def _fork_findings(tmp_path, prompt, assert_yaml):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\nfidelity: hostloop\n"
+        f"prompt: {prompt}\nassert:\n{assert_yaml}",
+        encoding="utf-8",
+    )
+    return [x for x in scenario.lint_file(str(f)) if x.rule == _FORK_RULE]
+
+
+_FORK_MATCH = "  - tool_result_matches: 'completed \\(forked execution\\)[\\s\\S]*exit code 2'\n"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "'/claude-code-internals What does exit code 2 from a PreToolUse hook do?'",
+        "'/claude-code-internals:claude-code-internals What does exit code 2 do?'",
+    ],
+)
+def test_fork_anchor_flagged_on_slash_prompt(tmp_path, prompt):
+    found = _fork_findings(tmp_path, prompt, _FORK_MATCH)
+    assert len(found) == 1
+    assert found[0].severity == "WARN"
+    assert "skill_triggered" in found[0].fix
+
+
+@pytest.mark.parametrize(
+    "assert_yaml",
+    [
+        "  - tool_result_contains: 'completed (forked execution)'\n",
+        "  - tool_result_not_contains: 'forked execution'\n",
+        "  - tool_result_not_matches: 'forked execution'\n",
+        # regex spellings of the same anchor
+        "  - tool_result_matches: 'completed \\(forked\\s+execution\\)'\n",
+        "  - tool_result_matches: 'forked.execution'\n",
+        "  - tool_result_matches: 'Forked\\sExecution'\n",
+    ],
+)
+def test_fork_anchor_flagged_for_every_tool_result_key(tmp_path, assert_yaml):
+    assert len(_fork_findings(tmp_path, "'/my-skill go'", assert_yaml)) == 1
+
+
+@pytest.mark.parametrize(
+    "prompt,assert_yaml",
+    [
+        # no slash: the model invokes the Skill tool, whose result carries the anchor — the working case
+        ("'What does exit code 2 do?'", _FORK_MATCH),
+        # slash named mid-prompt is never expanded (prompt-slash-not-leading's concern, not this rule's)
+        ("'Please use /claude-code-internals on this'", _FORK_MATCH),
+        # slash prompt, but the tool_result assert does not anchor on the fork result
+        ("'/claude-code-internals go'", "  - tool_result_matches: 'exit code 2'\n"),
+        # slash prompt asserting the skill itself — the right key, nothing to warn about
+        ("'/claude-code-internals go'", "  - skill_triggered: 'claude-code-internals'\n"),
+        # a leading slash that is a path, not a command
+        ("'/mnt/uploads/deck.pdf summarize this'", _FORK_MATCH),
+    ],
+)
+def test_fork_anchor_quiet(tmp_path, prompt, assert_yaml):
+    assert _fork_findings(tmp_path, prompt, assert_yaml) == []
+
+
 # --- enum-value-invalid: generic enum validation (top-level + nested answers[]/assert[]) ------------
 #
 # The bug this rule fixes: `lint --strict` reported these scenarios CLEAN while `record --dry-run`

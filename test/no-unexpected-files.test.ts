@@ -24,6 +24,7 @@ function ctx(workRoot: string, prefixes: string[], preRunPaths?: string[], preRu
     toolResultTexts: [],
     skillsInvoked: [],
     skillToolAvailable: true,
+    slashInvokedSkills: [],
   };
 }
 

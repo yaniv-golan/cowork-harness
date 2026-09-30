@@ -165,6 +165,10 @@ The model declined the skill and answered from its own knowledge. The guidance b
 correct and simply never consulted — so the run was measuring the model, not the skill. No transcript
 of the *answer* would have shown that, because the answer was fine.
 
+That record predates `slashInvokedSkills`; today's harness would also record `slashInvokedSkills: []`
+there. Read both before concluding "never invoked": a prompt that starts with `/<skill>` runs the skill
+with no `Skill` call, so it leaves `skillsInvoked` empty and records the skill in `slashInvokedSkills`.
+
 They widened the skill's description in response, re-ran the same probe, and it now invokes — then
 pinned the fix with a scenario so it cannot regress silently. **That is the loop this is for:** find a
 failure the output hides, fix it, and verify with the same instrument that found it. The snapshot

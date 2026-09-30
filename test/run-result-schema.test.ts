@@ -176,6 +176,7 @@ const full: RunResult = {
     gates: [{ question: "Proceed?", answeredBy: "scripted", answer: "Proceed?=Yes", model: undefined }],
   },
   skillsInvoked: ["my-plugin:my-skill"],
+  slashInvokedSkills: ["my-plugin:my-skill"],
   skillToolAvailable: true,
   staleness: [{ class: "skill", message: "skill content changed since record" }],
   skippedAssertions: { full: 1, partial: 0 },

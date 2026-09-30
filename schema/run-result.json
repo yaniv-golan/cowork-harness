@@ -1281,6 +1281,13 @@
       },
       "description": "Wave 1 / E8: skill/plugin ids invoked via the Skill tool_use event, in call order, duplicates kept. Backs skill_triggered/no_skill_triggered. Absent on a run predating E8."
     },
+    "slashInvokedSkills": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "staged skill ids this turn's prompt invoked by a leading slash command (`/<skill> \u2026` or `/<plugin>:<skill> \u2026`), resolved against the init frame's skill inventory. The agent expands such a command itself and emits no Skill tool_use, so these never appear in skillsInvoked (whose meaning is unchanged); skill_triggered/no_skill_triggered read both. [] = no staged skill invoked by slash; absent = cannot tell (no prompt, a slash prompt with no inventory, a bare name more than one staged skill answers to, or a result predating the field)."
+    },
     "skillToolAvailable": {
       "type": "boolean",
       "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" \u2014 false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."

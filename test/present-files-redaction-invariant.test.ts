@@ -129,6 +129,7 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
     toolResultTexts: [],
     skillsInvoked: [],
     skillToolAvailable: true,
+    slashInvokedSkills: [],
     // Pinned on every case below: without it the TIER arm fires first, and ITS message also says
     // "cannot verify" — so a bare /cannot verify/ expectation would pass with this fix reverted.
     effectiveFidelity: "hostloop",

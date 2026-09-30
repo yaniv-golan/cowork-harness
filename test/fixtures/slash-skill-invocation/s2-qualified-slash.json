@@ -1,0 +1,100 @@
+{
+  "result": {
+    "scenario": "s2-qualified-slash",
+    "prompt": "/claude-code-internals:claude-code-internals What does exit code 2 from a PreToolUse hook do?",
+    "result": "success",
+    "skillsInvoked": [],
+    "skillToolAvailable": true,
+    "models": [
+      "<synthetic>"
+    ],
+    "modelUsage": {
+      "claude-sonnet-5": {
+        "inputTokens": 10,
+        "outputTokens": 1371
+      }
+    },
+    "subagents": [],
+    "toolCounts": {},
+    "context": {
+      "availableSkills": [
+        {
+          "id": "deep-research"
+        },
+        {
+          "id": "claude-code-internals:claude-code-internals"
+        },
+        {
+          "id": "design"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/private/var/empty",
+      "session_id": "00000000-0000-0000-0000-000000000000",
+      "tools": [
+        "Task",
+        "AskUserQuestion",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Skill",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskStop",
+        "TaskUpdate",
+        "ToolSearch",
+        "WebSearch",
+        "Write",
+        "mcp__cowork__present_files",
+        "mcp__plugins__list_plugins",
+        "mcp__plugins__search_plugins",
+        "mcp__plugins__suggest_plugin_install",
+        "mcp__skills__list_skills",
+        "mcp__skills__suggest_skills",
+        "mcp__workspace__bash",
+        "mcp__workspace__web_fetch"
+      ],
+      "mcp_servers": [],
+      "skills": [
+        "deep-research",
+        "claude-code-internals:claude-code-internals",
+        "design"
+      ]
+    },
+    {
+      "type": "assistant",
+      "parent_tool_use_id": null,
+      "message": {
+        "model": "<synthetic>",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "## Exit code 2 from a PreToolUse hook\n\n**Effect:** It blocks the tool call, and the hook's stderr is surfaced to the model (not just the user).\n\n**Details:**\n\n- **Exit code semantics for PreToolUse sp"
+          }
+        ]
+      }
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "num_turns": 0,
+      "session_id": "00000000-0000-0000-0000-000000000000",
+      "result": "## Exit code 2 from a PreToolUse hook\n\n**Effect:** It blocks the tool call, and the hook's stderr is surfaced to the model (not just the user).\n\n**Details:**\n\n- **Exit code semantics for PreToolUse sp",
+      "modelUsage": {
+        "claude-sonnet-5": {
+          "inputTokens": 10,
+          "outputTokens": 1371
+        }
+      }
+    }
+  ]
+}
