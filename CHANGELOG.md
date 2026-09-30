@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **A secret in a `semantic_matches` rubric was sent to the judge unscrubbed.** Only the judged document
+  was scrubbed before a live grade; the rubric claims went to the judge model verbatim, so a rubric that
+  named a secret value (for example "the report must not contain `<token>`") shipped that value out of the
+  process. Each claim is now scrubbed with the same secret set as the judged document before the call. A
+  rubric with no secret in it is sent unchanged, `judgePromptHash` is unaffected, and the per-claim results
+  in `semanticClaims` still line up with the scenario's claims by index.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
