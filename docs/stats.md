@@ -17,7 +17,7 @@ reads it back.
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
 runLabel?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
-cacheReadTokens?, modelCostUsd?, judgeCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
+cacheReadTokens?, modelCostUsd?, judgeCostUsd?, deciderCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
 
 `costUsd` is the run's `cost.usd`: the agent session's own SDK-reported spend. It does **not** include
 the `semantic_matches` judge or the LLM decider (`on_unanswered: llm` / `--decider-llm`), which are
@@ -25,7 +25,11 @@ separate model calls, so neither `totalUsd` nor the `--max-budget-usd` estimates
 counts them. (A critique's evaluator passes are the exception: the roll-up row below carries them.) The
 judge's spend is recorded beside it instead: `judgeCostUsd` sums the run's
 `assertions[].judgeCostUsd` (every attempt of every `semantic_matches` grade), and is absent when no
-judge call was priced. The LLM decider's spend is not recorded.
+judge call was priced. The LLM decider's spend is recorded the same way: `deciderCostUsd` is the run's
+`deciderCostUsd` (every call the decider made, the gate that whiffed on a partial run included), absent when
+no LLM decider answered or none of its calls was priced. `stats --runs` prints both beside each run's cost
+(`judge=$…`, `decider=$…`), and its JSON `runs[]` entries carry `judgeCostUsd`/`deciderCostUsd`; neither is
+added to `costUsd`, `totalUsd` or the cost percentiles.
 
 **Summing a critique's cost: use the roll-up row, not the turns.** A `critique` is FOUR model workloads,
 but only two of them produce a run — the graded turn and the reflection turn each write a row via the inner

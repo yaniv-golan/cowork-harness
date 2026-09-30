@@ -29,6 +29,26 @@ All notable changes to this project are documented here. The format is based on
     and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
     quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
     A literal newline or tab inside a rationale is tolerated.
+- **The LLM decider's spend is recorded.** A run answered by the LLM decider (`on_unanswered: llm` /
+  `--decider-llm`) now carries `RunResult.deciderCostUsd` and `deciderUsage` (tokens), summed over every
+  call it made, including the call on a gate that then failed to bind on a salvaged partial run. Like the
+  judge's, it sits beside `cost.usd` and is never added to it, and it is absent (not `0`) when no LLM
+  decider answered or no call was priced. The run index gains `deciderCostUsd` per row.
+- **`stats --runs` shows harness-side spend beside each run's cost:** `judge=$…` and `decider=$…` in text,
+  `judgeCostUsd`/`deciderCostUsd` on each JSON `runs[]` entry. Totals and percentiles are unchanged.
+- **`semantic_matches` records the judge's tokens and what it was shown.** Each graded assert now carries:
+  - `assertions[].judgeUsage`: the judge's tokens, summed over both attempts (the same basis as
+    `judgeCostUsd`).
+  - `assertions[].judgedDoc`: `{sha256, sections: [{kind, path?, sha256, chars}]}`, a fingerprint of the
+    exact document the judge received after scrubbing and every cap, part by part (`final`, `transcript`,
+    `subagent`, `authored` with its path, `scratch_note`, `health`). A later re-grade can compare against
+    it to prove it showed the judge the same bytes.
+- **`RunResult.authoredCapture`** records the authored-file capture budget a live run used
+  (`{perFileBytes, totalBytes}`), so the judged document's authored-file sections can be recomposed under
+  the same budget later.
+- **`RunResult.apiRetries`** counts the agent's own retried model calls (`{count, delayMs}`), from the
+  `api_retry` events on its stream, which were previously ignored. `{count: 0, delayMs: 0}` means a stream
+  was observed with none; absent means none was observed.
 
 ### Changed
 
