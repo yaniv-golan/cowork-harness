@@ -23,14 +23,25 @@ All notable changes to this project are documented here. The format is based on
 ### Changed
 
 - **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), now what `latest` resolves to.
-  The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
-  origin are unchanged from `desktop-2.9939.4`. The bundled cassettes are re-stamped to `2.16120.0`,
-  not re-recorded: none of them runs Python that could write bytecode, so the one spawn-env addition
-  below cannot change what they recorded. `verify-cassettes` and `replay --strict` pass on them.
-- **`PYTHONDONTWRITEBYTECODE=1` is now set in the agent spawn env on every tier** (`container`,
-  `microvm` and `hostloop`), as Desktop 2.16120.0 does for every Cowork session. Python run by the
-  agent or a skill's scripts no longer writes `__pycache__`/`.pyc` files into mounted folders or outputs.
-  It comes from the pinned baseline, so a scenario pinned to an older baseline does not get it.
+  - The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
+    origin are unchanged from `desktop-2.9939.4`.
+  - The recorded changes: `spawn.env` and `spawnEnvKeys` gain `PYTHONDONTWRITEBYTECODE` (below),
+    `asarGateIds` gains 30 ids and loses 3, and the GrowthBook cache's `featureCount` goes 384 → 387.
+  - Desktop's `cowork` server no longer declares `create_artifact`/`list_artifacts`/`update_artifact`/
+    `verify_artifact` in the observed session, which carries the native `Artifact` tool instead, and it
+    declares a new `screenshot_file_preview`, which the harness does not serve (see
+    `docs/fidelity-gaps.md`).
+  - The Desktop init surface for 2.16120.0 was read from a scheduled session (the only local session
+    kind still available); no interactive-session frame.
+  - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: none of them runs Python that
+    could write bytecode, so the one spawn-env addition cannot change what they recorded.
+    `verify-cassettes` and `replay --strict` pass on them.
+- **`PYTHONDONTWRITEBYTECODE=1` is now set in the agent spawn env**, as Desktop 2.16120.0 does for every
+  Cowork session. On `container` and `microvm`, where the agent's own Bash runs, Python run by the agent
+  or a skill's scripts no longer writes `__pycache__`/`.pyc` files into mounted folders or outputs. On
+  `hostloop` it reaches the agent process, and the shell sidecar keeps its proxy-only env — as Desktop's
+  host-loop VM bash gets `TZ` only. It comes from the pinned baseline, so a scenario pinned to an older
+  baseline does not get it.
 
 ### Fixed
 
@@ -53,6 +64,13 @@ All notable changes to this project are documented here. The format is based on
   the scheduled-run restriction moved to a gate-controlled step at session start. Each new shape is
   accepted only in its exact form: a blanket allow, a dropped `await`, a rewritten input, or a scheduled
   form without its session-start restriction still fails `sync`.
+- **`sync` no longer passes a widening appended to the Artifact predicate.** The predicate was matched as a
+  prefix, so a trailing `||!0` after its last condition passed on every Desktop version; the whole body
+  is now matched.
+- **`sync` now fails if Desktop's VM start stops staging the agent.** The staged agent binary the harness
+  runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
+  moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
+  no longer staged.
 
 ## [4.1.1] — 2026-09-29
 

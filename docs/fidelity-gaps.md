@@ -245,8 +245,10 @@ VM. The newer mechanism ("frame artifacts") instead gives the agent an `Artifact
 list — no per-artifact mount at all. Which one a session gets is decided by a server-delivered session
 flag, `frameArtifactsEnabled`, that arrives with the rest of the session config alongside flags like
 `memoryEnabled`/`skillsEnabled` — it is not a feature gate readable on the machine, so neither the
-harness nor the user can observe its value locally. The flag is off by default today, so production
-currently takes the legacy bind-mount path.
+harness nor the user can observe its value locally. Its default cannot be read here, but init frames
+recorded on one real account show it served **on** for host-loop sessions since 2026-08-21
+(agent 2.1.237 onward: the native `Artifact` tool, and no `cowork` artifact tools). No VM-loop session
+since then has been observed, so the VM-loop value is unknown.
 
 The bind-mount only happens in the **VM-loop** spawn path — host-loop never mounts artifact
 directories, though the same host paths still appear in host-loop's read-only path allowlist as
@@ -255,8 +257,10 @@ list but outside the pre-approved allowed-tools list, so it must go through the 
 permission flow as `AskUserQuestion`.
 
 **The tool is not VM-loop-only.** The frame-artifacts predicate tests the session flag, the session
-type, the scheduled-task id, bridge and dispatch-child status and the HIPAA restriction — it does *not*
-test the loop tier. So a **host-loop** session with the server flag on gets the `Artifact` tool as well,
+type, bridge and dispatch-child status and the HIPAA restriction — it does *not* test the loop tier.
+Through Desktop 2.9939.4 it also required that there be no scheduled-task id. From 2.16120.0 it admits
+`scheduled` sessions instead; a scheduled run keeps the flag only while the `scheduledRunFrameArtifacts`
+key of gate `1978029737` allows it (default on), which Desktop checks when the session starts. So a **host-loop** session with the server flag on gets the `Artifact` tool as well,
 even though host-loop never receives artifact *mounts*.
 
 The same release added a **host-loop-only approval-integrity guard** in front of the permission chain,
@@ -280,12 +284,16 @@ is reachable there and the harness serves it at no tier.
 This is a deliberate non-modeling decision, not an oversight: the mount branch is the one Anthropic is
 retiring, and the harness has no way to observe the server flag that selects between the two
 mechanisms. If the flag flips, the mount difference disappears on its own and the gap becomes the
-missing `Artifact` tool instead. Revisit trigger: a real session showing `Artifact` in its tool list.
+missing `Artifact` tool instead. Revisit trigger: a real session showing `Artifact` in its tool list —
+this has already happened (host-loop sessions since 2026-08-21, and a scheduled run on Desktop 2.16120.0),
+and the decision has not been revisited yet.
 
 The two mechanisms are mutually exclusive but not exhaustive — there is a third state. The tool
 additionally requires an **attended** turn, while the mount suppression does not check that, so a
-session with the flag on whose turn is unattended (a scheduled or otherwise non-interactive run) gets
-**neither** the artifact mounts nor the `Artifact` tool. Reading "one or the other" as a guarantee that
+session with the flag on whose turn is unattended gets **neither** the artifact mounts nor the
+`Artifact` tool. Scheduled runs no longer fall in that state from Desktop 2.16120.0: a scheduled run's
+init frame on that release carried the native `Artifact` tool, where the same kind of run on 2.9939.4
+had the `cowork` artifact tools and no `Artifact`. Reading "one or the other" as a guarantee that
 some artifact mechanism is always present would be wrong.
 
 ### The session flag also reaches into the agent, and unattended artifact actions hard-refuse
@@ -1492,6 +1500,22 @@ or an assertion against these tools:
 The **cloud** lane shares none of this: cwd is `/home/claude`, there is no `/sessions/<id>/mnt` tree (see "The
 remote lane, measured from inside" above for what `/mnt/user-data` holds), and the shell and
 file tools share one root.
+
+
+### Not served: `screenshot_file_preview` (Desktop 2.16120.0)
+
+**Real Cowork behaviour:** from Desktop 2.16120.0 the `cowork` server also declares
+`screenshot_file_preview`: it screenshots an HTML or SVG file the agent wrote this session, as rendered
+in Desktop's file preview panel after the page's JavaScript has run, and returns a JPEG plus a short
+note. It only takes `.html`/`.htm`/`.svg`, needs the file to have been presented with `present_files`
+first, and is offered when Desktop's `verifyToolsEnabled` and `coworkNativeFilePreview` flags are both on,
+independently of the artifact tools. The same release stopped declaring
+`create_artifact`/`list_artifacts`/`update_artifact`/`verify_artifact` on the scheduled run observed.
+
+**Harness behaviour:** not served (the harness's `cowork` server registers `present_files` only). A skill
+that produces HTML or SVG and checks its own rendering with this tool gets an unknown-tool error here — a
+false red — and a skill that would have fixed a rendering bug after looking at the screenshot has no
+such loop in the harness, so a green run says nothing about how the page actually renders.
 
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
 
