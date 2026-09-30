@@ -26,7 +26,8 @@ counts them. (A critique's evaluator passes are the exception: the roll-up row b
 judge's spend is recorded beside it instead: `judgeCostUsd` sums the run's
 `assertions[].judgeCostUsd` (every attempt of every `semantic_matches` grade), and is absent when no
 judge call was priced. The LLM decider's spend is recorded the same way: `deciderCostUsd` is the run's
-`deciderCostUsd` (every call the decider made, the gate that whiffed on a partial run included), absent when
+`deciderCostUsd` (what every completed decider call reported, the gate that whiffed on a partial run included; a call
+that threw is not counted, so it is a floor), absent when
 no LLM decider answered or none of its calls was priced. `stats --runs` prints both beside each run's cost
 (`judge=$…`, `decider=$…`), and its JSON `runs[]` entries carry `judgeCostUsd`/`deciderCostUsd`; neither is
 added to `costUsd`, `totalUsd` or the cost percentiles.
