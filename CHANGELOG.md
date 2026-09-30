@@ -165,6 +165,12 @@ decider's spend on every graded run. Full `/claude-api hillclimb` integration is
   agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
   and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
 
+- **A credential loaded from the install's own `.env` is named on stderr.** When `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` comes from `<install>/.env` while the CLI runs from another
+  directory — for example `node <clone>/dist/cli.js` — one `[env] using <names> from <file>` line says which
+  file, and never prints a value. Every other `.env` load stays silent. See the `.env` notes in
+  [docs/cli.md](./docs/cli.md).
+
 ### Fixed
 
 - **Stopping a run at `protocol` or `hostloop` stops the processes the agent started on the host** —
