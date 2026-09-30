@@ -40,6 +40,7 @@ import { classifyRep } from "../src/eval/classify.js";
 import { repEvidenceOf } from "../src/eval/runs.js";
 import { isConcreteModelId } from "../src/run/model-provenance.js";
 import { tildeify } from "../src/io.js";
+import { tokenCheck, type DoctorCheck, type DoctorProbe } from "../src/run/doctor.js";
 import { hostPathTokens } from "../src/run/host-path-tokens.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
@@ -132,8 +133,12 @@ function args(scen: string, a: string, b: string, extra: string[] = []) {
   return parseEvalArgs([scen, "--arm", `before=${a}`, "--arm", `after=${b}`, "--out", join(root, "eval"), "--quiet", ...extra]);
 }
 
+/** Doctor's token row for a tier that has a credential (the preflight's pass). */
+const TOKEN_OK = (): DoctorCheck => ({ id: "token", title: "Auth token", status: "ok", detail: "found (env / .env)", required: true });
+
 const deps = (runJob: (s: EvalJobSpec) => Promise<RunResult>, log: string[] = []) => ({
   runJob,
+  tokenCheck: TOKEN_OK,
   log: (s: string) => log.push(s),
   evalId: "test1",
   now: () => new Date("2026-09-30T00:00:00Z"),
@@ -304,6 +309,139 @@ describe("eval: end to end over a fake runner", () => {
     expect(out.report.summary.exitCode).toBe(1);
     expect(out.report.arms[0].buckets).toEqual({ errored_infra: 5 });
     expect(out.report.arms[0].errorSources).toEqual({ result: 5 });
+  });
+});
+
+describe("eval: credential preflight (doctor's token check, before any run)", () => {
+  // The consumer's machine: no env / .env token, a Claude Code login in the Keychain. Doctor's own check over
+  // a probe saying exactly that — not a stand-in verdict.
+  const keychainOnly = {
+    hasToken: () => false,
+    hasKeychainToken: () => true,
+    platform: () => "darwin",
+    worktreeEnv: () => null,
+  } as unknown as DoctorProbe;
+  it("refuses (usage, exit 2) with doctor's detail and remedy, runs nothing, and leaves no eval dir", async () => {
+    const { scen, a, b } = setup();
+    const calls: EvalJobSpec[] = [];
+    const tiers: string[] = [];
+    const p = runEval(args(scen, a, b), {
+      ...deps(fakeRunner(undefined, calls)),
+      tokenCheck: (tier) => {
+        tiers.push(tier);
+        return tokenCheck(tier, keychainOnly);
+      },
+    });
+    await expect(p).rejects.toBeInstanceOf(UsageError);
+    await expect(p).rejects.toThrow(/fidelity container.*Keychain entry.*setup-token/s);
+    expect(tiers).toEqual(["container"]);
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(root, "eval"))).toBe(false);
+  });
+  it("a tier doctor passes with a warning (protocol + Keychain) runs", async () => {
+    const { scen, a, b } = setup();
+    for (const f of readdirSync(scen))
+      writeFileSync(join(scen, f), readFileSync(join(scen, f), "utf8").replace("fidelity: container", "fidelity: protocol"));
+    const out = await runEval(args(scen, a, b), { ...deps(fakeRunner()), tokenCheck: (tier) => tokenCheck(tier, keychainOnly) });
+    expect(out.report.arms.map((x) => x.buckets)).toEqual([{ valid: 5 }, { valid: 5 }]);
+  });
+  it("asks once per distinct tier the scenarios declare", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    writeFileSync(
+      join(scen, "smoke-semantic-evidence-files.yaml"),
+      readFileSync(join(scen, "smoke-semantic-evidence-files.yaml"), "utf8").replace("fidelity: container", "fidelity: hostloop"),
+    );
+    const tiers: string[] = [];
+    await runEval(args(scen, a, b), {
+      ...deps(fakeRunner()),
+      tokenCheck: (tier) => {
+        tiers.push(tier);
+        return TOKEN_OK();
+      },
+    });
+    expect(tiers.sort()).toEqual(["container", "hostloop"]);
+  });
+});
+
+describe("eval: every rep of an arm errored — nothing was compared", () => {
+  // The consumer's report: no usable credential, every rep of both arms "Not logged in", and the eval said
+  // "no detectable change" and exited 0. The fake returns the REAL auth excerpt for every job.
+  const authRep = (_s: EvalJobSpec, r: RunResult) =>
+    ({ ...fixture("auth-exit"), outDir: r.outDir, fingerprint: r.fingerprint }) as RunResult;
+
+  it("an auth failure in every rep is infrastructure, every row insufficient, exit 1, and the header names it", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner(authRep)));
+    expect(out.report.arms.map((x) => x.buckets)).toEqual([{ errored_infra: 5 }, { errored_infra: 5 }]);
+    expect(out.report.reps.every((r) => r.rule === "auth")).toBe(true);
+    expect(out.report.sections.tuned!.rows.every((r) => r.label === "insufficient")).toBe(true);
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(out.report.summary.erroredArms).toEqual([
+      { arm: "before", reps: 5, dominant: { bucket: "errored_infra", rule: "auth", count: 5 } },
+      { arm: "after", reps: 5, dominant: { bucket: "errored_infra", rule: "auth", count: 5 } },
+    ]);
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toMatch(/Every rep of arm before errored.*errored_infra \(auth\) 5\/5/);
+    // The runs line keeps the agent's own text, which is what `auth` matches on a re-render.
+    const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
+    expect(lines[0].result?.finalMessage).toBe("Not logged in · Please run /login");
+  });
+
+  it("an eval dir written before finalMessage was persisted still re-reports as infrastructure, exit 1", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner(authRep)));
+    // Strip the field from every line: the shape of runs.jsonl the consumer already has on disk.
+    const file = join(out.evalDir, "runs.jsonl");
+    const old = readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => {
+        const o = JSON.parse(l);
+        delete o.result.finalMessage;
+        return JSON.stringify(o);
+      });
+    writeFileSync(file, old.join("\n") + "\n");
+    const rep = writeEvalReport(out.evalDir);
+    expect(rep.reps.every((r) => r.rule === "no_model_answered")).toBe(true);
+    expect(rep.summary.exitCode).toBe(1);
+  });
+
+  it("an arm whose every rep is the agent's error does not report a comparison: insufficient, exit 1", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner((s, r) =>
+          s.job.arm === "after" ? ({ ...fixture("timeout"), outDir: r.outDir, fingerprint: r.fingerprint } as RunResult) : r,
+        ),
+      ),
+    );
+    expect(out.report.arms[1].buckets).toEqual({ errored_agent: 5 });
+    expect(out.report.sections.tuned!.rows.every((r) => r.label === "insufficient")).toBe(true);
+    expect(out.report.summary.allInsufficient).toBe(true);
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(out.report.summary.erroredArms).toEqual([
+      { arm: "after", reps: 5, dominant: { bucket: "errored_agent", rule: "source_timeout", count: 5 } },
+    ]);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toMatch(
+      /Every rep of arm after errored.*errored_agent \(source_timeout\) 5\/5/,
+    );
+  });
+
+  it("one arm with a single valid rep is not an all-errored arm", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner((s, r) =>
+          s.job.arm === "after" && s.job.rep > 1
+            ? ({ ...fixture("timeout"), outDir: r.outDir, fingerprint: r.fingerprint } as RunResult)
+            : r,
+        ),
+      ),
+    );
+    expect(out.report.summary.erroredArms).toEqual([]);
+    expect(out.report.sections.tuned!.rows.some((r) => r.label !== "insufficient")).toBe(true);
   });
 });
 

@@ -102,6 +102,9 @@ export interface EvalReport {
   }>;
   summary: {
     familyRows: number;
+    /** Arms whose every recorded rep is errored (infrastructure or the agent's): nothing was compared, so
+     *  every row is `insufficient` and the eval exits 1. `dominant` is the most frequent bucket and rule. */
+    erroredArms: Array<{ arm: string; reps: number; dominant: { bucket: RepBucket; rule: string; count: number } }>;
     labels: Record<string, number>;
     allInsufficient: boolean;
     failOnHit: boolean;
@@ -116,6 +119,7 @@ export interface EvalReport {
 }
 
 const SCORED: ReadonlySet<RepBucket> = new Set(["valid", "judge_invalid", "errored_agent"]);
+const ERRORED: ReadonlySet<RepBucket> = new Set(["errored_infra", "errored_agent"]);
 
 interface ClassifiedLine {
   line: RunsLine;
@@ -135,6 +139,13 @@ function noteFor(r: FamilyRowOutput): string | undefined {
   if (excludes0 && !flagged) return "interval excludes 0, but the exact test at this n cannot confirm it; see MDD";
   if (!excludes0 && flagged) return "the exact test flags it, though the interval still includes 0";
   return undefined;
+}
+
+/** A row of an eval in which an arm compared nothing: its counts stay visible, its verdict does not. */
+function asInsufficient(r: ReportRow): ReportRow {
+  const { p: _p, adjustedP: _a, mdd: _m, evidence: _e, note: _n, ...rest } = r;
+  (void _p, void _a, void _m, void _e, void _n);
+  return { ...rest, label: "insufficient" };
 }
 
 /** Derived rows are shown with their own test but never corrected, so at most `possible`. */
@@ -311,8 +322,31 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const threshold = insufficientThreshold(m.settings.reps, m.settings.allowUnderpowered);
   const tunedNames = m.scenarios.filter((s) => !s.heldOut).map((s) => s.name);
   const heldNames = m.scenarios.filter((s) => s.heldOut).map((s) => s.name);
-  const tuned = tunedNames.length ? sectionOf(m, tunedNames, classified, threshold) : null;
-  const heldOut = heldNames.length ? sectionOf(m, heldNames, classified, threshold) : null;
+  // An arm whose every rep errored compared nothing: an agent error scores 0 on every row, so without this
+  // an arm that never got a model (or crashed every time) reads as a clean "no detectable change" against a
+  // failing other arm, or as a flawless drop — either way the rows are not a comparison. Force them
+  // `insufficient`; the header names the dominant error.
+  const erroredArms = m.arms.flatMap((a) => {
+    const mine = classified.filter((x) => x.line.arm === a.label);
+    if (mine.length === 0 || !mine.every((x) => ERRORED.has(x.c.bucket))) return [];
+    const counts = new Map<string, { bucket: RepBucket; rule: string; count: number }>();
+    for (const x of mine) {
+      const k = `${x.c.bucket}\0${x.c.termination.rule}`;
+      const e = counts.get(k) ?? { bucket: x.c.bucket, rule: x.c.termination.rule, count: 0 };
+      e.count++;
+      counts.set(k, e);
+    }
+    const dominant = [...counts.values()].sort(
+      (p, q) => q.count - p.count || `${p.bucket}${p.rule}`.localeCompare(`${q.bucket}${q.rule}`),
+    )[0];
+    return [{ arm: a.label, reps: mine.length, dominant }];
+  });
+  const forceInsufficient = (s: ReportSection | null): ReportSection | null =>
+    s === null || erroredArms.length === 0
+      ? s
+      : { ...s, m: 0, confirmableRows: 0, rows: s.rows.map(asInsufficient), derivedRows: s.derivedRows.map(asInsufficient) };
+  const tuned = forceInsufficient(tunedNames.length ? sectionOf(m, tunedNames, classified, threshold) : null);
+  const heldOut = forceInsufficient(heldNames.length ? sectionOf(m, heldNames, classified, threshold) : null);
 
   const arms: ReportArm[] = m.arms.map((a) => {
     const mine = classified.filter((x) => x.line.arm === a.label);
@@ -396,6 +430,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
     })),
     summary: {
       familyRows: familyRows.length,
+      erroredArms,
       labels: Object.fromEntries(Object.entries(labels).sort(([x], [y]) => x.localeCompare(y))),
       allInsufficient,
       failOnHit,
@@ -532,6 +567,11 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   if (rep.summary.missingJobs > 0) L.push(`- ⚠ ${rep.summary.missingJobs} scheduled job(s) have no record (the eval did not finish).`);
   if (rep.summary.tornFinalLine) L.push("- ⚠ runs.jsonl ends in a torn line (skipped).");
   L.push("");
+  for (const e of rep.summary.erroredArms)
+    L.push(
+      `**⚠ Every rep of arm ${e.arm} errored** — ${e.dominant.bucket} (${e.dominant.rule}) ${e.dominant.count}/${e.reps}. Nothing was compared: every row is insufficient (exit 1).${e.dominant.bucket === "errored_infra" ? " Check the agent's credentials and quota (`cowork-harness doctor`)." : ""}`,
+      "",
+    );
   if (rep.judgeDisagreements.length) {
     L.push("**⚠ Judge model differed across reps** (exit 1):");
     for (const d of rep.judgeDisagreements) L.push(`- ${d.scenario} #${d.assertionIndex}: ${d.models.join(", ")}`);

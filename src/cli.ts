@@ -83,7 +83,7 @@ import {
 } from "./run/command-globals.js";
 import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
 import { projectDispatchProbe, formatDispatchProbe } from "./run/probe-dispatch.js";
-import { cmdDoctor } from "./run/doctor.js";
+import { cmdDoctor, tokenCheck } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
 import { resolveStatusTarget } from "./run/status-target.js";
@@ -2083,6 +2083,7 @@ async function cmdEval(rawArgs: string[]) {
   try {
     outcome = await runEval(parsed, {
       log,
+      tokenCheck: (tier) => tokenCheck(tier),
       runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
     });
   } catch (e) {

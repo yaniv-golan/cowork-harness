@@ -13,6 +13,27 @@ import { jobRunId } from "../src/eval/schedule.js";
 
 const can = POSIX && existsSync(CLI);
 
+// eval refuses before its first run unless doctor's token check passes for the scenario's tier. The fixture
+// blanks every credential variable, so each test that is meant to RUN sets this made-up value (it is never
+// sent anywhere: the stub is the agent).
+const FAKE_TOKEN = "stub-not-a-real-token";
+
+// The first two stream lines of a REAL kept run whose agent had no usable login (hostloop, agent 2.1.x):
+// the synthetic assistant reply and the is_error result, verbatim except the session/uuid/timestamp ids
+// (set to "stub") and the result's subagent_stats (dropped). The agent then exits 1.
+const AUTH_STREAM = join(import.meta.dirname, "fixtures", "eval-classify", "auth-agent-stream.jsonl");
+const AUTH_STUB = [
+  `echo "$*" >> "$STUB_ARGV_LOG"`,
+  `case " $* " in *" --output-format json "*)`,
+  `  printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\\"results\\":[{\\"index\\":0,\\"pass\\":false}]}","total_cost_usd":0.001,"modelUsage":{"claude-judge-stub-1":{"inputTokens":1,"outputTokens":1,"costUSD":0.001}}}'`,
+  `  exit 0;;`,
+  `esac`,
+  `printf '%s\\n' '{"type":"system","subtype":"init","session_id":"stub","model":"claude-sonnet-5","tools":[],"cwd":"/tmp"}'`,
+  `cat "${AUTH_STREAM}"`,
+  "cat >/dev/null",
+  "exit 1",
+].join("\n");
+
 // The agent turn reports model claude-sonnet-5 (on its assistant message, where the run reads it). The judge's
 // call (`-p --output-format json`; the agent's own is stream-json) answers the one rubric claim.
 const STUB = [
@@ -77,6 +98,7 @@ describe.runIf(can)("eval through the real job wiring (stub agent)", () => {
     const f = makeStubFixture(STUB, { STUB_ARGV_LOG: "" });
     try {
       f.env.STUB_ARGV_LOG = join(f.root, argvLog);
+      f.env.CLAUDE_CODE_OAUTH_TOKEN = FAKE_TOKEN;
       setup(f);
       const r = await evalRun(f, []);
       const env = JSON.parse(r.stdout);
@@ -122,6 +144,7 @@ describe.runIf(can)("eval through the real job wiring (stub agent)", () => {
     const f = makeStubFixture(STUB, { STUB_ARGV_LOG: "" });
     try {
       f.env.STUB_ARGV_LOG = join(f.root, "argv.log");
+      f.env.CLAUDE_CODE_OAUTH_TOKEN = FAKE_TOKEN;
       setup(f);
       // Pin opus; the stub agent reports claude-sonnet-5.
       const r = await evalRun(f, ["--model", "claude-opus-4-8"]);
@@ -129,6 +152,46 @@ describe.runIf(can)("eval through the real job wiring (stub agent)", () => {
       expect(env.arms.map((a: { buckets: unknown }) => a.buckets)).toEqual([{ model_mismatch: 4 }, { model_mismatch: 4 }]);
       expect(env.summary.allInsufficient).toBe(true);
       expect(r.code).toBe(1);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("an agent that answers 'Not logged in' in every rep is never a green: infrastructure, insufficient, exit 1", async () => {
+    const f = makeStubFixture(AUTH_STUB, { STUB_ARGV_LOG: "" });
+    try {
+      f.env.STUB_ARGV_LOG = join(f.root, "argv.log");
+      f.env.CLAUDE_CODE_OAUTH_TOKEN = FAKE_TOKEN;
+      setup(f);
+      const r = await evalRun(f, []);
+      const env = JSON.parse(r.stdout);
+      expect(r.code, r.stderr).toBe(1);
+      expect(env.ok).toBe(false);
+      expect(env.arms.map((a: { buckets: unknown }) => a.buckets)).toEqual([{ errored_infra: 4 }, { errored_infra: 4 }]);
+      expect(env.summary.erroredArms.map((e: { dominant: { rule: string } }) => e.dominant.rule)).toEqual(["auth", "auth"]);
+      const md = readFileSync(join(r.out, "report.md"), "utf8");
+      expect(md).toMatch(/Every rep of arm a errored.*\(auth\) 4\/4/);
+      expect(md).not.toMatch(/\*\*no detectable change\*\*/);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("no credential for the scenario's tier refuses before any run (exit 2, doctor's message), leaving no eval dir", async () => {
+    const f = makeStubFixture(AUTH_STUB, { STUB_ARGV_LOG: "" });
+    try {
+      f.env.STUB_ARGV_LOG = join(f.root, "argv.log");
+      setup(f);
+      // hostloop: doctor fails a missing env token there whether or not a Keychain login exists.
+      writeFileSync(join(f.cwd, "q.yaml"), readFileSync(join(f.cwd, "q.yaml"), "utf8").replace("fidelity: protocol", "fidelity: hostloop"));
+      const r = await evalRun(f, []);
+      expect(r.code, r.stdout + r.stderr).toBe(2);
+      const env = JSON.parse(r.stdout);
+      expect(env.ok).toBe(false);
+      expect(env.error.message).toMatch(/no usable agent credential for fidelity hostloop/);
+      expect(env.error.message).toMatch(/doctor --tier hostloop/);
+      expect(existsSync(r.out)).toBe(false);
+      expect(existsSync(f.stubPidFile)).toBe(false); // the agent was never started
     } finally {
       f.cleanup();
     }
