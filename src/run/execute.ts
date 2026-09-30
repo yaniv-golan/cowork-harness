@@ -1541,7 +1541,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       effectiveFidelity,
       // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
       // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
-      // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
+      // this same "live" mode (see assertContextFromRunDir in verify-context.ts).
       linkResolution: {
         mode: "live",
         hostRoots: [join(resolve(outDir), "work", "session", "mnt"), ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath)],

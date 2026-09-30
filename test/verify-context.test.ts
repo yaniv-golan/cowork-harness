@@ -174,6 +174,25 @@ describe("assertContextFromRunDir: recomputeAuthored 'semantic' reproduces the l
     expect(plain.ctx.authoredFiles).not.toEqual(live.files);
   });
 
+  it("passes perFileBytes through to the capture", () => {
+    const k = keptRun(author);
+    const s = parseScenarioFile(scenarioFile(k.runDir, SEMANTIC_ONLY));
+    const r = assertContextFromRunDir(k.runDir, s, { recomputeAuthored: "semantic", priorityGlobs, totalBytes, perFileBytes: 512 });
+    if (!r.ok) throw new Error("unexpected refusal");
+    const expected = captureAuthoredFilesWithHealth(k.workRoot, ["outputs"], [], readPreRunManifestHashes(k.runDir), {
+      scratchpadRoot: dirname(k.workRoot),
+      preRunStats: readPreRunManifestStats(k.runDir),
+      priorityGlobs,
+      totalBytes,
+      perFileBytes: 512,
+    });
+    expect(r.ctx.authoredFiles).toEqual(expected.files);
+    // The non-priority intermediates file is cut at the per-file cap, not at the remaining total.
+    const junk = r.ctx.authoredFiles!.find((f) => f.path === "outputs/_work/junk.md");
+    expect(junk?.truncated).toBe(true);
+    expect(Buffer.byteLength(junk!.content, "utf8")).toBeLessThanOrEqual(512);
+  });
+
   it("the default mode does not capture for a semantic-only scenario (verify-run unchanged)", () => {
     const k = keptRun(author);
     const s = parseScenarioFile(scenarioFile(k.runDir, SEMANTIC_ONLY));
