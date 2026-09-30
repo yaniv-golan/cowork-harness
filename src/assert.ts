@@ -292,7 +292,14 @@ export interface SemanticClaimResult {
 /** The semantic judge: grade a fixed rubric against the run's answer. LIVE-ONLY (a real model call).
  *  Injectable so tests can stub it; the real judge is `makeSemanticJudge` in src/decide/. `model` is the
  *  resolved judge model id, recorded as provenance (`RunResult.assertions[].judgeModel`); a stub may omit it. */
-export type SemanticJudge = ((rubric: string[], answer: string) => Promise<SemanticClaimResult[]>) & { model?: string };
+export type SemanticJudge = ((rubric: string[], answer: string) => Promise<SemanticClaimResult[]>) & {
+  model?: string;
+  /** USD cost of the judge's most recent call, set per call (cleared when the call spent nothing it could
+   *  price). `undefined` = unpriced, never $0. A stub may omit it. */
+  lastCostUsd?: number;
+  /** Identity of the grading-prompt template this judge uses (`JUDGE_PROMPT_HASH`). A stub may omit it. */
+  promptHash?: string;
+};
 /** WHY a `semantic_matches` assert refused, or WHAT a scoped one graded — the typed companion to the
  *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are FIVE distinct
  *  evidence-unavailable causes with five different fixes; a consumer (usually an agent iterating on a
@@ -310,6 +317,11 @@ export interface AssertContext {
   /** Which judge model graded each `semantic_matches` assert (provenance) — populated by
    *  runSemanticJudges alongside semanticResults, surfaced as `RunResult.assertions[].judgeModel`. */
   judgeModels?: Map<Assertion, string>;
+  /** Total judge spend per `semantic_matches` assert, summed over every attempt (the grade is retried once).
+   *  Absent for an assert where no attempt was priced. Populated by runSemanticJudges. */
+  judgeCosts?: Map<Assertion, number>;
+  /** The grading-prompt template hash of the judge that graded each assert. Populated by runSemanticJudges. */
+  judgePromptHashes?: Map<Assertion, string>;
   /** `semantic_matches` asserts whose judge grade was INVALID (malformed/ambiguous after a retry) —
    *  populated by runSemanticJudges. Distinct from "not graded": the check surfaces `judgeInvalid:true` so
    *  a consumer counts the rep as invalid, never silently drops it (which would inflate the score). */
@@ -727,6 +739,8 @@ export async function runSemanticJudges(
 ): Promise<void> {
   if (!ctx.semanticResults) ctx.semanticResults = new Map();
   if (!ctx.judgeModels) ctx.judgeModels = new Map();
+  if (!ctx.judgeCosts) ctx.judgeCosts = new Map();
+  if (!ctx.judgePromptHashes) ctx.judgePromptHashes = new Map();
   if (!ctx.judgeInvalid) ctx.judgeInvalid = new Set();
   if (!ctx.semanticDocInfo) ctx.semanticDocInfo = new Map();
   // The judged document depends on TWO per-assert inputs — `include_subagent_text` and the
@@ -758,6 +772,7 @@ export async function runSemanticJudges(
     // Grade with ONE retry — a stochastic judge sometimes emits a malformed grade. If it still throws,
     // mark the rep INVALID (not absent): the check surfaces it so a consumer counts it, never drops it.
     let graded: SemanticClaimResult[] | undefined;
+    let cost: number | undefined; // summed over BOTH attempts — a retried grade is paid twice
     for (let attempt = 0; attempt < 2 && graded === undefined; attempt++) {
       try {
         graded = await j(a.semantic_matches.rubric, answer);
@@ -768,13 +783,17 @@ export async function runSemanticJudges(
             `::warning:: semantic judge grade invalid after retry (rep counts as invalid, not passed): ${(e as Error).message.split("\n")[0]}\n`,
           );
         }
+      } finally {
+        if (typeof j.lastCostUsd === "number") cost = (cost ?? 0) + j.lastCostUsd;
       }
     }
+    if (cost !== undefined) ctx.judgeCosts.set(a, cost);
+    if (j.promptHash) ctx.judgePromptHashes.set(a, j.promptHash);
     // Record provenance AFTER the call, not before: `j.model` may be a factory-time alias (e.g. "opus")
     // until the transport resolves it per-call to a concrete id (`makeSemanticJudge` mutates `.model` onto
     // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
     // requested alias even when the transport actually resolved to a different concrete model (F11).
-    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
+    ctx.judgeModels.set(a, j.model ?? (j !== judge ? override : undefined) ?? "unknown"); // an unused per-assert key is not provenance
     if (graded) ctx.semanticResults.set(a, graded);
   }
 }
@@ -1191,6 +1210,8 @@ function check(
   evidence?: string;
   semanticClaims?: SemanticClaimResult[];
   judgeModel?: string;
+  judgeCostUsd?: number;
+  judgePromptHash?: string;
   judgeInvalid?: boolean;
   semanticEvidence?: SemanticEvidence;
 } {
@@ -3192,10 +3213,14 @@ function check(
   const semanticClaims = a.semantic_matches !== undefined ? ctx.semanticResults?.get(a) : undefined;
   const judgeModel = a.semantic_matches !== undefined ? ctx.judgeModels?.get(a) : undefined;
   const judgeInvalid = a.semantic_matches !== undefined && ctx.judgeInvalid?.has(a) ? true : undefined;
+  const judgeCostUsd = a.semantic_matches !== undefined ? ctx.judgeCosts?.get(a) : undefined;
+  const judgePromptHash = a.semantic_matches !== undefined ? ctx.judgePromptHashes?.get(a) : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
     ...(semanticClaims ? { semanticClaims } : {}),
     ...(judgeModel ? { judgeModel } : {}),
+    ...(judgeCostUsd !== undefined ? { judgeCostUsd } : {}),
+    ...(judgePromptHash ? { judgePromptHash } : {}),
     ...(judgeInvalid ? { judgeInvalid } : {}),
     ...(semanticEvidence ? { semanticEvidence } : {}),
   });

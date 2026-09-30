@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { claudeCliComplete } from "./llm-transport.js";
 import type { Complete } from "./decider.js";
 import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
@@ -77,6 +78,26 @@ real value; do NOT copy the placeholders verbatim:
 {"results":[{"index":<claim number>,"pass":<true or false>}, …]}`;
 }
 
+/** Identity of the grading-prompt TEMPLATE (placeholder rubric + answer), not of any one filled prompt —
+ *  so two runs graded under different prompt wording are distinguishable even when rubric and answer match.
+ *  A change here can shift every pass rate; a before/after comparison must refuse to mix hashes. */
+export const JUDGE_PROMPT_HASH = createHash("sha256")
+  .update(buildJudgePrompt(["<c0>", "<c1>", "<c2>"], "<ANSWER>"))
+  .digest("hex")
+  .slice(0, 16);
+
+/** Total `costUSD` across every per-model entry of a transport usage map (the transport can make an
+ *  auxiliary call under a second model key — that is real spend). `undefined` when no entry is priced:
+ *  unpriced is not $0. */
+function usageCostUsd(usage: Record<string, unknown> | undefined): number | undefined {
+  let total: number | undefined;
+  for (const m of Object.values(usage ?? {})) {
+    const c = (m as { costUSD?: unknown } | null)?.costUSD;
+    if (typeof c === "number" && Number.isFinite(c)) total = (total ?? 0) + c;
+  }
+  return total;
+}
+
 /** Try to read one balanced `{...}` group as a FULL-COVERAGE grade: a `results` array with exactly one
  *  `{index:number,pass:boolean}` per rubric index `0..n-1`. Returns the ordered pass map, or null if this
  *  group isn't a valid full grade (so the prompt's own embedded EXAMPLE, a partial restatement, or a prose
@@ -146,7 +167,11 @@ export function makeSemanticJudge(opts: { model?: string; complete?: Complete } 
   const requestedModel = opts.model ?? defaultJudgeModel();
   const complete = opts.complete ?? claudeCliComplete;
   const judge: SemanticJudge = async (rubric, answer) => {
-    const { text, model: resolvedModel } = await complete(buildJudgePrompt(rubric, answer), requestedModel);
+    // Cleared before the await so a transport throw never leaves the PREVIOUS call's cost behind; set
+    // before parsing so a call whose grade then fails to parse still reports what it spent.
+    judge.lastCostUsd = undefined;
+    const { text, model: resolvedModel, usage } = await complete(buildJudgePrompt(rubric, answer), requestedModel);
+    judge.lastCostUsd = usageCostUsd(usage);
     // Stash the per-call RESOLVED model onto the judge (mutated synchronously before this async fn
     // resolves) so a caller reading `judge.model` AFTER awaiting this call sees what actually graded,
     // not the factory-time alias. This is the only way to thread a per-call, async-resolved value out of
@@ -157,5 +182,19 @@ export function makeSemanticJudge(opts: { model?: string; complete?: Complete } 
   // Seed with the requested alias so a caller reading `.model` BEFORE any call still gets something
   // (e.g. logging) — overwritten with the resolved model as soon as a call completes, above.
   judge.model = requestedModel;
+  judge.promptHash = JUDGE_PROMPT_HASH;
   return judge;
+}
+
+/** The judges a live run grades with. `modelOverride` (a caller that must hold the judge constant, e.g. a
+ *  paired comparison) grades EVERY `semantic_matches` assert with that model — a per-assert `judge_model`
+ *  included — so no `judgeFor` factory is returned and runSemanticJudges uses the run-level judge
+ *  throughout. Without it, a per-assert `judge_model` is honoured, as before. An injected `judge` (the
+ *  test seam) is the run-level judge either way. */
+export function judgesForRun(
+  opts: { judge?: SemanticJudge; modelOverride?: string },
+  make: (o?: { model?: string }) => SemanticJudge = makeSemanticJudge,
+): { judge: SemanticJudge; judgeFor?: (model: string) => SemanticJudge } {
+  if (opts.modelOverride !== undefined) return { judge: opts.judge ?? make({ model: opts.modelOverride }) };
+  return { judge: opts.judge ?? make(), judgeFor: (model) => make({ model }) };
 }

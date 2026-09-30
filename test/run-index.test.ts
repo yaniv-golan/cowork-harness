@@ -116,6 +116,33 @@ describe("indexRowFromResult — pure derivation from a RunResult", () => {
   });
 });
 
+describe("indexRowFromResult — judgeCostUsd", () => {
+  const sem = { semantic_matches: { rubric: ["c"] } };
+  it("sums every semantic assert's judgeCostUsd (reported beside costUsd, never folded into it)", () => {
+    const row = indexRowFromResult(
+      rr({
+        cost: { usd: 1 },
+        assertions: [
+          { assertion: sem, pass: true, judgeCostUsd: 0.02 },
+          { assertion: { result: "success" }, pass: true },
+          { assertion: sem, pass: false, judgeCostUsd: 0.03 },
+        ],
+      } as Partial<RunResult>),
+      { command: "run", partial: false },
+    );
+    expect(row.judgeCostUsd).toBeCloseTo(0.05, 10);
+    expect(row.costUsd).toBe(1);
+  });
+
+  it("is undefined — not $0 — when no assert carries a judge cost", () => {
+    const row = indexRowFromResult(rr({ assertions: [{ assertion: sem, pass: true }] } as Partial<RunResult>), {
+      command: "run",
+      partial: false,
+    });
+    expect(row.judgeCostUsd).toBeUndefined();
+  });
+});
+
 describe("appendIndexRow / readIndex — the on-disk round trip", () => {
   it("writes and reads back one row", () => {
     const dir = mkdtempSync(join(tmpdir(), "run-index-"));

@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { makeSemanticJudge, parseJudgeResults, extractJsonObject, buildJudgePrompt } from "../src/decide/semantic-judge.js";
+import { createHash } from "node:crypto";
+import {
+  makeSemanticJudge,
+  parseJudgeResults,
+  extractJsonObject,
+  buildJudgePrompt,
+  JUDGE_PROMPT_HASH,
+  judgesForRun,
+} from "../src/decide/semantic-judge.js";
 import type { Complete } from "../src/decide/decider.js";
 
 // A stubbed transport (same shape as the shared claudeCliComplete) so the judge's prompt/parse/align
@@ -111,5 +119,103 @@ describe("semantic judge — makeSemanticJudge (stubbed transport)", () => {
     expect(() => parseJudgeResults(p, ["a", "b"])).toThrow(/no valid full-coverage/);
     // Belt: the example must not contain a bare, parseable {"index":0,"pass":true} literal.
     expect(p).not.toMatch(/\{"index":\s*0,\s*"pass":\s*(true|false)\}/);
+  });
+});
+
+describe("semantic judge — cost and prompt-template provenance", () => {
+  const GRADE = '{"results":[{"index":0,"pass":true}]}';
+  const priced =
+    (text: string, usage?: Record<string, unknown>): Complete =>
+    async () => ({ text, model: "m", ...(usage ? { usage } : {}) });
+
+  it("sums costUSD over EVERY modelUsage key (the transport's auxiliary call is real spend)", async () => {
+    const judge = makeSemanticJudge({ complete: priced(GRADE, { main: { costUSD: 0.01 }, aux: { costUSD: 0.002 } }) });
+    await judge(["c"], "a");
+    expect(judge.lastCostUsd).toBeCloseTo(0.012, 10);
+  });
+
+  it("is undefined — never $0 — when no key carries a numeric costUSD", async () => {
+    const judge = makeSemanticJudge({ complete: priced(GRADE, { main: { inputTokens: 5 } }) });
+    await judge(["c"], "a");
+    expect(judge.lastCostUsd).toBeUndefined();
+    const bare = makeSemanticJudge({ complete: priced(GRADE) });
+    await bare(["c"], "a");
+    expect(bare.lastCostUsd).toBeUndefined();
+  });
+
+  it("records the cost of a call whose grade then fails to parse (the spend happened)", async () => {
+    const judge = makeSemanticJudge({ complete: priced("not json", { main: { costUSD: 0.03 } }) });
+    await expect(judge(["c"], "a")).rejects.toThrow(/no valid full-coverage/);
+    expect(judge.lastCostUsd).toBeCloseTo(0.03, 10);
+  });
+
+  it("clears a previous call's cost when the transport itself throws (no stale carry-over)", async () => {
+    let n = 0;
+    const flaky: Complete = async () => {
+      if (n++ === 0) return { text: GRADE, model: "m", usage: { main: { costUSD: 0.05 } } };
+      throw new Error("transport down");
+    };
+    const judge = makeSemanticJudge({ complete: flaky });
+    await judge(["c"], "a");
+    expect(judge.lastCostUsd).toBeCloseTo(0.05, 10);
+    await expect(judge(["c"], "a")).rejects.toThrow(/transport down/);
+    expect(judge.lastCostUsd).toBeUndefined();
+  });
+
+  it("exports the prompt-TEMPLATE hash (placeholder rubric + answer) and stamps it on the judge", () => {
+    const expected = createHash("sha256")
+      .update(buildJudgePrompt(["<c0>", "<c1>", "<c2>"], "<ANSWER>"))
+      .digest("hex")
+      .slice(0, 16);
+    expect(JUDGE_PROMPT_HASH).toBe(expected);
+    expect(makeSemanticJudge({ complete: priced(GRADE) }).promptHash).toBe(JUDGE_PROMPT_HASH);
+  });
+});
+
+describe("semantic judge — judgesForRun (run-level judge model override)", () => {
+  const made: Array<string | undefined> = [];
+  const make = (o: { model?: string } = {}) => {
+    made.push(o.model);
+    const j = (async () => []) as unknown as ReturnType<typeof makeSemanticJudge>;
+    j.model = o.model ?? "default";
+    return j;
+  };
+
+  it("without an override: the default run-level judge + a per-assert factory that honours judge_model", () => {
+    made.length = 0;
+    const { judge, judgeFor } = judgesForRun({}, make);
+    expect(judge.model).toBe("default");
+    expect(judgeFor?.("claude-x-1").model).toBe("claude-x-1");
+  });
+
+  it("with an override: every assert — including one with its own judge_model — is graded by the override", () => {
+    made.length = 0;
+    const { judge, judgeFor } = judgesForRun({ modelOverride: "claude-pinned-2" }, make);
+    expect(judge.model).toBe("claude-pinned-2");
+    expect(judgeFor).toBeUndefined(); // runSemanticJudges then uses `judge` for every assert
+    expect(made).toEqual(["claude-pinned-2"]);
+  });
+
+  it("an injected judge (test seam) is used as the run-level judge either way", () => {
+    const injected = make({ model: "stub" });
+    expect(judgesForRun({ judge: injected }, make).judge).toBe(injected);
+    expect(judgesForRun({ judge: injected, modelOverride: "claude-pinned-2" }, make).judge).toBe(injected);
+  });
+});
+
+describe("executeScenario's judge wiring (judgesForExecute)", () => {
+  it("maps ExecuteOptions.judgeModelOverride onto the run-level judge and suppresses the per-assert factory", async () => {
+    const { judgesForExecute } = await import("../src/run/execute.js");
+    const make = (o: { model?: string } = {}) => {
+      const j = (async () => []) as unknown as ReturnType<typeof makeSemanticJudge>;
+      j.model = o.model ?? "default";
+      return j;
+    };
+    const pinned = judgesForExecute({ judgeModelOverride: "claude-pinned-2" }, make);
+    expect(pinned.judge.model).toBe("claude-pinned-2");
+    expect(pinned.judgeFor).toBeUndefined();
+    const plain = judgesForExecute({}, make);
+    expect(plain.judge.model).toBe("default");
+    expect(plain.judgeFor?.("claude-x-1").model).toBe("claude-x-1");
   });
 });

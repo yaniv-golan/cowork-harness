@@ -16,9 +16,8 @@
 import { readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { z } from "zod";
-import { buildJudgePrompt } from "../src/decide/semantic-judge.js";
+import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { isLiveModelId } from "../src/types.js";
 
 const SKILL = "cowork-harness";
@@ -28,14 +27,9 @@ const BASELINE = resolve("test/evals/baseline/profile.json");
 const SCENARIO_DIR = resolve("test/evals/scenarios");
 const HARNESS_VERSION = (JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { version?: string }).version ?? "unknown";
 const today = (): string => new Date().toISOString().slice(0, 10);
-// Fingerprint of the JUDGE PROMPT TEMPLATE (rendered on a fixed sentinel rubric/answer, so it changes iff
-// the template changes). Recorded in the baseline and checked by the gate: a prompt edit silently shifts
-// every pass rate, and the model-provenance guard can't see it — so a baseline captured under a different
-// prompt is not comparable and the gate must refuse to diff across it (M1).
-const JUDGE_PROMPT_HASH = createHash("sha256")
-  .update(buildJudgePrompt(["<c0>", "<c1>", "<c2>"], "<ANSWER>"))
-  .digest("hex")
-  .slice(0, 16);
+// JUDGE_PROMPT_HASH fingerprints the judge prompt TEMPLATE. Recorded in the baseline and checked by the
+// gate: a prompt edit silently shifts every pass rate, and the model-provenance guard can't see it — so a
+// baseline captured under a different prompt is not comparable and the gate must refuse to diff across it.
 
 // ─────────────────────────────── pure statistics (exported for tests) ───────────────────────────────
 

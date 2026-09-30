@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`semantic_matches` judge cost and prompt identity are recorded.** Each graded assert now carries:
+  - `RunResult.assertions[].judgeCostUsd`: the judge's spend, summed over both attempts when a malformed
+    grade is retried.
+  - `judgePromptHash`: 16 hex characters identifying the grading-prompt template. Two runs graded under
+    different prompt wording should not be compared.
+
+  The judge cost was previously discarded. It is recorded beside `cost.usd`, which remains the agent's
+  spend alone, and is absent (not `0`) when no judge call reported a cost. `stats` totals, percentiles
+  and `--max-budget-usd` still count the agent's spend only. The run index gains a matching
+  `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
+  cost to recover, so their rows stay without it, even after `stats --reindex`.
+
+### Fixed
+
+- **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
+  `fingerprint` (`skillHash`, `contentSig`, `skillSources`) and `skillCommit` described the directory the
+  session file declares, not the substituted candidate the cell actually mounted. Every cell therefore
+  looked identical. They now describe the mounted directory.
+  - Assertions and verdicts were not affected.
+  - `stats --skill-hash` / `--group-by skill-hash` merged all of a matrix's `skill_dirs` cells into one
+    group; they now separate.
+  - `verify-run` on a kept `skill_dirs` cell whose scenario has `answers:` now refuses (exit `2`, "the
+    kept run predates the current skill"), because it recomputes the fingerprint from the session file.
+    Previously it compared the wrong directory against itself and passed.
+- **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
+  as its own repeat batch, as documented in the scenario reference.
+
 ## [4.1.1] — 2026-09-29
 
 ### Upgrade notes

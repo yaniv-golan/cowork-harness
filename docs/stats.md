@@ -17,12 +17,15 @@ reads it back.
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
 runLabel?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
-cacheReadTokens?, modelCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
+cacheReadTokens?, modelCostUsd?, judgeCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
 
 `costUsd` is the run's `cost.usd`: the agent session's own SDK-reported spend. It does **not** include
 the `semantic_matches` judge or the LLM decider (`on_unanswered: llm` / `--decider-llm`), which are
 separate model calls, so neither `totalUsd` nor the `--max-budget-usd` estimates built from these rows
-counts them. (A critique's evaluator passes are the exception: the roll-up row below carries them.)
+counts them. (A critique's evaluator passes are the exception: the roll-up row below carries them.) The
+judge's spend is recorded beside it instead: `judgeCostUsd` sums the run's
+`assertions[].judgeCostUsd` (every attempt of every `semantic_matches` grade), and is absent when no
+judge call was priced. The LLM decider's spend is not recorded.
 
 **Summing a critique's cost: use the roll-up row, not the turns.** A `critique` is FOUR model workloads,
 but only two of them produce a run — the graded turn and the reflection turn each write a row via the inner

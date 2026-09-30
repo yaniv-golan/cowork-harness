@@ -61,6 +61,9 @@ export interface RunIndexRow {
   turns?: number;
   cacheReadTokens?: number; // summed across all models in RunResult.modelUsage (stats surfacing)
   modelCostUsd?: number; // summed across all models in RunResult.modelUsage
+  /** `semantic_matches` judge spend, summed over `RunResult.assertions[].judgeCostUsd`. Separate model calls
+   *  from the agent's — NOT part of `costUsd`. Absent when no assert carried a priced judge call. */
+  judgeCostUsd?: number;
   durationMs?: number;
   partial: boolean;
   nonDeterministic: boolean;
@@ -138,6 +141,8 @@ export function indexRowFromResult(
     0,
   );
   const modelCostUsd = modelUsageEntries?.reduce((sum, m) => sum + (typeof m.costUSD === "number" ? m.costUSD : 0), 0);
+  const judgeCosts = result.assertions.flatMap((a) => (typeof a.judgeCostUsd === "number" ? [a.judgeCostUsd] : []));
+  const judgeCostUsd = judgeCosts.length ? judgeCosts.reduce((sum, c) => sum + c, 0) : undefined;
   return {
     v: 1,
     ts: opts.ts ?? new Date().toISOString(),
@@ -160,6 +165,7 @@ export function indexRowFromResult(
     turns: budget.turns,
     cacheReadTokens,
     modelCostUsd,
+    judgeCostUsd,
     durationMs: result.durationMs,
     partial: opts.partial,
     nonDeterministic: !!result.nonDeterministic,
