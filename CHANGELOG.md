@@ -32,6 +32,10 @@ All notable changes to this project are documented here. The format is based on
   - `verify-run` on a kept `skill_dirs` cell whose scenario has `answers:` now refuses (exit `2`, "the
     kept run predates the current skill"), because it recomputes the fingerprint from the session file.
     Previously it compared the wrong directory against itself and passed.
+- **`list` printed baselines in directory order**, so `desktop-1.24012.11` came before `desktop-1.24012.9`
+  on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
+  the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
+  filename per line), and `latest: true` on that entry in `--output-format json`.
 - **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
   as its own repeat batch, as documented in the scenario reference.
 
