@@ -8,23 +8,31 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **Verdict change: `stalled` now fails a run that ends by asking for input without a `?`, on `run` and on
-  `replay`.** After an `AskUserQuestion` gate, a run that closed on "Please share your pre-money valuation
-  and the total amount you're raising so I can run the numbers." passed, while the same run ending "…for
-  the Series A?" failed. The check only looked for a trailing `?`.
-  - Once a gate has fired, the final turn's closing sentence now also counts when it asks for specific
-    input: `Please`/`Kindly` + share, provide, send, upload, attach, paste, confirm, specify, tell me,
-    give me, reply with, choose, pick or select; `Let me know which…`/`whether…`; `Once you share…, I'll…`
-    or `Once I have the file, I'll…`; `I need X to proceed`/`before I can…`; or a question followed only
-    by a `For example: …` or parenthetical aside.
-  - A polite closer never counts: `Let me know if…`, `Feel free…`, `any feedback/questions`, `what you
-    think`, `happy to`, or a sentence starting `If you…`. A run with no gate still stalls only on a
-    trailing `?`, so a plain answer cannot fail on its wording.
+- **Verdict change: `stalled` now fails a run that ends by asking for input without a `?`, on `run`,
+  `replay` and `eval`.** After an `AskUserQuestion` gate, a run that closed on "Please share your
+  pre-money valuation and the total amount you're raising so I can run the numbers." passed, while the
+  same run ending "…for the Series A?" failed. The check only looked for a trailing `?` on the raw text.
+  - Once a gate has fired, the final turn's closing sentence now also counts when:
+    - it ends in `?` after trailing bold, quotes, a closing parenthesis or an emoji
+      (`**Which scenario should I model?**`);
+    - it is a question followed only by a `For example: …` or parenthetical aside;
+    - it asks for specific input AND says the input comes back to the agent: `Please`/`Kindly` + share,
+      provide, send, upload, attach, paste, confirm, specify, tell me, give me, reply with, choose, pick
+      or select, or `Let me know which…`/`whether…`, with a cue such as `so I…`, `and I'll…`,
+      `to proceed`, `here`, `with me`, `to me`, `in chat`, `reply`, `you'd like me to`;
+    - `Once you share…, I'll…`; `I need X to proceed` or `…before I can <do Y>` ending the sentence; or
+      `Once I have the file, I'll…` right after a sentence that asked for it.
+  - Never counted: a polite closer or a hand-off (`Let me know if…`, `Feel free…`, `thoughts`, `feedback`,
+    `with your`/`to your`, `before sending`, `whichever`, `how it goes`, a sentence starting `If you…`), a
+    closing code block or `>` blockquote, and any request earlier than the closing sentence. With no gate,
+    a run still stalls only on a trailing `?`, so a plain answer cannot fail on its wording. The request
+    test is English-only; in any other language only the `?` test applies.
   - The other conditions are unchanged: the run succeeded and no tool ran after the last gate.
-    `allow_stall: true` / `--allow-stall` still opt out.
+    `allow_stall: true` / `--allow-stall` still opt out of the verdict.
   - `replay` re-derives the check from the recording, so an existing cassette with this ending fails on
-    replay too. Replaying the 5 cassettes committed here and 11 from a consumer skill suite with the old
-    and new check changed no verdict.
+    replay too.
+  - Under `eval`, a newly stalled rep is `errored_agent`, which fails every row; `allow_stall` does not
+    apply there.
   - The live-lane `ended_with_question` warning uses the same test under the same gate condition. A
     `?`-free request made after post-gate tool work, which raised nothing, now warns. A run that used to
     warn `ended_with_question` and matches the new shape now fails `stalled` instead.

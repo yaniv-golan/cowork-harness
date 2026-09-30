@@ -123,6 +123,12 @@ it landed in.
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
 
+A **stalled** rep is one whose run the `stalled` verdict signal would flag: the agent ended asking for input
+(a closing `?`, or, after an `AskUserQuestion` gate, a closing request such as "Please share X so I can…")
+with no tool work after its last gate. It is classified `errored_agent` and fails every row; `allow_stall`
+does not change that here. The request test is English-only — see the `stalled` row in the companion
+skill's `references/assertion-catalog.md`.
+
 The `auth` and `usage_limit` rows need the reply to come from the agent itself, which writes it as a
 `<synthetic>` turn. A skill's own message that merely reads like one ("You've reached your daily limit
 of 5 files") is the skill's failure and is scored.

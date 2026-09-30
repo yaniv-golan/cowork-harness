@@ -201,7 +201,10 @@ describe("stall detector: a closing request for input without a `?`", () => {
     ["'Once you share …, I'll …'", "Once you share the option pool size, I'll finish the dilution table."],
     ["'Let me know which …'", "I found two candidate models. Let me know which one you want me to use."],
     ["'I need … to proceed'", "I need the closing date of the round to proceed."],
-    ["a request wrapped in bold", "**Please provide the valuation cap.**"],
+    ["a request wrapped in bold", "**Please provide the valuation cap so I can finish the model.**"],
+    ["a bold question (the raw `?` test misses the trailing `**`)", "**Which scenario should I model?**"],
+    ["a question followed by an emoji", "Which of the two models should I use? 🙂"],
+    ["'(A or B?)' at the very end", "I can model it either way (pre-money or post-money?)"],
   ])("%s → stalled", async (_label, text) => {
     expect((await afterGate(text)).stalledOnQuestion).toBe(true);
   });
@@ -216,12 +219,42 @@ describe("stall detector: a closing request for input without a `?`", () => {
     "Let me know what you think.",
     "I'll need to check the docs before I can say more.",
     "Summary written. Happy to adjust anything — just let me know.",
+    // completed-work closers and hand-offs: the input goes to someone else, or nowhere
+    "Please share this with your team.",
+    "Please send the memo to your investors before Friday.",
+    "Please upload the final PDF to your data room.",
+    "Please select Save to keep the file.",
+    "Please choose whichever format works best.",
+    "Please tell me how it goes!",
+    "Please give me a shout if anything looks off.",
+    "Please share thoughts on the draft.",
+    "Please confirm the numbers look right before sending to investors.",
+    "I'll need more data before I can make a firm call, but the base case is solid.",
+    "When I have the numbers, I'll update the table.",
+    // quoted or generated text is not the agent asking in its own voice
+    "Here is the snippet:\n\n```\nPlease share your valuation so I can run the numbers.\n```",
+    "The founder wrote:\n\n> Please share your valuation so I can run the numbers.",
   ])("a polite closer is NOT a stall, even right after a gate: %s", async (text) => {
     expect((await afterGate(text)).stalledOnQuestion).toBeFalsy();
   });
 
   it("only the CLOSING sentence counts — a request earlier in the answer is not a stall", async () => {
     const rec = await afterGate("Please share the valuation next time. For now I assumed $10M and the full model is above.");
+    expect(rec.stalledOnQuestion).toBeFalsy();
+  });
+
+  // The deliverable is written, a final follow-up-offer gate is declined, and the agent signs off. No
+  // productive tool ran after that gate, so only the wording separates this from a stall. In `eval` a
+  // false stall here is `errored_agent`, which fails every row.
+  it("a declined follow-up gate after a written deliverable, then a sign-off → NOT stalled", async () => {
+    const rec = await drive([
+      { type: "tool_use", name: "Write", input: {} },
+      gateToolUse(),
+      gateDecision(),
+      { type: "assistant_text", text: "Sounds good — please confirm the numbers look right before sending to investors." },
+      { type: "result", isError: false },
+    ]);
+    expect(rec.result).toBe("success");
     expect(rec.stalledOnQuestion).toBeFalsy();
   });
 
@@ -251,7 +284,13 @@ describe("stall detector: a closing request for input without a `?`", () => {
 // on a long whitespace run (~48 s for 200k spaces on Node 25). Generous bound: this is a complexity guard,
 // not a benchmark (linear finishes in ~1 ms).
 it("the input-request test is linear on pathological whitespace/markup runs", () => {
-  for (const text of ["a" + " ".repeat(200_000) + "b", "a" + "*_`".repeat(70_000) + "b", "Once you share " + "x ".repeat(100_000)]) {
+  for (const text of [
+    "I need x " + "before I can y ".repeat(20_000) + ", z",
+    "x. " + "please ".repeat(100_000) + ". Once I have the file, I'll go.",
+    "a" + " ".repeat(200_000) + "b",
+    "a" + "*_`".repeat(70_000) + "b",
+    "Once you share " + "x ".repeat(100_000),
+  ]) {
     const t = performance.now();
     endsOnRequestForInput(text);
     expect(performance.now() - t).toBeLessThan(2000);

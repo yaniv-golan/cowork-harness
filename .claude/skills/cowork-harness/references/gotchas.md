@@ -119,15 +119,18 @@ authorable). Reach for this list when debugging a run's behavior, that one while
       tool calls) AND the *answered-gate-then-re-ask* case (the agent answers an `AskUserQuestion`,
       then asks again in plain text and stops). Suppress with `allow_stall: true` if ending on a
       question is intended.
-    - "Asking for input" is read from the final turn's **closing sentence**: it ends in `?`, or — only
-      once an `AskUserQuestion` gate has fired — it is a request without one: `Please`/`Kindly` +
-      share, provide, send, upload, attach, paste, confirm, specify, tell me, give me, reply with,
-      choose, pick, select; `Let me know which…`/`whether…`; `Once you share…, I'll…` / `Once I have the
-      file, I'll…`; `I need X to proceed`/`before I can…`; or a `?` followed only by a `For example: …`
-      or parenthetical aside. A polite closer never counts: `Let me know if…`, `Feel free…`, `any
-      feedback/questions`, `what you think`, `happy to`, or a sentence starting `If you…`. A request
-      anywhere but the closing sentence is not read, and a run with no gate stalls only on a trailing
-      `?`.
+    - "Asking for input" is read from the final turn's **closing sentence**. It ends in `?` on the raw
+      text; or, once an `AskUserQuestion` gate has fired: it ends in `?` after trailing bold, quotes, a
+      `)` or an emoji; it is a `?` followed only by a `For example: …` or parenthetical aside; or it is
+      a request that says the input comes back to the agent — `Please`/`Kindly` + share, provide, send,
+      upload, attach, paste, confirm, specify, tell me, give me, reply with, choose, pick, select, or
+      `Let me know which…`/`whether…`, WITH a cue (`so I…`, `and I'll…`, `to proceed`, `here`,
+      `with me`, `to me`, `in chat`, `reply`, `you'd like me to`); `Once you share…, I'll…`; a whole
+      sentence `I need X to proceed`/`…before I can Y`; or `Once I have the file, I'll…` right after a
+      sentence asking for it. Never counted: polite closers and hand-offs (`Let me know if…`,
+      `Feel free…`, `thoughts`, `feedback`, `with your`/`to your`, `before sending`, `whichever`,
+      `how it goes`, `If you…`), a closing code block or `>` blockquote, or a request earlier than the
+      closing sentence. With no gate only the raw `?` counts. The request test is English-only.
     - The signal is a **tool-position heuristic**, not deliverable detection, so it is imprecise both
       ways:
       - **False negative:** a post-gate tool *call* clears the flag whether it **succeeded or

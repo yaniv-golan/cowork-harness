@@ -7,6 +7,9 @@
 // stopped exactly as a "…for the Series A?" sibling did, and passed. The widening is a closed list of
 // shapes matched against the LAST SENTENCE only (of the last line of the last paragraph), so a request
 // buried mid-answer never counts and a polite closer after finished work is rejected before any pattern runs.
+// Every imperative must also carry a cue that the input comes BACK to the agent ("so I can…", "here",
+// "and I'll…"): "Please share this with your team." is a closer after finished work, not a stall.
+// English only: a closing request in any other language falls back to the `?` rule.
 
 const LEAD = new Set([..." \t\r\n\f\v>*_`#-"]);
 const TRAIL = new Set([..." \t\r\n\f\v*_`"]);
@@ -21,56 +24,91 @@ function unwrap(s: string): string {
   return s.slice(a, b);
 }
 
-/** The sentences of the last non-empty line of the last paragraph, wrappers stripped. */
+/** Trailing wrappers that can follow a closing `?`: emphasis, quotes, a closing paren, emoji. */
+const QUESTION_TAIL = /[\s*_`)"'\u201d\u2019\uFE0F\u200D]|\p{Extended_Pictographic}/u;
+/** True when the sentence ends in `?` once trailing wrappers are stripped ("**Which one?**", "(A or B?)"). */
+function endsInQuestionMark(sentence: string): boolean {
+  const cps = [...sentence];
+  let i = cps.length - 1;
+  while (i >= 0 && QUESTION_TAIL.test(cps[i])) i--;
+  return i >= 0 && cps[i] === "?";
+}
+
+/** The sentences of the last non-empty line of the last paragraph, wrappers stripped. Empty when that
+ *  paragraph ends in a fenced code block or its last line is a `>` blockquote — quoted or generated
+ *  text, not the agent asking in its own voice. */
 function closingSentences(text: string): string[] {
   const para =
     text
       .trim()
       .split(/\n\s*\n/)
       .pop() ?? "";
-  const line = para.split("\n").map(unwrap).filter(Boolean).pop() ?? "";
-  return line
+  const lines = para.split("\n").filter((l) => l.trim() !== "");
+  const lastRaw = (lines[lines.length - 1] ?? "").trim();
+  if (lastRaw.startsWith("```") || lastRaw.startsWith("~~~") || lastRaw.startsWith(">")) return [];
+  const line = unwrap(lastRaw);
+  const sentences = line
     .split(/(?<=[.!?])\s+(?=\S)/)
     .map(unwrap)
     .filter(Boolean);
+  // A trailing emoji/wrapper-only "sentence" ("Which one? 🙂") belongs to the sentence before it.
+  while (sentences.length > 1 && [...sentences[sentences.length - 1]].every((c) => QUESTION_TAIL.test(c))) {
+    const tail = sentences.pop();
+    sentences[sentences.length - 1] += " " + tail;
+  }
+  return sentences;
 }
+
+/** A closing request is a sentence, not an essay: past this length only the `?` test runs, which also
+ *  bounds the backtracking patterns below on untrusted model output. */
+const MAX_SENTENCE = 1000;
 
 /** What the agent asks the user to hand over. `let me know` counts only with `which`/`whether` — "let me
  *  know if…" and "let me know what you think" are closers. */
 const REQUEST_VERB = String.raw`(?:share|provide|send|upload|attach|paste|confirm|specify|tell me|give me|reply with|choose|pick|select|let me know (?:which|whether))`;
 
-/** Polite closers after completed work. Checked FIRST, and a match vetoes every pattern below. */
-const CLOSER =
-  /\b(?:any (?:feedback|thoughts|questions|comments|changes)|your (?:feedback|thoughts|questions|comments)|what you think|feel free|don't hesitate|do not hesitate|happy to)\b|^(?:please\s+|just\s+)?(?:let me know|tell me) if\b|^if you\b/i;
+/** The cue that the requested input comes back to the agent. Required by every imperative shape. */
+const CUE =
+  /\bso (?:that )?I\b|\band I(?:'ll| will)\b|\bto (?:proceed|continue|get started)\b|\bhere\b|\bwith me\b|\bto me\b|\bfor me to\b|\bin (?:the )?chat\b|\brepl(?:y|ies)\b|\byou(?:'d| would) like (?:me )?to\b|\byou (?:want|need) me to\b/i;
 
-/** The request shapes. Each is anchored at the start of the closing sentence. */
-const REQUEST_PATTERNS: readonly RegExp[] = [
-  // "Please share X so I can run the numbers." / "Kindly provide …"
-  new RegExp(String.raw`^(?:please|kindly)\s+${REQUEST_VERB}\b`, "i"),
-  // "Let me know which option you prefer."
-  /^(?:just\s+)?let me know (?:which|whether)\b/i,
-  // "Once you share X, I'll …" / "Once I have the file, I'll …"
-  new RegExp(
-    String.raw`^(?:once|as soon as|when)\s+(?:you(?:'ve)?\s+${REQUEST_VERB}|I (?:have|get|receive) (?:the|that|this|those|these|your|it|them)\b)[^.!?]*\bI(?:'ll| will| can)\b`,
-    "i",
-  ),
-  // "I need X to proceed." — `I need to …` is the agent narrating its own next step, not a request.
-  /^I(?: still)?(?:'ll| will)? need (?!to\b)[^.!?]*\b(?:to (?:proceed|continue|get started)|before I can)\b/i,
-];
+/** Polite closers after completed work, and hand-offs to someone else. Checked FIRST; a match vetoes every
+ *  imperative shape below. */
+const CLOSER =
+  /\b(?:any (?:feedback|thoughts|questions|comments|changes)|your (?:feedback|thoughts|questions|comments)|thoughts|feedback|what you think|feel free|don't hesitate|do not hesitate|happy to|with your|to your|before (?:signing|sending)|whichever|how it goes|a shout)\b|^(?:please\s+|just\s+)?(?:let me know|tell me) if\b|^if you\b/i;
+
+/** "Please share X so I can run the numbers." / "Let me know which one you want me to use." */
+const IMPERATIVE = new RegExp(String.raw`^(?:(?:please|kindly)\s+${REQUEST_VERB}|(?:just\s+)?let me know (?:which|whether))\b`, "i");
+/** "Once you share X, I'll …" — the "I'll" is the cue. */
+const ONCE_YOU = new RegExp(String.raw`^(?:once|as soon as|when)\s+you(?:'ve)?\s+${REQUEST_VERB}\b[^.!?]*\bI(?:'ll| will| can)\b`, "i");
+/** "Once I have the file, I'll …" — a request only when the sentence before it asked for the input. */
+const ONCE_I_HAVE =
+  /^(?:once|as soon as|when)\s+I (?:have|get|receive) (?:the|that|this|those|these|your|it|them)\b[^.!?]*\bI(?:'ll| will| can)\b/i;
+const PRIOR_REQUEST = new RegExp(String.raw`\b(?:please|kindly)\s[^.!?]*\b${REQUEST_VERB}\b`, "i");
+/** "I need X to proceed." — the whole sentence. "I need to …" is the agent narrating its own next step, and
+ *  "…before I can make a firm call, but the base case is solid" is not a request. */
+const I_NEED = /^I(?: still)?(?:'ll| will)? need (?!to\b)[^.!?]*\b(?:to (?:proceed|continue|get started)|before I can\b[^.!?,;]*)[.!]?$/i;
 
 /** A question followed only by an aside: "Which area? For example: a, b, or c." / "…signed? (Day matters.)" */
 const TRAILER = /^(?:\(.*\)|(?:for example|for instance|e\.g\.)\b.*)$/i;
 
 /**
- * True when the closing text asks the user for input WITHOUT ending on a `?`: an imperative request for
- * something the run needs (see REQUEST_PATTERNS), or a question followed only by an example/parenthetical
- * trailer. Never true for a polite closer (see CLOSER). Callers OR this with their own `?` test.
+ * True when the closing sentence asks the user for input: it ends in `?` once wrappers are stripped
+ * ("**Which scenario?**"), it is a question followed only by an example/parenthetical trailer, or it is a
+ * cued imperative request (see IMPERATIVE / ONCE_YOU / ONCE_I_HAVE / I_NEED). Never true for a polite
+ * closer or a hand-off (see CLOSER), nor when the closing text is a code fence or blockquote. Callers apply
+ * it only once an AskUserQuestion gate has fired, and OR it with their own raw `?` test.
  */
 export function endsOnRequestForInput(text: string | undefined): boolean {
   const s = closingSentences(text ?? "");
   const last = s[s.length - 1];
   if (last === undefined) return false;
-  if (TRAILER.test(last)) return s.length >= 2 && s[s.length - 2].endsWith("?");
-  if (CLOSER.test(last)) return false;
-  return REQUEST_PATTERNS.some((re) => re.test(last));
+  if (endsInQuestionMark(last)) return true;
+  if (TRAILER.test(last)) return s.length >= 2 && endsInQuestionMark(s[s.length - 2]);
+  if (last.length > MAX_SENTENCE || CLOSER.test(last)) return false;
+  if (I_NEED.test(last) || ONCE_YOU.test(last)) return true;
+  if (ONCE_I_HAVE.test(last)) {
+    const prev = s[s.length - 2];
+    return prev !== undefined && prev.length <= MAX_SENTENCE && PRIOR_REQUEST.test(prev) && CUE.test(prev) && !CLOSER.test(prev);
+  }
+  return IMPERATIVE.test(last) && CUE.test(last);
 }
