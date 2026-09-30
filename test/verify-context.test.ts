@@ -168,7 +168,9 @@ describe("assertContextFromRunDir: recomputeAuthored 'semantic' reproduces the l
     const exec = readFileSync(resolve("src/run/execute.ts"), "utf8");
     const call = exec.slice(exec.indexOf("const authored = captureAuthoredFilesWithHealth("));
     expect(call.length, "execute.ts's authored capture moved or was renamed — re-anchor").toBeLessThan(exec.length);
-    expect(call.slice(0, call.indexOf(");\n"))).toMatch(/authoredCaptureOpts\(\{/);
+    // The whole options argument IS the shared call — a spread-and-override (`{ ...authoredCaptureOpts(…),
+    // priorityGlobs: [] }`) or a trailing extra argument would diverge the live capture from the re-grade.
+    expect(call.slice(0, call.indexOf(");\n"))).toMatch(/,\s*authoredCaptureOpts\(\{[^{}]*\}\),?\s*$/);
   });
 
   it("calls the capture with exactly the shared live option derivation", () => {
