@@ -375,6 +375,7 @@ export async function cmdChat(args: string[]) {
   // The host agent (protocol, hostloop) and everything it starts: stopped by the termination handler on a
   // signal (SIGTERM, grace, force-kill of the whole tree), and by reapAgentOnTeardown at the end.
   let treeAgent: TreeAgent | undefined;
+  let agentStopMs = 0; // left out of durationMs (see reapAgentOnTeardown)
   let deregisterAgent: (() => void) | undefined;
   const trackAgent = (
     spawned: { child: import("node:child_process").ChildProcess; runTag: string; workDir?: string },
@@ -585,7 +586,7 @@ export async function cmdChat(args: string[]) {
     // Reap the agent first (mirrors execute.ts). protocol/hostloop: the host agent's whole process tree —
     // reached here after the last turn (a mid-turn Ctrl-C goes through the termination handler instead);
     // container: the docker client, then the container by name below.
-    await reapAgentOnTeardown({ microvm: false, agent: treeAgent, child, deregister: deregisterAgent });
+    agentStopMs = await reapAgentOnTeardown({ microvm: false, agent: treeAgent, child, deregister: deregisterAgent });
     // mark BEFORE the forced removal below — this session's own `docker rm -f` makes the hostloop
     // sidecar exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra
     // failure (see watchHostLoopSidecar's doc comment).
@@ -622,7 +623,7 @@ export async function cmdChat(args: string[]) {
       userVisibleRoots: userVisibleRootsFromPlan(plan),
       readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
       egress: sidecar ? sidecar.collect().entries : [],
-      durationMs: Date.now() - start,
+      durationMs: Date.now() - start - agentStopMs,
       turn: turnNumber,
     });
     const secrets = collectSecrets();

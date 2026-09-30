@@ -106,4 +106,12 @@ describe("reapAgentOnTeardown", () => {
     });
     expect(log).toEqual(["child", "deregister"]);
   });
+
+  it("reports the time the host-agent stop sequence took, so a run's durationMs can leave it out", async () => {
+    const tree = await reapAgentOnTeardown({ microvm: false, agent: fakeAgent([]), settleMs: 60, graceMs: 60 });
+    expect(tree).toBeGreaterThanOrEqual(110);
+    expect(tree).toBeLessThan(1500);
+    const container = await reapAgentOnTeardown({ microvm: false, child: { kill: () => {} } });
+    expect(container).toBe(0);
+  });
 });

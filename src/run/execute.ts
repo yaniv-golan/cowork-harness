@@ -817,6 +817,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
   let signalAgent: TerminableAgent | undefined; // what the termination handler stops (protocol/hostloop/microvm)
+  let agentStopMs = 0; // time spent stopping the host agent's tree, left out of durationMs (see reapAgentOnTeardown)
   let treeAgent: TreeAgent | undefined; // the host agent's process tree (protocol/hostloop) — refreshed from the drive loop
   let deregisterAgent: (() => void) | undefined;
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
@@ -1168,7 +1169,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // orphan a running container holding the network. On the success path the child has already
       // exited (--rm), so these are no-ops.
       deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
-      await reapAgentOnTeardown({ microvm: effectiveFidelity === "microvm", agent: signalAgent, child, deregister: deregisterAgent });
+      agentStopMs = await reapAgentOnTeardown({
+        microvm: effectiveFidelity === "microvm",
+        agent: signalAgent,
+        child,
+        deregister: deregisterAgent,
+      });
       // mark BEFORE the forced removal below — this run's own `docker rm -f` makes the hostloop sidecar
       // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
@@ -1364,7 +1370,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         readonlyFolderRoots,
         effectiveFidelity,
         egress,
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt - agentStopMs,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
         fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
         onUnanswered,
@@ -1809,7 +1815,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       cost: record.cost,
       skillsInvoked: record.skillsInvoked,
       skillToolAvailable: record.initTools.includes("Skill"),
-      durationMs: Date.now() - startedAt,
+      durationMs: Date.now() - startedAt - agentStopMs,
       outDir,
       workDir: workRoot,
       outputsDir: join(workRoot, "outputs"),
@@ -2521,6 +2527,10 @@ export function makeContainerPhaseReap(p: {
  *
  * container: SIGKILL the `docker run` client (the container itself is removed by the caller).
  *
+ * Returns how long the host-agent stop sequence took (0 for microvm and container), so `durationMs` can leave
+ * it out: it is teardown, and before the process-tree stop existed it cost nothing, so a run's duration
+ * keeps one meaning across versions.
+ *
  * De-register LAST. Until the agent is dead a signal must still find it registered: a signal that lands in
  * the wait above would otherwise see no agent, exit at once, and leave the guest agent running. A signal
  * racing the kills below double-kills harmlessly (every kill tolerates an already-dead target).
@@ -2532,7 +2542,8 @@ export async function reapAgentOnTeardown(p: {
   deregister?: () => void;
   settleMs?: number;
   graceMs?: number;
-}): Promise<void> {
+}): Promise<number> {
+  let agentStopMs = 0;
   const wait = (a: TerminableAgent, ms: number) => Promise.race([a.exited(), new Promise((r) => setTimeout(r, ms).unref())]);
   if (p.microvm) {
     if (p.agent?.alive()) {
@@ -2545,6 +2556,7 @@ export async function reapAgentOnTeardown(p: {
       /* already gone */
     }
   } else if (p.agent) {
+    const t0 = Date.now();
     if (p.agent.alive()) {
       await wait(p.agent, p.settleMs ?? 2000);
       if (p.agent.alive()) {
@@ -2553,6 +2565,7 @@ export async function reapAgentOnTeardown(p: {
       }
     }
     p.agent.forceKill();
+    agentStopMs = Date.now() - t0;
   } else {
     try {
       p.child?.kill?.("SIGKILL");
@@ -2561,6 +2574,7 @@ export async function reapAgentOnTeardown(p: {
     }
   }
   p.deregister?.();
+  return agentStopMs;
 }
 
 export function buildPartialResult(args: {

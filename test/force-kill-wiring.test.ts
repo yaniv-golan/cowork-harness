@@ -86,4 +86,11 @@ describe("stop sites route through the tree kill", () => {
     expect(chat).toContain("registerAgent(");
     expect(chat).toContain("wireChatInterrupt(rl");
   });
+
+  it("run and chat leave the host-agent stop sequence out of durationMs", () => {
+    const executeDurations = execute.match(/durationMs: Date\.now\(\) - startedAt[^,\n]*/g) ?? [];
+    expect(executeDurations.length).toBeGreaterThanOrEqual(2);
+    for (const d of executeDurations) expect(d).toContain("- agentStopMs");
+    expect(chat).toMatch(/durationMs: Date\.now\(\) - start - agentStopMs/);
+  });
 });
