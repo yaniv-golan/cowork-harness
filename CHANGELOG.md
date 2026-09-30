@@ -132,8 +132,9 @@ All notable changes to this project are documented here. The format is based on
   - The agent runs in its own session and process group, as Claude Desktop spawns it, with no controlling
     terminal. A host tool that needs `/dev/tty` (an `ssh` password prompt, `sudo`, `gh auth login`) fails
     instead of waiting for input.
-  - At `hostloop` the agent now gets SIGTERM and a grace period before SIGKILL, as Desktop stops it. On
-    Ctrl-C the sidecar container is removed after that grace period, not before it.
+  - At `hostloop` the agent now gets SIGTERM and a 5-second grace period before SIGKILL, as Desktop stops
+    it. On Ctrl-C the sidecar container is removed after that grace period, not before it. At the end of a
+    run, the harness first waits up to 2 seconds for the agent to exit on its own, as Desktop does.
   - `chat` stops its agent the same way at `protocol` and `hostloop`. On a terminal, at every tier, a Ctrl-C
     during a turn now stops the agent and exits 130 instead of taking effect only after the turn; a Ctrl-C
     at the `you>` prompt still ends the session and writes its result.

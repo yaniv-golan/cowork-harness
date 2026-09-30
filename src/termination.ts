@@ -45,6 +45,9 @@ export interface TerminableAgent {
   /** Force-kill even when {@link alive} is false. For an agent whose process tree outlives its leader; left
    *  unset where the force-kill is expensive and pointless once the agent is gone (a guest-side VM kill). */
   readonly unconditionalForceKill?: boolean;
+  /** How long to wait between terminate() and forceKill(); default {@link TERMINATION_GRACE_MS}. The handler
+   *  waits the longest any pending agent asks for. */
+  readonly graceMs?: number;
   /** Resolves when the agent has exited. */
   exited(): Promise<void>;
 }
@@ -170,7 +173,8 @@ function onSignal(sig: NodeJS.Signals): void {
   runSteps("helpers", sig);
   if (!pending.length) return finish(sig);
   for (const a of pending) a.terminate();
-  const grace = new Promise<void>((res) => setTimeout(res, TERMINATION_GRACE_MS));
+  const graceMs = Math.max(...pending.map((a) => a.graceMs ?? TERMINATION_GRACE_MS));
+  const grace = new Promise<void>((res) => setTimeout(res, graceMs));
   void Promise.race([Promise.all(pending.map((a) => a.exited())), grace]).then(() => finish(sig));
 }
 

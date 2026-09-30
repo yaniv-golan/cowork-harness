@@ -132,6 +132,24 @@ describe.runIf(POSIX)("termination handler", () => {
     expect(died).toBe(true);
   });
 
+  it("the grace period is the longest a pending agent asks for (hostloop's is 5 s, as Desktop's)", async () => {
+    const r = await runScript(`
+      import { installTerminationHandler, registerAgent } from ${TERMINATION};
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      installTerminationHandler();
+      registerAgent(() => ({ graceMs: 3200, alive: () => true, terminate: () => {}, forceKill: () => {}, exited: () => new Promise(() => {}) }));
+      let sentAt = 0;
+      process.on("exit", () => writeFileSync(join($DIR, "ms"), String(Date.now() - sentAt)));
+      setTimeout(() => { sentAt = Date.now(); process.kill(process.pid, "SIGINT"); }, 50);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.status, r.stderr).toBe(130);
+    const ms = Number(readFileSync(join(r.dir, "ms"), "utf8"));
+    expect(ms).toBeGreaterThanOrEqual(3150);
+    expect(ms).toBeLessThan(4700);
+  });
+
   it("a second signal during the grace period exits at once", async () => {
     const r = await runScript(`
       import { installTerminationHandler, registerAgent, childProcessAgent } from ${TERMINATION};

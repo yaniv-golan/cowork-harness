@@ -26,7 +26,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { buildChatResult } from "./chat-result.js";
 import { writeTrace, scrubRawRunLogs, beginTurn, makeContainerPhaseReap, reapAgentOnTeardown } from "./execute.js";
 import { installTerminationHandler, registerAgent } from "../termination.js";
-import { agentTreeAgent, type TreeAgent } from "../runtime/agent-tree.js";
+import { agentTreeAgent, hostAgentStopTiming, type TreeAgent } from "../runtime/agent-tree.js";
 import { turnWriteDir } from "./turn-layout.js";
 import { appendIndexRow, indexRowFromResult } from "./run-index.js";
 import { scrub, collectSecrets } from "../secrets.js";
@@ -380,7 +380,12 @@ export async function cmdChat(args: string[]) {
     spawned: { child: import("node:child_process").ChildProcess; runTag: string; workDir?: string },
     startedAtMs: number,
   ) => {
-    treeAgent = agentTreeAgent(spawned.child, { runTag: spawned.runTag, runStartMs: startedAtMs, workDir: spawned.workDir });
+    treeAgent = agentTreeAgent(spawned.child, {
+      runTag: spawned.runTag,
+      runStartMs: startedAtMs,
+      workDir: spawned.workDir,
+      graceMs: hostAgentStopTiming(fidelity).graceMs,
+    });
     installTerminationHandler();
     deregisterAgent = registerAgent(() => treeAgent);
     return treeAgent;

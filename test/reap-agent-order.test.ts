@@ -60,6 +60,17 @@ describe("reapAgentOnTeardown", () => {
     expect(log).toEqual(["terminate", "forceKill", "deregister"]);
   });
 
+  it("tree agent: without an explicit grace it waits the agent's own grace period (hostloop's is longer)", async () => {
+    const log: string[] = [];
+    const agent = { ...fakeAgent(log), graceMs: 300 };
+    const t = Date.now();
+    await reapAgentOnTeardown({ microvm: false, agent, deregister: () => log.push("deregister"), settleMs: 10 });
+    const ms = Date.now() - t;
+    expect(log).toEqual(["terminate", "forceKill", "deregister"]);
+    expect(ms).toBeGreaterThanOrEqual(290);
+    expect(ms).toBeLessThan(1500);
+  });
+
   it("tree agent whose leader already exited: no SIGTERM round, the tree is still force-killed", async () => {
     const log: string[] = [];
     const agent = fakeAgent(log);

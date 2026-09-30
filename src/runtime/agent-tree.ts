@@ -2,7 +2,7 @@ import { spawnSync, type SpawnOptions } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { sep } from "node:path";
 import { warn as ioWarn } from "../io.js";
-import type { TerminableAgent } from "../termination.js";
+import { TERMINATION_GRACE_MS, type TerminableAgent } from "../termination.js";
 
 /**
  * Stopping a host agent stops everything it started.
@@ -63,6 +63,15 @@ export function agentSpawnOptions<T extends SpawnOptions>(opts: T, runTag: strin
  *  its agent lives in the container's pid namespace, which the container-phase thunk's `docker rm -f` ends. */
 export function handlerOwnsAgent(fidelity: string): boolean {
   return fidelity === "protocol" || fidelity === "hostloop" || fidelity === "microvm";
+}
+
+/**
+ * How long a host agent gets to stop, matching Claude Desktop's own agent stop: wait up to 2 s for it to exit
+ * on its own, then SIGTERM, then SIGKILL its process group after a grace period — 5 s in Desktop, used at
+ * hostloop. `protocol` has no Desktop counterpart and keeps the handler's default grace.
+ */
+export function hostAgentStopTiming(fidelity: string): { settleMs: number; graceMs: number } {
+  return { settleMs: 2000, graceMs: fidelity === "hostloop" ? 5000 : TERMINATION_GRACE_MS };
 }
 
 export interface ProcRow {
@@ -226,6 +235,8 @@ export interface AgentTreeOptions {
   /** The run's work dir — the macOS sweep's cwd root. Omitted at hostloop, whose Bash runs in the sidecar
    *  and whose host agent sits outside the session tree. */
   workDir?: string;
+  /** SIGTERM-to-SIGKILL grace for this agent (see {@link hostAgentStopTiming}). */
+  graceMs?: number;
 }
 
 interface ChildLike {
@@ -239,6 +250,7 @@ interface ChildLike {
 
 export interface TreeAgent extends TerminableAgent {
   readonly unconditionalForceKill: true;
+  readonly graceMs?: number;
   /** Re-list processes and extend the tracked set from the agent and every tracked process still alive. */
   refresh(): void;
   /** Feed a parsed stream-json frame from the drive loop; refreshes on `result` and `tool_result` frames. */
@@ -277,6 +289,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
     // Windows: no process groups to signal and no `ps`; the agent alone, by pid.
     return {
       unconditionalForceKill: true,
+      graceMs: opts.graceMs,
       alive: running,
       terminate: () => signalLeader("SIGTERM"),
       forceKill: () => signalLeader("SIGKILL"),
@@ -408,6 +421,7 @@ export function agentTreeAgent(child: ChildLike, opts: AgentTreeOptions, deps: P
 
   return {
     unconditionalForceKill: true,
+    graceMs: opts.graceMs,
     alive: running,
     exited: () => exited,
     refresh: () => refreshAt(d.now()),

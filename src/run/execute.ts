@@ -51,7 +51,7 @@ import { warnUnservedHookEvents, checkHostHookConsent, logHostHookNotice } from 
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import { installTerminationHandler, registerAgent, parkIfTerminating, TERMINATION_GRACE_MS, type TerminableAgent } from "../termination.js";
-import { agentTreeAgent, handlerOwnsAgent, type TreeAgent } from "../runtime/agent-tree.js";
+import { agentTreeAgent, handlerOwnsAgent, hostAgentStopTiming, type TreeAgent } from "../runtime/agent-tree.js";
 import {
   probeImageOmitted,
   probeMicrovmOmitted,
@@ -1005,7 +1005,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         child = hl.child;
         // No work dir: hostloop's Bash runs in the sidecar (ended by `rm -f`) and its host agent sits outside
         // the session tree; its host children are hooks and MCP servers, which the group kill and walk reach.
-        signalAgent = treeAgent = agentTreeAgent(hl.child, { runTag: hl.runTag, runStartMs: agentSpawnedAtMs });
+        signalAgent = treeAgent = agentTreeAgent(hl.child, {
+          runTag: hl.runTag,
+          runStartMs: agentSpawnedAtMs,
+          graceMs: hostAgentStopTiming("hostloop").graceMs,
+        });
         sdkMcp = hl.sdkMcp;
         containerName = hl.containerName;
         hostEgress = hl.hostEgress;
@@ -2510,9 +2514,9 @@ export function makeContainerPhaseReap(p: {
  * exits, so a client that lingers past the wait gets the guest KILL even on success — only an agent still
  * flushing its session store after closing stdout would notice.)
  *
- * A host agent's process tree (protocol, hostloop): the same short wait for the agent to exit on its own; if
- * it is still running (a salvaged, timed-out or stalled run), SIGTERM it and everything it started and wait
- * out the grace period, as the signal path does. Then force-kill the tree UNCONDITIONALLY — on the success
+ * A host agent's process tree (protocol, hostloop): Claude Desktop's own stop sequence — wait up to 2 s for
+ * the agent to exit on its own; if it is still running (a salvaged, timed-out or stalled run), SIGTERM it and
+ * everything it started and wait out the agent's grace period (5 s at hostloop, as Desktop's). Then force-kill the tree UNCONDITIONALLY — on the success
  * path the agent has exited, but a background job, hook or MCP server it started has not.
  *
  * container: SIGKILL the `docker run` client (the container itself is removed by the caller).
@@ -2542,10 +2546,10 @@ export async function reapAgentOnTeardown(p: {
     }
   } else if (p.agent) {
     if (p.agent.alive()) {
-      await wait(p.agent, p.settleMs ?? 1000);
+      await wait(p.agent, p.settleMs ?? 2000);
       if (p.agent.alive()) {
         p.agent.terminate();
-        await wait(p.agent, p.graceMs ?? TERMINATION_GRACE_MS);
+        await wait(p.agent, p.graceMs ?? p.agent.graceMs ?? TERMINATION_GRACE_MS);
       }
     }
     p.agent.forceKill();

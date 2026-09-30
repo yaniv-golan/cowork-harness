@@ -766,9 +766,10 @@ controlling terminal.
 
 **Harness behaviour:** at `protocol` and `hostloop` the agent is a host process, spawned detached as Desktop
 spawns it. When a run ends (normally, on a timeout, stall or unanswered gate, or on Ctrl-C/SIGTERM) the harness
-stops the agent and every host process it started: SIGTERM, a 2-second grace period, then SIGKILL to the agent's
-process group, to each descendant's group, and to background processes that have already detached from the
-agent, found by an orphan sweep. Each process the sweep kills prints
+stops the agent and every host process it started, with Desktop's stop timing: on the normal path it first waits
+up to 2 s for the agent to exit on its own; then SIGTERM, a grace period (5 s at `hostloop`, as in Desktop; 2 s at
+`protocol`), then SIGKILL to the agent's process group, to each descendant's group, and to background processes
+that have already detached from the agent, found by an orphan sweep. Each process the sweep kills prints
 `::warning:: [teardown] orphan sweep killed pid <n> (<command>) …`; `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` turns
 the sweep off. `container` and `microvm` are unaffected: their agent and its processes end with the container
 or the guest.

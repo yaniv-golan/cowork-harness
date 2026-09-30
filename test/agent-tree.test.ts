@@ -5,6 +5,7 @@ import {
   agentTreeAgent,
   agentSpawnOptions,
   handlerOwnsAgent,
+  hostAgentStopTiming,
   parseLsofCwd,
   parsePsSnapshot,
   RUN_TAG_ENV,
@@ -164,6 +165,19 @@ describe("handlerOwnsAgent — which tiers the termination handler stops", () =>
     expect(handlerOwnsAgent("hostloop")).toBe(true);
     expect(handlerOwnsAgent("microvm")).toBe(true);
     expect(handlerOwnsAgent("container")).toBe(false);
+  });
+});
+
+describe("hostAgentStopTiming — Claude Desktop's agent stop timing", () => {
+  it("waits 2 s for a natural exit, then SIGTERM; SIGKILL after 5 s at hostloop (as Desktop), 2 s at protocol", () => {
+    expect(hostAgentStopTiming("hostloop")).toEqual({ settleMs: 2000, graceMs: 5000 });
+    expect(hostAgentStopTiming("protocol")).toEqual({ settleMs: 2000, graceMs: 2000 });
+  });
+
+  it("the tree agent carries its grace period for the termination handler", () => {
+    const h = harness();
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, graceMs: 5000 }, h.deps);
+    expect(a.graceMs).toBe(5000);
   });
 });
 
