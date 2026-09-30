@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { regradeRuns, regradeEnvelope, type RegradeOptions } from "../src/run/regrade.js";
+import { regradeRuns, regradeEnvelope, regradeTextReport, type RegradeOptions } from "../src/run/regrade.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty, DEFAULT_AUTHORED_TOTAL_BYTES } from "../src/run/artifacts.js";
 import { authoredCaptureOpts } from "../src/run/authored-capture-opts.js";
 import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
@@ -282,8 +283,8 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     const refused = await regradeRuns(opts(k, { makeJudge: judge.make }));
     expect(refused).toMatchObject({ ok: false, kind: "runtime" });
     if (refused.ok) throw new Error("expected a refusal");
-    expect(refused.message).toMatch(/^regrade: .*the rebuilt judged document differs from the one the live judge read/);
-    expect(refused.message).toContain("assert 0: changed authored outputs/report.md");
+    expect(refused.message).toMatch(/^regrade: .*the judged document differs from the one the live judge read/);
+    expect(refused.message).toContain("live assert 0: changed authored outputs/report.md");
     expect(refused.message).toContain("--allow-doc-drift");
     expect(refused.message).toMatch(/\(can't verify ⇒ not green\)$/);
     expect(judge.calls).toHaveLength(0);
@@ -360,17 +361,42 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(judge.calls).toHaveLength(0);
   });
 
+  it("a changed scope does not hide a secret the live run scrubbed: the live document is rebuilt and checked too", async () => {
+    // Live: unscoped, with the secret known and scrubbed. Re-grade: the secret unknown, and the scope narrowed
+    // to the file — the graded document is scope_changed by design, but the LIVE one no longer rebuilds.
+    const SECRET = "sk-test-scope-probe-5e7a";
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    const k = await keptRun({
+      author: (w) => writeFileSync(join(w, "outputs", "report.md"), `token: ${SECRET}\nrisk: concentration\n`),
+      assertYaml: `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
+    });
+    delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scn6-")), SCOPED),
+      makeJudge: judge.make,
+    });
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain("live assert 0: changed authored outputs/report.md");
+    expect(judge.calls).toHaveLength(0);
+    // The budget override is a changed scope too, and gets the same check.
+    const flagged = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 4096 }));
+    expect(flagged).toMatchObject({ ok: false, kind: "runtime" });
+    expect(judge.calls).toHaveLength(0);
+  });
+
   it("scope_changed and unknown are not drift: both grade", async () => {
     const k = await keptRun({ author: writeReport });
     const judge = judgeFactory(() => true);
     const scoped = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 4096 }));
     if (!scoped.ok) throw new Error(scoped.message);
     expect(scoped.runs[0].docMatchesLive).toBe("scope_changed");
-    // An edited file under a changed scope is still scope_changed, never refused.
+    // A changed scope does not excuse drift: the live document, rebuilt from the live inputs, no longer matches.
     writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
     const scopedDrift = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 4096 }));
-    if (!scopedDrift.ok) throw new Error(scopedDrift.message);
-    expect(scopedDrift.runs[0].docMatchesLive).toBe("scope_changed");
+    expect(scopedDrift).toMatchObject({ ok: false, kind: "runtime" });
 
     const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
     for (const a of r.assertions) delete a.judgedDoc;
@@ -378,7 +404,7 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     const unknown = await regradeRuns(opts(k, { makeJudge: judge.make }));
     if (!unknown.ok) throw new Error(unknown.message);
     expect(unknown.runs[0].docMatchesLive).toBe("unknown");
-    expect(judge.calls).toHaveLength(3);
+    expect(judge.calls).toHaveLength(2);
   });
 
   it("a batch whose second dir drifts judges nothing, not even the first", async () => {
@@ -600,6 +626,64 @@ describe("regrade: spend, provenance and invalid grades", () => {
     expect(file).toMatchObject({ regraded: 1, invalidGrades: 1 });
     expect(file.assertions[0].judgeInvalid).toBe(true);
     expect(file.judgeCostUsd).toBeCloseTo(0.004); // two attempts
+  });
+
+  it("a secret only in the rubric reaches none of the outputs: file, envelope, text report", async () => {
+    const SECRET = "sk-test-rubric-sinks-0c3d";
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    const k = await keptRun({ author: writeReport });
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(
+        mkdtempSync(join(tmpdir(), "cwh-rg-scn7-")),
+        `  - semantic_matches:\n      rubric: ["the report never mentions ${SECRET}"]\n      evidence_files: ["outputs/report.md"]\n`,
+      ),
+      makeJudge: judgeFactory(() => false).make, // a failing claim, so the message echoes it too
+    });
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].assertions[0].semanticClaims?.[0].claim).toContain(SECRET); // the in-memory report is raw
+    const sinks = {
+      file: readFileSync(out.runs[0].regradeFile, "utf8"),
+      envelope: regradeEnvelope(out),
+      text: regradeTextReport(out).join("\n"),
+    };
+    for (const [name, text] of Object.entries(sinks)) {
+      expect(text, name).not.toContain(SECRET);
+      expect(text, name).toContain("[REDACTED]");
+    }
+  });
+
+  it("a refusal message is scrubbed too", async () => {
+    const SECRET = "sk-test-in-a-path-77aa";
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    const k = await keptRun({ author: writeReport });
+    const dir = join(mkdtempSync(join(tmpdir(), "cwh-rg-scn8-")), SECRET);
+    mkdirSync(dir);
+    const out = await regradeRuns({ runDirs: [k.runDir], scenarioFile: scenarioAt(dir, `  - file_exists: outputs/report.md\n`) });
+    expect(out).toMatchObject({ ok: false, kind: "usage" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).not.toContain(SECRET);
+    expect(out.message).toContain("[REDACTED]");
+  });
+
+  it("a run dir reached through a symlink is graded once", async () => {
+    const k = await keptRun({ author: writeReport });
+    const link = join(mkdtempSync(join(tmpdir(), "cwh-rg-link-")), "run");
+    symlinkSync(k.runDir, link);
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [k.runDir, link], scenarioFile: k.scenarioFile, makeJudge: judge.make });
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs).toHaveLength(1);
+    expect(judge.calls).toHaveLength(1);
+  });
+
+  it("the file and each runs[] entry carry the scenario file's sha256", async () => {
+    const k = await keptRun({ author: writeReport });
+    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    if (!out.ok) throw new Error(out.message);
+    const want = createHash("sha256").update(readFileSync(k.scenarioFile)).digest("hex");
+    expect(out.runs[0].scenarioSha256).toBe(want);
+    expect(JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8")).scenarioSha256).toBe(want);
   });
 
   it("the written file is scrubbed as a whole document with this process's secrets", async () => {

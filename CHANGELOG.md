@@ -19,13 +19,15 @@ All notable changes to this project are documented here. The format is based on
     run recorded: `true`, `false` (the differing sections are listed by kind and path; an authored file changed
     since the run, a different scrub set, or a sub-agent section can each cause it), `scope_changed` (the
     evidence scope or budget changed), or `unknown` (the run recorded no fingerprint).
-  - The comparison runs before any judge call, and a `false` is refused: the judge would read different bytes
-    than the live judge did, possibly including a value the live run scrubbed and this process does not.
-    `--allow-doc-drift` grades anyway, with a warning. `scope_changed` and `unknown` grade; a run that recorded
-    no fingerprint cannot be checked for drift or for an unscrubbed secret.
+  - Before any judge call, each live assert's document is rebuilt from the live run's own inputs (its scope,
+    the live `evidence_files` union, the recorded budget) and compared with its `judgedDoc`; any difference is
+    refused, whatever the new scenario's scope — it can mean a value the live run scrubbed and this process does
+    not. `--allow-doc-drift` grades anyway, with a warning. Not checked: a run that recorded no fingerprint
+    (neither for drift nor for an unscrubbed secret), and content only a new scope brings in.
   - The grade is written to `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json` (layout
-    experimental), scrubbed as a whole document and stamped with `harnessVersion`. `result.json` is never
-    modified and no run-index row is added. The same run dir named twice is graded once.
+    experimental), scrubbed as a whole document and stamped with `harnessVersion` and `scenarioSha256`.
+    `result.json` is never modified and no run-index row is added. The same run dir named twice, or through a
+    symlink, is graded once. The JSON envelope, the text report and refusal messages are scrubbed too.
   - Judge spend is reported per run and in total (`judgeCostUsd`, with `unpricedGrades` counting grades that
     had no price — the total is then a floor). Grades the judge could not produce are counted as
     `invalidGrades`, apart from failures.

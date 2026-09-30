@@ -291,20 +291,29 @@ not run again; the judge call is the only spend.
   expected), or `unknown` (the run recorded no fingerprint). A `false` says only that the bytes differ, not why:
   an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
   cause it, and the listed sections are what tell them apart.
-- **Drift is checked before the judge is called.** The comparison runs first, for every run dir, before any judge
-  call. A `false` is refused (exit `2`), naming the differing sections: the judge would be handed different
-  bytes than the live judge read, and one cause is a value the live run scrubbed that this process does not, so
-  refusing is also what keeps that value from being sent. `--allow-doc-drift` grades anyway; the grade is then
-  reported with `docMatchesLive: false` and a warning that it is not comparable with the live one.
-  `scope_changed` and `unknown` are not refused. A run that recorded no fingerprint (`unknown`) cannot be checked
-  at all — neither for drift nor for an unscrubbed secret — so its document goes to the judge unchecked.
+- **Drift is checked before the judge is called, from the live run's own inputs.** For every run dir, before any
+  judge call, each LIVE `semantic_matches` assert that recorded a `judgedDoc` has its document rebuilt from the
+  live inputs — its own `evidence_files` and `include_subagent_text`, the live run's `evidence_files` union and
+  its recorded capture budget — scrubbed with this process's secrets, and compared with that `judgedDoc`. Any
+  difference is refused (exit `2`), naming the live assert and the differing sections: an authored file changed
+  since the run, a sub-agent section, or a value the live run scrubbed that this process does not (refusing is
+  what keeps that value from being sent). This check does not depend on the new scenario, so a changed scope or
+  an `--authored-total-bytes` override (`scope_changed`) does not skip it. `--allow-doc-drift` grades anyway; the
+  grade is then reported with its own `docMatchesLive` and, when that is `false`, a warning.
+  **What is not checked:** a live assert that recorded no `judgedDoc` — a run with none (`unknown`) is not checked
+  at all, neither for drift nor for an unscrubbed secret; and content that only the NEW scope brings in (a file
+  the live judge never read has nothing to be compared with, so a secret in it that this process does not know
+  is not detected). For a run recorded before `authoredCapture` existed, the live budget is the
+  `--authored-total-bytes` you pass.
 - **Output.** Each run dir gets `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`, holding the re-graded
   asserts (per-claim grades and rationales, judge model, usage, cost, prompt hash and document fingerprint),
   `docMatchesLive` with the differing sections, the not-re-graded asserts, the `harnessVersion` that wrote it,
   and the SHA-256 of the `result.json` it was graded against. The whole file is scrubbed with the same secret set
-  before it is written. Re-grades with different judge models sit side by side. `result.json` is never modified
-  and no run-index row is written, so `stats` does not count a re-grade as a run. The same run dir named twice
-  is graded once.
+  before it is written, and records `scenarioSha256`, the SHA-256 of the scenario file's bytes. Re-grades with
+  different judge models sit side by side. `result.json` is never modified
+  and no run-index row is written, so `stats` does not count a re-grade as a run. The same run dir named twice,
+  or reached through a symlink, is graded once. The JSON envelope, the text report and every refusal message are
+  scrubbed with the same secret set.
 - **Spend and invalid grades.** The file, each `runs[]` entry and the JSON envelope carry `judgeCostUsd` (the
   sum of the priced judge calls, retries included; absent when none was priced — unpriced is never `$0`) and
   `unpricedGrades` (how many grades had no price; when it is above `0` the total is a floor). The envelope's
@@ -327,7 +336,8 @@ not run again; the judge call is the only spend.
   and also a failure writing a regrade file after earlier run dirs were already graded (their files stay
   written; the judge calls for them were spent). Text mode writes its
   report to stderr; `--output-format json` prints one payload document (`{tool, version, command, ok, runs[],
-  error}`) on stdout.
+  error}`) on stdout. `runs[]` holds only graded run dirs: a refusal refuses the whole batch and prints the error
+  envelope instead.
 
 The regrade file's layout is experimental and may change in a minor release.
 
