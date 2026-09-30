@@ -29,6 +29,25 @@ All notable changes to this project are documented here. The format is based on
     and never invalidates a grade. A reply whose JSON the rationale breaks (for example, an unescaped
     quote) is a malformed grade like any other: it is retried once, and then counted as `judgeInvalid`.
     A literal newline or tab inside a rationale is tolerated.
+- **`verify-cassettes` and `replay` note a cassette whose recording agent differs from the one its
+  baseline pins for that tier.** The agent version is read from the recording's own `system/init` event
+  (`claude_code_version`) and compared per tier with the baseline named in `fingerprint.baseline`:
+  - `container` and `microvm` run the staged VM agent, so they are compared with the baseline's
+    `agentVersion`.
+  - `hostloop` runs the staged native agent, which versions separately, so it is compared with the version
+    in the baseline's `agentBinary.nativeStagedPath`. A baseline without one gives no note.
+  - `protocol` runs the `claude` on your `PATH`, which no baseline pins, so it is never noted.
+  - A `cowork` cassette that does not record which tier it resolved to is never noted either.
+
+  The note states the mismatch and lists that tier's possible causes without picking one: a fingerprint
+  re-stamped by hand across an agent bump, a recording made under `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`,
+  an explicit binary override (`COWORK_AGENT_BINARY`, or `COWORK_HOST_AGENT_BINARY` at `hostloop`), and at
+  `hostloop` the patch-bump substitution of the native agent that is accepted by default.
+  `verify-cassettes` reports it as an `agent-version:` entry in the result's `notes[]` (a `[note]` line in
+  text mode). `replay` has no `notes[]`: it prints one `::notice:: [replay] <file> — … [agent-version]`
+  line per cassette on stderr, under `--output-format json` too. Neither changes `ok` or the exit code. It
+  works on existing cassettes without a re-record, and says nothing when the event carries no version or
+  the baseline is not a committed one.
 - **The LLM decider's spend is recorded.** A run answered by the LLM decider (`on_unanswered: llm` /
   `--decider-llm`) now carries `RunResult.deciderCostUsd` and `deciderUsage` (tokens): the usage every
   completed decider call reported, including the call on a gate that then failed to bind on a salvaged
@@ -91,6 +110,13 @@ All notable changes to this project are documented here. The format is based on
   `hostloop` it reaches the agent process, and the shell sidecar keeps its proxy-only env — as Desktop's
   host-loop VM bash gets `TZ` only. It comes from the pinned baseline, so a scenario pinned to an older
   baseline does not get it.
+- **`replay --help`, `verify-cassettes --help` and the CI guide now name the scriptable success signal.**
+  In text mode both commands print nothing to stdout by design, and the exit code is the only signal.
+  For a script, set `COWORK_HARNESS_OUTPUT_FORMAT=json` (or pass `--output-format json`) and gate on the
+  envelope's `ok`, for example with `jq -e '.ok'`.
+- **The `lint-skill` size caps are re-verified against agent 2.1.284.** The values are unchanged. The
+  agent version they were read from moves from 2.1.281 to 2.1.284 in the `skill-body-over-reattach-cap`
+  and `skill-reference-over-read-cap` messages and in the `lint-skill` entry of `docs/cli.md`.
 
 ### Fixed
 
@@ -120,6 +146,10 @@ All notable changes to this project are documented here. The format is based on
   runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
   moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
   no longer staged.
+- **`list` printed baselines in directory order**, so `desktop-1.24012.11` came before `desktop-1.24012.9`
+  on macOS and the order was arbitrary on Linux. It now prints them oldest → newest by version, and names
+  the one `latest` resolves to: a `latest → <file>` line on stderr in text mode (stdout stays one bare
+  filename per line), and `latest: true` on that entry in `--output-format json`.
 
 ### Internal
 

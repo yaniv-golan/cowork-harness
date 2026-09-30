@@ -15,7 +15,15 @@ import {
   type PlatformBaseline,
 } from "./types.js";
 import { writeAllSync } from "./io.js";
-import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, countStringInFile, newestStagedSibling } from "./baseline.js";
+import {
+  loadBaseline,
+  BASELINES_DIR,
+  cmpVersionStrings,
+  listBaselineNames,
+  sha256File,
+  countStringInFile,
+  newestStagedSibling,
+} from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
@@ -2614,12 +2622,8 @@ async function cmdProbeDispatch(rawArgs: string[]) {
  *  envelope can report it. `latest` resolves to its concrete file; an absolute name is itself. */
 function baselineFilePath(name: string): string {
   if (name === "latest") {
-    const files = readdirSync(BASELINES_DIR)
-      .filter((f) => f.startsWith("desktop-") && f.endsWith(".json"))
-      .sort((a, b) =>
-        cmpVersionStrings(a.replace(/^desktop-/, "").replace(/\.json$/, ""), b.replace(/^desktop-/, "").replace(/\.json$/, "")),
-      );
-    return files.length ? join(BASELINES_DIR, files[files.length - 1]) : join(BASELINES_DIR, "latest");
+    const newest = listBaselineNames()[0];
+    return newest ? join(BASELINES_DIR, `${newest}.json`) : join(BASELINES_DIR, "latest");
   }
   if (isAbsolute(name)) return name;
   return join(BASELINES_DIR, name.endsWith(".json") ? name : `${name}.json`);
@@ -3359,18 +3363,25 @@ function cmdList(args: string[] = []) {
   if (listParsed.positionals.length > 0) {
     return fail("list", "usage", `list takes no positional arguments (got: ${listParsed.positionals.join(", ")})`, undefined, json);
   }
-  const files = readdirSync(BASELINES_DIR).filter((f) => f.endsWith(".json"));
+  // Oldest -> newest by version (readdir order is lexical on APFS and arbitrary on ext4), over the same
+  // population and rule `latest` resolves with, so the last entry is always the one `latest` loads.
+  const files = listBaselineNames()
+    .reverse()
+    .map((n) => `${n}.json`);
+  const latest = files[files.length - 1];
   if (json) {
-    // emit a JSON array of objects (filename + name stem) to stdout
+    // emit a JSON array of objects (filename + name stem) to stdout; `latest: true` on the newest only
     out(
       JSON.stringify(
-        files.map((f) => ({ file: f, name: f.replace(/\.json$/, "") })),
+        files.map((f) => ({ file: f, name: f.replace(/\.json$/, ""), ...(f === latest ? { latest: true } : {}) })),
         null,
         2,
       ),
     );
   } else {
+    // stdout stays one bare filename per line (safe to pipe); the marker is for humans, on stderr.
     for (const f of files) out(f);
+    if (latest) log(`latest → ${latest}`);
   }
 }
 
