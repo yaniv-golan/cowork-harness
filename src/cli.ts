@@ -236,6 +236,11 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format text|json] [--quiet|-q] [--verbose]
       (run 'run --help' for the full flag reference)
 
+  eval <scenario.yaml | dir/> --arm [<label>=]<source> --arm [<label>=]<source>
+                               EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
+                               each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
+  eval report <eval-dir>       rebuild an eval's report from its directory ($0)
+
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
@@ -305,10 +310,6 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
-  eval <scenario.yaml | dir/> --arm [<label>=]<source> --arm [<label>=]<source>
-                               EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
-                               each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
-  eval report <eval-dir>       rebuild an eval's report from its directory ($0)
   critique <skill-folder>      EXPERIMENTAL — run a skill, ask the agent what confused it, then grade that
                                self-report against a frozen record of the run (see 'critique --help' for cost).
                                Advisory — a discovery lead, not an independent attestation.
