@@ -387,7 +387,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         code: "ended_with_question",
         severity: "warn",
         message:
-          "the final answer contains a question and the run wrote no deliverable to outputs/ — the agent may have ended on a request for input instead of a deliverable. " +
+          "the final answer contains a question or a closing request for input and the run wrote no deliverable to outputs/ — the agent may have ended on a request for input instead of a deliverable. " +
           `Script the answer (answer:/--answer/a decider) or steer --decider-llm --intent; ${stallOptOut} if ending on a question is intended.`,
       });
 
