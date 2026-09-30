@@ -661,6 +661,7 @@ Each is overridden by the matching explicit flag.
 
 - `COWORK_HARNESS_SCRUB_KEYS=<KEY1,KEY2>` — adds extra env-var names whose values are redacted from logs (beyond the known auth tokens + `ANTHROPIC_CUSTOM_HEADERS`).
 - `COWORK_HARNESS_SCRUB_VALUES=<v1,v2>` — redacts literal values regardless of env.
+- Where the redaction applies: every file a run writes (`result.json`, `run.jsonl`, `trace.json`, the raw stream logs, a recorded cassette's run data, an `eval` dir's `runs.jsonl`) **and** everything the CLI prints to stdout and stderr, in both `--output-format json` and text. The set is the same for all of them — the known auth tokens, `COWORK_HARNESS_SCRUB_KEYS`, `COWORK_HARNESS_SCRUB_VALUES`, each also in its base64, URI-encoded, JSON-escaped and `Bearer ` forms — read from the environment after every `.env`/`--dotenv` has loaded. Output of a child process the CLI hands the terminal to directly (`chat --raw`, a `--decider-cmd` helper's stderr, `lint` in text mode) is not scrubbed, and neither is the copy of the scenario a cassette or an `eval` manifest freezes as written.
 - `COWORK_HARNESS_REDACT_PATTERNS=<rx1,rx2>` — extends the committed-cassette privacy layer that scrubs recorded `controlOut` before a cassette is written for commit.
 - `COWORK_HARNESS_REDACT_KEYS=<k1,k2>` — extends the same committed-cassette privacy layer.
 

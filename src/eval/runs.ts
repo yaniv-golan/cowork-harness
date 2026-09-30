@@ -7,6 +7,7 @@ import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.j
 import type { RunResult } from "../types.js";
 import type { ClassifiableResult, RepEvidence } from "./classify.js";
 import { tildeify } from "../io.js";
+import { collectSecrets, scrub } from "../secrets.js";
 
 export const RUNS_FILE = "runs.jsonl";
 
@@ -125,7 +126,9 @@ export function buildRunsLine(args: {
             ...(r.resultErrorKind !== undefined ? { resultErrorKind: r.resultErrorKind } : {}),
             ...(r.resultSubtype !== undefined ? { resultSubtype: r.resultSubtype } : {}),
             ...(r.result !== "success" && typeof r.finalMessage === "string"
-              ? { finalMessage: r.finalMessage.slice(0, FINAL_MESSAGE_MAX) }
+              ? // Scrubbed BEFORE the cap: a secret straddling the cut would leave a prefix the line scrub
+                // in appendRunsLine can no longer match.
+                { finalMessage: scrub(r.finalMessage, collectSecrets()).slice(0, FINAL_MESSAGE_MAX) }
               : {}),
             ...(r.stalledOnQuestion !== undefined ? { stalledOnQuestion: r.stalledOnQuestion } : {}),
             ...(r.partial !== undefined ? { partial: r.partial } : {}),
@@ -148,8 +151,10 @@ export function buildRunsLine(args: {
   };
 }
 
+/** Appended secret-scrubbed, like each rep's result.json: the line is built from the in-memory RunResult,
+ *  which `executeScenario` returns unscrubbed, and the report files are rebuilt from these lines. */
 export function appendRunsLine(file: string, line: RunsLine): void {
-  appendFileSync(file, JSON.stringify(line) + "\n");
+  appendFileSync(file, scrub(JSON.stringify(line), collectSecrets()) + "\n");
 }
 
 /** Read runs.jsonl, ordered by schedule index. A torn final line (a crash mid-append) is skipped and

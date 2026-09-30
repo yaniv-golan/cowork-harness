@@ -13,7 +13,7 @@ import {
   type RunStatus,
   type PlatformBaseline,
 } from "./types.js";
-import { writeAllSync, tildeify } from "./io.js";
+import { writeAllSync, tildeify, installTerminalScrub } from "./io.js";
 import { SECRET_ENV_KEYS } from "./runtime/host-env.js";
 import {
   loadBaseline,
@@ -781,6 +781,8 @@ function leadingGlobalCount(av: string[]): number {
 }
 
 async function main() {
+  // Before anything can print: stdout/stderr get the same secret scrub as the run's artifacts (src/io.ts).
+  installTerminalScrub();
   const argv = process.argv.slice(2);
 
   // `--dotenv <path>` BEFORE the subcommand — parse + strip it before command dispatch so a skill run from

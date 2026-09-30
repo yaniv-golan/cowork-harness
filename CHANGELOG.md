@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Output printed to the terminal is now secret-scrubbed like the files a run writes.** Before, a value
+  that `result.json` showed as `[REDACTED]` (an auth token, or anything in `COWORK_HARNESS_SCRUB_KEYS` /
+  `COWORK_HARNESS_SCRUB_VALUES`) was printed verbatim to stdout by `--output-format json` and to stderr by
+  text output: the agent's final message, assertion messages, verdict signals and failures, and the
+  transcript in the failure footer. This affected `run`, `skill`, `record`, `replay` and `verify-run`
+  (`verify-run` and `replay` echo the scenario's own assertion values). stdout and stderr are now scrubbed
+  with the same set of secrets, and a json envelope is still a single parseable document.
+- **`eval` wrote unscrubbed text to `runs.jsonl`.** An errored rep's final message and the other result
+  fields in each line are now secret-scrubbed like the rep's `result.json`, and the final message is
+  scrubbed before its 300-character cap, so no partial secret is left at the cut. `report.json` and
+  `report.md` are rebuilt from those lines.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
