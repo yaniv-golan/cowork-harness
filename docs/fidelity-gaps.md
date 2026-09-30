@@ -291,9 +291,8 @@ and the decision has not been revisited yet.
 The two mechanisms are mutually exclusive but not exhaustive — there is a third state. The tool
 additionally requires an **attended** turn, while the mount suppression does not check that, so a
 session with the flag on whose turn is unattended gets **neither** the artifact mounts nor the
-`Artifact` tool. Scheduled runs no longer fall in that state from Desktop 2.16120.0: a scheduled run's
-init frame on that release carried the native `Artifact` tool, where the same kind of run on 2.9939.4
-had the `cowork` artifact tools and no `Artifact`. Reading "one or the other" as a guarantee that
+`Artifact` tool. A scheduled run is outside that state on Desktop 2.16120.0 and later: its init frame
+carries the native `Artifact` tool and none of the `cowork` artifact tools. Reading "one or the other" as a guarantee that
 some artifact mechanism is always present would be wrong.
 
 ### The session flag also reaches into the agent, and unattended artifact actions hard-refuse

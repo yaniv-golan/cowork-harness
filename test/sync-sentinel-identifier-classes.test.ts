@@ -153,6 +153,7 @@ const ESCAPED_OR_CONSTANT_SPANS: Record<string, string> = {
   e: "bound to reEsc(local) (bindsGatedToolSet / bindsPathKeys)",
   p: "bound to reEsc(param) (egressWrapperDefect)",
   PATH_GATE_MAP_LITERAL: "a regex SOURCE constant, interpolated as pattern on purpose",
+  ASSIGN_OP: "a regex SOURCE constant (assignment operators), interpolated as pattern on purpose",
   GRANT_KEY: "a string constant naming an env key",
   taskArray: "a regex source fragment built from constants",
   "arrayRe.source": "a regex literal's own source, interpolated as pattern on purpose",

@@ -1951,11 +1951,10 @@ const ASSIGN_OP = `\\s*(?:\\*\\*|<<|>>>?|&&|\\|\\||\\?\\?|[-+*/%&|^])?=(?![=>])`
 /** True when `text` assigns to `id` itself or to a member/index of it, updates it, or deletes from it. */
 function writesIdentifier(text: string, id: string): boolean {
   const e = reEsc(id);
-  const b = `(?<![\\w$.])${e}(?![\\w$])`;
   return (
-    new RegExp(`${b}${ASSIGN_OP}`).test(text) ||
-    new RegExp(`${b}(?:\\[[^\\]]*\\]|\\.[\\w$]+)+${ASSIGN_OP}`).test(text) ||
-    new RegExp(`(?:\\+\\+|--)${e}(?![\\w$])|${b}(?:\\[[^\\]]*\\]|\\.[\\w$]+)*(?:\\+\\+|--)`).test(text) ||
+    new RegExp(`(?<![\\w$.])${e}(?![\\w$])${ASSIGN_OP}`).test(text) ||
+    new RegExp(`(?<![\\w$.])${e}(?![\\w$])(?:\\[[^\\]]*\\]|\\.[\\w$]+)+${ASSIGN_OP}`).test(text) ||
+    new RegExp(`(?:\\+\\+|--)${e}(?![\\w$])|(?<![\\w$.])${e}(?![\\w$])(?:\\[[^\\]]*\\]|\\.[\\w$]+)*(?:\\+\\+|--)`).test(text) ||
     new RegExp(`(?<![\\w$])delete ${e}(?![\\w$])`).test(text)
   );
 }
