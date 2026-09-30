@@ -228,7 +228,7 @@ export function cmdRunsGc(args: string[]): void {
 
   for (const [id, n] of [...evalRunsPruned].sort(([a], [b]) => a.localeCompare(b)))
     log(
-      `::warning:: prune: ${n} of the pruned run dir(s) belong to eval ${id} — its report's evidence links now point at deleted runs. ` +
+      `::warning:: prune: ${n} of the ${dryRun ? "run dir(s) prune would remove" : "pruned run dir(s)"} belong to eval ${id} — its report's evidence links ${dryRun ? "would point" : "now point"} at deleted runs. ` +
         `\`eval report <eval-dir>\` still rebuilds the report (it reads only the eval dir); raise --keep-last to keep an eval's runs.`,
     );
   log(

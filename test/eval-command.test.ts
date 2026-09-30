@@ -8,7 +8,7 @@
 //   - `outDir` is the pre-assigned run dir, from the same derivation `executeScenario` uses (`runOutDir`).
 // A per-arm behaviour may flip individual assertion bits (to create a drop to detect); every such flip is
 // named in the test that does it.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -841,9 +841,26 @@ describe("eval: answer-key guard through links and git arms", () => {
 
   it("any link resolving outside the snapshot is refused (it could reach answers, or change mid-eval)", async () => {
     const { scen, a, b } = setup();
+    const log: string[] = [];
     writeFileSync(join(root, "elsewhere.md"), "not an eval file");
     symlinkSync(join(root, "elsewhere.md"), join(b, "shared.md"));
-    await expect(runEval(args(scen, a, b), deps(fakeRunner()))).rejects.toThrow(/answer-key guard.*symlink outside/);
+    const stderr: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    });
+    const err = await runEval(args(scen, a, b), deps(fakeRunner(), log))
+      .catch((e: Error) => e)
+      .finally(() => spy.mockRestore());
+    expect(err).toBeInstanceOf(UsageError);
+    const msg = (err as Error).message;
+    // The target is named as the SOURCE sees it (the snapshot is gone once the eval is refused).
+    expect(msg).toContain(`shared.md -> ${join(root, "elsewhere.md")}`);
+    expect(msg).not.toContain(join(root, "eval"));
+    expect(msg).toMatch(/symlink outside.*To fix: replace the link with the files, or point it inside the plugin\.$/);
+    expect(msg).not.toMatch(/Move the scenarios/);
+    // Refused before the signatures are computed, so the fingerprint walk printed nothing about the link.
+    expect([...log, ...stderr].join("\n")).not.toMatch(/escaping symlink/);
   });
 
   it("a symlinked evals.json in an arm is refused", async () => {
@@ -1047,5 +1064,36 @@ describe("eval: wiring the in-process runs cannot see by default", () => {
     rmSync(join(root, "declared"), { recursive: true });
     const out = await runEval(args(scen, a, b), deps(fakeRunner()));
     expect(out.report.arms.map((x) => x.buckets)).toEqual([{ valid: 5 }, { valid: 5 }]);
+  });
+});
+
+describe("executeScenario's pre-assigned run id guards", () => {
+  async function scenario() {
+    const { scen } = setup();
+    const { parseScenarioFile } = await import("../src/run/execute.js");
+    return parseScenarioFile(join(scen, "csv-metrics.yaml"));
+  }
+  it("refuses an id that is not local_ + 8-32 base36 characters", async () => {
+    const { executeScenario } = await import("../src/run/execute.js");
+    const s = await scenario();
+    for (const bad of ["sess-abcdefgh", "local_ABCDEFGH", "local_abc", "local_../../x"])
+      await expect(executeScenario(s, { runId: bad })).rejects.toThrow(/must be local_ followed by 8-32 base36/);
+  });
+  it("refuses a run id combined with a session id (or a resume of one)", async () => {
+    const { executeScenario } = await import("../src/run/execute.js");
+    const s = await scenario();
+    await expect(executeScenario(s, { runId: "local_abcdefgh12345", sessionId: "x" })).rejects.toThrow(
+      /cannot be combined with --session-id or --resume/,
+    );
+    await expect(executeScenario(s, { runId: "local_abcdefgh12345", sessionId: "x", resume: true })).rejects.toThrow(
+      /cannot be combined|cannot resume/,
+    );
+  });
+  it("refuses to reuse an id whose run dir exists; a fresh one passes the guard (and stops at the spawn guard)", async () => {
+    const { executeScenario, runOutDir } = await import("../src/run/execute.js");
+    const s = await scenario();
+    mkdirSync(runOutDir(s.name, "local_usedusedused1"), { recursive: true });
+    await expect(executeScenario(s, { runId: "local_usedusedused1" })).rejects.toThrow(/never reused/);
+    await expect(executeScenario(s, { runId: "local_freshfreshfr1" })).rejects.toThrow(/COWORK_HARNESS_FORBID_SPAWN/);
   });
 });

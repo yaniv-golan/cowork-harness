@@ -492,7 +492,7 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   const s = rep.settings;
   L.push(
     `Reps: ${s.reps} per arm per scenario, scheduled ABBA (rep 1 runs A then B, rep 2 B then A, …); a row needs ≥ ${s.threshold} valid reps per arm${s.allowUnderpowered ? " (--allow-underpowered)" : ""}. ` +
-      `Correction: ${s.correction === "bh" ? `bh (q = ${s.q}, fixed)` : "holm"}, within each section; alpha ${s.alpha}. ${s.failOn === null ? "No --fail-on: the exit code does not depend on what the rows show." : `--fail-on ${s.failOn}.`}`,
+      `Correction: ${s.correction === "bh" ? `bh (q = ${s.q}, fixed)` : "holm"}, within each section; alpha ${s.alpha}. ${s.failOn === null ? "No --fail-on: no drop fails the eval (an all-insufficient result or a judge disagreement still exits 1)." : `--fail-on ${s.failOn}.`}`,
   );
   L.push("Family: claim sub-rows and non-semantic assertion rows. Roll-up and classification rows are shown separately.");
   L.push("No control arm: prior-answerable claims are not flagged.");

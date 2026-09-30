@@ -203,13 +203,6 @@ export interface ExecuteOptions {
  *  (128 + 1 + 8) and prevents names that share a 128-char prefix from colliding in the filesystem.
  *  Format: <up-to-128-char-prefix>-<8-hex-chars>
  */
-/** Where a run of `scenarioName` with run id `sessionId` (`local_…`, or `sess-…` when pinned) writes its
- *  artifacts. The one derivation: a caller that needs a run's dir before the run (an eval job, to recover
- *  an unanswered gate's salvaged result) calls this rather than re-assembling it. */
-export function runOutDir(scenarioName: string, sessionId: string): string {
-  return join(runsWriteRoot(), slugForPath(scenarioName), sessionId);
-}
-
 export function slugForPath(name: string): string {
   const full =
     name
@@ -220,6 +213,13 @@ export function slugForPath(name: string): string {
   if (full.length <= 128) return full;
   const hash = createHash("sha256").update(full).digest("hex").slice(0, 8);
   return `${full.slice(0, 128)}-${hash}`;
+}
+
+/** Where a run of `scenarioName` with run id `sessionId` (`local_…`, or `sess-…` when pinned) writes its
+ *  artifacts. The one derivation: a caller that needs a run's dir before the run (an eval job, to recover
+ *  an unanswered gate's salvaged result) calls this rather than re-assembling it. */
+export function runOutDir(scenarioName: string, sessionId: string): string {
+  return join(runsWriteRoot(), slugForPath(scenarioName), sessionId);
 }
 
 /** The SOURCE host paths a session stages (skills/uploads/folders/plugins, plus the session file itself).

@@ -48,7 +48,7 @@ reported. A loud UNCLASSIFIED count means a termination the classifier does not 
 
 ## Exit codes
 
-`0` completed — whatever the rows show, unless you pass `--fail-on`. `1` a drop at the `--fail-on` level,
+`0` completed — no drop fails the eval unless you pass `--fail-on`. `1` a drop at the `--fail-on` level,
 every row `insufficient`, or the judge model differed across reps (an A/A run under `--fail-on possible`
 can exit 1 on noise). `2` usage or a refusal. `3` an arm snapshot could not be copied or staged.
 

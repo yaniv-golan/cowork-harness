@@ -28,9 +28,9 @@ All notable changes to this project are documented here. The format is based on
     arms (unless `--allow-identical-arms`), an arm that contains the eval's own scenario or session files
     (a symlink included), an `evals.json` or a symlink resolving outside it, and a scenario input a run
     would refuse. In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
-  - Exit `0` when the eval completed, whatever the rows show; `--fail-on possible|confirmed` opts in to
-    exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
-    differed across reps, and `3` when an arm snapshot could not be copied. The report format, labels and
+  - Exit `0` when the eval completed, whatever drops the rows show; `--fail-on possible|confirmed` opts in
+    to exit `1` on a drop at that level. Exit `1` also when every row is `insufficient` or the judge model
+    differed across reps, and `3` when an arm snapshot could not be copied or failed its staging preflight. The report format, labels and
     statistical defaults are experimental
     ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
 - **`prune` names each eval whose runs it trimmed.** An eval's runs are ordinary run dirs, so

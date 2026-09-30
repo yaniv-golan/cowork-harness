@@ -139,7 +139,8 @@ A refused eval leaves nothing in its eval dir.
 
 ## Exit codes
 
-- `0` — completed. Without `--fail-on` this is the answer whatever the rows show; read the report.
+- `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
+  result or a judge disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
   classification rows do not); with `--fail-on confirmed`, a `confirmed` drop. Also, with or without it:
   every row `insufficient`, or the judge model differed across reps. An A/A run under

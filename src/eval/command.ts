@@ -30,6 +30,7 @@ import {
   snapshotGitArm,
   isInsideGitWorkTree,
   answerKeyFindings,
+  ANSWER_KEY_ADVICE,
   type ArmSpec,
   type SnapshotInfo,
 } from "./snapshot.js";
@@ -111,7 +112,7 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
     const name = eq > 0 ? a.slice(0, eq) : a === "-q" ? "--quiet" : a;
     if (name === "--label")
       throw new UsageError("eval does not take --label: every run is labelled eval:<eval-id>:<arm> so the index keeps the arms apart");
-    if (name === "--session-id") throw new UsageError("eval does not take --session-id: each job gets its own pre-assigned session id");
+    if (name === "--session-id") throw new UsageError("eval does not take --session-id: each job gets its own pre-assigned run id");
     if (BOOLEAN.has(name)) {
       if (eq > 0) throw new UsageError(`${name} takes no value`);
       booleans.add(name);
@@ -433,6 +434,19 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
         `[eval] no single skill to record invocation for (${args.skill ? `--skill ${args.skill} is not in both arms` : "pass --skill <name> to pick one"}): the per-rep invocation fact is unobservable`,
       );
 
+    // Answer-key guard — before the signatures, whose walk would otherwise warn about the very links it refuses.
+    const evalFiles = [...new Set(scenarios.flatMap((s) => [resolve(s.file), s.sessionFile]))];
+    const findings = answerKeyFindings(
+      evalFiles,
+      snaps.map((s) => ({ label: s.spec.label, snapshotDir: s.dir, ...(s.sourceDir ? { sourceDir: s.sourceDir } : {}) })),
+    );
+    if (findings.length)
+      throw new UsageError(
+        `answer-key guard: an arm could let the agent read this eval's own scenarios or evals — ` +
+          findings.map((f) => `arm ${f.arm}: ${tildeify(f.file)} (${f.reason.replace(/_/g, " ")})`).join("; ") +
+          `. To fix: ${[...new Set(findings.map((f) => ANSWER_KEY_ADVICE[f.reason]))].join("; ")}.`,
+      );
+
     // Per arm x scenario: the substituted session, its signature from the SAME fingerprint call a rep makes,
     // and the staging preflight over the substituted session.
     const sessions = new Map<string, SessionConfig>();
@@ -475,19 +489,6 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     if (identical && !args.allowIdenticalArms)
       throw new UsageError(
         `the two arms are identical (same content signature) — nothing to compare. Pass --allow-identical-arms for an A/A noise run.`,
-      );
-
-    // Answer-key guard.
-    const evalFiles = [...new Set(scenarios.flatMap((s) => [resolve(s.file), s.sessionFile]))];
-    const findings = answerKeyFindings(
-      evalFiles,
-      snaps.map((s) => ({ label: s.spec.label, snapshotDir: s.dir, ...(s.sourceDir ? { sourceDir: s.sourceDir } : {}) })),
-    );
-    if (findings.length)
-      throw new UsageError(
-        `answer-key guard: an arm could let the agent read this eval's own scenarios or evals — ` +
-          findings.map((f) => `arm ${f.arm}: ${tildeify(f.file)} (${f.reason.replace(/_/g, " ")})`).join("; ") +
-          `. Move the scenarios out of the plugin (or drop evals.json from it).`,
       );
 
     // `--fail-on confirmed` must be able to fire.

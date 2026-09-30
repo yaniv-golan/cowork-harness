@@ -267,6 +267,14 @@ export function snapshotGitArm(source: { ref: string; path: string }, dest: stri
 
 // ---- answer-key guard ------------------------------------------------------------------------------------
 
+/** What to do about each kind of finding, for the refusal message. */
+export const ANSWER_KEY_ADVICE: Record<AnswerKeyFinding["reason"], string> = {
+  inside_source: "move the scenarios out of the plugin",
+  content_copy: "remove the copy from the plugin",
+  evals_json: "drop evals.json from the plugin",
+  symlink_outside: "replace the link with the files, or point it inside the plugin",
+};
+
 export interface AnswerKeyFinding {
   arm: string;
   file: string;
@@ -330,8 +338,13 @@ export function answerKeyFindings(
       if (f.split(sep).pop() === "evals.json") findings.push({ arm: arm.label, file: rel, reason: "evals_json" });
       if (link) {
         const target = linkTarget(f);
-        if (target !== snapRoot && !target.startsWith(snapRoot + sep))
-          findings.push({ arm: arm.label, file: `${rel} -> ${tildeify(target)}`, reason: "symlink_outside" });
+        if (target !== snapRoot && !target.startsWith(snapRoot + sep)) {
+          // Name the target as the arm's SOURCE sees it: the snapshot is removed when the eval is refused, so a
+          // path into it would point at nothing the user can open.
+          const raw = readlinkSync(f);
+          const shown = isAbsolute(raw) || arm.sourceDir === undefined ? raw : resolve(arm.sourceDir, dirname(rel), raw);
+          findings.push({ arm: arm.label, file: `${rel} -> ${tildeify(shown)}`, reason: "symlink_outside" });
+        }
         const isFile = (() => {
           try {
             return statSync(f).isFile();

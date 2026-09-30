@@ -43,7 +43,9 @@ describe.skipIf(!existsSync(CLI))("prune and an eval's runs", () => {
     const r = spawnSync("node", [CLI, "prune", root, "--dry-run"], { encoding: "utf8" });
     expect(r.status, r.stderr).toBe(0);
     expect(readdirSync(join(root, "q"))).toHaveLength(11);
-    expect(r.stderr).toMatch(/belong to eval 20260930-000000-abc123/);
+    expect(r.stderr).toMatch(
+      /5 of the run dir\(s\) prune would remove belong to eval 20260930-000000-abc123 — its report's evidence links would point at deleted runs/,
+    );
   });
 
   it("no warning when nothing pruned belongs to an eval", () => {

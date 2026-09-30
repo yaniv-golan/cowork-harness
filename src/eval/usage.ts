@@ -45,8 +45,8 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
                              separate held-out section — scenarios you tuned the skill against are weak evidence.
   --include-untracked        snapshot a directory arm's untracked files too (the raw walk); not with a git: arm
   --allow-identical-arms     run even when both arms hash identically (an A/A noise run)
-  --fail-on possible|confirmed  opt in to gating: exit 1 on a drop at this level. Without it the exit code does
-                             not depend on what the rows show. At --reps 5 a single collapsed row reaches
+  --fail-on possible|confirmed  opt in to gating: exit 1 on a drop at this level. Without it no drop fails the
+                             eval (every row insufficient, or a judge disagreement, still exits 1). At --reps 5 a single collapsed row reaches
                              'possible' but, with 13 or more rows under bh, cannot reach 'confirmed' alone; the
                              start-up notice prints how many rows 'confirmed' needs. An A/A run under
                              --fail-on possible can exit 1 on noise.
