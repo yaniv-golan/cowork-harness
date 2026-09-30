@@ -79,6 +79,24 @@ no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^4 criti
 `jq -e` IS the gate: the flag itself exits 0 on a measurement even over the ceiling. The number is a
 floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)).
 
+**Scripting `replay` or `verify-cassettes` yourself (outside the Action):** in text mode both commands
+write their report to stderr and nothing to stdout, so a passing run prints 0 bytes there. That is by
+design: text output is for people and is not a compatibility contract
+([SPEC.md §12](../SPEC.md#12-versioning--the-10-compatibility-contract)), and in text mode the exit code is
+the only signal. For a result a script can read, ask for the JSON envelope, which is covered. Set
+`COWORK_HARNESS_OUTPUT_FORMAT=json` once for the job (or pass `--output-format json` per call) and gate on
+`ok`:
+
+```bash
+export COWORK_HARNESS_OUTPUT_FORMAT=json
+npx cowork-harness@^4 verify-cassettes cassettes/ | jq -e '.ok'
+npx cowork-harness@^4 replay cassettes/ | jq -e '.ok'
+```
+
+`jq -e` exits non-zero when `ok` is `false`. The Action also passes `--output-format json` and exposes
+the envelope's `ok` as its `ok` output, but the job's pass or fail comes from the command's exit code,
+which it propagates.
+
 **Live lane, by design not oversight:** the action never downloads or stages the agent ELF itself.
 Pulling Anthropic's binary is a call about your own relationship with their distribution terms, so it
 stays a step in *your* workflow, not something a third-party action automates for you. A self-hosted-runner
