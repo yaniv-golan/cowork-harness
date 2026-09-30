@@ -593,7 +593,7 @@ there are three families:
   payload, the `record <dir/>` / `record --rerecord-stale` batch payload (below), `scaffold <run>`
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload, `verify-cassettes` (§11.1), `doctor`
-  (§11.2), `rehash`, and `answer` (`gate`, `answers`).
+  (§11.2), `rehash`, `answer` (`gate`, `answers`), and `regrade` (below).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
@@ -639,6 +639,20 @@ A scenario file that did not load is a `failed` item. A batch stopped by `--max-
 unless `--allow-budget-stop`. `--rerecord-stale` with nothing stale prints `ok: true` and `items: []`.
 A refusal before the first recording (no credentials, an unresolved model, the budget pre-flight, a slug
 collision) prints the error envelope instead, as before.
+
+**`regrade`** re-grades a kept run's `semantic_matches` asserts with the judge and prints one payload-shaped
+document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`. Each `runs[]` entry is one run dir:
+`{runDir, turn, regradeFile, pass, docMatchesLive, differingSections[], assertions[], notRegraded[],
+authoredCapture}`. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
+`assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
+every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `false` | `"scope_changed"` |
+`"unknown"`: whether the recomposed judged document equals, section for section, the `judgedDoc` the live run
+recorded (`unknown` when it recorded none, never `true`); `differingSections[]` entries are
+`{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
+passed. **Exit codes:** `0` every re-graded assert passes · `1` any fails · `2` usage, or a refusal (a
+multi-turn, partial, replay or chat run dir, a pruned work dir, a run that did not record `authoredCapture`
+without `--authored-total-bytes`, an alias judge model, a scenario with no `semantic_matches`); a refusal is
+the shared error envelope, decided for every run dir before any judge call. `result.json` is never modified.
 
 The command lists above are illustrative, not a frozen contract — this is not a single universal
 envelope across every command, so check a given command's own section (or grep its
@@ -1093,6 +1107,9 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
   explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
 - **`trace` row shapes** and other debug/diagnostic output.
+- **The `regrade` output file** (`turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`) — its name and
+  layout are EXPERIMENTAL and may change in any minor release. The `regrade` command itself — its name, flags and
+  exit codes — is covered by the CLI-surface clause above.
 - **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
   the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
   (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your

@@ -265,6 +265,44 @@ when interactive), or `first` (pick
 option 1, loudly warn). Pick with `--on-unanswered`; left unset, `skill` is **adaptive** (`prompt` on
 a TTY, `fail` when piped/CI) and `run` is always `fail`.
 
+
+### Re-grading a kept run (`regrade`)
+
+`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--judge-model <model-id>] [--authored-total-bytes <N>] [--output-format json]`
+
+`verify-run` re-checks assertions but never calls the semantic judge, so a `semantic_matches` assert cannot be
+re-graded with it. `regrade` does exactly that: it rebuilds the judged document from the kept run dir and grades
+the scenario's `semantic_matches` asserts again. Every other assert is listed as *not re-graded*. The agent does
+not run again; the judge call is the only spend.
+
+- **The document is rebuilt the way the live run built it.** The authored files are recaptured from the kept work
+  dir with the budget the live run recorded (`result.json` `authoredCapture`) and with the scenario's
+  `evidence_files` as priority globs, and every section is secret-scrubbed before it reaches the judge.
+- **Whether it matches is measured, not assumed.** Each assert's document is fingerprinted and compared, section
+  by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
+  (they differ; the differing sections are listed by kind and path — for example an authored file edited in the
+  work dir since the run), `scope_changed` (the rubric's `evidence_files` or `include_subagent_text`, or the
+  capture budget, changed, so a different document is expected), or `unknown` (the run recorded no fingerprint).
+  A `false` is printed as a warning: that grade is not comparable with the live one.
+- **Output.** Each run dir gets `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`, holding the re-graded
+  asserts (per-claim grades and rationales, judge model, usage, cost, prompt hash and document fingerprint),
+  `docMatchesLive` with the differing sections, the not-re-graded asserts, and the SHA-256 of the `result.json`
+  it was graded against. Re-grades with different judge models sit side by side. `result.json` is never modified
+  and no run-index row is written, so `stats` does not count a re-grade as a run.
+- **Judge model.** `--judge-model` grades every assert with one model; without it each assert's `judge_model`,
+  else `COWORK_HARNESS_JUDGE_MODEL`, else the default applies. Either way the model must name exactly one model —
+  an alias such as `opus` is refused, because it resolves to whatever is newest at call time.
+- **Refusals (exit `2`, before any judge call; one refused run dir stops the whole batch):** a multi-turn run dir,
+  a partial, replay or chat run, a pruned work dir, a scenario with no `semantic_matches` assert, and a run
+  recorded before `authoredCapture` existed. For the last, pass `--authored-total-bytes` with the budget that run
+  used (`65536` unless `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` was set); on a newer run the flag overrides the
+  recorded budget and the result is reported as `scope_changed`.
+- **Exit codes:** `0` every re-graded assert passes · `1` any fails · `2` usage or refusal. Text mode writes its
+  report to stderr; `--output-format json` prints one payload document (`{tool, version, command, ok, runs[],
+  error}`) on stdout.
+
+The regrade file's layout is experimental and may change in a minor release.
+
 ## Exit codes
 
 **Exit-code space is per-command, not global** — the same number means different things on different
@@ -335,6 +373,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter** (key flags below; `replay --explain` prints the evidence behind every passing assert) | **token-free, Docker-free CI** from a once-recorded run |
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path/machine-inventory) + a staleness check (allowlist and skip flags below); a dir argument scans `*.cassette.json` non-recursively | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
+| `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for |
 | `trace <run-id>` | Digest a run's `events.jsonl` through one of eight `--view`s (tools, questions, dispatches, tool-durations, tool-errors, files, usage, subagent-research). Per-view detail: see [Flags worth knowing](#flags-worth-knowing) | "how many sub-agents *actually* dispatched, and which?" — plus per-tool timings, per-call stderr, a workspace-file diff, per-model cost, or each dispatch's WebSearch query+result |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |

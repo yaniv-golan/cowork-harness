@@ -53,6 +53,8 @@ describe.skipIf(!can)("--output-format json — exactly one JSON document on std
     [["gates"], 2],
     [["verify-run"], 2],
     [["verify-run", missing, `${missing}.yaml`], 2],
+    [["regrade"], 2],
+    [["regrade", missing, "--scenario", `${missing}.yaml`], 2],
     [["assertions", "--list", "extra"], 2],
     [["trace", missing], 2],
     [["diff"], 2],

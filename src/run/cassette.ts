@@ -1,4 +1,5 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
+import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
 import { deriveModelProvenance, noModelProvenance } from "./model-provenance.js";
@@ -6557,6 +6558,15 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     aliases: { "-q": "--quiet" },
     usage: VERIFY_CASSETTES_USAGE,
     allowlist: VERIFY_CASSETTES_ALLOWLIST,
+  },
+  {
+    command: "regrade",
+    booleanFlags: REGRADE_BOOLEAN_FLAGS,
+    valueFlags: REGRADE_VALUE_FLAGS,
+    repeatedFlags: [],
+    aliases: {},
+    usage: REGRADE_USAGE,
+    allowlist: [],
   },
 ];
 
