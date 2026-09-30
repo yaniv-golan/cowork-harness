@@ -21,12 +21,12 @@ function pkg(packageEnv: string) {
   return hermeticPackageRoot({ packageEnv, parent: join(home, "clones") });
 }
 
-function cli(cliPath: string, cwd: string, extraEnv: Record<string, string> = {}) {
+function cli(cliPath: string, cwd: string, extraEnv: Record<string, string> = {}, args: string[] = ["--version"]) {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, ...extraEnv };
   // The caller's own credentials must not decide what these cases see.
   for (const k of CREDS) if (!(k in extraEnv)) delete env[k];
   delete env.COWORK_HARNESS_DEBUG;
-  const r = spawnSync("node", [cliPath, "--version"], { encoding: "utf8", cwd, env });
+  const r = spawnSync("node", [cliPath, ...args], { encoding: "utf8", cwd, env });
   return { code: r.status, stderr: r.stderr || "", stdout: r.stdout || "" };
 }
 
@@ -51,6 +51,30 @@ describe.skipIf(!can)("a credential loaded from the install's .env is named on s
     const r = cli(p.cli, mkdtempSync(join(home, "work-")));
     expect(line(r.stderr)).toHaveLength(1);
     expect(line(r.stderr)[0]).toContain("ANTHROPIC_AUTH_TOKEN");
+  });
+});
+
+describe.skipIf(!can)("a --dotenv after the subcommand that replaces the install's credential", () => {
+  it("says the credential now comes from the --dotenv file", () => {
+    const p = pkg(`CLAUDE_CODE_OAUTH_TOKEN=${VALUE}\n`);
+    const cwd = mkdtempSync(join(home, "work-"));
+    writeFileSync(join(cwd, "my.env"), "CLAUDE_CODE_OAUTH_TOKEN=cwh-dummy-from-my-env\n");
+    const r = cli(p.cli, cwd, {}, ["stats", "--dotenv", "my.env", "--run-dir", join(cwd, "runs")]);
+    expect(r.code, r.stderr).toBe(0);
+    const rel = cwd.slice(home.length + 1);
+    const lines = r.stderr.split("\n").filter((l) => l.startsWith("[env]"));
+    expect(lines).toContain(`[env] CLAUDE_CODE_OAUTH_TOKEN from ~/${rel}/my.env (replacing the install's .env)`);
+    expect(r.stderr + r.stdout).not.toContain(VALUE);
+    expect(r.stderr + r.stdout).not.toContain("cwh-dummy-from-my-env");
+  });
+
+  it("a trailing --dotenv without the credential adds no correction", () => {
+    const p = pkg(`CLAUDE_CODE_OAUTH_TOKEN=${VALUE}\n`);
+    const cwd = mkdtempSync(join(home, "work-"));
+    writeFileSync(join(cwd, "my.env"), "CWH_OTHER_KEY=1\n");
+    const r = cli(p.cli, cwd, {}, ["stats", "--dotenv", "my.env", "--run-dir", join(cwd, "runs")]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain("replacing");
   });
 });
 

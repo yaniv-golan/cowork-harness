@@ -78,6 +78,7 @@ import {
   applyParsedCommandGlobals,
   isCommandGlobalFlag,
   recordLeadingGlobals,
+  recordInstallCredentials,
   setRunsDir,
   stripCommandGlobals,
   withCommandGlobals,
@@ -898,7 +899,10 @@ async function main() {
   // One exception to that silence: a credential that came from the INSTALL's .env while running from some
   // other directory. That file is easy to forget (a clone's .env, used by `node <clone>/dist/cli.js` from
   // anywhere), and the run is billed to it. Names only, never values. A credential already exported, given
-  // with --dotenv or in ./.env is never loaded from here, and cwd === install dir skipped the file above.
+  // with a leading --dotenv or in ./.env is never loaded from here, and cwd === install dir skipped the file
+  // above. A --dotenv AFTER the subcommand is applied later, by the command's parser, and may replace it:
+  // applyCommandGlobal (run/command-globals.ts) then prints a correcting line naming that file.
+  recordInstallCredentials(packageRootCredentials);
   if (packageRootCredentials.length)
     log(`[env] using ${packageRootCredentials.join(", ")} from ${tildeify(packageRootEnv)} (the install's .env, not this directory's)`);
 
