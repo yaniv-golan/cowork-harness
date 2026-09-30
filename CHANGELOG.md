@@ -20,6 +20,32 @@ All notable changes to this project are documented here. The format is based on
   `judgeCostUsd` per row (the sum over the run's asserts). Runs made before this release have no judge
   cost to recover, so their rows stay without it, even after `stats --reindex`.
 
+### Changed
+
+- **New baseline `desktop-2.16120.0`** (agent unchanged at **2.1.284**), now what `latest` resolves to.
+  - The Cowork system prompt, the sub-agent append fingerprints, the egress contract and the VM rootfs
+    origin are unchanged from `desktop-2.9939.4`.
+  - The recorded changes: `spawn.env` and `spawnEnvKeys` gain `PYTHONDONTWRITEBYTECODE` (below),
+    `asarGateIds` gains 30 ids and loses 3, and the GrowthBook cache's `featureCount` goes 384 → 387.
+  - The observed sessions declare `screenshot_file_preview` on Desktop's `cowork` server and, in some
+    session kinds, the artifact family (`create_artifact`/`list_artifacts`/`update_artifact`/
+    `verify_artifact`) including a new `screenshot_artifact`. The artifact family is offered where the
+    native `Artifact` tool is not. Neither `screenshot_file_preview` nor the artifact family is served
+    by the harness (see `docs/fidelity-gaps.md`).
+  - The Desktop init surface for 2.16120.0 was read from 3 local init frames on this install; no
+    interactive local session was available.
+  - The computer-use permission gate (`cuCanUseToolEnabled`) moved to off, server-side. The harness does
+    not model computer use.
+  - The bundled cassettes are re-stamped to `2.16120.0`, not re-recorded: none of them runs Python that
+    could write bytecode, so the one spawn-env addition cannot change what they recorded.
+    `verify-cassettes` and `replay --strict` pass on them.
+- **`PYTHONDONTWRITEBYTECODE=1` is now set in the agent spawn env**, as Desktop 2.16120.0 does for every
+  Cowork session. On `container` and `microvm`, where the agent's own Bash runs, Python run by the agent
+  or a skill's scripts no longer writes `__pycache__`/`.pyc` files into mounted folders or outputs. On
+  `hostloop` it reaches the agent process, and the shell sidecar keeps its proxy-only env — as Desktop's
+  host-loop VM bash gets `TZ` only. It comes from the pinned baseline, so a scenario pinned to an older
+  baseline does not get it.
+
 ### Fixed
 
 - **`run --matrix` recorded the wrong skill fingerprint for a `skill_dirs` cell.** Every cell's
@@ -34,6 +60,20 @@ All notable changes to this project are documented here. The format is based on
     Previously it compared the wrong directory against itself and passed.
 - **`run --help` no longer says `--matrix` cannot be combined with `--repeat`.** It can: each cell runs
   as its own repeat batch, as documented in the scenario reference.
+- **`sync` accepts Desktop 2.16120.0's permission-chain and Artifact-gate shapes** instead of refusing
+  them as unknown deltas. The host-loop permission chain now ends in a step that pins an approval's
+  input to the input that was judged, and an organization-policy "ask" on a file tool now reaches the
+  permission prompt instead of being denied; the Artifact tool gate now admits scheduled sessions, with
+  the scheduled-run restriction moved to a gate-controlled step at session start. Each new shape is
+  accepted only in its exact form: a blanket allow, a dropped `await`, a rewritten input, or a scheduled
+  form without its session-start restriction still fails `sync`.
+- **`sync` no longer passes a widening appended to the Artifact predicate.** The predicate was matched as a
+  prefix, so a trailing `||!0` after its last condition passed on every Desktop version; the whole body
+  is now matched.
+- **`sync` now fails if Desktop's VM start stops staging the agent.** The staged agent binary the harness
+  runs is put on disk by the step that starts the local VM; if that step stops preparing the agent, or
+  moves off the VM-start path, `sync` refuses instead of silently writing a baseline for a binary that is
+  no longer staged.
 
 ## [4.1.1] — 2026-09-29
 
