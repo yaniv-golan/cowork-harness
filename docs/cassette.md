@@ -181,7 +181,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 |---|---|---|
 | **v13** | has an `assert:` entry using the object form of `tool_called` / `tool_not_called` | v12: refuses as too new (see below) |
 | **v14** | has a `semantic_matches` entry carrying `include_fork_results` (any value), or a `semantic_pairwise` entry — one bump shared with the other keys of this release that an older reader cannot read | v13: refuses as too new — upgrade the harness, don't re-record |
-| **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a `question_option_count` entry | v13: refuses as too new — upgrade the harness, don't re-record |
+| **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry | v13: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -548,6 +548,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
 | `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
 | `hook_event_fired` / `hook_event_blocked` | a plugin's command hook for the named event ran / blocked (`hook_response` system frames) — replay: content-class, re-derived from the frozen stream, no `controlOut` needed |
+| `hook_output_contains` / `hook_output_not_contains` | a command hook for the named event printed / never printed a text on its `stdout` or `stderr` (the same `hook_response` frames) — replay: content-class, re-derived from the frozen stream. On a stream a redaction policy rewrote, a literal miss and any `matches` result are evidence-unavailable for either key, while a literal hit outside a token counts. `record`'s redaction self-check compares these two keys' failures by key, not message (their excerpts quote the rewritten stream); a pass that redaction turns into a failure is still refused |
 | `vm_path_denied` | **`fidelity: hostloop` only** — a path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
 | `path_denied` | **`fidelity: hostloop` only** — a path denial matched all given matchers (`tool`/`path_matches`/`source`/`agent_scope`) — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
 | `no_path_denied` | **`fidelity: hostloop` only** — no path denial was recorded at all — replay: needs `controlOut`. **Only `true` is valid**; any other tier FAILS "cannot verify" |

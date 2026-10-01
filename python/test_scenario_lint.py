@@ -2221,3 +2221,27 @@ def test_file_exists_object_form_is_not_unknown_and_joins_the_absent_contradicti
         tmp_path,
     )
     assert "file-absent-contradiction" in rules
+
+
+# hook_output_* needles: the harness's loader refuses a control character (a double-quoted YAML `\\b` is a
+# backspace); the bundled linter must refuse what `run` refuses.
+@pytest.mark.parametrize("key", ["hook_output_contains", "hook_output_not_contains"])
+@pytest.mark.parametrize("field", ["text", "matches"])
+def test_hook_output_control_char_is_an_error(tmp_path, key, field):
+    found = [f for f in _findings(f'assert:\n  - {key}: {{ event: Stop, {field}: "\\bfailed open" }}\n', tmp_path)
+             if f.rule == "hook-output-control-char"]
+    assert len(found) == 1 and found[0].severity == "ERROR"
+    assert f"{key}.{field}" in found[0].message
+
+
+def test_hook_output_single_quoted_word_boundary_is_clean(tmp_path):
+    rules = _rules("assert:\n  - hook_output_not_contains: { event: Stop, matches: '\\bfailed open\\b' }\n", tmp_path)
+    assert "hook-output-control-char" not in rules
+
+
+def test_hook_output_yaml11_booleans_are_not_a_contradiction(tmp_path):
+    # `yes` and `on` both load as True under PyYAML but stay distinct strings in the harness
+    body = "assert:\n  - hook_output_not_contains: { event: Stop, text: yes }\n  - hook_output_contains: { event: Stop, text: on }\n"
+    assert "assert-contradiction" not in _rules(body, tmp_path)
+    same = 'assert:\n  - hook_output_not_contains: { event: Stop, text: "x" }\n  - hook_output_contains: { event: Stop, text: "x" }\n'
+    assert "assert-contradiction" in _rules(same, tmp_path)
