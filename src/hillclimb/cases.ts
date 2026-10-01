@@ -10,7 +10,7 @@ import { UsageError } from "../errors.js";
 import { resolveInputs } from "../run/inputs.js";
 import { parseScenarioFile } from "../run/execute.js";
 import type { Scenario } from "../types.js";
-import { findDuplicateCaseIds, pathSafeId } from "./ids.js";
+import { findDuplicateCaseIds, pathSafeId, unusableCaseIds } from "./ids.js";
 
 export interface HillclimbCase {
   /** pathSafeId(stem): the row's prompt_id and the trace file's id. */
@@ -50,8 +50,8 @@ export function loadCases(target: string): { cases: HillclimbCase[]; skipped: st
   const cases = files.map((file): HillclimbCase => {
     const stem = stemOf(file);
     const id = pathSafeId(stem);
-    // The lite report refuses an all-dot id (L l.342) and an empty one names no file.
-    if (id === "" || /^\.+$/.test(id))
+    // The lite report refuses an all-dot id (L l.342) and an empty one names no file — the shared rule.
+    if (unusableCaseIds([stem]).length)
       throw new UsageError(`hillclimb: ${basename(file)}: "${stem}" is not a usable case id (rename the file)`);
     const scenario = parseScenarioFile(file);
     return { id, stem, ...(id !== stem ? { originalId: stem } : {}), name: scenario.name, file, scenario };
