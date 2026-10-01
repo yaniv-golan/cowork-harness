@@ -387,6 +387,33 @@ enums, `error.code` and `refusals[]` — is a covered surface ([SPEC.md](../SPEC
 `true`), removing or renaming one is a major change. The regrade **file**'s name, layout and contents are
 experimental and may change in a minor release.
 
+### Exporting a run's outputs as a fixture (`fixture export`)
+
+`cowork-harness fixture export <run-dir> --out <dir> [--allow-host-paths] [--output-format json]`
+
+Copies the outputs a kept run produced into `<dir>`, so a later scenario can start from that state instead of
+re-running every step before it.
+
+- **Source.** The run's latest `result.json` names its outputs dir. That tree is cumulative across the run's turns;
+  there is no per-turn snapshot. Files the run wrote at the session root (scratchpad deliverables) are not exported.
+  A partial run (stopped at an unanswered gate) exports normally. A `replay` run dir is refused: its outputs were
+  materialized from a cassette, not produced. An outputs dir that resolves outside the run dir is refused.
+- **Copy.** Every regular file, byte-for-byte, with its permission bits. Symlinks and hard-linked files are skipped
+  and listed. `<dir>` must not exist or must be empty; an export never merges.
+- **Refusals.** A fixture is committed test input, so the export never edits a byte. Instead it refuses, naming each
+  file and writing nothing, when a text file contains:
+  - a value from the secret set (the `COWORK_HARNESS_SCRUB_*` values and the credentials in this process's
+    environment — the same set the rest of the CLI scrubs with; run the export with the scrub settings the run used);
+  - a host path (`/Users/…`, `/home/…`). `--allow-host-paths` accepts these, but a path into a harness run dir or VM
+    work dir is refused regardless.
+- **Notes.** Emails, domains and machine identifiers are listed as notes, not refused. Binary files are copied
+  unscanned and noted — check them yourself before committing.
+- **Exit codes.** `0` written · `2` usage or refusal (nothing written). Text mode writes its report to stderr;
+  `--output-format json` prints one payload document on success (`written`, `skipped`, `notes`, `bytes`,
+  `outputsDir`) and the error envelope on a refusal, carrying the same fields plus `refused[]` (`{file, kind}`;
+  `kind` is `secret`, `host_path` or `run_path`). The JSON shape is experimental and may change
+  in a minor release.
+
 ## Exit codes
 
 **Exit-code space is per-command, not global** — the same number means different things on different
@@ -462,6 +489,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path/machine-inventory) + a staleness check (allowlist and skip flags below); a dir argument scans `*.cassette.json` non-recursively | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for |
+| `fixture export <run-dir> --out <dir>` | Copy a kept run's outputs tree, byte-for-byte, into a directory a scenario can start from. Refuses (writing nothing) on a secret or a host path in any text file, and never alters bytes. See [Exporting a run's outputs as a fixture](#exporting-a-runs-outputs-as-a-fixture-fixture-export) | turning a run that stopped after step N into the starting state for a test of step N+1 |
 | `trace <run-id>` | Digest a run's `events.jsonl` through one of eight `--view`s (tools, questions, dispatches, tool-durations, tool-errors, files, usage, subagent-research). Per-view detail: see [Flags worth knowing](#flags-worth-knowing) | "how many sub-agents *actually* dispatched, and which?" — plus per-tool timings, per-call stderr, a workspace-file diff, per-model cost, or each dispatch's WebSearch query+result |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |

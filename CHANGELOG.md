@@ -37,6 +37,12 @@ All notable changes to this project are documented here. The format is based on
   `judgedDoc.sections[].kind` gains `skill_result`. With the key unset, the judged document and its
   fingerprint are byte-identical to before.
 
+- **`fixture export <run-dir> --out <dir>` copies a kept run's outputs tree into a directory** a later scenario
+  can start from, byte-for-byte and keeping permission bits. It refuses, naming the files and writing nothing,
+  when a text file holds a value from the secret set or a host path (`--allow-host-paths` accepts host paths, but
+  never a path into a harness run dir or VM work dir); emails, domains, machine identifiers and binary files are
+  listed as notes. Symlinks and hard-linked files are skipped and listed; `--out` must be absent or empty. A
+  partial run exports; a `replay` run dir is refused. Exit `0` written, `2` usage or refusal.
 - **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` asserts** with
   the judge, without running the agent again; the judge call is the only spend. `verify-run` never calls the
   judge, so a rubric change previously meant a paid re-run.

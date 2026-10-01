@@ -50,6 +50,7 @@ const PHANTOM_EXCEPTIONS: Readonly<Record<string, readonly string[]>> = {
   replay: [],
   "verify-cassettes": [],
   regrade: [],
+  fixture: [],
 };
 
 describe("usage-guard registry shape", () => {

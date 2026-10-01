@@ -596,7 +596,8 @@ there are three families:
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload, `eval` and `eval report` (`evalDir`, `arms`, `pins`,
   `sections`, `summary`, `cost`, `stoppedEarly`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
-  `answer` (`gate`, `answers`), and `regrade` (below).
+  `answer` (`gate`, `answers`), `fixture export` (`written`, `skipped`, `notes`, `bytes`, `outputsDir`; a refusal is
+  the error envelope carrying the same fields plus `refused[]`), and `regrade` (below).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
