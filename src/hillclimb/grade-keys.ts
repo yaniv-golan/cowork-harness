@@ -19,18 +19,13 @@
 //   a<i>_c<j>         0|1 for claim j of semantic assertion i
 // Every `_present` companion precedes the graded keys, so none can become the headline by accident.
 
-import type { Assertion } from "../types.js";
+import type { Assertion, ScenarioMetric } from "../types.js";
 import { UsageError } from "../errors.js";
 import { scenarioRows } from "../eval/classify.js";
 import { firstAssertionKey } from "../run/repeat.js";
 
-/** A scenario-declared numeric metric, as the grade key and template need it. */
-export interface MetricDecl {
-  id: string;
-  better: "higher" | "lower";
-  scale?: number;
-  unbounded?: true;
-}
+/** A scenario-declared numeric metric (the scenario's `metrics:` entry, whole). */
+export type MetricDecl = ScenarioMetric;
 
 export interface GradeKeyDecl {
   id: string;
@@ -121,15 +116,22 @@ export function flowMetricDecls(
   ];
 }
 
-/** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared with a
- *  different direction or bound in another case is refused: one column cannot mean two things. */
+/** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared differently in
+ *  another case (any field: the file, the path, the direction, the bound, the floor) is refused: one column cannot
+ *  mean two things. Ids are compared case-insensitively, as the scenario compares its own: two spellings of one id
+ *  would be two keys on a row but one file on a case-folding disk. */
 export function metricUnion(cases: ReadonlyArray<{ metrics?: readonly MetricDecl[] }>): MetricDecl[] {
   const seen = new Map<string, MetricDecl>();
+  const sig = (m: MetricDecl) => JSON.stringify([m.id, m.artifact, m.path, m.better, m.scale, m.unbounded, m.min]);
   for (const c of cases)
     for (const m of c.metrics ?? []) {
-      const prev = seen.get(m.id);
-      if (prev === undefined) seen.set(m.id, m);
-      else if (prev.better !== m.better || prev.scale !== m.scale || prev.unbounded !== m.unbounded)
+      const prev = seen.get(m.id.toLowerCase());
+      if (prev === undefined) seen.set(m.id.toLowerCase(), m);
+      else if (prev.id !== m.id)
+        throw new UsageError(
+          `metric "${prev.id}" and metric "${m.id}" differ only in case; ids are compared case-insensitively — spell them the same in every scenario`,
+        );
+      else if (sig(prev) !== sig(m))
         throw new UsageError(
           `metric "${m.id}" is declared differently in two scenarios (${JSON.stringify(prev)} vs ${JSON.stringify(m)}); one column cannot mean two things — make the declarations identical or rename one`,
         );

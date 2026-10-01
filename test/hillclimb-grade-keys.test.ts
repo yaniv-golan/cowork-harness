@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 import { caseKeyDecls, flowMetricDecls, presentCompanionOf, reservedMetricId } from "../src/hillclimb/grade-keys.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import { UsageError } from "../src/errors.js";
-import type { Assertion } from "../src/types.js";
+import type { Assertion, ScenarioMetric } from "../src/types.js";
 
 const real = parseScenarioFile("test/evals/scenarios/eval-14-subagent-dispatch-and-declared-unused.yaml");
 const claimCount = real.assert[0].semantic_matches!.rubric.length;
@@ -20,10 +20,15 @@ const mixed = [
   { tool_called: { name: "Write" } },
 ] as unknown as Assertion[];
 const other = [{ file_exists: "outputs/other.md" }] as unknown as Assertion[];
+/** A scenario metric declaration, whole: the union compares every field. */
+const metric = (id: string, over: Partial<ScenarioMetric> = {}): ScenarioMetric =>
+  ({ id, artifact: "outputs/scores.json", path: id, better: "higher", scale: 1, ...over }) as ScenarioMetric;
+const unboundedLower = (id: string, over: Partial<ScenarioMetric> = {}) =>
+  metric(id, { better: "lower", scale: undefined, unbounded: true, ...over });
 
 describe("caseKeyDecls — every key one case's rows carry, in row order", () => {
   it("pass, the companions, claims, then the per-index keys, then the floats", () => {
-    expect(caseKeyDecls(mixed, [{ id: "words", better: "lower", unbounded: true }]).map((d) => d.id)).toEqual([
+    expect(caseKeyDecls(mixed, [unboundedLower("words")]).map((d) => d.id)).toEqual([
       "pass",
       "pass_present",
       "claims_present",
@@ -43,8 +48,7 @@ describe("caseKeyDecls — every key one case's rows carry, in row order", () =>
   });
 
   it("labels fit the legend (<= 14 chars)", () => {
-    for (const d of caseKeyDecls(mixed, [{ id: "a_long_metric_identifier", better: "higher", scale: 1 }]))
-      expect(d.label.length).toBeLessThanOrEqual(14);
+    for (const d of caseKeyDecls(mixed, [metric("a_long_metric_identifier")])) expect(d.label.length).toBeLessThanOrEqual(14);
   });
 });
 
@@ -72,8 +76,8 @@ describe("flowMetricDecls — what the flow declares", () => {
 
   it("scenario-declared floats are the UNION over cases, each with its companion", () => {
     const ids = flowMetricDecls([
-      { assertions: other, metrics: [{ id: "words", better: "lower", unbounded: true }] },
-      { assertions: [], metrics: [{ id: "ratio", better: "higher", scale: 1 }] },
+      { assertions: other, metrics: [unboundedLower("words")] },
+      { assertions: [], metrics: [metric("ratio")] },
     ]).map((d) => d.id);
     expect(ids).toEqual(["pass", "pass_present", "words_present", "ratio_present", "words", "ratio"]);
   });
@@ -81,20 +85,46 @@ describe("flowMetricDecls — what the flow declares", () => {
   it("one metric id declared two different ways is refused", () => {
     expect(() =>
       flowMetricDecls([
-        { assertions: [], metrics: [{ id: "words", better: "lower", unbounded: true }] },
-        { assertions: [], metrics: [{ id: "words", better: "higher", unbounded: true }] },
+        { assertions: [], metrics: [unboundedLower("words")] },
+        { assertions: [], metrics: [unboundedLower("words", { better: "higher" })] },
       ]),
     ).toThrow(UsageError);
+  });
+
+  it("any differing field is a conflict — the file, the path or the floor, not just the direction and bound", () => {
+    for (const over of [{ artifact: "outputs/other.json" }, { path: "totals.words" }, { min: 10 }] as Partial<ScenarioMetric>[])
+      expect(
+        () =>
+          flowMetricDecls([
+            { assertions: [], metrics: [unboundedLower("words")] },
+            { assertions: [], metrics: [unboundedLower("words", over)] },
+          ]),
+        JSON.stringify(over),
+      ).toThrow(/metric "words" is declared differently/);
+  });
+
+  it("one id spelled in two cases (Words, words) is refused: the scenario compares ids case-insensitively, and a case-folding disk would merge them", () => {
+    expect(() =>
+      flowMetricDecls([
+        { assertions: [], metrics: [unboundedLower("Words")] },
+        { assertions: [], metrics: [unboundedLower("words")] },
+      ]),
+    ).toThrow(/"Words".*"words"|"words".*"Words"/);
+  });
+
+  it("the same declaration in two cases is one column", () => {
+    const ids = flowMetricDecls([
+      { assertions: [], metrics: [unboundedLower("words", { min: 1 })] },
+      { assertions: [], metrics: [unboundedLower("words", { min: 1 })] },
+    ]).map((d) => d.id);
+    expect(ids).toEqual(["pass", "pass_present", "words_present", "words"]);
   });
 
   it("a float declares better, and scale only when bounded", () => {
     const decls = flowMetricDecls([
       {
         assertions: [],
-        metrics: [
-          { id: "ratio", better: "higher", scale: 1 },
-          { id: "cost", better: "lower", unbounded: true },
-        ],
+        metrics: [metric("ratio"), unboundedLower("cost")],
       },
     ]);
     expect(decls.find((d) => d.id === "ratio")).toMatchObject({ kind: "float", better: "higher", scale: 1 });

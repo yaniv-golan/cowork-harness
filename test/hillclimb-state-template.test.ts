@@ -50,7 +50,12 @@ describe("stateTemplate", () => {
     expect(t.metricsMd).toMatch(/`pass_present`.*refused/s);
     expect(t.metricsMd).toMatch(/per-assertion keys .* not declared/i);
     const withFloat = stateTemplate({
-      cases: [{ assertions: other, metrics: [{ id: "words", better: "lower", unbounded: true }] }],
+      cases: [
+        {
+          assertions: other,
+          metrics: [{ id: "words", artifact: "outputs/stats.json", path: "totals.words", better: "lower", unbounded: true }],
+        },
+      ],
       harnessPaths: [],
       decider: false,
     });
