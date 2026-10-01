@@ -12,7 +12,7 @@ import { isolationRefusal } from "../decide/llm-transport.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
-import { headroom, stateMetricFindings } from "./check.js";
+import { headroom, pairwiseHints, pairwiseRefFindings, stateMetricFindings } from "./check.js";
 import { prepareCases } from "./command.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
@@ -21,7 +21,10 @@ import { termSafe } from "./runner.js";
 import { checkFlowDir, loadFlowSnapshot, type SchemaCheckReport } from "./schema-check.js";
 import { trackedSkill } from "./skill.js";
 import { stateTemplate, type StateTemplate } from "./state-template.js";
-import { HILLCLIMB_CHECK_USAGE, HILLCLIMB_STATE_TEMPLATE_USAGE, HILLCLIMB_USAGE } from "./usage.js";
+import { HILLCLIMB_CHECK_USAGE, HILLCLIMB_FREEZE_REF_USAGE, HILLCLIMB_STATE_TEMPLATE_USAGE, HILLCLIMB_USAGE } from "./usage.js";
+import { freezeRefCommand } from "./freeze-ref.js";
+import { flowHasPairwise } from "./grade-keys.js";
+import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
 
 const CMD = "hillclimb";
 
@@ -42,22 +45,27 @@ export function checkReport(flowArg: string, cwd: string): { report: SchemaCheck
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
   const base = checkFlowDir(flowAbs, { profile: "harness" });
   const snap = loadFlowSnapshot(flowAbs);
-  const extra = stateMetricFindings(snap);
+  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap)];
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
-  return { report, warnings: headroom(snap).warnings, exitCode: report.errors ? 1 : 0 };
+  return {
+    report,
+    warnings: [...headroom(snap).warnings, ...pairwiseHints(snap, normalizeRootArg(flowArg))],
+    exitCode: report.errors ? 1 : 0,
+  };
 }
 
 /** `hillclimb state-template`: the skeleton for the flow's cases, with the gate's files relative to cwd. The tracked
  *  skill is resolved against the live plugin's git-tracked files with run's resolution — the files a pass would
  *  snapshot — and an unknown `skill` (`--skill`) is refused as run would refuse it. When run would omit the
- *  skill_invoked column (several skills and no --skill, or none), `perf_fields` leaves it out too, and `note` says why;
- *  `harness_skill` is the runner's to write. */
+ *  skill_invoked column (several skills and no --skill, or none), `perf_fields` leaves it out too, and a note says
+ *  why; `harness_skill` is the runner's to write. With `flow` (`--flow`), each later variant's frozen pairwise
+ *  reference is declared. */
 export function stateTemplateFor(
   target: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  opts: { skill?: string } = {},
-): StateTemplate & { note?: string } {
+  opts: { skill?: string; flow?: string } = {},
+): StateTemplate {
   const { cases } = loadCases(resolve(cwd, target));
   const prep = prepareCases(cases, { env });
   let tracked: ReturnType<typeof trackedSkill>;
@@ -66,13 +74,35 @@ export function stateTemplateFor(
   } catch (e) {
     throw new UsageError((e as Error).message);
   }
+  const assertions = cases.map((c) => ({ assertions: c.scenario.assert ?? [] }));
+  // With --flow: each later variant's frozen reference, and how many scored rows (every variant) lack its column.
+  let pairwiseRefs: Array<{ ref: string; rowsMissing: number }> | undefined;
+  if (opts.flow !== undefined && flowHasPairwise(assertions)) {
+    const flowAbs = resolve(cwd, normalizeRootArg(opts.flow));
+    pairwiseRefs = [];
+    if (lexists(flowAbs)) {
+      const snap = loadFlowSnapshot(flowAbs);
+      const rows = Object.values(snap.variants).flatMap((vs) =>
+        (vs.results ?? "").split("\n").flatMap((l) => {
+          try {
+            return l.trim() ? [JSON.parse(l) as { grade?: Record<string, unknown> }] : [];
+          } catch {
+            return [];
+          }
+        }),
+      );
+      for (const ref of metricRefNames(discoverFlowRefs(flowAbs)))
+        pairwiseRefs.push({ ref, rowsMissing: rows.filter((r) => r.grade?.[`win_${ref}_present`] === undefined).length });
+    }
+  }
   const t = stateTemplate({
-    cases: cases.map((c) => ({ assertions: c.scenario.assert ?? [] })),
+    cases: assertions,
     harnessPaths: prep.derivedPaths(cases).map((p) => relative(cwd, p)),
     decider: false,
+    ...(pairwiseRefs ? { pairwiseRefs } : {}),
     skillInvoked: tracked.name !== undefined,
   });
-  return tracked.name === undefined ? { ...t, note: tracked.note } : t;
+  return tracked.name === undefined ? { ...t, notes: [...t.notes, tracked.note] } : t;
 }
 
 /** `state-template --flow`: the metrics legend into `<flow>/metrics.md`, through the no-follow root. The loop
@@ -212,8 +242,11 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       if (p.positionals.length !== 1)
         return usage(`hillclimb state-template takes exactly one scenario file or directory`, HILLCLIMB_STATE_TEMPLATE_USAGE);
       const skillOpt = p.options["--skill"];
-      const t = stateTemplateFor(p.positionals[0], process.cwd(), process.env, skillOpt !== undefined ? { skill: skillOpt } : {});
-      if (t.note !== undefined) err(t.note, secrets);
+      const t = stateTemplateFor(p.positionals[0], process.cwd(), process.env, {
+        ...(skillOpt !== undefined ? { skill: skillOpt } : {}),
+        ...(flowGiven !== undefined ? { flow: flowGiven } : {}),
+      });
+      if (!json) for (const n of t.notes) err(`note: ${n}`, secrets);
       const md = flowGiven !== undefined ? writeMetricsMd(flowGiven, process.cwd(), t.metricsMd, secrets) : undefined;
       if (md && !json)
         err(
@@ -231,6 +264,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
             jsonPayloadEnvelope(`${CMD} state-template`, true, {
               state: t.state,
               metrics_md: t.metricsMd,
+              ...(t.notes.length ? { notes: t.notes } : {}),
               ...(md ? { metrics_md_file: md } : {}),
             }),
             secrets,
@@ -247,6 +281,54 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         );
       }
       return process.exit(0);
+    } catch (e) {
+      if (e instanceof UsageError) return usage(e.message, e.hint);
+      if (e instanceof FsRefusal) return usage(e.message);
+      throw e;
+    }
+  }
+
+  if (sub === "freeze-ref") {
+    let p;
+    try {
+      p = parseArgs(
+        rest,
+        withCommandGlobals({
+          booleans: [],
+          values: ["--flow", "--variant", "--output-format"],
+          repeated: ["--case"],
+          enums: { "--output-format": ["text", "json"] },
+          noDashValue: ["--flow", "--variant", "--case"],
+        }),
+      );
+    } catch (e) {
+      return usage((e as Error).message, HILLCLIMB_FREEZE_REF_USAGE);
+    }
+    if (p.flags["--help"] === true) {
+      writeAllSync(2, HILLCLIMB_FREEZE_REF_USAGE + "\n");
+      return process.exit(0);
+    }
+    applyParsedCommandGlobals(CMD, p, json);
+    const variant = p.options["--variant"];
+    if (p.positionals.length !== 1 || variant === undefined)
+      return usage(`hillclimb freeze-ref takes one scenario file or directory and --variant`, HILLCLIMB_FREEZE_REF_USAGE);
+    try {
+      const r = freezeRefCommand({
+        target: p.positionals[0],
+        flowArg: normalizeRootArg(p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow),
+        variant,
+        caseIds: (p.repeated?.["--case"] as string[] | undefined) ?? [],
+        cwd: process.cwd(),
+        secrets: [...secrets],
+      });
+      if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} freeze-ref`, r.exitCode === 0, { ...r }), secrets) + "\n");
+      else {
+        for (const f of r.frozen) err(`froze ${f.case} from ${variant} rep ${f.rep}`, secrets);
+        for (const f of r.added) err(`added compose key(s) to ${f.case} (from its recorded rep ${f.rep})`, secrets);
+        for (const c of r.exists) err(`${c}: already frozen`, secrets);
+        for (const f of r.refused) err(`refused ${f.case}: ${f.why}`, secrets);
+      }
+      return process.exit(r.exitCode);
     } catch (e) {
       if (e instanceof UsageError) return usage(e.message, e.hint);
       if (e instanceof FsRefusal) return usage(e.message);

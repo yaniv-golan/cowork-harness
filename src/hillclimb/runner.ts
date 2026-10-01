@@ -16,6 +16,7 @@ import { pMapBounded } from "../async-pool.js";
 import type { RunResult } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./cases.js";
+import type { PairwiseDecls } from "./grade-keys.js";
 import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest, listedInside } from "./gate.js";
@@ -23,7 +24,7 @@ import { attemptRow, type AttemptContext } from "./rows.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
-import { headroom } from "./check.js";
+import { headroom, pairwiseHints } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
 
 /** What one job hands back. */
@@ -79,6 +80,16 @@ export interface RunnerDeps {
   /** The registered skill id this pass's `skill_invoked` is measured against (`<plugin>:<name>`), recorded on every
    *  scored row as `meta.skill_tracked`; absent when the column is omitted. */
   skillTracked?: string;
+  /** Set when any case has `semantic_pairwise`: the later variants' references this pass judges against, so every
+   *  row carries one win column per reference. */
+  pairwise?: PairwiseDecls;
+  /** After the pool, before the summary: work over the pass's written rows (a baseline pass freezes the flow's
+   *  pairwise references). Returns the lines to print and how many of them are failures — counted like a failed
+   *  post-row write: no error row, `scored` unchanged. Not called on a dry run. */
+  afterPass?: (pass: { variant: string; flowAbs: string; cases: readonly HillclimbCase[]; results: string | null }) => {
+    lines: string[];
+    failures: number;
+  };
   /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
@@ -369,6 +380,7 @@ async function run(
         scenarioName: c.name,
         prompt: c.scenario.prompt,
         assertions: c.scenario.assert,
+        ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
         rep,
         pin: deps.pin(c),
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
@@ -483,6 +495,15 @@ async function run(
     }
     progress();
     // After the pool the rows are on disk: a failure here is reported but never loses the pass's counts.
+    if (deps.afterPass && w)
+      try {
+        const r = deps.afterPass({ variant: v, flowAbs, cases, results: w.readVariantFile("results.jsonl") });
+        for (const line of r.lines) say(line);
+        fail += r.failures;
+      } catch (e) {
+        fail++;
+        say(`[${v}] the pass finished, but its post-pass step failed: ${message(e)}`);
+      }
     try {
       writer.mergeSummary({
         ...(models.size === 1 ? { model: [...models][0] } : {}),
@@ -492,6 +513,13 @@ async function run(
     } catch (e) {
       fail++;
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);
+    }
+    // The second-reference hint is advice: a flow read it cannot make (a concurrent freeze's temp dir vanishing
+    // mid-walk) is never a failed pass.
+    try {
+      for (const line of pairwiseHints(loadFlowSnapshot(flowAbs), flowArg, args.target)) say(line);
+    } catch {
+      /* warn-only */
     }
     say(`[${v}] done - ${ok} ok, ${fail} failed -> ${join(flowArg, v, "results.jsonl")}`);
     return { exitCode: fail ? 1 : 0, scheduled: tasks.length, ok, failed: fail, scored };

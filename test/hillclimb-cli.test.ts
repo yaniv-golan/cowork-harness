@@ -70,7 +70,7 @@ describe("stateTemplateFor --skill", () => {
     multi();
     const t = stateTemplateFor("evals", cwd, {}, { skill: "b" });
     expect(perfIds(t)).toContain("skill_invoked");
-    expect(t.note).toBeUndefined();
+    expect(t.notes).toEqual([]);
     expect(t.state).not.toHaveProperty("harness_skill");
   });
 
@@ -79,7 +79,7 @@ describe("stateTemplateFor --skill", () => {
     const t = stateTemplateFor("evals", cwd, {});
     expect(perfIds(t)).not.toContain("skill_invoked");
     expect(perfIds(t)).toContain("cost_usd");
-    expect(t.note).toMatch(/several skills \(a, b\).*pass --skill <name>/);
+    expect(t.notes).toEqual([expect.stringMatching(/several skills \(a, b\).*pass --skill <name>/)]);
     expect({ ...t.state, perf_fields: [] }).toEqual({ ...stateTemplateFor("evals", cwd, {}, { skill: "b" }).state, perf_fields: [] });
   });
 
@@ -109,7 +109,7 @@ describe("stateTemplateFor --skill", () => {
     rmSync(join(cwd, "plug", "skills", "b"), { recursive: true });
     const t = stateTemplateFor("evals", cwd, {});
     expect(perfIds(t)).toContain("skill_invoked");
-    expect(t.note).toBeUndefined();
+    expect(t.notes).toEqual([]);
   });
 
   it("an unknown skill is a usage error naming the plugin's skills", () => {
@@ -129,7 +129,7 @@ describe("stateTemplateFor --skill", () => {
     delete process.env.COWORK_HARNESS_GITSET;
     try {
       expect(() => stateTemplateFor("evals", cwd, {}, { skill: "b" })).toThrow(/--skill b: .*untracked.*git add/);
-      expect(stateTemplateFor("evals", cwd, {}).note).toBeUndefined(); // one tracked skill: a
+      expect(stateTemplateFor("evals", cwd, {}).notes).toEqual([]); // one tracked skill: a
     } finally {
       if (saved !== undefined) process.env.COWORK_HARNESS_GITSET = saved;
     }

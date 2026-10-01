@@ -1913,9 +1913,16 @@ export interface RunResult {
     /** How the judge's call was made: `isolation` (the level of isolation from the operator's own Claude Code setup —
      *  no tools, safe mode, user settings only) and the host CLI's version. Absent for an injected judge. Live lane only. */
     judgeTransport?: { isolation: string; cliVersion?: string; strictMcp?: false };
-    /** How many calls the `semantic_matches` judge took for this assert: 1, or 2 when its one retry ran (a
-     *  malformed first grade). Absent where the judge never ran, and for `semantic_pairwise` (not yet counted). Live lane only. */
+    /** How many calls the judge took for this assert: 1 plus every retry it ran. For
+     *  `semantic_matches`, 1 or 2 (a malformed first grade is retried once). For `semantic_pairwise`, 1 plus the
+     *  retries summed over every comparison and order, so `judgeAttempts - 1` is the number of retries. Absent
+     *  where the judge never ran. Live lane only. */
     judgeAttempts?: number;
+    /** A `semantic_pairwise` assert's composed candidate document, fingerprinted the same way as `judgedDoc` —
+     *  recorded on every assert whose evidence was not refused, including one where every comparison was neutral
+     *  (a run of the reference's own variant) and so no judge read it. A later freeze of this run as a reference
+     *  checks its recomposition against it. Live lane only. */
+    composedDoc?: JudgedDocFingerprint;
     /** Identity (16 hex) of the grading-prompt TEMPLATE the judge used. A before/after comparison must
      *  refuse to mix hashes: a prompt change can shift every pass rate. Live lane only. */
     judgePromptHash?: string;
@@ -1931,10 +1938,15 @@ export interface RunResult {
      *  so no judge was called and the value is 0.5. `missing` / `integrity`: the reference could not be read (absent,
      *  or failing its recorded sha256), and the assert is evidence-unavailable. `rationale` is the judge's reason
      *  restated from the run's side (untrusted model text). `refDocSha256` is the frozen document's sha256 — constant
-     *  across every run judged against that reference. Live lane only. */
+     *  across every run judged against that reference. `gate: false` marks a reference that is a metric only: it
+     *  never decides `pass_if` or refuses the verdict, and a comparison against it that could not be made is recorded
+     *  (`missing` / `integrity`, or `invalid` when its judge reply stayed malformed) without making the assert
+     *  evidence-unavailable. Only a caller that names gate references sets it (a hillclimb flow gates on its
+     *  baseline). Live lane only. */
     pairwise?: Array<{
       ref: string;
-      status: "graded" | "neutral" | "missing" | "integrity";
+      status: "graded" | "neutral" | "missing" | "integrity" | "invalid";
+      gate?: false;
       outcome?: "win" | "tie" | "loss" | "both_bad";
       value?: number;
       order?: "candidate_first" | "ref_first" | "both";

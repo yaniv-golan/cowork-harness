@@ -31,7 +31,9 @@ import {
   type ClassifiableResult,
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
-import { caseKeyDecls, refusableAssertion, type MetricDecl } from "./grade-keys.js";
+import { caseKeyDecls, refusableAssertion, type MetricDecl, type PairwiseDecls } from "./grade-keys.js";
+import { pairwiseRowValues } from "./pairwise.js";
+import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
@@ -48,6 +50,9 @@ export interface AttemptContext {
   /** The scenario's authored assertions — the frozen list every grade lines up against. */
   assertions: readonly Assertion[];
   metrics?: readonly MetricDecl[];
+  /** Set when any case of the flow has `semantic_pairwise`: every row then carries the win columns, one per
+   *  reference the pass judged against. */
+  pairwise?: PairwiseDecls;
   rep: number;
   /** The concrete model the main loop must be served by. */
   pin?: string;
@@ -291,9 +296,22 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     grade[`${m.id}_present`] = ok ? 1 : 0;
     if (ok) grade[m.id] = got!.value!;
   }
+  if (ctx.pairwise) {
+    const pw = pairwiseRowValues({ assertions: ctx.assertions, entries: authoredGrades, metricRefs: ctx.pairwise.metricRefs, agentFailed });
+    Object.assign(grade, pw.grade);
+    if (!agentFailed && pw.explanation !== undefined) explanation.win = pw.explanation;
+  }
+  // The frozen document each pairwise comparison read, so `check` can tell when a reference changed under the flow.
+  const refShas: Record<string, string> = {};
+  ctx.assertions.forEach((a, i) => {
+    if (a.semantic_pairwise === undefined) return;
+    // Keyed by compose key, not assert index: a re-scoped assert reads another document of the same reference.
+    for (const o of authoredGrades[i]?.pairwise ?? [])
+      if (o.refDocSha256 !== undefined) refShas[`${pairwiseComposeKey(a)}/${o.ref}`] = o.refDocSha256;
+  });
   // Order the keys as declared, so every row reads the same way.
   const ordered: Record<string, number> = {};
-  for (const d of caseKeyDecls(ctx.assertions, ctx.metrics ?? [])) if (d.id in grade) ordered[d.id] = grade[d.id];
+  for (const d of caseKeyDecls(ctx.assertions, ctx.metrics ?? [], ctx.pairwise)) if (d.id in grade) ordered[d.id] = grade[d.id];
 
   const toolCalls = r?.toolCalls;
   const latencyBasisWall = ev.durationMs === undefined;
@@ -349,6 +367,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       judge_retries: jr.judge_retries,
       ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
       ...(Object.keys(claims).length ? { claims } : {}),
+      ...(Object.keys(refShas).length ? { pairwise_ref_sha256: refShas } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),
