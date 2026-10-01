@@ -4421,6 +4421,45 @@
       ".assert[].semantic_matches.rubric[]": {
         "type": "string"
       },
+      ".assert[].semantic_pairwise": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].semantic_pairwise.evidence_files": {
+        "type": "array"
+      },
+      ".assert[].semantic_pairwise.evidence_files[]": {
+        "type": "string"
+      },
+      ".assert[].semantic_pairwise.include_fork_results": {
+        "type": "boolean"
+      },
+      ".assert[].semantic_pairwise.include_subagent_text": {
+        "type": "boolean"
+      },
+      ".assert[].semantic_pairwise.judge_model": {
+        "type": "string"
+      },
+      ".assert[].semantic_pairwise.order": {
+        "type": "string",
+        "enum": ["random", "both"]
+      },
+      ".assert[].semantic_pairwise.pass_if": {
+        "type": "string",
+        "enum": ["win", "not_worse", "any"]
+      },
+      ".assert[].semantic_pairwise.refs": {
+        "type": "array"
+      },
+      ".assert[].semantic_pairwise.refs[]": {
+        "type": "string"
+      },
+      ".assert[].semantic_pairwise.rubric": {
+        "type": "array"
+      },
+      ".assert[].semantic_pairwise.rubric[]": {
+        "type": "string"
+      },
       ".assert[].skill_available": {
         "type": "string"
       },
