@@ -332,6 +332,9 @@ function readDeclared(c: Collector, text: string | undefined): Declared {
       c.note("state.harness_paths", F, "`harness_paths` holds a non-string entry; the scaffold stringifies it");
   }
   if (st.harness_sha !== undefined && typeof st.harness_sha !== "string") c.error("state.harness_sha", F, "`harness_sha` must be a string");
+  // The runner records the --skill an approval hashed beside harness_sha; a gate message names it from here.
+  if (st.harness_skill !== undefined && typeof st.harness_skill !== "string")
+    c.error("state.harness_skill", F, "`harness_skill` must be a string");
   return d;
 }
 

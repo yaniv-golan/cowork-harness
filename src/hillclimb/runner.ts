@@ -191,13 +191,19 @@ async function run(
       );
   }
 
-  // The harness gate (runner-scaffold.mjs l.238-277).
-  const digest = harnessDigest({
-    cwd: deps.cwd,
-    listed: Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [],
-    derived: deps.derivedPaths(all),
-    virtual: { "cowork-harness-version": deps.virtual.harnessVersion, baseline: deps.virtual.baselineId },
-  });
+  // The harness gate (runner-scaffold.mjs l.238-277). A --skill selection joins the digest as `skill:<name>`: it
+  // decides what skill_invoked means, so changing it is a harness change. Without one nothing is added and the sha
+  // is the one a flow approved before --skill existed.
+  const skillTag = (skill: string | undefined): string[] => (skill !== undefined ? [`skill:${skill}`] : []);
+  const digestFor = (skill: string | undefined) =>
+    harnessDigest({
+      cwd: deps.cwd,
+      listed: Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [],
+      derived: deps.derivedPaths(all),
+      virtual: { "cowork-harness-version": deps.virtual.harnessVersion, baseline: deps.virtual.baselineId },
+      tags: skillTag(skill),
+    });
+  const digest = digestFor(args.skill);
   for (const s of digest.skipped) say(`warning: harness path '${s.path}' not readable (${s.code}) - skipped`);
   const decision = gateDecision(state, digest.sha, args.approveHarness);
   if (args.dryRun && !args.approveHarness)
@@ -207,7 +213,7 @@ async function run(
   else if (decision.kind !== "ok") {
     if (!digest.lockfiles.length) say("note: no lockfile in the current directory - dependency changes are outside the harness sha");
     if (decision.kind === "approve") {
-      w!.approveHarness(digest.sha);
+      w!.approveHarness(digest.sha, args.skill);
       say(`harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${statePathShown}`);
     } else if (decision.kind === "absent") {
       const m = `no approved harness sha in ${statePathShown} (computed ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}).`;
@@ -216,8 +222,26 @@ async function run(
       say(fix);
       return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: `${m} ${fix}` } };
     } else {
-      const m = `harness changed since last approved run (files: ${digest.hashed.join(", ")}); approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}.`;
-      const fix = "Re-run with --approve-harness after reviewing the diff.";
+      // The sha alone cannot name the skill it was approved with: `harness_skill`, recorded beside it on approval,
+      // can. Re-hashing under that selection tells a selection-only change from one where the files moved too.
+      const approvedSkill = typeof state.harness_skill === "string" ? state.harness_skill : undefined;
+      const shas = `approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}`;
+      const files = `files: ${digest.hashed.join(", ")}`;
+      let m: string;
+      let fix = "Re-run with --approve-harness after reviewing the diff.";
+      if (approvedSkill === args.skill) m = `harness changed since last approved run (${files}); ${shas}.`;
+      else {
+        const skill =
+          approvedSkill === undefined
+            ? `--skill added (${args.skill})`
+            : args.skill === undefined
+              ? `--skill removed (was ${approvedSkill})`
+              : `tracked skill ${approvedSkill} → ${args.skill}`;
+        if (digestFor(approvedSkill).sha === state.harness_sha) {
+          m = `harness changed since last approved run: ${skill}; ${shas}.`;
+          fix = "Re-run with --approve-harness if intended.";
+        } else m = `harness changed since last approved run: ${skill}, and the hashed files changed too (${files}); ${shas}.`;
+      }
       say(m);
       say(fix);
       return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: `${m} ${fix}` } };

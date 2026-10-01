@@ -48,6 +48,19 @@ export function readSkillDescription(skillMdPath: string): string | undefined {
   return typeof fm.description === "string" ? fm.description : typeof fm.when_to_use === "string" ? fm.when_to_use : undefined;
 }
 
+/** Read a SKILL.md's frontmatter `name`, trimmed; `undefined` when the file, the frontmatter or a non-empty
+ *  string `name` is missing. Best-effort like `readSkillDescription`, over the same frontmatter split. */
+export function readSkillFrontmatterName(skillMdPath: string): string | undefined {
+  let content: string;
+  try {
+    content = readFileSync(skillMdPath, "utf8");
+  } catch {
+    return undefined;
+  }
+  const n = parseFrontmatter(content)?.name;
+  return typeof n === "string" && n.trim() !== "" ? n.trim() : undefined;
+}
+
 /** A mounted skill, as the skills SDK-MCP server's stub sees it: `name` is the bare skill-dir name for a
  *  `skills.local` entry, or `<pluginName>:<dir>` for a plugin-provided one (same id scheme
  *  `resolveAvailableSkills` uses for `<plugin>:<skill>` ids). `isUserCreated` mirrors the real handler's

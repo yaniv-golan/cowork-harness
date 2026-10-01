@@ -138,10 +138,13 @@ export class FlowWriter {
     this.r.writeFile(p, JSON.stringify({ ...cur, ...redactDeep(missing, this.secrets) }, null, 2) + "\n");
   }
 
-  /** The one sanctioned `_state.json` write (runner-scaffold.mjs l.262-266): record the approved harness sha, keep everything else. */
-  approveHarness(sha: string): void {
-    const st = this.state();
-    this.r.writeFile(join(this.r.root, "_state.json"), JSON.stringify({ ...st, harness_sha: sha }, null, 2) + "\n");
+  /** The one sanctioned `_state.json` write (runner-scaffold.mjs l.262-266): record the approved harness sha and the
+   *  `--skill` selection it was approved with (`harness_skill`, removed when there is none, so a stale one never
+   *  names a selection this sha did not hash), keep everything else. */
+  approveHarness(sha: string, skill?: string): void {
+    const { harness_skill: _stale, ...st } = this.state();
+    const next = { ...st, harness_sha: sha, ...(skill !== undefined ? { harness_skill: skill } : {}) };
+    this.r.writeFile(join(this.r.root, "_state.json"), JSON.stringify(next, null, 2) + "\n");
   }
 
   /** Hold the variant for this process. Refuses while a live process holds it; takes over a dead one's lock.

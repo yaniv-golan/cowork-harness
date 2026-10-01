@@ -22,7 +22,6 @@ import { pkgVersion } from "../run/envelope.js";
 import { ANSWER_KEY_ADVICE, answerKeyFindings } from "../eval/snapshot.js";
 import { evidenceFacts } from "../eval/invocation.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
-import { gradedSkillNameFor, resolveCritiquedSkillDir } from "../critique/command.js";
 import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
@@ -31,6 +30,7 @@ import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js"
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
 import { readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
+import { trackedSkill } from "./skill.js";
 import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
 
 /** Where variant snapshots live: outside every git work tree, or the stager would mount them empty. */
@@ -221,15 +221,11 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     if (pw) throw new UsageError(`case ${c.id}: ${pw}`);
   }
 
-  // Which skill's invocation the rows record (the `skill_invoked` column): one per plugin, or none.
-  const skillName = (() => {
-    try {
-      return gradedSkillNameFor(undefined, resolveCritiquedSkillDir(pluginDir, undefined));
-    } catch {
-      return undefined;
-    }
-  })();
-  if (skillName === undefined) say(`[${v}] the plugin has no single skill to record invocation for: skill_invoked is omitted`);
+  // Which skill's invocation the rows record (the `skill_invoked` column), resolved against the snapshot the runs
+  // mount. An unknown --skill refuses here, before any spend.
+  const tracked = trackedSkill(pluginDir, args.skill);
+  const skillName = tracked.name;
+  if (tracked.name === undefined) say(`[${v}] ${tracked.note}`);
 
   const job = makeHillclimbJobRunner({
     runScenario: deps.runScenario,

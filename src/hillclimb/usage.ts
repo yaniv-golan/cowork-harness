@@ -13,6 +13,7 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--judge-model",
   "--decider-cmd",
   "--decider-dir",
+  "--skill",
   "--output-format",
   "--dotenv",
   "--run-dir",
@@ -35,6 +36,9 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --ablate                run with the skill removed (the null run); use a sibling flow dir
   --dry-run               print the resolved scope, gate status and estimate; spend nothing
   --judge-model ID        concrete judge model for every semantic assertion
+  --skill NAME            the plugin skill whose invocation the rows record (skill_invoked): skills/NAME/
+                          of the variant's snapshot; needed for a multi-skill plugin. It joins the harness
+                          sha, so changing it needs --approve-harness
   --no-copy-inputs        do not copy session uploads into <flow>/inputs/
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
   --output-format text|json   json: one envelope on stdout at exit
@@ -44,11 +48,12 @@ export const HILLCLIMB_CHECK_USAGE = `usage: hillclimb check [--flow DIR] [--out
        Checks a flow dir against our reading of the published hillclimb schema, plus _state.json's metric
        declarations, and warns when a baseline case has no headroom. Exit 0 clean, 1 findings, 2 usage.`;
 
-export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <scenario.yaml | dir/> [--flow DIR] [--output-format text|json]
+export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <scenario.yaml | dir/> [--flow DIR] [--skill NAME] [--output-format text|json]
        Prints a _state.json skeleton for the loop to save: the metrics every row carries, the perf columns and
        the files the harness gate digests. With --flow, also writes the metrics legend to <flow>/metrics.md
        (an existing copy that differs is kept; the new legend goes to metrics.md.new). json: the envelope
-       also carries it as metrics_md.`;
+       also carries it as metrics_md. --skill NAME is checked against the plugin as run's is (an unknown
+       skill exits 2, naming the plugin's skills).`;
 
 /** The whole family: `hillclimb --help`, and the usage guard's text (every flag of every subcommand). */
 export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template> ...
