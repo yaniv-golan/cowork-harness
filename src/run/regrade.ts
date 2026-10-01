@@ -398,7 +398,9 @@ function uncheckedSections(
       // never read" — and a changed budget legitimately adds or reshapes them (a smaller budget truncates a file,
       // which adds a health note no live document had).
       if (s.kind === "health" || s.kind === "scratch_note") continue;
-      if (s.kind !== "authored" && s.kind !== "subagent" && s.chars <= (longest.get(s.kind) ?? -1)) continue;
+      // Covered by length only for the single, unscoped sections every document carries (final answer,
+      // transcript): an allowlist, so a section kind added later is unchecked until it is reasoned about here.
+      if ((s.kind === "final" || s.kind === "transcript") && s.chars <= (longest.get(s.kind) ?? -1)) continue;
       const key = `${assertionIndex}\0${s.kind}\0${s.path ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);

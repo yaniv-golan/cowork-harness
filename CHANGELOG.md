@@ -58,7 +58,8 @@ All notable changes to this project are documented here. The format is based on
   - `--output-format json` prints one payload document with a `runs[]` array. **The envelope is a covered
     surface** ([SPEC.md](./SPEC.md) §12), described by `schema/regrade.json`; the regrade file's layout stays
     experimental. A drift or unchecked-content refusal carries `error.code` (`doc_drift` /
-    `unchecked_content`) and `refusals[]`, listing every refused run dir; a write failure carries the run dirs
+    `unchecked_content`) and `refusals[]`, listing every refused run dir (complete only when no other refusal
+    fires); a write failure carries the run dirs
     already graded in `runs[]`.
 - **`--output-format json` now says whether `--max-budget-usd` was actually enforced.** Every envelope
   from `run`, `skill` and `record` (every `record` arm, including `record`'s `--dry-run` arms; `skill
