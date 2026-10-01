@@ -362,6 +362,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
+  `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
+  constant across both arms and only enlarged the correction family, which weakened the correction for the
+  real rows. An existing eval dir re-rendered with `eval report` loses those rows and can get a smaller `m`, so a
+  row's corrected label can move. An assertion that combines a modifier with another key is still a row. An eval
+  whose scenarios leave no row at all is refused, as one with no `assert:` entry is; a scenario of modifiers only,
+  alongside others that have rows, contributes runs but no row. `hillclimb` rows follow the same rule: such an
+  assertion gets no `a<i>` grade key, and a later assertion keeps its index.
 - **`lint-skill` lints a file once when two arguments reach it** (a relative and an absolute path to the same
   skill, or a symlinked alias). It used to report each finding once per argument.
 - **`scaffold` no longer asserts on a file that existed before the run unchanged** (marked
@@ -388,6 +396,11 @@ All notable changes to this project are documented here. The format is based on
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers
   (a staged plugin declares runnable hooks).
+- **An `eval` interrupted before it starts no longer leaves its eval dir behind.** A Ctrl-C (or SIGTERM)
+  while `eval` copied the arm snapshots, before its manifest was written, killed the process mid-copy: the
+  eval dir and its partial snapshots stayed, and that `--out` could not be reused. The eval now discards the
+  unstarted dir, as it does on a refusal, and exits 130 (143 for SIGTERM). Once the manifest exists the eval
+  has started, and an interrupt keeps the dir as before.
 - **A record redaction policy that rewrites an untouched file's body no longer blocks the recording.** The
   cassette kept the file's raw pre-run hash next to the redacted body's hash, so `input_unmodified` on it read
   "modified in place" and the record-time verdict check refused to write the cassette. Its pre-run hash is now
