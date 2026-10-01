@@ -386,7 +386,10 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
               if (o.status === "refused") {
                 failures++;
                 lines.push(
-                  `  [${v}] ${c.id}: the baseline reference was not frozen — ${o.message}; repair with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``,
+                  `  [${v}] ${c.id}: the baseline reference was not frozen — ${o.message}` +
+                    (o.restart
+                      ? ""
+                      : `; repair with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``),
                 );
               } else lines.push(`  [${v}] ${c.id}: froze the baseline reference from rep ${o.rep}`);
             }

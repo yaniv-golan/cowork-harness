@@ -599,7 +599,9 @@ there are three families:
   is created; §12 covers `plan.cost`'s summary keys and nothing else of `plan`), `hillclimb run` (`flow`, `variant`, `scheduled`, `scored` — the
   rows written to `results.jsonl` this pass, named so it never shadows the envelope's `ok` — `failed`, `exitCode`, and on `--dry-run`
   `dryRun: true` with the estimate at `plan.cost`, where `eval --dry-run` puts it), `hillclimb check` (`reading`, `disclaimer`, `profile`, `findings`, `errors`, `notes`, `warnings`),
-  `hillclimb state-template` (`state`, `metrics_md`, and with `--flow` `metrics_md_file`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
+  `hillclimb state-template` (`state`, `metrics_md`, and with `--flow` `metrics_md_file`; `notes` when a column was left
+  undeclared, experimental), `hillclimb freeze-ref` (payload experimental, §12: `frozen`, `added`, `exists`, `refused`,
+  `exitCode`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
   `answer` (`gate`, `answers`), `fixture export` (exit `0` written, `2` usage or refusal; payload experimental,
   §12: `message`, `written`, `skipped`, `refused` (`[]`), `notes`, `bytes`, `outputsDir`, `partial`, `result`; a
   refusal is the error envelope, its message in `error.message`, carrying `refused[]` and whichever of the other

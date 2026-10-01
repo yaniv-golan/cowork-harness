@@ -33,6 +33,7 @@ import {
 import { combineJudges } from "./judge-rollup.js";
 import { caseKeyDecls, refusableAssertion, type MetricDecl, type PairwiseDecls } from "./grade-keys.js";
 import { pairwiseRowValues } from "./pairwise.js";
+import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
@@ -302,7 +303,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const refShas: Record<string, string> = {};
   ctx.assertions.forEach((a, i) => {
     if (a.semantic_pairwise === undefined) return;
-    for (const o of authoredGrades[i]?.pairwise ?? []) if (o.refDocSha256 !== undefined) refShas[`a${i}/${o.ref}`] = o.refDocSha256;
+    // Keyed by compose key, not assert index: a re-scoped assert reads another document of the same reference.
+    for (const o of authoredGrades[i]?.pairwise ?? [])
+      if (o.refDocSha256 !== undefined) refShas[`${pairwiseComposeKey(a)}/${o.ref}`] = o.refDocSha256;
   });
   // Order the keys as declared, so every row reads the same way.
   const ordered: Record<string, number> = {};

@@ -444,7 +444,7 @@ async function run(
       });
       const snap = loadFlowSnapshot(flowAbs);
       if (v === "baseline") for (const line of headroom(snap).warnings) say(line);
-      for (const line of pairwiseHints(snap, flowArg)) say(line);
+      for (const line of pairwiseHints(snap, flowArg, args.target)) say(line);
     } catch (e) {
       fail++;
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);

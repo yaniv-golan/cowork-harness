@@ -3,7 +3,8 @@
 // captured — and say whether it equals what the live run's judge read.
 
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { runsWriteRoot } from "../run/trace-view.js";
 import { COMPOSER_ID, judgedOpts, semanticRefusal, type AssertContext } from "../assert.js";
 import { pathSafeId } from "../hillclimb/ids.js";
 import { tildeify } from "../io.js";
@@ -38,6 +39,12 @@ export interface ComposeSource {
   command: string;
   variant?: string;
   rep?: number;
+}
+
+function recordedRunDir(runDir: string, secrets: string[]): string {
+  const rel = relative(resolve(runsWriteRoot()), resolve(runDir));
+  if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return scrub(`<runs>/${rel.split(sep).join("/")}`, secrets);
+  return redactDeep(tildeify(runDir), secrets);
 }
 
 export function composeFromRunDir(
@@ -118,9 +125,10 @@ export function composeFromRunDir(
       command: cmd,
       ...(by.variant !== undefined ? { variant: by.variant } : {}),
       ...(by.rep !== undefined ? { rep: by.rep } : {}),
-      // Redacted like every string in the entry; the run id (the dir's name, never a path) is kept beside it, so a
-      // later `hillclimb freeze-ref` can still find the run under the runs root.
-      runDir: redactDeep(tildeify(runDir), secrets),
+      // A store may be committed or shared, so no host path: under the runs root the dir is recorded relative to it
+      // (`<runs>/…`), anywhere else redacted. The run id (the dir's name, never a path) rides beside it, so a later
+      // `hillclimb freeze-ref` finds the run under whatever runs root is current.
+      runDir: recordedRunDir(runDir, secrets),
       resultSha256,
       sessionId: basename(runDir),
     },

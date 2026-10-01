@@ -46,8 +46,8 @@ export function stateTemplate(opts: {
   for (const r of opts.pairwiseRefs ?? [])
     if (r.rowsMissing > 0)
       notes.push(
-        `win_${r.ref} is not declared: ${r.rowsMissing} scored row(s) were written before ${r.ref}'s reference was frozen and do not carry it — ` +
-          `declare it once every scored row does, by re-running this command`,
+        `win_${r.ref} is not declared: ${r.rowsMissing} scored row(s) were written before ${r.ref}'s reference was frozen and do not carry it, ` +
+          `and a written row is never rewritten — it stays on the rows as drill-down data`,
       );
   if (opts.pairwiseRefs === undefined && flowHasPairwise(opts.cases))
     notes.push("pass --flow to declare a win_<vN> column for each later variant's frozen reference (only `win` is declared without it)");

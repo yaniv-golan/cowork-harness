@@ -129,7 +129,7 @@ function refVariants(snap: FlowSnapshot): string[] {
 /** The second-reference hint (warn-only, never an exit code): a variant that beats the NEWEST reference on 90% or
  *  more of its measured rows has little left to show against it — freeze that variant's own reference, so the next
  *  rounds are compared with the new bar (`win_<vN>`). Only variants numbered after the newest reference count. */
-export function pairwiseHints(snap: FlowSnapshot, flowArg = "<flow>"): string[] {
+export function pairwiseHints(snap: FlowSnapshot, flowArg = "<flow>", target = "<scenarios>"): string[] {
   const refs = refVariants(snap);
   const newest = refs[refs.length - 1];
   if (newest === undefined) return [];
@@ -148,7 +148,7 @@ export function pairwiseHints(snap: FlowSnapshot, flowArg = "<flow>"): string[] 
     if (mean >= 0.9)
       out.push(
         `note: ${v} scores ${mean.toFixed(2)} on ${col} over ${vals.length} row(s) — it has little left to show against the ${newest} reference; ` +
-          `freeze ${v}'s own with \`hillclimb freeze-ref <scenarios> --flow ${flowArg} --variant ${v}\` to compare the next rounds with it`,
+          `freeze ${v}'s own with \`hillclimb freeze-ref ${target} --flow ${flowArg} --variant ${v}\` to compare the next rounds with it`,
       );
   }
   return out;
@@ -173,7 +173,7 @@ export function pairwiseRefFindings(snap: FlowSnapshot): SchemaFinding[] {
             level: "error",
             rule: "pairwise.ref_changed",
             file: `${v}/results.jsonl`,
-            message: `case ${String(r.prompt_id)}: ${k} was judged against a different reference document than ${prev.where} — a frozen reference changed under the flow; start a fresh flow dir`,
+            message: `case ${String(r.prompt_id)}: ${k} (compose key/reference) was judged against a different reference document than ${prev.where} — a frozen reference changed under the flow; start a fresh flow dir`,
           });
       }
     }

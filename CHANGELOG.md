@@ -125,8 +125,10 @@ All notable changes to this project are documented here. The format is based on
   assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of
   the scenario's `refs:`. A baseline pass is neutral against its own reference and freezes it after the pool from each
   case's lowest-rep good row; any other variant is refused before spending while its case has none. Only the
-  baseline's reference decides `pass`; rows gain `win` / `win_present` / `both_bad`, a `win_<vN>` column per later
-  reference, and per-assert drill-down keys, which `state-template` declares and the metrics legend explains.
+  baseline's reference decides `pass`; rows gain `win` / `win_present` / `both_bad` (which `state-template` declares
+  and the metrics legend explains), a `win_<vN>` column per later reference, and per-assert drill-down keys. A
+  `win_<vN>` column is declared only when every scored row carries it; rows written before that reference was
+  frozen never do, so it stays drill-down data on them.
   `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar;
   `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
   90% of its rows. A `semantic_pairwise` result now records `composedDoc` (the composed document's fingerprint, even

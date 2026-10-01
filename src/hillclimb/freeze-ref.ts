@@ -82,7 +82,8 @@ export interface FreezeCaseInput {
 export type FreezeCaseOutcome =
   | { status: "frozen" | "added"; caseId: string; rep: number; message: string }
   | { status: "exists"; caseId: string; message: string }
-  | { status: "refused"; caseId: string; message: string };
+  /** `restart`: no freeze can repair it (a damaged entry, one for another prompt, its recorded run gone) — the flow restarts. */
+  | { status: "refused"; caseId: string; message: string; restart?: true };
 
 /** Freeze one case's reference into `<flow>/<variant>/ref`. An entry already holding every compose key the case's
  *  pairwise asserts need is `exists` (benign). An entry missing a key (an assert added, a scope changed) gains it
@@ -92,13 +93,19 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
   const keys = [...new Set(i.assertions.filter((a) => a.semantic_pairwise !== undefined).map(pairwiseComposeKey))];
   const existing = readRefEntry(store, i.caseId);
   if (existing.status === "integrity")
-    return { status: "refused", caseId: i.caseId, message: `the reference for case ${i.caseId} in ${store} is damaged: ${existing.why}` };
+    return {
+      status: "refused",
+      caseId: i.caseId,
+      restart: true,
+      message: `the reference for case ${i.caseId} in ${store} is damaged: ${existing.why}`,
+    };
   if (existing.status === "ok") {
     // A reference for another task is not this case's answer: never compared, never extended — the flow must restart.
     if (existing.taskSha256 !== createHash("sha256").update(i.prompt, "utf8").digest("hex"))
       return {
         status: "refused",
         caseId: i.caseId,
+        restart: true,
         message: `case ${i.caseId}: its reference in ${store} was frozen for a different prompt — start a fresh flow dir for the changed scenario`,
       };
     const lacking = keys.filter((k) => readRefDoc(store, i.caseId, k).status !== "ok");
@@ -115,6 +122,7 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
       return {
         status: "refused",
         caseId: i.caseId,
+        restart: true,
         message:
           `case ${i.caseId}: its reference lacks compose key(s) ${lacking.join(", ")} and the run it was frozen from (${existing.source.runDir}) is gone — ` +
           `a reference never mixes runs, so start a fresh flow dir for the changed assertions`,
