@@ -163,14 +163,15 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       );
 
   // The plugin the variant runs. A variant with rows keeps the snapshot of its first run.
+  // A dry run makes the same checks read-only, and takes no snapshot.
   let pluginDir = live;
-  if (!args.dryRun) {
+  {
     const variantRan = ["results.jsonl", "errors.jsonl"].some((f) => slotsIn(readVariantFileIfPresent(flowArg, v, f, deps.cwd)).size > 0);
     // A live runner of this variant may be mounting its snapshot: never re-take it under that runner.
     const holder = liveLockHolder(flowArg, v, deps.cwd);
     if (holder !== undefined) throw new UsageError(lockHeldMessage(holder, join(flowArg, v, ".lock")));
-    NoFollowRoot.open(snapshotRoot); // created no-follow: a planted link on its path is refused
-    const snap = variantSnapshot(live, { snapshotRoot, flowHash, variant: v, variantRan });
+    if (!args.dryRun) NoFollowRoot.open(snapshotRoot); // created no-follow: a planted link on its path is refused
+    const snap = variantSnapshot(live, { snapshotRoot, flowHash, variant: v, variantRan, checkOnly: args.dryRun });
     pluginDir = snap.dir;
     if (snap.created) say(`[${v}] plugin snapshot: ${tildeify(live)} → ${tildeify(snap.dir)}`);
     if (snap.untrackedExcluded)

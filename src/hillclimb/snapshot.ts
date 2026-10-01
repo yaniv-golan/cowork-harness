@@ -63,7 +63,7 @@ const digest = (dir: string, rels: readonly string[]): string => {
 
 export function variantSnapshot(
   live: string,
-  opts: { snapshotRoot: string; flowHash: string; variant: string; variantRan?: boolean },
+  opts: { snapshotRoot: string; flowHash: string; variant: string; variantRan?: boolean; checkOnly?: boolean },
 ): VariantSnapshot {
   if (isInsideGitWorkTree(opts.snapshotRoot))
     throw new UsageError(
@@ -77,7 +77,7 @@ export function variantSnapshot(
     const liveDiffers = digest(dir, rels) !== digest(live, rels);
     // A variant with no rows has measured nothing yet: its snapshot (left by a refused run) is re-taken
     // when the live plugin moved on, or the pass would measure an older round under this variant's name.
-    if (opts.variantRan || !liveDiffers) return { dir, created: false, liveDiffers };
+    if (opts.variantRan || !liveDiffers || opts.checkOnly) return { dir, created: false, liveDiffers };
   }
   if (opts.variantRan) {
     if (existsSync(dir))
@@ -88,6 +88,9 @@ export function variantSnapshot(
       `variant ${opts.variant} already has rows, but its plugin snapshot ${tildeify(dir)} is missing: running it now would measure the live plugin, which may hold a later round — restore the snapshot or re-run this variant into a fresh flow`,
     );
   }
+  // A dry run checks what a pass would refuse, and stops before writing: the pass would take a snapshot of the live
+  // plugin, so the dry run checks that plugin.
+  if (opts.checkOnly) return { dir: live, created: false, liveDiffers: false };
   rmSync(marker, { force: true }); // first: a crash mid-replace must not leave a marker vouching for it
   rmSync(dir, { recursive: true, force: true }); // an interrupted or outdated copy of a variant that never ran
   const tmp = `${dir}.tmp-${randomBytes(6).toString("hex")}`;

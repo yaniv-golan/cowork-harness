@@ -528,4 +528,33 @@ describe("runHillclimbCommand", () => {
     expect(metas[0]).not.toHaveProperty("judge_transport");
     expect(metas[1].judge_transport).toEqual({ isolation: "strict", cliVersion: "9.9.9" });
   });
+
+  describe("--dry-run refuses what the pass would, creating nothing", () => {
+    it("a variant with rows whose snapshot is gone", async () => {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+      await runHillclimbCommand(args(), deps());
+      rmSync(snaps, { recursive: true, force: true });
+      mkdirSync(snaps);
+      const r = await runHillclimbCommand(args("--dry-run", "--reps", "2"), deps({ indexRows: () => [] }));
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toMatch(/snapshot .* is missing/);
+      expect(readdirSync(snaps)).toEqual([]);
+    });
+
+    it("a snapshot root inside a git work tree", async () => {
+      const d = deps({ indexRows: () => [] });
+      const r = await runHillclimbCommand(args("--dry-run"), { ...d, snapshotRoot: join(import.meta.dirname, "..", ".snap-test-dry") });
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toMatch(/git work tree/);
+      expect(existsSync(join(import.meta.dirname, "..", ".snap-test-dry"))).toBe(false);
+    });
+
+    it("another live runner holding the variant's lock", async () => {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+      writeFileSync(join(cwd, "flow", "baseline", ".lock"), JSON.stringify({ pid: process.pid }));
+      const r = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toMatch(/another hillclimb process/);
+    });
+  });
 });
