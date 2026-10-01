@@ -21,13 +21,90 @@ it.
 
 - **Live only.** Every rep is a real agent run; `eval` never replays a cassette.
 - **Runs.** scenarios × 2 arms × `--reps` — 10 runs per scenario at the default `--reps 5` — plus one
-  judge call per `semantic_matches` assert per run. There is no budget flag; the start-up line prints the
-  job count before the first run, and `stats` prices past runs of the same scenarios.
+  judge call per `semantic_matches` assert per run. `--dry-run` prices the schedule from history before
+  you spend anything ([Planning before you spend](#planning-before-you-spend---dry-run)), and
+  `--max-budget-usd <x>` refuses the eval before its first run when history says it would cost more than x.
+  Both read the agent's cost only: judge and LLM-decider spend are not counted, as on every other command.
 - **Tier.** Each scenario runs at its own `fidelity:`, with that tier's prerequisites (Docker and the
   agent image for `container`, and so on) — check them with `cowork-harness doctor --tier <tier>`. The
   agent credential is checked for you: see [What it holds fixed](#what-it-holds-fixed-refused-before-any-run-exit-2).
 - **Run an A/A first.** `eval` with the same source as both arms (`--allow-identical-arms`) shows how
   far your scenarios' rates move when nothing changed. Read that before trusting a before/after.
+
+## Planning before you spend (`--dry-run`)
+
+`eval … --dry-run` makes every check the real eval makes before its first run, then prints a plan and exits
+0. It runs no agent, builds no `--decider-cmd`/`--decider-dir` channel, and creates no eval dir: the arm
+snapshots it needs for the checks go to a temp dir that is removed afterwards. (The credential check still
+runs, as on `record --dry-run`; it may run the `security` Keychain probe or a container runtime's
+`--version`. So does the host-`claude` isolation check when a scenario calls the judge or the LLM decider: it
+runs `claude --help` / `--version`, and a host `claude` that is missing, or too old to run them isolated, refuses the dry
+run as it refuses the eval.) A refusal is the real eval's refusal, with the same message and exit code, so a clean dry run
+is never refused for real on anything it could have checked. One refusal is the dry run's own: its temp dir
+must be outside any git work tree, for the same reason the eval dir must (the snapshots would hash as empty),
+so a TMPDIR inside one, or one git cannot answer for, exits 3 — set TMPDIR to a directory outside any git
+work tree. The plan is the dry run's
+output: `--quiet` does not mute the plan, only the per-arm progress lines before it.
+
+```
+cowork-harness eval evals/ --arm before=./skill --arm after=../skill-edit --dry-run --target-effect 30pp
+```
+
+Everything comes from the runs dir's history of each scenario (`~/.cowork-harness/runs`, or `--run-dir`):
+
+- **Cost at `--reps`.** p50, mean, p95 and worst observed, each per scenario × its 2 × `--reps` runs, summed
+  over the scenarios that have priced history. The history is the scenario's runs on the tier it will run at
+  (`cowork` resolved to its concrete tier) and on its baseline, first turns only, with `hillclimb:`-labelled
+  runs left out. `stats <name> --baseline <b> --group-by fidelity` prints the same per-run figures for that
+  tier, except that it counts resumed turns and hillclimb runs; the plan names both counts when they are
+  non-zero. p95 is the most expensive run when a scenario has 20 or fewer; neither p95 nor the worst-observed
+  sum is a bound. A scenario with no priced run contributes $0 and makes the total a **LOWER BOUND** — on a
+  fresh `--run-dir`, every scenario. History is arm-agnostic: arm B's cost may differ from arm A's past runs.
+  The judge's spend is printed beside it, and is not covered by `--max-budget-usd`.
+- **Each row's rate.** Each kept run's `result.json` is re-scored by the eval's own classifier — an
+  infrastructure failure is left out, an agent error scores 0 on every row, a run graded against a different
+  assertion is left out for that row only. Only runs on the eval's agent model count, and a claim row only
+  counts runs graded by the eval's judge model for that assertion. The newest 50 qualifying runs per scenario
+  are used. When 5 or more of them ran arm A's exact content (its content signature), the rate comes from
+  those, with the config-matched rate shown beside it; otherwise from all of them, with the exact-content
+  count printed. After an edit, with an `--include-untracked` arm, history recorded under
+  `COWORK_HARNESS_GITSET=0`, or a session that declares a different set of skill dirs, no run matches arm A's
+  content, by design. A rate from fewer than 5 runs is labelled THIN, and every rate carries its 95% interval.
+  A row with no usable history is `unknown`: the plan then shows only the best case (the smallest change any
+  rate allows at `--reps`). The index's pass/fail verdicts are shown as context only; no row rate is drawn
+  from them.
+- **What `--reps` can detect.** Per row, the minimum detectable drop and rise at `--reps` — the same figure
+  the report prints, at the historical rate and across its interval. *Detectable* means an observed difference
+  this large reaches p ≤ `--alpha`; at the smallest such N a true difference of that size is observed that
+  large typically only about 60% of the time. That is why every N also carries its **power**.
+- **`--target-effect <pp>`** (percentage points, `30pp` or `30`, 1 to 100; dry run only). Per row and
+  direction: the smallest N at which that change is detectable at `possible` and, for a single row, at
+  `confirmed`; the smallest N with 80% power (`nForPower80`); the power at `--reps`; and the cost of the eval at
+  each N, for that scenario and for the whole eval. Neither detectability nor power is monotone in N, so each
+  N comes with the N from which it holds at every larger N. With a historical valid-rep fraction below 1, the
+  plan also says how many reps to schedule for N valid ones. A row at 100% cannot show a rise at its point
+  estimate; the plan then shows what the target would need if the true rate were the interval's lower end.
+- **Sequential preview.** A look at every complete ABBA block — the most looks, so the most conservative
+  per-look level — with alpha split evenly across the looks and Holm within a look: the first look at which a
+  single row could reach `confirmed`. `--sequential` is not implemented; this previews its planned design and
+  may change with it. The fixed design the eval runs today is printed beside it.
+
+`--output-format json` prints `{tool, version, command:"eval", ok:true, dryRun:true, plan, budget?, error:null}`.
+`plan.cost`'s summary keys — `jobs`, `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`,
+`unpriced`, `pricedRuns`, `thinnest` — are a covered surface ([schema/schedule-cost.json](../schema/schedule-cost.json));
+everything else in `plan` is experimental (`schemaVersion: 0`).
+
+### `--max-budget-usd`
+
+`--max-budget-usd <x>` works with and without `--dry-run`. It sums, over the scenarios, each scenario's most
+expensive prior run times its 2 × `--reps` runs, and refuses before any run when that exceeds x (exit 2,
+`error.code: "budget_exceeded"`, with the `budget` marker and the plan on the error envelope). It is the
+`record` batch gate's rule, and it reads that gate's basis — any tier, baseline or turn of the scenario's
+name, hillclimb runs included — which is wider than the plan's `worstObservedUsd`; the plan prints it as the
+budget-gate basis. A real eval with a cap reads the run index only (never the kept `result.json` files), so the
+plan its refusal carries is cost-only (`plan.costOnly: true`, every row `unknown`). A cap
+equal to the estimate passes. With no priced history the check is against a lower bound, and the `budget`
+marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is never stopped mid-way.
 
 ## What it compares
 
@@ -73,6 +150,10 @@ it.
 - `--on-unanswered fail|first`, `--decider-cmd`, `--decider-dir` — how unscripted questions are answered,
   as on `run`.
 - `--fail-on possible|confirmed` — opt in to gating (see [Exit codes](#exit-codes)).
+- `--dry-run` — print the plan and exit; see [Planning before you spend](#planning-before-you-spend---dry-run).
+- `--target-effect <pp>` — with `--dry-run`, the change to size N for, in percentage points.
+- `--max-budget-usd <x>` — refuse before any run when history says the eval would cost more than x; see
+  [`--max-budget-usd`](#--max-budget-usd).
 - `--output-format json` — the envelope
   `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`,
   with `ok` true exactly when the exit code is 0.
@@ -202,8 +283,13 @@ A refused eval leaves nothing in its eval dir.
   with `--fail-on confirmed`, a `confirmed` drop only. Also, with or without it: every row `insufficient`
   (`insufficient_refusals` rows do not count toward this), a scenario that compared nothing (below), or the
   judge model differed across reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
-- `2` — usage, or any refusal before the first run.
+- `2` — usage, or any refusal before the first run (the `--max-budget-usd` refusal included).
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
+
+Under `--dry-run`: `0` the plan was printed; `2` any refusal the real eval would make before its first run;
+`3` as above, or the dry run's temp dir is inside a git work tree, or git cannot tell whether it is (set
+TMPDIR). Every dry-run refusal's JSON
+error envelope carries `dryRun: true`, and `plan` when the refusal came after the plan was computed.
 
 ### When every rep errored
 

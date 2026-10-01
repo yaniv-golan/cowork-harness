@@ -45,6 +45,8 @@ import { hostPathTokens } from "../src/run/host-path-tokens.js";
 import { createHash } from "node:crypto";
 import { COMPOSER_ID } from "../src/assert.js";
 import { composeKey, freezeRef } from "../src/refs/store.js";
+import { appendIndexRow } from "../src/run/run-index.js";
+import { budgetStatus, resetBudgetStatus } from "../src/run/budget-status.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
 // report.md's row table: row | assertion / claim | A | B | B − A [95% CI] | p | adj. p | label | note.
@@ -870,6 +872,41 @@ describe("eval: snapshots and their signatures", () => {
         isolationCheck: () => "OLD-CLI-REFUSAL",
       }),
     ).rejects.toThrow(/OLD-CLI-REFUSAL/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the isolation refusal comes before the --max-budget-usd gate (a real eval with priced history over the cap)", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    resetBudgetStatus();
+    const app = loadBaseline("latest").appVersion;
+    for (const [i, scenario] of ["csv-metrics", "smoke-semantic-evidence-files"].entries())
+      appendIndexRow(runsRoot, {
+        v: 1,
+        ts: `2026-09-1${i}T00:00:00.000Z`,
+        command: "run",
+        scenario,
+        slug: scenario,
+        runId: `local_hist${i}`,
+        fidelity: "container",
+        baseline: app,
+        result: "success",
+        pass: true,
+        signals: [],
+        costUsd: 100, // 10 jobs x $100 is far over the $1 cap: the gate would refuse if it ran first
+        turn: 1,
+        partial: false,
+        nonDeterministic: false,
+        outDir: join(runsRoot, scenario, `local_hist${i}`),
+        git: { branch: null, sha: null },
+      });
+    const calls: EvalJobSpec[] = [];
+    await expect(
+      runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--max-budget-usd", "1"]), {
+        ...deps(fakeRunner(undefined, calls)),
+        isolationCheck: () => "OLD-CLI-REFUSAL",
+      }),
+    ).rejects.toThrow(/OLD-CLI-REFUSAL/);
+    expect(budgetStatus()).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
 

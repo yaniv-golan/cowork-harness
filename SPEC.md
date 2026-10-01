@@ -595,7 +595,8 @@ there are three families:
   payload, the `record <dir/>` / `record --rerecord-stale` batch payload (below), `scaffold <run>`
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload, `eval` and `eval report` (`evalDir`, `arms`, `pins`,
-  `sections`, `summary`, `cost`, `stoppedEarly`), `hillclimb run` (`flow`, `variant`, `scheduled`, `scored` — the
+  `sections`, `summary`, `cost`, `stoppedEarly`), `eval --dry-run` (`dryRun: true`, `plan` — no `evalDir`, none
+  is created; §12 covers `plan.cost`'s summary keys and nothing else of `plan`), `hillclimb run` (`flow`, `variant`, `scheduled`, `scored` — the
   rows written to `results.jsonl` this pass, named so it never shadows the envelope's `ok` — `failed`, `exitCode`, and on `--dry-run`
   `dryRun: true` with the estimate at `plan.cost`, where `eval --dry-run` puts it), `hillclimb check` (`reading`, `disclaimer`, `profile`, `findings`, `errors`, `notes`, `warnings`),
   `hillclimb state-template` (`state`, `metrics_md`, and with `--flow` `metrics_md_file`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
@@ -729,7 +730,8 @@ shape before parsing it generically.
 invocation, not about any one `RunResult`, so it is published on the envelope frame — beside `ok` and
 `error`, on every family (`results[]`-bearing, payload-shaped, and the error envelope) — as a top-level
 `budget` key, whenever a `--max-budget-usd` pre-flight ran: `run` (a file, `<dir/>`, `--matrix`), `skill`,
-and `record` (a file, `<dir/>`, `--rerecord-stale`, and both `--dry-run` arms). It is **absent** when no cap
+`record` (a file, `<dir/>`, `--rerecord-stale`, and both `--dry-run` arms), and `eval` (a real eval and
+`--dry-run` alike). It is **absent** when no cap
 was passed and on a `--repeat` lane, which skips the pre-flight and enforces a running total instead
 (reported as `rollups[].stoppedEarly: "budget"`). One shape, used in both places below:
 
@@ -738,7 +740,8 @@ was passed and on a `--repeat` lane, which skips the pre-flight and enforces a r
   "capUsd": 0.5,                       // the --max-budget-usd value
   "basis": "single" | "batch",         // single: each scenario's OWN worst observed cost vs the cap (run, skill,
                                        //   a record file, each scenario of run <dir/>); batch: the SUM over a
-                                       //   record <dir/> / --rerecord-stale batch vs the cap
+                                       //   record <dir/> / --rerecord-stale batch, or over an eval's schedule
+                                       //   (each scenario's worst x its 2 x --reps runs), vs the cap
   "enforced": true | false | "lower_bound",
                                        // true: every scenario was priced. false (single): at least one scenario
                                        //   had no history and ran with NO cap. "lower_bound" (batch): unpriced
@@ -760,13 +763,15 @@ two are not distinguished).
 A budget **refusal** is the error envelope with `error.category: "runtime"` (unchanged), plus
 **`error.code: "budget_exceeded"`** and **`error.budget`** — the same shape as above, describing the
 estimate that was refused (`enforced` is `true`, or `"lower_bound"` when the known part of a batch alone
-exceeds the cap). Exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`). `error.code` narrows a
+exceeds the cap). Exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`/`eval`). `error.code` narrows a
 category and never replaces one; it is **absent** on every other error, so `error.code ===
 "budget_exceeded"` is the whole test for "refused on cost" and a load failure is never mistaken for it.
 When the refusal replaces a payload envelope, that payload's findings stay on the error envelope as the
 same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `target`, `scenarios`,
 `skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
-`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`. (Through 4.2.0
+`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`; an `eval` refusal
+carries the `plan` when one was computed before it (on a dry run, or a real eval with `--max-budget-usd`, whose
+plan is cost-only), and a dry run's refusal always carries `dryRun: true`. (Through 4.2.0
 these went to stderr only, and the message prose was the only discriminator.)
 On `run <dir/>` each scenario is pre-flighted on its own, so the top-level `budget` (merged across every
 scenario checked so far) can differ from `error.budget`, which describes the refused scenario only.
@@ -917,7 +922,7 @@ prints the same exclusion warning the run prints. `verify-run` follows the same 
 not exist or is a file, or a scenario file that does not load, is `usage`; a directory holding no completed
 run stays `runtime`. `answer` splits the same way: a directory or gate that is not there is `usage`; a gate
 request that exists but cannot be read or parsed, or an answer that cannot be written, is `runtime`.
-**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `eval` (and `eval report`) exits `0` when the comparison completed — whatever drops the rows show, unless `--fail-on` was given; `1` for a drop at the `--fail-on` level (`possible` or `confirmed`; no gating without the flag — under `possible` a drop includes an `insufficient_refusals` row, one the candidate's excess `semantic_matches` refusals for unavailable evidence took below the rep threshold, which would otherwise hide a drop as `insufficient`), every row `insufficient`, or a judge model that differed across reps; `2` for a usage error or any refusal before the first run (an alias model, an eval dir inside a git work tree, identical arms, the answer-key guard, a scenario input a run would refuse, an unreachable `--fail-on confirmed`); `3` when an arm snapshot could not be copied or failed its staging preflight. Its `--output-format json` envelope is `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`, with `ok` ⇔ exit `0`. `hillclimb run` exits `0` when every attempted (case, rep) was scored, `1` when any attempt failed (an `errors.jsonl` row, or a scored row whose trace or copies could not be written), the pass stopped mid-run (rows already written are kept), or `summary.json` could not be written after the pass, and `2` for any refusal before spending: a usage error, the harness gate, an alias model, a flow-dir or `_state.json` problem, split or duplicate case ids, an unknown `--case`, the answer-key guard, a `harness_paths` entry inside the tuned plugin, a missing or incomplete variant snapshot, a scenario input a run would refuse, a `semantic_pairwise` reference that is missing, damaged or exposed through a mount (the gate a run applies), a host `claude` that cannot run the judge or LLM decider isolated (checked when a scenario uses `semantic_matches` or `semantic_pairwise`, or `on_unanswered: llm` with no decider channel, as on `eval`), or a decider with `--concurrency` above 1; `--dry-run` exits `0` unless such a refusal fires; the harness gate does not refuse a dry run, which reports its status instead. `--timeout-s` bounds the whole attempt: the agent phase through the scenario's `timeout_ms` (lowered to it), and the judge phase through a deadline no judge may start after; an attempt that reaches it is an `errors.jsonl` row (`timeout`), never a scored one. Its envelope's `ok` ⇔ exit `0`. Its `--dry-run` `plan.cost` is the same object `eval --dry-run` emits at `plan.cost` (covered keys `jobs`, `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced`, `pricedRuns`, `thinnest`; `p95Usd` and `worstObservedUsd` are pessimistic figures, never bounds, and `worstObservedUsd` is not the `--max-budget-usd` gate's figure), priced on `eval --dry-run`'s basis exactly — the scenario's runs on this machine at its effective tier and baseline, turn 1, every `hillclimb:` run excluded — so each covered key means the same on both commands. `jobs` is the slots the pass would still run after resuming. A scored row records how its judge ran in `meta.judge_transport` (`assertions[].judgeTransport`'s shape, `{isolation, cliVersion?, strictMcp?}`), or `meta.judge_transports` listing each distinct one when its asserts were judged differently; neither is present when no host judge recorded one, so a round judged under a different isolation can be told apart from a regression. `hillclimb check` exits `0` clean, `1` on any error finding (a headroom warning never changes it), `2` usage; `hillclimb state-template` exits `0`, or `2` on usage or a refusal. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
+**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `eval` (and `eval report`) exits `0` when the comparison completed — whatever drops the rows show, unless `--fail-on` was given; `1` for a drop at the `--fail-on` level (`possible` or `confirmed`; no gating without the flag — under `possible` a drop includes an `insufficient_refusals` row, one the candidate's excess `semantic_matches` refusals for unavailable evidence took below the rep threshold, which would otherwise hide a drop as `insufficient`), every row `insufficient`, or a judge model that differed across reps; `2` for a usage error or any refusal before the first run (an alias model, an eval dir inside a git work tree, identical arms, the answer-key guard, a scenario input a run would refuse, an unreachable `--fail-on confirmed`, a `--max-budget-usd` refusal — `error.code: "budget_exceeded"`); `3` when an arm snapshot could not be copied or failed its staging preflight. Its `--output-format json` envelope is `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`, with `ok` ⇔ exit `0`. `eval --dry-run` runs no agent and creates no eval dir: it exits `0` with the plan (`{tool, version, command:"eval", ok:true, dryRun:true, plan, budget?, error:null}`), `2` for any refusal the real eval would make before its first run (the budget refusal included), `3` as above, or when its temp dir is inside a git work tree or git cannot tell whether it is (set TMPDIR) — its arm snapshots go to a temp dir that is removed afterwards. `hillclimb run` exits `0` when every attempted (case, rep) was scored, `1` when any attempt failed (an `errors.jsonl` row, or a scored row whose trace or copies could not be written), the pass stopped mid-run (rows already written are kept), or `summary.json` could not be written after the pass, and `2` for any refusal before spending: a usage error, the harness gate, an alias model, a flow-dir or `_state.json` problem, split or duplicate case ids, an unknown `--case`, the answer-key guard, a `harness_paths` entry inside the tuned plugin, a missing or incomplete variant snapshot, a scenario input a run would refuse, a `semantic_pairwise` reference that is missing, damaged or exposed through a mount (the gate a run applies), a host `claude` that cannot run the judge or LLM decider isolated (checked when a scenario uses `semantic_matches` or `semantic_pairwise`, or `on_unanswered: llm` with no decider channel, as on `eval`), or a decider with `--concurrency` above 1; `--dry-run` exits `0` unless such a refusal fires; the harness gate does not refuse a dry run, which reports its status instead. `--timeout-s` bounds the whole attempt: the agent phase through the scenario's `timeout_ms` (lowered to it), and the judge phase through a deadline no judge may start after; an attempt that reaches it is an `errors.jsonl` row (`timeout`), never a scored one. Its envelope's `ok` ⇔ exit `0`. Its `--dry-run` `plan.cost` is the same object `eval --dry-run` emits at `plan.cost` (covered keys `jobs`, `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced`, `pricedRuns`, `thinnest`; `p95Usd` and `worstObservedUsd` are pessimistic figures, never bounds, and `worstObservedUsd` is not the `--max-budget-usd` gate's figure), priced on `eval --dry-run`'s basis exactly — the scenario's runs on this machine at its effective tier and baseline, turn 1, every `hillclimb:` run excluded — so each covered key means the same on both commands. `jobs` is the slots the pass would still run after resuming. A scored row records how its judge ran in `meta.judge_transport` (`assertions[].judgeTransport`'s shape, `{isolation, cliVersion?, strictMcp?}`), or `meta.judge_transports` listing each distinct one when its asserts were judged differently; neither is present when no host judge recorded one, so a round judged under a different isolation can be told apart from a regression. `hillclimb check` exits `0` clean, `1` on any error finding (a headroom warning never changes it), `2` usage; `hillclimb state-template` exits `0`, or `2` on usage or a refusal. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
 `2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
 shape, unsupported version, unrecognized assertion key) or any per-file throw, plus the batch loop's
 own source-resolution failures (`--assert-from`/`--reassert` drift, scenario-parse errors, `--write`
@@ -1148,6 +1153,18 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   every re-graded assert passes (`ok: true` iff exit `0`) · `1` any fails or is judge-invalid · `2` a usage
   error, a refusal before any judge call (the evidence refusals carry `error.code`), or a failure writing a
   regrade file after earlier run dirs were graded (§11). The regrade output FILE is not part of this (below).
+- **The planned-schedule cost summary** — `plan.cost` in the `eval --dry-run` JSON envelope, validated by
+  `schema/schedule-cost.json` (one serializer, `scheduleCostJson`). Covered: `jobs` (agent runs scheduled),
+  `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced[]`, `pricedRuns` and `thinnest` (null
+  when nothing is priced). **Their one basis:** each scenario's prior runs in the runs dir's index on the
+  schedule's effective tier (`cowork` resolved) and its baseline, turn 1 only, `hillclimb:`-labelled runs
+  excluded, agent cost only (no judge or decider spend). `worstObservedUsd` is on that same basis — the sum over
+  the priced scenarios of jobs × the most expensive run on it — and is NOT the `--max-budget-usd` gate's figure,
+  which reads a wider basis (any tier, baseline or turn, hillclimb runs included; the experimental
+  `budgetGateWorstUsd`). Each dollar key sums the priced scenarios only; an unpriced one adds $0, is named in
+  `unpriced[]`, and sets `lowerBound`. Every other key of that object (`budgetGateWorstUsd`, `judge*`,
+  `decider*`, `items[]`) is experimental. Adding a key is MINOR; removing or renaming one, or changing its basis or
+  meaning, is MAJOR.
 - **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **14**
   (`schema/cassette.v14.json`) and its verdict-modifier assertion keys.
 
@@ -1272,10 +1289,13 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   it stabilizes too.
 - **The `eval` report** — `report.json` (`schemaVersion: 0`), `report.md`, `manifest.json`, `runs.jsonl` and the
   `arms`/`pins`/`sections`/`summary`/`cost` payload of its JSON envelope — plus its row labels and the defaults of
-  its statistical flags (`--reps`, `--alpha`, `--correction`, `--concurrency`, and the `insufficient` threshold).
-  `eval` is EXPERIMENTAL; these are expected to change as the wording and thresholds are tuned. The command name,
-  its `--arm` source grammar, its exit codes (§11) and `--fail-on`'s meaning — no gating unless it is given — are
-  covered.
+  its statistical flags (`--reps`, `--alpha`, `--correction`, `--concurrency`, and the `insufficient` threshold) —
+  and `--dry-run`'s `plan` payload (`schemaVersion: 0`) apart from `plan.cost`'s covered summary keys above,
+  including its estimates, its text, its history window, the 80% power target and its assumed sequential design
+  (`implemented: false`). `eval` is EXPERIMENTAL; these are expected to change as the wording and thresholds are
+  tuned. The command name, its flags (`--dry-run`, `--target-effect` — which requires `--dry-run` — and
+  `--max-budget-usd` included), its `--arm` source grammar, its exit codes (§11), the `budget` marker and
+  `error.code` on it (§11), and `--fail-on`'s meaning — no gating unless it is given — are covered.
 - **The `hillclimb` flow files beyond the published runner-scaffold contract** — the harness's own row `meta`
   keys, the `out/` copies and sidecars, the `metrics.md` wording and `hillclimb check`'s findings text — and the
   experimental keys of the `--dry-run` `plan.cost` object (`budgetGateWorstUsd`, `judgeMeanUsd`, `judgeP50Usd`, `items`).

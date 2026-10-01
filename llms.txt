@@ -45,7 +45,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [docs/subagents.md](docs/subagents.md): what a sub-agent can reach, what tools it gets, and where host-loop vs VM-loop diverge — read before writing/asserting a Task-dispatching skill
 - [docs/chat.md](docs/chat.md): the interactive `chat` command — multi-turn sessions, `--folder`, fidelity tiers
 - [docs/critique.md](docs/critique.md): EXPERIMENTAL `critique` — grounded skill self-critique (advisory lead, not an attestation); how it resists confabulation, cost, exit codes, and running it on a skill you did not write
-- [docs/eval.md](docs/eval.md): EXPERIMENTAL `eval` — paired A/B evaluation of a skill edit (two plugin versions, interleaved, pinned models, per-claim exact tests); exit 0 / 1 (a drop at the `--fail-on` level) / 2 / 3
+- [docs/eval.md](docs/eval.md): EXPERIMENTAL `eval` — paired A/B evaluation of a skill edit (two plugin versions, interleaved, pinned models, per-claim exact tests); exit 0 / 1 (a drop at the `--fail-on` level) / 2 / 3. `eval --dry-run [--target-effect <pp>]` plans it first at no cost: the cost at `--reps` and, per row, the detectable change, power and the `--reps` a target change needs, from the runs dir's history; `--max-budget-usd` refuses before any run
 - [docs/debugging.md](docs/debugging.md): debugging a run — `inspect`/`trace`/`verify-run`/`diff`/`chat` for a misbehaving skill, and the false-green hunt
 - [docs/gotchas.md](docs/gotchas.md): troubleshooting FAQ (setup + authoring) — lint/docker/worktree/doctor/scenarioDrift failures and skill-authoring/host-loop footguns
 - [docs/fidelity-gaps.md](docs/fidelity-gaps.md): what the harness deliberately does NOT reproduce vs real Cowork

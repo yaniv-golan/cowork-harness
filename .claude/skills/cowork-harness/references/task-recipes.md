@@ -228,6 +228,9 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    cowork-harness eval evals/scenarios/ --arm before=git:HEAD:plugins/my-skill --arm after=./plugins/my-skill \
      --model <concrete id> --judge-model <concrete id> --holdout evals/scenarios/untouched-question.yaml
    ```
+   Before paying for it, add `--dry-run --target-effect 30pp` to the same command: at no cost it prints what the
+   eval would cost at `--reps` and, from your runs' history, the `--reps` each row needs to detect a 30-point
+   change and with what power. A row at 100% cannot show a rise; size `--reps` for the rows you care about.
    The first `--arm` is the baseline. Each arm is snapshotted before the first run (a `git:` arm is read
    from the commit — freeze a recoverable source this way rather than trusting the working tree to stay
    put). A row labelled `possible drop` or `confirmed drop` is a **regression signal to investigate**,

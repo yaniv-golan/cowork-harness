@@ -1,7 +1,13 @@
 // `eval` usage text and flag lists. Dependency-free on purpose: the usage-guard registry in
 // src/run/cassette.ts imports these, and the eval command imports cassette.ts, so this module must not.
 
-export const EVAL_BOOLEAN_FLAGS = ["--allow-underpowered", "--include-untracked", "--allow-identical-arms", "--quiet"] as const;
+export const EVAL_BOOLEAN_FLAGS = [
+  "--allow-underpowered",
+  "--include-untracked",
+  "--allow-identical-arms",
+  "--quiet",
+  "--dry-run",
+] as const;
 export const EVAL_VALUE_FLAGS = [
   "--reps",
   "--model",
@@ -18,6 +24,8 @@ export const EVAL_VALUE_FLAGS = [
   "--decider-dir",
   "--dotenv",
   "--run-dir",
+  "--target-effect",
+  "--max-budget-usd",
 ] as const;
 export const EVAL_REPEATED_FLAGS = ["--arm", "--holdout"] as const;
 
@@ -55,12 +63,24 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --out <dir>                the eval directory (default ~/.cowork-harness/evals/<eval-id>); refused inside a git
                              work tree, where the stager would mount the snapshots empty
   --on-unanswered fail|first, --decider-cmd '<helper>', --decider-dir <dir>   answer path, as on 'run'
-  --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,error}
-  --quiet                    no per-job progress lines
+  --dry-run                  plan only: print what the eval would cost at --reps (p50, mean, p95, worst observed, from
+                             this runs dir's history of each scenario on its tier and baseline) and what each row could
+                             detect (minimum detectable change, power), then exit 0. Runs no agent and creates no eval
+                             dir; every refusal the real eval makes before its first run still applies.
+  --target-effect <pp>       with --dry-run: the change to size for, in percentage points (30pp or 30, 1..100); the plan
+                             adds the smallest --reps that detects it per row, its power, and the cost at that --reps
+  --max-budget-usd <x>       refuse before any run (exit 2) when the scenarios' worst observed runs, times the jobs
+                             scheduled, exceed x. A pre-flight from history only: the eval is never stopped mid-way, and
+                             judge spend is not counted. With no priced history the check is a LOWER BOUND, and says so.
+  --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,error};
+                             with --dry-run: {tool,version,command,ok,dryRun,plan,budget?,error}
+  --quiet                    no per-job progress lines (a --dry-run's plan is its output, and still prints)
   --dotenv <path>, --run-dir <path>   as on every command
        No run label or session id is accepted: eval labels each run eval:<eval-id>:<arm> and gives each job its own session.
        exit codes: 0 completed (with --fail-on: and no drop at that level) · 1 a drop at the --fail-on level
        (under possible, also an insufficient_refusals row: the candidate refused ≥ 2 more semantic_matches
        grades for unavailable evidence than the baseline, and that excess took the row below the threshold),
        every row insufficient, or the judge model differed across reps · 2 usage, or a refusal before any
-       run · 3 an arm snapshot could not be copied, or failed its staging preflight`;
+       run (including the --max-budget-usd refusal) · 3 an arm snapshot could not be copied, or failed its staging
+       preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
+       temp dir is inside a git work tree, or git cannot tell whether it is (set TMPDIR)`;
