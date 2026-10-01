@@ -163,10 +163,11 @@ All notable changes to this project are documented here. The format is based on
   every case: the plugin the loop tunes. Each variant runs from a snapshot of that plugin taken on its first run, so a resume or
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
   refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
-  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
-  harness change (`--approve-harness` records it; the harness sha covers each scenario, its session file, its uploads
-  and its `workspace_fixture` files, exec bits included; a fixture is also a read root, so a scenario or session
-  file inside one is refused like one inside a mounted folder). Rows carry the
+  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), an unknown `--skill`
+  (naming the plugin's skills), and an unapproved harness change (`--approve-harness` records it; the harness sha
+  covers each scenario, its session file, its uploads and its `workspace_fixture` files, exec bits included; a
+  fixture is also a read root, so a scenario or session file inside one is refused like one inside a mounted
+  folder). Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
@@ -182,12 +183,28 @@ All notable changes to this project are documented here. The format is based on
   flow dir is not the default passes the same dir to every one.
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
+  `skill_invoked` is `1` or `0` for whether the run invoked the tracked skill; a blank cell means not measured (no
+  tracked skill, or a record that could not tell), never "not invoked". The tracked skill is matched by the id the agent
+  registers: `<plugin>:<name>`, the name being a skill directory's name or a root `SKILL.md`'s frontmatter `name` (else
+  the plugin directory's name), with every character outside `[a-zA-Z0-9_-]` replaced by `-`. The candidates are the
+  skills the agent loads: `skills/*/`, the paths in the manifest's `skills` field (a string or an array, each `.` or
+  `./`-prefixed), and a root `SKILL.md` when there is no `skills/` and no `skills` field (an empty one counts); a `SKILL.md` that is not a regular file or is over 1 MiB is skipped. A plugin with one
+  skill is tracked; with several, `--skill <name>` (on `run` and `state-template`; a directory name or a registered name)
+  picks one, and without it the rows omit the column, the run lists the skills, and `state-template` leaves
+  `skill_invoked` out of `perf_fields` (as it does for a plugin with no skill). Every scored row records the tracked id in `meta.skill_tracked`. A pass whose
+  tracked skill differs from the one the rows already in its variant record is refused (a row with no
+  `meta.skill_tracked` records none, so a pass tracking a skill over it only warns); another variant may track a different skill,
+  with a warning. A `--skill` selection is part of the harness sha: `--approve-harness` records it in `_state.json` as
+  `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or dropped since is refused with a
+  message naming the change, which the dry run's gate line names too. `--skill` is not remembered between passes, so the
+  runner command the loop repeats must carry it every time. Without `--skill` the sha is what it was before.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
   run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric
   change) and `pass` is recomputed; `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot
-  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, refuses up
+  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, under the
+  `--skill` the flow was approved with (`harness_skill`, which its `--approve-harness` keeps), refuses up
   front (exit 2) when the host `claude` cannot run the judge isolated, takes every selected variant's lock, and
   preflights every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
