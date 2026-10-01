@@ -77,7 +77,7 @@
     }
   ],
   "definitions": {
-    "SectionKind": { "type": "string", "enum": ["final", "transcript", "subagent", "authored", "scratch_note", "health"] },
+    "SectionKind": { "type": "string", "enum": ["final", "transcript", "subagent", "skill_result", "authored", "scratch_note", "health"] },
     "UncheckedSection": {
       "type": "object",
       "required": ["assertionIndex", "kind"],

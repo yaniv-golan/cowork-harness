@@ -28,8 +28,8 @@ describe("the `assert` entry of the stamp is value-aware", () => {
     expect(requiredVersionFor({ prompt: "x", assert: [{ tool_called: { tool: "Bash" } }] })).toBe(13);
     expect(requiredVersionFor({ prompt: "x", assert: "not-an-array" })).toBe(12);
   });
-  it("this build writes and reads v13", () => {
-    expect(CASSETTE_VERSION).toBe(13);
+  it("this build writes and reads at least v13 (v14 since include_fork_results)", () => {
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(13);
   });
 });
 

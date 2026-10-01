@@ -40,8 +40,13 @@ export function safeNamedBaseline(name: string): string {
  * iff `target` equals `root` or sits under it; false otherwise.
  */
 export function containedRealPath(root: string, target: string): boolean {
-  const realRoot = realpathSync(resolve(root));
-  const realTarget = realpathSync(resolve(target));
+  return isUnderRealRoot(realpathSync(resolve(root)), realpathSync(resolve(target)));
+}
+
+/** The containment test alone, over two ALREADY-resolved real paths: true iff `realTarget` equals `realRoot` or
+ *  sits under it. Split out so a caller that captures its root's realpath once (a no-follow root) applies the
+ *  same rule without re-resolving the root on every call. */
+export function isUnderRealRoot(realRoot: string, realTarget: string): boolean {
   if (realTarget === realRoot) return true;
   const rel = relative(realRoot, realTarget);
   return rel !== "" && rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel);

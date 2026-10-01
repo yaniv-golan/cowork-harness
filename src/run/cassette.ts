@@ -459,7 +459,14 @@ export interface Cassette {
 //  as an unrecognized assertion to re-record. (A v12 `replay` still evaluated before refusing, and crashes on
 //  the object form — the reason replay now refuses a future cassette before evaluating anything.) Every other
 //  scenario still stamps v12. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 13;
+// v14: ONE interpretation bump shared by the keys of this release that an older reader cannot read. Today:
+//  `semantic_matches.include_fork_results` (V14_ASSERT_FEATURES below). Later keys of this release stamp the
+//  same version with no further bump: a top-level key adds its own KEY_REQUIRED_VERSION entry returning 14,
+//  an assert-level one appends a predicate to V14_ASSERT_FEATURES. A cassette using any of them stamps v14, so
+//  a v13 reader refuses it as "too new; upgrade" instead of rejecting the frozen assertion as unrecognized
+//  ("re-record" — the wrong remedy). Every other scenario stamps exactly what it did. No hashing or shape
+//  change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 14;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -521,13 +528,27 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // reader's strict assertion schema rejects it as UNRECOGNIZED and tells the user to re-record, which is
   // the wrong remedy. Stamping v13 routes it to the future-cassette path ("too new; upgrade") instead —
   // on verify-cassettes; a v12 `replay` evaluates before refusing and crashes (see CASSETTE_VERSION).
-  // String-form assertions need nothing.
-  assert: (v) => (Array.isArray(v) && v.some(usesToolCallObjectForm) ? 13 : 0),
+  // String-form assertions need nothing. A live-only key is NOT exempt: `readCassette` strict-parses every
+  // assert BEFORE the live-only strip, so a reader predating a nested option refuses the cassette as an
+  // "unrecognized assertion … re-record" unless the stamp routes it to "too new; upgrade" — hence
+  // `include_fork_results` (live-only) stamps v14 (V14_ASSERT_FEATURES).
+  assert: (v) =>
+    !Array.isArray(v) ? 0 : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a))) ? 14 : v.some(usesToolCallObjectForm) ? 13 : 0,
   skills: () => 0,
   requires_capabilities: () => 0,
   allow_host_writes: () => 0,
   allow_host_hooks: () => 0,
 };
+
+/** The assertion-level features that need a v14 reader — ONE list, so a later key of this release appends a predicate
+ *  here instead of bumping the version again. Each takes a possibly loose, on-disk assertion. */
+export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
+  // `semantic_matches.include_fork_results` — any VALUE: a v13 reader rejects the key itself, true or false.
+  (a) => {
+    const sm = a && typeof a === "object" ? (a as Record<string, unknown>).semantic_matches : undefined;
+    return !!sm && typeof sm === "object" && "include_fork_results" in (sm as object);
+  },
+];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
 function usesToolCallObjectForm(a: unknown): boolean {
@@ -3307,7 +3328,7 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   if (cassette.fingerprint !== undefined) {
     const fmt = cassette.fingerprint.hashFormat;
     const shown = fmt === undefined ? "(absent)" : `'${fmt}'`;
-    // KNOWN versions only, both directions. A future v14/`jcs2` is NOT judged here — that belongs to the
+    // KNOWN versions only, both directions. A future v15/`jcs2` is NOT judged here — that belongs to the
     // future-cassette policy below, which is the surface that knows how to talk about versions this build
     // does not understand. The check applies to a baseline-only fingerprint too: `hashFormat` is stamped on
     // every buildFingerprint return path, so its absence at the current version is a genuine inconsistency

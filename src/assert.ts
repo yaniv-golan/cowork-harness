@@ -15,7 +15,7 @@ import type {
 import { addTokenUsage } from "./decide/usage.js";
 import { checkToolCallObject, routedToolGlobs } from "./tool-call-assert.js";
 import { outputsDeleteTier, outputsDeleteEntries } from "./run/outputs-delete-tier.js";
-import { VERDICT_MODIFIER_KEYS } from "./types.js";
+import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
@@ -321,8 +321,8 @@ export type SemanticJudge = ((rubric: string[], answer: string) => Promise<Seman
   promptHash?: string;
 };
 /** WHY a `semantic_matches` assert refused, or WHAT a scoped one graded — the typed companion to the
- *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are SIX distinct
- *  evidence-unavailable causes with six different fixes; a consumer (usually an agent iterating on a
+ *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are TEN distinct
+ *  evidence-unavailable causes with different fixes; a consumer (usually an agent iterating on a
  *  skill) must be able to tell them apart without regex-scraping English. Same rationale as `judgeInvalid`.
  *  Kept structurally identical to the `RunResult` field in types.ts — that is the persisted contract. */
 export type SemanticEvidence = NonNullable<RunResult["assertions"][number]["semanticEvidence"]>;
@@ -361,7 +361,7 @@ export interface AssertContext {
    *  `evidenceCut` is true when the aggregate `JUDGE_DOC_CAP` truncated the authored-file evidence (or the
    *  evidence-health note that tells the judge not to read an absence as a negative). Without this the
    *  raise-the-budget remedy would just move incompleteness from a loud refusal into a silent cut. */
-  semanticDocInfo?: Map<Assertion, { evidenceCut: boolean; healthNoteCut: boolean; overflowSection?: string }>;
+  semanticDocInfo?: Map<Assertion, { evidenceCut: boolean; healthNoteCut: boolean; overflowSection?: string; skillResultsCut?: string[] }>;
   /** `semantic_matches` asserts runSemanticJudges REFUSED before calling the judge, with the typed reason and
    *  the message `check` reports. Every evidence-unavailable reason is a function of the composed evidence
    *  alone (never of a grade), so it is decided before the call: a grade over evidence the verdict will
@@ -767,6 +767,54 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   return assertions.map((a) => check(a, withWaivers));
 }
 
+/** The `include_fork_results` refusals decided from the persisted call/result record ALONE — no compose, no
+ *  grade — so they hold on every lane that carries `toolCalls`/`toolResults` (live and verify-run). Split from
+ *  `semanticRefusal` (which calls it first) so `check` can still report them when the judge pre-pass never
+ *  ran; the compose-time half (`skillResultsCut`, the aggregate cap) needs the pre-pass and lives there. */
+export function forkRecordRefusal(a: Assertion, ctx: AssertContext): SemanticRefusal | undefined {
+  if (a.semantic_matches?.include_fork_results !== true) return undefined;
+  const j = joinSkillResults(ctx);
+  if (!j.recorded)
+    // "No Skill call" and "cannot tell" look identical in an empty document, and grading it would stamp the
+    // fork answer as evidence the judge was shown — the vacuous green the opt-in exists to prevent.
+    return {
+      semanticEvidence: { reason: "fork_calls_unrecorded" },
+      message:
+        `evidence unavailable: include_fork_results is set but this run carries no tool-call/tool-result record, so no Skill ` +
+        `result could be joined to its call — re-run live on a current harness`,
+    };
+  const { unpaired, background, truncated } = j;
+  if (!unpaired.length && !background.length && !truncated.length) return undefined;
+  // Precedence when several apply: a missing answer (unpaired) > an answer that never came back through the
+  // result (background) > a cut one. Every gap is still named in the ONE message.
+  const uniq = (xs: string[]): string[] => [...new Set(xs)].sort();
+  const semanticEvidence: SemanticEvidence = unpaired.length
+    ? { reason: "fork_result_unpaired", paths: uniq(unpaired) }
+    : background.length
+      ? { reason: "fork_result_background", paths: uniq(background) }
+      : { reason: "fork_result_truncated", paths: uniq(truncated) };
+  const bits: string[] = [];
+  if (unpaired.length)
+    bits.push(
+      `${unpaired.length} Skill call(s) with NO paired result (${unpaired.join(", ")}) — the run ended while the skill ran, or the call carried no id`,
+    );
+  if (background.length)
+    bits.push(
+      `${background.length} fork(s) ran in the BACKGROUND (${background.join(", ")}) — the tool result is only the launch line and the fork's answer is not in it`,
+    );
+  if (truncated.length)
+    bits.push(
+      `${truncated.length} Skill result(s) cut at the tool-result capture cap (${truncated.join(", ")}; a top-level Skill result is captured up to ${SKILL_RESULT_ASSERT_CAP} chars, and a record with no assertText keeps only the 500-char display text) — the judge would grade a prefix of the answer`,
+    );
+  return {
+    semanticEvidence,
+    message:
+      `evidence unavailable: include_fork_results cannot show the judge the whole skill answer — ${bits.join("; ")}. ` +
+      `A partial answer grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. ` +
+      `Assert on the answer's head with tool_result_matches, or have the skill return a shorter answer (writing the long form to a file the judge grades)`,
+  };
+}
+
 /** Decide whether a `semantic_matches` assert's evidence is unavailable — from the composed evidence ALONE,
  *  never from a grade. ONE definition, called by `runSemanticJudges` (to skip the judge call for an assert
  *  whose verdict is already decided) and by `check` (to report it), so the two cannot disagree about which
@@ -776,9 +824,13 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
 export function semanticRefusal(
   a: Assertion,
   ctx: AssertContext,
-  docInfo: { evidenceCut: boolean; overflowSection?: string } | undefined,
+  docInfo: { evidenceCut: boolean; overflowSection?: string; skillResultsCut?: string[] } | undefined,
 ): SemanticRefusal | undefined {
   if (a.semantic_matches === undefined) return undefined;
+  // FIRST, so every lane that can compute it reports the same reason: it reads only the persisted call/result
+  // record, which verify-run carries too (see `check`, which falls back to it when the pre-pass never ran).
+  const fromRecord = forkRecordRefusal(a, ctx);
+  if (fromRecord) return fromRecord;
   const scope = a.semantic_matches.evidence_files;
   const sc = scopeAuthoredEvidence(ctx, scope);
   const scoped = scope !== undefined && scope.length > 0;
@@ -873,6 +925,21 @@ export function semanticRefusal(
         `A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. ` +
         `To grade it: ${remedies.join("; or ")}${scoped ? `. Keep the composed document under ${JUDGE_DOC_CAP} chars or it is cut at the other end` : ""}`,
     };
+  } else if (a.semantic_matches.include_fork_results === true && docInfo?.skillResultsCut?.length) {
+    // Compose-time (the per-section cap after scrubbing, or the aggregate cap), so it needs the pre-pass —
+    // unlike the record-only fork reasons.
+    semanticEvidence = { reason: "fork_result_truncated", paths: docInfo.skillResultsCut };
+    return {
+      semanticEvidence,
+      message:
+        `evidence unavailable: the Skill result section(s) of ${docInfo.skillResultsCut.join(", ")} were cut while composing the judge ` +
+        `document — ` +
+        (docInfo.overflowSection
+          ? `it exceeded its ${JUDGE_DOC_CAP}-char budget (the overflow lands in "${docInfo.overflowSection}"); ` +
+            `${docInfo.overflowSection.startsWith("Sub-agent output") ? "set include_subagent_text: false, or " : ""}` +
+            `shorten what precedes the skill results (the final answer and transcript)`
+          : `secret scrubbing lengthened a result past the ${SKILL_RESULT_ASSERT_CAP}-char Skill-result cap; have the skill return a shorter answer`),
+    };
   } else if (docInfo?.evidenceCut) {
     // The remedy for every refusal above is "raise the budget" — which, past JUDGE_DOC_CAP, would
     // otherwise move the incompleteness from a loud refusal into a SILENT aggregate cut of the sections
@@ -890,6 +957,9 @@ export function semanticRefusal(
         `evidence unavailable: the composed judge document exceeded its ${JUDGE_DOC_CAP}-char budget and the authored-file evidence was cut ` +
         `(the overflow lands in "${docInfo.overflowSection ?? "an unknown section"}") — ` +
         `${docInfo.overflowSection?.startsWith("Sub-agent output") ? "set include_subagent_text: false, or " : ""}` +
+        // Skill sections precede the authored region, so when they exist they are part of what pushed the
+        // overflow into it — wherever the cut itself landed.
+        `${a.semantic_matches.include_fork_results === true && joinSkillResults(ctx).joined.length ? "set include_fork_results: false, or " : ""}` +
         `${scoped ? "narrow" : "add"} semantic_matches.evidence_files so only the files the rubric is about reach the judge` +
         `${sc.files.length === 1 ? ` — but this scope already names a SINGLE file, so it cannot be narrowed further: that deliverable is simply too large to grade whole against a ${JUDGE_DOC_CAP}-char judge document, and the rubric needs to target a smaller artifact` : ""}. ` +
         `(Lowering $COWORK_HARNESS_AUTHORED_TOTAL_BYTES will NOT help — it only drops the evidence at the capture instead.)`,
@@ -921,17 +991,22 @@ export async function runSemanticJudges(
   if (!ctx.judgeInvalid) ctx.judgeInvalid = new Set();
   if (!ctx.semanticDocInfo) ctx.semanticDocInfo = new Map();
   if (!ctx.semanticRefused) ctx.semanticRefused = new Map();
-  // The judged document depends on TWO per-assert inputs — `include_subagent_text` and the
-  // `evidence_files` scope — so the cache MUST be keyed on both. Keyed on the boolean alone (as it was
+  // The judged document depends on THREE per-assert inputs — `include_subagent_text`, `include_fork_results`
+  // and the `evidence_files` scope — so the cache MUST be keyed on all of them. Keyed on the boolean alone (as it was
   // when the scope did not exist), two asserts with different scopes would silently share the first
   // one's document and grade against the wrong evidence. Memoize rather than rebuild per assert:
   // composing scrubs + caps every section, which is real work on a long run with many authored files.
   const docCache = new Map<string, ReturnType<typeof composeJudgedDocument>>();
-  const judgedDocument = (withSubagents: boolean, scope: string[] | undefined): ReturnType<typeof composeJudgedDocument> => {
-    const key = `${withSubagents ? 1 : 0}::${scope ? JSON.stringify(scope) : ""}`;
+  const judgedDocument = (
+    withSubagents: boolean,
+    scope: string[] | undefined,
+    withSkillResults: boolean,
+  ): ReturnType<typeof composeJudgedDocument> => {
+    const key = `${withSubagents ? 1 : 0}:${withSkillResults ? 1 : 0}::${scope ? JSON.stringify(scope) : ""}`;
     let d = docCache.get(key);
     if (d === undefined) {
-      d = composeJudgedDocument(ctx, withSubagents, scope); // finalMessage + transcript [+ sub-agent text] + authored files, scrubbed
+      // finalMessage + transcript [+ sub-agent text] [+ Skill results] + authored files, scrubbed
+      d = composeJudgedDocument(ctx, withSubagents, scope, withSkillResults);
       docCache.set(key, d);
     }
     return d;
@@ -959,12 +1034,17 @@ export async function runSemanticJudges(
           `${redactedIdx.length === 1 ? "it" : "they"} cannot be graded for that value. Assert on a secret deterministically ` +
           `instead: \`transcript_not_contains\` or \`artifact_text: {not_contains}\` (both read the raw evidence on the live run).\n`,
       );
-    const built = judgedDocument(a.semantic_matches.include_subagent_text === true, a.semantic_matches.evidence_files);
+    const built = judgedDocument(
+      a.semantic_matches.include_subagent_text === true,
+      a.semantic_matches.evidence_files,
+      a.semantic_matches.include_fork_results === true,
+    );
     const answer = built.doc;
     ctx.semanticDocInfo.set(a, {
       evidenceCut: built.evidenceCut,
       healthNoteCut: built.healthNoteCut,
       overflowSection: built.overflowSection,
+      ...(built.skillResultsCut ? { skillResultsCut: built.skillResultsCut } : {}),
     });
     // Evidence the verdict will refuse is decided HERE, before the call, and the judge is not called for it:
     // its grade could not change the verdict, so it would be spend for nothing — and per-claim results stored
@@ -1090,6 +1170,64 @@ export function allAuthoredPaths(ctx: AssertContext): string[] {
   ].sort();
 }
 
+/** The agent's own `completed (forked execution)` wrapper on a foreground `context: fork` Skill result
+ *  (agent 2.1.284; the same anchor docs/scenario.md recommends for `tool_result_matches`). It chooses the
+ *  section's LABEL only — never whether the result is included — so a reworded marker can mislabel a fork as
+ *  a plain Skill result but can never silently drop its answer from the judged document. */
+const FORKED_SKILL_RESULT = /^Skill "[^"]*" completed \(forked execution\)/;
+/** A BACKGROUNDED fork's result: only the launch line — the answer never comes back through the tool result.
+ *  Grading a rubric over it would be a silent false red, so the check refuses it (`fork_result_background`). */
+const BACKGROUND_FORK_RESULT = /^Skill "[^"]*" launched \(forked execution, running in the background\)/;
+
+/** Every top-level `Skill` call joined to its result BY `toolUseId` (never by position — a parallel or
+ *  interleaved call would otherwise pair a skill with its neighbour's answer), plus the three ways the join can
+ *  leave the judge with less than the whole answer.
+ *
+ *  ONE definition, used by both the document composer and the check — if the two disagreed about what was
+ *  paired, the judge would grade one set while the refusal reasoned about another (same shape as
+ *  `scopeAuthoredEvidence`).
+ *
+ *  `recorded: false` = the lane carries no tool-call or tool-result record (a result.json written before those
+ *  fields existed): pairing is impossible, which is NOT "the run called no skill". `truncated` = a result whose
+ *  text is cut at its capture cap (SKILL_RESULT_ASSERT_CAP; 10,240 on a run recorded before it) or is only the
+ *  500-char display fallback. `unpaired` = a call with no result carrying its id (the run ended while the skill
+ *  ran, or the call carries no id). `background` = a fork launched in the background, whose result is only
+ *  the launch line. */
+export function joinSkillResults(ctx: AssertContext): {
+  recorded: boolean;
+  joined: Array<{ skill: string; toolUseId: string; text: string; forked: boolean; truncated: boolean }>;
+  truncated: string[];
+  unpaired: string[];
+  background: string[];
+} {
+  if (ctx.toolCalls === undefined || ctx.toolResults === undefined)
+    return { recorded: false, joined: [], truncated: [], unpaired: [], background: [] };
+  const byId = new Map<string, NonNullable<AssertContext["toolResults"]>[number]>();
+  for (const r of ctx.toolResults) if (r.toolUseId !== undefined && !byId.has(r.toolUseId)) byId.set(r.toolUseId, r);
+  const joined: ReturnType<typeof joinSkillResults>["joined"] = [];
+  const truncated: string[] = [];
+  const unpaired: string[] = [];
+  const background: string[] = [];
+  for (const c of ctx.toolCalls) {
+    // TOP-LEVEL calls only. `origin: "main"` also covers a Skill invoked INSIDE a fork (a fork's children inherit
+    // the main agent's context, so `classifyOrigin` files them under main) — but an inner skill's result is the
+    // fork's working material, not the run's answer; the outer fork's result already carries whatever it used.
+    if (c.name !== "Skill" || c.origin !== "main" || c.parentToolUseId !== undefined) continue;
+    const skill = c.input.skill?.text || "(unnamed skill)";
+    const r = c.toolUseId !== undefined ? byId.get(c.toolUseId) : undefined;
+    if (r === undefined) {
+      unpaired.push(skill);
+      continue;
+    }
+    const text = r.text ?? "";
+    const cut = r.assertTextTruncated === true;
+    if (cut) truncated.push(skill);
+    if (BACKGROUND_FORK_RESULT.test(text)) background.push(skill);
+    joined.push({ skill, toolUseId: c.toolUseId!, text, forked: FORKED_SKILL_RESULT.test(text), truncated: cut });
+  }
+  return { recorded: true, joined, truncated, unpaired, background };
+}
+
 export function buildJudgedDocument(ctx: AssertContext, includeSubagentText = false, scopeGlobs?: string[]): string {
   return composeJudgedDocument(ctx, includeSubagentText, scopeGlobs).doc;
 }
@@ -1100,7 +1238,16 @@ export function composeJudgedDocument(
   ctx: AssertContext,
   includeSubagentText = false,
   scopeGlobs?: string[],
-): { doc: string; evidenceCut: boolean; healthNoteCut: boolean; overflowSection?: string; fingerprint: JudgedDocFingerprint } {
+  includeSkillResults = false,
+): {
+  doc: string;
+  evidenceCut: boolean;
+  healthNoteCut: boolean;
+  overflowSection?: string;
+  /** The skills whose result section the aggregate cap cut (or dropped) — the judge saw part of an answer. */
+  skillResultsCut?: string[];
+  fingerprint: JudgedDocFingerprint;
+} {
   // SCRUB BEFORE CAP: scrub is exact-string replacement, so a secret straddling a cap boundary would
   // be truncated mid-token and slip past scrub into the doc sent to the (external) judge. Scrub each raw
   // section FIRST, then cap the already-redacted text — capping redacted content can never re-expose a secret.
@@ -1135,6 +1282,30 @@ export function composeJudgedDocument(
       if (!text) continue;
       const label = sa.description ?? sa.resolvedAgentType ?? sa.dispatchAgentType ?? `#${i + 1}`;
       push("subagent", `## Sub-agent output: ${s(label)}\n${capForJudge(s(text), JUDGE_SUBAGENT_CAP)}`);
+    }
+  }
+  // OPT-IN `Skill` results (`include_fork_results`). A `context: fork` skill's answer is neither top-level
+  // assistant text (the transcript) nor a dispatch (it has no `subagents[]` entry), so without this it never
+  // reaches the judge at all. Every top-level Skill result is included — the fork marker picks the heading,
+  // not inclusion — and each is untrusted run text exactly like a sub-agent's: scrubbed, then capped. A
+  // truncated or unpaired result is refused by the check (`joinSkillResults` is shared with it); it is still
+  // composed here so the fingerprint records what the judge was sent.
+  // Capped at SKILL_RESULT_ASSERT_CAP — the capture's own cap — so a whole captured answer is never cut here
+  // (the sub-agent cap is smaller, and a silent compose-time cut is exactly what the refusal exists to prevent).
+  const skillSections: Array<{ index: number; skill: string }> = [];
+  // A section the per-section cap cuts HERE. The capture's own cap already refused anything longer, but
+  // scrubbing can lengthen text (a short secret becomes `[REDACTED]`), pushing a near-cap result over — and a
+  // cut answer must refuse, never grade silently.
+  const skillCutAtCompose: string[] = [];
+  if (includeSkillResults) {
+    for (const j of joinSkillResults(ctx).joined) {
+      const head = j.forked ? "Fork skill result" : "Skill result";
+      skillSections.push({ index: parts.length, skill: j.skill });
+      if (s(j.text).length > SKILL_RESULT_ASSERT_CAP) skillCutAtCompose.push(j.skill);
+      push(
+        "skill_result",
+        `## ${head}: ${s(j.skill)}${j.truncated ? " (truncated)" : ""}\n${capForJudge(s(j.text), SKILL_RESULT_ASSERT_CAP)}`,
+      );
     }
   }
   // AUTHORED is not DELIVERED. The capture deliberately includes the scratchpad (the run DID write those
@@ -1237,8 +1408,23 @@ export function composeJudgedDocument(
         overflowSection = parts[i].split("\n", 1)[0].replace(/^## /, "");
         break;
       }
+  // Skill results sit before the authored region, so the cut reaches them only when the document is dominated
+  // by the final answer, transcript and sub-agent text — but then the judge would see part of an answer.
+  const skillResultsCut = [
+    ...new Set([
+      ...skillCutAtCompose,
+      ...(overflowed ? skillSections.filter((x) => lenUpTo(x.index + 1) > JUDGE_DOC_CAP).map((x) => x.skill) : []),
+    ]),
+  ].sort();
   const sent = capForJudge(doc, JUDGE_DOC_CAP); // aggregate backstop
-  return { doc: sent, evidenceCut, healthNoteCut, overflowSection, fingerprint: fingerprintJudgedDoc(sent, parts, kinds) };
+  return {
+    doc: sent,
+    evidenceCut,
+    healthNoteCut,
+    overflowSection,
+    ...(skillResultsCut.length ? { skillResultsCut } : {}),
+    fingerprint: fingerprintJudgedDoc(sent, parts, kinds),
+  };
 }
 
 const sha256Hex = (t: string): string => createHash("sha256").update(t, "utf8").digest("hex");
@@ -1581,7 +1767,9 @@ function check(
     // have captured. Reporting `scope_matched_nothing` for a run that authored plenty (verify-run populates
     // `authoredFiles` only when `no_lost_write_back` is asserted) would send an author to fix a glob that is
     // already correct.
-    const refusal = ctx.semanticRefused?.get(a) ?? (judged ? semanticRefusal(a, ctx, docInfo) : undefined);
+    // The record-only fork refusals are the exception: they read nothing but the persisted call/result record,
+    // so they are reported even when the pre-pass never ran (verify-run) instead of "judge not run".
+    const refusal = ctx.semanticRefused?.get(a) ?? (judged ? semanticRefusal(a, ctx, docInfo) : forkRecordRefusal(a, ctx));
     if (ctx.judgeInvalid?.has(a)) {
       results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
     } else if (refusal) {
@@ -1608,7 +1796,13 @@ function check(
       // just as much, because the bug this whole mechanism guards against (#14/#16) is a false ABSENCE —
       // "the claim failed" is only actionable next to "and here is what the judge was actually shown".
       semanticEvidence = { reason: "graded", paths: gradedPaths };
-      const over = scoped ? `; graded authored files: ${gradedPaths.length ? gradedPaths.join(", ") : "(none)"}` : "";
+      const skillJoin = a.semantic_matches.include_fork_results === true ? joinSkillResults(ctx) : undefined;
+      const over =
+        (scoped ? `; graded authored files: ${gradedPaths.length ? gradedPaths.join(", ") : "(none)"}` : "") +
+        // Name what the opt-in added, so a green over ZERO skill results is visible as such (no Skill call ran).
+        (skillJoin
+          ? `; graded Skill results: ${skillJoin.joined.length ? skillJoin.joined.map((j) => j.skill).join(", ") : "(none — no Skill call)"}`
+          : "");
       results.push(
         passed >= need
           ? ok(`semantic: ${passed}/${judged.length} rubric claims passed (need ${need})${over}`)

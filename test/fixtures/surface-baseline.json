@@ -1042,6 +1042,273 @@
         "type": "string"
       }
     },
+    "cassette.v14.json": {
+      "": {
+        "type": "object"
+      },
+      ".$schema": {
+        "type": "string"
+      },
+      ".artifacts": {
+        "type": "array"
+      },
+      ".artifacts[]": {
+        "type": "object"
+      },
+      ".artifacts[].body": {
+        "type": "string"
+      },
+      ".artifacts[].bytes": {
+        "type": "number",
+        "required": true
+      },
+      ".artifacts[].encoding": {
+        "type": "string",
+        "enum": ["utf8", "base64"]
+      },
+      ".artifacts[].linkKind": {
+        "type": "string",
+        "enum": ["symlink", "hardlink"]
+      },
+      ".artifacts[].path": {
+        "type": "string",
+        "required": true
+      },
+      ".artifacts[].sha256": {
+        "type": "string",
+        "required": true
+      },
+      ".artifacts[].truncated": {
+        "type": "boolean"
+      },
+      ".artifacts[].truncationReason": {
+        "type": "string",
+        "enum": ["size", "readonly", "unreadable", "input"]
+      },
+      ".authoring": {
+        "type": "object"
+      },
+      ".authoring.channel": {
+        "type": "string",
+        "enum": ["decider-dir", "decider-llm"]
+      },
+      ".authoring.nonDeterministic": {
+        "type": "boolean",
+        "required": true
+      },
+      ".cassetteVersion": {
+        "type": "integer"
+      },
+      ".controlOut": {
+        "type": "array"
+      },
+      ".controlOut[]": {
+        "type": "string"
+      },
+      ".effectiveFidelity": {
+        "type": "string"
+      },
+      ".environment": {
+        "type": "object"
+      },
+      ".environment.agentBinaryFormat": {
+        "type": "string"
+      },
+      ".environment.agentImage": {
+        "type": "object"
+      },
+      ".environment.agentImage.configId": {
+        "type": "string"
+      },
+      ".environment.agentImage.ref": {
+        "type": "string",
+        "required": true
+      },
+      ".environment.agentImage.registryDigest": {
+        "type": "string"
+      },
+      ".environment.harnessVersion": {
+        "type": "string"
+      },
+      ".environment.location": {
+        "type": "string",
+        "enum": ["local", "cloud"],
+        "required": true
+      },
+      ".environment.model": {
+        "type": "object"
+      },
+      ".environment.model.id": {
+        "type": "string"
+      },
+      ".environment.model.source": {
+        "type": "string"
+      },
+      ".environment.tier": {
+        "type": "string"
+      },
+      ".events": {
+        "type": "array",
+        "required": true
+      },
+      ".events[]": {
+        "type": "string"
+      },
+      ".fingerprint": {
+        "type": "object"
+      },
+      ".fingerprint.agentScope": {
+        "type": "string",
+        "enum": ["skill"]
+      },
+      ".fingerprint.baseline": {
+        "type": "string"
+      },
+      ".fingerprint.contentSig": {
+        "type": "string"
+      },
+      ".fingerprint.fileSigs": {
+        "type": "array"
+      },
+      ".fingerprint.fileSigsOmitted": {
+        "type": "boolean"
+      },
+      ".fingerprint.fileSigs[]": {
+        "type": "array"
+      },
+      ".fingerprint.fileSigs[][]": {
+        "type": "string"
+      },
+      ".fingerprint.hashFormat": {
+        "type": "string",
+        "enum": ["jcs1"]
+      },
+      ".fingerprint.mode": {
+        "type": "string",
+        "enum": ["git", "raw"]
+      },
+      ".fingerprint.promptAssetsHash": {
+        "type": "string"
+      },
+      ".fingerprint.sharedHash": {
+        "type": "string"
+      },
+      ".fingerprint.skillHash": {
+        "type": "string"
+      },
+      ".fingerprint.skillScope": {
+        "type": "array"
+      },
+      ".fingerprint.skillScope[]": {
+        "type": "string"
+      },
+      ".fingerprint.skillSources": {
+        "type": "array"
+      },
+      ".fingerprint.skillSources[]": {
+        "type": "string"
+      },
+      ".folderPrefixMap": {
+        "type": "array"
+      },
+      ".folderPrefixMap[]": {
+        "type": "object"
+      },
+      ".folderPrefixMap[].from": {
+        "type": "string",
+        "required": true
+      },
+      ".folderPrefixMap[].mount": {
+        "type": "string",
+        "required": true
+      },
+      ".generator": {
+        "type": "string",
+        "const": "cowork-harness"
+      },
+      ".preRunHashes": {
+        "type": "object"
+      },
+      ".preRunHashes{}": {
+        "type": ["string", "null"]
+      },
+      ".preRunOrigin": {
+        "type": "string",
+        "enum": ["local-walk", "remote-unavailable", "local-unreadable"]
+      },
+      ".preRunPaths": {
+        "type": "array"
+      },
+      ".preRunPaths[]": {
+        "type": "string"
+      },
+      ".scenario": {
+        "type": "object",
+        "required": true
+      },
+      ".scenarioSource": {
+        "type": "string"
+      },
+      ".sessionFingerprint": {
+        "type": "string"
+      },
+      ".timeline": {
+        "type": "array"
+      },
+      ".timelineHeader": {
+        "type": "object"
+      },
+      ".timelineHeader.startedAtMono": {
+        "type": "string",
+        "required": true
+      },
+      ".timelineHeader.startedAtWall": {
+        "type": "string",
+        "required": true
+      },
+      ".timelineHeader.v": {
+        "type": "integer",
+        "const": 1,
+        "required": true
+      },
+      ".timeline[]": {
+        "type": "object"
+      },
+      ".timeline[].line": {
+        "type": "integer",
+        "required": true
+      },
+      ".timeline[].seq": {
+        "type": "integer",
+        "required": true
+      },
+      ".timeline[].ts": {
+        "type": "number",
+        "required": true
+      },
+      ".timeline[].type": {
+        "type": "string",
+        "enum": [
+          "tool_use",
+          "tool_result",
+          "subagent_dispatch",
+          "skill_invoked",
+          "task_updated",
+          "file_changed",
+          "scratchpad_promoted",
+          "thinking",
+          "decision",
+          "result"
+        ],
+        "required": true
+      },
+      ".userVisibleRoots": {
+        "type": "array"
+      },
+      ".userVisibleRoots[]": {
+        "type": "string"
+      }
+    },
     "cassette.v9.json": {
       "": {
         "type": "object"
@@ -2375,7 +2642,7 @@
       },
       "definitions.SectionKind": {
         "type": "string",
-        "enum": ["final", "transcript", "subagent", "authored", "scratch_note", "health"]
+        "enum": ["final", "transcript", "subagent", "skill_result", "authored", "scratch_note", "health"]
       },
       "definitions.UncheckedSection": {
         "type": "object"
@@ -4117,6 +4384,9 @@
       },
       ".assert[].semantic_matches.evidence_files[]": {
         "type": "string"
+      },
+      ".assert[].semantic_matches.include_fork_results": {
+        "type": "boolean"
       },
       ".assert[].semantic_matches.include_subagent_text": {
         "type": "boolean"
