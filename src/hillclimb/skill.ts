@@ -6,8 +6,9 @@
 //
 // The skills a plugin registers follow the plugin skill loader of the staged agent (2.1.284):
 //  - skills paths, in order: skills/ whenever it exists; then each entry of the manifest's `skills` field (a string or
-//    an array of paths relative to the plugin root; an entry must be an existing directory inside the plugin, and
-//    skills/ itself is dropped); the plugin root only when the manifest has no `skills` field and there is no skills/;
+//    an array of paths relative to the plugin root; an entry must be "." or start with "./", as the manifest schema
+//    requires, and be an existing directory inside the plugin, and skills/ itself is dropped); the plugin root only
+//    when the manifest has no `skills` field at all (`"skills": []` is a field) and there is no skills/;
 //  - per path: a SKILL.md directly in it that is a regular file of at most 1 MiB is ONE skill, named by its
 //    frontmatter `name` (minus a leading "<plugin>:") or else the path's basename; otherwise (no SKILL.md, or one the
 //    loader skips) every directory or symlink in the path holding such a SKILL.md is a skill named by its directory;
@@ -130,7 +131,8 @@ function skillsPaths(c: Ctx): string[] {
   const hasSkillsDir = isDir(c, skillsDir);
   if (hasSkillsDir) paths.push(skillsDir);
   const raw = manifestOf(c)?.skills;
-  if (raw !== undefined && raw !== null && raw !== "" && !(Array.isArray(raw) && raw.length === 0)) {
+  // Only an absent field falls back to the root: `"skills": []` is a declared field that names no path.
+  if (raw !== undefined) {
     let realRoot: string;
     try {
       realRoot = realpathSync(c.root);
@@ -138,7 +140,8 @@ function skillsPaths(c: Ctx): string[] {
       return paths;
     }
     for (const e of Array.isArray(raw) ? raw : [raw]) {
-      if (typeof e !== "string") continue;
+      // The loader's manifest schema takes "." or a "./"-prefixed path only.
+      if (typeof e !== "string" || !(e === "." || e.startsWith("./"))) continue;
       const p = resolve(c.root, e);
       if (!inside(p, c.root)) continue;
       let real: string;

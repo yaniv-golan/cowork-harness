@@ -1,8 +1,8 @@
 // Which skill `hillclimb run`'s skill_invoked column tracks, per plugin shape. The expected ids are the ones the
 // agent binary's plugin skill loader registers (read from the staged agent, 2.1.284):
 //  - the skills paths, in order: skills/ whenever it exists; each manifest `skills` entry (a string or an array of
-//    paths relative to the plugin root, each an existing directory, skills/ itself dropped); the plugin root only
-//    when the manifest has no `skills` field and there is no skills/ dir;
+//    paths relative to the plugin root, each "." or "./"-prefixed and an existing directory, skills/ itself
+//    dropped); the plugin root only when the manifest has no `skills` field (`[]` is one) and there is no skills/ dir;
 //  - per path: a SKILL.md directly in it (a regular file of at most 1 MiB) is one skill, named by its frontmatter
 //    `name` minus a leading "<plugin>:", else the path's basename; otherwise every directory in it holding such a
 //    SKILL.md is a skill named by the DIRECTORY (its frontmatter name is not read);
@@ -127,6 +127,25 @@ describe("registeredSkills: skill directories and manifest paths", () => {
     manifest({ name: "plug", skills: ["./skills/a"] });
     skill("a", "skills", "zed");
     expect(ids()).toEqual(["a"]);
+  });
+
+  it("a manifest `skills: []` is a declared field: the root SKILL.md is not loaded, and the plugin registers no skill", () => {
+    manifest({ name: "plug", skills: [] });
+    rootMd("coach");
+    expect(ids()).toEqual([]);
+    expect(trackedSkill(root, undefined)).toMatchObject({ name: undefined, note: expect.stringMatching(/registers no skill/) });
+  });
+
+  it("a manifest entry that is neither '.' nor './'-prefixed is skipped, as the loader's schema rejects it", () => {
+    manifest({ name: "plug", skills: ["custom", "./other"] });
+    skill("a", "custom");
+    skill("b", "other");
+    expect(ids()).toEqual(["b"]);
+    manifest({ name: "plug", skills: "custom" });
+    expect(ids()).toEqual([]);
+    manifest({ name: "plug", skills: ["."] });
+    rootMd("coach");
+    expect(ids()).toEqual(["coach"]);
   });
 
   it("a manifest path that escapes the plugin or does not exist loads nothing", () => {

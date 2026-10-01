@@ -158,8 +158,8 @@ All notable changes to this project are documented here. The format is based on
   tracked skill, or a record that could not tell), never "not invoked". The tracked skill is matched by the id the agent
   registers: `<plugin>:<name>`, the name being a skill directory's name or a root `SKILL.md`'s frontmatter `name` (else
   the plugin directory's name), with every character outside `[a-zA-Z0-9_-]` replaced by `-`. The candidates are the
-  skills the agent loads: `skills/*/`, the paths in the manifest's `skills` field (a string or an array), and a root
-  `SKILL.md` when neither applies; a `SKILL.md` that is not a regular file or is over 1 MiB is skipped. A plugin with one
+  skills the agent loads: `skills/*/`, the paths in the manifest's `skills` field (a string or an array, each `.` or
+  `./`-prefixed), and a root `SKILL.md` when there is no `skills/` and no `skills` field (an empty one counts); a `SKILL.md` that is not a regular file or is over 1 MiB is skipped. A plugin with one
   skill is tracked; with several, `--skill <name>` (on `run` and `state-template`; a directory name or a registered name)
   picks one, and without it the rows omit the column, the run lists the skills, and `state-template` leaves
   `skill_invoked` out of `perf_fields`. Every scored row records the tracked id in `meta.skill_tracked`. A pass whose
