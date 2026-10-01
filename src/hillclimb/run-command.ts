@@ -97,8 +97,9 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   const say = (line: string) => deps.stderr(termSafe(line));
   let runner: Parameters<typeof runHillclimb>[1];
   let price: Prepared["price"];
+  let skill: string | undefined;
   try {
-    ({ runner, price } = prepare(args, deps, say));
+    ({ runner, price, skill } = prepare(args, deps, say));
   } catch (e) {
     if (!(e instanceof Error)) throw e;
     const m = message(e);
@@ -106,7 +107,8 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
     say(line);
     return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: line } };
   }
-  const outcome = await runHillclimb(args, runner);
+  // --skill by any spelling it accepts is one selection: the gate and `harness_skill` see its registered name.
+  const outcome = await runHillclimb(skill !== undefined ? { ...args, skill } : args, runner);
   if (!args.dryRun || outcome.remaining === undefined) return outcome;
   const cost = price(outcome.remaining);
   say(`[${args.variant}] ${scheduleCostLine(cost)}`);
@@ -117,6 +119,8 @@ interface Prepared {
   runner: Parameters<typeof runHillclimb>[1];
   /** The dry run's estimate for the remaining slots (case id → count). */
   price: (remaining: Record<string, number>) => ReturnType<typeof estimateScheduleCost>;
+  /** `--skill` as the registered name it selects; undefined without --skill. */
+  skill: string | undefined;
 }
 
 function prepare<F extends { label?: string; ablateSkill?: boolean }>(
@@ -222,10 +226,11 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   }
 
   // Which skill's invocation the rows record (the `skill_invoked` column), resolved against the snapshot the runs
-  // mount. An unknown --skill refuses here, before any spend.
+  // mount (a dry run: the live plugin's tracked files, which a pass would snapshot). An unknown --skill refuses
+  // here, before any spend.
   const tracked = trackedSkill(pluginDir, args.skill);
   const skillName = tracked.name;
-  if (tracked.name === undefined) say(`[${v}] ${tracked.note}`);
+  say(tracked.name === undefined ? `[${v}] ${tracked.note}` : `[${v}] skill_invoked tracks ${tracked.id}`);
 
   const job = makeHillclimbJobRunner({
     runScenario: deps.runScenario,
@@ -303,8 +308,9 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     mountRoots: (cs) => [...new Set([...prep.mountRoots(cs), pluginDir])],
     lever: live,
     expectedContentSig: (c) => sigs.get(c.id),
+    ...(tracked.name !== undefined ? { skillTracked: tracked.id } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),
   };
-  return { runner, price };
+  return { runner, price, skill: args.skill !== undefined ? tracked.name : undefined };
 }

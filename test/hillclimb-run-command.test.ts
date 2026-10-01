@@ -872,3 +872,168 @@ describe("skill_invoked: which skill the rows track", () => {
     expect(err.join("\n")).toMatch(/harness gate: absent \(sha256 [0-9a-f]{12} over: .*, skill:x\)/);
   });
 });
+
+describe("skill_invoked: what each row tracked, and keeping a variant's column one meaning", () => {
+  const state = () => JSON.parse(readFileSync(join(cwd, "flow", "_state.json"), "utf8")) as Record<string, unknown>;
+  const rowsOf = (variant: string) =>
+    readFileSync(join(cwd, "flow", variant, "results.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { skill_invoked?: number; meta: Record<string, unknown> });
+  const addSkill = (name: string) => {
+    mkdirSync(join(plugin, "skills", name), { recursive: true });
+    writeFileSync(join(plugin, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\n${name}\n`);
+  };
+  const SHA = "[0-9a-f]{12}";
+  const withFixture = async (body: () => Promise<void>) => {
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "report.md"), "# draft 1\n");
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: ../fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      await body();
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  };
+
+  it("a skill directory the loader renames is tracked by its registered id: an invocation scores 1", async () => {
+    rmSync(join(plugin, "skills", "x"), { recursive: true });
+    addSkill("my.skill");
+    inventory = ["my-plugin:my-skill"];
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    skillActivity = [{ skillId: "my-plugin:my-skill" }];
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(0);
+    expect(rows()[0].skill_invoked).toBe(1);
+    expect((rows()[0].meta as Record<string, unknown>).skill_tracked).toBe("my-plugin:my-skill");
+  });
+
+  it("--skill by directory name and by registered name are one selection: the same sha and harness_skill", async () => {
+    rmSync(join(plugin, "skills", "x"), { recursive: true });
+    addSkill("my.skill");
+    addSkill("y");
+    await runHillclimbCommand(args("--skill", "my.skill", "--approve-harness", "--dry-run"), deps());
+    expect(state().harness_skill).toBe("my-skill");
+    skillActivity = [{ skillId: "my-plugin:my-skill" }];
+    expect((await runHillclimbCommand(args("--skill", "my-skill"), deps())).exitCode).toBe(0);
+    expect(rows()[0].skill_invoked).toBe(1);
+  });
+
+  it("a plugin skill of the same name in ANOTHER plugin is not this one: 0", async () => {
+    inventory = ["my-plugin:x", "other-plugin:x"];
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    skillActivity = [{ skillId: "other-plugin:x" }];
+    await runHillclimbCommand(args(), deps());
+    expect(rows()[0].skill_invoked).toBe(0);
+  });
+
+  it("every scored row records the tracked id in meta.skill_tracked; an omitted column records none", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args("--reps", "2"), deps());
+    expect(rowsOf("baseline").map((r) => r.meta.skill_tracked)).toEqual(["my-plugin:x", "my-plugin:x"]);
+    addSkill("y");
+    await runHillclimbCommand(args("--variant", "v1", "--approve-harness"), deps());
+    expect(rowsOf("v1")[0].meta).not.toHaveProperty("skill_tracked");
+    expect(rowsOf("v1")[0]).not.toHaveProperty("skill_invoked");
+  });
+
+  it("a pass whose tracked skill differs from the variant's existing rows is refused before spend, and approves nothing", async () => {
+    addSkill("y");
+    await runHillclimbCommand(args("--skill", "x", "--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args("--skill", "x"), deps());
+    calls = [];
+    for (const extra of [["--dry-run"], ["--approve-harness"], []]) {
+      const r = await runHillclimbCommand(args("--skill", "y", "--reps", "2", ...extra), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toMatch(
+        /variant baseline's rows track my-plugin:x, and this pass would track my-plugin:y: one column would mix two skills — run the switch as a new variant/,
+      );
+    }
+    expect(calls).toEqual([]);
+    expect(state().harness_skill).toBe("x");
+  });
+
+  it("rows that tracked nothing refuse a pass that would track a skill, in that variant", async () => {
+    addSkill("y");
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args(), deps());
+    const r = await runHillclimbCommand(args("--skill", "y", "--approve-harness", "--reps", "2"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/variant baseline's rows track no skill, and this pass would track my-plugin:y/);
+  });
+
+  it("a different tracked skill in ANOTHER variant runs, with a warning naming each variant's skill", async () => {
+    addSkill("y");
+    await runHillclimbCommand(args("--skill", "x", "--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args("--skill", "x"), deps());
+    err = [];
+    expect((await runHillclimbCommand(args("--variant", "v1", "--skill", "y", "--approve-harness"), deps())).exitCode).toBe(0);
+    expect(err.join("\n")).toMatch(
+      /warning: the flow's variants track different skills in skill_invoked \(baseline: my-plugin:x; v1: my-plugin:y\) — compare that column across them only knowingly/,
+    );
+  });
+
+  it("a skill renamed in the live plugin between variants (no --skill): the new variant warns", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args(), deps());
+    renameSync(join(plugin, "skills", "x"), join(plugin, "skills", "x2"));
+    err = [];
+    // The variant with rows keeps its snapshot, so it still tracks x and runs unwarned.
+    expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
+    expect(err.join("\n")).not.toMatch(/track different skills/);
+    expect((await runHillclimbCommand(args("--variant", "v1"), deps())).exitCode).toBe(0);
+    expect(err.join("\n")).toMatch(/\(baseline: my-plugin:x; v1: my-plugin:x2\)/);
+  });
+
+  it("the dry run names the tracked skill, or why there is none", async () => {
+    await runHillclimbCommand(args("--dry-run"), deps());
+    expect(err.join("\n")).toMatch(/\[baseline\] skill_invoked tracks my-plugin:x/);
+    err = [];
+    addSkill("y");
+    await runHillclimbCommand(args("--dry-run"), deps());
+    expect(err.join("\n")).toMatch(/\[baseline\] the plugin registers several skills \(x, y\): skill_invoked is omitted/);
+  });
+
+  it("the dry run's gate line names a skill-only change as the real run does, and a skill change with a file edit", async () => {
+    addSkill("y");
+    await runHillclimbCommand(args("--skill", "x", "--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args("--skill", "y", "--dry-run"), deps());
+    expect(err.join("\n")).toMatch(new RegExp(`harness gate: mismatch: tracked skill x → y \\(sha256 ${SHA} over: .*skill:y\\)`));
+    err = [];
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("do the thing", "do the other thing"));
+    await runHillclimbCommand(args("--skill", "y", "--dry-run"), deps());
+    expect(err.join("\n")).toMatch(/harness gate: mismatch: tracked skill x → y, and the hashed files changed too \(sha256/);
+  });
+
+  it("a workspace_fixture edit with a --skill switch names both causes; a switch alone with a fixture present is skill-only", async () => {
+    addSkill("y");
+    await withFixture(async () => {
+      await runHillclimbCommand(args("--skill", "x", "--approve-harness", "--dry-run"), deps());
+      const only = await runHillclimbCommand(args("--skill", "y"), deps());
+      expect(only.error?.message).toMatch(new RegExp(`^harness changed since last approved run: tracked skill x → y; approved ${SHA}`));
+      writeFileSync(join(cwd, "fx", "report.md"), "# draft 2\n");
+      const both = await runHillclimbCommand(args("--skill", "y"), deps());
+      expect(both.exitCode).toBe(2);
+      expect(both.error?.message).toMatch(
+        /^harness changed since last approved run: tracked skill x → y, and the hashed files changed too \(files: [^)]*fx\/report\.md[^)]*, skill:y\)/,
+      );
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it("with a fixture present, the no-skill sha hashes no skill and survives a --skill round trip", async () => {
+    await withFixture(async () => {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      const plain = state().harness_sha;
+      await runHillclimbCommand(args("--dry-run"), deps());
+      expect(err.join("\n")).toMatch(/harness gate: approved \(sha256 [0-9a-f]{12} over: [^)]*fx\/report\.md[^)]*\)/);
+      expect(err.join("\n")).not.toMatch(/skill:/);
+      await runHillclimbCommand(args("--skill", "x", "--approve-harness", "--dry-run"), deps());
+      expect(state().harness_sha).not.toBe(plain);
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      expect(state().harness_sha).toBe(plain);
+    });
+  });
+});

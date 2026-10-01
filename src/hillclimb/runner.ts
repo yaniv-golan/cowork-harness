@@ -76,6 +76,9 @@ export interface RunnerDeps {
   lever?: string;
   /** The variant snapshot's content signature for a case (each scenario's session fingerprints apart). */
   expectedContentSig?: (c: HillclimbCase) => string | undefined;
+  /** The registered skill id this pass's `skill_invoked` is measured against (`<plugin>:<name>`), recorded on every
+   *  scored row as `meta.skill_tracked`; absent when the column is omitted. */
+  skillTracked?: string;
   /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
@@ -196,10 +199,28 @@ async function run(
 
   // A null (--ablate) run belongs in its own flow: mixed into a scored flow it would enter the trajectory.
   if (lexists(flowAbs)) {
-    const mixed = ablationMix(flowAbs, args.ablate);
+    const snap = loadFlowSnapshot(flowAbs);
+    const mixed = ablationMix(snap, args.ablate);
     if (mixed)
       throw new UsageError(
         `--ablate ${args.ablate ? "into a flow that holds scored rows" : "rows are in this flow"}: ${mixed} — run the null baseline into a sibling flow (e.g. <flow>-null)`,
+      );
+    // skill_invoked means "invoked the tracked skill": within a variant, every row must mean the same skill. Across
+    // variants a switch is allowed (re-approved through the gate) but said, as the report puts them in one column.
+    const tracked = skillTrackedByVariant(snap);
+    const mine = deps.skillTracked ?? "";
+    const own = tracked.get(v);
+    if (own !== undefined && [...own].some((t) => t !== mine))
+      throw new UsageError(
+        `variant ${v}'s rows track ${trackedText(own)}, and this pass would track ${trackedText(new Set([mine]))}: one column would mix two skills — run the switch as a new variant (or keep the selection the rows were run with)`,
+      );
+    tracked.set(v, new Set([mine]));
+    if (new Set([...tracked.values()].flatMap((s) => [...s])).size > 1)
+      say(
+        `warning: the flow's variants track different skills in skill_invoked (${[...tracked]
+          .sort(([a], [b]) => variantOrder(a) - variantOrder(b))
+          .map(([name, s]) => `${name}: ${trackedText(s)}`)
+          .join("; ")}) — compare that column across them only knowingly`,
       );
   }
 
@@ -222,11 +243,26 @@ async function run(
   const digest = digestFor(args.skill);
   for (const s of digest.skipped) say(`warning: harness path '${s.path}' not readable (${s.code}) - skipped`);
   const decision = gateDecision(state, digest.sha, args.approveHarness);
-  if (args.dryRun && !args.approveHarness)
+  // The sha alone cannot name the skill it was approved with: `harness_skill`, recorded beside it on approval,
+  // can. Re-hashing under that selection tells a selection-only change from one where the files moved too.
+  const approvedSkill = typeof state.harness_skill === "string" ? state.harness_skill : undefined;
+  const skillChange = (): { cause: string; filesToo: boolean } | undefined => {
+    if (approvedSkill === args.skill) return undefined;
+    const cause =
+      approvedSkill === undefined
+        ? `--skill added (${args.skill})`
+        : args.skill === undefined
+          ? `--skill removed (was ${approvedSkill})`
+          : `tracked skill ${approvedSkill} → ${args.skill}`;
+    return { cause, filesToo: digestFor(approvedSkill).sha !== state.harness_sha };
+  };
+  if (args.dryRun && !args.approveHarness) {
+    const change = decision.kind === "mismatch" ? skillChange() : undefined;
+    const why = change ? `: ${change.cause}${change.filesToo ? ", and the hashed files changed too" : ""}` : "";
     say(
-      `harness gate: ${decision.kind === "ok" ? "approved" : decision.kind} (sha256 ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")})`,
+      `harness gate: ${decision.kind === "ok" ? "approved" : decision.kind}${why} (sha256 ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")})`,
     );
-  else if (decision.kind !== "ok") {
+  } else if (decision.kind !== "ok") {
     if (!digest.lockfiles.length) say("note: no lockfile in the current directory - dependency changes are outside the harness sha");
     if (decision.kind === "approve") {
       w!.approveHarness(digest.sha, args.skill);
@@ -238,26 +274,16 @@ async function run(
       say(fix);
       return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: `${m} ${fix}` } };
     } else {
-      // The sha alone cannot name the skill it was approved with: `harness_skill`, recorded beside it on approval,
-      // can. Re-hashing under that selection tells a selection-only change from one where the files moved too.
-      const approvedSkill = typeof state.harness_skill === "string" ? state.harness_skill : undefined;
       const shas = `approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}`;
       const files = `files: ${digest.hashed.join(", ")}`;
       let m: string;
       let fix = "Re-run with --approve-harness after reviewing the diff.";
-      if (approvedSkill === args.skill) m = `harness changed since last approved run (${files}); ${shas}.`;
-      else {
-        const skill =
-          approvedSkill === undefined
-            ? `--skill added (${args.skill})`
-            : args.skill === undefined
-              ? `--skill removed (was ${approvedSkill})`
-              : `tracked skill ${approvedSkill} → ${args.skill}`;
-        if (digestFor(approvedSkill).sha === state.harness_sha) {
-          m = `harness changed since last approved run: ${skill}; ${shas}.`;
-          fix = "Re-run with --approve-harness if intended.";
-        } else m = `harness changed since last approved run: ${skill}, and the hashed files changed too (${files}); ${shas}.`;
-      }
+      const change = skillChange();
+      if (change === undefined) m = `harness changed since last approved run (${files}); ${shas}.`;
+      else if (!change.filesToo) {
+        m = `harness changed since last approved run: ${change.cause}; ${shas}.`;
+        fix = "Re-run with --approve-harness if intended.";
+      } else m = `harness changed since last approved run: ${change.cause}, and the hashed files changed too (${files}); ${shas}.`;
       say(m);
       say(fix);
       return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: `${m} ${fix}` } };
@@ -358,6 +384,7 @@ async function run(
           ...(sigOf(c) !== undefined ? { contentSig: sigOf(c)! } : {}),
           // The skill hash the run itself staged (evidence), not one recomputed here.
           ...(typeof report.result?.fingerprint?.skillHash === "string" ? { skillHash: report.result.fingerprint.skillHash } : {}),
+          ...(deps.skillTracked !== undefined ? { skillTracked: deps.skillTracked } : {}),
           ...(args.ablate ? { ablated: true } : {}),
           ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
         },
@@ -489,9 +516,35 @@ function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknow
   }
 }
 
+/** Per variant with scored rows: the `meta.skill_tracked` values its rows carry ("" = a row that tracked none). */
+function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [variant, vs] of Object.entries(snap.variants))
+    for (const line of (vs.results ?? "").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const t = (JSON.parse(line) as { meta?: { skill_tracked?: unknown } }).meta?.skill_tracked;
+        const set = out.get(variant) ?? new Set<string>();
+        set.add(typeof t === "string" ? t : "");
+        out.set(variant, set);
+      } catch {
+        /* schema-check reports malformed lines */
+      }
+    }
+  return out;
+}
+
+const trackedText = (s: ReadonlySet<string>): string =>
+  [...s]
+    .sort()
+    .map((t) => t || "no skill")
+    .join(" and ");
+
+/** baseline first, then v1, v2, … */
+const variantOrder = (v: string): number => (v === "baseline" ? 0 : Number(v.slice(1)));
+
 /** A row in the flow whose `meta.ablated` disagrees with this run, named as `<variant>/<prompt_id>`. */
-function ablationMix(flowAbs: string, ablate: boolean): string | undefined {
-  const snap = loadFlowSnapshot(flowAbs);
+function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean): string | undefined {
   for (const [variant, vs] of Object.entries(snap.variants))
     for (const line of (vs.results ?? "").split("\n")) {
       if (!line.trim()) continue;
