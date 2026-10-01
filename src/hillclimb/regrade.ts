@@ -33,6 +33,7 @@ import { flowHasPairwise, type MetricDecl } from "./grade-keys.js";
 import { discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
+import { judgedOpts } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
 import { readStateIfPresent, readVariantFileIfPresent } from "./runner.js";
 import { VARIANT_DIR_RE } from "./schema-check.js";
@@ -82,8 +83,10 @@ export interface RegradeFlowOutcome {
   error?: { category: "usage" | "runtime"; message: string };
 }
 
-/** The metrics seam: re-extracted metric floats (and their unavailable reasons) merge into a rewritten row here, after its
- *  grade is rebuilt and before its keys are ordered. A no-op until the metrics half fills it; mutates in place. */
+/** The metrics seam: re-extracted metric floats (and their unavailable reasons) merge here into every row rebuilt FROM A
+ *  RE-GRADE REPORT, after its grade is rebuilt and before its keys are ordered (a row rebuilt with no judge call has no
+ *  report, so no re-measure to merge). A no-op until the metrics half fills it; mutates in place. The declarations come
+ *  from the same source `run` grades rows with — none until `run` declares them, and both must change together. */
 export function mergeMetrics(
   row: { grade: Record<string, number>; meta: Record<string, unknown> },
   report: RegradeRunReport,
@@ -119,6 +122,10 @@ function shownRunPath(p: string, secrets: readonly string[]): string {
   if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return `<runs>/${rel.split(sep).join("/")}`;
   return redactDeep(tildeify(p), secrets);
 }
+
+/** The judge model that made a fill's comparisons (the row's own judge fields stay the live ones). */
+const fillModel = (report: RegradeRunReport): string | undefined =>
+  report.assertions.find((a) => a.assertion.semantic_pairwise !== undefined && a.judgeModel !== undefined)?.judgeModel;
 
 /** A core message as the flow, the JSON envelope and stderr show it: no secret, no host path. */
 const shownMessage = (m: string, secrets: readonly string[]): string => redactDeep(m, secrets);
@@ -167,8 +174,17 @@ function regradedResult(live: RunResult, report: RegradeRunReport, keepVerdict: 
   const copy = { ...live, assertions } as RunResult;
   // A fill re-judged no gating comparison: the live verdict stands, so `pass` cannot move by construction.
   if (!keepVerdict) copy.verdict = computeVerdict(copy, "live") as RunResult["verdict"];
-  // The metrics as the re-grade re-measured them from the kept run, when it did.
-  if (report.metrics !== undefined) copy.metrics = report.metrics;
+  // The metrics as the re-grade re-measured them, id by id: a re-measure with no finite value (a pruned or changed file)
+  // never replaces a value the run measured.
+  if (report.metrics !== undefined) {
+    const byId = new Map((live.metrics ?? []).map((m) => [m.id, m]));
+    for (const m of report.metrics) {
+      const prev = byId.get(m.id);
+      const fresh = typeof (m as { value?: unknown }).value === "number" && Number.isFinite((m as { value: number }).value);
+      if (fresh || prev === undefined || typeof (prev as { value?: unknown }).value !== "number") byId.set(m.id, m);
+    }
+    copy.metrics = [...byId.values()] as RunResult["metrics"];
+  }
   return copy;
 }
 
@@ -211,6 +227,7 @@ function rebuiltRow(
     "judge_retries_unrecorded",
     "regrade_fill",
     "regrade_judge_usd",
+    "regrade_judge_model",
     "regrade_doc_matches_live",
     "regrade_unchecked",
     "regrade_file",
@@ -308,6 +325,23 @@ function staleCopied(
  *  judge call, but the column must be there). An outcome that exists but could not be compared live (`missing`,
  *  `integrity`) counts as present: re-judging it could move a gating comparison, which a fill never does — a full
  *  re-grade is the tool for that. */
+/** Why a row's live result no longer lines up with the scenario's assertion list — a different count, a different
+ *  key at an index, or a pairwise assert with another evidence scope — decided before any judge call (a re-grade
+ *  substitutes entries by index, so a shifted list would grade one assert into another's place). */
+function shapeMismatch(result: RunResult, c: HillclimbCase): string | undefined {
+  const live = (result.assertions ?? []).filter((e) => e.source === undefined);
+  const now = c.scenario.assert;
+  if (live.length !== now.length) return `the scenario now has ${now.length} assertion(s), its run graded ${live.length}`;
+  for (let i = 0; i < now.length; i++) {
+    const keys = (a: object) => Object.keys(a).sort().join(",");
+    if (keys(live[i]!.assertion) !== keys(now[i]!))
+      return `assertion ${i} is \`${keys(now[i]!)}\` now, \`${keys(live[i]!.assertion)}\` in its run`;
+    if (now[i]!.semantic_pairwise && pairwiseComposeKey(now[i]!) !== pairwiseComposeKey(live[i]!.assertion))
+      return `assertion ${i} (semantic_pairwise) has another evidence scope than in its run`;
+  }
+  return undefined;
+}
+
 function missingRefs(result: RunResult, c: HillclimbCase, refNames: readonly string[]): string[] {
   const pairwiseIdx = c.scenario.assert.map((a, i) => (a.semantic_pairwise !== undefined ? i : -1)).filter((i) => i >= 0);
   if (!pairwiseIdx.length) return [];
@@ -456,7 +490,7 @@ async function regradeFlowInner(
           if (!args.cases.length) vr.listed.push({ prompt_id: id, rep, why: "no scenario file for this case in the target" });
           continue;
         }
-        const judged = c.scenario.assert.some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined);
+        const judged = c.scenario.assert.some((a) => judgedOpts(a) !== undefined);
         // Nothing to re-grade: the row stands — except in a fill, which rebuilds EVERY scored row (no judge call for
         // this one) so a later reference's win column is on every row of the flow.
         if (!judged && !args.fillRefs) continue;
@@ -465,6 +499,28 @@ async function regradeFlowInner(
         if (!runDir || !result) {
           vr.listed.push({ prompt_id: id, rep, why: "its kept run dir is gone (evidence unavailable)" });
           continue;
+        }
+        const mismatch = judged ? shapeMismatch(result, c) : undefined;
+        if (mismatch) {
+          vr.listed.push({ prompt_id: id, rep, why: `${mismatch} — re-run the variant for the new assertions` });
+          continue;
+        }
+        // A fill keeps every live outcome: one judged against a reference that has since changed (re-frozen by hand)
+        // would mix two references in one row — listed before any spend, never written.
+        if (args.fillRefs) {
+          let k = 0;
+          const entries = (result.assertions ?? []).flatMap((e) =>
+            e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],
+          );
+          const stale = staleCopied(entries, c, refs, false);
+          if (stale.length) {
+            vr.listed.push({
+              prompt_id: id,
+              rep,
+              why: `its kept outcome against ${stale.join(", ")} was judged against a reference that has changed since`,
+            });
+            continue;
+          }
         }
         const agentFailed = classifyRep({ result: result as never }, {}).bucket === "errored_agent";
         const t: Target = { variant: v, c, line, runDir, result, missing: args.fillRefs ? missingRefs(result, c, refNames) : [] };
@@ -497,7 +553,8 @@ async function regradeFlowInner(
         vr.listed.push({
           prompt_id: id,
           rep: Number(e.rep),
-          why: `an errors.jsonl row (judge_invalid): its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${v}\` re-runs it (one agent run)`,
+          // `run` schedules reps below --reps only, so the command names the case and a --reps that covers this rep.
+          why: `an errors.jsonl row (judge_invalid): its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${v} --case ${id} --reps ${Number(e.rep) + 1}\` re-runs it (one agent run per open slot)`,
         });
       }
     }
@@ -540,6 +597,8 @@ async function regradeFlowInner(
       }
       if ("code" in pre && pre.code === "no_semantic_asserts") {
         skip.add(b);
+        for (const t of b.targets)
+          vr.listed.push({ prompt_id: b.c.id, rep: Number(t.line.row?.rep), why: "the scenario has no judged assert to re-grade" });
         continue;
       }
       skip.add(b);
@@ -608,7 +667,11 @@ async function regradeFlowInner(
             regrade_file: shownRunPath(report.regradeFile, deps.secrets),
             regraded_at: at,
             ...(args.fillRefs
-              ? { regrade_fill: b.onlyRefs, ...(report.judgeCostUsd !== undefined ? { regrade_judge_usd: report.judgeCostUsd } : {}) }
+              ? {
+                  regrade_fill: b.onlyRefs,
+                  ...(report.judgeCostUsd !== undefined ? { regrade_judge_usd: report.judgeCostUsd } : {}),
+                  ...(fillModel(report) ? { regrade_judge_model: fillModel(report) } : {}),
+                }
               : {}),
           },
           args.fillRefs ? undefined : copy,
@@ -649,6 +712,12 @@ async function regradeFlowInner(
         undefined,
       );
       if ("why" in got) perVariant.get(t.variant)!.v.listed.push({ prompt_id: t.c.id, rep: Number(t.line.row?.rep), why: got.why });
+      // Nothing to add (every column already there, nothing re-judged): the row stays byte for byte.
+      else if (
+        JSON.stringify(got.row.grade) === JSON.stringify(t.line.row!.grade) &&
+        JSON.stringify(got.row.explanation) === JSON.stringify(t.line.row!.explanation)
+      )
+        continue;
       else {
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
@@ -695,11 +764,16 @@ async function regradeFlowInner(
     }
     for (const l of report) say(l);
     for (const vr of outcome.variants) {
-      const open = vr.listed.filter((x) => x.why.startsWith("an errors.jsonl row (judge_invalid)")).length;
-      if (open)
-        say(
-          `  [${vr.variant}] ${open} slot(s) hold a judge_invalid error row; the next \`hillclimb run ${args.target} --flow ${flowArg} --variant ${vr.variant}\` re-runs them (about one agent run each)`,
-        );
+      const open = vr.listed.filter((x) => x.why.startsWith("an errors.jsonl row (judge_invalid)"));
+      if (!open.length) continue;
+      // One command per case: --reps covers its highest open rep (lower open slots of the case are re-run with it).
+      const byCase = new Map<string, number>();
+      for (const x of open) byCase.set(x.prompt_id, Math.max(byCase.get(x.prompt_id) ?? 0, x.rep + 1));
+      say(
+        `  [${vr.variant}] ${open.length} slot(s) hold a judge_invalid error row (about one agent run each to re-run): ${[...byCase]
+          .map(([id, reps]) => `\`hillclimb run ${args.target} --flow ${flowArg} --variant ${vr.variant} --case ${id} --reps ${reps}\``)
+          .join("; ")}`,
+      );
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
     say(

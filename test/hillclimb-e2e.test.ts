@@ -381,10 +381,22 @@ cat "${ENVELOPE}"
     const v1 = env.variants.find((v) => v.variant === "v1")!;
     expect(v1.rewritten).toBe(1);
     expect(v1.listed).toMatchObject([
-      { rep: 1, why: expect.stringMatching(/judge_invalid.*hillclimb run evals --flow flow --variant v1.*re-runs it/) },
+      {
+        rep: 1,
+        why: expect.stringMatching(/judge_invalid.*`hillclimb run evals --flow flow --variant v1 --case alpha --reps 2` re-runs it/),
+      },
     ]);
     expect(r.stderr).toMatch(
-      /\[v1\] 1 slot\(s\) hold a judge_invalid error row; the next `hillclimb run evals --flow flow --variant v1` re-runs them/,
+      /\[v1\] 1 slot\(s\) hold a judge_invalid error row .*`hillclimb run evals --flow flow --variant v1 --case alpha --reps 2`/,
     );
-  }, 120_000);
+    // The printed command really fills that slot.
+    const rerun = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--case", "alpha", "--reps", "2", "--concurrency", "1");
+    expect(rerun.status, rerun.stderr).toBe(0);
+    expect(
+      results("v1")
+        .trim()
+        .split("\n")
+        .map((l) => (JSON.parse(l) as { rep: number }).rep),
+    ).toContain(1);
+  }, 180_000);
 });

@@ -61,6 +61,7 @@ export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario
 
 export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml | dir/> [--flow DIR] [--variant all|baseline|vN] [--case ID]...
        [--judge-model ID] [--fill-refs] [--approve-harness] [--allow-doc-drift] [--allow-unchecked] [--output-format text|json]
+       [--dotenv FILE] [--run-dir DIR]
        Re-grades a flow's scored rows from their kept run dirs (no agent run) and rewrites results.jsonl atomically,
        keeping the prior file as regrade-<sha>.bak.jsonl and a before/after in <variant>/regrade.md. Default: every
        judged assert is graded again with the flow's references now (a judge or rubric change). --fill-refs: only the
