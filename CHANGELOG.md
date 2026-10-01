@@ -65,6 +65,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **An `eval` `report.md` row whose text holds a backslash before a pipe no longer splits the table.**
+  A row's assertion or claim text (and its note) escaped `|` but not `\`, so a claim containing `\|`
+  rendered as `\\|`: the backslash escaped the backslash and the pipe became a live column separator,
+  adding a column to that row. Backslashes are now escaped before pipes. `report.json` is unchanged.
 - **`eval` honours `allow_stall`.** A scenario whose intended terminal state is a question asserts
   `allow_stall: true`, which `run` and `replay` accept as the opt-out from the `stalled` verdict. `eval`
   ignored it and classified every stalled rep as the agent's failure, scoring it 0 on every row. A

@@ -575,7 +575,9 @@ const pct = (k: number, n: number) => (n === 0 ? "—" : `${k}/${n} (${Math.roun
 const fmtP = (p: number | undefined) => (p === undefined ? "—" : p < 0.0001 ? p.toExponential(1) : p.toFixed(4));
 const fmtDiff = (x: number) => `${x >= 0 ? "+" : ""}${Math.round(x * 100)}pp`;
 const fmtMdd = (d: Mdd) => (d === "n/a" ? "n/a" : d === "none" ? "none at this n" : `${Math.round(d * 100)}pp`);
-const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+// Backslashes first: escaping only the pipe turns a source `\|` into `\\|`, where the backslash escapes the
+// backslash and the pipe is a live column separator again.
+const cell = (s: string) => s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ");
 const fmtUsd = (x: number | undefined) => (x === undefined ? "—" : `$${x.toFixed(4)}`);
 
 function rowLine(r: ReportRow): string {
