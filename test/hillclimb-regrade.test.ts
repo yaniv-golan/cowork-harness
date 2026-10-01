@@ -408,7 +408,7 @@ describe("mergeMetrics: a re-measure's sigs and unavailable reasons onto a rebui
     expect(row.grade).toEqual({ words_present: 1, words: 1200 });
   });
 
-  it("a still-missing metric keeps its reason; a reason for another id stays; a row predating both gains their sigs", () => {
+  it("a still-missing metric keeps its reason; a reason for an id no longer declared goes; a row predating both gains their sigs", () => {
     const row = {
       grade: { words_present: 1, words: 3, gone_present: 0 },
       meta: { metrics_unavailable: { old: "pruned" } } as Record<string, unknown>,
@@ -421,7 +421,8 @@ describe("mergeMetrics: a re-measure's sigs and unavailable reasons onto a rebui
       ]),
       [words, gone],
     );
-    expect(row.meta.metrics_unavailable).toEqual({ old: "pruned", gone: "missing_artifact" });
+    // `run` never writes a reason for an id outside the declarations, so neither does a re-measure keep one.
+    expect(row.meta.metrics_unavailable).toEqual({ gone: "missing_artifact" });
     expect(row.meta.metric_sigs).toEqual(metricSigs([words, gone]));
   });
 
@@ -503,20 +504,33 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
 
   it("a fill's row rebuilt with no judge call (no re-measure) loses a removed metric's sig with its column, gains no new one", () => {
     writing();
-    const { cli, flow, rows, evals } = buildFlow({ metrics: [OTHER, WORDS] });
+    // LOST is never measured (no file), so the run records its unavailable reason; it is removed below with WORDS.
+    const LOST = "  - { id: lost, artifact: outputs/lost.json, path: x, better: higher, scale: 1 }";
+    const { cli, flow, rows, evals } = buildFlow({ metrics: [OTHER, WORDS, LOST] });
+    expect(rows("v1")[0]!.meta.metrics_unavailable).toEqual({ lost: "missing_artifact" });
     const env = { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
     const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
     writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...stateTemplateFor("evals", f.cwd, env, "flow").state }));
     expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
     // WORDS removed, GONE added: v1's row lacks only its own reference, so the fill rebuilds it with no judge call.
     const sc = join(evals, "alpha.yaml");
-    writeFileSync(sc, readFileSync(sc, "utf8").replace(`${WORDS}\n`, `${GONE}\n`));
+    writeFileSync(sc, readFileSync(sc, "utf8").replace(`${WORDS}\n`, `${GONE}\n`).replace(`${LOST}\n`, ""));
+    // _state.json declares the added metric (the loop merged state-template's new entry); `run`'s rows predate it.
+    const st2 = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
+    const added = stateTemplateFor("evals", f.cwd, env, "flow").state as { metrics: Array<{ id: string }> };
+    st2.metrics = [...st2.metrics, ...added.metrics.filter((m) => !st2.metrics.some((x: { id: string }) => x.id === m.id))];
+    writeFileSync(join(flow, "_state.json"), JSON.stringify(st2));
     const r = cli("regrade", "evals", "--flow", "flow", "--fill-refs", "--approve-harness");
     expect(r.status, r.stderr).toBe(0);
     const v1 = rows("v1")[0]!;
     expect(v1.meta).not.toHaveProperty("regrade_doc_matches_live");
     expect(v1.grade).toHaveProperty("win_v1");
     expect(v1.grade).not.toHaveProperty("words_present");
+    // Not re-measured, so the row still predates GONE: no column, no presence key (a `_present: 0` would read as
+    // "measured: no"), exactly as `run` left it — and no reason for the removed LOST.
+    expect(v1.grade).not.toHaveProperty("gone");
+    expect(v1.grade).not.toHaveProperty("gone_present");
+    expect(v1.meta).not.toHaveProperty("metrics_unavailable");
     expect(Object.keys(v1.meta.metric_sigs as object)).toEqual(["other"]);
     // The re-measured baseline row: the added metric is sigged, with its reason.
     expect(Object.keys(rows("baseline")[0]!.meta.metric_sigs as object).sort()).toEqual(["gone", "other"]);
@@ -526,6 +540,8 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
       c.report.findings.filter((x) => x.level === "error"),
       JSON.stringify(c.report.findings),
     ).toEqual([]);
+    // check still reads v1's row as predating the added metric.
+    expect(c.report.findings.map((x) => x.message)).toContainEqual(expect.stringMatching(/1 rows predate metric gone \(v1 1\)/));
   }, 240_000);
 
   it("in-process with no metricDecls dep, the flow's union is still the default (no caller can drop the columns)", async () => {

@@ -104,9 +104,14 @@ export function mergeMetrics(
 ): void {
   if (decls.length) row.meta.metric_sigs = metricSigs(decls);
   else delete row.meta.metric_sigs;
-  if (row.meta.failure_class === "errored_agent") return;
-  const prev = row.meta.metrics_unavailable;
-  const unavailable: Record<string, unknown> = { ...(prev && typeof prev === "object" && !Array.isArray(prev) ? prev : {}) };
+  // Only the declarations' reasons survive: `run` never writes one for an id outside them, so a removed metric's
+  // reason goes with its column and sig.
+  const unavailable = declaredUnavailable(row.meta, decls);
+  if (row.meta.failure_class === "errored_agent") {
+    if (Object.keys(unavailable).length) row.meta.metrics_unavailable = unavailable;
+    else delete row.meta.metrics_unavailable;
+    return;
+  }
   for (const m of decls) {
     if (row.grade[`${m.id}_present`] === 1) delete unavailable[m.id];
     else {
@@ -116,6 +121,14 @@ export function mergeMetrics(
   }
   if (Object.keys(unavailable).length) row.meta.metrics_unavailable = unavailable;
   else delete row.meta.metrics_unavailable;
+}
+
+/** The row's `meta.metrics_unavailable` reasons for the declared ids only. */
+function declaredUnavailable(meta: Record<string, unknown>, decls: readonly MetricDecl[]): Record<string, unknown> {
+  const prev = meta.metrics_unavailable;
+  if (!prev || typeof prev !== "object" || Array.isArray(prev)) return {};
+  const ids = new Set(decls.map((m) => m.id));
+  return Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id)));
 }
 
 type Row = Record<string, unknown> & { prompt_id?: unknown; rep?: unknown; grade?: Record<string, number>; meta?: Record<string, unknown> };
@@ -257,15 +270,26 @@ function rebuiltRow(
   const grade = { ...g.grade };
   if (report) shape.merge({ grade, meta }, report, shape.metrics);
   else {
-    // Not re-measured: a removed metric's sig goes with its column (the ordered grade no longer carries it), and no
-    // metric the row predates gains one — `check` still reads that row as predating it.
+    // Not re-measured, so the row stays as `run` left it. A removed metric's sig and unavailable reason go with its
+    // column (the ordered grade no longer carries it). A metric the row predates (no sig) gains neither a sig nor the
+    // `<id>` / `<id>_present` keys `gradeFor` emits for every declared metric — a `_present: 0` would read as
+    // "measured: no", and `check` would no longer count the row as predating the metric.
     const sigs = meta.metric_sigs;
-    if (sigs && typeof sigs === "object" && !Array.isArray(sigs)) {
-      const ids = new Set(shape.metrics.map((m) => m.id));
-      const kept = Object.fromEntries(Object.entries(sigs).filter(([id]) => ids.has(id)));
-      if (Object.keys(kept).length) meta.metric_sigs = kept;
-      else delete meta.metric_sigs;
-    }
+    const ids = new Set(shape.metrics.map((m) => m.id));
+    const kept =
+      sigs && typeof sigs === "object" && !Array.isArray(sigs)
+        ? Object.fromEntries(Object.entries(sigs).filter(([id]) => ids.has(id)))
+        : {};
+    if (Object.keys(kept).length) meta.metric_sigs = kept;
+    else delete meta.metric_sigs;
+    for (const m of shape.metrics)
+      if (!(m.id in kept)) {
+        delete grade[m.id];
+        delete grade[`${m.id}_present`];
+      }
+    const unavailable = declaredUnavailable(meta, shape.metrics);
+    if (Object.keys(unavailable).length) meta.metrics_unavailable = unavailable;
+    else delete meta.metrics_unavailable;
   }
   // Replacements, by key; `undefined` removes a key the producer no longer emits.
   const repl: Record<string, unknown> = {
