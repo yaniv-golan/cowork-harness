@@ -129,6 +129,8 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     expect(r.status).toBe(0);
     const env = JSON.parse(r.stdout);
     expect(env.ok).toBe(true);
-    expect(env).toMatchObject({ scheduled: 1, scored: 0, failed: 0, cost: { jobs: 1, lowerBound: true } });
+    // eval's dry-run shape: the estimate under plan.cost, so a top-level cost can only ever mean spend.
+    expect(env).toMatchObject({ dryRun: true, scheduled: 1, scored: 0, failed: 0, plan: { cost: { jobs: 1, lowerBound: true } } });
+    expect(env).not.toHaveProperty("cost");
   });
 });

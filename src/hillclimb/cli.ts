@@ -134,7 +134,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
             scored: outcome.ok,
             failed: outcome.failed,
             exitCode: outcome.exitCode,
-            ...(outcome.cost ? { cost: outcome.cost } : {}),
+            // eval's dry-run shape: the estimate under plan.cost; a top-level cost would read as spend.
+            ...(a.dryRun ? { dryRun: true, ...(outcome.cost ? { plan: { cost: outcome.cost } } : {}) } : {}),
           }),
           secrets,
         ) + "\n",
