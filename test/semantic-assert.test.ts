@@ -240,18 +240,22 @@ describe("semantic_matches — judgedDoc fingerprints the document the judge act
 
   it("top-level sha256 equals the received document; sections name each part (kind, path) and hash its received bytes", async () => {
     const { judge, received } = capturing();
-    const a = sem(["alpha"]);
+    // Scoped, so the out-of-scope omission yields the health section without refusing the verdict — the
+    // judge is called only over complete in-scope evidence, and every section kind has to reach it here.
+    const a: Assertion = { semantic_matches: { rubric: ["alpha"], evidence_files: ["outputs/report.md", "scratchpad/notes.txt"] } };
     const c = ctx({
       transcript: "the transcript says alpha",
       finalMessage: "final: alpha with TOKEN-XYZ inside",
       secrets: ["TOKEN-XYZ"],
       authoredFiles: [
         { path: "outputs/report.md", content: "# Report\nalpha" },
-        { path: "scratchpad/notes.txt", content: "draft", truncated: true },
+        { path: "scratchpad/notes.txt", content: "draft" },
       ],
-    } as Partial<AssertContext>);
+      authoredFilesHealth: { omittedPaths: ["outputs/other.md"], readErrors: [] },
+    } as unknown as Partial<AssertContext>);
     await runSemanticJudges([a], c, judge);
     const r = evaluate([a], c)[0];
+    expect(r.semanticEvidence?.reason).toBe("graded");
     expect(received).toHaveLength(1);
     const doc = received[0]!;
     expect(doc).not.toContain("TOKEN-XYZ"); // the fingerprint covers the SCRUBBED bytes that left
@@ -289,24 +293,28 @@ describe("semantic_matches — judgedDoc fingerprints the document the judge act
 
   it("past the aggregate cap: the hash is still of the received (cut) document, and sections stop at the cut", async () => {
     const { judge, received } = capturing();
-    const a = sem(["alpha"]);
-    const c = ctx({
-      transcript: "alpha",
-      authoredFiles: [
-        { path: "outputs/big.md", content: "x".repeat(300 * 1024) },
-        { path: "outputs/after.md", content: "never reached" },
-      ],
-    });
+    // A cut into AUTHORED evidence refuses without a judge call, so the overflow here is sub-agent text in a
+    // run that authored nothing — the one shape the aggregate cap cuts and the judge still grades.
+    const a: Assertion = { semantic_matches: { rubric: ["alpha"], include_subagent_text: true } };
+    const subagents = Array.from({ length: 12 }, (_, i) => ({
+      description: `w${i}`,
+      reasoning: [{ kind: "text", text: `${i}`.repeat(15 * 1024) }],
+    })) as AssertContext["subagents"];
+    const c = ctx({ transcript: "alpha " + "t".repeat(120 * 1024), subagents });
     await runSemanticJudges([a], c, judge);
     const r = evaluate([a], c)[0];
+    expect(r.semanticEvidence?.reason).toBe("graded");
     const doc = received[0]!;
     expect(doc).toMatch(/chars truncated for the judge input budget/);
     expect(r.judgedDoc?.sha256).toBe(sha(doc));
-    const kinds = r.judgedDoc!.sections.map((s) => s.path ?? s.kind);
-    expect(kinds).toEqual(["transcript", "outputs/big.md"]); // the file wholly past the cut is not a section
-    walk(doc, r.judgedDoc!.sections);
-    const big = r.judgedDoc!.sections[1]!;
-    expect(big.chars).toBeLessThan(300 * 1024); // clipped to what the judge saw
+    const secs = r.judgedDoc!.sections;
+    expect(secs[0]!.kind).toBe("transcript");
+    expect(secs.length).toBeGreaterThan(2);
+    expect(secs.length).toBeLessThan(13); // the sub-agents wholly past the cut are not sections
+    walk(doc, secs);
+    const last = secs[secs.length - 1]!;
+    expect(last.kind).toBe("subagent");
+    expect(last.chars).toBeLessThan(15 * 1024); // clipped to what the judge saw
   });
 
   it("is recorded on an INVALID grade too — the judge was still sent the document, twice", async () => {

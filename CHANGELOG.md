@@ -65,6 +65,40 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A `semantic_matches` assert whose evidence is unavailable no longer calls the judge.** Every
+  evidence-unavailable reason (`scope_matched_nothing`, `in_scope_omitted`, `in_scope_truncated`,
+  `evidence_incomplete`, `no_pre_run_manifest`, `authored_evidence_truncated`) depends only on the
+  composed evidence, so it is now decided before the judge call, and that assert is not graded. The
+  judge was previously still called: its spend was recorded although the grade could not change the
+  verdict, and its per-claim grades were stored beside the refusal. The verdict, message and
+  `semanticEvidence` reason are unchanged, except that a refused assert can no longer also be
+  judge-invalid (the refusal message now wins); the assert now carries no `semanticClaims`, `judgeModel`,
+  `judgeCostUsd`, `judgeUsage`, `judgePromptHash` or `judgedDoc`, because no judge was called and no
+  judge received a document.
+- **`eval` no longer counts claim grades from a refused `semantic_matches` assert.** Those grades were
+  made over evidence the verdict had declared incomplete, and they entered the A/B claim rows as if
+  they were real; the roll-up row counted the refusal as a fail. Now, as with an invalid judge grade,
+  that assertion's rows (the roll-up and every claim) leave out the rep. Each arm reports how many grades
+  were refused, by reason (`arms[].evidenceUnavailable` in `report.json`, and a line under "Reps per
+  arm"), so an arm that refuses more often stays visible. `runs.jsonl` now keeps each grade's refusal
+  reason. In an eval dir written earlier, `eval report` recognises a refusal only where the kept fields
+  prove one (counted as `unrecorded`). A refusal whose claims also missed `min_pass` cannot be told from
+  a graded fail there, and is still scored as a fail. The roll-up row of an assertion with keys besides
+  `semantic_matches` keeps a refused rep as a fail, because the grade's one `pass` covers every key.
+- **`eval --fail-on possible` no longer passes when the candidate's evidence refusals hide a drop.**
+  Excluding refusals has a blind spot: if the edit makes the deliverable outgrow the evidence budget, the
+  candidate refuses more, its rows fall below the rep threshold, and they would read plain `insufficient`
+  — where the same runs used to show a roll-up drop that `--fail-on possible` gated on. Such a row is now
+  `insufficient_refusals`: the candidate refused at least 2 more grades than the baseline, and that excess
+  alone took the row below the threshold. It is a drop signal at the `possible` level — `--fail-on
+  possible` exits 1 on it, `--fail-on confirmed` does not, and without `--fail-on` the exit code is
+  unchanged. It is not counted toward "every row insufficient", and `summary.labels` counts it under its
+  own key (no longer within `insufficient`). The header warns per assertion when the arms' refusals differ
+  by 2 or more reps, or either arm refused at least 20% of its scored reps (`summary.refusalImbalances`);
+  a baseline that refuses more warns but never labels a row. Re-reporting an eval dir written before this
+  change (`eval report <dir>`) can change its row labels — refusals provable from the kept fields now
+  leave the rows — and, with `--fail-on`, its exit code.
+
 - **A budget refusal on `record <dir/> --dry-run` no longer drops the corpus findings from the JSON.**
   The refusal's error envelope replaces the dry-run payload, and `broken[]`, `refusals[]` and
   `inputErrors[]` went to stderr only; they now stay on the error envelope as the same top-level keys
@@ -138,6 +172,7 @@ All notable changes to this project are documented here. The format is based on
   - A sub-agent's reasoning and web searches now appear in the `subagent` entries of `run.jsonl` and
     `trace.json` whenever the reasoning is captured, including on a run salvaged after an unanswered gate. Before, they
     appeared there only when the run had no usable timeline.
+
 ### Documentation
 
 - The companion skill now says that a green run says nothing about a skill edited while a session is

@@ -53,6 +53,7 @@ import {
   normalizeClaim,
   scenarioRows,
   repRowValues,
+  semanticRefusalReason,
   armMedians,
   type ClassifiableResult,
   type RepBucket,
@@ -598,6 +599,87 @@ describe("repRowValues", () => {
       semantic_matches: 1,
       "names the owner.": "x:claims_missing",
       "cites a source": "x:claims_missing",
+    });
+  });
+  it("a semantic grade that refused for unavailable evidence leaves that assertion's rows, roll-up included", () => {
+    // The post-fix shape: the judge was not called, so no claims — and the typed reason says why.
+    const r = validRep();
+    r.assertions![1] = { assertion: semAssertion, pass: false, semanticEvidence: { reason: "in_scope_truncated" } };
+    expect(byLabel(repRowValues(rows, assertions, classifyRep({ result: r }, expected), r))).toEqual({
+      result: 1,
+      semantic_matches: "x:evidence_unavailable",
+      "names the owner.": "x:evidence_unavailable",
+      "cites a source": "x:evidence_unavailable",
+    });
+  });
+  it("claims recorded BESIDE a refusal (a pre-fix result) are not counted", () => {
+    // Before the judge was skipped for a refused assert it was still called, and its per-claim grades were
+    // stored next to the refusal — graded over evidence the verdict had declared incomplete.
+    const r = validRep();
+    r.assertions![1] = { ...r.assertions![1], pass: false, semanticEvidence: { reason: "evidence_incomplete" } };
+    const vals = byLabel(repRowValues(rows, assertions, classifyRep({ result: r }, expected), r));
+    expect(vals["names the owner."]).toBe("x:evidence_unavailable");
+    expect(vals["cites a source"]).toBe("x:evidence_unavailable");
+    expect(vals.semantic_matches).toBe("x:evidence_unavailable");
+  });
+  it("a graded semantic fail is still a 0, not an exclusion", () => {
+    const r = validRep();
+    r.assertions![1] = { ...r.assertions![1], pass: false, semanticEvidence: { reason: "graded" } };
+    r.assertions![1].semanticClaims = r.assertions![1].semanticClaims!.map((c) => ({ ...c, pass: false }));
+    expect(byLabel(repRowValues(rows, assertions, classifyRep({ result: r }, expected), r))).toEqual({
+      result: 1,
+      semantic_matches: 0,
+      "names the owner.": 0,
+      "cites a source": 0,
+    });
+  });
+  it("a MULTI-key assertion's roll-up keeps a refused rep as a fail; its claim rows still lose it", () => {
+    // `{semantic_matches, result}`: the grade's one `pass` is the AND of both keys, so a `result` that failed
+    // would be dropped with the refusal. Only the claims (about the semantic key alone) are excluded.
+    const multi = { ...semAssertion, result: "success" } as Assertion;
+    const both = [plainAssertion, multi];
+    const mrows = scenarioRows("s1", both);
+    const r = validRep();
+    r.assertions![1] = { assertion: multi, pass: false, semanticEvidence: { reason: "in_scope_truncated" } };
+    expect(byLabel(repRowValues(mrows, both, classifyRep({ result: r }, expected), r))).toEqual({
+      result: 1,
+      semantic_matches: 0,
+      "names the owner.": "x:evidence_unavailable",
+      "cites a source": "x:evidence_unavailable",
+    });
+  });
+  describe("a runs.jsonl written before the refusal reason was kept", () => {
+    // min_pass is 1 on `semAssertion`: one passing claim is enough, so a graded verdict would be a pass.
+    it("a FAIL whose claims met min_pass can only have been a refusal: excluded as `unrecorded`", () => {
+      const r = validRep();
+      r.assertions![1] = { ...r.assertions![1], pass: false };
+      expect(semanticRefusalReason(r.assertions![1])).toBe("unrecorded");
+      const vals = byLabel(repRowValues(rows, assertions, classifyRep({ result: r }, expected), r));
+      expect(vals.semantic_matches).toBe("x:evidence_unavailable");
+      expect(vals["names the owner."]).toBe("x:evidence_unavailable");
+    });
+    it("a FAIL whose claims missed min_pass is indistinguishable from a graded fail, and stays one", () => {
+      const r = validRep();
+      r.assertions![1] = {
+        ...r.assertions![1],
+        pass: false,
+        semanticClaims: r.assertions![1].semanticClaims!.map((c) => ({ ...c, pass: false })),
+      };
+      expect(semanticRefusalReason(r.assertions![1])).toBeUndefined();
+      expect(byLabel(repRowValues(rows, assertions, classifyRep({ result: r }, expected), r)).semantic_matches).toBe(0);
+    });
+    it("a multi-key assert is never inferred: another key may be what failed", () => {
+      const g = {
+        assertion: { ...semAssertion, result: "success" } as Assertion,
+        pass: false,
+        semanticClaims: [{ index: 0, claim: "Names the  Owner.", pass: true }],
+      };
+      expect(semanticRefusalReason(g)).toBeUndefined();
+    });
+    it("a pass, or a judge_invalid grade, is never a refusal", () => {
+      const r = validRep();
+      expect(semanticRefusalReason(r.assertions![1])).toBeUndefined();
+      expect(semanticRefusalReason({ ...r.assertions![1], pass: false, judgeInvalid: true })).toBeUndefined();
     });
   });
   it("a grade that does not line up with the frozen scenario is excluded, never guessed", () => {

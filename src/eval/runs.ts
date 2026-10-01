@@ -104,6 +104,9 @@ export function buildRunsLine(args: {
     ...(a.judgePromptHash !== undefined ? { judgePromptHash: a.judgePromptHash } : {}),
     ...(a.judgeCostUsd !== undefined ? { judgeCostUsd: a.judgeCostUsd } : {}),
     ...(a.judgeModel !== undefined ? { judgeModel: a.judgeModel } : {}),
+    // The reason only: the row extractor reads nothing else, and `scope_matched_nothing`'s `paths` is every
+    // path the run authored. Without it a refused semantic grade is indistinguishable from a graded fail.
+    ...(a.semanticEvidence !== undefined ? { semanticEvidence: { reason: a.semanticEvidence.reason } } : {}),
   }));
   const semantic = assertions.filter((a) => a.assertion.semantic_matches !== undefined);
   return {

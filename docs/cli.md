@@ -291,16 +291,17 @@ not run again; the judge call is the only spend.
   expected), `unknown` (this assert's scope has no live fingerprint), `live_refused` (every live assert with this
   scope refused its evidence and no fingerprint was recorded — in practice a run from before fingerprints were
   recorded, or one where no judge ran for the refused assert; a refused assert that did record one is compared
-  like a graded one), or `not_graded` (this re-grade's own assert refused its evidence and no document was handed
-  to a judge). While the judge is called before a refusal is decided, an assert that refuses has still had its
-  document read, so it is compared and reported like any other — `false` included — and its refusal shows in its
-  own pass and message. The run-level value is the worst over the asserts, in the order `false`, `live_refused`,
+  like a graded one), or `not_graded` (this re-grade's own assert refused its evidence, so no judge was called for
+  it and no document was handed to one; its refusal shows in its own pass and message). A kept run recorded while
+  the judge was still called before a refusal can carry a `judgedDoc` on a refused live assert: that document is
+  still drift-checked before any judge call, like a graded one's. The run-level value is the worst over the asserts, in the order `false`, `live_refused`,
   `unknown`, `scope_changed`, `true` (so "differs by design" never hides "never checked"); it is `not_graded` only
   when every assert is. `unknown` and `live_refused` are named in a
   `::warning::` before the judge call: those documents could not be checked for drift or for a secret the live
-  run scrubbed, and this process's scrub set is all that protects them. None of these change the exit code.
-  If no judge ran for any assert (not possible while a refusing assert's judge is still called), the regrade
-  file is named after the requested `--judge-model`, else `not-graded`.
+  run scrubbed, and this process's scrub set is all that protects them. An assert that will refuse its evidence
+  is left out of that warning and of the unchecked-sections one: no judge receives its document. None of these change the exit code.
+  If no judge ran for any assert (every one refused its evidence), the regrade file is named after the requested
+  `--judge-model`, else `not-graded`.
   A `false` says only that the bytes differ, not why:
   an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
   cause it, and the listed sections are what tell them apart.

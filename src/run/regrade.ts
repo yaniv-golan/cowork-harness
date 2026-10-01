@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { composeJudgedDocument, evaluate, runSemanticJudges, type AssertContext } from "../assert.js";
+import { composeJudgedDocument, evaluate, runSemanticJudges, semanticRefusal, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
@@ -41,7 +41,7 @@ const CMD = "regrade";
 /** Whether the re-grade's judged document is the one the live judge read. See REGRADE_USAGE. `unknown` and
  *  `live_refused` mean there was nothing live to compare with (this scope has no live fingerprint, or the live
  *  assert refused its evidence and none was recorded); `not_graded` means this re-grade's own assert refused its
- *  evidence and no document was handed to a judge. */
+ *  evidence, so no judge was called for it and no document was handed to one. */
 export type DocMatch = true | false | "scope_changed" | "unknown" | "live_refused" | "not_graded";
 
 export interface DifferingSection {
@@ -188,10 +188,11 @@ interface LiveSide {
 }
 
 /** A live semantic assert that refused its evidence (any `semanticEvidence.reason` but `graded`) AND for which no
- *  fingerprint was recorded — in practice a run from before `judgedDoc` existed, or one where no judge ran for
- *  the refused assert — so it vouches for nothing. A refused assert that DID record one (a harness that still
- *  called the judge before refusing) is compared like a graded one. A result without `semanticEvidence`
- *  predates the field and is read as graded. */
+ *  fingerprint was recorded — every refusal the harness records now (the judge is not called for a refused
+ *  assert, so there is no document to fingerprint), or a run from before `judgedDoc` existed — so it vouches for
+ *  nothing. A refused assert that DID record one (a run recorded while the harness still called the judge before
+ *  refusing) is compared like a graded one. A result without `semanticEvidence` predates the field and is read
+ *  as graded. */
 const liveRefused = (r: LiveResult): boolean =>
   r.judgedDoc === undefined && r.semanticEvidence !== undefined && r.semanticEvidence.reason !== "graded";
 
@@ -227,9 +228,10 @@ export function compareWithLive(
   /** This re-grade's own assert refused its evidence. */
   regradeRefused: boolean,
 ): { match: DocMatch; differing: DifferingSection[] } {
-  // Compare FIRST: an assert that refused after its judge read a document (the judge is called before the
-  // refusal is decided) is reported by what that document was — the refusal stays visible in its own
-  // pass/message. `not_graded` is only for a refusal with no document handed to a judge at all.
+  // Compare FIRST: whenever a judge was handed a document (`now`), the assert is reported by what that document
+  // was, refused or not — the refusal stays visible in its own pass/message. `not_graded` is only for a refusal
+  // with no document handed to a judge, which is every refusal now: `runSemanticJudges` decides it before the
+  // call and does not call the judge for it.
   if (regradeRefused && !now) return { match: "not_graded", differing: [] };
   const none = nothingLive(a, live);
   if (none) return { match: none, differing: [] };
@@ -406,6 +408,8 @@ interface Prepared {
   unchecked: UncheckedSection[];
   /** `assert <i>: unknown|live_refused` for each assert with no live fingerprint to compare with. */
   blind: string[];
+  /** The asserts whose evidence will be refused, so no judge is called for them (left out of both warnings). */
+  willRefuse: Set<Assertion>;
   turn: number;
   ctx: AssertContext;
   resultSha256: string;
@@ -535,16 +539,23 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
 
     // The documents the judge will be handed (composed exactly as `runSemanticJudges` will), for what can be
     // said before the spend: the content no live fingerprint covers, and the asserts with no live
-    // fingerprint to compare with at all.
+    // fingerprint to compare with at all. An assert whose evidence will be refused is decided here by the same
+    // `semanticRefusal` over the same context, and left out: no judge is called for it, so its document
+    // reaches no one and there is nothing to warn about.
     const newSemantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
-    const newDocs = new Map(
-      newSemantic.map((a) => [
-        a,
-        composeJudgedDocument(second.ctx, a.semantic_matches!.include_subagent_text === true, a.semantic_matches!.evidence_files)
-          .fingerprint,
-      ]),
-    );
+    const willRefuse = new Set<Assertion>();
+    const newDocs = new Map<Assertion, JudgedDocFingerprint>();
+    for (const a of newSemantic) {
+      const built = composeJudgedDocument(
+        second.ctx,
+        a.semantic_matches!.include_subagent_text === true,
+        a.semantic_matches!.evidence_files,
+      );
+      if (semanticRefusal(a, second.ctx, built)) willRefuse.add(a);
+      else newDocs.set(a, built.fingerprint);
+    }
     const blind = newSemantic.flatMap((a, ordinal) => {
+      if (willRefuse.has(a)) return [];
       const { match } = compareWithLive(a, ordinal, sc.assert.indexOf(a), newDocs.get(a), live, false);
       return match === "unknown" || match === "live_refused" ? [`assert ${sc.assert.indexOf(a)}: ${match}`] : [];
     });
@@ -555,6 +566,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       ctx: second.ctx,
       unchecked: uncheckedSections(newDocs, sc, second.result),
       blind,
+      willRefuse,
       resultSha256: sha256Hex(readFileSync(turnArtifactPath(runDir, second.turn, "result.json"))),
       budget,
       live,
@@ -592,6 +604,13 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     const { judge, judgeFor } = judgesForRun({ modelOverride: opts.judgeModel }, opts.makeJudge);
     // The SAME array to both calls: `check` reads the judge's results back by assertion identity.
     await runSemanticJudges(semantic, p.ctx, judge, judgeFor);
+    // The warnings above left out the asserts predicted to refuse. Had a judge been handed one of their
+    // documents after all, it went out unwarned — fail loudly rather than report it as not_graded.
+    for (const a of p.willRefuse)
+      if (!p.ctx.semanticRefused?.has(a) || p.ctx.judgedDocs?.has(a))
+        throw new Error(
+          `${CMD}: internal: assert ${sc.assert.indexOf(a)} was predicted to refuse its evidence but a judge was called for it`,
+        );
     const graded = evaluate(semantic, p.ctx);
 
     const differing: DifferingSection[] = [];
