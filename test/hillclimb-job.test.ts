@@ -147,4 +147,27 @@ describe("makeHillclimbJobRunner", () => {
     expect(rep).toMatchObject({ result: undefined, events: [], children: [] });
     expect((rep.thrown as Error).message).toBe("spawn failed");
   });
+
+  it("the report carries the sub-agent append the session sent (SYNTHETIC control-out line)", async () => {
+    const run = makeHillclimbJobRunner(
+      deps({
+        runScenario: async (a) => {
+          const outDir = join(root, a.scenario.name, String(a.extra.runId));
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(outDir, "events.jsonl"), frames);
+          writeFileSync(
+            join(outDir, "control-out.jsonl"),
+            JSON.stringify({
+              type: "control_request",
+              request_id: "1",
+              request: { subtype: "initialize", appendSubagentSystemPrompt: "SYNTHETIC append" },
+            }),
+          );
+          return { result: "success", outDir, effectiveFidelity: "container" } as unknown as RunResult;
+        },
+      }),
+    );
+    const rep = await run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false });
+    expect(rep.subagentAppend).toBe("SYNTHETIC append");
+  });
 });

@@ -35,6 +35,8 @@ export interface JobReport {
   children: ChildTranscript[];
   /** The trace's system turn (marker + the append as sent); absent ⇒ no system turn. */
   system?: string;
+  /** The sub-agent append the session sent; absent ⇒ none was sent. */
+  subagentAppend?: string;
   attemptS: number;
   runnerTimeout: boolean;
   runDir?: string;
@@ -365,6 +367,7 @@ async function run(
           events: report.events,
           prompt: c.scenario.prompt,
           system: report.system,
+          ...(report.subagentAppend !== undefined ? { subagentAppend: report.subagentAppend } : {}),
           children: report.children,
           sidecarPrefix: prefix,
           redact: (t) => redactDeep(t, deps.secrets),

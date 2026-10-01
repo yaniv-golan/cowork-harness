@@ -15,7 +15,7 @@ import type { RunResult, Scenario } from "../types.js";
 import type { ExecuteOptions } from "../run/execute.js";
 import { salvagedResult, type ScenarioRunner } from "../eval/job-runner.js";
 import type { JobReport, JobSpec } from "./runner.js";
-import { keptChildTranscripts } from "./trace.js";
+import { keptChildTranscripts, sentSubagentAppend } from "./trace.js";
 
 export interface JobDeps<F extends { label?: string; ablateSkill?: boolean }> {
   runScenario: ScenarioRunner<F>;
@@ -77,12 +77,14 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const attemptS = (now() - t0) / 1000;
     const outDir = result?.outDir ?? (existsSync(expectedDir) ? expectedDir : undefined);
     const fidelity = result?.effectiveFidelity ?? result?.fidelity;
+    const subagentAppend = outDir ? sentSubagentAppend(outDir) : undefined;
     return {
       ...(result !== undefined ? { result } : { result: undefined }),
       ...(thrown !== undefined ? { thrown } : {}),
       events: outDir ? lines(join(outDir, "events.jsonl")) : [],
       children:
         outDir && fidelity ? keptChildTranscripts({ outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}) }) : [],
+      ...(subagentAppend !== undefined ? { subagentAppend } : {}),
       attemptS,
       runnerTimeout: runnerBound && result?.errorSource === "timeout",
       ...(outDir !== undefined ? { runDir: outDir } : {}),
