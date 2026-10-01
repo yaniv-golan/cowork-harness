@@ -113,3 +113,69 @@ export function stateMetricFindings(snap: FlowSnapshot): SchemaFinding[] {
       message: `metric ${m.id} is a float with no \`better\` ("higher" or "lower"); the report would assume higher`,
     }));
 }
+
+const variantNumber = (v: string): number => (v === "baseline" ? 0 : Number(v.slice(1)));
+
+/** The variants holding a frozen pairwise reference (a file under `<variant>/ref/`), baseline first. */
+function refVariants(snap: FlowSnapshot): string[] {
+  const out = new Set<string>();
+  for (const f of snap.files ?? []) {
+    const m = /^(baseline|v[1-9]\d*)\/ref\//.exec(f);
+    if (m) out.add(m[1]!);
+  }
+  return [...out].sort((a, b) => variantNumber(a) - variantNumber(b));
+}
+
+/** The second-reference hint (warn-only, never an exit code): a variant that beats the NEWEST reference on 90% or
+ *  more of its measured rows has little left to show against it — freeze that variant's own reference, so the next
+ *  rounds are compared with the new bar (`win_<vN>`). Only variants numbered after the newest reference count. */
+export function pairwiseHints(snap: FlowSnapshot, flowArg = "<flow>"): string[] {
+  const refs = refVariants(snap);
+  const newest = refs[refs.length - 1];
+  if (newest === undefined) return [];
+  const col = newest === "baseline" ? "win" : `win_${newest}`;
+  const out: string[] = [];
+  for (const v of Object.keys(snap.variants).sort((a, b) => variantNumber(a) - variantNumber(b))) {
+    if (variantNumber(v) <= variantNumber(newest)) continue;
+    const vals: number[] = [];
+    for (const r of parseRows(snap.variants[v]?.results)) {
+      if (r.status != null && r.status !== "ok") continue;
+      const g = r.grade as Record<string, unknown> | undefined;
+      if (g?.[`${col}_present`] === 1 && typeof g[col] === "number") vals.push(g[col] as number);
+    }
+    if (!vals.length) continue;
+    const mean = vals.reduce((s, x) => s + x, 0) / vals.length;
+    if (mean >= 0.9)
+      out.push(
+        `note: ${v} scores ${mean.toFixed(2)} on ${col} over ${vals.length} row(s) — it has little left to show against the ${newest} reference; ` +
+          `freeze ${v}'s own with \`hillclimb freeze-ref <scenarios> --flow ${flowArg} --variant ${v}\` to compare the next rounds with it`,
+      );
+  }
+  return out;
+}
+
+/** A frozen reference must not change under a flow: every row judged against one (case, assert, reference) recorded
+ *  the same document sha256 (`meta.pairwise_ref_sha256`). Two differing values mean the store was replaced. */
+export function pairwiseRefFindings(snap: FlowSnapshot): SchemaFinding[] {
+  const seen = new Map<string, { sha: string; where: string }>();
+  const out: SchemaFinding[] = [];
+  for (const [v, vs] of Object.entries(snap.variants))
+    for (const r of parseRows(vs.results)) {
+      const shas = (r.meta as Record<string, unknown> | undefined)?.pairwise_ref_sha256;
+      if (!shas || typeof shas !== "object") continue;
+      for (const [k, sha] of Object.entries(shas as Record<string, unknown>)) {
+        if (typeof sha !== "string") continue;
+        const id = `${String(r.prompt_id)} ${k}`;
+        const prev = seen.get(id);
+        if (prev === undefined) seen.set(id, { sha, where: `${v} rep ${String(r.rep)}` });
+        else if (prev.sha !== sha)
+          out.push({
+            level: "error",
+            rule: "pairwise.ref_changed",
+            file: `${v}/results.jsonl`,
+            message: `case ${String(r.prompt_id)}: ${k} was judged against a different reference document than ${prev.where} — a frozen reference changed under the flow; start a fresh flow dir`,
+          });
+      }
+    }
+  return out;
+}

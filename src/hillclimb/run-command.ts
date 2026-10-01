@@ -14,7 +14,8 @@ import { applySessionOverrides, expandHome, type SessionConfig } from "../sessio
 import { buildFingerprint } from "../run/cassette.js";
 import { effectiveTier, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
 import { pairwiseRefsRefusal } from "../refs/preflight.js";
-import { discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
+import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
+import { freezeCaseRef } from "./freeze-ref.js";
 import { flowHasPairwise } from "./grade-keys.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
@@ -210,6 +211,22 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     );
   }
   const pairwiseFor = (c: HillclimbCase) => flowPairwiseOptions(c.id, v, refs);
+  if (flowPairwise && args.dryRun) {
+    // The judge's spend is not in plan.cost (agent spend only): say how many calls a rep makes, at most.
+    const judged = refs.filter((r) => r.name !== v).length;
+    const calls = cases.reduce(
+      (n, c) =>
+        n +
+        (c.scenario.assert ?? []).reduce(
+          (k, a) => k + (a.semantic_pairwise ? judged * (a.semantic_pairwise.order === "both" ? 2 : 1) : 0),
+          0,
+        ),
+      0,
+    );
+    say(
+      `[${v}] pairwise judging (experimental; not in the estimate, which covers agent spend only): up to ${calls} judge call(s) per rep over the cases, plus a retry each when a reply is invalid — unpriced`,
+    );
+  }
 
   // Per case: the session pointed at the variant's plugin, its signature from the same fingerprint call a run
   // makes, and the input checks a run makes before its run dir exists — over the SUBSTITUTED session.
@@ -243,7 +260,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       );
       if (pw)
         throw new UsageError(
-          `case ${c.id}: ${pw}\n  the baseline reference is frozen by a baseline pass from its first good row, or now with \`hillclimb freeze-ref --flow ${flowArg} --variant baseline --case ${c.id}\``,
+          `case ${c.id}: ${pw}\n  the baseline reference is frozen by a baseline pass from its first good row, or now with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``,
         );
     }
   }
@@ -334,6 +351,38 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     mountRoots: (cs) => [...new Set([...prep.mountRoots(cs), pluginDir])],
     lever: live,
     ...(flowPairwise ? { pairwise: { metricRefs: metricRefNames(refs) } } : {}),
+    // A baseline pass freezes the flow's baseline reference for every selected pairwise case that has none, from the
+    // case's LOWEST-REP good row — the rule `hillclimb freeze-ref` applies. A resumed pass with no new rows repairs
+    // a missing one the same way. Only "no good row" (or a refused freeze) is a failure.
+    ...(flowPairwise && v === BASELINE_REF
+      ? {
+          afterPass: ({ flowAbs, cases: selected, results }) => {
+            const lines: string[] = [];
+            let failures = 0;
+            for (const c of selected) {
+              if (!(c.scenario.assert ?? []).some((a) => a.semantic_pairwise !== undefined)) continue;
+              const o = freezeCaseRef({
+                flowAbs,
+                variant: BASELINE_REF,
+                caseId: c.id,
+                scenarioFile: c.file,
+                assertions: c.scenario.assert,
+                results,
+                secrets: [...deps.secrets],
+                command: "hillclimb run",
+              });
+              if (o.status === "exists") continue;
+              if (o.status === "refused") {
+                failures++;
+                lines.push(
+                  `  [${v}] ${c.id}: the baseline reference was not frozen — ${o.message}; repair with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``,
+                );
+              } else lines.push(`  [${v}] ${c.id}: froze the baseline reference from rep ${o.rep}`);
+            }
+            return { lines, failures };
+          },
+        }
+      : {}),
     expectedContentSig: (c) => sigs.get(c.id),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),

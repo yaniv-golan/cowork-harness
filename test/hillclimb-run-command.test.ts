@@ -503,7 +503,7 @@ describe("runHillclimbCommand", () => {
         expect(calls).toEqual([]);
         const text = err.join("\n");
         expect(text).toMatch(/case alpha: .*reference "baseline"/);
-        expect(text).toContain("hillclimb freeze-ref --flow flow --variant baseline --case alpha");
+        expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
         // The scenario's own store is never consulted.
         expect(text).not.toContain("refstore");
       });

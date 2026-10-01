@@ -298,6 +298,12 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     Object.assign(grade, pw.grade);
     if (!agentFailed && pw.explanation !== undefined) explanation.win = pw.explanation;
   }
+  // The frozen document each pairwise comparison read, so `check` can tell when a reference changed under the flow.
+  const refShas: Record<string, string> = {};
+  ctx.assertions.forEach((a, i) => {
+    if (a.semantic_pairwise === undefined) return;
+    for (const o of authoredGrades[i]?.pairwise ?? []) if (o.refDocSha256 !== undefined) refShas[`a${i}/${o.ref}`] = o.refDocSha256;
+  });
   // Order the keys as declared, so every row reads the same way.
   const ordered: Record<string, number> = {};
   for (const d of caseKeyDecls(ctx.assertions, ctx.metrics ?? [], ctx.pairwise)) if (d.id in grade) ordered[d.id] = grade[d.id];
@@ -355,6 +361,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       judge_retries: jr.judge_retries,
       ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
       ...(Object.keys(claims).length ? { claims } : {}),
+      ...(Object.keys(refShas).length ? { pairwise_ref_sha256: refShas } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),

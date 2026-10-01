@@ -24,7 +24,7 @@ import { attemptRow, type AttemptContext } from "./rows.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
-import { headroom } from "./check.js";
+import { headroom, pairwiseHints } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
 
 /** What one job hands back. */
@@ -78,6 +78,13 @@ export interface RunnerDeps {
   /** Set when any case has `semantic_pairwise`: the later variants' references this pass judges against, so every
    *  row carries one win column per reference. */
   pairwise?: PairwiseDecls;
+  /** After the pool, before the summary: work over the pass's written rows (a baseline pass freezes the flow's
+   *  pairwise references). Returns the lines to print and how many of them are failures — counted like a failed
+   *  post-row write: no error row, `scored` unchanged. Not called on a dry run. */
+  afterPass?: (pass: { variant: string; flowAbs: string; cases: readonly HillclimbCase[]; results: string | null }) => {
+    lines: string[];
+    failures: number;
+  };
   /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
@@ -421,12 +428,23 @@ async function run(
     }
     progress();
     // After the pool the rows are on disk: a failure here is reported but never loses the pass's counts.
+    if (deps.afterPass && w)
+      try {
+        const r = deps.afterPass({ variant: v, flowAbs, cases, results: w.readVariantFile("results.jsonl") });
+        for (const line of r.lines) say(line);
+        fail += r.failures;
+      } catch (e) {
+        fail++;
+        say(`[${v}] the pass finished, but its post-pass step failed: ${message(e)}`);
+      }
     try {
       writer.mergeSummary({
         ...(models.size === 1 ? { model: [...models][0] } : {}),
         ...(variantSig !== undefined ? { source_sig: variantSig } : {}),
       });
-      if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
+      const snap = loadFlowSnapshot(flowAbs);
+      if (v === "baseline") for (const line of headroom(snap).warnings) say(line);
+      for (const line of pairwiseHints(snap, flowArg)) say(line);
     } catch (e) {
       fail++;
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);
