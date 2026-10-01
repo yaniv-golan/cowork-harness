@@ -56,3 +56,28 @@ describe("combineJudges (the per-row judge_model / judge_usage rule)", () => {
     expect(combineJudges([{ judgeModel: "m1" }])).toEqual({ judge_model: "m1" });
   });
 });
+
+describe("review fixes", () => {
+  it("ranks the dominant model by ALL input tokens, cache reads and writes included", () => {
+    const cached = { input_tokens: 5, output_tokens: 0, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 };
+    expect(
+      combineJudges([
+        { judgeModel: "cached", judgeUsage: cached },
+        { judgeModel: "plain", judgeUsage: u(100) },
+      ]).judge_model,
+    ).toBe("cached");
+  });
+  it("usage of an assert with no recorded model still counts in the total", () => {
+    expect(combineJudges([{ judgeModel: "m1", judgeUsage: u(1) }, { judgeUsage: u(2) }]).judge_usage).toEqual(u(3));
+  });
+  it("'unknown' never wins the name over a real model, and alone it names no model", () => {
+    expect(
+      combineJudges([
+        { judgeModel: "unknown", judgeUsage: u(100) },
+        { judgeModel: "m1", judgeUsage: u(1) },
+      ]).judge_model,
+    ).toBe("m1");
+    const only = combineJudges([{ judgeModel: "unknown", judgeUsage: u(3) }]);
+    expect(Object.keys(only).sort()).toEqual(["judge_usage"]);
+  });
+});

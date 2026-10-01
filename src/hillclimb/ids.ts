@@ -32,3 +32,10 @@ export function findDuplicateCaseIds(ids: readonly string[]): Array<{ id: string
   }
   return out;
 }
+
+/** Ids whose path-safe form is empty or all dots. `pathSafeId` passes them through (scaffold parity), but as a
+ *  DIRECTORY name — a frozen reference entry is `<store>/<case-id>/` — `..` is the store's parent and `.` the store
+ *  itself. Every consumer refuses these before spend; the scaffold only ever used the id as a file-name prefix. */
+export function unusableCaseIds(ids: readonly string[]): string[] {
+  return ids.filter((id) => /^\.*$/.test(pathSafeId(id)));
+}

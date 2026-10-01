@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { findDuplicateCaseIds, pathSafeId } from "../src/hillclimb/ids.js";
+import { findDuplicateCaseIds, pathSafeId, unusableCaseIds } from "../src/hillclimb/ids.js";
 import { isPathSafeId } from "../src/hillclimb/schema-check.js";
 
 // Expected values transcribed from runner-scaffold.mjs's pathSafeId (bundle 2.1.285, l.329-339): an id that
@@ -44,5 +44,11 @@ describe("findDuplicateCaseIds", () => {
 
   it("returns nothing for distinct ids", () => {
     expect(findDuplicateCaseIds(["a", "b", "case/1", "case_1"])).toEqual([]);
+  });
+});
+
+describe("unusableCaseIds", () => {
+  it("flags ids whose path-safe form is empty or all dots (a '..' entry dir would be the store's parent)", () => {
+    expect(unusableCaseIds(["", ".", "..", "...", "ok", "a.b"])).toEqual(["", ".", "..", "..."]);
   });
 });

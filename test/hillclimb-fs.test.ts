@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,5 +113,176 @@ describe("NoFollowRoot", () => {
   it("refuses a path outside the root outright", () => {
     const r = NoFollowRoot.open(join(tmp, "flow"));
     expect(() => r.writeFile(join(tmp, "sibling.txt"), "x")).toThrow(/outside/);
+  });
+});
+
+describe("review fixes", () => {
+  it("a '..' after a symlinked dir never escapes the root (kernel resolves link/.. to the TARGET's parent)", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    mkdirSync(join(tmp, "outside", "deep"), { recursive: true });
+    writeFileSync(join(tmp, "outside", "secret"), "SECRET");
+    symlinkSync(join(tmp, "outside", "deep"), join(tmp, "flow", "evil"));
+    expect(() => r.readFile(`${tmp}/flow/evil/../secret`)).toThrow(FsRefusal);
+    expect(() => r.writeFile(`${tmp}/flow/evil/../pwn`, "x")).toThrow(FsRefusal);
+    expect(() => r.mkdir(`${tmp}/flow/evil/../made`)).toThrow(FsRefusal);
+    expect(lexists(join(tmp, "outside", "pwn"))).toBe(false);
+    expect(lexists(join(tmp, "outside", "made"))).toBe(false);
+  });
+
+  it("a dot segment is refused even when the path stays inside the root (the guard, not the realpath, decides)", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.mkdir(join(tmp, "flow", "a"));
+    expect(() => r.writeFile(`${tmp}/flow/a/../b`, "x")).toThrow(/segment/);
+    expect(() => r.readFile(`${tmp}/flow/./b`)).toThrow(/segment/);
+  });
+
+  it("a planted FIFO is refused instead of hanging the run", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    execFileSync("mkfifo", [join(tmp, "flow", "ref")]);
+    expect(() => r.readFile(join(tmp, "flow", "ref"))).toThrow(FsRefusal);
+    expect(() => r.readIfPresent(join(tmp, "flow", "ref"))).toThrow(FsRefusal);
+    expect(() => r.writeFile(join(tmp, "flow", "ref"), "x")).toThrow(FsRefusal);
+  });
+
+  it("every link/non-regular refusal is an FsRefusal, never a raw errno (callers map FsRefusal to exit 2)", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    writeFileSync(join(tmp, "t"), "T");
+    symlinkSync(join(tmp, "t"), join(tmp, "flow", "leaf"));
+    mkdirSync(join(tmp, "flow", "adir"));
+    for (const op of [
+      () => r.readFile(join(tmp, "flow", "leaf")),
+      () => r.writeFile(join(tmp, "flow", "leaf"), "x"),
+      () => r.appendFile(join(tmp, "flow", "leaf"), "x"),
+      () => r.readFile(join(tmp, "flow", "adir")),
+      () => r.writeFile(join(tmp, "flow", "adir"), "x"),
+    ])
+      expect(op).toThrow(FsRefusal);
+  });
+
+  it("appendFile and createFile refuse a hard link too", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    writeFileSync(join(tmp, "outside"), "OUT");
+    linkSync(join(tmp, "outside"), join(tmp, "flow", "h"));
+    expect(() => r.appendFile(join(tmp, "flow", "h"), "x")).toThrow(/hard link/);
+    expect(readFileSync(join(tmp, "outside"), "utf8")).toBe("OUT");
+  });
+
+  it("mkdir through a symlinked ancestor creates NOTHING outside the root", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    mkdirSync(join(tmp, "outside"));
+    symlinkSync(join(tmp, "outside"), join(tmp, "flow", "anc"));
+    expect(() => r.mkdir(join(tmp, "flow", "anc", "x", "y"))).toThrow(/symlinked directory/);
+    expect(lexists(join(tmp, "outside", "x"))).toBe(false);
+  });
+
+  it("open() runs the ancestor walk itself, against the same cwd it binds", () => {
+    mkdirSync(join(tmp, "real"));
+    symlinkSync(join(tmp, "real"), join(tmp, "hop"));
+    expect(() => NoFollowRoot.open("hop/flow", { cwd: tmp })).toThrow(/ancestor/);
+    const r = NoFollowRoot.open("real/flow", { cwd: tmp });
+    expect(r.root).toBe(join(tmp, "real", "flow"));
+  });
+
+  it("preflightRoot normalizes listed paths (a trailing slash must not blind the check)", () => {
+    mkdirSync(join(tmp, "flow"));
+    mkdirSync(join(tmp, "elsewhere"));
+    symlinkSync(join(tmp, "elsewhere"), join(tmp, "flow", "anc"));
+    expect(() => preflightRoot(join(tmp, "flow"), [join(tmp, "flow", "anc") + "/"])).toThrow(/symlink/);
+  });
+});
+
+describe("renameNoFollow", () => {
+  it("replace: atomically swaps a regular file into place", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.writeFile(join(tmp, "flow", "results.jsonl"), "old\n");
+    r.writeFile(join(tmp, "flow", "results.jsonl.tmp"), "new\n");
+    expect(r.renameNoFollow(join(tmp, "flow", "results.jsonl.tmp"), join(tmp, "flow", "results.jsonl"), { replace: true })).toBe("renamed");
+    expect(r.readFile(join(tmp, "flow", "results.jsonl"))).toBe("new\n");
+    expect(lexists(join(tmp, "flow", "results.jsonl.tmp"))).toBe(false);
+  });
+  it("refuses a symlink or a hard link at the destination, leaving both sides untouched", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    writeFileSync(join(tmp, "victim"), "V");
+    symlinkSync(join(tmp, "victim"), join(tmp, "flow", "dst"));
+    r.writeFile(join(tmp, "flow", "src"), "S");
+    expect(() => r.renameNoFollow(join(tmp, "flow", "src"), join(tmp, "flow", "dst"), { replace: true })).toThrow(/replace a symlink/);
+    rmSync(join(tmp, "flow", "dst"));
+    linkSync(join(tmp, "victim"), join(tmp, "flow", "dst"));
+    expect(() => r.renameNoFollow(join(tmp, "flow", "src"), join(tmp, "flow", "dst"), { replace: true })).toThrow(/hard link/);
+    expect(readFileSync(join(tmp, "victim"), "utf8")).toBe("V");
+    expect(r.readFile(join(tmp, "flow", "src"))).toBe("S");
+  });
+  it("refuses a symlinked source", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    writeFileSync(join(tmp, "t"), "T");
+    symlinkSync(join(tmp, "t"), join(tmp, "flow", "src"));
+    expect(() => r.renameNoFollow(join(tmp, "flow", "src"), join(tmp, "flow", "dst"), { replace: true })).toThrow(FsRefusal);
+  });
+  it("no-replace: reports exists for ANY entry at the destination (a planted link included) and moves nothing", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.mkdir(join(tmp, "flow", ".tmp-1"));
+    mkdirSync(join(tmp, "flow", "case_1"));
+    expect(r.renameNoFollow(join(tmp, "flow", ".tmp-1"), join(tmp, "flow", "case_1"), { replace: false })).toBe("exists");
+    expect(lexists(join(tmp, "flow", ".tmp-1"))).toBe(true);
+    symlinkSync(join(tmp, "flow", ".tmp-1"), join(tmp, "flow", "case_2"));
+    expect(r.renameNoFollow(join(tmp, "flow", ".tmp-1"), join(tmp, "flow", "case_2"), { replace: false })).toBe("exists");
+    expect(r.renameNoFollow(join(tmp, "flow", ".tmp-1"), join(tmp, "flow", "case_3"), { replace: false })).toBe("renamed");
+    expect(lexists(join(tmp, "flow", "case_3"))).toBe(true);
+  });
+  it("refuses a destination outside the root", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.writeFile(join(tmp, "flow", "src"), "S");
+    expect(() => r.renameNoFollow(join(tmp, "flow", "src"), join(tmp, "dst"), { replace: true })).toThrow(/outside/);
+  });
+});
+
+describe("appendJsonl (torn-line guard, runner-scaffold.mjs l.452-455)", () => {
+  it("isolates a torn final line before appending, so two rows never merge", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    const p = join(tmp, "flow", "results.jsonl");
+    writeFileSync(p, '{"a":1}\n{"b":');
+    r.appendJsonl(p, { c: 3 });
+    expect(readFileSync(p, "utf8")).toBe('{"a":1}\n{"b":\n{"c":3}\n');
+  });
+  it("adds nothing extra to a clean file, and creates a missing one", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    const p = join(tmp, "flow", "results.jsonl");
+    r.appendJsonl(p, { a: 1 });
+    r.appendJsonl(p, { b: "x\ny" });
+    expect(readFileSync(p, "utf8")).toBe('{"a":1}\n{"b":"x\\ny"}\n');
+  });
+  it("refuses a symlinked target like every other write", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    writeFileSync(join(tmp, "victim"), "V");
+    symlinkSync(join(tmp, "victim"), join(tmp, "flow", "results.jsonl"));
+    expect(() => r.appendJsonl(join(tmp, "flow", "results.jsonl"), { a: 1 })).toThrow(FsRefusal);
+    expect(readFileSync(join(tmp, "victim"), "utf8")).toBe("V");
+  });
+});
+
+describe("readdirNoFollow", () => {
+  it("lists entries without following them, links reported as links", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.writeFile(join(tmp, "flow", "a"), "1");
+    symlinkSync(join(tmp, "flow", "a"), join(tmp, "flow", "l"));
+    const ents = r.readdirNoFollow(join(tmp, "flow")).map((d) => [d.name, d.isSymbolicLink()]);
+    expect(ents.sort()).toEqual([
+      ["a", false],
+      ["l", true],
+    ]);
+  });
+  it("refuses a symlinked directory even when it points INSIDE the root", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.mkdir(join(tmp, "flow", "real"));
+    symlinkSync(join(tmp, "flow", "real"), join(tmp, "flow", "alias"));
+    expect(() => r.readdirNoFollow(join(tmp, "flow", "alias"))).toThrow(/symlinked directory/);
+  });
+
+  it("refuses a symlinked directory and one outside the root", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    mkdirSync(join(tmp, "outside"));
+    symlinkSync(join(tmp, "outside"), join(tmp, "flow", "v1"));
+    expect(() => r.readdirNoFollow(join(tmp, "flow", "v1"))).toThrow(FsRefusal);
+    expect(() => r.readdirNoFollow(join(tmp, "outside"))).toThrow(/outside/);
   });
 });

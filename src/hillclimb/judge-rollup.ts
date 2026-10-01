@@ -23,25 +23,33 @@ export interface JudgeRollup {
 
 /** Combine the judge provenance of every judged assert in one run. No judged assert ⇒ `{}`: both keys absent,
  *  never zero (unpriced is not $0). Usage is summed token-wise over every assert (each already sums its own
- *  attempts). With several models the one with the most input tokens is named; a tie goes to the
- *  lexicographically first id, so the result never depends on assert order. */
+ *  attempts) — including an assert that recorded tokens but no model, so no spend drops out of the total. The
+ *  named model is the one with the most input tokens counting cache reads and writes (with prompt caching,
+ *  `input_tokens` alone can be tiny); a tie goes to the lexicographically first id, so the result never depends on
+ *  assert order. `"unknown"` (a transport that reported no model) is never named while a real model is present,
+ *  and alone it names none. `judge_models` — present only with more than one model — belongs under the row's
+ *  `meta`; the caller places it there. */
 export function combineJudges(asserts: readonly JudgedAssert[]): JudgeRollup {
   const byModel = new Map<string, TokenUsage | undefined>();
   let total: TokenUsage | undefined;
   for (const a of asserts) {
+    total = addTokenUsage(total, a.judgeUsage);
     if (a.judgeModel === undefined) continue;
     byModel.set(a.judgeModel, addTokenUsage(byModel.get(a.judgeModel), a.judgeUsage));
-    total = addTokenUsage(total, a.judgeUsage);
   }
-  if (byModel.size === 0) return {};
-  const models = [...byModel.keys()].sort();
-  const input = (m: string): number => byModel.get(m)?.input_tokens ?? 0;
-  const judge_model = models.reduce((best, m) => (input(m) > input(best) ? m : best));
-  const out: JudgeRollup = { judge_model };
+  const out: JudgeRollup = {};
   if (total !== undefined) out.judge_usage = total;
-  if (models.length > 1) {
+  const named = [...byModel.keys()].filter((m) => m !== "unknown").sort();
+  if (named.length > 0) {
+    const input = (m: string): number => {
+      const u = byModel.get(m);
+      return u ? u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens : 0;
+    };
+    out.judge_model = named.reduce((best, m) => (input(m) > input(best) ? m : best));
+  }
+  if (byModel.size > 1) {
     const breakdown: Record<string, TokenUsage> = {};
-    for (const m of models) {
+    for (const m of [...byModel.keys()].sort()) {
       const usage = byModel.get(m);
       if (usage !== undefined) breakdown[m] = usage;
     }
