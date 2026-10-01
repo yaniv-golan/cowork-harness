@@ -11,6 +11,12 @@ All notable changes to this project are documented here. The format is based on
 A security fix: the judge, the LLM decider and the `critique` evaluator run tool-less, isolated from your own Claude
 Code setup. **Needs Claude Code 2.1.197 or later on the host** for any run that uses them.
 
+### Upgrade notes
+
+- **Cassettes: no re-record needed.** Nothing under `src/runtime`, `src/hostloop`, `src/staging`, `src/session.ts`,
+  `baselines/` or `docker/` changed, and `CASSETTE_VERSION` is still 13. A committed cassette's recorded content and
+  fingerprints are unchanged; `verify-cassettes` and `replay --strict` pass on the bundled ones.
+
 ### Security
 
 - **The LLM judge, the LLM decider and the `critique` evaluator call the host `claude` with no tools, isolated
