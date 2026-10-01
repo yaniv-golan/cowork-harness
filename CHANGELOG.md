@@ -377,6 +377,11 @@ All notable changes to this project are documented here. The format is based on
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers
   (a staged plugin declares runnable hooks).
+- **An `eval` interrupted before it starts no longer leaves its eval dir behind.** A Ctrl-C (or SIGTERM)
+  while `eval` copied the arm snapshots, before its manifest was written, killed the process mid-copy: the
+  eval dir and its partial snapshots stayed, and that `--out` could not be reused. The eval now discards the
+  unstarted dir, as it does on a refusal, and exits 130 (143 for SIGTERM). Once the manifest exists the eval
+  has started, and an interrupt keeps the dir as before.
 - **A record redaction policy that rewrites an untouched file's body no longer blocks the recording.** The
   cassette kept the file's raw pre-run hash next to the redacted body's hash, so `input_unmodified` on it read
   "modified in place" and the record-time verdict check refused to write the cassette. Its pre-run hash is now
