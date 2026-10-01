@@ -56,6 +56,7 @@ export class FlowWriter {
         "inputs",
         v("out"),
         v("regrade.md"),
+        v("results.jsonl.tmp"),
         v(".lock"),
       ].map((p) => `${flowArg.replace(/\/+$/, "")}/${p}`),
       cwd,
@@ -98,6 +99,32 @@ export class FlowWriter {
 
   appendResult(row: Record<string, unknown>): void {
     this.r.appendJsonl(this.vpath("results.jsonl"), redactDeep(row, this.secrets));
+  }
+
+  /** Replace `results.jsonl` atomically: the prior bytes are kept first as `regrade-<sha16 of them>.bak.jsonl` (an
+   *  identical backup already there is fine), the new text goes to `results.jsonl.tmp` (a stale one is overwritten,
+   *  never followed), and a no-follow rename swaps it in. Lines are passed as they will be written: a caller redacts
+   *  the rows it rebuilt (`redactRow`) and keeps every other line byte for byte. Returns the backup's name. */
+  rewriteResults(newText: string, oldText: string): string {
+    const bak = `regrade-${createHash("sha256").update(oldText, "utf8").digest("hex").slice(0, 16)}.bak.jsonl`;
+    try {
+      this.r.createFile(this.vpath(bak), oldText);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "EEXIST" || this.r.readIfPresent(this.vpath(bak)) !== oldText) throw e;
+    }
+    this.r.writeFile(this.vpath("results.jsonl.tmp"), newText);
+    this.r.renameNoFollow(this.vpath("results.jsonl.tmp"), this.vpath("results.jsonl"), { replace: true });
+    return bak;
+  }
+
+  /** A row as `appendResult` would write it (every string secret-scrubbed and host-path-redacted). */
+  redactRow(row: Record<string, unknown>): Record<string, unknown> {
+    return redactDeep(row, this.secrets);
+  }
+
+  /** `regrade.md`: the before/after of the last `hillclimb regrade` of this variant (replaced each time). */
+  writeRegradeReport(text: string): void {
+    this.r.writeFile(this.vpath("regrade.md"), redactDeep(text, this.secrets));
   }
 
   appendError(row: Record<string, unknown>): void {

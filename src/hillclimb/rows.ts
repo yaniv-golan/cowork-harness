@@ -244,15 +244,14 @@ export interface GradeBlock {
   refShas: Record<string, string>;
 }
 
-export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
-  const r = a.result;
-  const ev = resultEventFields(ctx.events);
-  const mains = mainLoopModels(ctx.events);
-  const model = mains[0];
-  const usage = model ? mainModelUsage(r?.modelUsage, model) : undefined;
+/** The judge fields of a row: which judge models graded it and what they used, how each host judge ran (one shape,
+ *  or every distinct one when the asserts differ; absent when no judge recorded one — never null), and the retries. */
+export function judgeFieldsOf(r: RunResult | undefined): {
+  judges: ReturnType<typeof combineJudges>;
+  transports: Array<NonNullable<RunResult["assertions"][number]["judgeTransport"]>>;
+  jr: { judge_retries: number; unrecorded: boolean };
+} {
   const judges = combineJudges(authored(r));
-  // How each graded semantic assert's host judge ran: one shape for the row, or every distinct one when the asserts
-  // differ. Absent when no judge recorded one (an injected judge, or none ran) — never null.
   const transports = [
     ...new Map(
       authored(r)
@@ -261,7 +260,16 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
         .map((t) => [JSON.stringify(t), t] as const),
     ).values(),
   ];
-  const jr = judgeRetries(r);
+  return { judges, transports, jr: judgeRetries(r) };
+}
+
+export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
+  const r = a.result;
+  const ev = resultEventFields(ctx.events);
+  const mains = mainLoopModels(ctx.events);
+  const model = mains[0];
+  const usage = model ? mainModelUsage(r?.modelUsage, model) : undefined;
+  const { judges, transports, jr } = judgeFieldsOf(r);
   const retries = r?.apiRetries?.count ?? 0;
 
   const models: Record<string, unknown> = {};

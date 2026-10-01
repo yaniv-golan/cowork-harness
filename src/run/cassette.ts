@@ -5,6 +5,7 @@ import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fi
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
 import {
   HILLCLIMB_RUN_BOOLEAN_FLAGS,
+  HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
   HILLCLIMB_RUN_REPEATED_FLAGS,
   HILLCLIMB_RUN_VALUE_FLAGS,
   HILLCLIMB_USAGE,
@@ -6938,7 +6939,7 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     // One entry for the family: `check` and `state-template` take a subset of `run`'s flags (--flow,
     // --output-format and the command globals), and HILLCLIMB_USAGE documents every subcommand.
     command: "hillclimb",
-    booleanFlags: HILLCLIMB_RUN_BOOLEAN_FLAGS,
+    booleanFlags: [...new Set([...HILLCLIMB_RUN_BOOLEAN_FLAGS, ...HILLCLIMB_REGRADE_BOOLEAN_FLAGS])],
     valueFlags: HILLCLIMB_RUN_VALUE_FLAGS,
     repeatedFlags: HILLCLIMB_RUN_REPEATED_FLAGS,
     aliases: {},

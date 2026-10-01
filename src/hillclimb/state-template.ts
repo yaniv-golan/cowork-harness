@@ -47,7 +47,7 @@ export function stateTemplate(opts: {
     if (r.rowsMissing > 0)
       notes.push(
         `win_${r.ref} is not declared: ${r.rowsMissing} scored row(s) were written before ${r.ref}'s reference was frozen and do not carry it, ` +
-          `and a written row is never rewritten — it stays on the rows as drill-down data`,
+          `— run \`hillclimb regrade --fill-refs\` to add it to them, then re-run this command`,
       );
   if (opts.pairwiseRefs === undefined && flowHasPairwise(opts.cases))
     notes.push("pass --flow to declare a win_<vN> column for each later variant's frozen reference (only `win` is declared without it)");

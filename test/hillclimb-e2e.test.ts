@@ -224,12 +224,50 @@ cat "${ENVELOPE}"
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
     expect(cli("check", "--flow", "flow").status).toBe(0);
 
-    // win_v1 exists for later variants only: the baseline's and v1's rows predate it, so it stays undeclared.
+    // win_v1 exists for later variants only: the baseline's and v1's rows predate it, so it is not declared yet.
     const st = cli("state-template", "evals", "--flow", "flow", "--output-format", "json");
     expect(st.status, st.stderr).toBe(0);
     const t = JSON.parse(st.stdout) as { state: { metrics: Array<{ id: string }> }; notes: string[] };
     expect(t.state.metrics.map((m) => m.id)).toEqual(expect.arrayContaining(["win", "win_present", "both_bad"]));
     expect(t.state.metrics.map((m) => m.id)).not.toContain("win_v1");
-    expect(t.notes.join("\n")).toMatch(/win_v1 is not declared: 2 scored row/);
+    expect(t.notes.join("\n")).toMatch(/win_v1 is not declared: 2 scored row.*hillclimb regrade --fill-refs/);
+
+    // --fill-refs judges only what each row lacks: the baseline row against v1 (one call); v1's own row is neutral
+    // (no call). pass cannot move; every row then carries win_v1, so state-template declares it.
+    const runIdOf = (v: string) => rowsOf(v)[0]!.meta.run_id as string;
+    const resultOf = (v: string) => {
+      const turns = join(f.runsDir, "alpha", runIdOf(v), "turns");
+      return readFileSync(join(turns, readdirSync(turns).sort().pop()!, "result.json"), "utf8");
+    };
+    const liveResults = { baseline: resultOf("baseline"), v1: resultOf("v1") };
+    const passBefore = { baseline: rowsOf("baseline")[0]!.grade.pass, v1: rowsOf("v1")[0]!.grade.pass };
+    const callsBefore = readFileSync(calls, "utf8").trim().split("\n").length;
+    const fill = cli("regrade", "evals", "--flow", "flow", "--fill-refs", "--output-format", "json");
+    expect(fill.status, fill.stderr).toBe(0);
+    expect(readFileSync(calls, "utf8").trim().split("\n").length - callsBefore).toBe(1);
+    expect(JSON.parse(fill.stdout)).toMatchObject({
+      ok: true,
+      variants: [
+        { variant: "baseline", rewritten: 1 },
+        { variant: "v1", rewritten: 1 },
+      ],
+    });
+    expect(rowsOf("baseline")[0]!.grade).toMatchObject({ pass: passBefore.baseline, win_v1_present: 1 });
+    expect(rowsOf("v1")[0]!.grade).toMatchObject({ pass: passBefore.v1, win_v1_present: 1, win_v1: 0.5 });
+    expect(readdirSync(join(flow, "baseline")).some((n) => /^regrade-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
+    expect(readFileSync(join(flow, "baseline", "regrade.md"), "utf8")).toMatch(/win_v1/);
+    expect({ baseline: resultOf("baseline"), v1: resultOf("v1") }).toEqual(liveResults);
+    const st2 = JSON.parse(cli("state-template", "evals", "--flow", "flow", "--output-format", "json").stdout) as {
+      state: { metrics: Array<{ id: string }> };
+    };
+    expect(st2.state.metrics.map((m) => m.id)).toContain("win_v1");
+    expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
+
+    // A full re-grade judges again (baseline neutral vs itself, v1 vs baseline; both vs v1 where not their own).
+    const full = cli("regrade", "evals", "--flow", "flow", "--variant", "v1");
+    expect(full.status, full.stderr).toBe(0);
+    expect(rowsOf("v1")[0]!.meta.regrade_doc_matches_live).toBe(true);
+    expect(resultOf("v1")).toBe(liveResults.v1);
+    expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
   }, 180_000);
 });
