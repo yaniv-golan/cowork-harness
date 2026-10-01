@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "../agent/session.js";
-import { budgetFields, toolResultEvidence, type AssertContext } from "../assert.js";
+import { budgetFields, judgedOpts, toolResultEvidence, type AssertContext } from "../assert.js";
 import type { Assertion, RunResult, Scenario } from "../types.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./artifacts.js";
 import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
@@ -294,7 +294,7 @@ export function assertContextFromRunDir(
   // for every other assertion.
   const mode = opts.recomputeAuthored ?? "no_lost_write_back";
   const wantsWriteBackCheck = mode !== "semantic" && scenario.assert.some((a) => a.no_lost_write_back !== undefined);
-  const wantsSemanticEvidence = mode !== "no_lost_write_back" && scenario.assert.some((a) => a.semantic_matches !== undefined);
+  const wantsSemanticEvidence = mode !== "no_lost_write_back" && scenario.assert.some((a) => judgedOpts(a) !== undefined);
   // The FS_KEYS refusal above covers no_lost_write_back. A semantic grade has no such refusal of its own,
   // and with the work dir gone the authored-file section would silently drop out of the judged document —
   // a grade over a different document than the live judge read. Refuse instead.

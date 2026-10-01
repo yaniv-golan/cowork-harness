@@ -1087,6 +1087,69 @@
               "rubric"
             ],
             "additionalProperties": false
+          },
+          "semantic_pairwise": {
+            "description": "LIVE-ONLY: a pinned LLM judge compares this run's judged document with a FROZEN reference (a baseline run's document, written once by `ref freeze` and never regenerated) and answers win, tie, loss or both_bad; skipped-loud on replay. The judged document is the one semantic_matches builds: finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — it excludes every tool_use/tool_result, and no sub-agent text unless include_subagent_text is set; a criterion about whether a TOOL was called cannot be judged from it. A missing or damaged reference is refused before the run spends",
+            "type": "object",
+            "properties": {
+              "rubric": {
+                "description": "optional short comparative criteria the judge weighs (concrete, checkable claims); omitted = overall quality for the task",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "refs": {
+                "description": "frozen reference STORES (directories written by `ref freeze`), relative to the scenario file. Each holds one entry per case; the run is judged against every store. In a hillclimb flow the flow's own references replace these",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "pass_if": {
+                "description": "default not_worse: the assert passes when, against EVERY reference, the run wins (win), wins or ties (not_worse), or was graded at all (any — metric only). both_bad fails win and not_worse",
+                "type": "string",
+                "enum": [
+                  "win",
+                  "not_worse",
+                  "any"
+                ]
+              },
+              "order": {
+                "description": "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome",
+                "type": "string",
+                "enum": [
+                  "random",
+                  "both"
+                ]
+              },
+              "judge_model": {
+                "description": "override the run-level pinned judge model for this assert",
+                "type": "string"
+              },
+              "evidence_files": {
+                "description": "scope the run's AUTHORED-FILE evidence exactly as semantic_matches.evidence_files does; the frozen reference must have been composed with the same scope",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "include_subagent_text": {
+                "description": "as semantic_matches.include_subagent_text; part of what the reference must match",
+                "type": "boolean"
+              },
+              "include_fork_results": {
+                "description": "as semantic_matches.include_fork_results; part of what the reference must match",
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

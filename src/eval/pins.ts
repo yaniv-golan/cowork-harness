@@ -50,21 +50,22 @@ export function resolveJudgePins(scenarios: readonly Scenario[], judgeModelFlag:
       throw new UsageError(`--judge-model "${judgeModelFlag}" is an alias; pass a concrete model id (e.g. claude-opus-4-8)`);
     for (const s of scenarios)
       (s.assert ?? []).forEach((a, i) => {
-        if (a.semantic_matches) resolved.push({ scenario: s.name, assertionIndex: i, model: judgeModelFlag });
+        if (a.semantic_matches || a.semantic_pairwise) resolved.push({ scenario: s.name, assertionIndex: i, model: judgeModelFlag });
       });
     return { mode: "override", resolved, promptHash: JUDGE_PROMPT_HASH };
   }
   const bad: string[] = [];
   for (const s of scenarios)
     (s.assert ?? []).forEach((a, i) => {
-      if (!a.semantic_matches) return;
-      const model = a.semantic_matches.judge_model ?? defaultJudgeModel();
+      const judged = a.semantic_matches ?? a.semantic_pairwise;
+      if (!judged) return;
+      const model = judged.judge_model ?? defaultJudgeModel();
       if (!isConcreteModelId(model)) bad.push(`${s.name} assertion ${i}: "${model}"`);
       resolved.push({ scenario: s.name, assertionIndex: i, model });
     });
   if (bad.length)
     throw new UsageError(
-      `eval needs a CONCRETE judge model for every semantic_matches assert: ${bad.join("; ")}. Pass --judge-model <id> to grade every assert with one model.`,
+      `eval needs a CONCRETE judge model for every semantic_matches / semantic_pairwise assert: ${bad.join("; ")}. Pass --judge-model <id> to grade every assert with one model.`,
     );
   return { mode: "per_assert", resolved, promptHash: JUDGE_PROMPT_HASH };
 }

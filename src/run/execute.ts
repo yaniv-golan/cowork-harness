@@ -76,11 +76,16 @@ import {
   budgetFields,
   toolResultEvidence,
   runSemanticJudges,
+  judgedOpts,
   type AssertContext,
   type SemanticJudge,
   expandExpectDenied,
 } from "../assert.js";
-import { judgesForRun } from "../decide/semantic-judge.js";
+import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
+import { makePairwiseJudge, type CompleteStructured } from "../decide/pairwise-judge.js";
+import { claudeCliCompleteStructured } from "../decide/llm-transport.js";
+import { pairwiseRefsRefusal, scenarioPairwiseSetup, type PairwiseSetup } from "../refs/preflight.js";
+import { runPairwiseJudges, type PairwisePrepassOpts, type PairwiseRef } from "./pairwise-prepass.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
@@ -91,7 +96,7 @@ import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "
 import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
-import { claudeCliComplete, isolationRefusal } from "../decide/llm-transport.js";
+import { claudeCliComplete, isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
 import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks, unionReferenceAccesses } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
@@ -166,6 +171,12 @@ export interface ExecuteOptions {
   /** Grade EVERY `semantic_matches` assert with this judge model, a per-assert `judge_model` included — for
    *  a caller that must hold the judge constant across runs (a paired comparison). Not a CLI flag. */
   judgeModelOverride?: string;
+  /** `semantic_pairwise` in a caller-owned flow (a hillclimb runner): the case's entry name, the references every
+   *  pairwise assert is judged against (replacing the scenario's `refs:`), and the names of references frozen from
+   *  this very variant (neutral 0.5, no judge call). Omitted = the scenario's own setup (`scenarioPairwiseSetup`). */
+  pairwise?: { caseId?: string; refs?: PairwiseRef[]; neutralRefs?: string[] };
+  /** Test seam: the structured judge transport for `semantic_pairwise` (default: the host `claude -p`). */
+  pairwiseComplete?: CompleteStructured;
   /** ABLATION (`--ablate-skill`): run the SAME prompt with the skill(s)-under-test removed — a
    *  deterministic negative control for skill-lift measurement (with-skill vs without). All plugin/skill
    *  discovery is stripped so nothing mounts and the agent answers from its own priors; the result is
@@ -344,12 +355,14 @@ export async function captureSubagentReasoningThenJudge(args: {
   asserts: Scenario["assert"];
   ctx: AssertContext;
   judges: () => { judge: SemanticJudge; judgeFor?: (model: string) => SemanticJudge };
+  /** Built only when a `semantic_pairwise` assert exists, so a scenario without one never spends a model call. */
+  pairwise?: () => PairwisePrepassOpts;
 }): Promise<void> {
   // AssertContext declares a narrower view of each dispatch than RunResult's (no webSearches/…Elided), but
   // every live construction site passes the run's own dispatch objects, which the capture fills in place.
   const subagents = args.ctx.subagents as unknown as Parameters<typeof captureSubagentReasoning>[1];
   if (args.subagentConfigRoot) captureSubagentReasoning(args.subagentConfigRoot, subagents);
-  const wantsSubagentText = args.asserts.some((a) => a.semantic_matches?.include_subagent_text === true);
+  const wantsSubagentText = args.asserts.some((a) => judgedOpts(a)?.includeSubagentText === true);
   if (wantsSubagentText && args.ctx.subagents?.length && args.ctx.subagents.every((s) => s.reasoning === undefined)) {
     const why = args.subagentConfigRoot
       ? `no child transcript under ${args.subagentConfigRoot} matched any of the ${args.ctx.subagents.length} dispatch(es)`
@@ -367,6 +380,8 @@ export async function captureSubagentReasoningThenJudge(args: {
     const { judge, judgeFor } = args.judges();
     await runSemanticJudges(args.asserts, args.ctx, judge, judgeFor);
   }
+  if (args.pairwise && args.asserts.some((a) => a.semantic_pairwise !== undefined))
+    await runPairwiseJudges(args.asserts, args.ctx, args.pairwise());
 }
 
 /** Groups of assertions that cannot all hold. Each group pairs ONE assertion demanding that a record
@@ -510,7 +525,8 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
         // finalMessage+transcript only — and, before the health signal below, the assert reported that as a
         // COMPLETE authored document. A scenario whose only evidence-bearing key is semantic_matches never
         // armed the manifest, so it never received authored-file evidence at all.
-        a.semantic_matches !== undefined,
+        // semantic_pairwise composes the same judged document (judgedOpts covers both keys).
+        judgedOpts(a) !== undefined,
     ) || isRecording
   );
 }
@@ -616,6 +632,22 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // before the run directory exists: a path that does not exist is a UsageError, and a run refused for it
   // leaves no run dir, status.json or index row behind. buildLaunchPlan stages from this same resolution.
   const launchSources = resolveLaunchSources(session, baseline, effectiveFidelity, !!opts.resume);
+
+  // semantic_pairwise: every frozen reference must exist, verify and sit outside every mounted source BEFORE any
+  // spend — a run that cannot be compared is refused here, not graded evidence-unavailable after it was paid for.
+  const pairwiseSetup: PairwiseSetup = (() => {
+    const base = scenarioPairwiseSetup(scenario);
+    const o = opts.pairwise;
+    return {
+      caseId: o?.caseId ?? base.caseId,
+      refsFor: o?.refs ? () => o.refs! : base.refsFor,
+      neutralRefs: new Set(o?.neutralRefs ?? []),
+    };
+  })();
+  {
+    const refusal = pairwiseRefsRefusal(scenario, pairwiseSetup, sessionOriginSources(session, "(inline)"));
+    if (refusal) throw new UsageError(refusal);
+  }
 
   if (opts.sessionId) {
     // Pinned (`sess-<id>`) run dirs are DETERMINISTIC, so on the shared (flat) runs root two different
@@ -944,6 +976,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // An external channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
   if (
     (scenario.assert.some((a) => a.semantic_matches !== undefined) && !opts.semanticJudge) ||
+    (scenario.assert.some((a) => a.semantic_pairwise !== undefined) && !opts.pairwiseComplete) ||
     (onUnanswered === "llm" && !opts.externalChannel)
   ) {
     const iso = isolationRefusal();
@@ -1575,7 +1608,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // prefix-major then alphabetical, so without this an intermediates dir sorting early (`_work/`…)
     // drains the whole budget before the deliverable is reached — and the judge is then refused over
     // files no rubric mentions. The union across every `semantic_matches`: one capture serves them all.
-    const priorityGlobs = [...new Set(scenario.assert.flatMap((a) => a.semantic_matches?.evidence_files ?? []))];
+    const priorityGlobs = [...new Set(scenario.assert.flatMap((a) => judgedOpts(a)?.evidenceFiles ?? []))];
     // One option derivation shared with the kept-run context builder, so a re-grade captures what this did.
     const authored = captureAuthoredFilesWithHealth(
       workRoot,
@@ -1693,6 +1726,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       ctx: assertCtx,
       // A per-assert judge_model is honoured unless the caller pinned one judge for the whole run.
       judges: () => judgesForExecute(opts),
+      pairwise: () => ({
+        caseId: pairwiseSetup.caseId,
+        refsFor: pairwiseSetup.refsFor,
+        neutralRefs: pairwiseSetup.neutralRefs,
+        sessionId,
+        task: scenario.prompt,
+        // One judge per resolved model; the caller's run-level pin (a paired comparison) wins over a per-assert one.
+        judgeFor: (model) => makePairwiseJudge({ model, complete: opts.pairwiseComplete ?? claudeCliCompleteStructured }),
+        // How the judge was called — only over the real host-`claude` transport, as for semantic_matches.
+        ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity() }),
+        modelFor: (a) => opts.judgeModelOverride ?? a.semantic_pairwise?.judge_model ?? defaultJudgeModel(),
+        mainModels: record.models ?? [],
+      }),
     });
     const assertions = evaluate(scenario.assert, assertCtx);
 
@@ -2216,6 +2262,12 @@ export function loadScenarioPure(path: string): Scenario {
   // `name` defaults to the filename (sans extension) — the file is the identity.
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
+  // semantic_pairwise reference stores are file-relative too: a store beside the scenario resolves from it.
+  for (const asrt of scenario.assert)
+    if (asrt.semantic_pairwise?.refs)
+      asrt.semantic_pairwise.refs = asrt.semantic_pairwise.refs.map((r) =>
+        isFileRelative(r) ? resolve(dirname(path), r) : r.replace(/^~(?=$|\/)/, homedir()),
+      );
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
   // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT
   // pass through here — the runtime try/catch in assert.ts and decider.ts is their safety net.

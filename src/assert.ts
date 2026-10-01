@@ -337,6 +337,9 @@ export interface SemanticRefusal {
 
 export interface AssertContext {
   transcript: string;
+  /** LIVE-ONLY, populated by `runPairwiseJudges` (src/run/pairwise-prepass.ts) beside the semantic pre-pass: each
+   *  `semantic_pairwise` assert's per-reference outcomes, surfaced as `RunResult.assertions[].pairwise`. */
+  pairwiseResults?: Map<Assertion, NonNullable<RunResult["assertions"][number]["pairwise"]>>;
   /** LIVE-ONLY, populated by runSemanticJudges (an async pre-pass) BEFORE the synchronous evaluate(),
    *  so check() reads judge results synchronously and evaluate() stays pure (replay determinism intact).
    *  Absent on replay (semantic_matches is stripped as live-only) or on a live run where the pre-pass
@@ -752,15 +755,15 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   // per-file exemption that grants therefore applies to the SINGLE shared capture — so scoping assert A
   // changes which bytes assert B gets, while B still refuses on any omission. Warned once per evaluation,
   // here, because this is the only place that sees the whole array.
-  const sem = assertions.filter((a) => a.semantic_matches !== undefined);
-  const scopedCount = sem.filter((a) => (a.semantic_matches?.evidence_files?.length ?? 0) > 0).length;
+  const sem = assertions.filter((a) => judgedOpts(a) !== undefined);
+  const scopedCount = sem.filter((a) => (judgedOpts(a)?.evidenceFiles?.length ?? 0) > 0).length;
   // Fires for ANY multi-assert scenario carrying a scope, not only a MIXED one. The interference comes from
   // `priorityGlobs` being the UNION across asserts plus the per-file-cap exemption, and neither cares whether
   // the other asserts are scoped — two SCOPED asserts collide harder (both files exempt, so the starvation is
   // larger), and a `scopedCount < sem.length` condition is silent on exactly that worse case.
   if (sem.length > 1 && scopedCount > 0)
     warn(
-      `::warning:: this scenario has ${sem.length} semantic_matches asserts (${scopedCount} scoped) sharing ONE authored-file ` +
+      `::warning:: this scenario has ${sem.length} ${sem.some((x) => x.semantic_pairwise !== undefined) ? "judged (semantic_matches/semantic_pairwise)" : "semantic_matches"} asserts (${scopedCount} scoped) sharing ONE authored-file ` +
         `capture. An evidence_files scope exempts its files from the per-file cap, so it changes how many bytes the OTHER asserts' ` +
         `evidence gets — a scoped assert can consume the budget until an unscoped sibling's file is dropped OR kept only as a ` +
         `truncated prefix (its per-file allowance is min(16 KiB, whatever is left), which can fall to almost nothing), and that ` +
@@ -770,12 +773,34 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   return assertions.map((a) => check(a, withWaivers));
 }
 
+/** The judged-document options of an assert graded by an LLM judge over the run's composed document
+ *  (`semantic_matches`, `semantic_pairwise`), or undefined for every other key. ONE accessor, so every site that
+ *  composes, scopes, captures or refuses evidence for a judged assert treats both keys alike. */
+export interface JudgedOpts {
+  key: "semantic_matches" | "semantic_pairwise";
+  evidenceFiles?: string[];
+  includeSubagentText: boolean;
+  includeForkResults: boolean;
+  judgeModel?: string;
+}
+export function judgedOpts(a: Assertion): JudgedOpts | undefined {
+  const o = a.semantic_matches ?? a.semantic_pairwise;
+  if (o === undefined) return undefined;
+  return {
+    key: a.semantic_matches !== undefined ? "semantic_matches" : "semantic_pairwise",
+    evidenceFiles: o.evidence_files,
+    includeSubagentText: o.include_subagent_text === true,
+    includeForkResults: o.include_fork_results === true,
+    judgeModel: o.judge_model,
+  };
+}
+
 /** The `include_fork_results` refusals decided from the persisted call/result record ALONE — no compose, no
  *  grade — so they hold on every lane that carries `toolCalls`/`toolResults` (live and verify-run). Split from
  *  `semanticRefusal` (which calls it first) so `check` can still report them when the judge pre-pass never
  *  ran; the compose-time half (`skillResultsCut`, the aggregate cap) needs the pre-pass and lives there. */
 export function forkRecordRefusal(a: Assertion, ctx: AssertContext): SemanticRefusal | undefined {
-  if (a.semantic_matches?.include_fork_results !== true) return undefined;
+  if (judgedOpts(a)?.includeForkResults !== true) return undefined;
   const j = joinSkillResults(ctx);
   if (!j.recorded)
     // "No Skill call" and "cannot tell" look identical in an empty document, and grading it would stamp the
@@ -829,12 +854,13 @@ export function semanticRefusal(
   ctx: AssertContext,
   docInfo: { evidenceCut: boolean; overflowSection?: string; skillResultsCut?: string[] } | undefined,
 ): SemanticRefusal | undefined {
-  if (a.semantic_matches === undefined) return undefined;
+  const o = judgedOpts(a);
+  if (o === undefined) return undefined;
   // FIRST, so every lane that can compute it reports the same reason: it reads only the persisted call/result
   // record, which verify-run carries too (see `check`, which falls back to it when the pre-pass never ran).
   const fromRecord = forkRecordRefusal(a, ctx);
   if (fromRecord) return fromRecord;
-  const scope = a.semantic_matches.evidence_files;
+  const scope = o.evidenceFiles;
   const sc = scopeAuthoredEvidence(ctx, scope);
   const scoped = scope !== undefined && scope.length > 0;
   let semanticEvidence: SemanticEvidence;
@@ -886,7 +912,7 @@ export function semanticRefusal(
     return {
       semanticEvidence,
       message:
-        `evidence unavailable: semantic_matches.evidence_files ${JSON.stringify(scope)} matched NONE of the ${all.length} path(s) this run authored — ` +
+        `evidence unavailable: ${o.key}.evidence_files ${JSON.stringify(scope)} matched NONE of the ${all.length} path(s) this run authored — ` +
         `grading would have used zero authored evidence. Paths are <root>/<rel> (not a bare filename) and globs use */?/** (not regex). ` +
         `This run authored: ${all.length ? all.join(", ") : "(nothing)"}`,
     };
@@ -914,7 +940,7 @@ export function semanticRefusal(
       remedies.push(
         scoped
           ? `raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes) — an in-scope file is already exempt from the per-file cap, so it is the TOTAL that did not fit`
-          : `scope this assert with semantic_matches.evidence_files: ["<the deliverable>"], which exempts it from the ${DEFAULT_AUTHORED_PER_FILE_BYTES}-byte per-file cap (raising the total alone will NOT lift that cap)`,
+          : `scope this assert with ${o.key}.evidence_files: ["<the deliverable>"], which exempts it from the ${DEFAULT_AUTHORED_PER_FILE_BYTES}-byte per-file cap (raising the total alone will NOT lift that cap)`,
       );
     }
     semanticEvidence = {
@@ -928,7 +954,7 @@ export function semanticRefusal(
         `A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. ` +
         `To grade it: ${remedies.join("; or ")}${scoped ? `. Keep the composed document under ${JUDGE_DOC_CAP} chars or it is cut at the other end` : ""}`,
     };
-  } else if (a.semantic_matches.include_fork_results === true && docInfo?.skillResultsCut?.length) {
+  } else if (o.includeForkResults && docInfo?.skillResultsCut?.length) {
     // Compose-time (the per-section cap after scrubbing, or the aggregate cap), so it needs the pre-pass —
     // unlike the record-only fork reasons.
     semanticEvidence = { reason: "fork_result_truncated", paths: docInfo.skillResultsCut };
@@ -962,8 +988,8 @@ export function semanticRefusal(
         `${docInfo.overflowSection?.startsWith("Sub-agent output") ? "set include_subagent_text: false, or " : ""}` +
         // Skill sections precede the authored region, so when they exist they are part of what pushed the
         // overflow into it — wherever the cut itself landed.
-        `${a.semantic_matches.include_fork_results === true && joinSkillResults(ctx).joined.length ? "set include_fork_results: false, or " : ""}` +
-        `${scoped ? "narrow" : "add"} semantic_matches.evidence_files so only the files the rubric is about reach the judge` +
+        `${o.includeForkResults && joinSkillResults(ctx).joined.length ? "set include_fork_results: false, or " : ""}` +
+        `${scoped ? "narrow" : "add"} ${o.key}.evidence_files so only the files the rubric is about reach the judge` +
         `${sc.files.length === 1 ? ` — but this scope already names a SINGLE file, so it cannot be narrowed further: that deliverable is simply too large to grade whole against a ${JUDGE_DOC_CAP}-char judge document, and the rubric needs to target a smaller artifact` : ""}. ` +
         `(Lowering $COWORK_HARNESS_AUTHORED_TOTAL_BYTES will NOT help — it only drops the evidence at the capture instead.)`,
     };
@@ -1239,6 +1265,12 @@ export function buildJudgedDocument(ctx: AssertContext, includeSubagentText = fa
 
 /** `buildJudgedDocument` plus the one fact the caller cannot recover from the returned string: whether the
  *  aggregate cap ate into the authored evidence (or the health note that qualifies it). */
+/** Identity of what `composeJudgedDocument` emits for given inputs. A frozen pairwise reference records the composer
+ *  it was built with and is judged only against a run composed by the same one: BUMP this whenever the composer's
+ *  output changes for the same inputs (a section heading, an order, a cap, a marker). `test/composer-id.test.ts`
+ *  pins a golden document and fails until this is bumped. */
+export const COMPOSER_ID = "judged-doc-1";
+
 export function composeJudgedDocument(
   ctx: AssertContext,
   includeSubagentText = false,
@@ -1815,6 +1847,44 @@ function check(
               `semantic: ${passed}/${judged.length} rubric claims passed (need ${need}); failed claim indices: ${failedIdx.join(",")}${over}`,
             ),
       );
+    }
+  }
+  if (a.semantic_pairwise !== undefined) {
+    // LIVE-ONLY. Outcomes are pre-computed by runPairwiseJudges (src/run/pairwise-prepass.ts); check() only reads
+    // them. Refusals use the semantic_matches definitions (same composer, same reasons, same fixes).
+    const p = a.semantic_pairwise;
+    const outcomes = ctx.pairwiseResults?.get(a);
+    const docInfo = ctx.semanticDocInfo?.get(a);
+    const refusal = ctx.semanticRefused?.get(a) ?? (outcomes ? semanticRefusal(a, ctx, docInfo) : forkRecordRefusal(a, ctx));
+    const unreadable = (outcomes ?? []).filter((o) => o.status === "missing" || o.status === "integrity");
+    if (ctx.judgeInvalid?.has(a)) {
+      results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
+    } else if (refusal) {
+      semanticEvidence = refusal.semanticEvidence;
+      results.push(fail(refusal.message));
+    } else if (!outcomes) {
+      results.push(fail("evidence unavailable: pairwise judge not run (semantic_pairwise is live-only; skipped on replay)"));
+    } else if (!outcomes.length) {
+      results.push(fail("evidence unavailable: semantic_pairwise has no reference to compare with"));
+    } else if (unreadable.length) {
+      // Whatever pass_if says, `any` included: a comparison that did not happen is never a pass.
+      results.push(
+        fail(
+          `evidence unavailable: reference(s) could not be read — ${unreadable.map((o) => `${o.ref}: ${o.status}${o.why ? ` (${o.why})` : ""}`).join("; ")}`,
+        ),
+      );
+    } else {
+      const passIf = p.pass_if ?? "not_worse";
+      const passes = (o: (typeof outcomes)[number]): boolean =>
+        o.status === "neutral" || passIf === "any" || o.outcome === "win" || (passIf === "not_worse" && o.outcome === "tie");
+      const summary = outcomes
+        .map(
+          (o) =>
+            `vs ${o.ref}: ${o.status === "neutral" ? "neutral (reference variant)" : `${o.outcome}${o.positionFlip ? " (orders disagreed)" : ""}`}`,
+        )
+        .join("; ");
+      semanticEvidence = { reason: "graded", paths: scopeAuthoredEvidence(ctx, p.evidence_files).files.map((f) => f.path) };
+      results.push(outcomes.every(passes) ? ok(`pairwise (${passIf}): ${summary}`) : fail(`pairwise (${passIf}): ${summary}`));
     }
   }
   if (a.tool_result_contains !== undefined) {
@@ -3603,16 +3673,20 @@ function check(
   // Structured per-claim results for a semantic_matches assert (undefined for every other key) — so a
   // consumer gets the per-claim profile, not just the summary message. Attached to fail AND pass.
   const semanticClaims = a.semantic_matches !== undefined ? ctx.semanticResults?.get(a) : undefined;
-  const judgeModel = a.semantic_matches !== undefined ? ctx.judgeModels?.get(a) : undefined;
-  const judgeInvalid = a.semantic_matches !== undefined && ctx.judgeInvalid?.has(a) ? true : undefined;
-  const judgeCostUsd = a.semantic_matches !== undefined ? ctx.judgeCosts?.get(a) : undefined;
-  const judgeUsage = a.semantic_matches !== undefined ? ctx.judgeUsages?.get(a) : undefined;
-  const judgedDoc = a.semantic_matches !== undefined ? ctx.judgedDocs?.get(a) : undefined;
-  const judgePromptHash = a.semantic_matches !== undefined ? ctx.judgePromptHashes?.get(a) : undefined;
-  const judgeTransport = a.semantic_matches !== undefined ? ctx.judgeTransports?.get(a) : undefined;
+  // Judge provenance for every judged key (semantic_matches, semantic_pairwise).
+  const isJudged = judgedOpts(a) !== undefined;
+  const judgeModel = isJudged ? ctx.judgeModels?.get(a) : undefined;
+  const judgeInvalid = isJudged && ctx.judgeInvalid?.has(a) ? true : undefined;
+  const judgeCostUsd = isJudged ? ctx.judgeCosts?.get(a) : undefined;
+  const judgeUsage = isJudged ? ctx.judgeUsages?.get(a) : undefined;
+  const judgedDoc = isJudged ? ctx.judgedDocs?.get(a) : undefined;
+  const judgePromptHash = isJudged ? ctx.judgePromptHashes?.get(a) : undefined;
+  const judgeTransport = isJudged ? ctx.judgeTransports?.get(a) : undefined;
+  const pairwise = a.semantic_pairwise !== undefined ? ctx.pairwiseResults?.get(a) : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
     ...(semanticClaims ? { semanticClaims } : {}),
+    ...(pairwise ? { pairwise } : {}),
     ...(judgeModel ? { judgeModel } : {}),
     ...(judgeCostUsd !== undefined ? { judgeCostUsd } : {}),
     ...(judgeUsage ? { judgeUsage } : {}),

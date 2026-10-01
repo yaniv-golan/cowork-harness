@@ -26,8 +26,7 @@ import {
 } from "./stats.js";
 import { readManifest, type EvalManifest } from "./manifest.js";
 import { readRunsLines, repEvidenceOf, RUNS_FILE, type RunsLine } from "./runs.js";
-import { hostPathTokenOccurrences } from "../run/host-path-tokens.js";
-import { tildeify } from "../io.js";
+import { redactHostPaths } from "../run/host-path-tokens.js";
 
 export const REPORT_JSON = "report.json";
 export const REPORT_MD = "report.md";
@@ -499,7 +498,8 @@ export function buildEvalReport(evalDir: string): EvalReport {
     if (!SCORED.has(c.bucket)) continue;
     const authored = (line.grades[0]?.assertions ?? []).filter((g) => g.source === undefined);
     authored.forEach((g, i) => {
-      if (!g.assertion.semantic_matches || g.judgeInvalid === true || typeof g.judgeModel !== "string") return;
+      if ((!g.assertion.semantic_matches && !g.assertion.semantic_pairwise) || g.judgeInvalid === true || typeof g.judgeModel !== "string")
+        return;
       const k = JSON.stringify([line.scenario, i]);
       const e = judgeSeen.get(k) ?? { scenario: line.scenario, assertionIndex: i, models: new Set<string>() };
       e.models.add(normalizeModel(g.judgeModel));
@@ -680,7 +680,7 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   L.push("Family: claim sub-rows and non-semantic assertion rows. Roll-up and classification rows are shown separately.");
   L.push("No control arm: prior-answerable claims are not flagged.");
   const agentModels = [...new Set(rep.pins.agent.map((p) => p.model))].join(", ");
-  const judgeModels = [...new Set(rep.pins.judge.resolved.map((p) => p.model))].join(", ") || "none (no semantic_matches)";
+  const judgeModels = [...new Set(rep.pins.judge.resolved.map((p) => p.model))].join(", ") || "none (no judged assert)";
   L.push(
     `Agent model: ${agentModels}. Judge (${rep.pins.judge.mode === "override" ? "--judge-model" : "per assert"}): ${judgeModels}; prompt ${rep.pins.judge.promptHash.slice(0, 12)}.`,
   );
@@ -779,23 +779,7 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   return { text: text.replace(REDACTION_PLACEHOLDER, String(redacted)), redacted };
 }
 
-/** Replace each host-path token with its `~` form when it is under $HOME, else `<host-path>`. Deterministic
- *  for a given text and $HOME, so a re-render is byte-identical. */
-export function redactHostPaths(text: string): { text: string; redacted: number } {
-  const tokens = [...new Set(hostPathTokenOccurrences(text).map((o) => o.token))].sort((a, b) => b.length - a.length);
-  let out = text;
-  let redacted = 0;
-  for (const t of tokens) {
-    const home = tildeify(t);
-    const replacement = home !== t ? home : "<host-path>";
-    const parts = out.split(t);
-    if (parts.length > 1) {
-      redacted += parts.length - 1;
-      out = parts.join(replacement);
-    }
-  }
-  return { text: out, redacted };
-}
+export { redactHostPaths } from "../run/host-path-tokens.js";
 
 /** Build, render and write `report.json` + `report.md`. The single path for both the live eval and
  *  `eval report`. */

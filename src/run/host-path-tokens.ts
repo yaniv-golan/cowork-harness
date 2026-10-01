@@ -1,3 +1,5 @@
+import { tildeify } from "../io.js";
+
 // The host-path shape `hostPathLeaked` (src/run/execute.ts) looks for, as a TOKEN extractor. Kept in its
 // own dependency-free module so the staging code (runtime/*) can tokenize input files without importing
 // execute.ts, which imports the runtimes.
@@ -78,4 +80,22 @@ export function hostPathTokenOccurrences(text: string): HostPathTokenOccurrence[
  */
 export function hostPathTokens(text: string): string[] {
   return hostPathTokenOccurrences(text).map((o) => o.token);
+}
+
+/** Replace each host-path token with its `~` form when it is under $HOME, else `<host-path>`. Deterministic
+ *  for a given text and $HOME, so a re-render is byte-identical. */
+export function redactHostPaths(text: string): { text: string; redacted: number } {
+  const tokens = [...new Set(hostPathTokenOccurrences(text).map((o) => o.token))].sort((a, b) => b.length - a.length);
+  let out = text;
+  let redacted = 0;
+  for (const t of tokens) {
+    const home = tildeify(t);
+    const replacement = home !== t ? home : "<host-path>";
+    const parts = out.split(t);
+    if (parts.length > 1) {
+      redacted += parts.length - 1;
+      out = parts.join(replacement);
+    }
+  }
+  return { text: out, redacted };
 }

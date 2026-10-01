@@ -1,6 +1,7 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
+import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
@@ -50,7 +51,10 @@ import {
   unresolvedModelPreflight,
   scenarioInputRefusal,
   scenarioInputFindings,
+  loadSessionFromFile,
+  sessionOriginSources,
 } from "./execute.js";
+import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { unresolvedModelRefusal } from "./model-provenance.js";
 import { UsageError, UnknownBaselineError, BaselineFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
@@ -549,6 +553,9 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
     const sm = a && typeof a === "object" ? (a as Record<string, unknown>).semantic_matches : undefined;
     return !!sm && typeof sm === "object" && "include_fork_results" in (sm as object);
   },
+  // `semantic_pairwise` — the key itself: a v13 reader's strict assertion schema rejects it ("re-record", the wrong
+  // remedy); v14 routes the cassette to "too new; upgrade". Live-only, so a v14 replay skips it loudly.
+  (a) => !!a && typeof a === "object" && "semantic_pairwise" in (a as object),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -796,6 +803,24 @@ export function cassetteSessionRef(session: string, cassettePath: string): strin
  *  snapshot (`--rerecord-stale --from-embedded`): the same resolution every other cassette reader uses. */
 export function embeddedSessionPath(session: string, cassettePath: string): string {
   return resolveCassetteSessionPath(session, dirname(cassettePath)).path;
+}
+
+/** Map every `semantic_pairwise.refs` store path of a scenario through `map`, copying only what changes. Record
+ *  stores them RELATIVE to the cassette (like `session:`), so a committed cassette never freezes an absolute host
+ *  path; a re-record from the embedded snapshot resolves them back against the cassette's directory. */
+export function relocatePairwiseRefs(scenario: Scenario, map: (ref: string) => string): Scenario {
+  if (!scenario.assert.some((a) => a.semantic_pairwise?.refs)) return scenario;
+  return {
+    ...scenario,
+    assert: scenario.assert.map((a) =>
+      a.semantic_pairwise?.refs ? { ...a, semantic_pairwise: { ...a.semantic_pairwise, refs: a.semantic_pairwise.refs.map(map) } } : a,
+    ),
+  };
+}
+
+/** The cassette-relative → absolute direction of `relocatePairwiseRefs`, for `--from-embedded`. */
+export function embeddedPairwiseRefs(scenario: Scenario, cassettePath: string): Scenario {
+  return relocatePairwiseRefs(scenario, (r) => (isAbsolute(r) || r.startsWith("~") ? r : resolve(dirname(cassettePath), r)));
 }
 
 function skillSourceDirs(
@@ -4564,7 +4589,7 @@ export async function cmdRecord(args: string[]) {
         }
       } else if (fromEmbedded) {
         const sessionRef = embeddedSessionPath(rc.cassette.scenario.session, cp);
-        sc = { ...rc.cassette.scenario, session: sessionRef };
+        sc = embeddedPairwiseRefs({ ...rc.cassette.scenario, session: sessionRef }, cp);
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
     }
@@ -4647,19 +4672,16 @@ export async function cmdRecord(args: string[]) {
           // --from-embedded: explicitly re-record from the embedded snapshot (edits to the YAML won't apply).
           log(`  ⚠ ${tag} --from-embedded: re-recording "${cassette.scenario.name}" from the embedded snapshot (YAML edits won't apply)`);
           const sessionRef = embeddedSessionPath(cassette.scenario.session, cp);
-          r = await recordScenarioObject(
-            { ...cassette.scenario, session: sessionRef },
-            {
-              noRedact,
-              modelOverride,
-              allowFailing,
-              cassettePath: cp,
-              maxArtifactBytes,
-              skipRedactionPreflight: true,
-              allowHostInventoryFixture,
-              allowHostInventoryFindings,
-            },
-          );
+          r = await recordScenarioObject(embeddedPairwiseRefs({ ...cassette.scenario, session: sessionRef }, cp), {
+            noRedact,
+            modelOverride,
+            allowFailing,
+            cassettePath: cp,
+            maxArtifactBytes,
+            skipRedactionPreflight: true,
+            allowHostInventoryFixture,
+            allowHostInventoryFindings,
+          });
         }
         staleBudget.add(budgetFields(r.result).costUsd);
         log(`  ✓ ${tag} ${cp} (${r.result.result})`);
@@ -4997,6 +5019,20 @@ export function preSpendVerdicts(
   const promptReject = promptPolicyRejection(scenario);
   if (promptReject) out.push({ kind: "refuse", message: promptReject });
 
+  // semantic_pairwise references — the SAME function executeScenario gates on before the run dir exists, so the
+  // preview refuses what the real path will. Mount roots come from the scenario's session; one that cannot load
+  // is the real path's own refusal, reported there, so it contributes no roots here.
+  if (scenario.assert.some((a) => a.semantic_pairwise !== undefined)) {
+    let mounts: string[] = [];
+    try {
+      mounts = sessionOriginSources(loadSessionFromFile(scenario.session), "(inline)");
+    } catch {
+      /* the session's own load error is reported by the real path */
+    }
+    const pw = pairwiseRefsRefusal(scenario, scenarioPairwiseSetup(scenario), mounts);
+    if (pw) out.push({ kind: "refuse", message: pw });
+  }
+
   // A host-inheriting tier freezes the recording machine's own inventory into the transcript, so writing
   // that to a repo-tracked path publishes the operator's tool stack (this has happened).
   const inv = hostInventoryPreflight(scenario, cassettePath, opts.allowHostInventoryFixture === true);
@@ -5140,7 +5176,9 @@ async function freezeRecordedRun(
     );
   }
   // RELOCATABLE session path (relative to the cassette dir) — metadata-only, keeps a moved bundle honest.
-  const relocatable: Scenario = { ...scenario, session: cassetteSessionRef(scenario.session, cassettePath) };
+  const relocatable: Scenario = relocatePairwiseRefs({ ...scenario, session: cassetteSessionRef(scenario.session, cassettePath) }, (r) =>
+    cassetteSessionRef(r, cassettePath),
+  );
   // buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
   // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
@@ -6624,6 +6662,15 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     usage: FIXTURE_USAGE,
     allowlist: [],
   },
+  {
+    command: "ref",
+    booleanFlags: REF_FREEZE_BOOLEAN_FLAGS,
+    valueFlags: REF_FREEZE_VALUE_FLAGS,
+    repeatedFlags: [],
+    aliases: {},
+    usage: REF_USAGE,
+    allowlist: [],
+  },
 ];
 
 export async function cmdVerifyCassettes(args: string[]) {
@@ -7558,6 +7605,7 @@ export const TOOL_USE_BLIND_KEYS: (keyof Assertion)[] = [
   "computer_links_resolve",
   "computer_links_resolve_if_present",
   "semantic_matches",
+  "semantic_pairwise",
 ];
 
 /** Keys that match text the MODEL composed, and which therefore red on rewording alone.
@@ -7628,6 +7676,7 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   "no_mcp_error",
   "max_peak_rss_bytes",
   "semantic_matches", // LIVE-ONLY: LLM-judge grade; skipped-loud on replay (the judge is a live model call)
+  "semantic_pairwise", // LIVE-ONLY: the same judged document compared with a frozen reference; a live model call
   // LIVE-ONLY: needs the authored-file set (captured live), which the replay AssertContext has no
   // `authoredFiles` for; a MANIFEST_KEYS classification would evaluate on every manifest-carrying cassette
   // with authoredFiles===undefined → could-not-verify → hard-fail every embedding replay. Replay eval is a

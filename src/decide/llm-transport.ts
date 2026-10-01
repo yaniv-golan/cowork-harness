@@ -4,6 +4,7 @@ import { assertSpawnAllowed } from "../spawn-guard.js";
 import { warn, envPositiveNumber } from "../io.js";
 import { isUsageLimit } from "../usage-limit.js";
 import type { Complete, CompleteResult } from "./decider.js";
+import type { CompleteStructured } from "./pairwise-judge.js";
 
 /** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from the
  *  operator's own setup. The model reads untrusted agent output, so it must be able to call no tool (`--tools ""`;
@@ -225,9 +226,16 @@ function resolvesRequested(key: string, requested: string): boolean {
  *  Ambiguity (zero or several keys resolve it) still throws — that is the contract break this parser
  *  exists to catch, and the one case the old count check was actually guarding. The whole map is still
  *  passed through as `usage`, so the auxiliary call's cost is not lost — it is real spend. */
-function parseEnvelope(raw: string, requestedModel: string): CompleteResult {
-  const parsed = JSON.parse(raw) as { result?: string; modelUsage?: Record<string, unknown> };
-  if (typeof parsed.result !== "string") throw new Error(`envelope missing "result": ${tail(raw)}`);
+function parseEnvelope(raw: string, requestedModel: string, structured = false): CompleteResult {
+  const parsed = JSON.parse(raw) as {
+    result?: string;
+    modelUsage?: Record<string, unknown>;
+    structured_output?: unknown;
+    subtype?: unknown;
+  };
+  // A structured call's answer is `structured_output`; a structured-output failure (subtype
+  // `error_max_structured_output_retries`) may carry no `result` at all, and must still reach the caller as data.
+  if (typeof parsed.result !== "string" && !structured) throw new Error(`envelope missing "result": ${tail(raw)}`);
   const models = Object.keys(parsed.modelUsage ?? {});
   if (models.length === 0) throw new Error(`envelope's modelUsage is empty (expected the resolved model): ${tail(raw)}`);
   const primary = models.length === 1 ? models : models.filter((k) => resolvesRequested(k, requestedModel));
@@ -238,7 +246,13 @@ function parseEnvelope(raw: string, requestedModel: string): CompleteResult {
     );
   // Pass the usage VALUE through too (additive — see CompleteResult.usage): the key alone gives model
   // provenance, but discarding the value made the evaluator passes' cost unrecoverable.
-  return { text: parsed.result, model: primary[0]!, usage: parsed.modelUsage as Record<string, unknown> };
+  const base: CompleteResult = { text: parsed.result ?? "", model: primary[0]!, usage: parsed.modelUsage as Record<string, unknown> };
+  if (!structured) return base;
+  return {
+    ...base,
+    ...(parsed.structured_output !== undefined ? { structured: parsed.structured_output } : {}),
+    ...(typeof parsed.subtype === "string" ? { subtype: parsed.subtype } : {}),
+  };
 }
 
 /** Lenient, best-effort extraction of JUST the `result` field for a FAILURE diagnosis message — unlike
@@ -263,7 +277,14 @@ function tryExtractResultText(raw: string): string | null {
  * verified), so the diagnosis prefers its `result` field and only falls back to the raw tail if the
  * envelope itself doesn't parse (e.g. a failure that never reached the CLI's own JSON emitter).
  */
-function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number, maxBytes: number): Promise<CompleteResult> {
+function spawnOnce(
+  bin: string,
+  prompt: string,
+  model: string,
+  timeoutMs: number,
+  maxBytes: number,
+  extraArgs: readonly string[] = [],
+): Promise<CompleteResult> {
   // The backstop for every host-`claude` call, whichever caller reaches it: never spawn the model call on a CLI
   // that would drop (or reject) an isolation flag. Cached per binary, so a retry or a batch probes once.
   try {
@@ -278,8 +299,11 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     // The prompt is delivered on STDIN, not argv: an argv prompt is world-readable via `ps` for the life of
     // the child (verified: `echo '...' | claude -p --output-format json` with no positional prompt reads
     // from stdin and returns the identical success envelope) — stdin is process-private.
+    // The caller's extra flags go BEFORE the isolation flags, so the variadic `--tools ""` stays last.
     const args = isolationArgs(bin);
-    const child = spawn(bin, ["-p", "--model", model, "--output-format", "json", ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(bin, ["-p", "--model", model, "--output-format", "json", ...extraArgs, ...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     // A child that exits/errors before consuming stdin (e.g. ENOENT, or a fake bin that exits immediately)
     // delivers EPIPE asynchronously as an `error` event on stdin — without a listener Node escalates it to
     // an uncaughtException. The child's own "error"/"close" handlers below already reject loud, so swallow
@@ -349,7 +373,7 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
       const raw = Buffer.concat(chunks).toString("utf8");
       if (code === 0) {
         try {
-          resolve(parseEnvelope(raw, model));
+          resolve(parseEnvelope(raw, model, extraArgs.includes("--json-schema")));
         } catch (e) {
           // NOT a TransportExit → not retried: a malformed/ambiguous envelope on a CLEAN exit is a
           // deterministic contract break (the CLI / its --output-format shape), not a transient hiccup.
@@ -411,7 +435,23 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
  * non-zero-exit class retries; timeout / maxBytes-overflow / spawn-ENOENT are not transient and fail loud on
  * the first attempt. Set `COWORK_HARNESS_LLM_RETRIES=0` to disable (e.g. deterministic CI).
  */
-export const claudeCliComplete: Complete = async (prompt, model) => {
+export const claudeCliComplete: Complete = async (prompt, model) => completeViaCli(prompt, model, []);
+
+/** The structured transport for the pairwise judge: the same `claude -p` spawn, retry and bounds as
+ *  `claudeCliComplete`, plus `--json-schema` (the answer arrives validated in the envelope's `structured_output`),
+ *  and `--system-prompt` (the untrusted-data instruction belongs in the system turn); it runs isolated and tool-less
+ *  like every host-`claude` call (`ISOLATION_ARGS`). The judged documents travel on stdin, never argv; the system prompt and schema are fixed harness text. */
+export const claudeCliCompleteStructured: CompleteStructured = async ({ system, user, schema, model }) => {
+  const r = await completeViaCli(user, model, ["--json-schema", JSON.stringify(schema), "--system-prompt", system]);
+  return {
+    structured: r.structured,
+    model: r.model,
+    ...(r.usage !== undefined ? { usage: r.usage } : {}),
+    ...(r.subtype !== undefined ? { subtype: r.subtype } : {}),
+  };
+};
+
+async function completeViaCli(prompt: string, model: string, extraArgs: readonly string[]): Promise<CompleteResult> {
   assertSpawnAllowed("the --decider-llm transport (`claude -p`)");
   const bin = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude";
   // envPositiveNumber warns LOUD (not a silent revert) when the var is SET but unparseable/non-positive
@@ -431,7 +471,7 @@ export const claudeCliComplete: Complete = async (prompt, model) => {
   let lastErr: Error | undefined;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await spawnOnce(bin, prompt, model, timeoutMs, maxBytes);
+      return await spawnOnce(bin, prompt, model, timeoutMs, maxBytes, extraArgs);
     } catch (e) {
       const err = e as Error & { retryable?: boolean; strictMcpRefused?: boolean };
       lastErr = err;
@@ -450,4 +490,4 @@ export const claudeCliComplete: Complete = async (prompt, model) => {
     }
   }
   throw lastErr; // unreachable (the loop returns or throws on the last attempt), but satisfies the type checker.
-};
+}
