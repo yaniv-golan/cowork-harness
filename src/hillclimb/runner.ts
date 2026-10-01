@@ -19,7 +19,7 @@ import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./case
 import type { PairwiseDecls } from "./grade-keys.js";
 import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
-import { gateDecision, harnessDigest, listedInside } from "./gate.js";
+import { approvedHarnessSkill, flowHarnessDigest, gateDecision, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
@@ -238,25 +238,22 @@ async function run(
   // The harness gate (runner-scaffold.mjs l.238-277). A --skill selection joins the digest as `skill:<name>`: it
   // decides what skill_invoked means, so changing it is a harness change. Without one nothing is added and the sha
   // is the one a flow approved before --skill existed.
-  const skillTag = (skill: string | undefined): string[] => (skill !== undefined ? [`skill:${skill}`] : []);
   const digestFor = (skill: string | undefined) =>
-    harnessDigest({
+    flowHarnessDigest({
       cwd: deps.cwd,
-      listed: Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [],
+      state,
       derived: deps.derivedPaths(all),
-      virtual: {
-        ...deps.derivedValues?.(all),
-        "cowork-harness-version": deps.virtual.harnessVersion,
-        baseline: deps.virtual.baselineId,
-      },
-      tags: skillTag(skill),
+      ...(deps.derivedValues ? { derivedValues: deps.derivedValues(all) } : {}),
+      harnessVersion: deps.virtual.harnessVersion,
+      baselineId: deps.virtual.baselineId,
+      ...(skill !== undefined ? { skill } : {}),
     });
   const digest = digestFor(args.skill);
   for (const s of digest.skipped) say(`warning: harness path '${s.path}' not readable (${s.code}) - skipped`);
   const decision = gateDecision(state, digest.sha, args.approveHarness);
   // The sha alone cannot name the skill it was approved with: `harness_skill`, recorded beside it on approval,
   // can. Re-hashing under that selection tells a selection-only change from one where the files moved too.
-  const approvedSkill = typeof state.harness_skill === "string" ? state.harness_skill : undefined;
+  const approvedSkill = approvedHarnessSkill(state);
   const skillChange = (): { cause: string; filesToo: boolean } | undefined => {
     if (approvedSkill === args.skill) return undefined;
     const cause =

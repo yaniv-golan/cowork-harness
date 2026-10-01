@@ -173,7 +173,8 @@ All notable changes to this project are documented here. The format is based on
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
   run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric
   change) and `pass` is recomputed; `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot
-  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, refuses up
+  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, under the
+  `--skill` the flow was approved with (`harness_skill`, which its `--approve-harness` keeps), refuses up
   front (exit 2) when the host `claude` cannot run the judge isolated, takes every selected variant's lock, and
   preflights every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
