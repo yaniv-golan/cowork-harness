@@ -166,8 +166,10 @@ All notable changes to this project are documented here. The format is based on
   changed since the flow's rows were written, naming the variants; adding or removing a metric mid-flow is allowed,
   and `run` warns on a removed one and on row metrics `_state.json` does not declare. `hillclimb check` notes rows
   that predate a declared metric instead of failing them, warns about a float outside `[min, scale]`, refuses a
-  non-numeric `min`, and its headroom reads a lower-is-better float's good end from `min`, 0 when absent. See
-  docs/cli.md → Numeric metrics in hillclimb.
+  non-numeric `min`, and its headroom reads a lower-is-better float's good end from `min`, 0 when absent.
+  `hillclimb regrade` keeps the metric keys on every row it rebuilds, re-measures them on a row it re-grades (which
+  gains the signatures of metrics added since, and loses an unavailable reason for one now measured), and refuses a
+  changed declaration before any judge call, as `run` does. See docs/cli.md → Numeric metrics in hillclimb.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb

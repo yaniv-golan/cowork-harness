@@ -7,7 +7,7 @@
 
 import type { MetricUnavailable, RunResult, ScenarioMetric } from "../types.js";
 import { UsageError } from "../errors.js";
-import { metricSig } from "./grade-keys.js";
+import { metricSig, metricUnion } from "./grade-keys.js";
 import type { FlowSnapshot } from "./schema-check.js";
 
 export function metricEntries(
@@ -24,6 +24,12 @@ export function metricEntries(
     if (got?.unavailable !== undefined) unavailable[m.id] = got.unavailable;
   }
   return { grade, unavailable };
+}
+
+/** A flow's metric columns: the union over EVERY case's scenario-declared metrics (whatever `--case` selects), each
+ *  case named by its id in a refusal. The one producer `run` grades rows with and `regrade` rebuilds them with. */
+export function flowMetricUnion(cases: ReadonlyArray<{ id: string; scenario: { metrics?: readonly ScenarioMetric[] } }>): ScenarioMetric[] {
+  return metricUnion(cases.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
 }
 
 /** The `meta.metric_sigs` of a row graded under these declarations: id → metricSig. The one producer, for the
