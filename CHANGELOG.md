@@ -8,28 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Security
 
-- **The LLM judge, the LLM decider and the `critique` evaluator call the host `claude` with no tools, isolated
-  from your own Claude Code setup.** All three read untrusted agent output. Before this release the call ran with
-  Claude Code's default tools: read-only tools (Read, Glob, Grep) always ran, and Write, Bash and web tools ran
-  whenever your settings allowed them — allow rules, an `auto`/`acceptEdits`/`bypassPermissions` default mode, or a
-  `PermissionRequest` hook — so text in a judged output could steer a tool call on the machine running the harness.
-  The call also loaded your CLAUDE.md, skills, plugins, hooks and MCP servers, and the project settings of the
-  directory the harness ran in, and saved a transcript into your session history. Every call passes `--safe-mode`,
-  `--strict-mcp-config`, `--no-session-persistence`, `--setting-sources user` and `--tools ""`. Your user settings
-  still apply (their `env`, `apiKeyHelper` and model settings), as do managed and policy settings; auth configured
-  only in a project's `.claude/settings.json` is not read. On a machine with an enterprise MCP config — a
-  `managed-mcp.json` in Claude Code's managed-settings directory
-  (`/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on Linux, `C:\Program Files\ClaudeCode\`
-  on Windows) — the call leaves out `--strict-mcp-config`, which Claude Code refuses beside one; `--safe-mode` still
-  keeps every MCP server out, your organisation's managed ones included, while its managed hooks and policy
-  settings still apply. A managed config at another path makes Claude Code refuse `--strict-mcp-config`; the call is
-  then retried once without it, before any model call.
-  **This needs Claude Code 2.1.197 or later on the host.** An older CLI is refused before any model call, saying
-  why and what to do. `run`, `record`, `skill` and `eval` make that check before the agent spends (`eval` before its
-  manifest, and `eval --dry-run` too) when a scenario has a `semantic_matches` or `semantic_pairwise` assert graded
-  by the host `claude`, or `on_unanswered: llm` / `--decider-llm` with no external decider channel;
-  `critique` makes it before its task turn, `decide --decider-llm` before its model call and `regrade` before its
-  first grade — all exit 2. Runs that use none of them are unaffected.
+- **The host-`claude` isolation check from 4.2.1 now refuses earlier, and covers more.** `eval` refuses up front,
+  before its manifest, instead of writing a report with every run errored, and `eval --dry-run` makes the same
+  check. `regrade` makes it before its first grade. A `semantic_pairwise` assert graded by the host `claude`
+  triggers it, as `semantic_matches` does. All exit 2, before any model call.
 
 ### Upgrade notes
 
@@ -63,8 +45,6 @@ All notable changes to this project are documented here. The format is based on
   - `--max-budget-usd <x>`, with or without `--dry-run`, refuses before any run (exit 2, `error.code:
     "budget_exceeded"`, `budget.basis: "batch"`) when each scenario's worst observed run × its 2 × `--reps` runs
     sums above x. It is a pre-flight only; judge spend is not counted, as on every other command.
-
-- **A graded `semantic_matches` assert records how its judge was called:** `assertions[].judgeTransport`
 
 - **A graded `semantic_matches` or `semantic_pairwise` assert records how its judge was called:** `assertions[].judgeTransport`
   (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
@@ -377,6 +357,42 @@ All notable changes to this project are documented here. The format is based on
 - The companion skill now says what a `lint-skill` ignore marker costs: it is an edit to `SKILL.md`, so it
   changes the skill hash (staling that skill's cassettes) and adds text the agent reads. `--ignore-rule`
   avoids both.
+
+## [4.2.1] — 2026-10-01
+
+A security fix: the judge, the LLM decider and the `critique` evaluator run tool-less, isolated from your own Claude
+Code setup. **Needs Claude Code 2.1.197 or later on the host** for any run that uses them.
+
+### Upgrade notes
+
+- **Cassettes: no re-record needed.** Nothing under `src/runtime`, `src/hostloop`, `src/staging`, `src/session.ts`,
+  `baselines/` or `docker/` changed, and `CASSETTE_VERSION` is still 13. A committed cassette's recorded content and
+  fingerprints are unchanged; `verify-cassettes` and `replay --strict` pass on the bundled ones.
+
+### Security
+
+- **The LLM judge, the LLM decider and the `critique` evaluator call the host `claude` with no tools, isolated
+  from your own Claude Code setup.** All three read untrusted agent output. Up to 4.2.0 the call ran with Claude
+  Code's default tools: read-only tools (Read, Glob, Grep) always ran, and Write, Bash and web tools ran whenever
+  your settings allowed them — allow rules, an `auto`/`acceptEdits`/`bypassPermissions` default mode, or a
+  `PermissionRequest` hook — so text in a judged output could steer a tool call on the machine running the harness.
+  The call also loaded your CLAUDE.md, skills, plugins, hooks and MCP servers, and the project settings of the
+  directory the harness ran in, and saved a transcript into your session history. Every call passes `--safe-mode`,
+  `--strict-mcp-config`, `--no-session-persistence`, `--setting-sources user` and `--tools ""`. Your user settings
+  still apply (their `env`, `apiKeyHelper` and model settings), as do managed and policy settings; auth configured
+  only in a project's `.claude/settings.json` is not read. On a machine with an enterprise MCP config — a
+  `managed-mcp.json` in Claude Code's managed-settings directory
+  (`/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on Linux, `C:\Program Files\ClaudeCode\`
+  on Windows) — the call leaves out `--strict-mcp-config`, which Claude Code refuses beside one; `--safe-mode` still
+  keeps every MCP server out, your organisation's managed ones included, while its managed hooks and policy
+  settings still apply. A managed config at another path makes Claude Code refuse `--strict-mcp-config`; the call is
+  then retried once without it, before any model call.
+  **This needs Claude Code 2.1.197 or later on the host.** An older CLI is refused before any model call, saying
+  why and what to do. `run`, `record` and `skill` make that check before the agent spends when a scenario
+  has a `semantic_matches` assert graded by the host `claude`, or `on_unanswered: llm` / `--decider-llm` with no
+  external decider channel; `critique` makes it before its task turn and `decide --decider-llm` before its model
+  call — all exit 2. `eval` refuses each such run before its agent spends; the eval still writes its report, with
+  every run errored. Runs that use none of them are unaffected.
 
 ## [4.2.0] — 2026-09-30
 
