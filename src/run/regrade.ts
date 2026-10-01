@@ -133,6 +133,22 @@ export type RegradeOutcome =
       completed?: RegradeRunReport[];
     };
 
+/** One run dir's evidence as a `checkOnly` preflight saw it: the pre-spend fields of `RegradeRunReport`, under
+ *  the same keys. `liveDocDrift` / `uncheckedSections` are non-empty only where `allowDocDrift` / `allowUnchecked`
+ *  accepted them (a real re-grade would grade over them, warned). Nothing graded, so no `docMatchesLive`. */
+export type RegradeCheckRun = Pick<
+  RegradeRunReport,
+  "runDir" | "turn" | "scenarioSha256" | "uncheckedSections" | "uncheckedCount" | "liveDocDrift" | "authoredCapture"
+>;
+
+/** A `checkOnly` preflight that a real re-grade with the same options would NOT refuse: every run dir passed every
+ *  pre-spend step. A refusal is the ordinary `{ ok: false }` arm of `RegradeOutcome`, identical to the real one. */
+export interface RegradeCheckPassed {
+  ok: true;
+  checkOnly: true;
+  runs: RegradeCheckRun[];
+}
+
 export interface RegradeOptions {
   runDirs: string[];
   scenarioFile: string;
@@ -153,6 +169,17 @@ export interface RegradeOptions {
   makeJudge?: Parameters<typeof judgesForRun>[1];
   /** Test seam: the clock that names the output file. */
   now?: () => Date;
+}
+
+/** `RegradeOptions` for an evidence preflight. Kept out of `RegradeOptions` itself so a caller that never asks for
+ *  one keeps the plain `RegradeOutcome` type. */
+export interface RegradeCheckOptions extends RegradeOptions {
+  /** Evidence preflight: run every pre-spend step a real re-grade runs — the builder's refusals, the judge-model
+   *  check, the live-inputs drift rebuild, the unchecked-content measurement — over EVERY run dir, honouring
+   *  `allowDocDrift` / `allowUnchecked` exactly as a real re-grade would, then stop. No judge is constructed or
+   *  called, no regrade file is written and no warning is printed. Returns the refusal a real re-grade with these
+   *  options would return (same `code` and `refusals[]`), else `RegradeCheckPassed`. API-only (no CLI flag). */
+  checkOnly: true;
 }
 
 const sha256Hex = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
@@ -502,9 +529,12 @@ interface Prepared {
 
 /**
  * Re-grade every run dir. Every run dir's evidence is rebuilt (and every refusal decided) BEFORE the first
- * judge call, so one bad dir in a batch spends nothing.
+ * judge call, so one bad dir in a batch spends nothing. With `checkOnly: true` it stops there (see
+ * `RegradeCheckOptions.checkOnly`): a refusal is returned as a real re-grade would return it, else `RegradeCheckPassed`.
  */
-export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome> {
+export async function regradeRuns(opts: RegradeCheckOptions): Promise<RegradeOutcome | RegradeCheckPassed>;
+export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>;
+export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }): Promise<RegradeOutcome | RegradeCheckPassed> {
   // ONE secret set for the judged document, the written file and every message, so they cannot disagree.
   const secrets = opts.secrets ?? collectSecrets();
   const refuse = (kind: "usage" | "runtime", message: string): RegradeOutcome => ({ ok: false, kind, message: scrub(message, secrets) });
@@ -683,6 +713,23 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       message: scrub(refusalLines.join("\n"), secrets),
       code: refusals.some((r) => r.code === "doc_drift") ? "doc_drift" : "unchecked_content",
       refusals: refusals.map((r) => scrubRefusal(r, secrets)),
+    };
+
+  // The preflight ends here: everything above is what a real re-grade decides before its first judge call. The
+  // values are those a real re-grade's `runs[]` carries, unscrubbed in-process as those are.
+  if (opts.checkOnly)
+    return {
+      ok: true,
+      checkOnly: true,
+      runs: prepared.map((p) => ({
+        runDir: p.runDir,
+        turn: p.turn,
+        scenarioSha256: scenarioSha256!,
+        uncheckedSections: p.unchecked,
+        uncheckedCount: p.unchecked.length,
+        liveDocDrift: p.drift,
+        authoredCapture: p.budget,
+      })),
     };
 
   const sc = loadScenario();

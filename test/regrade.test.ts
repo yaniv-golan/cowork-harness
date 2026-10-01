@@ -1694,3 +1694,135 @@ describe.skipIf(!existsSync(CLI))("regrade CLI", () => {
     expect(r.stderr).toContain("--authored-total-bytes");
   });
 });
+
+describe("regrade checkOnly: every pre-spend step, then stop", () => {
+  /** A judge factory that fails the test if a judge is ever constructed (judgesForRun builds eagerly). */
+  const noJudge = (): SemanticJudge => {
+    throw new Error("checkOnly constructed a judge");
+  };
+  /** The two outcomes compared as a caller reads them: the refusal fields, not the per-call message order. */
+  const refusalOf = (o: { ok: boolean }) => {
+    if (o.ok) throw new Error("expected a refusal");
+    const r = o as Extract<Awaited<ReturnType<typeof regradeRuns>>, { ok: false }>;
+    return { ok: r.ok, kind: r.kind, code: r.code, refusals: r.refusals, message: r.message };
+  };
+
+  it("a clean run → ok, checkOnly, no judge constructed, no regrade file; the per-run evidence fields are reported", async () => {
+    const k = await keptRun({ author: writeReport });
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns({ ...opts(k, { makeJudge: noJudge }), checkOnly: true as const });
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(out).toMatchObject({ ok: true, checkOnly: true });
+    expect(out.runs).toHaveLength(1);
+    expect(out.runs[0]).toEqual({
+      runDir: k.runDir,
+      turn: 1,
+      scenarioSha256: createHash("sha256").update(readFileSync(k.scenarioFile)).digest("hex"),
+      uncheckedSections: [],
+      uncheckedCount: 0,
+      liveDocDrift: [],
+      authoredCapture: expect.objectContaining({ source: "persisted" }),
+    });
+    expect(regradeFiles(k)).toEqual([]);
+    expect(existsSync(join(k.runDir, "turns", "1", "regrade"))).toBe(false);
+    expect(stderr.text()).toBe("");
+  });
+
+  it("a drifted run → the same doc_drift refusal a real regrade returns, with no judge", async () => {
+    const k = await keptRun({ author: writeReport });
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const judge = judgeFactory(() => true);
+    const real = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    const check = await regradeRuns({ ...opts(k, { makeJudge: noJudge }), checkOnly: true as const });
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+    expect(refusalOf(check).code).toBe("doc_drift");
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(k)).toEqual([]);
+  });
+
+  it("unchecked content → the same unchecked_content refusal a real regrade returns", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+    });
+    const scenarioFile = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnco-")), WIDER);
+    const real = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: judgeFactory(() => true).make });
+    const check = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: noJudge, checkOnly: true });
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+    expect(refusalOf(check).code).toBe("unchecked_content");
+    expect(regradeFiles(k)).toEqual([]);
+  });
+
+  it("a multi-dir batch → the same refusals[] (every dir, both codes) as the real path", async () => {
+    const withAppendix = (w: string) => {
+      writeReport(w);
+      writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+    };
+    const clean = await keptRun({ author: withAppendix });
+    const drifted = await keptRun({ author: withAppendix });
+    writeFileSync(join(drifted.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const scenarioFile = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnco2-")), WIDER);
+    const runDirs = [clean.runDir, drifted.runDir];
+    const judge = judgeFactory(() => true);
+    const real = await regradeRuns({ runDirs, scenarioFile, makeJudge: judge.make });
+    const check = await regradeRuns({ runDirs, scenarioFile, makeJudge: noJudge, checkOnly: true });
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+    const r = refusalOf(check);
+    expect(r.code).toBe("doc_drift");
+    expect(r.refusals!.map((x) => [x.runDir, x.code])).toEqual([
+      [clean.runDir, "unchecked_content"],
+      [drifted.runDir, "doc_drift"],
+      [drifted.runDir, "unchecked_content"],
+    ]);
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it("a non-evidence refusal (a dir with no persisted budget) is the real path's refusal too", async () => {
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    delete r.authoredCapture;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const real = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    const check = await regradeRuns({ ...opts(k, { makeJudge: noJudge }), checkOnly: true as const });
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+  });
+
+  it("allowDocDrift / allowUnchecked → success, reporting what the real run would accept", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+    });
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const scenarioFile = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnco3-")), WIDER);
+    const base = { runDirs: [k.runDir], scenarioFile, makeJudge: noJudge, checkOnly: true as const };
+    expect(await regradeRuns({ ...base, allowDocDrift: true })).toMatchObject({ ok: false, code: "unchecked_content" });
+    expect(await regradeRuns({ ...base, allowUnchecked: true })).toMatchObject({ ok: false, code: "doc_drift" });
+    // A real re-grade warns here ("grading anyway", "never read by the live judge"); the preflight prints nothing.
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns({ ...base, allowDocDrift: true, allowUnchecked: true });
+    } finally {
+      stderr.restore();
+    }
+    expect(stderr.text()).toBe("");
+    if (!out.ok) throw new Error(out.message);
+    if (!("checkOnly" in out)) throw new Error("expected a preflight outcome");
+    expect(out.checkOnly).toBe(true);
+    expect(out.runs[0].liveDocDrift).toEqual([
+      { liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/report.md", change: "changed" }] },
+    ]);
+    expect(out.runs[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "authored", path: "outputs/appendix.md" }]);
+    expect(out.runs[0].uncheckedCount).toBe(1);
+    expect(regradeFiles(k)).toEqual([]);
+  });
+});
