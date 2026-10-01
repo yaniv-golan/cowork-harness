@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- The companion skill now says that a green run says nothing about a skill edited while a session is
+  running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
+  This was previously documented only in `docs/fidelity-gaps.md`.
+- The companion skill now says what a `lint-skill` ignore marker costs: it is an edit to `SKILL.md`, so it
+  changes the skill hash (staling that skill's cassettes) and adds text the agent reads. `--ignore-rule`
+  avoids both.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
