@@ -645,7 +645,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       message:
         `this question batch is only partly scripted — answers: matched ${quoteList(g.matched)} but not ` +
         `${quoteList(g.unmatched)}; answers are delivered atomically, so the WHOLE batch went to the fallback ` +
-        `(${answeredBy ? `answered by: ${answeredBy}` : "no recorded answer"}) and the scripted answer(s) were not delivered. ` +
+        `(${answeredBy === "replay" ? "the recorded answer was replayed" : answeredBy ? `answered by: ${answeredBy}` : "no recorded answer"}) and the scripted answer(s) were not delivered. ` +
         `Script every sub-question of the batch to pin it.`,
     });
   }

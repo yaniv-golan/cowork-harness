@@ -762,7 +762,9 @@ Only twelve codes are **warn**-severity (informational, never flip pass/fail):
   matched and unmatched sub-questions and who answered the batch; `result.partlyScriptedGates` carries
   `{requestId, matched, unmatched}` per batch. Never fires on a single-question gate no rule matched (that
   is the ordinary unanswered case). `replay` re-derives it from the cassette's frozen `answers:`, and
-  `verify-run` from the scenario you pass, so it clears once every sub-question is scripted.
+  `verify-run` from the scenario you pass: `verify-run` clears once every sub-question is scripted, a replay
+  once the run is re-recorded with them scripted. On a replay the message names the recorded answer, not who
+  gave it live.
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion

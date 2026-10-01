@@ -38,7 +38,8 @@ All notable changes to this project are documented here. The format is based on
   (`{requestId, matched, unmatched}`, naming the sub-questions) and raises the warn-severity
   `partly_scripted_gate` verdict signal, which names the matched and unmatched sub-questions and who answered
   the batch instead. `replay` re-derives it from the cassette's frozen `answers:`, and `verify-run` from the
-  scenario you pass, so it clears once every sub-question is scripted. It never changes a verdict or exit
+  scenario you pass: `verify-run` clears once every sub-question is scripted, and a replay once the run is re-recorded
+  with them scripted (a replay reads the answers frozen at record). It never changes a verdict or exit
   code, and a single-question gate that no rule matched does not raise it.
 - **Scenario `metrics:` — numbers a scenario measures, beside the verdict.** Each entry
   (`{id, artifact, path, better, scale | unbounded, min?}`; `scale` is the upper bound of the range, `min` the floor, default 0) reads one number from a JSON file the run wrote and is

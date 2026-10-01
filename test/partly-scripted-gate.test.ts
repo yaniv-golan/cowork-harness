@@ -209,7 +209,10 @@ describe("replay re-derives the finding from the cassette's frozen answers", () 
     expect(partly.partlyScriptedGates).toEqual([{ requestId: "req-batch", matched: [JURIS], unmatched: [ROUND] }]);
     expect(full.partlyScriptedGates).toBeUndefined();
     const v = computeVerdict(partly, "replay");
-    expect(v.signals.some((s) => s.code === "partly_scripted_gate" && s.severity === "warn")).toBe(true);
+    const sig = v.signals.find((s) => s.code === "partly_scripted_gate");
+    expect(sig?.severity).toBe("warn");
+    // a replay cannot tell who answered live: it names the replayed answer, never "answered by: replay"
+    expect(sig?.message).toMatch(/the recorded answer was replayed/);
     expect(v.pass).toBe(computeVerdict(full, "replay").pass);
     // the replayed answer is the recorded one, regardless of the frozen rules
     expect(partly.decisions.find((d) => d.kind === "question")?.detail).toEqual({ [JURIS]: "Israeli parent", [ROUND]: "Seed" });

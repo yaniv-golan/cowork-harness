@@ -316,7 +316,8 @@ Recognize these before "fixing" a non-bug:
   `answers:` matched only some. Answers are delivered as one unit, so the whole batch went to
   `on_unanswered` and the matched answers were not delivered. The message names the matched and unmatched
   sub-questions and who answered; `result.partlyScriptedGates` has the lists. `replay` and `verify-run`
-  re-derive it, so it clears once you script every sub-question of the batch.
+  re-derive it: `verify-run` clears once you script every sub-question of the batch, a replay only after you
+  re-record with them scripted (it reads the answers frozen in the cassette).
 
 The full 23-code signal table (severity + per-signal opt-out) is in
 [`references/assertion-catalog.md`](./assertion-catalog.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
