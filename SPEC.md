@@ -595,7 +595,8 @@ there are three families:
   payload, the `record <dir/>` / `record --rerecord-stale` batch payload (below), `scaffold <run>`
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload, `eval` and `eval report` (`evalDir`, `arms`, `pins`,
-  `sections`, `summary`, `cost`, `stoppedEarly`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
+  `sections`, `summary`, `cost`, `stoppedEarly`), `eval --dry-run` (`dryRun: true`, `plan` — no `evalDir`, none
+  is created; §12 covers `plan.cost`'s summary keys and nothing else of `plan`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
   `answer` (`gate`, `answers`), `fixture export` (exit `0` written, `2` usage or refusal; payload experimental,
   §12: `message`, `written`, `skipped`, `refused` (`[]`), `notes`, `bytes`, `outputsDir`, `partial`, `result`; a
   refusal is the error envelope, its message in `error.message`, carrying `refused[]` and whichever of the other
@@ -726,7 +727,8 @@ shape before parsing it generically.
 invocation, not about any one `RunResult`, so it is published on the envelope frame — beside `ok` and
 `error`, on every family (`results[]`-bearing, payload-shaped, and the error envelope) — as a top-level
 `budget` key, whenever a `--max-budget-usd` pre-flight ran: `run` (a file, `<dir/>`, `--matrix`), `skill`,
-and `record` (a file, `<dir/>`, `--rerecord-stale`, and both `--dry-run` arms). It is **absent** when no cap
+`record` (a file, `<dir/>`, `--rerecord-stale`, and both `--dry-run` arms), and `eval` (a real eval and
+`--dry-run` alike). It is **absent** when no cap
 was passed and on a `--repeat` lane, which skips the pre-flight and enforces a running total instead
 (reported as `rollups[].stoppedEarly: "budget"`). One shape, used in both places below:
 
@@ -735,7 +737,8 @@ was passed and on a `--repeat` lane, which skips the pre-flight and enforces a r
   "capUsd": 0.5,                       // the --max-budget-usd value
   "basis": "single" | "batch",         // single: each scenario's OWN worst observed cost vs the cap (run, skill,
                                        //   a record file, each scenario of run <dir/>); batch: the SUM over a
-                                       //   record <dir/> / --rerecord-stale batch vs the cap
+                                       //   record <dir/> / --rerecord-stale batch, or over an eval's schedule
+                                       //   (each scenario's worst x its 2 x --reps runs), vs the cap
   "enforced": true | false | "lower_bound",
                                        // true: every scenario was priced. false (single): at least one scenario
                                        //   had no history and ran with NO cap. "lower_bound" (batch): unpriced
@@ -757,13 +760,14 @@ two are not distinguished).
 A budget **refusal** is the error envelope with `error.category: "runtime"` (unchanged), plus
 **`error.code: "budget_exceeded"`** and **`error.budget`** — the same shape as above, describing the
 estimate that was refused (`enforced` is `true`, or `"lower_bound"` when the known part of a batch alone
-exceeds the cap). Exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`). `error.code` narrows a
+exceeds the cap). Exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`/`eval`). `error.code` narrows a
 category and never replaces one; it is **absent** on every other error, so `error.code ===
 "budget_exceeded"` is the whole test for "refused on cost" and a load failure is never mistaken for it.
 When the refusal replaces a payload envelope, that payload's findings stay on the error envelope as the
 same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `target`, `scenarios`,
 `skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
-`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`. (Through 4.2.0
+`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`; an `eval` refusal
+carries the `plan` computed before it (and `dryRun: true` on a dry run). (Through 4.2.0
 these went to stderr only, and the message prose was the only discriminator.)
 On `run <dir/>` each scenario is pre-flighted on its own, so the top-level `budget` (merged across every
 scenario checked so far) can differ from `error.budget`, which describes the refused scenario only.
@@ -914,7 +918,7 @@ prints the same exclusion warning the run prints. `verify-run` follows the same 
 not exist or is a file, or a scenario file that does not load, is `usage`; a directory holding no completed
 run stays `runtime`. `answer` splits the same way: a directory or gate that is not there is `usage`; a gate
 request that exists but cannot be read or parsed, or an answer that cannot be written, is `runtime`.
-**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `eval` (and `eval report`) exits `0` when the comparison completed — whatever drops the rows show, unless `--fail-on` was given; `1` for a drop at the `--fail-on` level (`possible` or `confirmed`; no gating without the flag — under `possible` a drop includes an `insufficient_refusals` row, one the candidate's excess `semantic_matches` refusals for unavailable evidence took below the rep threshold, which would otherwise hide a drop as `insufficient`), every row `insufficient`, or a judge model that differed across reps; `2` for a usage error or any refusal before the first run (an alias model, an eval dir inside a git work tree, identical arms, the answer-key guard, a scenario input a run would refuse, an unreachable `--fail-on confirmed`); `3` when an arm snapshot could not be copied or failed its staging preflight. Its `--output-format json` envelope is `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`, with `ok` ⇔ exit `0`. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
+**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `eval` (and `eval report`) exits `0` when the comparison completed — whatever drops the rows show, unless `--fail-on` was given; `1` for a drop at the `--fail-on` level (`possible` or `confirmed`; no gating without the flag — under `possible` a drop includes an `insufficient_refusals` row, one the candidate's excess `semantic_matches` refusals for unavailable evidence took below the rep threshold, which would otherwise hide a drop as `insufficient`), every row `insufficient`, or a judge model that differed across reps; `2` for a usage error or any refusal before the first run (an alias model, an eval dir inside a git work tree, identical arms, the answer-key guard, a scenario input a run would refuse, an unreachable `--fail-on confirmed`, a `--max-budget-usd` refusal — `error.code: "budget_exceeded"`); `3` when an arm snapshot could not be copied or failed its staging preflight. Its `--output-format json` envelope is `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`, with `ok` ⇔ exit `0`. `eval --dry-run` runs no agent and creates no eval dir: it exits `0` with the plan (`{tool, version, command:"eval", ok:true, dryRun:true, plan, budget?, error:null}`), `2` for any refusal the real eval would make before its first run (the budget refusal included), `3` as above (its arm snapshots go to a temp dir that is removed afterwards). `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
 `2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
 shape, unsupported version, unrecognized assertion key) or any per-file throw, plus the batch loop's
 own source-resolution failures (`--assert-from`/`--reassert` drift, scenario-parse errors, `--write`
@@ -1139,6 +1143,18 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `authoredCapture.source`, a section's `kind`, `error.code`. **Adding a key or an enum value is MINOR** — a
   consumer must treat an unknown `docMatchesLive` as not `true` (one validating against an older schema copy
   rejects the new value); removing or renaming a key or a value, or changing a key's type or meaning, is MAJOR.
+- **The planned-schedule cost summary** — `schema/schedule-cost.json`: `plan.cost` under `eval --dry-run
+  --output-format json`, and the same object (one serializer, `scheduleCostJson`) on `hillclimb run --dry-run`.
+  Covered on both commands: `jobs` (agent runs scheduled), `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`,
+  `lowerBound`, `unpriced[]`, `pricedRuns` and `thinnest` (null when nothing is priced). **Their one basis:** each
+  scenario's prior runs in the runs dir's index on the schedule's effective tier (`cowork` resolved) and its
+  baseline, turn 1 only, `hillclimb:`-labelled runs excluded, agent cost only (no judge or decider spend).
+  `worstObservedUsd` is on that same basis — the sum over the priced scenarios of jobs × the most expensive run
+  on it — and is NOT the `--max-budget-usd` gate's figure, which reads a wider basis (any tier, baseline or turn;
+  the experimental `budgetGateWorstUsd`). Each dollar key sums the priced scenarios only; an unpriced one adds $0,
+  is named in `unpriced[]`, and sets `lowerBound`. Every other key of that object (`budgetGateWorstUsd`,
+  `judge*`, `decider*`, `items[]`) is experimental. Adding a key is MINOR; removing or renaming one, or changing
+  its basis or meaning, is MAJOR.
   The published schema stays permissive (no `additionalProperties: false`). Meaning that is covered too: a
   per-assert `docMatchesLive` describes that assert's own document, and the run-level value is `false` whenever a
   drift was detected and accepted (`liveDocDrift[]` non-empty) — it is the value to consume. Exit codes: `0`
@@ -1269,10 +1285,13 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   it stabilizes too.
 - **The `eval` report** — `report.json` (`schemaVersion: 0`), `report.md`, `manifest.json`, `runs.jsonl` and the
   `arms`/`pins`/`sections`/`summary`/`cost` payload of its JSON envelope — plus its row labels and the defaults of
-  its statistical flags (`--reps`, `--alpha`, `--correction`, `--concurrency`, and the `insufficient` threshold).
-  `eval` is EXPERIMENTAL; these are expected to change as the wording and thresholds are tuned. The command name,
-  its `--arm` source grammar, its exit codes (§11) and `--fail-on`'s meaning — no gating unless it is given — are
-  covered.
+  its statistical flags (`--reps`, `--alpha`, `--correction`, `--concurrency`, and the `insufficient` threshold) —
+  and `--dry-run`'s `plan` payload (`schemaVersion: 0`) apart from `plan.cost`'s covered summary keys above,
+  including its estimates, its text, its history window, the 80% power target and its assumed sequential design
+  (`implemented: false`). `eval` is EXPERIMENTAL; these are expected to change as the wording and thresholds are
+  tuned. The command name, its flags (`--dry-run`, `--target-effect` — which requires `--dry-run` — and
+  `--max-budget-usd` included), its `--arm` source grammar, its exit codes (§11), the `budget` marker and
+  `error.code` on it (§11), and `--fail-on`'s meaning — no gating unless it is given — are covered.
 - **The bundled `scenario.py`'s functions, constants and module layout** — the `lint` / `lint-skill` /
   `scaffold` subcommands (and the CLI's passthroughs to them) are the surface; the script is not an
   importable API, and a consumer that vendors or imports a `_helper` from it is copying an implementation

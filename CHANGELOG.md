@@ -42,6 +42,29 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`eval --dry-run` plans an A/B before you spend, and `eval --max-budget-usd` caps it.** A dry run makes every
+  check the real eval makes before its first run, then prints a plan from the runs dir's history and exits 0.
+  It runs no agent, builds no `--decider-cmd` / `--decider-dir` channel, and creates no eval dir (its arm
+  snapshots go to a temp dir that is removed). A refusal is the real eval's refusal, with its exit code.
+  - **Cost at `--reps`:** p50, mean, p95 and worst observed for the 2 × `--reps` runs of every scenario, from
+    each scenario's runs on its effective tier and baseline (first turns only, `hillclimb:` runs left out), the
+    judge's spend beside it, and a LOWER BOUND label wherever a scenario has no priced run.
+  - **Per row:** its historical pass rate, re-scored from the kept `result.json` files by the eval's own
+    classifier, with a 95% interval (THIN under 5 reps, `unknown` with none); the change `--reps` can detect;
+    and, with `--target-effect <pp>`, the smallest `--reps` that detects that change, the smallest with 80%
+    power, and the cost of the eval at each.
+  - A preview of the planned sequential design's first look at which `confirmed` is reachable, beside the
+    fixed design's reachability line.
+  - `--output-format json` prints `{…, dryRun: true, plan}`. **`plan.cost`'s summary keys — `jobs`, `meanUsd`,
+    `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced`, `pricedRuns`, `thinnest` — are a covered
+    surface** on `eval --dry-run` and `hillclimb run --dry-run` (`schema/schedule-cost.json`,
+    [SPEC.md](./SPEC.md) §12); the rest of `plan` is experimental.
+  - `--max-budget-usd <x>`, with or without `--dry-run`, refuses before any run (exit 2, `error.code:
+    "budget_exceeded"`, `budget.basis: "batch"`) when each scenario's worst observed run × its 2 × `--reps` runs
+    sums above x. It is a pre-flight only; judge spend is not counted, as on every other command.
+
+- **A graded `semantic_matches` assert records how its judge was called:** `assertions[].judgeTransport`
+
 - **A graded `semantic_matches` or `semantic_pairwise` assert records how its judge was called:** `assertions[].judgeTransport`
   (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
   `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config), so grades made
