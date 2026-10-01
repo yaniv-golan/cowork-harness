@@ -92,8 +92,13 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
   if (existing.status === "ok") {
     const lacking = keys.filter((k) => readRefDoc(store, i.caseId, k).status !== "ok");
     if (!lacking.length) return { status: "exists", caseId: i.caseId, message: `case ${i.caseId}: already frozen in ${store}` };
-    // Add the lacking keys from the entry's own run: a store entry never mixes documents of two runs.
-    const runDir = expandHome(existing.source.runDir);
+    // Add the lacking keys from the entry's own run: a store entry never mixes documents of two runs. Its recorded
+    // path may be redacted; the run id under the current runs root finds it then.
+    const recorded = expandHome(existing.source.runDir);
+    const runDir =
+      existsSync(join(recorded, "turns")) || existing.source.sessionId === undefined
+        ? recorded
+        : runOutDir(existing.scenario, existing.source.sessionId);
     const rep = existing.source.rep ?? 0;
     if (!existsSync(join(runDir, "turns")))
       return {

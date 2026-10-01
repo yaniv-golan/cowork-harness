@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
 import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
-import { freezeCaseRef, goodRefRows } from "../src/hillclimb/freeze-ref.js";
+import { freezeCaseRef, freezeRefCommand, goodRefRows } from "../src/hillclimb/freeze-ref.js";
 import { flowPairwiseOptions, discoverFlowRefs } from "../src/hillclimb/pairwise.js";
 import { readRefDoc, readRefEntry, verifyStore } from "../src/refs/store.js";
 import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
@@ -270,5 +270,62 @@ describe.runIf(POSIX)("two processes freezing one reference", () => {
     }
     expect(verifyStore(store).problems).toEqual([]);
     expect(readdirSync(store).sort()).toEqual(["case_0", "case_1", "case_2", "case_3", "case_4"]);
+  });
+});
+
+describe.runIf(POSIX)("hillclimb freeze-ref", () => {
+  const SECRET = "sk-test-FREEZE-77";
+  const cmd = (variant: string, caseIds: string[] = []) =>
+    freezeRefCommand({ target: "evals", flowArg: "flow", variant, caseIds, cwd: dir, secrets: [SECRET] });
+
+  it("refuses a bad variant, and a variant with no rows before creating anything", () => {
+    scenario(ONE);
+    mkdirSync(join(dir, "flow"), { recursive: true });
+    expect(() => cmd("v0")).toThrow(/--variant must be 'baseline' or 'v<N>'/);
+    expect(() => cmd("v1")).toThrow(/flow\/v1 has no results\.jsonl — run the variant first/);
+    expect(existsSync(join(dir, "flow", "v1"))).toBe(false);
+  });
+
+  it("freezes from the lowest-rep good row; the store carries no secret and no host path; a re-run reports exists", async () => {
+    const file = scenario(ONE);
+    const sc = parseScenarioFile(file);
+    mkdirSync(join(dir, "flow", "v2"), { recursive: true });
+    const run = await executeScenario(sc, {
+      pairwise: flowPairwiseOptions("alpha", "v2", [{ name: "v2", store: join(dir, "flow", "v2", "ref") }]),
+    });
+    writeFileSync(join(dir, "flow", "v2", "results.jsonl"), results(rowFor(run.outDir, 0)));
+    const r = cmd("v2");
+    expect(r).toMatchObject({ exitCode: 0, frozen: [{ case: "alpha", rep: 0 }], refused: [] });
+    for (const p of readdirSync(join(dir, "flow", "v2", "ref", "alpha"))) {
+      const text = readFileSync(join(dir, "flow", "v2", "ref", "alpha", p), "utf8");
+      expect(text).not.toContain(SECRET);
+      expect(text).not.toContain(dir);
+      expect(text).not.toMatch(/\/(Users|home|var\/folders|private)\//);
+    }
+    expect(readRefEntry(join(dir, "flow", "v2", "ref"), "alpha")).toMatchObject({
+      status: "ok",
+      source: { command: "hillclimb freeze-ref", variant: "v2", rep: 0, sessionId: basename(run.outDir) },
+    });
+    expect(cmd("v2")).toMatchObject({ exitCode: 0, exists: ["alpha"], frozen: [] });
+    // v2 now has a reference: a later pass finds it as a metric column.
+    expect(discoverFlowRefs(join(dir, "flow")).map((x) => x.name)).toEqual(["baseline", "v2"]);
+  });
+
+  it("a case with no good row is refused, exit 1", () => {
+    scenario(ONE);
+    mkdirSync(join(dir, "flow", "baseline"), { recursive: true });
+    writeFileSync(join(dir, "flow", "baseline", "results.jsonl"), results(rowFor("/nope/local_q", 0, { status: "truncated" })));
+    expect(cmd("baseline", ["alpha"])).toMatchObject({
+      exitCode: 1,
+      refused: [{ case: "alpha", why: expect.stringMatching(/no good row/) }],
+    });
+  });
+
+  it("refuses while a live run of the variant holds its lock", () => {
+    scenario(ONE);
+    mkdirSync(join(dir, "flow", "baseline"), { recursive: true });
+    writeFileSync(join(dir, "flow", "baseline", "results.jsonl"), "");
+    writeFileSync(join(dir, "flow", "baseline", ".lock"), JSON.stringify({ pid: process.pid }));
+    expect(() => cmd("baseline")).toThrow(/lock|running/i);
   });
 });

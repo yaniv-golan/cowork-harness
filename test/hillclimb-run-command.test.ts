@@ -522,6 +522,30 @@ describe("runHillclimbCommand", () => {
         });
         expect(err.join("\n")).toMatch(/pairwise refs: baseline .*the scenario `refs:` of alpha is ignored under hillclimb/);
       });
+
+      it("after the pool, a baseline pass freezes each pairwise case's reference — a case with no good row is a counted failure, not an error row", async () => {
+        pairwise();
+        // The fake run records no pairwise outcome, so its evidence reads as refused: win_present 0, no good row.
+        const r = await runHillclimbCommand(args("--approve-harness"), deps());
+        expect(r.exitCode).toBe(1);
+        expect(r.scored).toBe(1);
+        const text = err.join("\n");
+        expect(text).toMatch(/alpha: the baseline reference was not frozen — case alpha: no good row/);
+        expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
+        expect(
+          existsSync(join(cwd, "flow", "baseline", "errors.jsonl"))
+            ? readFileSync(join(cwd, "flow", "baseline", "errors.jsonl"), "utf8").trim()
+            : "",
+        ).toBe("");
+        // The row carries the pairwise columns, measured as not compared.
+        expect(rows()[0]!.grade).toMatchObject({ win_present: 0 });
+      });
+
+      it("a dry run says how many judge calls a rep makes, outside the agent-spend estimate", async () => {
+        pairwise();
+        await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+        expect(err.join("\n")).toMatch(/pairwise judging \(experimental; not in the estimate.*\): up to 0 judge call\(s\) per rep/);
+      });
     });
 
     it("a flow with no judge and no LLM answering never asks", async () => {

@@ -3,6 +3,7 @@
 // captured — and say whether it equals what the live run's judge read.
 
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import { COMPOSER_ID, judgedOpts, semanticRefusal, type AssertContext } from "../assert.js";
 import { pathSafeId } from "../hillclimb/ids.js";
 import { tildeify } from "../io.js";
@@ -117,8 +118,11 @@ export function composeFromRunDir(
       command: cmd,
       ...(by.variant !== undefined ? { variant: by.variant } : {}),
       ...(by.rep !== undefined ? { rep: by.rep } : {}),
-      runDir: scrub(tildeify(runDir), secrets),
+      // Redacted like every string in the entry; the run id (the dir's name, never a path) is kept beside it, so a
+      // later `hillclimb freeze-ref` can still find the run under the runs root.
+      runDir: redactDeep(tildeify(runDir), secrets),
       resultSha256,
+      sessionId: basename(runDir),
     },
     harnessVersion: pkgVersion(),
     composerId: COMPOSER_ID,
