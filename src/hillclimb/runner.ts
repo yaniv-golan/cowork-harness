@@ -223,7 +223,7 @@ async function run(
     const own = tracked.get(v);
     if (own !== undefined && [...own].some((t) => t !== mine))
       throw new UsageError(
-        `variant ${v}'s rows track ${trackedText(own)}, and this pass would track ${trackedText(new Set([mine]))}: one column would mix two skills — run the switch as a new variant (or keep the selection the rows were run with)`,
+        `variant ${v}'s rows track ${trackedText(own)}, and this pass would track ${trackedText(new Set([mine]))}: one column would mix two skills — run the switch as a new variant, or keep the --skill the rows were run with (rows from before skill tracking was recorded track no skill: continue them in a fresh flow)`,
       );
     tracked.set(v, new Set([mine]));
     if (new Set([...tracked.values()].flatMap((s) => [...s])).size > 1)
