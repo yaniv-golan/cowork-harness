@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
-import { claudeCliComplete } from "../src/decide/llm-transport.js";
+import {
+  claudeCliComplete,
+  defaultManagedMcpPath,
+  helpDeclaresFlag,
+  isolationRefusal,
+  resetIsolationPreflight as resetPreflight,
+  transportIdentity,
+} from "../src/decide/llm-transport.js";
+import { makeSemanticJudge } from "../src/decide/semantic-judge.js";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +20,34 @@ let binPath: string;
 let counterPath: string;
 
 const FAKE = `#!/bin/sh
+# The isolation preflight probes --help / --version: answer without counting a model call.
+if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi
+if [ "$1" = "--help" ]; then
+  if [ "$FAKE_HELP_MODE" = "crash" ]; then exit 3; fi
+  if [ -n "$FAKE_HELP_COUNTER" ]; then h=$(cat "$FAKE_HELP_COUNTER" 2>/dev/null || echo 0); echo $((h + 1)) > "$FAKE_HELP_COUNTER"; fi
+  echo "Usage: claude [options]"
+  if [ "$FAKE_HELP_MODE" = "unknown" ]; then
+    # Some other help layout: every flag is named, but none as a two-space option line.
+    printf '\\t--safe-mode\\n\\t--strict-mcp-config\\n\\t--no-session-persistence\\n\\t--setting-sources\\n\\t--tools\\n'
+    exit 0
+  fi
+  if [ "$FAKE_HELP_MODE" = "described-only" ]; then
+    # The flags appear only inside another option's wrapped description (as --tools and --strict-mcp-config do in
+    # the real 2.1.286 help) — the old unanchored match counted these.
+    echo "  --mcp-config <configs...>             Load MCP servers; --safe-mode ignores user ones, add"
+    echo "                                        --strict-mcp-config to skip them, --no-session-persistence"
+    echo "                                        --setting-sources and --tools still apply"
+    exit 0
+  fi
+  if [ "$FAKE_HELP_MODE" != "old" ]; then
+    echo "  --safe-mode                           Start with all customizations disabled"
+    echo "  --strict-mcp-config                   Only use MCP servers from --mcp-config"
+    echo "  --no-session-persistence              Disable session persistence"
+  fi
+  echo "  --setting-sources <sources>           Comma-separated list of setting sources"
+  echo "  --tools <tools...>                    Specify the list of available tools"
+  exit 0
+fi
 n=$(cat "$FAKE_COUNTER" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" > "$FAKE_COUNTER"
@@ -46,6 +82,13 @@ case "$FAKE_MODE" in
   aux-ambiguous)
     echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-sonnet-5":{},"claude-sonnet-5[1m]":{}}}'
     exit 0 ;;
+  enterprise-mcp)
+    # A managed config the harness did not find: the real CLI refuses --strict-mcp-config, and runs without it.
+    case " $* " in *" --strict-mcp-config "*)
+      echo "Error: You cannot use --strict-mcp-config when an enterprise MCP config is present" >&2
+      exit 1 ;;
+    esac
+    echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-sonnet-5":{}}}'; exit 0 ;;
   aux-none)
     echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-haiku-4-5-20251001":{},"claude-opus-5":{}}}'
     exit 0 ;;
@@ -56,6 +99,12 @@ esac
 
 function invocations(): number {
   return existsSync(counterPath) ? Number(readFileSync(counterPath, "utf8").trim()) || 0 : 0;
+}
+
+/** Forget the cached probes; the enterprise-MCP check looks at a path that never exists, so the argv the suite
+ *  expects does not depend on whether this machine has a real managed MCP config. */
+function resetIsolationPreflight(managedMcpPath = join(dir, "no-managed-mcp.json")): void {
+  resetPreflight(managedMcpPath);
 }
 
 let prevForbid: string | undefined;
@@ -71,6 +120,7 @@ beforeAll(() => {
   counterPath = join(dir, "counter");
   writeFileSync(binPath, FAKE, { mode: 0o755 });
   process.env.COWORK_HARNESS_CLAUDE_BIN = binPath;
+  resetIsolationPreflight();
 });
 
 afterEach(() => {
@@ -90,6 +140,7 @@ afterAll(() => {
   if (prevForbid === undefined) delete process.env.COWORK_HARNESS_FORBID_SPAWN;
   else process.env.COWORK_HARNESS_FORBID_SPAWN = prevForbid;
   delete process.env.COWORK_HARNESS_CLAUDE_BIN;
+  resetPreflight();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -232,6 +283,148 @@ describe("claudeCliComplete — retry transport", () => {
     expect(argv).not.toContain(secret);
   });
 
+  it("every call runs the host claude isolated: no tools, safe mode, no MCP, no saved session, user settings only", async () => {
+    process.env.FAKE_COUNTER = counterPath;
+    const argvFile = join(dir, "argv-iso.out");
+    process.env.FAKE_ARGV_FILE = argvFile;
+    await claudeCliComplete("q", "m");
+    // One argv element per line; the trailing newline of the last (empty) `--tools` value leaves one more "".
+    const argv = readFileSync(argvFile, "utf8").split("\n").slice(0, -1);
+    // The whole argv, in order: every isolation flag arrives as its OWN element (nothing swallowed by the
+    // empty --tools value), and the variadic --tools comes last.
+    expect(argv).toEqual([
+      "-p",
+      "--model",
+      "m",
+      "--output-format",
+      "json",
+      "--safe-mode",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--setting-sources",
+      "user",
+      "--tools",
+      "",
+    ]);
+  });
+
+  it("an older host claude without the isolation flags is refused with an actionable message, before any model call", async () => {
+    resetIsolationPreflight();
+    process.env.FAKE_COUNTER = counterPath;
+    process.env.FAKE_HELP_MODE = "old";
+    try {
+      await expect(claudeCliComplete("q", "m")).rejects.toThrow(/--safe-mode[\s\S]*--strict-mcp-config[\s\S]*upgrade/);
+      expect(invocations()).toBe(0); // no model call was spawned
+    } finally {
+      delete process.env.FAKE_HELP_MODE;
+      resetIsolationPreflight();
+    }
+  });
+
+  it("the --help probe runs once per binary, not once per call", async () => {
+    resetIsolationPreflight();
+    const helpCounter = join(dir, "help-counter");
+    process.env.FAKE_HELP_COUNTER = helpCounter;
+    process.env.FAKE_COUNTER = counterPath;
+    try {
+      await claudeCliComplete("q", "m");
+      await claudeCliComplete("q", "m");
+      expect(Number(readFileSync(helpCounter, "utf8").trim())).toBe(1);
+    } finally {
+      delete process.env.FAKE_HELP_COUNTER;
+    }
+  });
+
+  for (const mode of ["unknown", "described-only"]) {
+    it(`an unrecognised --help layout (${mode}) fails CLOSED: refused, no model call`, async () => {
+      resetIsolationPreflight();
+      process.env.FAKE_COUNTER = counterPath;
+      process.env.FAKE_HELP_MODE = mode;
+      try {
+        await expect(claudeCliComplete("q", "m")).rejects.toThrow(
+          /does not accept --safe-mode, --strict-mcp-config, --no-session-persistence, --setting-sources, --tools/,
+        );
+        expect(invocations()).toBe(0);
+      } finally {
+        delete process.env.FAKE_HELP_MODE;
+        resetIsolationPreflight();
+      }
+    });
+  }
+
+  it("a probe that could not run is not remembered: the binary appearing later is accepted", async () => {
+    resetIsolationPreflight();
+    const later = join(dir, "later-claude.sh");
+    process.env.COWORK_HARNESS_CLAUDE_BIN = later;
+    process.env.FAKE_COUNTER = counterPath;
+    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/failed to spawn/);
+    writeFileSync(later, FAKE, { mode: 0o755 });
+    await expect(claudeCliComplete("q", "m")).resolves.toMatchObject({ text: "OK-ANSWER" });
+  });
+
+  it("with an enterprise managed-mcp.json, the call leaves out only --strict-mcp-config and still runs", async () => {
+    const managed = join(dir, "managed-mcp.json");
+    writeFileSync(managed, "{}");
+    resetIsolationPreflight(managed);
+    process.env.FAKE_COUNTER = counterPath;
+    const argvFile = join(dir, "argv-managed.out");
+    process.env.FAKE_ARGV_FILE = argvFile;
+    try {
+      expect(isolationRefusal()).toBeUndefined();
+      await expect(claudeCliComplete("q", "m")).resolves.toMatchObject({ text: "OK-ANSWER" });
+      const argv = readFileSync(argvFile, "utf8").split("\n").slice(0, -1);
+      expect(argv).toEqual([
+        "-p",
+        "--model",
+        "m",
+        "--output-format",
+        "json",
+        "--safe-mode",
+        "--no-session-persistence",
+        "--setting-sources",
+        "user",
+        "--tools",
+        "",
+      ]);
+    } finally {
+      rmSync(managed);
+      resetIsolationPreflight();
+    }
+  });
+
+  it("the CLI's own enterprise-MCP refusal (a managed config elsewhere) is retried once without --strict-mcp-config, then remembered", async () => {
+    process.env.FAKE_MODE = "enterprise-mcp";
+    process.env.FAKE_COUNTER = counterPath;
+    process.env.COWORK_HARNESS_LLM_RETRIES = "0"; // the retry is not one of the transient-exit retries
+    const argvFile = join(dir, "argv-relocated.out");
+    process.env.FAKE_ARGV_FILE = argvFile;
+    resetIsolationPreflight();
+    try {
+      await expect(claudeCliComplete("q", "m")).resolves.toMatchObject({ text: "OK-ANSWER" });
+      expect(invocations()).toBe(2);
+      const argv = readFileSync(argvFile, "utf8").split("\n");
+      expect(argv).not.toContain("--strict-mcp-config");
+      expect(argv).toContain("--safe-mode");
+      await expect(claudeCliComplete("q", "m")).resolves.toMatchObject({ text: "OK-ANSWER" });
+      expect(invocations()).toBe(3); // straight through, no refused attempt first
+    } finally {
+      resetIsolationPreflight();
+    }
+  });
+
+  it("a --help that crashes with no output is refused, and not remembered as an old CLI", async () => {
+    resetIsolationPreflight();
+    process.env.FAKE_COUNTER = counterPath;
+    process.env.FAKE_HELP_MODE = "crash";
+    try {
+      await expect(claudeCliComplete("q", "m")).rejects.toThrow(/printed nothing for `--help` \(exit 3\)/);
+      expect(invocations()).toBe(0);
+    } finally {
+      delete process.env.FAKE_HELP_MODE;
+    }
+    await expect(claudeCliComplete("q", "m")).resolves.toMatchObject({ text: "OK-ANSWER" });
+  });
+
   it("a malformed COWORK_HARNESS_LLM_TIMEOUT_MS is rejected loud, not silently reverted", async () => {
     process.env.FAKE_COUNTER = counterPath;
     process.env.COWORK_HARNESS_LLM_TIMEOUT_MS = "5m";
@@ -262,5 +455,77 @@ describe("claudeCliComplete — retry transport", () => {
       spy.mockRestore();
     }
     expect(warnings.join("")).toMatch(/COWORK_HARNESS_LLM_MAX_BYTES.*not a positive number/s);
+  });
+});
+
+describe("isolationRefusal — the pre-spend form of the preflight", () => {
+  it("returns the actionable message for an older CLI, undefined for a current one, and never throws", () => {
+    resetIsolationPreflight();
+    process.env.FAKE_HELP_MODE = "old";
+    try {
+      expect(isolationRefusal()).toMatch(/does not accept --safe-mode.*2\.1\.197 or later/s);
+    } finally {
+      delete process.env.FAKE_HELP_MODE;
+      resetIsolationPreflight();
+    }
+    expect(isolationRefusal()).toBeUndefined();
+  });
+});
+
+describe("transport identity", () => {
+  it("records the isolation level and the host CLI version, probed once", async () => {
+    resetIsolationPreflight();
+    expect(transportIdentity()).toEqual({ isolation: "1", cliVersion: "9.9.9" });
+  });
+  it("records strictMcp: false when the call leaves out --strict-mcp-config for an enterprise MCP config", () => {
+    const managed = join(dir, "managed-mcp-identity.json");
+    writeFileSync(managed, "{}");
+    resetIsolationPreflight(managed);
+    try {
+      expect(transportIdentity()).toEqual({ isolation: "1", cliVersion: "9.9.9", strictMcp: false });
+    } finally {
+      rmSync(managed);
+      resetIsolationPreflight();
+    }
+  });
+  it("launches nothing under the spawn guard: the version is then unrecorded", () => {
+    resetIsolationPreflight();
+    const prev = process.env.COWORK_HARNESS_FORBID_SPAWN;
+    process.env.COWORK_HARNESS_FORBID_SPAWN = "1";
+    try {
+      expect(transportIdentity()).toEqual({ isolation: "1" });
+    } finally {
+      process.env.COWORK_HARNESS_FORBID_SPAWN = prev;
+      resetIsolationPreflight();
+    }
+  });
+  it("the real-transport judge records it on every call; an injected one does not", async () => {
+    resetIsolationPreflight();
+    process.env.FAKE_COUNTER = counterPath;
+    const real = makeSemanticJudge({ model: "m" });
+    await real(["c"], "doc").catch(() => undefined); // the fake's reply is not a grade; the identity is set before parsing
+    expect(real.transport).toEqual({ isolation: "1", cliVersion: "9.9.9" });
+    const stub = makeSemanticJudge({ model: "m", complete: async () => ({ text: '{"results":[{"index":0,"pass":true}]}', model: "m" }) });
+    await stub(["c"], "doc");
+    expect(stub.transport).toBeUndefined();
+  });
+});
+
+describe("helpDeclaresFlag / defaultManagedMcpPath", () => {
+  it("matches an option line only: two-space indent, the flag, then a separator", () => {
+    expect(helpDeclaresFlag("  --tools <tools...>   Specify", "--tools")).toBe(true);
+    expect(helpDeclaresFlag("  --safe-mode", "--safe-mode")).toBe(true);
+    expect(helpDeclaresFlag("                    --tools names them", "--tools")).toBe(false);
+    expect(helpDeclaresFlag("  --tools-extra <x>", "--tools")).toBe(false);
+    expect(helpDeclaresFlag("\t--tools", "--tools")).toBe(false);
+    // The flag is matched literally, never as a pattern: "." does not stand for any character.
+    expect(helpDeclaresFlag("  --a.b <x>", "--a.b")).toBe(true);
+    expect(helpDeclaresFlag("  --aXb <x>", "--a.b")).toBe(false);
+    expect(helpDeclaresFlag("  --tools\r", "--tools")).toBe(true);
+  });
+  it("names Claude Code's managed-settings directory per platform", () => {
+    expect(defaultManagedMcpPath("darwin")).toBe("/Library/Application Support/ClaudeCode/managed-mcp.json");
+    expect(defaultManagedMcpPath("linux")).toBe("/etc/claude-code/managed-mcp.json");
+    expect(defaultManagedMcpPath("win32")).toBe("C:\\Program Files\\ClaudeCode\\managed-mcp.json");
   });
 });

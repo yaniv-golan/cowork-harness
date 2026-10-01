@@ -186,6 +186,7 @@ run, under the constraints it will meet in production".
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
 >   - **A Claude token** — real per-run cost, runs take minutes; mint one with `claude setup-token` (needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`).
 >   - **A runtime** — **Docker (arm64)** for `container` / `hostloop`, or **Lima (Apple-VZ)** for `microvm`.
+>   - **Claude Code 2.1.197 or later** on the host, if a scenario uses the `semantic_matches` judge or the LLM decider, or you run `critique` — those calls run isolated and tool-less, and an older CLI is refused up front.
 >   - The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it still needs the token. Run `cowork-harness doctor --tier <t>` to check exactly what a given tier needs.
 > - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page.
 

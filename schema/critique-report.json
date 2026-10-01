@@ -321,6 +321,12 @@
       "type": "string",
       "description": "the transport-RESOLVED evaluator model (never the requested alias); present only when the evaluator completed"
     },
+    "evaluatorTransport": {
+      "type": "object",
+      "description": "how the evaluator's calls were made: `isolation` (the level of isolation from the operator's own Claude Code setup) the host CLI's `cliVersion`, and `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config; present with evaluatorModel",
+      "properties": { "isolation": { "type": "string" }, "cliVersion": { "type": "string" }, "strictMcp": { "const": false } },
+      "required": ["isolation"]
+    },
     "items": {
       "type": "array",
       "description": "the citation-validated findings from both passes. citationResolved:false = the cited excerpt did not resolve verbatim against the evidence package (DROPPED section — transparency only, do not act on as-is)",

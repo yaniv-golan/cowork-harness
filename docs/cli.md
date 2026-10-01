@@ -116,6 +116,7 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
    - **Which file supplied your credential:** loading is silent, with one exception. When `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` comes from `<install>/.env` and you are running from another directory, stderr gets one line naming the variables and the file (never the values): `[env] using CLAUDE_CODE_OAUTH_TOKEN from ~/code/cowork-harness/.env (the install's .env, not this directory's)`. A run started with `node <clone>/dist/cli.js` from elsewhere is billed to that clone's credential; to use another, export it, put it in `./.env` or pass `--dotenv`. A `--dotenv` given after the subcommand is read later, so when it replaces that credential a second line names it: `[env] CLAUDE_CODE_OAUTH_TOKEN from ~/work/my.env (replacing the install's .env)`. `COWORK_HARNESS_DEBUG=1` lists every loaded key.
    - **Placement:** keep `.env` at a working-dir or install root, never inside a mounted skill/project folder.
    - **Global install:** find the package root with `` `$(npm root -g)/cowork-harness` `` (e.g. `$(npm root -g)/cowork-harness/.env`) — or simpler, just use `--dotenv <path>` / `./.env` in your working directory, which take priority over the package root anyway.
+4. **Claude Code 2.1.197 or later on the host, for the judge, the LLM decider and `critique`.** A `semantic_matches` assert, `on_unanswered: llm` / `--decider-llm` and `critique` call the host `claude`, isolated from your own setup (see `COWORK_HARNESS_CLAUDE_BIN` under [Advanced / internal escape hatches](#advanced--internal-escape-hatches)); an older CLI is refused before the run spends anything. Runs that use none of them do not need it.
 
 > `sync` (below) is **optional for a first run** — the repo ships `baselines/desktop-*.json`, so `baseline: latest` already resolves. Run `sync` only to refresh the platform baseline after Claude Desktop updates. (`sync` is **macOS-only** today; on Linux/Windows use the committed baselines — they work cross-platform.)
 
@@ -853,7 +854,20 @@ Rarely needed.
 
 - `PYTHON` — overrides the interpreter for `lint` / scenario tooling (default `python3`).
 - `COWORK_HARNESS_DEBUG=1` — surfaces which `.env` files were loaded.
-- `COWORK_HARNESS_CLAUDE_BIN=<path>` — points the `--decider-llm` transport at a specific `claude` binary.
+- `COWORK_HARNESS_CLAUDE_BIN=<path>` — points the host `claude` calls at a specific binary. Every model call the
+  harness makes through it — the `semantic_matches` judge, the LLM decider and the `critique` evaluator — runs
+  **isolated from your own Claude Code setup**: no tools (`--tools ""`), no CLAUDE.md, skills, plugins, hooks or MCP
+  servers (`--safe-mode`, `--strict-mcp-config`), no project or local settings from the directory the harness runs
+  in (`--setting-sources user`), and no session saved (`--no-session-persistence`). Your user settings still apply
+  (their `env`, `apiKeyHelper` and model settings), as do managed and policy settings; auth configured only in a
+  project's `.claude/settings.json` is not read. On a machine with an enterprise MCP config — a
+  `managed-mcp.json` in Claude Code's managed-settings directory
+  (`/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on Linux, `C:\Program Files\ClaudeCode\`
+  on Windows) — the call leaves out `--strict-mcp-config`, which Claude Code refuses beside one; `--safe-mode` still
+  keeps every MCP server out, your organisation's managed ones included, while its managed hooks and policy
+  settings still apply. A managed config at another path makes Claude Code refuse `--strict-mcp-config`; the call is
+  then retried once without it, before any model call. This needs **Claude Code 2.1.197 or later** on
+  the host; an older one is refused before any model call, saying why and what to do.
 - `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` — lets the harness use the newest sibling agent binary when the baseline-pinned version is missing (a fidelity compromise — off by default). A same-major.minor **patch** bump of the staged NATIVE binary is auto-accepted without this flag (the native binary carries no sha256 pin, so a patch drift is safe by default; it prints a loud stderr note naming the pinned and substituted versions). At `hostloop`, and at `cowork` **only when it resolves to host-loop** on the synced baseline, the staged **VM ELF** is auto-accepted on a patch bump too, because on that path it's a non-executed parity mount into the bash sidecar; a `cowork` baseline that resolves to VM-loop instead executes the ELF directly, so it keeps the strict sha-pinned exact-version match, same as `container`/`microvm`, which always keep it (the ELF is the executed agent there), so the flag remains required for any ELF drift on those tiers/paths, and for a major/minor gap everywhere.
 - `COWORK_MANAGED_CONFIG=1` — forces the managed-config path on `protocol`, and `=0` suppresses the token-derived managed branch there (leaving the `ANTHROPIC_API_KEY` CI path intact); any other value is rejected rather than silently picking a branch.
 - `COWORK_HARNESS_ALLOW_MISSING_PROMPT=1` — downgrades a missing prompt asset to a warning.

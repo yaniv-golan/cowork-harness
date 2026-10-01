@@ -319,6 +319,8 @@ export type SemanticJudge = ((rubric: string[], answer: string) => Promise<Seman
   lastUsage?: TokenUsage;
   /** Identity of the grading-prompt template this judge uses (`JUDGE_PROMPT_HASH`). A stub may omit it. */
   promptHash?: string;
+  /** How the judge's call was made (isolation level, host CLI version), set per call by the real transport. */
+  transport?: import("./decide/llm-transport.js").TransportIdentity;
 };
 /** WHY a `semantic_matches` assert refused, or WHAT a scoped one graded — the typed companion to the
  *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are TEN distinct
@@ -352,6 +354,7 @@ export interface AssertContext {
   judgedDocs?: Map<Assertion, JudgedDocFingerprint>;
   /** The grading-prompt template hash of the judge that graded each assert. Populated by runSemanticJudges. */
   judgePromptHashes?: Map<Assertion, string>;
+  judgeTransports?: Map<Assertion, import("./decide/llm-transport.js").TransportIdentity>;
   /** `semantic_matches` asserts whose judge grade was INVALID (malformed/ambiguous after a retry) —
    *  populated by runSemanticJudges. Distinct from "not graded": the check surfaces `judgeInvalid:true` so
    *  a consumer counts the rep as invalid, never silently drops it (which would inflate the score). */
@@ -988,6 +991,7 @@ export async function runSemanticJudges(
   if (!ctx.judgeUsages) ctx.judgeUsages = new Map();
   if (!ctx.judgedDocs) ctx.judgedDocs = new Map();
   if (!ctx.judgePromptHashes) ctx.judgePromptHashes = new Map();
+  if (!ctx.judgeTransports) ctx.judgeTransports = new Map();
   if (!ctx.judgeInvalid) ctx.judgeInvalid = new Set();
   if (!ctx.semanticDocInfo) ctx.semanticDocInfo = new Map();
   if (!ctx.semanticRefused) ctx.semanticRefused = new Map();
@@ -1083,6 +1087,7 @@ export async function runSemanticJudges(
     if (cost !== undefined) ctx.judgeCosts.set(a, cost);
     if (tokens !== undefined) ctx.judgeUsages.set(a, tokens);
     if (j.promptHash) ctx.judgePromptHashes.set(a, j.promptHash);
+    if (j.transport) ctx.judgeTransports.set(a, j.transport);
     // Record provenance AFTER the call, not before: `j.model` may be a factory-time alias (e.g. "opus")
     // until the transport resolves it per-call to a concrete id (`makeSemanticJudge` mutates `.model` onto
     // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
@@ -3604,6 +3609,7 @@ function check(
   const judgeUsage = a.semantic_matches !== undefined ? ctx.judgeUsages?.get(a) : undefined;
   const judgedDoc = a.semantic_matches !== undefined ? ctx.judgedDocs?.get(a) : undefined;
   const judgePromptHash = a.semantic_matches !== undefined ? ctx.judgePromptHashes?.get(a) : undefined;
+  const judgeTransport = a.semantic_matches !== undefined ? ctx.judgeTransports?.get(a) : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
     ...(semanticClaims ? { semanticClaims } : {}),
@@ -3612,6 +3618,7 @@ function check(
     ...(judgeUsage ? { judgeUsage } : {}),
     ...(judgedDoc ? { judgedDoc } : {}),
     ...(judgePromptHash ? { judgePromptHash } : {}),
+    ...(judgeTransport ? { judgeTransport } : {}),
     ...(judgeInvalid ? { judgeInvalid } : {}),
     ...(semanticEvidence ? { semanticEvidence } : {}),
   });
