@@ -1595,9 +1595,9 @@ const SCRATCHPAD_PREFIX = "scratchpad/";
  *  why on stderr passes hook_event_fired, so this reads the text it printed. Never vacuous: no frame for the event
  *  fails both keys, because a disabled or misplaced hook is exactly what the negative form guards against.
  *
- *  Redaction follows the `tool_not_called` object rules: a needle a redaction policy rewrote is unknowable; a hit is
- *  judged with every token replaced by a sentinel no needle can match into; and a MISS on a token-bearing stream is
- *  unknown for the negative key, since the replaced bytes might have matched. */
+ *  Redaction follows the `tool_not_called` object rules: a needle a redaction policy rewrote is unknowable; a literal
+ *  HIT counts only when the text lies wholly inside one stretch of bytes the policy left alone (between tokens); and a
+ *  MISS on a token-bearing stream is unknown, since the replaced bytes might have held it. */
 function checkHookOutput(
   key: "hook_output_contains" | "hook_output_not_contains",
   spec: { event: string; stream?: "stdout" | "stderr" | "any"; text?: string; matches?: string },
@@ -1614,18 +1614,38 @@ function checkHookOutput(
     return fail(
       `evidence unavailable: ${key}'s ${spec.text !== undefined ? "text" : "regex"} was rewritten by the cassette's redaction policy — it cannot be evaluated on replay. Match a literal the policy does not rewrite, or check it on a live run`,
     );
-  // Over output a redaction policy rewrote, a LITERAL hit is still trustworthy — with every token replaced by a
-  // sentinel no text can contain, it lies in bytes the policy left alone — but a literal miss is not (the replaced
-  // bytes might have held it), and a REGEX says nothing either way (`.`, `[^/]` or a lookahead match the token's own
-  // text). Such a stream is `unknown`.
-  let judge: (s: string) => "hit" | "miss" | "unknown";
+  // Over output a redaction policy rewrote, a LITERAL hit is still trustworthy when it sits inside one untouched
+  // segment between tokens — those bytes are the hook's own — but a literal miss is not (the replaced bytes might
+  // have held it), and a REGEX says nothing either way (`.`, `[^/]` or a lookahead match the token's own text).
+  // Such a stream is `unknown`. A hit carries its offset in the stream, so the excerpt can be centred on it.
+  type Judged = { hit: true; at: number; len: number } | { hit: false; unknown: boolean };
+  let judge: (s: string) => Judged;
   if (spec.text !== undefined) {
     const t = spec.text;
-    judge = (s) => (s.replace(REDACTION_TOKEN_RE, "\u0000").includes(t) ? "hit" : hasRedactionToken(s) ? "unknown" : "miss");
+    judge = (s) => {
+      // The untouched segments between tokens, with their offsets in `s` (matchAll clones the global regex, so
+      // REDACTION_TOKEN_RE's lastIndex is never read or left behind).
+      let from = 0;
+      const segments: { start: number; text: string }[] = [];
+      for (const m of s.matchAll(REDACTION_TOKEN_RE)) {
+        segments.push({ start: from, text: s.slice(from, m.index) });
+        from = m.index + m[0].length;
+      }
+      segments.push({ start: from, text: s.slice(from) });
+      for (const seg of segments) {
+        const i = seg.text.indexOf(t);
+        if (i >= 0) return { hit: true, at: seg.start + i, len: t.length };
+      }
+      return { hit: false, unknown: hasRedactionToken(s) };
+    };
   } else {
     const c = compileUserRegex(spec.matches!);
     if ("error" in c) return fail(`${key}: bad regex "${spec.matches}": ${c.error}`);
-    judge = (s) => (hasRedactionToken(s) ? "unknown" : c.re.test(s) ? "hit" : "miss");
+    judge = (s) => {
+      if (hasRedactionToken(s)) return { hit: false, unknown: true };
+      const m = c.re.exec(s);
+      return m ? { hit: true, at: m.index, len: m[0].length } : { hit: false, unknown: false };
+    };
   }
   const stream = spec.stream ?? "any";
   const fields = stream === "any" ? (["stdout", "stderr"] as const) : ([stream] as const);
@@ -1636,44 +1656,79 @@ function checkHookOutput(
     return fail(
       `${key}: no hook_response frame for \`${spec.event}\` was recorded — the staged plugin declares no such hook, the hook never ran, its hooks.json is not at <plugin>/hooks/hooks.json (the root is silently ignored), or the recording predates --include-hook-events`,
     );
-  const excerpt = (s: string) => {
-    const one = scrubForTerminal(s.replace(REDACTION_TOKEN_RE, "(redacted)")).replace(/\s+/g, " ").trim();
-    return JSON.stringify(one.length > 200 ? `${one.slice(0, 200)}…` : one);
+  // One line, ≤ EXCERPT chars of the stream, centred on the hit when there is one. The window is widened rather
+  // than cut through a redaction token, so a half-token never reaches the message as if it were the hook's text.
+  const EXCERPT = 200;
+  const excerpt = (s: string, at = 0, len = 0) => {
+    let start = 0;
+    let end = s.length;
+    if (s.length > EXCERPT) {
+      start = Math.max(0, Math.min(at + Math.floor(len / 2) - EXCERPT / 2, s.length - EXCERPT));
+      end = start + EXCERPT;
+      for (const m of s.matchAll(REDACTION_TOKEN_RE)) {
+        const a = m.index;
+        const b = a + m[0].length;
+        if (a < start && b > start) start = a;
+        if (a < end && b > end) end = b;
+      }
+    }
+    let one = scrubForTerminal(s.slice(start, end).replace(REDACTION_TOKEN_RE, "(redacted)")).replace(/\s+/g, " ").trim();
+    let cut = end < s.length;
+    if (one.length > EXCERPT) {
+      one = one.slice(0, EXCERPT);
+      cut = true;
+    }
+    return JSON.stringify(`${start > 0 ? "…" : ""}${one}${cut ? "…" : ""}`);
   };
+  // At most this many frames are listed in a message; an event can fire dozens of times (each PreToolUse).
+  const LISTED = 5;
+  const listed = <T>(xs: T[], show: (x: T) => string) =>
+    xs.slice(0, LISTED).map(show).join("; ") + (xs.length > LISTED ? `; +${xs.length - LISTED} more` : "");
   const name = (e: (typeof frames)[number]) => (typeof e.data?.hook_name === "string" ? e.data.hook_name : spec.event);
   const read = frames.map((e) => {
     const texts = fields.map((f) => (typeof e.data?.[f] === "string" ? (e.data[f] as string) : undefined));
     const present = texts.filter((t): t is string => t !== undefined);
+    const judged = present.map((t) => ({ t, j: judge(t) }));
+    const hit = judged.find((x) => x.j.hit);
     return {
       e,
       present,
       missing: texts.length - present.length,
-      hit: present.find((t) => judge(t) === "hit"),
-      unknown: present.some((t) => judge(t) === "unknown"),
+      hit: hit && hit.j.hit ? { text: hit.t, at: hit.j.at, len: hit.j.len } : undefined,
+      unknown: judged.some((x) => !x.j.hit && x.j.unknown),
     };
   });
   const hitFrames = read.filter((r) => r.hit !== undefined);
+  const exitOf = (r: (typeof read)[number]) => (typeof r.e.data?.exit_code === "number" ? r.e.data.exit_code : "unknown");
   if (!negative) {
-    if (hitFrames.length > 0)
+    if (hitFrames.length > 0) {
+      const h = hitFrames[0]!.hit!;
       return {
         pass: true,
-        evidence: `${key}: ${name(hitFrames[0]!.e)} printed ${shownNeedle} on ${where}: ${excerpt(hitFrames[0]!.hit!)}`,
+        evidence: `${key}: ${name(hitFrames[0]!.e)} printed ${shownNeedle} on ${where}: ${excerpt(h.text, h.at, h.len)}`,
       };
-    const unreadable = read.filter((r) => r.present.length === 0).length;
+    }
+    // Not found — and when a frame lacks a selected field, or carries output a redaction policy rewrote, that is
+    // not a shown absence: the unread bytes might have held it. Labelled evidence-unavailable on the same rule the
+    // negative key uses (any selected field missing on any frame), so the two keys never disagree on what counts.
+    const unreadable = read.filter((r) => r.missing > 0).length;
     const unknown = read.filter((r) => r.unknown).length;
-    const seen = read.map((r) => `${name(r.e)}: ${r.present.length ? r.present.map(excerpt).join(" / ") : "(no output field)"}`).join("; ");
-    // Not found — but output the check could not read, or that a redaction policy rewrote, might have held it.
+    const seen = listed(
+      read,
+      (r) => `${name(r.e)}: ${r.present.length ? r.present.map((t) => excerpt(t)).join(" / ") : "(no output field)"}`,
+    );
     return fail(
-      `${unreadable === read.length || unknown ? "evidence unavailable: " : ""}${key}: no \`${spec.event}\` hook printed ${shownNeedle} on ${where} across ${frames.length} frame(s)${
+      `${unreadable || unknown ? "evidence unavailable: " : ""}${key}: no \`${spec.event}\` hook printed ${shownNeedle} on ${where} across ${frames.length} frame(s)${
         unknown ? ` (${unknown} carry output rewritten by a redaction policy)` : ""
-      }${unreadable ? ` (${unreadable} without the field)` : ""} — seen: ${seen}`,
+      }${unreadable ? ` (${unreadable} without the ${where === "stdout or stderr" ? "stdout or stderr" : where} field)` : ""} — seen: ${seen}`,
     );
   }
   if (hitFrames.length > 0)
     return fail(
-      `${key}: ${hitFrames.length} \`${spec.event}\` hook frame(s) printed ${shownNeedle} on ${where}: ${hitFrames
-        .map((r) => `${name(r.e)} (exit ${typeof r.e.data?.exit_code === "number" ? r.e.data.exit_code : "unknown"}): ${excerpt(r.hit!)}`)
-        .join("; ")}`,
+      `${key}: ${hitFrames.length} \`${spec.event}\` hook frame(s) printed ${shownNeedle} on ${where}: ${listed(
+        hitFrames,
+        (r) => `${name(r.e)} (exit ${exitOf(r)}): ${excerpt(r.hit!.text, r.hit!.at, r.hit!.len)}`,
+      )}`,
     );
   const unreadable = read.filter((r) => r.missing > 0).length;
   if (unreadable > 0)

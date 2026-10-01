@@ -207,3 +207,37 @@ export function logHostHookNotice(pluginRoots: string[], warn: (m: string) => vo
     warn(`::warning:: [protocol] ${d.root} hooks run as native host processes (${d.events.join(", ")}) — no container sandbox\n`);
   }
 }
+
+/** `hook_output_*` reads every `hook_response` frame for an event, and a frame carries no plugin id — so when
+ *  more than one staged plugin declares the asserted event, or host hooks are allowed (`allow_host_hooks`), the
+ *  output cannot be attributed to the plugin under test: another hook's text can satisfy `hook_output_contains`
+ *  or fail `hook_output_not_contains`. Emitted regardless of `--compact`: it qualifies what a verdict means,
+ *  like the host-hook disclosure, rather than decorating the run. Never throws. */
+export function warnAmbiguousHookOutput(
+  pluginRoots: string[],
+  asserts: ReadonlyArray<{ hook_output_contains?: { event: string }; hook_output_not_contains?: { event: string } }>,
+  allowHostHooks: boolean,
+  warn: (msg: string) => void,
+): void {
+  const events = new Set<string>();
+  for (const a of asserts)
+    for (const v of [a.hook_output_contains, a.hook_output_not_contains]) if (v && typeof v.event === "string") events.add(v.event);
+  if (events.size === 0) return;
+  let declaring: Array<{ root: string; events: string[] }> = [];
+  try {
+    declaring = pluginRootsWithRunnableHooks(pluginRoots);
+  } catch {
+    return;
+  }
+  for (const ev of [...events].sort()) {
+    const roots = declaring.filter((d) => d.events.includes(ev)).map((d) => d.root);
+    const reasons: string[] = [];
+    if (roots.length > 1) reasons.push(`${roots.length} staged plugins declare \`${ev}\` (${roots.join(", ")})`);
+    if (allowHostHooks) reasons.push("`allow_host_hooks` is set, so a host hook may also answer it");
+    if (reasons.length)
+      warn(
+        `::warning:: [hooks] hook_output_* on \`${ev}\`: ${reasons.join("; ")} — hook_response frames carry no plugin id, ` +
+          `so the output graded cannot be attributed to one hook. Stage only the plugin under test, or match text only it prints.\n`,
+      );
+  }
+}

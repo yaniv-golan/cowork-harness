@@ -2933,6 +2933,70 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
   return findings;
 }
 
+/** The frozen `hook_response` frames of an events stream, by LINE index (redaction maps `events` line for line,
+ *  so the same index in the base and redacted streams is the same frame). Non-frames are `undefined`. */
+function frozenHookResponses(events: string[]): Array<Record<string, unknown> | undefined> {
+  return (Array.isArray(events) ? events : []).map((l) => {
+    try {
+      const m = JSON.parse(l) as Record<string, unknown> | null;
+      return m && typeof m === "object" && m.type === "system" && m.subtype === "hook_response" ? m : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+}
+
+/** RECORD-TIME finding for `hook_output_contains` / `hook_output_not_contains`, the sibling of
+ *  `redactionRewroteNegativeToolInputs` (same inputs, same output shape, same channel). Reports, per assertion:
+ *   - a `text` / `matches` needle the policy itself REWROTE (replay reports it evidence-unavailable);
+ *   - `hook_response` frames for the asserted event whose selected stream (`stdout`, `stderr`, or either) carries
+ *     a redaction token after redaction and did not before — a miss over such a stream, and any regex result,
+ *     is evidence-unavailable on replay.
+ *  Both keys are reported. For `hook_output_not_contains` this is what makes the verdict-divergence check refuse
+ *  the write; for `hook_output_contains` a literal hit outside the tokens still passes on replay, so the finding
+ *  may be advisory — but a miss or a regex over that stream is not, and the author should hear it once, here. */
+export function redactionRewroteHookOutput(base: Cassette, redacted: Cassette): string[] {
+  const findings: string[] = [];
+  const baseAsserts = (base.scenario?.assert ?? []) as Array<Record<string, unknown>>;
+  const redAsserts = (redacted.scenario?.assert ?? []) as Array<Record<string, unknown>>;
+  let before: ReturnType<typeof frozenHookResponses> | undefined;
+  let after: ReturnType<typeof frozenHookResponses> | undefined;
+  baseAsserts.forEach((a, i) => {
+    for (const key of ["hook_output_contains", "hook_output_not_contains"] as const) {
+      const v = a?.[key];
+      if (!v || typeof v !== "object") continue;
+      const o = v as { event?: unknown; stream?: unknown; text?: unknown; matches?: unknown };
+      const redO = redAsserts[i]?.[key] as typeof o | undefined;
+      for (const f of ["text", "matches"] as const) {
+        const src = o[f];
+        const redSrc = redO && typeof redO === "object" ? redO[f] : undefined;
+        if (typeof src === "string" && typeof redSrc === "string" && hasRedactionToken(redSrc) && !hasRedactionToken(src))
+          findings.push(
+            `assert[${i}] ${key}.${f} ${JSON.stringify(src)} was itself rewritten by the redaction policy — the committed cassette no longer carries the needle you wrote, so replay reports it evidence-unavailable`,
+          );
+      }
+      before ??= frozenHookResponses(base.events);
+      after ??= frozenHookResponses(redacted.events);
+      const stream = o.stream === "stdout" || o.stream === "stderr" ? o.stream : "any";
+      const fields = stream === "any" ? (["stdout", "stderr"] as const) : ([stream] as const);
+      let n = 0;
+      for (let k = 0; k < before.length && k < after.length; k++) {
+        const b = before[k];
+        const r = after[k];
+        if (!b || !r || b.hook_event !== o.event) continue;
+        if (fields.some((fl) => typeof r[fl] === "string" && hasRedactionToken(r[fl] as string) && !hasRedactionToken(String(b[fl] ?? ""))))
+          n++;
+      }
+      if (n)
+        findings.push(
+          `assert[${i}] ${key} on ${String(o.event)}: ${n} \`${String(o.event)}\` hook_response frame${n === 1 ? "" : "s"} ${n === 1 ? "carries" : "carry"} a redaction token in ${stream === "any" ? "stdout or stderr" : stream} — output this check reads, so on the committed cassette a miss there (and any \`matches\` result) can only be reported evidence-unavailable. ` +
+            `Ways out: narrow \`stream\` to one the policy leaves alone; use a literal \`text\` that sits outside the redacted span; or accept that this check is live-only`,
+        );
+    }
+  });
+  return findings;
+}
+
 /** Apply CONTENT redaction (the opt-in policy) across the WHOLE cassette surface: events/controlOut
  *  protocol lines (structurally — string leaves AND object keys, keeping JSON valid + the question/answer
  *  strings in sync), artifact bodies, the scenario prompt/answers/assert metadata, and the diagnostic
@@ -5620,6 +5684,9 @@ export async function freezeRecordedRun(
       warn(
         `::warning:: record: ${f}. Assert on a literal the policy does not rewrite (lint: tool-input-regex-redactable), or keep this check on a live gate.\n`,
       );
+    // The same, for what a command hook printed: a hook_output_* needle the policy rewrote, or a selected stream
+    // it tokenised, is evidence-unavailable on replay.
+    for (const f of redactionRewroteHookOutput(base, redacted)) warn(`::warning:: record: ${f}.\n`);
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassettePath));
     cassette = redacted;
   }

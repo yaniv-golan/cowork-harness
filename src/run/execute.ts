@@ -49,7 +49,7 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
-import { warnUnservedHookEvents, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
+import { warnUnservedHookEvents, warnAmbiguousHookOutput, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import { installTerminationHandler, registerAgent, parkIfTerminating, TERMINATION_GRACE_MS, type TerminableAgent } from "../termination.js";
@@ -472,6 +472,28 @@ const CONTRADICTION_GROUPS: {
   },
 ];
 
+/** `hook_output_not_contains` + `hook_output_contains` on the same event and the same needle (same `text`, or the
+ *  same `matches`), where the negative's stream covers the positive's (equal, or `any`): the frame the positive
+ *  requires is one the negative requires not to exist. Value-level, so it cannot be a CONTRADICTION_GROUPS row
+ *  (those are key-level). `contains: any` + `not_contains: stderr` is NOT flagged — a stdout hit satisfies both. */
+export function hookOutputContradictions(asserts: Assertion[]): string[] {
+  const neg = asserts.flatMap((a) => (a.hook_output_not_contains ? [a.hook_output_not_contains] : []));
+  const pos = asserts.flatMap((a) => (a.hook_output_contains ? [a.hook_output_contains] : []));
+  const out: string[] = [];
+  for (const n of neg)
+    for (const p of pos) {
+      const nStream = n.stream ?? "any";
+      const pStream = p.stream ?? "any";
+      const sameNeedle = (n.text !== undefined && n.text === p.text) || (n.matches !== undefined && n.matches === p.matches);
+      if (n.event !== p.event || !sameNeedle || !(nStream === "any" || nStream === pStream)) continue;
+      const needle = n.text !== undefined ? `text ${JSON.stringify(n.text)}` : `matches ${JSON.stringify(n.matches)}`;
+      out.push(
+        `\`hook_output_not_contains\` alongside \`hook_output_contains\` for ${n.event} ${needle} (stream ${nStream} / ${pStream}) (both read the same hook_response frames — the output \`hook_output_contains\` requires is the output \`hook_output_not_contains\` requires not to exist)`,
+      );
+    }
+  return out;
+}
+
 /** Every statically unsatisfiable assertion pairing in the scenario, or `undefined` when it is runnable.
  *
  *  The two halves of a pair can sit in SEPARATE `assert:` entries, so the check is over the whole array —
@@ -517,6 +539,7 @@ export function assertContradiction(scenario: Scenario): string | undefined {
     // fixing them one refusal at a time costs a round trip each.
     if (hits.length) clauses.push(`${g.absence.label} alongside ${hits.join(" and ")} (${g.why})`);
   }
+  clauses.push(...hookOutputContradictions(asserts));
   if (!clauses.length) return undefined;
   // "both" is wrong once a scenario carries more than one contradictory group — and a scenario that
   // carries two is exactly the one whose message gets read carefully.
@@ -909,6 +932,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // HOST sources (pre-stage) so it reports a real path the author can open. Tier-independent by design —
   // the served set is a property of the harness, not of the fidelity tier. Suppressed under --compact
   // alongside the other informational notices.
+  // hook_output_* grades every frame for its event, and frames carry no plugin id: say when the output may not be
+  // the plugin under test's. Not gated on --compact (it qualifies a verdict; see warnAmbiguousHookOutput).
+  warnAmbiguousHookOutput(
+    plan.mounts
+      .filter((mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin")
+      .map((mt) => mt.hostPath),
+    scenario.assert,
+    scenario.allow_host_hooks ?? false,
+    warn,
+  );
   if (!opts.compact)
     warnUnservedHookEvents(
       plan.mounts

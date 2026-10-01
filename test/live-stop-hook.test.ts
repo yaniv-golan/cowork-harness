@@ -40,7 +40,7 @@ if (!CAN)
   );
 
 describe.skipIf(!CAN)("live: plugin Stop hook blocks once and is graded (container)", () => {
-  it("hook_event_fired: Stop, hook_event_blocked: Stop and the resent PINEAPPLE all pass", () => {
+  it("hook_event_fired: Stop, hook_event_blocked: Stop, the hook's stderr and the resent PINEAPPLE all pass", () => {
     const r = spawnSync(
       "node",
       [resolve("dist/cli.js"), "run", "examples/probes/stop-hook-probe.scenario.yaml", "--output-format", "json"],
@@ -52,7 +52,7 @@ describe.skipIf(!CAN)("live: plugin Stop hook blocks once and is graded (contain
       (res: { assertions?: { pass: boolean; assertion?: unknown; message?: string }[] }) => res.assertions ?? [],
     );
     const failed = assertions.filter((a: { pass: boolean }) => !a.pass);
-    expect(assertions.length, "expected exactly the probe's three assertions").toBe(3);
+    expect(assertions.length, "expected exactly the probe's four assertions").toBe(4);
     expect(failed, JSON.stringify(failed, null, 2)).toEqual([]);
   }, 620_000);
 });

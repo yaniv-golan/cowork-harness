@@ -62,7 +62,10 @@ All notable changes to this project are documented here. The format is based on
   that fails open and says why on stderr while exiting 0 — which `hook_event_fired` passes — can be caught. `text` is a
   literal (case-sensitive), `matches` a regex. Neither passes vacuously: no frame for the event fails both. The negative
   key fails evidence-unavailable on a frame without the selected field, or over output a redaction policy rewrote
-  (a literal hit there still counts). Content-class: it grades live, on `verify-run` and on replay.
+  (a literal hit there still counts). Content-class: it grades live, on `verify-run` and on replay. A needle holding a
+  control character is refused at load; `record` warns when redaction rewrites the needle or a stream the check
+  reads; a run warns when more than one staged plugin, or a host hook, can answer the event (frames carry no plugin
+  id); and the same event, needle and stream in both keys is refused as a contradiction.
 
 - **`question_option_count` counts the options a gate offered whose label matches a regex, on every sub-question.**
   `{matches, exactly | min/max, when_question?, case_sensitive?}` passes only when the count satisfies the

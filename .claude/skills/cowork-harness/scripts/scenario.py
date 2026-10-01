@@ -1686,6 +1686,26 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
         # Report EVERY contradictory group, not just the first — a scenario can carry more than one.
         if hits:
             clauses.append(f"{absence_label} alongside {' and '.join(hits)} ({why})")
+    # Value-level, so not a group above (mirrors hookOutputContradictions in src/run/execute.ts): the same event
+    # and needle in hook_output_not_contains and hook_output_contains, where the negative's stream covers the
+    # positive's (equal, or `any`). `contains: any` + `not_contains: stderr` is satisfiable — not flagged.
+    for n in _assert_values(items, "hook_output_not_contains"):
+        for p in _assert_values(items, "hook_output_contains"):
+            if not isinstance(n, dict) or not isinstance(p, dict):
+                continue
+            n_stream = n.get("stream", "any")
+            p_stream = p.get("stream", "any")
+            same_needle = ("text" in n and n.get("text") == p.get("text")) or (
+                "matches" in n and n.get("matches") == p.get("matches")
+            )
+            if n.get("event") != p.get("event") or not same_needle or not (n_stream == "any" or n_stream == p_stream):
+                continue
+            needle = f"text {json.dumps(n['text'])}" if "text" in n else f"matches {json.dumps(n['matches'])}"
+            clauses.append(
+                f"`hook_output_not_contains` alongside `hook_output_contains` for {n.get('event')} {needle} "
+                f"(stream {n_stream} / {p_stream}) (both read the same hook_response frames — the output "
+                f"`hook_output_contains` requires is the output `hook_output_not_contains` requires not to exist)"
+            )
     if clauses:
         findings.append(
             Finding(

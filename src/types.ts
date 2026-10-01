@@ -395,12 +395,20 @@ const hookOutputObject = z
       .enum(["stdout", "stderr", "any"])
       .optional()
       .describe("which output field of the frame to read: `stdout`, `stderr`, or `any` (either; the default)"),
-    text: z.string().min(1).optional().describe("a literal substring, case-sensitive; NON-EMPTY (an empty text is in every output)"),
+    // A control character in either needle is almost always a YAML double-quoted escape (`"\bfailed\b"` loads
+    // a backspace), and a needle no hook prints makes the negative key pass silently — refused at load.
+    text: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("a literal substring, case-sensitive; NON-EMPTY (an empty text is in every output)")
+      .refine((v) => v === undefined || !CONTROL_CHAR.test(v), CONTROL_CHAR_MESSAGE),
     matches: z
       .string()
       .min(1)
       .optional()
-      .describe("a regex, case-insensitive like every other regex key; NON-EMPTY (an empty pattern matches every output)"),
+      .describe("a regex, case-insensitive like every other regex key; NON-EMPTY (an empty pattern matches every output)")
+      .refine((v) => v === undefined || !CONTROL_CHAR.test(v), CONTROL_CHAR_MESSAGE),
   })
   // Load-time, so an assert that names no needle, or two, is refused before the spawn.
   .refine((v) => (v.text === undefined) !== (v.matches === undefined), { message: "set exactly one of `text` or `matches`" });
