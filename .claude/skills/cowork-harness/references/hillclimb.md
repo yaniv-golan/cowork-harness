@@ -222,7 +222,7 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
     `meta.metrics_unavailable` names the reason.
   - Adding a metric mid-flow is allowed. Older rows predate it and do not carry it, and `check` says so in a note.
     A regrade that re-judges a row re-measures the metric from the kept run.
-  - Changing a declaration is refused (artifact, path, direction, `scale`, `unbounded` or `min`). Start a new flow,
+  - Changing a declaration is refused (artifact, path, direction, `scale`, `unbounded` or `min`; an omitted `min` is `min: 0`). Start a new flow,
     or give the metric a new id.
   - Removing a metric is allowed. Also remove its entries from `_state.json`.
   - The headline stays the pass rate. A number is never the headline; the metric columns sit beside it.
