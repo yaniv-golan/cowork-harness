@@ -208,8 +208,7 @@ export function readPreRunManifestLinkAware(outDir: string): boolean {
   }
 }
 
-/** undefined = no manifest (an older kept run, or a run that didn't capture; a --resume turn finds the FIRST
- *  turn's, since it captures none of its own) — the
+/** undefined = no manifest (an older kept run, or a run that didn't capture; a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable) — the
  *  assertion then fails evidence-unavailable rather than vacuously passing. (Every live sandbox tier
  *  captures now, microvm included — its session tree is snapshotted from the VM into the run dir.) */
 export function readPreRunManifest(outDir: string): string[] | undefined {

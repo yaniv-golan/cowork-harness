@@ -552,8 +552,9 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 > ⚠️ **"This specific file must NOT exist" is `file_absent`, and it is LIVE-only.** Do not reach for
 > `no_unexpected_files` — that is an *allowlist over newly created files*, a different claim with two
 > traps: it is **new-files-only**, so a file that existed before the run is invisible to it however
-> tight the allowlist, and it needs a pre-run manifest (on a `--resume` turn it diffs against the FIRST
-> turn's, so "new" there means new since the session began). `file_absent` has neither precondition. It does not run on `replay`: proving
+> tight the allowlist, and it needs a pre-run manifest (on resume, a `--resume` turn reads the first turn's
+> manifest if that turn captured one — so "new" there means new since the session began — otherwise the key
+> fails evidence-unavailable). `file_absent` has neither precondition. It does not run on `replay`: proving
 > absence needs an exhaustive, healthy walk, and a cassette records no walk health — "not in the
 > manifest" and "the walk never saw it" are indistinguishable there, so the key would pass while
 > proving nothing. It also fails **evidence-unavailable** on `lane: remote` and on a pre-run origin of
@@ -1089,7 +1090,10 @@ fixture its cassette could only reference by climbing out of that repository (th
 machine's directory names). `cowork-harness fixture export <run-dir> --out <dir>` turns a kept
 run's outputs into one ([cli.md](./cli.md)).
 
-**Staging.** Fresh runs only, on every tier: after the mounts, before the pre-run manifest. A host path a
+**Staging.** Fresh runs only, on every tier: after the mounts, before the pre-run manifest. A `--resume`
+turn re-stages nothing, but it must still declare the SAME `workspace_fixture` (and session) as the first turn:
+the fixture is part of the pinned session's identity, so a turn that drops or changes it is refused as
+belonging to another project. A host path a
 fixture file contains counts as user-supplied input, so quoting it is not a `host_path_leak` — the same
 exemption uploads get, at `container` and `microvm` (the tiers where that signal is armed). A `--resume` turn
 never re-stages — it sees whatever the skill left in `outputs/`. A fresh run whose outputs dir is not empty is

@@ -781,7 +781,7 @@ export const Assertion = z.strictObject({
     .array(z.string().min(1))
     .optional()
     .describe(
-      "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), except a --resume run (no fresh manifest ⇒ fails loud)",
+      "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), and a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable",
     ),
   file_absent: z
     .string()
@@ -2207,8 +2207,7 @@ export interface RunResult {
   workspaceFixture?: string;
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
-   *  against. undefined = the run didn't capture it (it never armed one, or predates the seam; a --resume turn
-   *  reports the FIRST turn's, which it reads because it captures none of its own); the
+   *  against. undefined = the run didn't capture it (it never armed one, or predates the seam; a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable); the
    *  assertion then fails evidence-unavailable, never vacuous-passes. (microvm captures it now — its
    *  session tree is snapshotted from the VM into the run dir before this walk.) */
   preRunPaths?: string[];
