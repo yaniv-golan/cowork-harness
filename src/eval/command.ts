@@ -767,9 +767,19 @@ export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ 
   try {
     // The snapshots must sit outside any work tree for the same reason the eval dir must (the signatures
     // hash what a run would stage).
-    if (isInsideGitWorkTree(snapRoot))
+    // The real eval snapshots into its eval dir, which `--out` places; the dry run's temp dir is placed by TMPDIR,
+    // so that is the remedy both refusals name.
+    let inside: boolean;
+    try {
+      inside = isInsideGitWorkTree(snapRoot);
+    } catch (e) {
       throw new EvalStagingError(
-        `the temp dir ${tildeify(snapRoot)} is inside a git work tree: the dry run cannot snapshot the arms there`,
+        `could not tell whether the temp dir ${tildeify(snapRoot)} is inside a git work tree (${(e as Error).message.replace(/^could not tell whether .*? is inside a git work tree \((.*?)\);.*$/s, "$1")}): set TMPDIR to a directory git can answer for, outside any work tree`,
+      );
+    }
+    if (inside)
+      throw new EvalStagingError(
+        `the temp dir ${tildeify(snapRoot)} is inside a git work tree, where the arm snapshots would hash as empty: set TMPDIR to a directory outside any git work tree`,
       );
     const prep = prepareArms(args, deps, ctx, snapRoot, "plan");
     return { plan: prep.plan! };

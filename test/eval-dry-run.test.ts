@@ -253,6 +253,41 @@ describe("eval --dry-run: a temp dir inside a git work tree", () => {
     expect(snapRoots[0].startsWith(repo)).toBe(true);
     expect(existsSync(snapRoots[0])).toBe(false);
   });
+
+  it("the refusal names TMPDIR as the remedy", async () => {
+    const { scen, a, b } = setup();
+    const repo = join(root, "tmp-repo");
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    const savedTmp = process.env.TMPDIR;
+    process.env.TMPDIR = repo;
+    try {
+      await expect(planEvalDryRun(dry(scen, a, b), planDeps([]))).rejects.toThrow(/set TMPDIR to a directory outside any git work tree/);
+    } finally {
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+    }
+  });
+
+  it("when git cannot answer for the temp dir, the refusal points at TMPDIR, not --out", async () => {
+    const { scen, a, b } = setup();
+    const repo = join(root, "odd-repo");
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    writeFileSync(join(repo, ".git", "config"), "[core]\n\trepositoryformatversion = 99\n"); // git refuses to read it
+    const savedTmp = process.env.TMPDIR;
+    process.env.TMPDIR = repo;
+    try {
+      const err = (await planEvalDryRun(dry(scen, a, b), planDeps([])).catch((e: unknown) => e)) as Error;
+      expect(err).toBeInstanceOf(EvalStagingError);
+      expect(err.message).toMatch(/could not tell whether the temp dir .* is inside a git work tree/);
+      expect(err.message).toMatch(/set TMPDIR/);
+      expect(err.message).not.toMatch(/--out/);
+    } finally {
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+    }
+  });
 });
 
 describe("eval --dry-run: the real eval's refusals, unchanged", () => {
@@ -538,6 +573,23 @@ describe("eval flags are documented where a consumer reads them", () => {
       expect(ref, f).toContain(f);
     }
     expect(ref).not.toMatch(/No budget flag/);
+  });
+  it("the docs state the dry run's own behaviours and where the budget rules now reach eval", () => {
+    const flat = (p: string) => doc(p).replace(/\s+/g, " ");
+    const evalDoc = flat("docs/eval.md");
+    expect(evalDoc).toMatch(/set TMPDIR/); // the dry run's own exit-3 refusal and its remedy
+    expect(evalDoc).toMatch(/--quiet` does not mute the plan/);
+    expect(evalDoc).toMatch(/reads the run index only/); // a capped real eval, cost-only
+    expect(evalDoc).toMatch(/any tier, baseline or turn of the scenario's name, hillclimb runs included/);
+    const spec = flat("SPEC.md");
+    expect(spec).toMatch(/inside a git work tree \(set TMPDIR\)/);
+    expect(spec).toMatch(/carries the `plan` when one was computed before it/);
+    const cliTableRow = doc("docs/cli.md")
+      .split("\n")
+      .find((l) => l.startsWith("| `eval <scenario.yaml"))!;
+    expect(cliTableRow).toMatch(/--dry-run/);
+    expect(flat("docs/cli.md")).toMatch(/"lower_bound"` for a `record` batch or an `eval`/);
+    expect(flat(".claude/skills/cowork-harness/references/task-recipes.md")).toMatch(/--dry-run --target-effect/);
     expect(doc("docs/eval.md")).not.toMatch(/There is no budget flag/);
   });
 });

@@ -74,7 +74,7 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
                              judge spend is not counted. With no priced history the check is a LOWER BOUND, and says so.
   --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,error};
                              with --dry-run: {tool,version,command,ok,dryRun,plan,budget?,error}
-  --quiet                    no per-job progress lines
+  --quiet                    no per-job progress lines (a --dry-run's plan is its output, and still prints)
   --dotenv <path>, --run-dir <path>   as on every command
        No run label or session id is accepted: eval labels each run eval:<eval-id>:<arm> and gives each job its own session.
        exit codes: 0 completed (with --fail-on: and no drop at that level) · 1 a drop at the --fail-on level
@@ -82,4 +82,5 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
        grades for unavailable evidence than the baseline, and that excess took the row below the threshold),
        every row insufficient, or the judge model differed across reps · 2 usage, or a refusal before any
        run (including the --max-budget-usd refusal) · 3 an arm snapshot could not be copied, or failed its staging
-       preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above`;
+       preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
+       temp dir is inside a git work tree (set TMPDIR)`;

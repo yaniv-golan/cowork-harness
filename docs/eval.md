@@ -38,7 +38,10 @@ it.
 snapshots it needs for the checks go to a temp dir that is removed afterwards. (The credential check still
 runs, as on `record --dry-run`; it may run the `security` Keychain probe or a container runtime's
 `--version`.) A refusal is the real eval's refusal, with the same message and exit code, so a clean dry run
-is never refused for real on anything it could have checked.
+is never refused for real on anything it could have checked. One refusal is the dry run's own: its temp dir
+must be outside any git work tree, for the same reason the eval dir must (the snapshots would hash as empty),
+so a TMPDIR inside one exits 3 — set TMPDIR to a directory outside any git work tree. The plan is the dry run's
+output: `--quiet` does not mute the plan, only the per-arm progress lines before it.
 
 ```
 cowork-harness eval evals/ --arm before=./skill --arm after=../skill-edit --dry-run --target-effect 30pp
@@ -94,7 +97,9 @@ everything else in `plan` is experimental (`schemaVersion: 0`).
 expensive prior run times its 2 × `--reps` runs, and refuses before any run when that exceeds x (exit 2,
 `error.code: "budget_exceeded"`, with the `budget` marker and the plan on the error envelope). It is the
 `record` batch gate's rule, and it reads that gate's basis — any tier, baseline or turn of the scenario's
-name — which is wider than the plan's `worstObservedUsd`; the plan prints it as the budget-gate basis. A cap
+name, hillclimb runs included — which is wider than the plan's `worstObservedUsd`; the plan prints it as the
+budget-gate basis. A real eval with a cap reads the run index only (never the kept `result.json` files), so the
+plan its refusal carries is cost-only (`plan.costOnly: true`, every row `unknown`). A cap
 equal to the estimate passes. With no priced history the check is against a lower bound, and the `budget`
 marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is never stopped mid-way.
 
@@ -279,7 +284,8 @@ A refused eval leaves nothing in its eval dir.
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
 
 Under `--dry-run`: `0` the plan was printed; `2` any refusal the real eval would make before its first run;
-`3` as above.
+`3` as above, or the dry run's temp dir is inside a git work tree (set TMPDIR). Every dry-run refusal's JSON
+error envelope carries `dryRun: true`, and `plan` when the refusal came after the plan was computed.
 
 ### When every rep errored
 
