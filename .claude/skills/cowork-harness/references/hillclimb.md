@@ -1,6 +1,6 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). It needs a `cowork-harness` whose `--help`
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`). It needs a `cowork-harness` whose `--help`
 lists `hillclimb`. The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
@@ -126,9 +126,9 @@ other variant is refused before spending while its case has no baseline referenc
 decides `pass`.
 
 `freeze-ref` freezes a later variant's reference, so the variants after it are also compared with it
-(`win_<vN>`). Use it when `check` notes a variant scoring 0.9 or more against the newest reference. It freezes
+(`win_<vN>`); `--variant baseline` repairs a missing baseline reference without a new pass. Use it when `check` notes a variant scoring 0.9 or more against the newest reference. It freezes
 from the variant's lowest-rep good row (status `ok`, not an agent failure, verdict and pairwise evidence
-measured), under the variant's lock: it refuses while a run of that variant holds it. The row's run is found by
+measured) whose run delivered an output, under the variant's lock: it refuses while a run of that variant holds it. The row's run is found by
 its `meta.run_dir`, else by its run id under the current runs root (`--run-dir` / `COWORK_HARNESS_RUNS_DIR`). An
 entry that is already complete is reported (`exists`), never rewritten. One that lacks a compose key (an assert
 added or re-scoped) gains it from the run it was frozen from, marked `unchecked`, and is refused when that run is
@@ -147,7 +147,8 @@ cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow --fill-ref
 ```
 
 It re-grades the flow's scored rows from their kept run dirs (found by `meta.run_id` under the current runs root)
-and rewrites each row through the same producer `run` writes it with.
+and rewrites each row through the same producer `run` writes it with. Pass the same `--run-dir` /
+`COWORK_HARNESS_RUNS_DIR` the runs were written with, or every row is listed as having no kept run dir.
 
 - **Default:** every judged assert is graded again, with the flow's references as they are now, and `pass` is
   recomputed. Use it after a judge or rubric change. A rubric fix is gated (see the harness gate above).
@@ -166,14 +167,17 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   `--allow-unchecked` accept it).
 - **What it writes:** `results.jsonl`, replaced atomically, the prior bytes kept as
   `<variant>/regrade-<sha16>.bak.jsonl`; `<variant>/regrade.md` and stderr show which rows' `pass`, `claims` or
-  `win` keys moved. A re-graded row gains `meta.regraded_at` and, when a judge re-graded it, the other
-  `meta.regrade_*` keys.
+  `win` keys moved. A row a judge re-graded gains `meta.regrade_doc_matches_live`, `meta.regrade_unchecked`,
+  `meta.regrade_file` and `meta.regraded_at`; in a fill also `meta.regrade_fill`, `meta.regrade_judge_usd` and
+  `meta.regrade_judge_model`. A fill row rebuilt with no judge call gains only `meta.regraded_at` and
+  `meta.regrade_fill`.
 - **What it never touches:** the agent (it never runs), `result.json`, the lines it did not rewrite (kept byte for
   byte), in a default re-grade a case with no judged assert, and an open `judge_invalid` slot in `errors.jsonl`,
   which is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it.
-- **Listed, not re-graded (exit 1):** a row whose kept run dir is gone or refused (multi-turn, partial, replay),
-  one whose re-grade is judge-invalid or does not line up with the scenario, one whose kept outcome was judged
-  against a reference that has changed since, and an open `judge_invalid` slot.
+- **Listed, not re-graded (exit 1):** a row with no scenario file for its case in the target (without `--case`),
+  one whose kept run dir is gone or refused (multi-turn, partial, replay), one whose re-grade is judge-invalid or
+  does not line up with the scenario, in a fill one whose kept outcome was judged against a reference that has
+  changed since, and an open `judge_invalid` slot.
 
 ## Exit codes
 
@@ -183,7 +187,7 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 - `check`: `0` clean, `1` an error finding, `2` usage.
 - `state-template`: `0`, or `2` on usage or a refusal.
 - `freeze-ref`: `0` no case refused (an entry already complete is reported, not refused); `1` a case refused (no
-  good row, its run not under the runs root, a damaged entry, a missing compose key whose run is gone); `2` usage
+  good row, its run not under the runs root, a damaged entry, a reference frozen for a different prompt, a missing compose key whose run is gone); `2` usage
   (a bad `--variant`, a variant with no `results.jsonl`, no selected case with `semantic_pairwise`, the variant's
   lock held by a live run).
 - `regrade`: `0` every selected row rewritten, or nothing to do; `1` a row listed instead, or a failure after the

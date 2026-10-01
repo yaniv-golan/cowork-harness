@@ -9,7 +9,7 @@
 //   4. the agent's own failure (errored_agent)              → SCORED: every graded key 0, reason in meta
 //   5. no model evidence on an otherwise-valid run     → errors, `serving_substitution`
 //   6. a run built from another snapshot than the variant's → errors, `error` + meta.arm_source_drift
-//   7. an invalid judge grade                               → errors, `judge_invalid` (promotable by regrade)
+//   7. an invalid judge grade                               → errors, `judge_invalid` (regrade lists it with the `run` that re-runs it)
 //   8. a grade that does not line up with the scenario      → errors, `error` (never a guessed value)
 //   9. otherwise                                            → SCORED
 // A served-model mismatch outranks an agent error (3 before 4): a score from the wrong model is not the

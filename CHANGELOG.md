@@ -150,8 +150,8 @@ All notable changes to this project are documented here. The format is based on
   `plan.cost` summary as `eval --dry-run`, on its basis exactly (hillclimb runs excluded), and its nine keys are covered
   the same way (`schema/schedule-cost.json`). `hillclimb check` checks a flow dir against our reading of the published
   schema and warns on a baseline case with no headroom; `hillclimb state-template` prints a `_state.json` skeleton
-  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy). All three take
-  `--flow <dir>` (default `.claude/hillclimb/flow`), and `--help` and `docs/cli.md` show it on each: a loop whose
+  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy). Every `hillclimb`
+  subcommand takes `--flow <dir>` (default `.claude/hillclimb/flow`), and `--help` and `docs/cli.md` show it on each: a loop whose
   flow dir is not the default passes the same dir to every one.
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
