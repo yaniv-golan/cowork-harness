@@ -151,24 +151,30 @@ describe("checkAgentReleaseChannel — NOTE-class only, never write-blocking", (
 
 // Desktop 2.19675.0 names each native build dir for the first 12 hex characters of the manifest checksum it
 // installs: `platforms[darwin-<arch>].bundle.checksum` when the platform has a bundle, else its `checksum`
-// (`expectedChecksumForTarget`). Values below are the real 2.1.286 literals from the 2.19675.0 asar.
+// (`expectedChecksumForTarget`). The 2.1.286 literals below are the real ones from the 2.19675.0 asar's
+// descriptor, where BOTH darwin platforms carry a bundle. The no-bundle case is synthetic (no shipped darwin
+// entry lacks one) and only pins the fallback branch.
 describe("extractAgentReleaseChannel — native build dirs", () => {
   const BUNDLE_ARM = "f2326db618029608409be774a5f4d5fde8a032d319d6aa58c3043afda393dd96";
   const BIN_ARM = "b1be27fbd8fe95bef2418c09f60a307f91c8631dc444fe9a828a7ed2520e45b5";
+  const BUNDLE_X64 = "fda00b160da41c43716c36fbd4f21729108f898911eea5ede701b10305bca5eb";
   const BIN_X64 = "e2bbc2a329924533319d0eb4f5a33e2488ce921f60329ab333bca10b0e4c02f2";
 
-  it("uses the bundle checksum when the platform has a bundle", () => {
+  it("the real 2.1.286 shape: both darwin platforms, each with a bundle → each bundle checksum's prefix", () => {
     const ch = extractAgentReleaseChannel(
       descriptor({
         version: "2.1.286",
         baseUrl: STABLE,
-        darwin: { "darwin-arm64": { binary: "claude.zst", checksum: BIN_ARM, bundle: { checksum: BUNDLE_ARM } } },
+        darwin: {
+          "darwin-arm64": { binary: "claude.zst", checksum: BIN_ARM, size: 75060478, bundle: { checksum: BUNDLE_ARM, size: 75074255 } },
+          "darwin-x64": { binary: "claude.zst", checksum: BIN_X64, size: 79220957, bundle: { checksum: BUNDLE_X64 } },
+        },
       }),
     );
-    expect(ch?.nativeBuilds).toEqual({ "darwin-arm64": "f2326db61802" });
+    expect(ch?.nativeBuilds).toEqual({ "darwin-arm64": "f2326db61802", "darwin-x64": "fda00b160da4" });
   });
 
-  it("uses the binary checksum when the platform has no bundle", () => {
+  it("synthetic: a platform with no bundle → its binary checksum's prefix", () => {
     const ch = extractAgentReleaseChannel(
       descriptor({ version: "2.1.286", baseUrl: STABLE, darwin: { "darwin-x64": { binary: "claude.zst", checksum: BIN_X64 } } }),
     );

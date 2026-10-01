@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, symlinkSync, readFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  AgentBinaryError,
   parseNativeStagedPath,
   pinnedNativeAgentVersion,
   classifyNativeStagingDrift,
@@ -75,11 +76,19 @@ describe("parseNativeStagedPath / pinnedNativeAgentVersion", () => {
     });
   });
 
-  it("a segment that is not exactly 12 lowercase hex is not a build (Desktop's /^[0-9a-f]{12}$/)", () => {
+  // A hand-edited pin with an upper-case build would otherwise parse as flat, with the build read as the
+  // version (and, on a case-insensitive volume, resolve "exact" to the real lower-case dir). Normalise it:
+  // Desktop's own `Vdr` lowercases the checksum it names the dir after.
+  it("an upper-case 12-hex build segment in a pin is normalised to lower case", () => {
     expect(parseNativeStagedPath("/r/claude-code/2.1.286/F2326DB61802/claude.app/Contents/MacOS/claude")).toEqual({
-      root: "/r/claude-code/2.1.286",
-      version: "F2326DB61802",
+      root: "/r/claude-code",
+      version: "2.1.286",
+      build: "f2326db61802",
     });
+    expect(pinnedNativeAgentVersion(pin("/r/claude-code/2.1.286/F2326DB61802/claude.app/Contents/MacOS/claude"))).toBe("2.1.286");
+  });
+
+  it("a segment that is not exactly 12 hex is not a build", () => {
     expect(parseNativeStagedPath("/r/claude-code/2.1.286/f2326db6180/claude.app/Contents/MacOS/claude")?.build).toBeUndefined();
     expect(parseNativeStagedPath("/r/claude-code/2.1.286/claude")).toBeUndefined();
   });
@@ -126,7 +135,7 @@ describe("classifyNativeStagingDrift / resolveHostAgentBinary — nested per-bui
     expect(stderr).not.toHaveBeenCalled();
   });
 
-  // This machine's real state on 2026-10-01: baseline 2.16120.0 pins flat 2.1.284; Desktop 2.19675.0 has
+  // A real state observed after the 2.19675.0 update: baseline 2.16120.0 pins flat 2.1.284, and Desktop has
   // staged only nested 2.1.286/<sha12>. It must resolve BY DEFAULT under the patch tolerance.
   it("FLAT pin 2.1.284, only nested 2.1.286/<build> staged → patch-tolerated with a stderr note and NO env var", () => {
     const root = stage([{ ver: "2.1.286", build: A }]);
@@ -216,7 +225,9 @@ describe("classifyNativeStagingDrift / resolveHostAgentBinary — nested per-bui
     expect(stderr).not.toHaveBeenCalled();
   });
 
-  it("equal mtimes tie-break on the dir name, whatever order the dirs were created in", () => {
+  // On APFS readdir already returns names sorted, so this on-disk case agrees with the tie-break without
+  // proving it; the pure compareNativeCandidates test below is what pins the tie-break.
+  it("equal mtimes on disk resolve to the lower build name", () => {
     const root = stage([
       { ver: "2.1.286", build: C, mtime: 100 },
       { ver: "2.1.286", build: B, mtime: 100 },
@@ -242,7 +253,7 @@ describe("classifyNativeStagingDrift / resolveHostAgentBinary — nested per-bui
   it("a build whose .verified does not name it is skipped (one identity rule: marker[:12] == dir name)", () => {
     const root = stage([{ ver: "2.1.286", build: B, marker: full(C) }]);
     const d = classifyNativeStagingDrift(pin(flat(root, "2.1.286")));
-    expect(d).toMatchObject({ kind: "missing", cause: "unfinished" });
+    expect(d).toMatchObject({ kind: "missing", cause: "unusable-build" }); // not "unfinished": Desktop did not leave it mid-staging
   });
 
   it("flat and nested in one version: nested wins over an unverified flat install; a flat one alone still resolves", () => {
@@ -376,5 +387,165 @@ describe("sync wiring (source guard — sync itself is never run in tests)", () 
     expect(cli).not.toMatch(/claude\.app\/Contents\/MacOS\/claude/);
     expect(cli).not.toMatch(/claude-code\/\$\{/);
     expect(cli).not.toMatch(/cowork-agent-backup/);
+  });
+  it("cmdSync logs every warning deriveNativeStagedPath returns", () => {
+    expect(cli).toMatch(/for \(const w of nativeDerived\.warnings\) log\(w\);/);
+  });
+});
+
+/** The `kind` a resolver failure carries — what doctor keys its remedy on. */
+function kindOf(fn: () => unknown): string | undefined {
+  try {
+    fn();
+  } catch (e) {
+    return e instanceof AgentBinaryError ? e.kind : `not an AgentBinaryError: ${(e as Error).message}`;
+  }
+  return undefined;
+}
+
+describe("resolveHostAgentBinary — the thrown kind matches the cause", () => {
+  it("major-minor, build, unfinished, unusable-build, unknown-layout, missing-root, missing, override", () => {
+    const mm = stage([{ ver: "2.2.0", build: B }]);
+    expect(kindOf(() => resolveHostAgentBinary(pin(nested(mm, "2.1.284", A))))).toBe("major-minor");
+    const bd = stage([{ ver: "2.1.286", build: B }]);
+    expect(kindOf(() => resolveHostAgentBinary(pin(nested(bd, "2.1.286", A))))).toBe("build");
+    const un = stage([{ ver: "2.1.286", build: A, marker: false }]);
+    expect(kindOf(() => resolveHostAgentBinary(pin(flat(un, "2.1.286"))))).toBe("unfinished");
+    const ub = stage([{ ver: "2.1.286", build: B, marker: full(C) }]);
+    expect(kindOf(() => resolveHostAgentBinary(pin(flat(ub, "2.1.286"))))).toBe("unusable-build");
+    const uk = stage([]);
+    mkdirSync(join(uk, "2.1.286", "weird"), { recursive: true });
+    expect(kindOf(() => resolveHostAgentBinary(pin(flat(uk, "2.1.286"))))).toBe("unknown-layout");
+    const nr = join(mkdtempSync(join(tmpdir(), "cowork-native-")), "claude-code");
+    expect(kindOf(() => resolveHostAgentBinary(pin(flat(nr, "2.1.286"))))).toBe("missing-root");
+    expect(kindOf(() => resolveHostAgentBinary(pin(flat(stage([]), "2.1.286"))))).toBe("missing");
+    process.env.COWORK_HOST_AGENT_BINARY = "/nonexistent/claude";
+    expect(kindOf(() => resolveHostAgentBinary(pin(flat(stage([]), "2.1.286"))))).toBe("override");
+  });
+});
+
+describe("resolveHostAgentBinary — review fixes", () => {
+  it("flat pin whose file still exists, a verified build of the same version also staged → runs the build and says so, naming both paths", () => {
+    const root = stage([{ ver: "2.1.286" }, { ver: "2.1.286", build: B }]);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(resolveHostAgentBinary(pin(flat(root, "2.1.286")))).toBe(nested(root, "2.1.286", B));
+    const out = stderrOf(stderr);
+    expect(out).toContain(flat(root, "2.1.286"));
+    expect(out).toContain(nested(root, "2.1.286", B));
+  });
+
+  it("a build dir whose .verified names it but holds no binary is diagnosed as such", () => {
+    const root = stage([]);
+    mkdirSync(join(root, "2.1.286", B), { recursive: true });
+    writeFileSync(join(root, "2.1.286", B, ".verified"), full(B));
+    expect(() => resolveHostAgentBinary(pin(flat(root, "2.1.286")))).toThrow(new RegExp(`2\\.1\\.286/${B}[^;]*no claude\\.app binary`));
+  });
+
+  it("a build dir whose .verified names another build is diagnosed as such", () => {
+    const root = stage([{ ver: "2.1.286", build: B, marker: full(C) }]);
+    expect(() => resolveHostAgentBinary(pin(flat(root, "2.1.286")))).toThrow(new RegExp(`2\\.1\\.286/${B}[^;]*names build ${C}`));
+  });
+
+  it("a build dir holding a bare claude binary (Desktop's non-bundle shape) is diagnosed as such", () => {
+    const root = stage([]);
+    mkdirSync(join(root, "2.1.286", B), { recursive: true });
+    writeFileSync(join(root, "2.1.286", B, "claude"), "x");
+    writeFileSync(join(root, "2.1.286", B, ".verified"), full(B));
+    expect(() => resolveHostAgentBinary(pin(flat(root, "2.1.286")))).toThrow(new RegExp(`2\\.1\\.286/${B}[^;]*bare claude binary`));
+  });
+
+  it("pinned build present but unfinished, an OLDER patch staged → patch-older, and the note names the unfinished pinned build", () => {
+    const root = stage([
+      { ver: "2.1.286", build: A, marker: false },
+      { ver: "2.1.284", build: B },
+    ]);
+    const b = pin(nested(root, "2.1.286", A));
+    expect(classifyNativeStagingDrift(b)).toMatchObject({ kind: "patch", found: "2.1.284" });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(resolveHostAgentBinary(b)).toBe(nested(root, "2.1.284", B));
+    const note = stderrOf(stderr);
+    expect(note).toMatch(/patch-older 2\.1\.284/);
+    expect(note).toContain(`2.1.286/${A}`);
+    expect(note).not.toMatch(/pruned|patch-newer/);
+  });
+
+  it("pinned version not staged at all, a newer patch staged → patch-newer, 'not staged'", () => {
+    const root = stage([{ ver: "2.1.290", build: B }]);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resolveHostAgentBinary(pin(flat(root, "2.1.286")));
+    expect(stderrOf(stderr)).toMatch(/2\.1\.286 is not staged; using patch-newer 2\.1\.290/);
+  });
+
+  it("an upper-case build in the pin resolves to the lower-case build dir as exact", () => {
+    const root = stage([{ ver: "2.1.286", build: A }]);
+    const upper = join(root, "2.1.286", A.toUpperCase(), ...LEAF);
+    expect(classifyNativeStagingDrift(pin(upper))).toMatchObject({ kind: "exact", pinned: "2.1.286", path: nested(root, "2.1.286", A) });
+  });
+
+  it("a symlinked VERSION dir is ignored, like a symlinked build dir", () => {
+    const root = stage([{ ver: "2.1.286", build: B }]);
+    symlinkSync(join(root, "2.1.286"), join(root, "2.1.299"));
+    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.284")))).toMatchObject({ kind: "patch", found: "2.1.286" });
+    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.299")))).toMatchObject({ kind: "patch", found: "2.1.286" });
+  });
+
+  it("nested pin vs an unmarked flat install of the same version → refused, saying the build cannot be confirmed", () => {
+    const root = stage([{ ver: "2.1.286" }]);
+    expect(() => resolveHostAgentBinary(pin(nested(root, "2.1.286", A)))).toThrow(/cannot be confirmed/);
+  });
+
+  it("nested pin vs another build of the same version → the refusal says another CPU architecture's build differs too", () => {
+    const root = stage([{ ver: "2.1.286", build: B }]);
+    expect(() => resolveHostAgentBinary(pin(nested(root, "2.1.286", A)))).toThrow(/CPU architecture/);
+  });
+
+  it("a .verified with a trailing CRLF, or upper-case hex, still names its build", () => {
+    const root = stage([
+      { ver: "2.1.286", build: A, marker: full(A) + "\r\n" },
+      { ver: "2.1.290", build: B, marker: full(B).toUpperCase() },
+    ]);
+    expect(classifyNativeStagingDrift(pin(nested(root, "2.1.286", A)))).toMatchObject({ kind: "exact" });
+    expect(classifyNativeStagingDrift(pin(nested(root, "2.1.290", B)))).toMatchObject({ kind: "exact" });
+  });
+
+  it("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 with an exact match is silent", () => {
+    const root = stage([{ ver: "2.1.286", build: A }]);
+    process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK = "1";
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resolveHostAgentBinary(pin(nested(root, "2.1.286", A)));
+    expect(stderr).not.toHaveBeenCalled();
+  });
+});
+
+describe("deriveNativeStagedPath (sync) — notes", () => {
+  const home = () => mkdtempSync(join(tmpdir(), "cowork-home-"));
+  const rootIn = (h: string) => join(h, "Library/Application Support/Claude/claude-code");
+
+  it("several builds and no applicable manifest → a NOTE naming the build pinned and the ones passed over", () => {
+    const h = home();
+    stage(
+      [
+        { ver: "2.1.286", build: B, mtime: 100 },
+        { ver: "2.1.286", build: C, mtime: 200 },
+      ],
+      rootIn(h),
+    );
+    const r = deriveNativeStagedPath({ nativeRoot: rootIn(h), homeDir: h, oldNativeStagedPath: "", agentVersion: "2.1.286" });
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(new RegExp(`^NOTE: 2 builds[\\s\\S]*pinning ${C}[\\s\\S]*${B}`));
+  });
+
+  it("a flat install with no marker, manifest for that version → a NOTE that its build is unknown, not a WARNING", () => {
+    const h = home();
+    stage([{ ver: "2.1.286" }], rootIn(h));
+    const r = deriveNativeStagedPath({
+      nativeRoot: rootIn(h),
+      homeDir: h,
+      oldNativeStagedPath: "",
+      agentVersion: "2.1.286",
+      manifestBuild: { version: "2.1.286", build: A },
+    });
+    expect(r.warnings.join("\n")).not.toMatch(/WARNING/);
+    expect(r.warnings.join("\n")).toMatch(/^NOTE:.*no \.verified marker/);
   });
 });

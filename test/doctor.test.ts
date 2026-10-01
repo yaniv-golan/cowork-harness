@@ -11,6 +11,7 @@ import {
   ghcrRefFor,
   registryDigestFrom,
   nativeAgentRemedy,
+  nativeDriftNote,
   agentRemedy,
   type DoctorProbe,
   type DoctorCheck,
@@ -688,7 +689,7 @@ describe("doctor — a signed-in config dir (.credentials.json) counts at protoc
 // version mismatch, for a staging layout this harness cannot read, on Linux (no native macOS agent at all),
 // and for an account whose Claude runs on its organization's infrastructure (Desktop stages nothing locally).
 describe("doctor — native agent remedy per cause", () => {
-  const kinds = ["major-minor", "build", "missing-root", "missing", "unfinished", "unknown-layout", "override"] as const;
+  const kinds = ["major-minor", "build", "missing-root", "missing", "unfinished", "unusable-build", "unknown-layout", "override"] as const;
 
   it("every cause has its own remedy, and none says 'open Cowork once'", () => {
     const seen = new Set<string>();
@@ -710,9 +711,18 @@ describe("doctor — native agent remedy per cause", () => {
     expect(nativeAgentRemedy("major-minor", "darwin")).not.toMatch(/recovering-an-old-agent-version/);
   });
 
-  it("off macOS the remedy says the native agent does not exist there", () => {
-    expect(nativeAgentRemedy("missing-root", "linux")).toMatch(/macOS/);
-    expect(nativeAgentRemedy("missing-root", "linux")).toMatch(/container|microvm/);
+  // docs/cli.md's platform table: Linux live is `container` only (microvm is Apple-VZ); Windows is
+  // replay/protocol only. A Mach-O override cannot run off macOS, so it is not offered there.
+  it("off macOS the remedy is the exact platform text, for every cause but override", () => {
+    const LINUX =
+      "hostloop and cowork run the native macOS agent binary, which does not exist on linux — use --tier container (docs/cli.md#prerequisites-for-anything-above-protocol-fidelity)";
+    const WIN =
+      "hostloop and cowork run the native macOS agent binary, which does not exist on win32 — use --tier protocol or replay (docs/cli.md#prerequisites-for-anything-above-protocol-fidelity)";
+    for (const k of ["major-minor", "build", "missing-root", "missing", "unfinished", "unusable-build", "unknown-layout"] as const) {
+      expect(nativeAgentRemedy(k, "linux"), k).toBe(LINUX);
+      expect(nativeAgentRemedy(k, "win32"), k).toBe(WIN);
+    }
+    expect(nativeAgentRemedy("override", "linux")).toMatch(/COWORK_HOST_AGENT_BINARY/);
   });
 
   it("runDoctorChecks renders the remedy for the probe's kind", () => {
@@ -755,12 +765,12 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
       rmSync(home, { recursive: true, force: true });
     }
   };
-  const stageBuild = (home: string, ver: string) => {
-    const dir = join(home, "Library", "Application Support", "Claude", "claude-code", ver, BUILD);
+  const stageBuild = (home: string, ver: string, build = BUILD, mtime = 100) => {
+    const dir = join(home, "Library", "Application Support", "Claude", "claude-code", ver, build);
     mkdirSync(join(dir, ...LEAF.slice(0, -1)), { recursive: true });
     writeFileSync(join(dir, ...LEAF), "#!/bin/sh\n");
-    writeFileSync(join(dir, ".verified"), BUILD + "0".repeat(52));
-    utimesSync(join(dir, ".verified"), 100, 100);
+    writeFileSync(join(dir, ".verified"), build + "0".repeat(52));
+    utimesSync(join(dir, ".verified"), mtime, mtime);
     return join(dir, ...LEAF);
   };
   const patchBump = (v: string) => {
@@ -793,6 +803,43 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
     });
   });
 
+  it("two builds of the pinned version (flat pin) → ok, with relocated AND ambiguous notes naming both builds", () => {
+    withHome((home) => {
+      stageBuild(home, pinned(), "aaaaaaaaaaaa", 100);
+      const bin = stageBuild(home, pinned(), "bbbbbbbbbbbb", 200);
+      const r = realProbe.hostAgentBinary();
+      expect(r).toMatchObject({ ok: true, path: bin });
+      expect(r.ok && r.note).toMatch(/pinned path uses the flat layout/);
+      expect(r.ok && r.note).toMatch(/ambiguous: 2 builds of [\d.]+, using bbbbbbbbbbbb/);
+    });
+  });
+
+  it("a major/minor jump staged → fail, kind major-minor, and doctor gives that cause's remedy (not 'nothing staged')", () => {
+    withHome((home) => {
+      const [a, b] = pinned().split(".").map(Number);
+      stageBuild(home, `${a}.${b + 1}.0`);
+      const r = realProbe.hostAgentBinary();
+      expect(r).toMatchObject({ ok: false, kind: "major-minor" });
+      const cs = runDoctorChecks("hostloop", probe({ hostAgentBinary: realProbe.hostAgentBinary }));
+      expect(get(cs, "hostAgent").remedy).toBe(nativeAgentRemedy("major-minor", "darwin"));
+    });
+  });
+
+  it("an unfinished build of the pinned version only → fail, kind unfinished", () => {
+    withHome((home) => {
+      const bin = stageBuild(home, pinned());
+      rmSync(join(bin, "..", "..", "..", "..", ".verified"));
+      expect(realProbe.hostAgentBinary()).toMatchObject({ ok: false, kind: "unfinished" });
+    });
+  });
+
+  it("an unrecognised entry in the pinned version dir only → fail, kind unknown-layout", () => {
+    withHome((home) => {
+      mkdirSync(join(home, "Library", "Application Support", "Claude", "claude-code", pinned(), "weird"), { recursive: true });
+      expect(realProbe.hostAgentBinary()).toMatchObject({ ok: false, kind: "unknown-layout" });
+    });
+  });
+
   it("an empty HOME (no Desktop) → fail, kind missing-root, and doctor gives that cause's remedy", () => {
     withHome(() => {
       const r = realProbe.hostAgentBinary();
@@ -800,6 +847,85 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
       const cs = runDoctorChecks("hostloop", probe({ hostAgentBinary: realProbe.hostAgentBinary }));
       expect(get(cs, "hostAgent").status).toBe("fail");
       expect(get(cs, "hostAgent").remedy).toBe(nativeAgentRemedy("missing-root", "darwin"));
+    });
+  });
+});
+
+// The pure note builder, one row per branch (the real-probe cases above cover patch, relocated and ambiguous
+// end to end).
+describe("doctor — nativeDriftNote", () => {
+  const base = { stagedPath: "/x", pinned: "2.1.286", found: "2.1.286" };
+  it("exact and unambiguous → no note", () => {
+    expect(nativeDriftNote({ ...base, kind: "exact", layout: "nested", foundBuild: "aaaaaaaaaaaa" })).toBeUndefined();
+  });
+  it("relocated from a flat pin into a build dir", () => {
+    expect(nativeDriftNote({ ...base, kind: "exact", relocated: true, layout: "nested", foundBuild: "aaaaaaaaaaaa" })).toBe(
+      "pinned path uses the flat layout; the same version is staged at 2.1.286/aaaaaaaaaaaa/",
+    );
+  });
+  it("relocated from a build pin to a flat install carrying that build's marker", () => {
+    expect(nativeDriftNote({ ...base, kind: "exact", relocated: true, layout: "flat", pinnedBuild: "aaaaaaaaaaaa" })).toBe(
+      "pinned build aaaaaaaaaaaa found as a flat install",
+    );
+  });
+  it("ambiguous: names the count, the chosen build and the rule", () => {
+    expect(
+      nativeDriftNote({ ...base, kind: "exact", layout: "nested", foundBuild: "bbbbbbbbbbbb", others: ["aaaaaaaaaaaa", "cccccccccccc"] }),
+    ).toBe("ambiguous: 3 builds of 2.1.286, using bbbbbbbbbbbb (newest .verified)");
+  });
+  it("a different build under the fallback env", () => {
+    expect(nativeDriftNote({ ...base, kind: "build", pinnedBuild: "aaaaaaaaaaaa", foundBuild: "bbbbbbbbbbbb", layout: "nested" })).toBe(
+      "fallback (COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1): pinned build aaaaaaaaaaaa, using bbbbbbbbbbbb of 2.1.286",
+    );
+  });
+  it("a major/minor jump under the fallback env", () => {
+    expect(
+      nativeDriftNote({ ...base, kind: "major-minor", pinned: "2.1.284", found: "2.2.0", layout: "nested", foundBuild: "bbbbbbbbbbbb" }),
+    ).toBe("fallback (COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1): pinned 2.1.284, using 2.2.0 (build bbbbbbbbbbbb)");
+  });
+  it("patch", () => {
+    expect(nativeDriftNote({ ...base, kind: "patch", pinned: "2.1.284", layout: "flat" })).toBe(
+      "patch-tolerated: pinned 2.1.284, using 2.1.286",
+    );
+  });
+});
+
+// The container ELF, through the REAL probe and resolver over a temp HOME — the kind doctor keys its
+// remedy on comes from the producer, not from the test.
+describe("doctor — real agentBinary probe over a temp HOME", () => {
+  const withHome = (fn: (home: string) => void) => {
+    const saved = { HOME: process.env.HOME, O: process.env.COWORK_AGENT_BINARY, F: process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK };
+    const home = mkdtempSync(join(tmpdir(), "cowork-doctor-home-"));
+    process.env.HOME = home;
+    delete process.env.COWORK_AGENT_BINARY;
+    delete process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK;
+    try {
+      fn(home);
+    } finally {
+      for (const [k, v] of [
+        ["HOME", saved.HOME],
+        ["COWORK_AGENT_BINARY", saved.O],
+        ["COWORK_HARNESS_ALLOW_AGENT_FALLBACK", saved.F],
+      ] as const)
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+  it("the pinned ELF pruned, a sibling staged → kind pruned, and doctor's container remedy names the runbook", () => {
+    withHome((home) => {
+      const dir = join(home, "Library", "Application Support", "Claude", "claude-code-vm", "0.0.1");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "claude"), "x");
+      const r = realProbe.agentBinary();
+      expect(r).toMatchObject({ ok: false, kind: "pruned" });
+      const cs = runDoctorChecks("container", probe({ agentBinary: realProbe.agentBinary }));
+      expect(get(cs, "agent").remedy).toBe(agentRemedy("pruned", false));
+    });
+  });
+  it("nothing staged → kind missing", () => {
+    withHome(() => {
+      expect(realProbe.agentBinary()).toMatchObject({ ok: false, kind: "missing" });
     });
   });
 });
@@ -813,7 +939,19 @@ describe("doctor — container agent remedy for a pruned pin", () => {
     expect(r).toContain("COWORK_AGENT_BINARY");
     expect(r).not.toMatch(/open Claude Cowork once/);
   });
-  it("a never-staged ELF keeps the stage-it remedy", () => {
-    expect(agentRemedy("missing", false)).toMatch(/open Claude Cowork once/);
+  it("a never-staged ELF: Desktop stages it on macOS; elsewhere point COWORK_AGENT_BINARY at a Linux ELF", () => {
+    const r = agentRemedy("missing", false);
+    expect(r).not.toMatch(/open Claude Cowork once/i);
+    expect(r).toMatch(/macOS/);
+    expect(r).toMatch(/COWORK_AGENT_BINARY=<path> to a Linux ELF/);
+  });
+  it("override → fix or unset COWORK_AGENT_BINARY", () => {
+    expect(agentRemedy("override", false)).toBe("fix or unset COWORK_AGENT_BINARY — it names a path that does not exist");
+  });
+  it("parity mount appends the non-executed note to every cause", () => {
+    for (const k of ["pruned", "missing", "override", undefined])
+      expect(agentRemedy(k, true)).toBe(
+        `${agentRemedy(k, false)} — note: on this tier the ELF is a non-executed parity mount, not the binary that actually runs (that's the native \`hostAgent\` check below)`,
+      );
   });
 });

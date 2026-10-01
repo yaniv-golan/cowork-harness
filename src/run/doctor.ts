@@ -177,7 +177,8 @@ export function agentBuildLine(runtime: string, image: string): string {
 }
 
 /** Why the native agent did not resolve — `AgentBinaryError.kind` from `resolveHostAgentBinary`. */
-export type NativeAgentFailure = "major-minor" | "build" | "missing-root" | "missing" | "unfinished" | "unknown-layout" | "override";
+export type NativeAgentFailure =
+  "major-minor" | "build" | "missing-root" | "missing" | "unfinished" | "unusable-build" | "unknown-layout" | "override";
 
 /** The note doctor shows on an `ok` native agent, naming any difference from the pin. Undefined for an
  *  exact, unambiguous match. Exported for tests. */
@@ -203,16 +204,20 @@ export function nativeDriftNote(d: NativeStagingDrift): string | undefined {
 }
 
 const NO_NATIVE_LOCALLY =
-  "Claude Desktop stages it when a Cowork session runs on this computer; if none has, or Claude runs on your organization's " +
-  "infrastructure (then nothing is staged locally), set COWORK_HOST_AGENT_BINARY=<path> to a native agent binary";
+  "Claude Desktop stages it locally; if nothing is staged here (for example because Claude runs on your organization's " +
+  "infrastructure), set COWORK_HOST_AGENT_BINARY=<path> to a native agent binary";
+
+/** docs/cli.md's platform table: Linux live is `container` only (microvm is Apple-VZ), Windows is replay/protocol. */
+const PLATFORM_TABLE = "docs/cli.md#prerequisites-for-anything-above-protocol-fidelity";
 
 /** The remedy for a native agent that did not resolve, per cause. Never "open Cowork once": wrong for a
  *  version mismatch, for a layout this harness cannot read, off macOS, and for an account whose Claude
  *  runs on its organization's infrastructure. Exported for tests. */
 export function nativeAgentRemedy(kind: NativeAgentFailure | undefined, platform: string): string {
   if (kind === "override") return "fix or unset COWORK_HOST_AGENT_BINARY — it names a path that does not exist";
+  // Off macOS there is no native agent and a Mach-O override cannot run, so the only remedy is another tier.
   if (platform !== "darwin")
-    return `hostloop runs the native macOS agent binary, which does not exist on ${platform} — use --tier container or microvm, or set COWORK_HOST_AGENT_BINARY=<path>`;
+    return `hostloop and cowork run the native macOS agent binary, which does not exist on ${platform} — use --tier ${platform === "linux" ? "container" : "protocol or replay"} (${PLATFORM_TABLE})`;
   switch (kind) {
     case "major-minor":
       return "set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to run the staged version, set COWORK_HOST_AGENT_BINARY=<path> to a saved copy of the pinned version's binary, or use a baseline that pins the staged version";
@@ -220,6 +225,8 @@ export function nativeAgentRemedy(kind: NativeAgentFailure | undefined, platform
       return "set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to run the staged build of the same version, or COWORK_HOST_AGENT_BINARY=<path> to a saved copy of the pinned build";
     case "unfinished":
       return `Claude Desktop has not finished staging that build (it writes .verified last); it re-stages it the next time it prepares the agent. Or set COWORK_HOST_AGENT_BINARY=<path>`;
+    case "unusable-build":
+      return "a build dir is present but not a runnable verified build (the detail says why) — set COWORK_HOST_AGENT_BINARY=<path> to a native agent binary";
     case "unknown-layout":
       return "this Desktop stages the agent in a layout this harness version does not read — set COWORK_HOST_AGENT_BINARY=<path> to the staged binary, and upgrade cowork-harness";
     case "missing-root":
@@ -236,7 +243,7 @@ export function agentRemedy(kind: string | undefined, parityMount: boolean): str
       ? "a Desktop update pruned the pinned ELF: recover and sha-verify that version, then set COWORK_AGENT_BINARY=<path> to it (docs/maintenance.md#recovering-an-old-agent-version); or set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to run the newest staged one; or repin baseline: to a version you have (docs/gotchas.md)"
       : kind === "override"
         ? "fix or unset COWORK_AGENT_BINARY — it names a path that does not exist"
-        : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)";
+        : "Claude Desktop stages the agent ELF on macOS (claude-code-vm/<ver>/claude); on Linux, in CI, or with nothing staged, set COWORK_AGENT_BINARY=<path> to a Linux ELF (docs/maintenance.md#recovering-an-old-agent-version) — put it in your .env so --dotenv covers it, like the token";
   return parityMount
     ? `${base} — note: on this tier the ELF is a non-executed parity mount, not the binary that actually runs (that's the native \`hostAgent\` check below)`
     : base;

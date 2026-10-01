@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from "node:fs";
 import { join, resolve, isAbsolute, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -181,9 +181,8 @@ export function resolveAgentBinary(baseline: PlatformBaseline, opts: { parityMou
     );
   }
   throw new AgentBinaryError(
-    `Staged agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +
-      `(claude-code-vm/<ver>/claude). Open Cowork once to stage it, or set COWORK_AGENT_BINARY to its path ` +
-      `(a version Desktop no longer stages: docs/maintenance.md#recovering-an-old-agent-version).`,
+    `Staged agent binary not found at "${staged}". Claude Desktop stages it on macOS (claude-code-vm/<ver>/claude); ` +
+      `otherwise set COWORK_AGENT_BINARY to a Linux ELF (docs/maintenance.md#recovering-an-old-agent-version).`,
     "missing",
   );
 }
@@ -233,18 +232,25 @@ export function newestStagedSibling(versionRoot: string, leaf: string): string |
 // ── Native macOS agent staging ────────────────────────────────────────────────────────────────────────
 //
 // Two layouts exist under `<userData>/claude-code/`:
-//   - flat (Desktop through 2.16120.0):       `<ver>/claude.app/Contents/MacOS/claude`
-//   - per-build (Desktop 2.19675.0 onward):   `<ver>/<build>/claude.app/Contents/MacOS/claude`
+//   - flat (Desktop 2.16120.0 and earlier):   `<ver>/claude.app/Contents/MacOS/claude`
+//   - per-build (Desktop 2.19675.0):          `<ver>/<build>/claude.app/Contents/MacOS/claude`
 // Binary-verified in the 2.19675.0 asar: the build dir is `Vdr(checksum)` = the first 12 hex characters of
 // the manifest checksum, lowercased, and a dir counts as a build only if its name matches `/^[0-9a-f]{12}$/`
 // (`Udr`). On darwin the checksum is the BUNDLE archive's (`platforms[darwin-<arch>].bundle.checksum`), not
 // the inner Mach-O's, so a build can never be identified by hashing the binary — the 12-hex segment of the
 // pinned path is the only build identity a baseline carries. `<build>/.verified` holds the full checksum and
-// is written LAST (after extract-to-temp + rename), so a build dir without a matching marker is one Desktop
-// itself would not run. `moveLegacyInstallNow` migrates an existing flat install into its build dir on first
-// touch (the VM ELF under `claude-code-vm/` is never moved). When several builds of one version are staged,
-// Desktop runs the one its current manifest names, and otherwise (`publishedInstallDirs`) the dirs that have a
-// `.verified`, newest `.verified` mtime first — the flat root joins that order only when its move failed.
+// is written last (after extract-to-temp + rename). `moveLegacyInstallNow` migrates an existing flat install
+// into its build dir on first touch (the VM ELF under `claude-code-vm/` is never moved); when that move fails,
+// Desktop adds the version to `legacyMovesGivenUp` — held in memory for that process only, so the move is
+// retried on the next launch — and meanwhile the flat root joins the fallback order below.
+//
+// Which build Desktop runs: its PRIMARY path runs the dir its current manifest names, and only when `.verified`
+// equals that manifest checksum exactly (else it re-downloads). Its FALLBACK (`publishedInstallDirs`) takes
+// any 12-hex dir that merely HAS a `.verified`, newest `.verified` mtime first. The harness cannot know the
+// manifest at run time, so its rule sits between the two: a build counts when its `.verified` holds a 64-hex
+// checksum whose first 12 characters (lowercased) equal the dir name. That is stricter than Desktop's
+// fallback — a dir whose marker names another build is skipped here, where Desktop's offline fallback could
+// still consider it — and looser than its primary path, which also needs the checksum to match the manifest.
 
 /** The leaf below a version dir (flat) or a build dir (per-build). */
 const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
@@ -253,14 +259,15 @@ const NATIVE_BUILD_RE = /^[0-9a-f]{12}$/;
 /** Desktop's checksum rule (`zdr`) for the `.verified` marker. */
 const NATIVE_CHECKSUM_RE = /^[0-9a-fA-F]{64}$/;
 /** Lazy root: the version is the segment right after the SHORTEST root that leaves a valid tail, so a
- *  per-build path never reads its build as the version. */
-const NATIVE_PATH_RE = /^(.*?)\/([^/]+)\/(?:([0-9a-f]{12})\/)?claude\.app\/Contents\/MacOS\/claude$/;
+ *  per-build path never reads its build as the version. The build segment is matched case-insensitively and
+ *  lowercased, as Desktop's `Vdr` lowercases the checksum it names the dir after. */
+const NATIVE_PATH_RE = /^(.*?)\/([^/]+)\/(?:([0-9a-fA-F]{12})\/)?claude\.app\/Contents\/MacOS\/claude$/;
 
 export interface NativeStagedPath {
   /** The `claude-code` dir the version dirs live in. */
   root: string;
   version: string;
-  /** The 12-hex build dir, for a per-build path. */
+  /** The 12-hex build dir (lower case), for a per-build path. */
   build?: string;
 }
 
@@ -268,7 +275,7 @@ export interface NativeStagedPath {
 export function parseNativeStagedPath(p: string): NativeStagedPath | undefined {
   const m = NATIVE_PATH_RE.exec(p);
   if (!m) return undefined;
-  return m[3] ? { root: m[1], version: m[2], build: m[3] } : { root: m[1], version: m[2] };
+  return m[3] ? { root: m[1], version: m[2], build: m[3].toLowerCase() } : { root: m[1], version: m[2] };
 }
 
 /** The native agent version a baseline pins, read from the `<ver>` directory of
@@ -294,6 +301,15 @@ function markerBuild(dir: string): { build: string; publishedMs: number } | unde
   return NATIVE_CHECKSUM_RE.test(text) ? { build: text.slice(0, 12).toLowerCase(), publishedMs: mtimeMs } : undefined;
 }
 
+/** A real directory, not a symlink to one (Desktop enumerates with `Dirent.isDirectory()`). */
+function isRealDir(p: string): boolean {
+  try {
+    return lstatSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 interface NativeCandidate {
   path: string;
   version: string;
@@ -303,11 +319,20 @@ interface NativeCandidate {
   publishedMs?: number;
 }
 
+/** A 12-hex dir that is not a runnable build, and why. `unmarked` is the only reason Desktop itself leaves
+ *  behind mid-staging; the others are a dir in some other state. */
+interface UnusableBuild {
+  entry: string;
+  reason: "unmarked" | "names-other" | "no-binary" | "bare-binary";
+  /** For `names-other`: the build its marker names. */
+  names?: string;
+}
+
 interface NativeVersionScan {
   /** Runnable candidates, in choice order (see `scanNativeVersion`). */
   candidates: NativeCandidate[];
-  /** `<ver>/<build>` dirs with a binary but no marker naming them — not finished, so never chosen. */
-  unfinished: string[];
+  /** 12-hex dirs that are not runnable builds — never chosen. */
+  unusable: UnusableBuild[];
   /** `<ver>/<entry>` entries that fit neither layout (dot-entries such as `.extract-*` are Desktop's own). */
   unknown: string[];
 }
@@ -316,30 +341,35 @@ interface NativeVersionScan {
  * Scan one version dir for runnable native binaries in both layouts, in choice order:
  *  1. builds (`<ver>/<12hex>/`, a real directory — a symlink is skipped, as Desktop's `Dirent.isDirectory()`
  *     skips it — whose `.verified` names that same build) and a flat install that has a valid marker, sorted
- *     by `.verified` mtime newest first, then per-build before flat, then by name — a total order, so equal
- *     mtimes cannot make the choice depend on readdir order;
+ *     by `compareNativeCandidates`;
  *  2. a flat install with no marker, only when nothing in (1) exists. That is the pre-2.19675.0 shape the
- *     harness always accepted, kept so an older Desktop resolves exactly as before.
+ *     harness always accepted, kept so an older Desktop resolves exactly as before. Desktop 2.19675.0 itself
+ *     would not run it (no `.verified`, so neither its primary path nor `publishedInstallDirs` lists it).
+ * A symlinked version dir is skipped the same way.
  */
 function scanNativeVersion(root: string, version: string): NativeVersionScan {
   const vdir = join(root, version);
-  const out: NativeVersionScan = { candidates: [], unfinished: [], unknown: [] };
+  const out: NativeVersionScan = { candidates: [], unusable: [], unknown: [] };
+  if (!isRealDir(vdir)) return out;
   let entries: import("node:fs").Dirent[] = [];
   try {
     entries = readdirSync(vdir, { withFileTypes: true });
   } catch {
-    /* no such version dir */
+    /* unreadable version dir */
   }
   const ranked: NativeCandidate[] = [];
   for (const e of entries) {
     if (e.name.startsWith(".") || e.name === "claude.app" || e.name === "claude") continue;
     if (NATIVE_BUILD_RE.test(e.name)) {
       if (!e.isDirectory()) continue;
-      const bin = join(vdir, e.name, NATIVE_LEAF);
-      const m = markerBuild(join(vdir, e.name));
-      if (existsSync(bin) && m?.build === e.name)
-        ranked.push({ path: bin, version, layout: "nested", build: e.name, publishedMs: m.publishedMs });
-      else out.unfinished.push(`${version}/${e.name}`);
+      const bdir = join(vdir, e.name);
+      const bin = join(bdir, NATIVE_LEAF);
+      const m = markerBuild(bdir);
+      const entry = `${version}/${e.name}`;
+      if (!m) out.unusable.push({ entry, reason: "unmarked" });
+      else if (m.build !== e.name) out.unusable.push({ entry, reason: "names-other", names: m.build });
+      else if (existsSync(bin)) ranked.push({ path: bin, version, layout: "nested", build: e.name, publishedMs: m.publishedMs });
+      else out.unusable.push({ entry, reason: existsSync(join(bdir, "claude")) ? "bare-binary" : "no-binary" });
       continue;
     }
     out.unknown.push(`${version}/${e.name}`);
@@ -356,6 +386,15 @@ function scanNativeVersion(root: string, version: string): NativeVersionScan {
   return out;
 }
 
+const describeUnusable = (u: UnusableBuild) =>
+  u.reason === "unmarked"
+    ? `${u.entry} has no .verified marker (Desktop writes it last, so it has not finished staging that build)`
+    : u.reason === "names-other"
+      ? `${u.entry}'s .verified names build ${u.names}, not this dir`
+      : u.reason === "bare-binary"
+        ? `${u.entry} holds a bare claude binary, not claude.app (a non-bundle install this harness does not run)`
+        : `${u.entry} is marked verified but has no claude.app binary`;
+
 /** Choice order among verified candidates of one version: newest `.verified` mtime first, then per-build
  *  before flat, then build name ascending. Desktop's own sort is stable, so on a tie it keeps readdir order,
  *  which is filesystem-dependent; the name key makes the harness's choice total. Exported for tests (APFS
@@ -371,7 +410,7 @@ export function compareNativeCandidates(
   );
 }
 
-/** Every version dir under `root` with at least one candidate, newest version first. */
+/** Every real version dir under `root`, newest version first. */
 function stagedNativeVersions(root: string): { version: string; scan: NativeVersionScan }[] {
   let names: string[] = [];
   try {
@@ -395,10 +434,10 @@ const buildLabel = (c: NativeCandidate) => (c.layout === "nested" ? c.build! : "
  * - `exact` — the pinned version is staged. For a per-build pin, it is the pinned build; for a flat pin
  *   (which names no build) it is the first candidate in choice order, with `relocated` when Desktop moved it
  *   into a build dir and `others` when more than one build of that version is staged.
- * - `build` — the pin names a build, that build is not staged, and another build of the SAME version is.
+ * - `build` — the pin names a build, that build is not staged, and another install of the SAME version is.
  *   A different build is a different binary, so it is gated like `major-minor`. A flat pin never yields it.
- * - `patch` — the pinned version is not staged; the newest staged one is a same-major.minor patch bump
- *   (auto-tolerated: the native binary has no sha256 pin).
+ * - `patch` — the pinned version has nothing runnable; the newest staged one differs only in patch
+ *   (auto-tolerated: the native binary has no sha256 pin). It may be older than the pin.
  * - `major-minor` — the newest staged version differs in major or minor (env-gated fallback or throw).
  * - `missing` — nothing runnable under either layout; `cause` says why.
  */
@@ -424,11 +463,14 @@ export interface NativeStagingDrift {
   relocated?: boolean;
   /** Other builds of the chosen version that were NOT chosen (only for a choice the pin did not decide). */
   others?: string[];
+  /** Descriptions of the pinned version's 12-hex dirs that are not runnable (kinds `patch`/`major-minor`). */
+  pinnedUnusable?: string[];
   /** Why nothing was found (`missing` only). */
-  cause?: "missing-root" | "missing" | "unfinished" | "unknown-layout";
+  cause?: "missing-root" | "missing" | "unfinished" | "unusable-build" | "unknown-layout";
   /** The `claude-code` dir scanned. */
   root?: string;
-  unfinished?: string[];
+  /** Descriptions of every 12-hex dir that is not a runnable build (`missing` only). */
+  unusable?: string[];
   unknownEntries?: string[];
 }
 
@@ -474,16 +516,28 @@ export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeSt
   const newest = all.find((v) => v.version !== pinned && v.scan.candidates.length);
   if (newest) {
     const [c, ...rest] = newest.scan.candidates;
-    return { kind: isPatchBump(pinned, newest.version) ? "patch" : "major-minor", ...base, ...describe(c, rest), fallbackPath: c.path };
+    return {
+      kind: isPatchBump(pinned, newest.version) ? "patch" : "major-minor",
+      ...base,
+      ...describe(c, rest),
+      fallbackPath: c.path,
+      ...(own.unusable.length ? { pinnedUnusable: own.unusable.map(describeUnusable) } : {}),
+    };
   }
-  const unfinished = all.flatMap((v) => v.scan.unfinished);
+  const unusable = all.flatMap((v) => v.scan.unusable);
   const unknownEntries = all.flatMap((v) => v.scan.unknown);
-  const cause = unfinished.length ? "unfinished" : unknownEntries.length ? "unknown-layout" : "missing";
+  const cause = unusable.length
+    ? unusable.every((u) => u.reason === "unmarked")
+      ? "unfinished"
+      : "unusable-build"
+    : unknownEntries.length
+      ? "unknown-layout"
+      : "missing";
   return {
     kind: "missing",
     cause,
     ...base,
-    ...(unfinished.length ? { unfinished } : {}),
+    ...(unusable.length ? { unusable: unusable.map(describeUnusable) } : {}),
     ...(unknownEntries.length ? { unknownEntries } : {}),
   };
 }
@@ -511,10 +565,10 @@ const ambiguityNote = (d: NativeStagingDrift) =>
  * is what hostloop spawns directly (no Docker) for the agent loop; the ELF (`resolveAgentBinary`) stays the
  * source of truth for container/microvm and for hostloop's bash/web_fetch VM sidecar image.
  *
- * A mid-session Claude Desktop auto-update prunes the pinned version and stages a newer one — since the
- * native binary carries NO sha256 pin (unlike the ELF), a same-major.minor PATCH bump is auto-tolerated
- * by default (loud stderr note, no env var needed). A major/minor drift, or a different build of a pinned
- * build, needs COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 or throws.
+ * A Claude Desktop update replaces the pinned version with another — since the native binary carries NO
+ * sha256 pin (unlike the ELF), a same-major.minor PATCH difference is auto-tolerated by default (loud stderr
+ * note, no env var needed). A major/minor drift, or a different build of a pinned build, needs
+ * COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 or throws.
  */
 export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
   const override = process.env.COWORK_HOST_AGENT_BINARY;
@@ -525,15 +579,26 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
   const d = classifyNativeStagingDrift(baseline);
   const exactPath = d.stagedPath || "(unknown)";
   if (d.kind === "exact") {
+    // The pinned flat file is still on disk, but a verified build of the same version wins (as it does for
+    // Desktop, which does not run an unmarked flat install). The two files can differ, so say which one runs.
+    if (d.relocated && d.layout === "nested" && existsSync(d.stagedPath))
+      process.stderr.write(
+        `cowork-harness: the pinned native agent "${d.stagedPath}" is present, but a verified build of ${d.found} is staged; ` +
+          `running that build, "${d.path}".\n`,
+      );
     const amb = ambiguityNote(d);
     if (amb) process.stderr.write(`cowork-harness: ${amb}.\n`);
     return resolve(d.path!);
   }
   if (d.kind === "patch") {
     const amb = ambiguityNote(d);
+    const why = d.pinnedUnusable?.length
+      ? `${d.pinned} is staged but not runnable (${d.pinnedUnusable.join("; ")})`
+      : `${d.pinned} is not staged`;
+    const dir = cmpVersionStrings(d.found!, d.pinned!) > 0 ? "newer" : "older";
     process.stderr.write(
-      `cowork-harness: staged native agent ${d.pinned} pruned by a Desktop update; using patch-newer ` +
-        `${d.found}${d.foundBuild && d.layout === "nested" ? ` (build ${d.foundBuild})` : ""} — behavior contract unchanged for a patch bump` +
+      `cowork-harness: pinned native agent ${why}; using patch-${dir} ` +
+        `${d.found}${d.foundBuild && d.layout === "nested" ? ` (build ${d.foundBuild})` : ""} — behavior contract unchanged for a patch difference` +
         `${amb ? `; ${amb}` : ""}.\n`,
     );
     return resolve(d.path!);
@@ -541,7 +606,11 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
   if (d.kind === "build" || d.kind === "major-minor") {
     const what =
       d.kind === "build"
-        ? `baseline NATIVE agent ${d.pinned} build ${d.pinnedBuild} is not staged; ${d.found} is staged as ${d.foundBuild ? `build ${d.foundBuild}` : "a flat install"} at "${d.path}" (a different build is a different binary)`
+        ? d.foundBuild
+          ? `baseline NATIVE agent ${d.pinned} build ${d.pinnedBuild} is not staged; ${d.found} is staged as build ${d.foundBuild} at "${d.path}" ` +
+            `(a different build is a different binary — so is the same version's build for another CPU architecture)`
+          : `baseline NATIVE agent ${d.pinned} build ${d.pinnedBuild} is not staged; ${d.found} is staged only as a flat install with no .verified ` +
+            `marker at "${d.path}", so its build cannot be confirmed`
         : `baseline NATIVE agent binary not found: ${exactPath}; newest staged is ${d.found} at "${d.path}" (major/minor differs)`;
     if (process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
       process.stderr.write(`cowork-harness: ${what}; COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 — falling back to "${d.path}".\n`);
@@ -557,8 +626,8 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
     d.cause === "missing-root"
       ? `${root} does not exist, so no native agent is staged on this machine`
       : `no version under ${root} holds a binary at <ver>/claude.app/Contents/MacOS/claude or <ver>/<build>/claude.app/Contents/MacOS/claude` +
-        (d.cause === "unfinished"
-          ? `; ${d.unfinished!.join(", ")} has no .verified marker naming it — Desktop has not finished staging it`
+        (d.cause === "unfinished" || d.cause === "unusable-build"
+          ? `; ${d.unusable!.join("; ")}`
           : d.cause === "unknown-layout"
             ? `; found ${d.unknownEntries!.join(", ")} — a staging layout this harness does not recognise`
             : "");
@@ -604,6 +673,12 @@ export function deriveNativeStagedPath(a: {
     if (a.manifestBuild && a.manifestBuild.version === newest.version) {
       const named = cands.find((c) => c.build === a.manifestBuild!.build);
       if (named) chosen = named;
+      else if (cands.length === 1 && chosen.build === undefined)
+        // An unmarked flat install: its build is unknown, not different — nothing to warn about.
+        warnings.push(
+          `NOTE: the only staged install of native agent ${newest.version} is a flat install with no .verified marker, so its build is unknown ` +
+            `(the asar manifest names ${a.manifestBuild.build}); pinning it.`,
+        );
       else
         warnings.push(
           `WARNING: the asar manifest names native build ${a.manifestBuild.build} of ${newest.version}, which is not staged; ` +
@@ -617,7 +692,7 @@ export function deriveNativeStagedPath(a: {
     }
     return { path: tilde(resolve(chosen.path)), warnings };
   }
-  const re = /claude-code\/[^/]+\/(?:[0-9a-f]{12}\/)?claude\.app\/Contents\/MacOS\/claude$/;
+  const re = /claude-code\/[^/]+\/(?:[0-9a-fA-F]{12}\/)?claude\.app\/Contents\/MacOS\/claude$/;
   let path: string;
   if (re.test(a.oldNativeStagedPath)) {
     path = a.oldNativeStagedPath.replace(re, `claude-code/${a.agentVersion}/${NATIVE_LEAF}`);

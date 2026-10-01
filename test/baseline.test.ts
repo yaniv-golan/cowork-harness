@@ -445,11 +445,14 @@ describe("resolveAgentBinary newest-sibling fallback", () => {
     const vmRoot = stageVm(["2.1.177"]);
     const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
     let msg = "";
+    let kind: string | undefined;
     try {
       resolveAgentBinary(baseline);
     } catch (e) {
       msg = (e as Error).message;
+      kind = (e as { kind?: string }).kind;
     }
+    expect(kind).toBe("pruned"); // doctor keys its remedy on this
     const line1 = msg.split("\n")[0];
     expect(line1).toContain("COWORK_AGENT_BINARY=");
     expect(line1).toContain("sha-verify");
