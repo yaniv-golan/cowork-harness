@@ -288,14 +288,19 @@ not run again; the judge call is the only spend.
   by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
   (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's
   `evidence_files` or `include_subagent_text`, or the capture budget, changed, so a different document is
-  expected), `unknown` (no live assert recorded a fingerprint to compare with), `live_refused` (every live assert
-  with this scope refused its evidence and recorded no fingerprint; a refused assert that did record one was read
-  by the live judge, so it is compared like a graded one), or `not_graded` (this
-  re-grade's own assert refused its evidence; its message says why). The run-level value is the worst over the
-  graded asserts, and `not_graded` only when every assert was refused. `unknown` and `live_refused` are named in a
+  expected), `unknown` (this assert's scope has no live fingerprint), `live_refused` (every live assert with this
+  scope refused its evidence and no fingerprint was recorded — in practice a run from before fingerprints were
+  recorded, or one where no judge ran for the refused assert; a refused assert that did record one is compared
+  like a graded one), or `not_graded` (this re-grade's own assert refused its evidence and no document was handed
+  to a judge). While the judge is called before a refusal is decided, an assert that refuses has still had its
+  document read, so it is compared and reported like any other — `false` included — and its refusal shows in its
+  own pass and message. The run-level value is the worst over the asserts, in the order `false`, `live_refused`,
+  `unknown`, `scope_changed`, `true` (so "differs by design" never hides "never checked"); it is `not_graded` only
+  when every assert is. `unknown` and `live_refused` are named in a
   `::warning::` before the judge call: those documents could not be checked for drift or for a secret the live
   run scrubbed, and this process's scrub set is all that protects them. None of these change the exit code.
-  When no judge ran at all, the regrade file is named after the requested `--judge-model`, else `not-graded`.
+  If no judge ran for any assert (not possible while a refusing assert's judge is still called), the regrade
+  file is named after the requested `--judge-model`, else `not-graded`.
   A `false` says only that the bytes differ, not why:
   an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
   cause it, and the listed sections are what tell them apart.

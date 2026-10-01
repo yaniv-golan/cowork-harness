@@ -653,11 +653,13 @@ calls and is absent when none was priced (never `0` for unknown); `unpricedGrade
 `assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
 every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `false` | `"scope_changed"` |
 `"unknown"` | `"live_refused"` | `"not_graded"`: whether the recomposed judged document equals, section for
-section, the `judgedDoc` the live run recorded (`unknown` when no live assert recorded one, never `true`;
-`live_refused` when every live assert with that scope refused its evidence and recorded no fingerprint — one that
-recorded a `judgedDoc` is compared like a graded one; `not_graded` when the re-grade's own
-assert refused its evidence). The run-level value is the worst over the graded asserts, `not_graded` only when
-every assert was refused; none of these values changes the exit code. `differingSections[]` entries are
+section, the `judgedDoc` the live run recorded (`unknown` when this assert's scope has no live fingerprint, never
+`true`; `live_refused` when every live assert with that scope refused its evidence and no fingerprint was
+recorded — one that recorded a `judgedDoc` is compared like a graded one; `not_graded` when the re-grade's own
+assert refused its evidence and no document was handed to a judge — an assert that refused after its judge read
+a document is compared like any other). The run-level value is the worst over the asserts in the order `false`,
+`live_refused`, `unknown`, `scope_changed`, `true`, and `not_graded` only when every assert is; none of these
+values changes the exit code. `differingSections[]` entries are
 `{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
 passed. `docMatchesLive: false` says the bytes differ, not why (an authored file changed since the run, a
 different secret-scrub set, a sub-agent section). The refusal is decided separately, before any judge call:

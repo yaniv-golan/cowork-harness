@@ -39,8 +39,9 @@ export { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./reg
 const CMD = "regrade";
 
 /** Whether the re-grade's judged document is the one the live judge read. See REGRADE_USAGE. `unknown` and
- *  `live_refused` mean there was nothing live to compare with (no fingerprint, or the live assert refused its
- *  evidence and recorded no fingerprint); `not_graded` means this re-grade's own assert refused its evidence. */
+ *  `live_refused` mean there was nothing live to compare with (this scope has no live fingerprint, or the live
+ *  assert refused its evidence and none was recorded); `not_graded` means this re-grade's own assert refused its
+ *  evidence and no document was handed to a judge. */
 export type DocMatch = true | false | "scope_changed" | "unknown" | "live_refused" | "not_graded";
 
 export interface DifferingSection {
@@ -186,10 +187,10 @@ interface LiveSide {
   captureMoved: boolean;
 }
 
-/** A live semantic assert that refused its evidence (any `semanticEvidence.reason` but `graded`) AND recorded no
- *  `judgedDoc`: no live judge read a document for it, so it vouches for nothing. A refused assert that DID
- *  record one (a harness that still called the judge before refusing) had its document read, so its
- *  fingerprint is valid evidence and it is compared like a graded one. A result without `semanticEvidence`
+/** A live semantic assert that refused its evidence (any `semanticEvidence.reason` but `graded`) AND for which no
+ *  fingerprint was recorded — in practice a run from before `judgedDoc` existed, or one where no judge ran for
+ *  the refused assert — so it vouches for nothing. A refused assert that DID record one (a harness that still
+ *  called the judge before refusing) is compared like a graded one. A result without `semanticEvidence`
  *  predates the field and is read as graded. */
 const liveRefused = (r: LiveResult): boolean =>
   r.judgedDoc === undefined && r.semanticEvidence !== undefined && r.semanticEvidence.reason !== "graded";
@@ -198,7 +199,8 @@ const liveRefused = (r: LiveResult): boolean =>
 const comparable = (r: LiveResult): boolean => r.judgedDoc !== undefined;
 
 /** Why an assert has nothing live to compare with, whatever its own document: every same-scope live assert
- *  refused and recorded no fingerprint (`live_refused`), or no live assert recorded a comparable document at all (`unknown`). */
+ *  refused with no fingerprint recorded (`live_refused`), or no live assert recorded one at all (`unknown`).
+ *  `compareWithLive` also reports `unknown` for an assert whose own scope has no live fingerprint. */
 function nothingLive(a: Assertion, live: LiveSide): "live_refused" | "unknown" | undefined {
   const key = ownScopeKey(a.semantic_matches!);
   const sameScope = live.liveSemantic.filter((r) => ownScopeKey(r.assertion.semantic_matches!) === key);
@@ -213,10 +215,10 @@ function liveSide(result: RunResult, sc: Scenario, budgetChanged: boolean): Live
   return { liveSemantic, captureMoved };
 }
 
-/** Compare one graded assert's document (`now`, the fingerprint of what the judge was handed) with the one
- *  its live counterpart's judge read — the reported `docMatchesLive`. The refusal is decided separately,
- *  before any judge call, by `liveDocDrift`. */
-function compareWithLive(
+/** Compare one assert's document (`now`, the fingerprint of what the judge was handed) with the one its live
+ *  counterpart's judge read — the reported `docMatchesLive`. The refusal is decided separately, before any
+ *  judge call, by `liveDocDrift`. Exported for tests. */
+export function compareWithLive(
   a: Assertion,
   ordinal: number,
   assertionIndex: number,
@@ -225,7 +227,10 @@ function compareWithLive(
   /** This re-grade's own assert refused its evidence. */
   regradeRefused: boolean,
 ): { match: DocMatch; differing: DifferingSection[] } {
-  if (regradeRefused) return { match: "not_graded", differing: [] };
+  // Compare FIRST: an assert that refused after its judge read a document (the judge is called before the
+  // refusal is decided) is reported by what that document was — the refusal stays visible in its own
+  // pass/message. `not_graded` is only for a refusal with no document handed to a judge at all.
+  if (regradeRefused && !now) return { match: "not_graded", differing: [] };
   const none = nothingLive(a, live);
   if (none) return { match: none, differing: [] };
   // The document is a function of the shared capture and the assert's own scope, so any live assert with
@@ -236,6 +241,8 @@ function compareWithLive(
   const positional = live.liveSemantic[ordinal];
   const counterpart =
     sameScope.find((r) => r.judgedDoc) ?? sameScope[0] ?? (positional && !liveRefused(positional) ? positional : undefined);
+  // The assert's own scope ran live but recorded no fingerprint: nothing to compare with, whatever else moved.
+  if (sameScope.length > 0 && !sameScope.some((r) => r.judgedDoc)) return { match: "unknown", differing: [] };
   const scopeChanged = sameScope.length === 0 || live.captureMoved;
   if (!counterpart || !counterpart.judgedDoc || !now) return { match: scopeChanged ? "scope_changed" : "unknown", differing: [] };
   const differing = diffSections(counterpart.judgedDoc, now, assertionIndex);
@@ -326,7 +333,7 @@ export interface UncheckedSection {
  * Empty when the run recorded no comparable `judgedDoc` at all: its asserts are then `unknown` or
  * `live_refused`, unchecked as a whole, and warned about as such.
  */
-function uncheckedSections(semantic: Assertion[], sc: Scenario, ctx: AssertContext, result: RunResult): UncheckedSection[] {
+function uncheckedSections(docs: Map<Assertion, JudgedDocFingerprint>, sc: Scenario, result: RunResult): UncheckedSection[] {
   const liveSections = (result.assertions ?? []).flatMap((r) =>
     r.assertion?.semantic_matches !== undefined && comparable(r) ? r.judgedDoc!.sections : [],
   );
@@ -336,9 +343,7 @@ function uncheckedSections(semantic: Assertion[], sc: Scenario, ctx: AssertConte
   for (const s of liveSections) longest.set(s.kind, Math.max(longest.get(s.kind) ?? 0, s.chars));
   const out: UncheckedSection[] = [];
   const seen = new Set<string>();
-  for (const a of semantic) {
-    const sm = a.semantic_matches!;
-    const fp = composeJudgedDocument(ctx, sm.include_subagent_text === true, sm.evidence_files).fingerprint;
+  for (const [a, fp] of docs) {
     const assertionIndex = sc.assert.indexOf(a);
     for (const s of fp.sections) {
       if (exact.has(`${s.kind}\0${s.path ?? ""}\0${s.sha256}`)) continue;
@@ -359,7 +364,8 @@ const sectionLabel = (d: DifferingSection): string => `${d.change} ${d.kind}${d.
 function aggregate(matches: DocMatch[]): DocMatch {
   const graded = matches.filter((m) => m !== "not_graded");
   if (graded.length === 0) return matches.length ? "not_graded" : true;
-  for (const m of [false, "scope_changed", "live_refused", "unknown"] as const) if (graded.includes(m)) return m;
+  // The unchecked values rank above `scope_changed`, so "differs by design" never hides "never checked".
+  for (const m of [false, "live_refused", "unknown", "scope_changed"] as const) if (graded.includes(m)) return m;
   return true;
 }
 
@@ -398,6 +404,8 @@ interface Prepared {
   runDir: string;
   dirAsGiven: string;
   unchecked: UncheckedSection[];
+  /** `assert <i>: unknown|live_refused` for each assert with no live fingerprint to compare with. */
+  blind: string[];
   turn: number;
   ctx: AssertContext;
   resultSha256: string;
@@ -525,17 +533,28 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
         );
     }
 
+    // The documents the judge will be handed (composed exactly as `runSemanticJudges` will), for what can be
+    // said before the spend: the content no live fingerprint covers, and the asserts with no live
+    // fingerprint to compare with at all.
+    const newSemantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
+    const newDocs = new Map(
+      newSemantic.map((a) => [
+        a,
+        composeJudgedDocument(second.ctx, a.semantic_matches!.include_subagent_text === true, a.semantic_matches!.evidence_files)
+          .fingerprint,
+      ]),
+    );
+    const blind = newSemantic.flatMap((a, ordinal) => {
+      const { match } = compareWithLive(a, ordinal, sc.assert.indexOf(a), newDocs.get(a), live, false);
+      return match === "unknown" || match === "live_refused" ? [`assert ${sc.assert.indexOf(a)}: ${match}`] : [];
+    });
     prepared.push({
       runDir,
       dirAsGiven: dir,
       turn: second.turn,
       ctx: second.ctx,
-      unchecked: uncheckedSections(
-        sc.assert.filter((a) => a.semantic_matches !== undefined),
-        sc,
-        second.ctx,
-        second.result,
-      ),
+      unchecked: uncheckedSections(newDocs, sc, second.result),
+      blind,
       resultSha256: sha256Hex(readFileSync(turnArtifactPath(runDir, second.turn, "result.json"))),
       budget,
       live,
@@ -559,15 +578,12 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       );
     // Asserts with nothing live to compare with were neither drift-checked nor secret-checked. Not refused —
     // a run graded before fingerprints existed is still worth re-grading — but said before the spend.
-    const blind = semantic.flatMap((a) => {
-      const why = nothingLive(a, p.live);
-      return why ? [`assert ${sc.assert.indexOf(a)}: ${why}`] : [];
-    });
+    const blind = p.blind;
     if (blind.length)
       warn(
         scrub(
           `::warning:: ${CMD}: ${p.dirAsGiven}: ${blind.length} assert(s) have no live document to compare with (${blind.join(", ")}) — ` +
-            `unknown: the run recorded no fingerprint; live_refused: the live assert refused its evidence and recorded no fingerprint. ` +
+            `unknown: this assert's scope has no live fingerprint; live_refused: the live assert refused its evidence and no fingerprint was recorded. ` +
             `Their rebuilt documents could not be checked for drift or for a secret the live run scrubbed; this process's scrub set ` +
             `is all that protects them.`,
           secrets,
@@ -665,11 +681,11 @@ function docMatchLine(r: RegradeRunReport): string {
     case true:
       return "· judged document: identical to the one the live judge read";
     case "unknown":
-      return "· judged document: cannot compare — the run did not record the live document's fingerprint (not drift- or secret-checked)";
+      return "· judged document: cannot compare — this assert's scope has no live fingerprint (not drift- or secret-checked)";
     case "live_refused":
-      return "· judged document: cannot compare — the live assert refused its evidence and recorded no fingerprint (not drift- or secret-checked)";
+      return "· judged document: cannot compare — the live assert refused its evidence and no fingerprint was recorded (not drift- or secret-checked)";
     case "not_graded":
-      return "· judged document: not graded — this re-grade's assert refused its evidence (see its message)";
+      return "· judged document: not graded — this re-grade's assert refused its evidence before any judge read a document (see its message)";
     case "scope_changed":
       return `· judged document: evidence scope or capture budget changed since the live run, so it differs by design${
         r.differingSections.length ? ` (${r.differingSections.map(where).join(", ")})` : ""

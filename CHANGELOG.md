@@ -18,11 +18,12 @@ All notable changes to this project are documented here. The format is based on
   - `docMatchesLive` reports whether the rebuilt document equals, section by section, the `judgedDoc` the live
     run recorded: `true`, `false` (the differing sections are listed by kind and path; an authored file changed
     since the run, a different scrub set, or a sub-agent section can each cause it), `scope_changed` (the
-    evidence scope or budget changed), `unknown` (no live fingerprint to compare with), `live_refused` (the live
-    assert refused its evidence and recorded no fingerprint; one that recorded a `judgedDoc` is compared like a
-    graded one), or `not_graded` (the re-grade's own assert
-    refused its evidence). `unknown` and `live_refused` are warned about before the judge call; none of them
-    changes the exit code.
+    evidence scope or budget changed), `unknown` (this assert's scope has no live fingerprint), `live_refused`
+    (the live assert refused its evidence and no fingerprint was recorded; one that recorded a `judgedDoc` is
+    compared like a graded one), or `not_graded` (the re-grade's own assert refused its evidence and no document
+    was handed to a judge; one that refused after its judge read a document is compared like any other). The
+    run-level value ranks `false`, then the unchecked `live_refused` and `unknown`, above `scope_changed`.
+    `unknown` and `live_refused` are warned about before the judge call; none of them changes the exit code.
   - Before any judge call, each live assert's document is rebuilt from the live run's own inputs (its scope,
     the live `evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture`
     existed, the `--authored-total-bytes` value you pass) and compared with its `judgedDoc`; any difference is
