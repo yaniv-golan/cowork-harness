@@ -60,6 +60,9 @@ export interface PairwiseSetup {
   caseId: string;
   refsFor: (a: Assertion) => PairwiseRef[];
   neutralRefs: ReadonlySet<string>;
+  /** The references that decide the verdict; unset = every one. Only these must resolve before spend: a metric-only
+   *  reference that cannot be read degrades its own comparison at run time instead. */
+  gateRefs?: ReadonlySet<string>;
 }
 
 /** The default setup for a scenario run outside a hillclimb flow: the case id is the scenario's name (its file stem
@@ -93,7 +96,7 @@ export function pairwiseRefsRefusal(scenario: Scenario, setup: PairwiseSetup, mo
     if (!refs.length) problems.push(`assert ${i}: semantic_pairwise has no reference — add \`refs:\` (a store written by \`ref freeze\`)`);
     for (const r of refs) {
       stores.add(r.store);
-      if (!setup.neutralRefs.has(r.name))
+      if (!setup.neutralRefs.has(r.name) && (setup.gateRefs === undefined || setup.gateRefs.has(r.name)))
         reqs.push({ caseId: setup.caseId, assertIndex: i, refName: r.name, store: r.store, composeKey: pairwiseComposeKey(a), taskSha256 });
     }
   }

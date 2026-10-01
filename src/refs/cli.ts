@@ -43,13 +43,32 @@ export interface FreezeOptions {
 
 export interface FreezeOutcome {
   exitCode: 0 | 2;
+  /** What happened: a fresh entry (`frozen`), keys added to an existing one (`added`), an entry already holding every
+   *  key, or one written concurrently by another process (`exists` — benign to a caller that only needs the entry to
+   *  be there; `ref freeze` still exits 2 on it), or a refusal (`refused`). */
+  status: "frozen" | "added" | "exists" | "refused";
   message: string;
   caseId?: string;
   frozen: string[];
   added: string[];
 }
 
-const refuse = (message: string, caseId?: string): FreezeOutcome => ({ exitCode: 2, message, caseId, frozen: [], added: [] });
+const refuse = (message: string, caseId?: string): FreezeOutcome => ({
+  exitCode: 2,
+  status: "refused",
+  message,
+  caseId,
+  frozen: [],
+  added: [],
+});
+const exists = (message: string, caseId: string): FreezeOutcome => ({
+  exitCode: 2,
+  status: "exists",
+  message,
+  caseId,
+  frozen: [],
+  added: [],
+});
 
 export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutcome {
   const c = deps.compose(opts.runDir, opts.scenarioFile);
@@ -87,9 +106,10 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
         { harnessVersion: c.harnessVersion, composerId: c.composerId, scenario: c.scenario, taskSha256: c.taskSha256 },
       );
       if (r.status === "exists")
-        return refuse(`ref freeze: a reference for case ${caseId} appeared in ${opts.out} concurrently; nothing written`, caseId);
+        return exists(`ref freeze: a reference for case ${caseId} appeared in ${opts.out} concurrently; nothing written`, caseId);
       return {
         exitCode: 0,
+        status: "frozen",
         message: `ref freeze: froze case ${caseId} into ${opts.out}`,
         caseId,
         frozen: c.docs.map((d) => d.key),
@@ -105,12 +125,13 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
       { resultSha256: c.source.resultSha256, composerId: c.composerId, taskSha256: c.taskSha256 },
     );
     if (added.length === 0)
-      return refuse(
+      return exists(
         `ref freeze: case ${caseId} is already frozen in ${opts.out} with every compose key; a frozen reference is never rewritten`,
         caseId,
       );
     return {
       exitCode: 0,
+      status: "added",
       message: `ref freeze: added ${added.length} compose key(s) to case ${caseId} in ${opts.out}`,
       caseId,
       frozen: [],
