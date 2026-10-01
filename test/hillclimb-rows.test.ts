@@ -139,6 +139,40 @@ describe("scored rows", () => {
     expect(row.in_tokens).toBe(2 + 17216 + 33648);
   });
 
+  it("never RunResult.usage (the last call only): the row's usage differs from it on the same result", () => {
+    const slash = fixture("slash-success-synthetic");
+    // ADDED: a last-call usage that disagrees with the session's modelUsage, as on real runs
+    const r = {
+      ...fixture("success-semantic"),
+      modelUsage: slash.modelUsage,
+      usage: { input_tokens: 88, output_tokens: 7 },
+    } as unknown as RunResult;
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.usage.output_tokens).toBe(1306);
+  });
+
+  it("a usage field the agent did not report is left out, never written as 0", () => {
+    // ADDED: an entry without cache counters
+    const r = {
+      ...fixture("success-semantic"),
+      modelUsage: { "claude-sonnet-5": { inputTokens: 5, outputTokens: 9 } },
+    } as unknown as RunResult;
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.usage).toEqual({ input_tokens: 5, output_tokens: 9 });
+    expect(row.in_tokens).toBe(5);
+  });
+
+  it("perf and meta extras: skill_invoked 1/0/absent, decider_usd from the decider's cost, meta.ablated", () => {
+    const r = { ...fixture("success-semantic"), deciderCostUsd: 0.012 } as unknown as RunResult; // ADDED: decider cost
+    const yes = attemptRow({ result: r }, ctx(r, { skillInvoked: true, meta: { ...ctx(r).meta, ablated: true } })).row as Record<
+      string,
+      any
+    >;
+    expect(yes).toMatchObject({ skill_invoked: 1, decider_usd: 0.012, meta: { ablated: true } });
+    expect((attemptRow({ result: r }, ctx(r, { skillInvoked: false })).row as Record<string, any>).skill_invoked).toBe(0);
+    expect(attemptRow({ result: r }, ctx(r)).row).not.toHaveProperty("skill_invoked");
+  });
+
   it("no cost recorded ⇒ cost_usd absent, never 0 (unpriced is not free)", () => {
     const r = fixture("success-semantic");
     expect(attemptRow({ result: r }, ctx(r)).row).not.toHaveProperty("cost_usd");

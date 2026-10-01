@@ -5,14 +5,26 @@
 // assistant frame naming the excerpt's model. The scenario files hold the excerpt's own assertion list, so the
 // grades line up. The wiring through the real runOneScenario is H4b's stub-agent test, not this one.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
 import { parseHillclimbRunArgs, type HillclimbRunArgs } from "../src/hillclimb/args.js";
 import type { RunResult } from "../src/types.js";
 import { stateTemplate } from "../src/hillclimb/state-template.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
+import { hostPathTokens } from "../src/run/host-path-tokens.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 
 const FX = join(import.meta.dirname, "fixtures");
@@ -186,6 +198,37 @@ describe("a pass", () => {
     expect(err.some((l) => l.startsWith("::"))).toBe(false);
   });
 
+  it("a pass never writes _state.json (S l.12-13: loop-owned; only --approve-harness records harness_sha)", async () => {
+    await approved();
+    const before = readFileSync(join(flowDir(), "_state.json"));
+    const mtime = statSync(join(flowDir(), "_state.json")).mtimeMs;
+    await runHillclimb(args(), deps());
+    expect(readFileSync(join(flowDir(), "_state.json")).equals(before)).toBe(true);
+    expect(statSync(join(flowDir(), "_state.json")).mtimeMs).toBe(mtime);
+  });
+
+  it("the progress line ticks while jobs run, not only at the end", async () => {
+    await approved();
+    const slow = deps({
+      tickMs: 20,
+      runJob: async (j) => {
+        await new Promise((res) => setTimeout(res, 120));
+        return { result: excerpt, events, children: [], attemptS: 1, runnerTimeout: false, runDir: `/tmp/r/${j.c.id}` };
+      },
+    });
+    await runHillclimb(args(), slow);
+    const ticks = err.filter((l) => /^\[baseline\] 0\/2 done/.test(l));
+    expect(ticks.length).toBeGreaterThan(0);
+  });
+
+  it("--ablate rows carry meta.ablated", async () => {
+    await approved();
+    const a = parseHillclimbRunArgs(["evals", "--flow", ".claude/hillclimb/f", "--concurrency", "2", "--ablate", "--approve-harness"]);
+    if (a.help) throw new Error("help");
+    await runHillclimb(a, deps());
+    expect(rows("baseline").every((x) => x.meta.ablated === true)).toBe(true);
+  });
+
   it("summary.json gets the observed model and keeps any key the loop wrote", async () => {
     await approved();
     mkdirSync(join(flowDir(), "baseline"), { recursive: true });
@@ -270,7 +313,9 @@ describe("the written flow, end to end", () => {
       readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
     for (const f of walk(flowDir())) {
       const text = readFileSync(f, "utf8");
-      for (const bad of [secret, homedir(), cwd, "/Users/"]) expect(text, `${f} contains ${bad}`).not.toContain(bad);
+      for (const bad of [secret, homedir(), cwd, "/Users/", `/${userInfo().username}/`])
+        expect(text, `${f} contains ${bad}`).not.toContain(bad);
+      expect(hostPathTokens(text), f).toEqual([]);
     }
   });
 });

@@ -80,35 +80,31 @@ export interface Attempt {
 
 export type RowOut = { dest: "results"; row: Record<string, unknown> } | { dest: "errors"; row: Record<string, unknown> };
 
+/** A modelUsage entry in the row's snake_case. A field the agent did not report is left out — never 0. */
 const snake = (e: Record<string, unknown> | undefined): TokenUsage | undefined => {
   if (!e) return undefined;
-  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-  return {
-    input_tokens: n(e.inputTokens),
-    output_tokens: n(e.outputTokens),
-    cache_read_input_tokens: n(e.cacheReadInputTokens),
-    cache_creation_input_tokens: n(e.cacheCreationInputTokens),
+  const out: Partial<TokenUsage> = {};
+  const put = (k: keyof TokenUsage, v: unknown) => {
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
   };
+  put("input_tokens", e.inputTokens);
+  put("output_tokens", e.outputTokens);
+  put("cache_read_input_tokens", e.cacheReadInputTokens);
+  put("cache_creation_input_tokens", e.cacheCreationInputTokens);
+  return Object.keys(out).length ? (out as TokenUsage) : undefined;
 };
 
 /** Every modelUsage entry that IS the main model, summed: the agent keys usage by the PICKED id, so a `[1m]`
  *  context-window pick of the same model is `claude-x[1m]` there while its responses say `claude-x`. */
 function mainModelUsage(mu: Record<string, unknown> | undefined, model: string): TokenUsage | undefined {
   const want = normalizeModelId(model);
-  let sum: TokenUsage | undefined;
+  const sum: Partial<TokenUsage> = {};
   for (const [k, e] of Object.entries(mu ?? {})) {
     if (normalizeModelId(k) !== want) continue;
-    const u = snake(e as Record<string, unknown>)!;
-    sum = sum
-      ? {
-          input_tokens: sum.input_tokens + u.input_tokens,
-          output_tokens: sum.output_tokens + u.output_tokens,
-          cache_read_input_tokens: sum.cache_read_input_tokens + u.cache_read_input_tokens,
-          cache_creation_input_tokens: sum.cache_creation_input_tokens + u.cache_creation_input_tokens,
-        }
-      : u;
+    const u = snake(e as Record<string, unknown>) ?? {};
+    for (const [f, v] of Object.entries(u) as Array<[keyof TokenUsage, number]>) sum[f] = (sum[f] ?? 0) + v;
   }
-  return sum;
+  return Object.keys(sum).length ? (sum as TokenUsage) : undefined;
 }
 
 const authored = (r: RunResult | undefined) => authoredGrades(r as ClassifiableResult | undefined) as RunResult["assertions"];
@@ -297,8 +293,10 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     ...(usage !== undefined
       ? {
           usage,
-          in_tokens: usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
-          out_tokens: usage.output_tokens,
+          ...(usage.input_tokens !== undefined
+            ? { in_tokens: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) }
+            : {}),
+          ...(usage.output_tokens !== undefined ? { out_tokens: usage.output_tokens } : {}),
         }
       : {}),
     ...(ev.stopReason !== undefined ? { stop_reason: ev.stopReason } : {}),
