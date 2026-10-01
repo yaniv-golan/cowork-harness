@@ -24,6 +24,8 @@ import type { Assertion, RunResult } from "../src/types.js";
 import { buildStats, indexRowFromResult, type RunIndexRow } from "../src/run/run-index.js";
 import { HILLCLIMB_LABEL_PREFIX, loadCostHistory, loadRowHistory, type RowHistoryOptions } from "../src/eval/plan-history.js";
 import { estimateScheduleCost, perRepCost } from "../src/eval/planner.js";
+import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
+import { PAIRWISE_PROMPT_HASH } from "../src/decide/pairwise-judge.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
 const fixture = (name: string): Record<string, unknown> => JSON.parse(readFileSync(join(FX, name), "utf8"));
@@ -654,6 +656,54 @@ describe("loadRowHistory — a row with no turn is a fresh run: its result is tu
     writeFileSync(join(row.outDir, "turns", "2", "result.json"), JSON.stringify(passing(failRow0)));
     const h = loadRowHistory([row], opts());
     expect(h.excludedByKey.turn).toBe(0);
+    expect(rowById(h, 0)).toMatchObject({ k: 1, n: 1 });
+  });
+});
+
+// semantic_pairwise: the eval grades it as one judged row (kind "assertion", in the family) whose prompt is the
+// pairwise judge's own. Fixture: the same success-semantic.json copy, with its semantic grade EDITED into a
+// pairwise grade — the assertion swapped for a semantic_pairwise one, the per-claim results dropped, and the
+// grade's pairwise outcome, judge model and the pairwise prompt hash set, as a graded pairwise run records them.
+describe("loadRowHistory — semantic_pairwise rows", () => {
+  const PW: Assertion = { semantic_pairwise: { rubric: ["the better answer"], refs: ["../refs"] } } as Assertion;
+  const PW_ASSERTIONS = ASSERTIONS.map((a, i) => (i === SEMANTIC_INDEX ? PW : a));
+  const pairwise =
+    (o: { pass: boolean; judgeModel?: string; promptHash?: string }): Edit =>
+    (r) => {
+      const grades = r.assertions as Array<Record<string, unknown>>;
+      grades[SEMANTIC_INDEX] = {
+        assertion: PW,
+        pass: o.pass,
+        judgeModel: o.judgeModel ?? "claude-opus-5",
+        judgePromptHash: o.promptHash ?? PAIRWISE_PROMPT_HASH,
+        pairwise: [{ ref: "r1", status: "graded", outcome: o.pass ? "win" : "loss" }],
+      };
+    };
+  const pwOpts = (o: Partial<RowHistoryOptions> = {}) => opts({ assertions: PW_ASSERTIONS, judgePromptHash: JUDGE_PROMPT_HASH, ...o });
+  const pwRow = (h: ReturnType<typeof loadRowHistory>) => h.rows.find((r) => r.row.assertionIndex === SEMANTIC_INDEX)!;
+
+  it("a pairwise row from history is rated, as one row in the family", () => {
+    const h = loadRowHistory([run(passing(pairwise({ pass: true }))), run(passing(pairwise({ pass: false })))], pwOpts());
+    expect(pwRow(h).row.kind).toBe("assertion");
+    expect(pwRow(h).history).toMatchObject({ k: 1, n: 2 });
+  });
+
+  it("a different pairwise judge model excludes only that assert's row", () => {
+    const h = loadRowHistory(
+      [
+        run(passing(pairwise({ pass: true, judgeModel: "claude-opus-5" }))),
+        run(passing(pairwise({ pass: true, judgeModel: "claude-haiku-4-5" }))),
+      ],
+      pwOpts({ judgeModelPins: new Map([[SEMANTIC_INDEX, "claude-opus-5"]]) }),
+    );
+    expect(h.judgeModelDiffers).toBe(1);
+    expect(pwRow(h).history).toMatchObject({ k: 1, n: 1, excluded: { judge_model_differs: 1 } });
+    expect(rowById(h, 0)).toMatchObject({ k: 2, n: 2 });
+  });
+
+  it("a pairwise grade under another prompt keeps the structural rows and drops only the pairwise row", () => {
+    const h = loadRowHistory([run(passing(pairwise({ pass: true, promptHash: "0".repeat(16) })))], pwOpts());
+    expect(pwRow(h).history).toMatchObject({ n: 0, excluded: { judge_prompt_mismatch: 1 } });
     expect(rowById(h, 0)).toMatchObject({ k: 1, n: 1 });
   });
 });

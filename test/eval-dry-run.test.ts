@@ -11,7 +11,10 @@
 // per test.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { COMPOSER_ID } from "../src/assert.js";
+import { composeKey, freezeRef } from "../src/refs/store.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UsageError } from "../src/errors.js";
@@ -468,6 +471,33 @@ describe("eval --dry-run: the host-claude isolation check", () => {
     expect((err as Error).message).toMatch(/OLD-CLI-REFUSAL/);
     expect(plans).toHaveLength(1);
     expect(budgetStatus()).toBeUndefined(); // refused before the budget gate ran
+  });
+
+  it("refuses a dry run whose only judged assert is semantic_pairwise", async () => {
+    const { scen, a, b } = setup();
+    const key = composeKey(COMPOSER_ID, { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+    freezeRef(
+      join(root, "refs"),
+      "pairwise",
+      { command: "ref freeze", runDir: "~/r", resultSha256: "a".repeat(64) },
+      { [key]: "a reference answer" },
+      {
+        harnessVersion: "t",
+        composerId: COMPOSER_ID,
+        scenario: "pairwise",
+        taskSha256: createHash("sha256").update("write", "utf8").digest("hex"),
+      },
+    );
+    // Only the pairwise scenario: the csv one has no judged assert.
+    rmSync(join(scen, "csv-metrics.yaml"));
+    writeFileSync(
+      join(scen, "pairwise.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: write\nassert:\n  - semantic_pairwise:\n      judge_model: claude-opus-4-8\n      refs: [../refs]\n`,
+    );
+    let asked = 0;
+    const deps = { ...planDeps([]), isolationCheck: () => (asked++, "OLD-CLI-REFUSAL") };
+    await expect(planEvalDryRun(dry(scen, a, b), deps)).rejects.toThrow(/OLD-CLI-REFUSAL/);
+    expect(asked).toBe(1);
   });
 
   it("does not consult it when no scenario calls the judge or the LLM decider", async () => {
