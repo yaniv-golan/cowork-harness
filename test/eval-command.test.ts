@@ -906,6 +906,20 @@ describe("eval: snapshots and their signatures", () => {
     expect(asked).toBe(0);
   });
 
+  it("a semantic_pairwise reference that does not exist refuses the eval up front (exit 2), running no job", async () => {
+    const { scen, a, b } = setup();
+    writeFileSync(
+      join(scen, "pairwise.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: write\nassert:\n  - semantic_pairwise:\n      judge_model: claude-opus-4-8\n      refs: [../no-such-store]\n`,
+    );
+    const calls: EvalJobSpec[] = [];
+    await expect(runEval(args(scen, a, b), deps(fakeRunner(undefined, calls)))).rejects.toThrow(
+      /semantic_pairwise: refusing before the run spends anything/,
+    );
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(root, "eval"))).toBe(false);
+  });
+
   it("a refused eval leaves no eval dir behind", async () => {
     const { scen, a } = setup();
     await expect(runEval(args(scen, a, a), deps(fakeRunner()))).rejects.toThrow(UsageError);

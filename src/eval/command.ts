@@ -5,6 +5,7 @@
 // the schedule runs through an injected `runJob` (the CLI passes the same per-scenario runner `run` uses; the
 // tests pass a fake), each finished job appends one runs.jsonl line, and the report is written by the same
 // function `eval report` calls.
+import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -16,7 +17,7 @@ import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
 import { loadBaseline } from "../baseline.js";
-import { parseScenarioFile, loadSessionFromFile, scenarioInputFindings } from "../run/execute.js";
+import { parseScenarioFile, loadSessionFromFile, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
@@ -484,6 +485,11 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           const f = scenarioInputFindings(s.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
           const refusal = f.session ?? f.vacuity ?? f.inputs;
           if (refusal) throw refusal;
+          // semantic_pairwise references: the same gate executeScenario applies before a run dir exists, run here
+          // once per arm × scenario so a missing or damaged reference refuses the eval (exit 2) instead of failing
+          // every job. Mount roots come from the SUBSTITUTED session the jobs will run.
+          const pw = pairwiseRefsRefusal(s.scenario, scenarioPairwiseSetup(s.scenario), sessionOriginSources(sub, "(inline)"));
+          if (pw) throw new UsageError(pw);
         } catch (e) {
           if (e instanceof BoundaryError)
             throw new EvalStagingError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
