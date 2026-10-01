@@ -272,10 +272,12 @@ describe.skipIf(!can)("verify-run grades question_option_count from events.jsonl
 // `gateOptions` — the same producer a live run uses. Copied to a scratch tree with its relative layout so
 // `--assert-from` sees the recorded scenario unchanged except for its assert block.
 describe.skipIf(!can)("replay grades question_option_count from the cassette's own gate", () => {
-  function replayWith(assertYaml: string) {
+  function replayWith(assertYaml: string, edit?: (cassette: Record<string, unknown>) => void) {
     const root = mkdtempSync(join(tmpdir(), "cwh-qoc-replay-"));
     for (const d of ["examples/replays", "e2e/scenarios", "e2e/sessions"]) mkdirSync(join(root, d), { recursive: true });
-    copyFileSync("examples/replays/example-multiselect-gate.cassette.json", join(root, "examples/replays/c.cassette.json"));
+    const cassette = JSON.parse(readFileSync("examples/replays/example-multiselect-gate.cassette.json", "utf8")) as Record<string, unknown>;
+    edit?.(cassette);
+    writeFileSync(join(root, "examples/replays/c.cassette.json"), JSON.stringify(cassette, null, 2));
     copyFileSync("e2e/sessions/minimal.yaml", join(root, "e2e/sessions/minimal.yaml"));
     const src = readFileSync("e2e/scenarios/smoke-multiselect.yaml", "utf8").replace(/\nassert:\n[\s\S]*$/, "\n");
     writeFileSync(join(root, "e2e/scenarios/smoke-multiselect.yaml"), `${src}assert:\n${assertYaml}`);
@@ -290,6 +292,21 @@ describe.skipIf(!can)("replay grades question_option_count from the cassette's o
   it("passes on the recorded labels (Auth, Billing, Audit)", () => {
     const r = replayWith(`  - question_option_count:\n      matches: '^(Auth|Audit)$'\n      exactly: 2\n`);
     expect(r.code, r.text).toBe(0);
+  });
+
+  it("a cassette without controlOut cannot grade it: excluded with a warning, never a pass", () => {
+    const r = replayWith(`  - question_option_count:\n      matches: '^(Auth|Audit)$'\n      exactly: 2\n`, (c) => delete c.controlOut);
+    expect(r.text).toMatch(/question_option_count/);
+    expect(r.text).not.toMatch(/✓ question_option_count/);
+  });
+
+  it("a gate label the cassette's redaction rewrote makes a count it could change evidence-unavailable", () => {
+    const redact = (c: Record<string, unknown>) => {
+      c.events = (c.events as string[]).map((e) => e.replaceAll('"label":"Billing"', '"label":"[REDACTED:path:0123456789ab]"'));
+    };
+    const r = replayWith(`  - question_option_count:\n      matches: '^B'\n      exactly: 1\n`, redact);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/evidence unavailable: question_option_count: 1 sub-question\(s\) carry option labels rewritten/);
   });
 
   it("fails on a bound the recorded labels do not satisfy, naming the sub-question", () => {
