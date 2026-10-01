@@ -288,7 +288,14 @@ not run again; the judge call is the only spend.
   by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
   (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's
   `evidence_files` or `include_subagent_text`, or the capture budget, changed, so a different document is
-  expected), or `unknown` (the run recorded no fingerprint). A `false` says only that the bytes differ, not why:
+  expected), `unknown` (no live assert recorded a fingerprint to compare with), `live_refused` (every live assert
+  with this scope refused its evidence, so no live judge read a document for it), or `not_graded` (this
+  re-grade's own assert refused its evidence; its message says why). The run-level value is the worst over the
+  graded asserts, and `not_graded` only when every assert was refused. `unknown` and `live_refused` are named in a
+  `::warning::` before the judge call: those documents could not be checked for drift or for a secret the live
+  run scrubbed, and this process's scrub set is all that protects them. None of these change the exit code.
+  When no judge ran at all, the regrade file is named after the requested `--judge-model`, else `not-graded`.
+  A `false` says only that the bytes differ, not why:
   an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
   cause it, and the listed sections are what tell them apart.
 - **Drift is checked before the judge is called, from the live run's own inputs.** For every run dir, before any
@@ -302,8 +309,8 @@ not run again; the judge call is the only spend.
   an `--authored-total-bytes` override (`scope_changed`) does not skip the check of what the live judge read.
   `--allow-doc-drift` grades anyway; the grade is then reported with its own `docMatchesLive` and, when that is
   `false`, a warning.
-  **What is not checked:** a live assert that recorded no `judgedDoc` (`unknown`) — neither for drift nor for an
-  unscrubbed secret; and content that only a widened `evidence_files` scope or a larger `--authored-total-bytes`
+  **What is not checked:** a live assert that recorded no `judgedDoc` (`unknown`) or refused its evidence
+  (`live_refused`) — neither for drift nor for an unscrubbed secret, though it is warned about; and content that only a widened `evidence_files` scope or a larger `--authored-total-bytes`
   brings in (a file the live cap left out, or a larger part of one). The live judge never read that content, so
   nothing can be compared with it and a secret in it that this process does not know is not detected. It is not
   refused: it is graded, named in a `::warning::` before the judge call, and listed in `uncheckedSections`

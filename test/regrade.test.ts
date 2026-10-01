@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { regradeRuns, regradeEnvelope, regradeTextReport, type RegradeOptions } from "../src/run/regrade.js";
+import { regradeRuns, regradeEnvelope, regradeFileStem, regradeTextReport, type RegradeOptions } from "../src/run/regrade.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty, DEFAULT_AUTHORED_TOTAL_BYTES } from "../src/run/artifacts.js";
 import { authoredCaptureOpts } from "../src/run/authored-capture-opts.js";
 import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
@@ -399,22 +399,32 @@ describe("regrade: is the judged document the one the live judge read?", () => {
   });
 
   it("content only a larger budget brings in is graded, warned about, and listed as unchecked", async () => {
-    // Live: a 150-byte budget cuts z-notes.md (it sorts last). Re-grade: a far larger budget captures it whole —
-    // content the live judge never read, so no live fingerprint can vouch for it.
+    // Live: a 150-byte budget cuts z-notes.md (it sorts last), outside the live assert's scope, so the live grade
+    // stands. Re-grade: unscoped, with a far larger budget that captures it whole — content the live judge never
+    // read, so no live fingerprint can vouch for it.
     const SECRET = "sk-test-budget-probe-3f19";
     const k = await keptRun({
       author: (w) => {
         writeReport(w);
         writeFileSync(join(w, "outputs", "z-notes.md"), `notes: ${SECRET}\n${"n".repeat(400)}\n`);
       },
-      assertYaml: `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
+      assertYaml: SCOPED,
       totalBytes: 150,
     });
+    expect(JSON.parse(readFileSync(k.resultPath, "utf8")).assertions[0].semanticEvidence.reason).toBe("graded");
     const judge = judgeFactory(() => true);
     const stderr = captureStderr();
     let out;
     try {
-      out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 1_000_000 }));
+      out = await regradeRuns({
+        runDirs: [k.runDir],
+        scenarioFile: scenarioAt(
+          mkdtempSync(join(tmpdir(), "cwh-rg-scn11-")),
+          `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
+        ),
+        makeJudge: judge.make,
+        authoredTotalBytes: 1_000_000,
+      });
     } finally {
       stderr.restore();
     }
@@ -467,7 +477,7 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(stderr.text()).not.toContain("never read by the live judge");
   });
 
-  it("a live scope on a file over the per-file cap, re-graded unscoped, grades rather than refuses", async () => {
+  it("a live scope on a file over the per-file cap, re-graded unscoped, is not refused as drift", async () => {
     // Live, the scope exempts report.md from the 16 KiB per-file cap. The live document must be rebuilt with
     // the LIVE union as priority globs, or it would read the file capped and report a false drift.
     const big = `# Report\n${"The main risk is customer concentration.\n".repeat(600)}`;
@@ -482,9 +492,87 @@ describe("regrade: is the judged document the one the live judge read?", () => {
       ),
       makeJudge: judge.make,
     });
+    // No drift refusal. The re-grade's own unscoped assert then refuses the capped file on its own terms
+    // (evidence-unavailable), which is reported as not_graded rather than compared.
     if (!out.ok) throw new Error(out.message);
+    const a = out.runs[0].assertions[0];
+    expect(a.semanticEvidence?.reason).not.toBe("graded");
+    expect(a.docMatchesLive).toBe("not_graded");
+    expect(out.runs[0].docMatchesLive).toBe("not_graded");
+  });
+
+  it("unknown: graded, warned before the judge call that nothing was drift- or secret-checked", async () => {
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    for (const a of r.assertions) delete a.judgedDoc;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const judge = judgeFactory(() => true);
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(out.exitCode).toBe(0);
+    expect(out.runs[0].docMatchesLive).toBe("unknown");
+    expect(stderr.text()).toMatch(
+      /::warning:: regrade: .*assert 0: unknown.*could not be checked for drift or for a secret the live run scrubbed/s,
+    );
     expect(judge.calls).toHaveLength(1);
-    expect(out.runs[0].docMatchesLive).toBe("scope_changed");
+  });
+
+  it("live_refused: the live assert refused its evidence, so there is nothing to compare — graded and warned", async () => {
+    // The live result as a run that refused this assert's evidence records it (a refusing assert may carry no
+    // judgedDoc; this one keeps it, which must not make it count as compared).
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    r.assertions[0].semanticEvidence = { reason: "in_scope_omitted", paths: ["outputs/report.md"] };
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    // An edit that would be drift against a graded live assert is not refused here: there is nothing to check it against.
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const judge = judgeFactory(() => true);
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].assertions[0].docMatchesLive).toBe("live_refused");
+    expect(out.runs[0].docMatchesLive).toBe("live_refused");
+    expect(out.runs[0].differingSections).toEqual([]);
+    expect(stderr.text()).toContain("assert 0: live_refused");
+    expect(regradeTextReport(out).join("\n")).toContain("the live assert refused its evidence");
+  });
+
+  it("not_graded: this re-grade's assert refused its evidence; the file is not named after an unknown model", async () => {
+    const k = await keptRun({ author: writeReport });
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(
+        mkdtempSync(join(tmpdir(), "cwh-rg-scn12-")),
+        `  - semantic_matches:\n      rubric: ["the report names the risk"]\n      evidence_files: ["outputs/nope.md"]\n`,
+      ),
+      makeJudge: judgeFactory(() => true).make,
+    });
+    if (!out.ok) throw new Error(out.message);
+    const a = out.runs[0].assertions[0];
+    expect(a.semanticEvidence?.reason).toBe("scope_matched_nothing");
+    expect(a.pass).toBe(false);
+    expect(a.docMatchesLive).toBe("not_graded");
+    expect(out.runs[0].docMatchesLive).toBe("not_graded");
+    expect(out.exitCode).toBe(1);
+    expect(regradeFiles(k)[0]).not.toContain("-unknown-");
+  });
+
+  it("the file stem names the requested model, or not-graded, when no judge ran", () => {
+    const at = "2026-10-01T00:00:00.000Z";
+    expect(regradeFileStem([{}], undefined, at)).toBe("no-prompt-hash-not-graded-2026-10-01T00-00-00.000Z");
+    expect(regradeFileStem([{}], "claude-opus-4-8", at)).toBe("no-prompt-hash-claude-opus-4-8-2026-10-01T00-00-00.000Z");
+    expect(regradeFileStem([{ judgeModel: "m1", judgePromptHash: "h" }, {}], undefined, at)).toBe("h-m1-2026-10-01T00-00-00.000Z");
   });
 
   it("scope_changed and unknown are not drift: both grade", async () => {
