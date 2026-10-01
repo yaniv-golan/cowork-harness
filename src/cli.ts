@@ -50,7 +50,7 @@ import {
   type OnUnanswered,
   type RunContext,
 } from "./decide/decider.js";
-import { claudeCliComplete } from "./decide/llm-transport.js";
+import { claudeCliComplete, isolationRefusal } from "./decide/llm-transport.js";
 import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName, vmProvisioned, type VmProvisioning } from "./runtime/lima.js";
 import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
@@ -3832,6 +3832,11 @@ async function cmdDecide(args: string[]) {
       json,
     );
   if (policy) rules.push(...loadAnswerPolicy("decide", policy, json));
+  // The LLM decider calls the host `claude`; one that cannot run isolated is a usage refusal (exit 2), like the run's.
+  if (deciderLlm) {
+    const refusal = isolationRefusal();
+    if (refusal) fail("decide", "usage", refusal, undefined, json);
+  }
   const opts = options.length ? options : ["Looks right", "Change it", "Correct or add data"];
   const req: DecisionRequest = { id: "check", kind: "question", questions: [{ question, options: opts.map((label) => ({ label })) }] };
   const ctx = { task: "", transcript: () => "(sample transcript context)", toolLog: () => [], runId: "decide-check" };

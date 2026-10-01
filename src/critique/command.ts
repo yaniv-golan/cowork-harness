@@ -14,6 +14,7 @@
 // microvm/protocol stay refused (see ./limitations.ts for why each).
 // A cross-tier resume is blocked fail-loud by the session-manifest fidelity stamp (src/run/execute.ts),
 // and at hostloop a writable connected folder requires --allow-host-writes (forwarded to both turns).
+import { isolationRefusal } from "../decide/llm-transport.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
@@ -194,7 +195,8 @@ COST AND PREREQUISITES — read before running:
     total; on a real document-analysis run the ratio INVERTS (measured: task turn ~61%, evaluator ~30%).
     Read the per-run split off the cost line / costUsd rather than assuming either — a cheaper
     --evaluator-model buys you at most the evaluator's share, and it voids the armor's
-    injection-resistance verification, which covers the DEFAULT evaluator only. When the task turn
+    injection-resistance verification, which covers the DEFAULT evaluator only (a probe not yet repeated
+    with the evaluator tool-less and isolated). When the task turn
     dominates, the levers are --model, --timeout and probe scope.
   * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
     agent binary, and writes to the real host FS (a writable --folder requires --allow-host-writes). Both
@@ -2233,6 +2235,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const forwardsModel = opts.forwardBoth.some((a) => a === "--model" || a.startsWith("--model="));
   if (!forwardsModel && envModelDefault() === undefined)
     return refuse("usage", `critique: ${unresolvedModelRefusal("this critique's task and reflection turns")}`);
+  // The evaluator runs the host `claude` isolated and tool-less, which needs a CLI that accepts the isolation flags.
+  // Checked here, before the task and reflection turns spend, not at the evaluator's first call after them.
+  const iso = isolationRefusal();
+  if (iso) return refuse("usage", `critique: ${iso}`);
   // Past this point a turn WILL run. parseArgs guarantees a probe on every non-corpus-only line; the
   // narrowing is for the type, not a second validation.
   const prompt = opts.prompt;

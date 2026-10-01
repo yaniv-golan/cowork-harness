@@ -91,7 +91,7 @@ import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "
 import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
-import { claudeCliComplete } from "../decide/llm-transport.js";
+import { claudeCliComplete, isolationRefusal } from "../decide/llm-transport.js";
 import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks, unionReferenceAccesses } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
@@ -881,6 +881,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // and spawns the agent. The unit lane sets COWORK_HARNESS_FORBID_SPAWN so a scenario a refusal should
   // have caught fails red instead of launching a real agent.
   assertSpawnAllowed(`scenario "${scenario.name}"`);
+
+  // A run that will call the host `claude` after the agent (the semantic_matches judge, the LLM decider) refuses one
+  // that cannot run isolated HERE, before the agent spends anything: those calls run isolated and tool-less, which
+  // needs a CLI that accepts the isolation flags. An injected judge
+  // (a test or library caller) never reaches the host CLI.
+  // An external channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
+  if (
+    (scenario.assert.some((a) => a.semantic_matches !== undefined) && !opts.semanticJudge) ||
+    (onUnanswered === "llm" && !opts.externalChannel)
+  ) {
+    const iso = isolationRefusal();
+    if (iso) throw new UsageError(iso);
+  }
 
   // Pre-flight: if the skill DECLARES required capabilities and the image provably omits one, FAIL FAST here
   // — before any paid agent run — instead of burning ~12 min to reach a verdict the post-run guard already

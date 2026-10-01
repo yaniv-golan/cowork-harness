@@ -5,7 +5,8 @@ import { validateCitations, type CritiqueItem } from "./evidence.js";
 import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEvidence, type EvidenceSection } from "./armor.js";
 import { ROOT_REFERENCE_SECTION_PREFIX, AGENT_SECTION_PREFIX } from "./package-evidence.js";
 
-// The two-pass, tool-less evaluator. Reuses the shared `claude -p` transport (same reasoning as
+// The two-pass, tool-less evaluator (the transport passes `--tools ""` — see ISOLATION_ARGS in
+// src/decide/llm-transport.ts). Reuses the shared `claude -p` transport (same reasoning as
 // `semantic-judge.ts`: the harness process itself is not behind the egress proxy, so a direct API call
 // would bypass the very allowlist the harness enforces; `claude -p` is egress-consistent). Unlike the
 // judge, this evaluator's output isn't a fixed indexed rubric — it's an open-ended set of findings — so
