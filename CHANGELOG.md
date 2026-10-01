@@ -612,6 +612,11 @@ All notable changes to this project are documented here. The format is based on
   `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, which runs a different version, and `doctor` said to open Cowork. For an
   ELF that was never staged, both say that Desktop stages it on macOS and that elsewhere `COWORK_AGENT_BINARY` must
   point at a Linux ELF, instead of saying to open Cowork.
+- **A symlinked pinned native version dir is diagnosed and reported accurately.** When the pinned version dir
+  (`claude-code/<ver>`) is a symlink to a dir of another name, `hostloop` still runs the binary it holds, as Desktop
+  does, and prints a stderr note naming the version the link points at. When that symlinked dir holds only an
+  unfinished build or an unrecognised entry, the error names it with cause `unfinished` or `unknown-layout`,
+  instead of reporting that nothing is staged.
 
 ### Documentation
 

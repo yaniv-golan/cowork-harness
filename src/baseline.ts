@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { join, resolve, isAbsolute, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -301,6 +301,15 @@ function markerBuild(dir: string): { build: string; publishedMs: number } | unde
   return NATIVE_CHECKSUM_RE.test(text) ? { build: text.slice(0, 12).toLowerCase(), publishedMs: mtimeMs } : undefined;
 }
 
+/** The basename a version dir's symlink resolves to, or undefined when it is not a symlink. */
+function pinnedVersionLinkTarget(vdir: string): string | undefined {
+  try {
+    return lstatSync(vdir).isSymbolicLink() ? basename(realpathSync(vdir)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** A real directory, not a symlink to one. */
 function isRealDir(p: string): boolean {
   try {
@@ -465,6 +474,8 @@ export interface NativeStagingDrift {
   relocated?: boolean;
   /** A flat pin was relocated to a build, and the pinned flat file is still on disk (the two can differ). */
   pinnedFilePresent?: boolean;
+  /** The pinned version dir is a symlink to a dir of ANOTHER name (that name, e.g. the version it links to). */
+  pinnedLinkTarget?: string;
   /** Other builds of the chosen version that were NOT chosen (only for a choice the pin did not decide). */
   others?: string[];
   /** Descriptions of the pinned version's 12-hex dirs that are not runnable (kinds `patch`/`major-minor`). */
@@ -503,17 +514,21 @@ export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeSt
   });
 
   const own = scanNativeVersion(root, pinned);
+  // The pinned version dir is followed through a symlink, as Desktop follows it. When the link points at a
+  // dir of another name, the binary that runs belongs to that version, so record it for the resolver's note.
+  const linkTarget = pinnedVersionLinkTarget(join(root, pinned));
+  const link = linkTarget && linkTarget !== pinned ? { pinnedLinkTarget: linkTarget } : {};
   if (own.candidates.length) {
     if (pinnedBuild) {
       const match =
         own.candidates.find((c) => c.layout === "nested" && c.build === pinnedBuild) ?? own.candidates.find((c) => c.build === pinnedBuild);
-      if (match) return { kind: "exact", ...base, ...describe(match, []) };
+      if (match) return { kind: "exact", ...base, ...describe(match, []), ...link };
       const c = own.candidates[0];
       return { kind: "build", ...base, ...describe(c, own.candidates.slice(1)), fallbackPath: c.path };
     }
     const [c, ...rest] = own.candidates;
     const stillThere = c.layout === "nested" && pinLayout === "flat" && existsSync(staged);
-    return { kind: "exact", ...base, ...describe(c, rest), ...(stillThere ? { pinnedFilePresent: true } : {}) };
+    return { kind: "exact", ...base, ...describe(c, rest), ...(stillThere ? { pinnedFilePresent: true } : {}), ...link };
   }
 
   if (!existsSync(root)) return { kind: "missing", cause: "missing-root", ...base };
@@ -529,8 +544,10 @@ export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeSt
       ...(own.unusable.length ? { pinnedUnusable: own.unusable.map(describeUnusable) } : {}),
     };
   }
-  const unusable = all.flatMap((v) => v.scan.unusable);
-  const unknownEntries = all.flatMap((v) => v.scan.unknown);
+  // The pinned version's own scan counts too: when its dir is a symlink, the fallback list skips it.
+  const others = all.filter((v) => v.version !== pinned);
+  const unusable = [...own.unusable, ...others.flatMap((v) => v.scan.unusable)];
+  const unknownEntries = [...own.unknown, ...others.flatMap((v) => v.scan.unknown)];
   const cause = unusable.length
     ? unusable.every((u) => u.reason === "unmarked")
       ? "unfinished"
@@ -586,6 +603,11 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
   if (d.kind === "exact") {
     // The pinned flat file is still on disk, but a verified build of the same version wins (as it does for
     // Desktop, which does not run an unmarked flat install). The two files can differ, so say which one runs.
+    if (d.pinnedLinkTarget)
+      process.stderr.write(
+        `cowork-harness: the pinned native agent version dir "${join(d.root!, d.pinned!)}" is a symlink to ${d.pinnedLinkTarget}; ` +
+          `running the binary it holds, "${d.path}".\n`,
+      );
     if (d.pinnedFilePresent)
       process.stderr.write(
         `cowork-harness: the pinned native agent "${d.stagedPath}" is present, but a verified build of ${d.found} is staged; ` +

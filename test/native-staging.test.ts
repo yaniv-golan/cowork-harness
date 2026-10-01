@@ -506,6 +506,46 @@ describe("resolveHostAgentBinary — review fixes", () => {
     expect(classifyNativeStagingDrift(pin(nested(root, "2.1.286", A)))).toMatchObject({ kind: "exact", path: nested(root, "2.1.286", A) });
   });
 
+  // Decided behaviour: a pinned version dir is followed through a symlink, as Desktop follows it, so a pin
+  // of 2.1.299 that links to 2.1.286 resolves exact and runs the 2.1.286 binary. The resolver says so on
+  // stderr, naming the link target's version, because the version that runs is not the one the pin names.
+  it("a pinned version dir that is a symlink to ANOTHER version → exact as the pin, with a stderr note naming the target version", () => {
+    const root = stage([{ ver: "2.1.286", build: B }]);
+    symlinkSync(join(root, "2.1.286"), join(root, "2.1.299"));
+    const b = pin(flat(root, "2.1.299"));
+    expect(classifyNativeStagingDrift(b)).toMatchObject({ kind: "exact", found: "2.1.299", pinnedLinkTarget: "2.1.286" });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(resolveHostAgentBinary(b)).toBe(nested(root, "2.1.299", B));
+    expect(stderrOf(stderr)).toMatch(/pinned native agent version dir .*2\.1\.299.* is a symlink to 2\.1\.286/);
+  });
+
+  it("a pinned version dir symlinked to a dir of the SAME name is silent", () => {
+    const real = stage([{ ver: "2.1.284", build: B }]);
+    const root = stage([]);
+    symlinkSync(join(real, "2.1.284"), join(root, "2.1.284"));
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resolveHostAgentBinary(pin(flat(root, "2.1.284")));
+    expect(stderr).not.toHaveBeenCalled();
+    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.284")))).not.toHaveProperty("pinnedLinkTarget");
+  });
+
+  it("a symlinked pinned dir holding only an unfinished build → cause unfinished, naming it", () => {
+    const real = stage([{ ver: "2.1.286", build: B, marker: false }]);
+    const root = stage([]);
+    symlinkSync(join(real, "2.1.286"), join(root, "2.1.286"));
+    const b = pin(flat(root, "2.1.286"));
+    expect(classifyNativeStagingDrift(b)).toMatchObject({ kind: "missing", cause: "unfinished" });
+    expect(() => resolveHostAgentBinary(b)).toThrow(new RegExp(`2\\.1\\.286/${B} has no \\.verified marker`));
+  });
+
+  it("a symlinked pinned dir holding only an unknown entry → cause unknown-layout", () => {
+    const real = stage([]);
+    mkdirSync(join(real, "2.1.286", "weird"), { recursive: true });
+    const root = stage([]);
+    symlinkSync(join(real, "2.1.286"), join(root, "2.1.286"));
+    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.286")))).toMatchObject({ kind: "missing", cause: "unknown-layout" });
+  });
+
   it("a .verified that is not a 64-hex checksum does not name a build, even when it starts with the dir name", () => {
     for (const marker of [`${B} junk`, B, full(B).slice(0, 63), full(B) + "0"]) {
       const root = stage([{ ver: "2.1.286", build: B, marker }]);
