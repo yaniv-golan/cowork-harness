@@ -468,3 +468,30 @@ describe("attemptRow — meta.judge_transport", () => {
     expect(meta.judge_transports).toEqual([{ isolation: "strict" }, { isolation: "strict", strictMcp: false }]);
   });
 });
+
+describe("attemptRow — a refused single-key semantic_pairwise assert is not measured", () => {
+  const pairwise = (refused: boolean): RunResult => {
+    const base = fixture("success-semantic");
+    const assertion = { semantic_pairwise: { refs: ["/refs/store"], judge_model: "claude-haiku-4-5-20251001" } } as unknown as Assertion;
+    const grade = {
+      assertion,
+      pass: !refused,
+      ...(refused ? { pairwise: [{ status: "missing" }] } : { pairwise: [{ status: "graded", outcome: "win" }] }),
+    };
+    return { ...base, assertions: [base.assertions[0], grade as never], verdict: { pass: !refused } as never } as RunResult;
+  };
+
+  it("refused: a<i> is omitted and its companion a<i>_present says 0 — never a silent missing key", () => {
+    const r = pairwise(true);
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.grade).not.toHaveProperty("a1");
+    expect(row.grade.a1_present).toBe(0);
+  });
+
+  it("graded: a<i> carries the outcome and a<i>_present is 1", () => {
+    const r = pairwise(false);
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.grade.a1).toBe(1);
+    expect(row.grade.a1_present).toBe(1);
+  });
+});

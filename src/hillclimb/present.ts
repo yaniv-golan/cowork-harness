@@ -5,7 +5,9 @@
  *  always graded. Explicit, not "`K` exempt when `K_present` is 0": a claim key is covered by its
  *  ASSERTION's companion (`a1_c0` → `a1_present`). Pairwise win keys map to `a<i>_win_present`. */
 export function presentCompanionOf(key: string): string | undefined {
-  if (key.endsWith("_present") || /^a\d+$/.test(key)) return undefined;
+  if (key.endsWith("_present")) return undefined;
+  // a<i>: only a single-key semantic_pairwise assert is ever omitted (a refusal); its companion is a<i>_present.
+  if (/^a\d+$/.test(key)) return `${key}_present`;
   const claim = /^(a\d+)_c\d+$/.exec(key);
   if (claim) return `${claim[1]}_present`;
   const win = /^(a\d+)_win(_v[1-9]\d*)?$/.exec(key);

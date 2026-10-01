@@ -31,7 +31,7 @@ import {
   type ClassifiableResult,
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
-import { caseKeyDecls, type MetricDecl } from "./grade-keys.js";
+import { caseKeyDecls, refusableAssertion, type MetricDecl } from "./grade-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
@@ -254,8 +254,11 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     // keeps its roll-up value (classify.ts) while every claim row is excluded.
     if (v.row.kind === "semantic_rollup")
       grade[`a${i}_present`] = values.some((x) => x.row.kind === "claim" && x.row.assertionIndex === i && x.excluded === undefined) ? 1 : 0;
-    else if (v.row.kind === "assertion") grade[`a${i}`] = v.value!;
-    else if (v.excluded === undefined) {
+    else if (v.row.kind === "assertion") {
+      // A refused pairwise assert is not measured: its companion says so and the key is omitted, never undefined.
+      if (refusableAssertion(ctx.assertions[i])) grade[`a${i}_present`] = v.excluded === undefined ? 1 : 0;
+      if (v.excluded === undefined) grade[`a${i}`] = v.value!;
+    } else if (v.excluded === undefined) {
       const key = `a${i}_c${v.row.claimIndex}`;
       grade[key] = v.value!;
       const sc = authoredGrades[i]?.semanticClaims?.find((c) => c.index === v.row.claimIndex);

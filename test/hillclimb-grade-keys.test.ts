@@ -119,6 +119,10 @@ describe("presentCompanionOf — the explicit key → companion map the _present
   });
 
   it("always-graded keys have none", () => {
-    for (const k of ["a0", "a1_present", "claims_present", "pass_present"]) expect(presentCompanionOf(k)).toBeUndefined();
+    for (const k of ["a1_present", "claims_present", "pass_present"]) expect(presentCompanionOf(k)).toBeUndefined();
+  });
+
+  it("a whole-assertion key's companion is a<i>_present (only a refused single-key semantic_pairwise is ever omitted)", () => {
+    expect(presentCompanionOf("a0")).toBe("a0_present");
   });
 });
