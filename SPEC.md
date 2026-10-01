@@ -1304,8 +1304,10 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   relative value is refused). A trace marks each sub-agent dispatch with a `system` turn saying what that
   child received, from its own transcript only: the harness's sub-agent append (when the child's prompt ends
   with exactly the append the session sent; Anthropic's built-in sub-agent prompt is withheld), "none received",
-  or "not recorded in its transcript" when the transcript holds no prompt snapshot. The marker wording is not
-  covered.
+  or "not recorded in its transcript" when the transcript holds no prompt snapshot. A trace opens with a `system`
+  turn read from the run dir's `system-prompt-append.txt` — the `--append-system-prompt` the agent was spawned with,
+  exactly as passed (the harness's append only; Anthropic's built-in system prompt is never in it) — or says none
+  was sent, or that the run dir recorded none. The marker wording is not covered.
 - **The bundled `scenario.py`'s functions, constants and module layout** — the `lint` / `lint-skill` /
   `scaffold` subcommands (and the CLI's passthroughs to them) are the surface; the script is not an
   importable API, and a consumer that vendors or imports a `_helper` from it is copying an implementation

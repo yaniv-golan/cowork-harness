@@ -118,6 +118,13 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
     const marker = "[system — harness append as sent; Anthropic's built-in system prompt withheld]\n\n";
     expect(turns[0].content.startsWith(marker)).toBe(true);
     expect(turns[0].content.slice(marker.length)).toBe(sent);
+    // The run dir's record is the harness append only — never Anthropic's built-in system prompt.
+    // (the flow redacts host paths in meta.run_dir, so find the run under the fixture's runs root by its id)
+    const runDir = join(f.runsDir, "alpha", (row.meta as { run_id: string }).run_id);
+    const recorded = readFileSync(join(runDir, "system-prompt-append.txt"), "utf8");
+    expect(recorded).toBe(sent);
+    for (const s of ["You are an agent for Claude Code", "Anthropic's official CLI", "You are Claude Code"])
+      expect(recorded.includes(s), `system-prompt-append.txt contains ${s}`).toBe(false);
     const sys = turns
       .filter((t) => t.role === "system")
       .map((t) => t.content)
