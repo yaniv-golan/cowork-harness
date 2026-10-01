@@ -498,7 +498,8 @@ export function buildEvalReport(evalDir: string): EvalReport {
     if (!SCORED.has(c.bucket)) continue;
     const authored = (line.grades[0]?.assertions ?? []).filter((g) => g.source === undefined);
     authored.forEach((g, i) => {
-      if (!g.assertion.semantic_matches || g.judgeInvalid === true || typeof g.judgeModel !== "string") return;
+      if ((!g.assertion.semantic_matches && !g.assertion.semantic_pairwise) || g.judgeInvalid === true || typeof g.judgeModel !== "string")
+        return;
       const k = JSON.stringify([line.scenario, i]);
       const e = judgeSeen.get(k) ?? { scenario: line.scenario, assertionIndex: i, models: new Set<string>() };
       e.models.add(normalizeModel(g.judgeModel));

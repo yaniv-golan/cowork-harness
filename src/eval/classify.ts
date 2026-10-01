@@ -8,6 +8,7 @@
 // no bucket. The table below keys on every field that distinguishes the cases, and a combination it does not
 // recognise is `errored_infra` with `unclassified: true` — excluded and reported, never silently scored as
 // the skill failing.
+import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
 import type { Assertion, RunResult } from "../types.js";
 import { isLiveModelId } from "../types.js";
 import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.js";
@@ -66,7 +67,7 @@ export type ClassifiableResult = Partial<
       Partial<
         Pick<
           RunResult["assertions"][number],
-          "source" | "semanticClaims" | "judgeInvalid" | "judgePromptHash" | "judgeCostUsd" | "semanticEvidence"
+          "source" | "semanticClaims" | "judgeInvalid" | "judgePromptHash" | "judgeCostUsd" | "semanticEvidence" | "pairwise"
         >
       >
   >;
@@ -268,10 +269,14 @@ export interface RepClassification {
 /** Assertions the harness injected (staleness, cassette-format, coverage) are not the author's rows. */
 export const authoredGrades = (r: ClassifiableResult | undefined) => (r?.assertions ?? []).filter((a) => a.source === undefined);
 
-/** Does any graded `semantic_matches` carry an OBSERVED prompt identity other than the expected one? */
+/** Does any graded judged assert carry an OBSERVED prompt identity other than the expected one? A
+ *  `semantic_pairwise` grade is held to the pairwise judge's own template (`PAIRWISE_PROMPT_HASH`). */
 function promptMismatch(r: ClassifiableResult | undefined, expected: string): boolean {
   return authoredGrades(r).some(
-    (a) => a.assertion.semantic_matches !== undefined && a.judgePromptHash !== undefined && a.judgePromptHash !== expected,
+    (a) =>
+      a.judgePromptHash !== undefined &&
+      ((a.assertion.semantic_matches !== undefined && a.judgePromptHash !== expected) ||
+        (a.assertion.semantic_pairwise !== undefined && a.judgePromptHash !== PAIRWISE_PROMPT_HASH)),
   );
 }
 
@@ -390,7 +395,11 @@ type Grade = NonNullable<ClassifiableResult["assertions"]>[number];
 
 /** Why a `semantic_matches` grade's evidence was unavailable — its typed reason, or `unrecorded` for a refusal
  *  proven from a grade that predates the persisted reason (see below). */
-export type SemanticRefusalReason = Exclude<NonNullable<Grade["semanticEvidence"]>["reason"], "graded"> | "unrecorded";
+export type SemanticRefusalReason =
+  | Exclude<NonNullable<Grade["semanticEvidence"]>["reason"], "graded">
+  | "unrecorded"
+  // A `semantic_pairwise` comparison whose frozen reference could not be read (missing or failing its sha256).
+  | "reference_unavailable";
 
 /** The refusal reason of a `semantic_matches` grade whose evidence was unavailable, else undefined.
  *
@@ -401,6 +410,11 @@ export type SemanticRefusalReason = Exclude<NonNullable<Grade["semanticEvidence"
  *  exactly "claims met min_pass" when it grades, so a fail there can only have been a refusal (`unrecorded`).
  *  A refused grade whose claims ALSO missed `min_pass` looks exactly like a graded fail, and is left as one. */
 export function semanticRefusalReason(g: Grade): SemanticRefusalReason | undefined {
+  if (g.assertion.semantic_pairwise !== undefined) {
+    if (g.judgeInvalid === true) return undefined;
+    if (g.semanticEvidence !== undefined && g.semanticEvidence.reason !== "graded") return g.semanticEvidence.reason;
+    return g.pairwise?.some((o) => o.status === "missing" || o.status === "integrity") ? "reference_unavailable" : undefined;
+  }
   const sm = g.assertion.semantic_matches;
   if (sm === undefined) return undefined;
   if (g.semanticEvidence !== undefined) return g.semanticEvidence.reason === "graded" ? undefined : g.semanticEvidence.reason;
