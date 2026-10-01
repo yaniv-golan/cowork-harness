@@ -242,6 +242,45 @@ describe("eval: end to end over a fake runner", () => {
     expect(readFileSync(join(out.evalDir, "report.json")).equals(js)).toBe(true);
   });
 
+  it("a semantic grade refused for unavailable evidence leaves its rows, is counted per arm, and survives `eval report`", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    // The shape a run now persists for a refused assert: no claims, no judge fields, the typed reason.
+    const refuse = (r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) => {
+        if (!x.assertion.semantic_matches) return x;
+        const { semanticClaims: _c, judgeModel: _m, judgeCostUsd: _u, judgePromptHash: _h, ...rest } = x;
+        (void _c, void _m, void _u, void _h);
+        return { ...rest, pass: false, semanticEvidence: { reason: "in_scope_truncated", paths: ["outputs/report.md"] } };
+      }),
+    });
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.scenario.name !== "csv-metrics" && s.job.arm === "after" && s.job.rep <= 2 ? refuse(r) : r))),
+    );
+    // The reason is carried through runs.jsonl — the report's only input — without the path list.
+    const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
+    const refusedLine = lines.find((l) => l.arm === "after" && l.rep === 1 && l.scenario !== "csv-metrics")!;
+    const g = refusedLine.grades[0].assertions.find((x) => x.assertion.semantic_matches)!;
+    expect(g.semanticEvidence).toEqual({ reason: "in_scope_truncated" });
+    expect(out.report.arms.map((x) => x.evidenceUnavailable)).toEqual([{}, { in_scope_truncated: 2 }]);
+    // Every row of that assertion lost exactly those two reps on the candidate arm, and none on the baseline.
+    const semRows = [...out.report.sections.tuned!.rows, ...out.report.sections.tuned!.derivedRows].filter(
+      (r) => r.scenario === "smoke-semantic-evidence-files" && (r.kind === "claim" || r.kind === "semantic_rollup"),
+    );
+    expect(semRows).toHaveLength(3);
+    for (const r of semRows) {
+      expect(r.n1).toBe(5);
+      expect(r.n2).toBe(3);
+      expect(r.k2).toBe(3); // the refusals are not scored as fails
+    }
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toContain("2 semantic_matches grade(s) refused for unavailable evidence (in_scope_truncated 2)");
+    const js = readFileSync(join(out.evalDir, "report.json"));
+    writeEvalReport(out.evalDir);
+    expect(readFileSync(join(out.evalDir, "report.json")).equals(js)).toBe(true);
+  });
+
   it("a collapsed row is a drop: reported with evidence links, but the DEFAULT does not gate (exit 0)", async () => {
     const { scen, a, b } = setup();
     // Flip: arm `after` fails `tool_called: Bash` (index 2) in every rep.
@@ -1245,8 +1284,14 @@ describe("eval: wiring the in-process runs cannot see by default", () => {
 
   it("a drop on a semantic roll-up row alone gates --fail-on possible (and is never confirmed)", async () => {
     const { scen, a, b } = setup({ semantic: true });
-    // Flip: only the semantic assertion's own pass (index 3) in `after`; its claims stay passing.
-    const flip = (s: EvalJobSpec, r: RunResult) => (s.job.arm === "after" && s.scenario.name !== "csv-metrics" ? failAssertion(r, 3) : r);
+    // Flip: only the semantic assertion's own pass (index 3) in `after`; its claims stay passing. Marked as
+    // GRADED: without a recorded reason, a single-key semantic fail whose claims met min_pass can only have
+    // been an evidence refusal (that is how a pre-reason runs.jsonl is read), and its rows would be excluded.
+    const flip = (s: EvalJobSpec, r: RunResult) => {
+      if (s.job.arm !== "after" || s.scenario.name === "csv-metrics") return r;
+      const f = failAssertion(r, 3);
+      return { ...f, assertions: f.assertions.map((x, i) => (i === 3 ? { ...x, semanticEvidence: { reason: "graded" as const } } : x)) };
+    };
     const out = await runEval(args(scen, a, b, ["--fail-on", "possible"]), deps(fakeRunner(flip)));
     const rollup = out.report.sections.tuned!.derivedRows[0];
     expect(rollup).toMatchObject({ kind: "semantic_rollup", k1: 5, k2: 0, label: "possible drop" });

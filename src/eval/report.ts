@@ -8,6 +8,7 @@ import {
   repRowValues,
   scenarioRows,
   armMedians,
+  semanticRefusalReason,
   type ArmMedians,
   type RepBucket,
   type RowKey,
@@ -75,6 +76,10 @@ export interface ReportArm {
   errorSources: Record<string, number>;
   unclassified: number;
   ambiguousExit: number;
+  /** `semantic_matches` grades that refused for unavailable evidence, by reason — counted once per (rep,
+   *  assertion) over this arm's valid and judge_invalid reps. Each leaves that assertion's rows for that rep
+   *  (`evidence_unavailable`), so this count is what keeps an arm that refuses more often visible. */
+  evidenceUnavailable: Record<string, number>;
   medians: ArmMedians;
 }
 
@@ -370,7 +375,13 @@ export function buildEvalReport(evalDir: string): EvalReport {
     const mine = classified.filter((x) => x.line.arm === a.label);
     const buckets: Partial<Record<RepBucket, number>> = {};
     const errorSources: Record<string, number> = {};
+    const evidenceUnavailable: Record<string, number> = {};
     for (const x of mine) {
+      if (x.c.bucket === "valid" || x.c.bucket === "judge_invalid")
+        for (const g of (repEvidenceOf(x.line).result?.assertions ?? []).filter((g) => g.source === undefined)) {
+          const reason = g.judgeInvalid === true ? undefined : semanticRefusalReason(g);
+          if (reason !== undefined) evidenceUnavailable[reason] = (evidenceUnavailable[reason] ?? 0) + 1;
+        }
       buckets[x.c.bucket] = (buckets[x.c.bucket] ?? 0) + 1;
       const key = x.line.thrown
         ? `thrown:${x.line.thrown.kind}`
@@ -390,6 +401,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       errorSources: Object.fromEntries(Object.entries(errorSources).sort(([x], [y]) => x.localeCompare(y))),
       unclassified: mine.filter((x) => x.c.termination.unclassified).length,
       ambiguousExit: mine.filter((x) => x.c.termination.ambiguousExit).length,
+      evidenceUnavailable: Object.fromEntries(Object.entries(evidenceUnavailable).sort(([x], [y]) => x.localeCompare(y))),
       medians: armMedians(mine.map((x) => ({ bucket: x.c.bucket, result: repEvidenceOf(x.line).result }))),
     };
   });
@@ -601,6 +613,17 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
     if (a.ambiguousExit > 0)
       L.push(
         `  - ⚠ ${a.ambiguousExit} rep(s) ended in a nonzero agent exit — an out-of-memory kill and a skill-caused crash look alike here; scored as the agent's error.`,
+      );
+    const refused = Object.values(a.evidenceUnavailable).reduce((n, v) => n + v, 0);
+    if (refused > 0)
+      L.push(
+        `  - ⚠ ${refused} semantic_matches grade(s) refused for unavailable evidence (${Object.entries(a.evidenceUnavailable)
+          .map(([k, v]) => `${k} ${v}`)
+          .join(", ")}) — neither a pass nor a fail, so each leaves that assertion's rows for that rep. An arm that refuses more ` +
+          `often is producing evidence the judge cannot see whole; read those run dirs.` +
+          (a.evidenceUnavailable.unrecorded
+            ? ` (\`unrecorded\`: a runs.jsonl written before the reason was kept; there, a refusal whose claims also missed min_pass reads as a fail.)`
+            : ""),
       );
     const md = a.medians;
     L.push(

@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `semantic_matches` assert whose evidence is unavailable no longer calls the judge.** Every
+  evidence-unavailable reason (`scope_matched_nothing`, `in_scope_omitted`, `in_scope_truncated`,
+  `evidence_incomplete`, `no_pre_run_manifest`, `authored_evidence_truncated`) depends only on the
+  composed evidence, so it is now decided before the judge call, and that assert is not graded. The
+  judge was previously still called: its spend was recorded although the grade could not change the
+  verdict, and its per-claim grades were stored beside the refusal. The verdict, message and
+  `semanticEvidence` reason are unchanged; the assert now carries no `semanticClaims`, `judgeModel`,
+  `judgeCostUsd`, `judgeUsage`, `judgePromptHash` or `judgedDoc`, because no judge was called and no
+  judge received a document.
+- **`eval` no longer counts claim grades from a refused `semantic_matches` assert.** Those grades were
+  made over evidence the verdict had declared incomplete, and they entered the A/B claim rows as if
+  they were real; the roll-up row counted the refusal as a fail. Now, as with an invalid judge grade,
+  that assertion's rows (the roll-up and every claim) leave out the rep. Each arm reports how many grades
+  were refused, by reason (`arms[].evidenceUnavailable` in `report.json`, and a line under "Reps per
+  arm"), so an arm that refuses more often stays visible. `runs.jsonl` now keeps each grade's refusal
+  reason. In an eval dir written earlier, `eval report` recognises a refusal only where the kept fields
+  prove one (counted as `unrecorded`). A refusal whose claims also missed `min_pass` cannot be told from
+  a graded fail there, and is still scored as a fail.
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus

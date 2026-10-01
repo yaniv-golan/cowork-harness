@@ -98,6 +98,10 @@ The header states what every number depends on:
   where a drop is);
 - **per arm**: each rep's bucket, an `errorSource` histogram, and a loud **UNCLASSIFIED** count for any
   termination the classifier does not recognise (excluded — read those run dirs);
+- **per arm, the `semantic_matches` grades refused for unavailable evidence**, by reason
+  (`report.json`: `arms[].evidenceUnavailable`). A refusal is neither a pass nor a fail, so it leaves that
+  assertion's rows for that rep; an arm that refuses more often is producing evidence the judge cannot see
+  whole (a deliverable that outgrew the capture budget, say), and this count is where that shows;
 - **every (arm, scenario) in which every rep errored**, named with its most frequent bucket and rule —
   for example `errored_infra (auth) 5/5` — and a hint that follows the rule (sign-in, quota, start-up,
   network, decider, or read the run dirs). Whether that scenario's rows were compared is stated on the
@@ -122,6 +126,12 @@ it landed in.
 | the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
+| one `semantic_matches` assertion refused for unavailable evidence (its `semanticEvidence` reason is not `graded`) | only that assertion's rows lose the rep — the roll-up and every claim — and it is counted per arm, by reason |
+
+An eval dir whose `runs.jsonl` was written before the refusal reason was kept in it carries no reason.
+`eval report` then recognises a refusal only where the kept fields prove one — a lone `semantic_matches`
+assertion that failed although its claims met `min_pass` (counted as `unrecorded`); a refusal whose
+claims also missed `min_pass` cannot be told from a graded fail and is scored as one.
 
 The `auth` and `usage_limit` rows need the reply to come from the agent itself, which writes it as a
 `<synthetic>` turn. A skill's own message that merely reads like one ("You've reached your daily limit

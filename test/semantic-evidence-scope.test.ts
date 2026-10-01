@@ -311,8 +311,10 @@ describe("semantic_matches.evidence_files — scoping the judge's authored-file 
     expect(cap.files.some((f) => f.truncated)).toBe(false); // capture looks perfectly healthy
     const judge = recordingJudge();
     const a: Assertion[] = [{ semantic_matches: { rubric: ["x"] } }] as Assertion[];
-    const res = await judgeAndEvaluate(a, ctxFrom(cap), judge);
-    expect(judge.seen[0]).not.toContain("MARK29"); // the tail really was cut
+    const ctx = ctxFrom(cap);
+    const res = await judgeAndEvaluate(a, ctx, judge);
+    expect(buildJudgedDocument(ctx)).not.toContain("MARK29"); // the tail really was cut…
+    expect(judge.seen).toHaveLength(0); // …so the verdict is decided without a judge call
     expect(res[0].pass).toBe(false);
     expect(res[0].semanticEvidence?.reason).toBe("authored_evidence_truncated");
     // The remedy must be one that can actually clear this. "add" (not "narrow") because an unscoped
@@ -404,8 +406,10 @@ describe("semantic_matches.evidence_files — scoping the judge's authored-file 
     expect(cap.health.readErrors).toEqual([]);
     const judge = recordingJudge();
     const a: Assertion[] = [{ semantic_matches: { rubric: ["the report contains no unmitigated risk line"] } }] as Assertion[];
-    const res = await judgeAndEvaluate(a, ctxFrom(cap), judge);
-    expect(judge.seen[0]).not.toContain("TAIL-RISK-LINE"); // the judge never saw the disconfirming text
+    const ctx = ctxFrom(cap);
+    const res = await judgeAndEvaluate(a, ctx, judge);
+    expect(buildJudgedDocument(ctx)).not.toContain("TAIL-RISK-LINE"); // the document lacks the disconfirming text…
+    expect(judge.seen).toHaveLength(0); // …so it is never graded
     expect(res[0].pass).toBe(false);
     expect(res[0].semanticEvidence?.reason).toBe("evidence_incomplete");
     expect(res[0].semanticEvidence?.paths).toContain("outputs/report.md");
@@ -506,11 +510,13 @@ describe("P0: a scenario whose only evidence-bearing assert is semantic_matches"
 
     const judge = recordingJudge();
     const a: Assertion[] = [{ semantic_matches: { rubric: ["names the actor", "carries a risk line"] } }] as Assertion[];
-    const res = await judgeAndEvaluate(a, ctxFrom(cap), judge);
+    const ctx = ctxFrom(cap);
+    const res = await judgeAndEvaluate(a, ctx, judge);
     expect(res[0].pass).toBe(false);
     expect(res[0].semanticEvidence?.reason).toBe("no_pre_run_manifest");
-    // The judge is told too, so a grade produced anyway cannot read the absence as "produced nothing".
-    expect(judge.seen[0]).toContain("NO authored files could be identified at all");
+    expect(judge.seen).toHaveLength(0); // refused before any judge call
+    // The composed document still says so, so no reader of it can take the absence as "produced nothing".
+    expect(buildJudgedDocument(ctx)).toContain("NO authored files could be identified at all");
   });
 
   it("a SCOPED assert with no manifest does not blame the glob", async () => {
