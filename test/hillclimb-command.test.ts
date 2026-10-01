@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fixtureDirOf, prepareCases } from "../src/hillclimb/command.js";
+import { prepareCases } from "../src/hillclimb/command.js";
 import { loadCases } from "../src/hillclimb/cases.js";
 import { UsageError } from "../src/errors.js";
 
@@ -133,9 +133,25 @@ describe("prepareCases — what defines the measurement, and what the agent can 
     }
   });
 
-  it("the fixture hook stays empty until the scenario key exists: no fixture dir is invented", () => {
-    scenario("a.yaml");
-    const { cases } = loadCases(dir);
-    expect(fixtureDirOf(cases[0].scenario)).toBeNull();
+  it("derived paths: a workspace_fixture's files, as staging scans them (OS metadata skipped)", () => {
+    mkdirSync(join(dir, "fx", "sub"), { recursive: true });
+    writeFileSync(join(dir, "fx", "report.md"), "# draft\n");
+    writeFileSync(join(dir, "fx", "sub", "data.csv"), "a,b\n");
+    writeFileSync(join(dir, "fx", ".DS_Store"), "x"); // OS metadata: never staged, so never hashed
+    scenario("a.yaml", "workspace_fixture: ./fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      const { cases } = loadCases(dir);
+      const derived = prepareCases(cases, { env: {} })
+        .derivedPaths(cases)
+        .map((x) => realpathSync(x));
+      expect(derived).toContain(realpathSync(join(dir, "fx", "report.md")));
+      expect(derived).toContain(realpathSync(join(dir, "fx", "sub", "data.csv")));
+      expect(derived).not.toContain(realpathSync(join(dir, "fx", ".DS_Store")));
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
   });
 });
