@@ -40,6 +40,7 @@ import { classifyRep } from "../src/eval/classify.js";
 import { repEvidenceOf } from "../src/eval/runs.js";
 import { isConcreteModelId } from "../src/run/model-provenance.js";
 import { tildeify } from "../src/io.js";
+import { parse as parseYaml } from "yaml";
 import { tokenCheck, type DoctorCheck, type DoctorProbe } from "../src/run/doctor.js";
 import { hostPathTokens } from "../src/run/host-path-tokens.js";
 import { createHash } from "node:crypto";
@@ -607,6 +608,47 @@ describe("eval: a scenario that opts out of the stall verdict (allow_stall: true
       ["after", true],
     ]);
     expect(out.report.summary.exitCode).toBe(1);
+  });
+});
+
+describe("eval: a verdict-modifier-only assertion is not a row, so it is outside the correction family", () => {
+  // `allow_stall: true` always grades pass. As a row it would be constant in both arms and only enlarge m.
+  const withModifierGrade = (_s: EvalJobSpec, r: RunResult): RunResult => ({
+    ...r,
+    assertions: [...r.assertions, { assertion: { allow_stall: true }, pass: true } as RunResult["assertions"][number]],
+  });
+
+  it("the row set, the family size and the correction match the same scenario without the modifier", async () => {
+    const evalArgs = (scen: string, a: string, b: string, out: string) =>
+      parseEvalArgs([scen, "--arm", `before=${a}`, "--arm", `after=${b}`, "--out", join(root, out), "--quiet"]);
+    const base = setup();
+    const plain = await runEval(evalArgs(base.scen, base.a, base.b, "eval-plain"), deps(fakeRunner()));
+    const file = join(base.scen, "csv-metrics.yaml");
+    writeFileSync(file, readFileSync(file, "utf8") + "  - allow_stall: true\n");
+    const modIndex = (parseYaml(readFileSync(file, "utf8")) as { assert: unknown[] }).assert.length - 1;
+    const out = await runEval(evalArgs(base.scen, base.a, base.b, "eval-mod"), deps(fakeRunner(withModifierGrade)));
+    const t = out.report.sections.tuned!;
+    const p = plain.report.sections.tuned!;
+    expect(t.rows.length).toBeGreaterThan(0);
+    // No row for the modifier's index, in the family or among the derived rows.
+    expect([...t.rows, ...t.derivedRows].some((r) => r.assertionIndex === modIndex)).toBe(false);
+    expect(t.rows.map((r) => r.text)).not.toContain("allow_stall");
+    // The denominator counts only the real rows: the same m and family as the scenario without the modifier,
+    // and the same corrected outcome per row.
+    expect(t.m).toBe(p.m);
+    expect(out.report.summary.familyRows).toBe(plain.report.summary.familyRows);
+    expect(t.rows.map((r) => [r.assertionIndex, r.text, r.label, r.p, r.adjustedP])).toEqual(
+      p.rows.map((r) => [r.assertionIndex, r.text, r.label, r.p, r.adjustedP]),
+    );
+    expect(t.minRowsToConfirm).toBe(p.minRowsToConfirm);
+  });
+  it("a scenario whose only assertion is a modifier has nothing to compare: refused before any run", async () => {
+    const { scen, a, b } = setup();
+    const file = join(scen, "csv-metrics.yaml");
+    writeFileSync(file, readFileSync(file, "utf8").replace(/\nassert:[\s\S]*$/, "\nassert:\n  - allow_stall: true\n"));
+    const calls: EvalJobSpec[] = [];
+    await expect(runEval(args(scen, a, b), deps(fakeRunner(undefined, calls)))).rejects.toThrow(/allow_stall is not a row/);
+    expect(calls).toEqual([]);
   });
 });
 
