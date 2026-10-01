@@ -289,7 +289,8 @@ not run again; the judge call is the only spend.
   (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's
   `evidence_files` or `include_subagent_text`, or the capture budget, changed, so a different document is
   expected), `unknown` (no live assert recorded a fingerprint to compare with), `live_refused` (every live assert
-  with this scope refused its evidence, so no live judge read a document for it), or `not_graded` (this
+  with this scope refused its evidence and recorded no fingerprint; a refused assert that did record one was read
+  by the live judge, so it is compared like a graded one), or `not_graded` (this
   re-grade's own assert refused its evidence; its message says why). The run-level value is the worst over the
   graded asserts, and `not_graded` only when every assert was refused. `unknown` and `live_refused` are named in a
   `::warning::` before the judge call: those documents could not be checked for drift or for a secret the live
@@ -310,7 +311,7 @@ not run again; the judge call is the only spend.
   `--allow-doc-drift` grades anyway; the grade is then reported with its own `docMatchesLive` and, when that is
   `false`, a warning.
   **What is not checked:** a live assert that recorded no `judgedDoc` (`unknown`) or refused its evidence
-  (`live_refused`) — neither for drift nor for an unscrubbed secret, though it is warned about; and content that only a widened `evidence_files` scope or a larger `--authored-total-bytes`
+  and recorded no fingerprint (`live_refused`) — neither for drift nor for an unscrubbed secret, though it is warned about; and content that only a widened `evidence_files` scope or a larger `--authored-total-bytes`
   brings in (a file the live cap left out, or a larger part of one). The live judge never read that content, so
   nothing can be compared with it and a secret in it that this process does not know is not detected. It is not
   refused: it is graded, named in a `::warning::` before the judge call, and listed in `uncheckedSections`

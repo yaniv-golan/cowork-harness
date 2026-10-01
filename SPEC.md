@@ -654,7 +654,8 @@ calls and is absent when none was priced (never `0` for unknown); `unpricedGrade
 every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `false` | `"scope_changed"` |
 `"unknown"` | `"live_refused"` | `"not_graded"`: whether the recomposed judged document equals, section for
 section, the `judgedDoc` the live run recorded (`unknown` when no live assert recorded one, never `true`;
-`live_refused` when every live assert with that scope refused its evidence; `not_graded` when the re-grade's own
+`live_refused` when every live assert with that scope refused its evidence and recorded no fingerprint — one that
+recorded a `judgedDoc` is compared like a graded one; `not_graded` when the re-grade's own
 assert refused its evidence). The run-level value is the worst over the graded asserts, `not_graded` only when
 every assert was refused; none of these values changes the exit code. `differingSections[]` entries are
 `{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
@@ -664,7 +665,7 @@ each live assert that recorded a `judgedDoc` is rebuilt from the live run's own 
 `evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture` existed, the
 `--authored-total-bytes` value passed) with this process's secrets, and any difference refuses unless
 `--allow-doc-drift` is passed — whatever the new scenario's scope. Not checked: a live assert that recorded no
-`judgedDoc` (`unknown`) or refused its evidence (`live_refused`), neither for drift nor for an unscrubbed secret
+`judgedDoc` (`unknown`) or refused its evidence and recorded none (`live_refused`), neither for drift nor for an unscrubbed secret
 (warned about before the judge call); and content only a widened scope or a
 larger `--authored-total-bytes` brings in, which is graded, warned about and listed in `uncheckedSections[]`
 (`{assertionIndex, kind, path?}`). The envelope is scrubbed with the same secret set as the file. **Exit codes:** `0` every re-graded assert passes · `1` any

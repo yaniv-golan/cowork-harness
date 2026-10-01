@@ -40,7 +40,7 @@ const CMD = "regrade";
 
 /** Whether the re-grade's judged document is the one the live judge read. See REGRADE_USAGE. `unknown` and
  *  `live_refused` mean there was nothing live to compare with (no fingerprint, or the live assert refused its
- *  evidence); `not_graded` means this re-grade's own assert refused its evidence. */
+ *  evidence and recorded no fingerprint); `not_graded` means this re-grade's own assert refused its evidence. */
 export type DocMatch = true | false | "scope_changed" | "unknown" | "live_refused" | "not_graded";
 
 export interface DifferingSection {
@@ -186,16 +186,19 @@ interface LiveSide {
   captureMoved: boolean;
 }
 
-/** A live semantic assert that refused its evidence (any `semanticEvidence.reason` but `graded`): no live judge
- *  read a document for it, so it vouches for nothing. A result without `semanticEvidence` predates the field
- *  and is read as graded. */
-const liveRefused = (r: LiveResult): boolean => r.semanticEvidence !== undefined && r.semanticEvidence.reason !== "graded";
+/** A live semantic assert that refused its evidence (any `semanticEvidence.reason` but `graded`) AND recorded no
+ *  `judgedDoc`: no live judge read a document for it, so it vouches for nothing. A refused assert that DID
+ *  record one (a harness that still called the judge before refusing) had its document read, so its
+ *  fingerprint is valid evidence and it is compared like a graded one. A result without `semanticEvidence`
+ *  predates the field and is read as graded. */
+const liveRefused = (r: LiveResult): boolean =>
+  r.judgedDoc === undefined && r.semanticEvidence !== undefined && r.semanticEvidence.reason !== "graded";
 
-/** A live assert whose recorded document can be compared with: graded, with a `judgedDoc`. */
-const comparable = (r: LiveResult): boolean => r.judgedDoc !== undefined && !liveRefused(r);
+/** A live assert whose recorded document can be compared with: it has a `judgedDoc`, refused or not. */
+const comparable = (r: LiveResult): boolean => r.judgedDoc !== undefined;
 
 /** Why an assert has nothing live to compare with, whatever its own document: every same-scope live assert
- *  refused (`live_refused`), or no live assert recorded a comparable document at all (`unknown`). */
+ *  refused and recorded no fingerprint (`live_refused`), or no live assert recorded a comparable document at all (`unknown`). */
 function nothingLive(a: Assertion, live: LiveSide): "live_refused" | "unknown" | undefined {
   const key = ownScopeKey(a.semantic_matches!);
   const sameScope = live.liveSemantic.filter((r) => ownScopeKey(r.assertion.semantic_matches!) === key);
@@ -265,7 +268,7 @@ function liveDocDrift(
   const allLive = (result.assertions ?? [])
     .map((r, liveIndex) => ({ r, liveIndex }))
     .filter(({ r }) => r.assertion?.semantic_matches !== undefined);
-  // A live assert that refused its evidence has no document a judge read for it (see `liveRefused`).
+  // Only an assert with a recorded document can be checked (see `comparable`).
   const live = allLive.filter(({ r }) => comparable(r));
   if (live.length === 0) return { drift: [] };
   let ctx = sameInputs;
@@ -564,7 +567,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       warn(
         scrub(
           `::warning:: ${CMD}: ${p.dirAsGiven}: ${blind.length} assert(s) have no live document to compare with (${blind.join(", ")}) — ` +
-            `unknown: the run recorded no fingerprint; live_refused: the live assert refused its evidence, so no judge read one. ` +
+            `unknown: the run recorded no fingerprint; live_refused: the live assert refused its evidence and recorded no fingerprint. ` +
             `Their rebuilt documents could not be checked for drift or for a secret the live run scrubbed; this process's scrub set ` +
             `is all that protects them.`,
           secrets,
@@ -664,7 +667,7 @@ function docMatchLine(r: RegradeRunReport): string {
     case "unknown":
       return "· judged document: cannot compare — the run did not record the live document's fingerprint (not drift- or secret-checked)";
     case "live_refused":
-      return "· judged document: cannot compare — the live assert refused its evidence, so no live judge read a document (not drift- or secret-checked)";
+      return "· judged document: cannot compare — the live assert refused its evidence and recorded no fingerprint (not drift- or secret-checked)";
     case "not_graded":
       return "· judged document: not graded — this re-grade's assert refused its evidence (see its message)";
     case "scope_changed":

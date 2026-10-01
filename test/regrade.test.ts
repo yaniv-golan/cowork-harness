@@ -523,12 +523,27 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(judge.calls).toHaveLength(1);
   });
 
-  it("live_refused: the live assert refused its evidence, so there is nothing to compare — graded and warned", async () => {
-    // The live result as a run that refused this assert's evidence records it (a refusing assert may carry no
-    // judgedDoc; this one keeps it, which must not make it count as compared).
+  it("a live assert that refused its evidence but recorded a judgedDoc is still drift-checked", async () => {
+    // A harness that called the judge before refusing recorded the document that judge read: valid evidence.
     const k = await keptRun({ author: writeReport });
     const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
     r.assertions[0].semanticEvidence = { reason: "in_scope_omitted", paths: ["outputs/report.md"] };
+    expect(r.assertions[0].judgedDoc).toBeDefined();
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain("live assert 0: changed authored outputs/report.md");
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it("live_refused: the live assert refused its evidence and recorded no fingerprint — graded and warned", async () => {
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    r.assertions[0].semanticEvidence = { reason: "in_scope_omitted", paths: ["outputs/report.md"] };
+    delete r.assertions[0].judgedDoc;
     writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
     // An edit that would be drift against a graded live assert is not refused here: there is nothing to check it against.
     writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
@@ -545,7 +560,7 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(out.runs[0].docMatchesLive).toBe("live_refused");
     expect(out.runs[0].differingSections).toEqual([]);
     expect(stderr.text()).toContain("assert 0: live_refused");
-    expect(regradeTextReport(out).join("\n")).toContain("the live assert refused its evidence");
+    expect(regradeTextReport(out).join("\n")).toContain("the live assert refused its evidence and recorded no fingerprint");
   });
 
   it("not_graded: this re-grade's assert refused its evidence; the file is not named after an unknown model", async () => {
