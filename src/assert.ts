@@ -905,7 +905,7 @@ export function semanticRefusal(
       message:
         `evidence unavailable: no pre-run manifest for this run, so the set of files it AUTHORED could not be computed — ` +
         `the judge would have graded the final message and transcript alone while reporting complete authored evidence. ` +
-        `The run never armed the manifest, or predates the manifest seam; re-run live.`,
+        `This is a --resume turn (the baseline belongs to the first turn), or the run predates the manifest seam; re-run live without --resume.`,
     };
   } else if (scoped && !sc.matchedAny) {
     // A glob matching nothing would grade the rubric against ZERO authored evidence while the capture
