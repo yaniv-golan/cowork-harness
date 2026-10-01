@@ -9,8 +9,8 @@
 //
 // A row is rewritten by the SAME producer `run` writes it with (`gradeFor` over the result with the re-graded entries
 // substituted), never patched key by key. `result.json` is never touched (`regrade`'s own invariant). Everything that
-// can refuse is decided before the first judge call, over every selected variant: the gate, the locks, and each
-// batch's evidence preflight.
+// can refuse is decided before the first judge call, over every selected variant: the host-`claude` isolation check,
+// the gate, the locks, and each batch's evidence preflight.
 
 import { realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -57,6 +57,9 @@ export interface RegradeFlowDeps {
   env: NodeJS.ProcessEnv;
   secrets: readonly string[];
   stderr: (line: string) => void;
+  /** The host-`claude` isolation preflight (`isolationRefusal`, src/decide/llm-transport.ts): the refusal message, or
+   *  undefined when the judge can run isolated. `hillclimb run` takes the same check. */
+  isolationCheck: () => string | undefined;
   harnessVersion?: string;
   /** Test seams, forwarded to `regradeRuns`. */
   regradeOptions?: Pick<RegradeOptions, "makeJudge" | "pairwiseComplete" | "now">;
@@ -412,6 +415,18 @@ async function regradeFlowInner(
     if (readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd) === null)
       throw new UsageError(`${join(flowArg, v)} has no results.jsonl`);
   if (!variants.length) throw new UsageError(`${flowArg} has no variant with rows to re-grade`);
+
+  // Every judge (semantic_matches, semantic_pairwise) runs the host `claude` isolated and tool-less, as `hillclimb run`
+  // requires: a CLI that cannot is refused here, before any lock or write, instead of grading every row judge-invalid.
+  // A fill judges only the pairwise comparisons a row lacks, so only a selected pairwise assert needs the check there.
+  if (
+    cases.some((c) =>
+      (c.scenario.assert ?? []).some((a) => (args.fillRefs ? a.semantic_pairwise !== undefined : judgedOpts(a) !== undefined)),
+    )
+  ) {
+    const iso = deps.isolationCheck();
+    if (iso) return refuse(iso);
+  }
 
   // The harness gate, exactly as `run` applies it: a rubric fix is a gated scenario edit.
   const state = readStateIfPresent(flowArg, deps.cwd);

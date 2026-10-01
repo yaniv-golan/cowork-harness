@@ -1,7 +1,18 @@
 // `hillclimb regrade` in-process over a flow the REAL CLI built (stub agent, a fake host-`claude` judge replaying a
 // captured envelope): the seams a CLI run cannot reach — the core re-grade, the metrics merge — are injected here.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, cpSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+  cpSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -122,8 +133,26 @@ const DEPS = (over: Partial<RegradeFlowDeps> = {}): RegradeFlowDeps => ({
   env: process.env,
   secrets: [],
   stderr: () => {},
+  isolationCheck: () => undefined,
   ...over,
 });
+/** Every entry under `dir`, with each file's bytes (a link's target): equal before and after = nothing was written. */
+function tree(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string, rel: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isSymbolicLink()) out[r] = `-> ${readlinkSync(p)}`;
+      else if (e.isDirectory()) {
+        out[r + "/"] = "";
+        walk(p, r);
+      } else out[r] = readFileSync(p, "utf8");
+    }
+  };
+  walk(dir, "");
+  return out;
+}
 
 describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
   it("a fill rebuilds every scored row — a case with no judged assert too — so state-template declares win_v1", async () => {
@@ -266,5 +295,60 @@ describe.runIf(POSIX)("hillclimb regrade leaves what it should not touch", () =>
       { why: expect.stringMatching(/now has 3 assertion\(s\), its run graded 2/) },
     ]);
     expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+  }, 180_000);
+});
+
+// A host `claude` too old to run the judge isolated: its `--help` (exit 0, as the real CLI's) lacks the isolation flags.
+const OLD_JUDGE = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "2.0.0 (Claude Code)"; exit 0; fi
+if [ "$1" = "--help" ]; then echo "  --print   x"; echo "  --model <model>   x"; exit 0; fi
+echo "should not be called" >&2
+exit 1
+`;
+
+describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
+  it("refuses up front (exit 2) before any lock, row or backup, when the host claude cannot run the judge isolated", async () => {
+    const { flow } = buildFlow();
+    const before = tree(flow);
+    const locksAtCheck: boolean[] = [];
+    let regradeCalls = 0;
+    const lines: string[] = [];
+    const out = await regradeFlow(
+      ARGS({ approveHarness: true }),
+      DEPS({
+        stderr: (l) => lines.push(l),
+        isolationCheck: () => {
+          for (const v of ["baseline", "v1"]) locksAtCheck.push(existsSync(join(flow, v, ".lock")));
+          return "the host claude cannot run isolated (SYNTHETIC refusal)";
+        },
+        regrade: async () => {
+          regradeCalls++;
+          throw new Error("the core re-grade must not run");
+        },
+      }),
+    );
+    expect(out.exitCode).toBe(2);
+    expect(out.error).toEqual({
+      category: "usage",
+      message: "refusing to regrade: the host claude cannot run isolated (SYNTHETIC refusal)",
+    });
+    expect(lines.join("\n")).toContain("refusing to regrade: the host claude cannot run isolated (SYNTHETIC refusal)");
+    expect(locksAtCheck).toEqual([false, false]);
+    expect(regradeCalls).toBe(0);
+    expect(tree(flow)).toEqual(before);
+  }, 180_000);
+
+  it("the CLI refuses with the usage envelope when the host claude is too old (no judge call, nothing written)", () => {
+    const { cli, flow } = buildFlow();
+    const before = tree(flow);
+    writeFileSync(join(work, "judge.sh"), OLD_JUDGE, { mode: 0o755 });
+    const r = cli("regrade", "evals", "--flow", "flow", "--output-format", "json");
+    expect(r.status, r.stderr).toBe(2);
+    const env = JSON.parse(r.stdout) as { command: string; ok: boolean; error: { category: string; message: string } };
+    expect(env).toMatchObject({ command: "hillclimb regrade", ok: false, error: { category: "usage" } });
+    expect(env.error.message).toMatch(
+      /^refusing to regrade: the host `claude` \(.*judge\.sh, 2\.0\.0 \(Claude Code\)\) does not accept --safe-mode/,
+    );
+    expect(tree(flow)).toEqual(before);
   }, 180_000);
 });

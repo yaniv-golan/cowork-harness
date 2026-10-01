@@ -303,7 +303,13 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         allowDocDrift: p.flags["--allow-doc-drift"] === true,
         allowUnchecked: p.flags["--allow-unchecked"] === true,
       },
-      { cwd: process.cwd(), env: process.env, secrets: [...secrets], stderr: (l) => err(l, secrets) },
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        secrets: [...secrets],
+        stderr: (l) => err(l, secrets),
+        isolationCheck: () => isolationRefusal(),
+      },
     );
     const payload = { flow: p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow, variants: out.variants, exitCode: out.exitCode };
     if (out.error)
