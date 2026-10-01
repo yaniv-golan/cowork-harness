@@ -14,6 +14,7 @@ import { regradeEnvelope, regradeRuns } from "../src/run/regrade.js";
 import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
 import { DEFAULT_AUTHORED_TOTAL_BYTES } from "../src/run/artifacts.js";
 import type { SemanticJudge } from "../src/assert.js";
+import { METRIC_UNAVAILABLE } from "../src/types.js";
 import type { LaunchPlan } from "../src/session.js";
 
 function caseInsensitiveFs(): boolean {
@@ -133,5 +134,9 @@ describe("regrade: metrics", () => {
       expect(out.runs[0]).not.toHaveProperty("metrics");
       expect(JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8"))).not.toHaveProperty("metrics");
     }
+  });
+  it("schema/regrade.json's reason enum is METRIC_UNAVAILABLE", () => {
+    const schema = JSON.parse(readFileSync(resolve("schema/regrade.json"), "utf8"));
+    expect(schema.definitions.Run.properties.metrics.items.properties.unavailable.enum).toEqual([...METRIC_UNAVAILABLE]);
   });
 });

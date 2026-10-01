@@ -3296,8 +3296,8 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
   if (limited.length)
     warn(
       `::warning:: [replay] metrics: ${limited.length}/${measured.length} not measurable from this cassette (` +
-        limited.map((x) => `${x.id}: ${x.unavailable} — ${x.why}`).join("; ") +
-        `) — re-record to measure them\n`,
+        limited.map((x) => `${x.id}: ${x.unavailable} — ${x.why}${x.remedy ? `; ${x.remedy}` : ""}`).join("; ") +
+        `)\n`,
     );
   return measured.map((x) => (x.value !== undefined ? { id: x.id, value: x.value } : { id: x.id, unavailable: x.unavailable! }));
 }

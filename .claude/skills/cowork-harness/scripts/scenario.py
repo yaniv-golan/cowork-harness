@@ -1437,6 +1437,13 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             _f = _enum_finding(_field, _value, path)
             if _f is not None:
                 findings.append(_f)
+    _metrics = doc.get("metrics")
+    if isinstance(_metrics, list):
+        for _m in _metrics:
+            if isinstance(_m, dict) and "better" in _m:
+                _f = _enum_finding("metrics.better", _m["better"], path)
+                if _f is not None:
+                    findings.append(_f)
     _answers = doc.get("answers")
     if isinstance(_answers, list):
         for _rule in _answers:

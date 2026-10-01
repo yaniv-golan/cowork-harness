@@ -1279,7 +1279,7 @@
       "minLength": 1
     },
     "metrics": {
-      "description": "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. See docs/scenario.md",
+      "description": "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible here): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
       "type": "array",
       "items": {
         "type": "object",
@@ -1295,16 +1295,16 @@
                   "pattern": "^\\.+$"
                 },
                 {
-                  "pattern": "^(pass|claims|win|both_bad)$"
+                  "pattern": "^([pP][aA][sS][sS]|[cC][lL][aA][iI][mM][sS]|[wW][iI][nN]|[bB][oO][tT][hH]_[bB][aA][dD])$"
                 },
                 {
-                  "pattern": "^a\\d+(_|$)"
+                  "pattern": "^[aA]\\d+(_|$)"
                 },
                 {
-                  "pattern": "_present$"
+                  "pattern": "_[pP][rR][eE][sS][eE][nN][tT]$"
                 },
                 {
-                  "pattern": "(^|_)(win|both_bad)(_|$)"
+                  "pattern": "(^|_)([wW][iI][nN]|[bB][oO][tT][hH]_[bB][aA][dD])(_|$)"
                 }
               ]
             }
@@ -1349,7 +1349,7 @@
             "description": "which direction is an improvement"
           },
           "scale": {
-            "description": "the metric's full range (a bounded metric); set exactly one of scale or unbounded",
+            "description": "the UPPER BOUND of a bounded metric's range (the range is [min, scale], min defaulting to 0 — a range of [-1, 1] is `min: -1, scale: 1`); set exactly one of scale or unbounded",
             "type": "number",
             "exclusiveMinimum": 0
           },
@@ -1359,7 +1359,7 @@
             "const": true
           },
           "min": {
-            "description": "the floor of the metric's range, when it is not 0",
+            "description": "the floor of the metric's range (default 0); with `scale`, it must be below `scale` (refused at load otherwise)",
             "type": "number"
           }
         },

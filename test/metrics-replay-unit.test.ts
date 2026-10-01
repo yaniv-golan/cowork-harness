@@ -21,6 +21,8 @@ describe("replayMetrics", () => {
   });
   it("no artifact manifest: pruned, and warned", () => {
     expect(replayMetrics({ workRoot: "", userVisiblePrefixes: [] }, [decl])).toEqual([{ id: "words", unavailable: "pruned" }]);
-    expect(said()).toMatch(/\[replay\] metrics: 1\/1 not measurable from this cassette \(words: pruned — there is no work tree to read\)/);
+    expect(said()).toMatch(
+      /\[replay\] metrics: 1\/1 not measurable from this cassette \(words: pruned — there is no work tree to read; re-record: the recording kept no artifact manifest\)/,
+    );
   });
 });

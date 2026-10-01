@@ -78,7 +78,9 @@ describe.runIf(can)("metrics over a recorded cassette (record → replay, stub a
       ]);
       const warnings = rep.stderr.split("\n").filter((l) => l.includes("[replay] metrics:"));
       expect(warnings, rep.stderr).toHaveLength(1);
-      expect(warnings[0]).toMatch(/1\/3 not measurable from this cassette \(big: size/);
+      expect(warnings[0]).toMatch(
+        /1\/3 not measurable from this cassette \(big: size — larger than the recorded artifact-body cap; re-record with a larger --max-artifact-bytes\)/,
+      );
       expect(warnings[0]).not.toMatch(/kept|words/);
 
       // --assert-from: the on-disk declaration is measured, not the frozen one.
@@ -136,6 +138,8 @@ describe.runIf(can)("metrics over a recorded cassette (record → replay, stub a
       expect(rep.stderr).toMatch(
         /\[replay\] metrics: 1\/1 not measurable from this cassette \(inherited: pre_run — its pre-run hash is unavailable/,
       );
+      // The live run could not hash it either, so a re-record would not measure it: no such remedy is offered.
+      expect(rep.stderr.split("\n").find((l) => l.includes("[replay] metrics:"))).not.toMatch(/re-record/);
     } finally {
       f.cleanup();
     }

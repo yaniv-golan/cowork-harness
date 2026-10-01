@@ -1224,8 +1224,17 @@ export type MetricUnavailable = (typeof METRIC_UNAVAILABLE)[number];
 
 /** Ids a scenario metric may not take: each would collide with a key the hillclimb runner generates (its grade
  *  keys, per-index keys, `_present` companions and pairwise keys). */
+export const RESERVED_METRIC_ID_PATTERNS = [
+  "^(pass|claims|win|both_bad)$",
+  "^a\\d+(_|$)",
+  "_present$",
+  "(^|_)(win|both_bad)(_|$)",
+] as const;
+/** Compared case-insensitively: `Pass` or `A1` would collide with `pass` / `a1` wherever keys are folded. The
+ *  published JSON Schema carries the same patterns with each letter spelled as a two-case class. */
 export function reservedMetricId(id: string): boolean {
-  return /^(pass|claims|win|both_bad)$/.test(id) || /^a\d+(_|$)/.test(id) || /_present$/.test(id) || /(^|_)(win|both_bad)(_|$)/.test(id);
+  const lower = id.toLowerCase();
+  return RESERVED_METRIC_ID_PATTERNS.some((p) => new RegExp(p).test(lower));
 }
 
 /** A metric id is path-safe: word characters, dots and hyphens, at most 129 characters, not all dots — the rule
@@ -1238,7 +1247,9 @@ export function isMetricIdSafe(id: string): boolean {
 
 /** A relative path under the work root: not blank, not absolute, no `..` segment, no NUL. */
 function isContainedRelPath(p: string): boolean {
-  if (p.trim().length === 0 || p.includes("\0") || p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\")) return false;
+  // A backslash is refused outright: on POSIX it is part of a file name, so `outputs\m.json` would never name the
+  // file the author meant and would always report missing_artifact.
+  if (p.trim().length === 0 || p.includes("\0") || p.includes("\\") || p.startsWith("/") || /^[A-Za-z]:/.test(p)) return false;
   return !p.split(/[\\/]/).includes("..");
 }
 
@@ -1254,18 +1265,30 @@ export const ScenarioMetric = z
     artifact: z
       .string()
       .refine(isContainedRelPath, {
-        message: "a metric artifact is a path relative to the work root (no absolute path, no `..`, not blank)",
+        message:
+          "a metric artifact is a path relative to the work root, with forward slashes (no absolute path, no `..`, no backslash, not blank)",
       })
       .describe(
         "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder",
       ),
     path: z.string().min(1).describe("dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score)"),
     better: z.enum(["higher", "lower"]).describe("which direction is an improvement"),
-    scale: z.number().positive().optional().describe("the metric's full range (a bounded metric); set exactly one of scale or unbounded"),
+    scale: z
+      .number()
+      .positive()
+      .optional()
+      .describe(
+        "the UPPER BOUND of a bounded metric's range (the range is [min, scale], min defaulting to 0 — a range of [-1, 1] is `min: -1, scale: 1`); set exactly one of scale or unbounded",
+      ),
     unbounded: z.literal(true).optional().describe("true for a metric with no natural ceiling; set exactly one of scale or unbounded"),
-    min: z.number().optional().describe("the floor of the metric's range, when it is not 0"),
+    min: z
+      .number()
+      .optional()
+      .describe("the floor of the metric's range (default 0); with `scale`, it must be below `scale` (refused at load otherwise)"),
   })
   .superRefine((m, ctx) => {
+    if (m.scale !== undefined && m.min !== undefined && !(m.min < m.scale))
+      ctx.addIssue({ code: "custom", path: ["min"], message: `metric "${m.id}": \`min\` (${m.min}) must be below \`scale\` (${m.scale})` });
     if ((m.scale === undefined) === (m.unbounded === undefined))
       ctx.addIssue({ code: "custom", path: ["scale"], message: `metric "${m.id}": set exactly one of \`scale\` or \`unbounded\`` });
     if (/^\.+$/.test(m.id)) ctx.addIssue({ code: "custom", path: ["id"], message: `metric id "${m.id}" is all dots` });
@@ -1421,7 +1444,7 @@ export const ScenarioObject = z.strictObject({
     })
     .optional()
     .describe(
-      "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. See docs/scenario.md",
+      "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible here): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
     ),
 });
 /** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key

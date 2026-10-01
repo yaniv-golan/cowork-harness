@@ -1399,6 +1399,21 @@ def test_enum_value_invalid_on_fidelity(tmp_path):
     assert code == 1  # ERROR alone (no --strict) already fails the run
 
 
+def test_enum_value_invalid_on_metrics_better(tmp_path):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nfidelity: protocol\nprompt: hi\n"
+        "metrics:\n  - {id: words, artifact: outputs/m.json, path: words, better: hgher, scale: 100}\n"
+        "assert:\n  - result: success\n",
+        encoding="utf-8",
+    )
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert "metrics.better: hgher" in hits[0]["message"]
+    assert code == 1
+
+
 def test_enum_value_invalid_on_present_but_null_value(tmp_path):
     # `fidelity:` with nothing after it parses as null. The loader rejects it; the rule must too.
     # The retired on_unanswered check guarded with `.get(...) is not None`, which skipped exactly this

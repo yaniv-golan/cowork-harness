@@ -115,6 +115,16 @@ describe("every gate's reason", () => {
     });
     expect(one(c, m("outputs/m.json")).unavailable).toBe("pre_run");
   });
+  it("replay body-less over the cap but outside the walked roots: pre_run, not a cap to raise", () => {
+    put("other/q.json", "");
+    const c = ctx({ truncatedPaths: new Map([["other/q.json", "size" as const]]), postRunHashes: { "other/q.json": "h".repeat(64) } });
+    const [x] = measureMetrics(c, [m("other/q.json")]);
+    expect([x.unavailable, x.evidenceLimited === true, x.remedy]).toEqual(["pre_run", false, undefined]);
+  });
+  it("a replay link placeholder is not evidence-limited: the live run reads a link as pre_run too", () => {
+    put("outputs/m.json", "");
+    expect(measureMetrics(ctx({ linkPaths: new Set(["outputs/m.json"]) }), [m("outputs/m.json")])[0].evidenceLimited).toBeUndefined();
+  });
   it("a replay link placeholder: pre_run", () => {
     put("outputs/m.json", "");
     expect(one(ctx({ linkPaths: new Set(["outputs/m.json"]) }), m("outputs/m.json")).unavailable).toBe("pre_run");
