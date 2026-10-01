@@ -39,6 +39,7 @@ describe("assertions --list families", () => {
         "gate_answers_delivered",
         "question_asked",
         "question_context",
+        "question_option_count",
         "question_options",
         "questions_count_max",
       ].sort(),

@@ -157,6 +157,7 @@ GATE_KEYS = {
     "question_asked",
     "question_options",
     "question_context",
+    "question_option_count",
     "questions_count_max",
     "gate_answers_delivered",
     "gate_answer_count_min",
@@ -1541,6 +1542,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             "question_asked" in assert_keys
             or "question_options" in assert_keys
             or "question_context" in assert_keys
+            or "question_option_count" in assert_keys
         ) or any(
             (n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")
         )
@@ -1640,6 +1642,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 ("question_asked", "question_asked" in assert_keys),
                 ("question_options", "question_options" in assert_keys),
                 ("question_context", "question_context" in assert_keys),
+                ("question_option_count", "question_option_count" in assert_keys),
                 ("gate_answers_delivered: false", any(v is False for v in _assert_values(items, "gate_answers_delivered"))),
             ],
             "a delivered gate records at least one question, so requiring a gate to be present contradicts requiring zero questions",
