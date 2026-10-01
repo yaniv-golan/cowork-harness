@@ -20,7 +20,7 @@ import { loadBaseline } from "../src/baseline.js";
 import { effectiveTier } from "../src/run/execute.js";
 import type { RunIndexRow } from "../src/run/run-index.js";
 import { budgetStatus, resetBudgetStatus } from "../src/run/budget-status.js";
-import { EvalBudgetRefusal, parseEvalArgs, planEvalDryRun, runEval, type EvalJobSpec } from "../src/eval/command.js";
+import { EvalBudgetRefusal, EvalStagingError, parseEvalArgs, planEvalDryRun, runEval, type EvalJobSpec } from "../src/eval/command.js";
 import { planText, type EvalPlan } from "../src/eval/plan.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_VALUE_FLAGS } from "../src/eval/usage.js";
 import type { DoctorCheck } from "../src/run/doctor.js";
@@ -231,6 +231,26 @@ describe("eval --dry-run: nothing runs, nothing is created", () => {
     const snapRoots: string[] = [];
     await expect(planEvalDryRun(dry(scen, a, a), planDeps([], { snapRoots }))).rejects.toThrow(/identical/);
     expect(snapRoots).toHaveLength(1);
+    expect(existsSync(snapRoots[0])).toBe(false);
+  });
+});
+
+describe("eval --dry-run: a temp dir inside a git work tree", () => {
+  it("is refused as a staging failure (exit 3), and nothing is left in it", async () => {
+    const { scen, a, b } = setup();
+    const repo = join(root, "tmp-repo");
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    const savedTmp = process.env.TMPDIR;
+    process.env.TMPDIR = repo; // os.tmpdir() reads it on every call
+    const snapRoots: string[] = [];
+    try {
+      await expect(planEvalDryRun(dry(scen, a, b), planDeps([], { snapRoots }))).rejects.toThrow(EvalStagingError);
+    } finally {
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+    }
+    expect(snapRoots[0].startsWith(repo)).toBe(true);
     expect(existsSync(snapRoots[0])).toBe(false);
   });
 });
