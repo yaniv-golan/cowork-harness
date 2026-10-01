@@ -122,6 +122,13 @@ per-job directory it finds no priced run for the scenario, warns `no priced run 
 UNCAPPED`, and runs with no cap (a batch's estimate becomes a lower bound; only the `--concurrency 1`
 running total still stops it). To keep the cap, leave `--run-dir` at the default, or reuse the same
 directory across invocations (a CI cache, say) so it holds at least one priced run of that scenario.
+Under `--output-format json` this is machine-readable: the envelope's top-level `budget` object reports
+`enforced: false` (single run: at least one scenario ran with no cap) or `"lower_bound"` (a `record`
+batch), with `unpriced[]`, `runsDir` and `runsDirRedirected`; and when the runs dir was redirected the
+warning names `--run-dir` / `COWORK_HARNESS_RUNS_DIR` as the cause. A budget REFUSAL carries
+`error.code: "budget_exceeded"` plus `error.budget` (cap, refused estimate, basis, unpriced) — branch on
+that code, never on the message; a scenario that did not load has no `error.code`. On a
+`record <dir/> --dry-run` refusal, `broken[]` / `inputErrors[]` stay on the error envelope.
 
 #### Validate a skill against real documents (not a cassette)
 
