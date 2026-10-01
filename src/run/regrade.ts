@@ -141,7 +141,8 @@ export type RegradeCheckRun = Pick<
   "runDir" | "turn" | "scenarioSha256" | "uncheckedSections" | "uncheckedCount" | "liveDocDrift" | "authoredCapture"
 > & {
   /** The asserts that will be graded with nothing live to compare their document with — exactly those a real
-   *  re-grade warns about before its spend. `docMatch` is the `docMatchesLive` value each would be graded with.
+   *  re-grade warns about before its spend. `docMatch` is the comparison result each would get, before an accepted
+   *  drift (`allowDocDrift`) forces its `docMatchesLive` to `false`.
    *  Never refused: the grade goes ahead, but those documents are neither drift- nor secret-checked. */
   blind: BlindAssert[];
 };
@@ -154,7 +155,9 @@ export interface BlindAssert {
 }
 
 /** A `checkOnly` preflight that a real re-grade with the same options would NOT refuse: every run dir passed every
- *  pre-spend step. A refusal is the ordinary `{ ok: false }` arm of `RegradeOutcome`, identical to the real one. */
+ *  pre-spend step. A refusal is the ordinary `{ ok: false }` arm of `RegradeOutcome`, identical to the real one.
+ *  Like a real re-grade's `runs[]`, this arm is NOT scrubbed in-process (run dirs, section paths): a caller that
+ *  serializes it must scrub it itself — `regradeEnvelope` accepts only the re-grade arm (with `exitCode`). */
 export interface RegradeCheckPassed {
   ok: true;
   checkOnly: true;
@@ -546,7 +549,10 @@ interface Prepared {
  * `RegradeCheckOptions.checkOnly`): a refusal is returned as a real re-grade would return it, else `RegradeCheckPassed`.
  */
 export async function regradeRuns(opts: RegradeCheckOptions): Promise<RegradeOutcome | RegradeCheckPassed>;
-export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>;
+export async function regradeRuns(opts: RegradeOptions & { checkOnly?: false }): Promise<RegradeOutcome>;
+/** A `checkOnly` not known to be `true` or absent (an options object built in a variable widens it to `boolean`):
+ *  typed as either outcome, so a preflight's success is never read as a re-grade's. */
+export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }): Promise<RegradeOutcome | RegradeCheckPassed>;
 export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }): Promise<RegradeOutcome | RegradeCheckPassed> {
   // ONE secret set for the judged document, the written file and every message, so they cannot disagree.
   const secrets = opts.secrets ?? collectSecrets();

@@ -1791,7 +1791,9 @@ describe("regrade checkOnly: every pre-spend step, then stop", () => {
     delete r.authoredCapture;
     writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
     const real = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
-    const check = await regradeRuns({ ...opts(k, { makeJudge: noJudge }), checkOnly: true as const });
+    // Options built in a variable: `checkOnly` widens to boolean (the widened overload, exercised at runtime).
+    const o = { ...opts(k, { makeJudge: noJudge }), checkOnly: true };
+    const check = await regradeRuns(o);
     expect(refusalOf(check)).toEqual(refusalOf(real));
   });
 
@@ -1825,6 +1827,28 @@ describe("regrade checkOnly: every pre-spend step, then stop", () => {
     expect(out.runs[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "authored", path: "outputs/appendix.md" }]);
     expect(out.runs[0].uncheckedCount).toBe(1);
     expect(regradeFiles(k)).toEqual([]);
+  });
+
+  it("types: the overloads never type a preflight's success as a regrade's (checked by typecheck, not run)", () => {
+    // Compiled under tsconfig.test.json; the bodies are never called. An unused @ts-expect-error fails typecheck.
+    const widened = async (k: Kept) => {
+      const o = { runDirs: [k.runDir], scenarioFile: k.scenarioFile, checkOnly: true };
+      const r = await regradeRuns(o);
+      // @ts-expect-error a widened checkOnly may return RegradeCheckPassed, which has no exitCode
+      if (r.ok) void r.exitCode;
+    };
+    const literal = async (k: Kept) => {
+      const r = await regradeRuns({ runDirs: [k.runDir], scenarioFile: k.scenarioFile, checkOnly: true });
+      // @ts-expect-error a literal checkOnly: true may return RegradeCheckPassed, which has no exitCode
+      if (r.ok) void r.exitCode;
+    };
+    const plain = async (k: Kept) => {
+      for (const o of [opts(k), { ...opts(k), checkOnly: false as const }]) {
+        const r = await regradeRuns(o);
+        if (r.ok) void r.exitCode; // no checkOnly (or false): the plain RegradeOutcome
+      }
+    };
+    expect([widened, literal, plain].every((f) => typeof f === "function")).toBe(true);
   });
 
   /** The real path's blind-assert warning for the same run, and the preflight's `blind` for it. */
