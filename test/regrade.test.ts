@@ -333,8 +333,18 @@ describe("regrade: is the judged document the one the live judge read?", () => {
 
     // --allow-doc-drift alone grades it: the mutated bytes ARE in the document rebuilt from the live inputs, so they
     // are drift (accepted and reported), not unchecked content.
-    const out = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
+    } finally {
+      stderr.restore();
+    }
     if (!out.ok) throw new Error(out.message);
+    // Said before the spend, naming the file.
+    expect(stderr.text()).toMatch(
+      /::warning:: regrade: .*the kept evidence differs from what the live judge read \(live assert 0: changed authored outputs\/report\.md\) — grading anyway \(--allow-doc-drift\)/,
+    );
     expect(judge.calls).toHaveLength(1);
     expect(out.runs[0].docMatchesLive).toBe(false);
     expect(out.runs[0].uncheckedSections).toEqual([]);
@@ -1255,7 +1265,7 @@ describe("regrade: content the live judge never read, and accepted drift", () =>
     expect(out.message).toContain("assert 1: authored outputs/notes.md");
   });
 
-  it("a smaller --authored-total-bytes is never an unchecked refusal: it can only drop content the live judge read", async () => {
+  it("a smaller --authored-total-bytes: content it truncates refuses its own assert, so no truncated section is graded", async () => {
     const k = await keptRun({
       author: (w) => {
         writeReport(w);
@@ -1273,6 +1283,122 @@ describe("regrade: content the live judge never read, and accepted drift", () =>
       ["scope_changed", "graded"],
       ["not_graded", "evidence_incomplete"],
     ]);
+  });
+
+  it("a smaller budget that adds an evidence-health note to a GRADED document is not unchecked content", async () => {
+    // The scoped assert still grades (its file is a priority glob), but notes.md no longer fits, so its document
+    // gains the harness's evidence-health note, which no live document had. That note is fixed text and paths.
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "notes.md"), `${"n".repeat(600)}\n`);
+      },
+      assertYaml: SCOPED,
+    });
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50 }));
+    if (!out.ok) throw new Error(out.message);
+    expect(judge.calls).toHaveLength(1);
+    expect(judge.calls[0].answer).toContain("## Evidence health");
+    expect(out.runs[0].assertions.map((a) => [a.docMatchesLive, a.semanticEvidence?.reason])).toEqual([["scope_changed", "graded"]]);
+    expect(out.runs[0].uncheckedSections).toEqual([]);
+    expect(out.runs[0].differingSections).toContainEqual({ assertionIndex: 0, kind: "health", change: "added" });
+  });
+
+  it("extra content only in an assert that refuses its own evidence is not refused as unchecked", async () => {
+    // The new unscoped assert would read big.md and notes.md, which no live document had, but big.md is over the
+    // per-file cap, so the assert refuses its evidence: no judge receives that document.
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "notes.md"), "side notes\n");
+        writeFileSync(join(w, "outputs", "big.md"), `# Big\n${"Concentration is the main risk.\n".repeat(700)}`);
+      },
+      assertYaml: SCOPED,
+    });
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(
+        mkdtempSync(join(tmpdir(), "cwh-rg-t6-")),
+        `${SCOPED}  - semantic_matches:\n      rubric: ["the outputs name the risk"]\n`,
+      ),
+      makeJudge: judge.make,
+    });
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].assertions.map((a) => [a.docMatchesLive, a.semanticEvidence?.reason])).toEqual([
+      [true, "graded"],
+      ["not_graded", "evidence_incomplete"],
+    ]);
+    expect(out.runs[0].uncheckedSections).toEqual([]);
+    expect(judge.calls).toHaveLength(1);
+  });
+
+  it("the refusal lists the first 20 unchecked sections and counts the rest", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        mkdirSync(join(w, "outputs", "extra"), { recursive: true });
+        for (let i = 0; i < 25; i++) writeFileSync(join(w, "outputs", "extra", `e${String(i).padStart(2, "0")}.md`), `extra ${i}\n`);
+      },
+      assertYaml: SCOPED,
+    });
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(
+        mkdtempSync(join(tmpdir(), "cwh-rg-cap-")),
+        `  - semantic_matches:\n      rubric: ["the report names the risk"]\n      evidence_files: ["outputs/report.md", "outputs/extra/*.md"]\n`,
+      ),
+      makeJudge: judgeFactory(() => true).make,
+    });
+    expect(out).toMatchObject({ ok: false, code: "unchecked_content" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.refusals?.[0].uncheckedCount).toBe(25);
+    expect(out.refusals?.[0].uncheckedSections).toHaveLength(25);
+    expect(out.message).toContain("outputs/extra/e19.md");
+    expect(out.message).not.toContain("outputs/extra/e20.md");
+    expect(out.message).toContain("… and 5 more");
+  });
+
+  it("sub-agent text an include_subagent_text opt-in brings in is unchecked content", async () => {
+    const k = await keptRun({ author: writeReport, assertYaml: SCOPED });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    r.subagents = [{ description: "researcher", reasoning: [{ kind: "text", text: "The sub-agent found the risk." }] }];
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(
+        mkdtempSync(join(tmpdir(), "cwh-rg-sa-")),
+        `  - semantic_matches:\n      rubric: ["the report names the risk"]\n      evidence_files: ["outputs/report.md"]\n      include_subagent_text: true\n`,
+      ),
+      makeJudge: judgeFactory(() => true).make,
+    });
+    expect(out).toMatchObject({ ok: false, code: "unchecked_content" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.refusals?.[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "subagent" }]);
+  });
+
+  it("a secret matching JSON syntax refuses cleanly: the refusals are scrubbed field by field", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+      assertYaml: SCOPED,
+    });
+    const SECRET = 'md"}';
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    let out;
+    try {
+      out = await regradeRuns({ runDirs: [k.runDir], scenarioFile: widerScenario(), makeJudge: judgeFactory(() => true).make });
+    } finally {
+      delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+    }
+    expect(out).toMatchObject({ ok: false, code: "unchecked_content" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).not.toContain(SECRET);
+    expect(JSON.stringify(out.refusals)).not.toContain("[REDACTED]"); // no field held the secret
+    expect(out.refusals?.[0].uncheckedSections).toEqual([APPENDIX_UNCHECKED]);
   });
 
   it("a failure writing a regrade file after an earlier dir was graded returns the completed runs", async () => {

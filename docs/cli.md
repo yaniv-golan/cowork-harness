@@ -328,8 +328,12 @@ not run again; the judge call is the only spend.
   `--allow-unchecked` it is graded instead, named in a `::warning::` before the judge call and listed in
   `uncheckedSections` (`{assertionIndex, kind, path?}`) with `uncheckedCount`, in the file and on each `runs[]`
   entry. The two flags are independent: a file changed in place is drift (the rebuild has it), not unchecked
-  content, and accepting one never accepts the other. A smaller budget only drops content, and an assert whose
-  evidence will be refused sends nothing, so neither is ever refused as unchecked.
+  content, and accepting one never accepts the other. Under `--allow-doc-drift` alone, a section the drift ADDED
+  (for instance an old run given a larger `--authored-total-bytes` than it used) reaches the judge without
+  `--allow-unchecked`: it was detected and overridden, and the drift warning names its files. The harness's own
+  evidence-health and scratch notes (fixed text and paths) never count as unchecked, so a smaller budget — which
+  only drops or truncates file content — is never refused as unchecked; an assert whose evidence it truncates
+  refuses its own evidence and sends nothing, like any assert that refuses.
   **What is not checked:** a run in which no live assert recorded a `judgedDoc` has nothing to measure against:
   its asserts are `unknown` or `live_refused` — neither drift- nor secret-checked — and are only warned about,
   not refused. A blind assert beside a comparable sibling is measured against the sibling's rebuilt document, so
@@ -364,7 +368,8 @@ not run again; the judge call is the only spend.
   pass the one the run really used; on a newer run the flag overrides the recorded budget, the result is reported
   as `scope_changed`, and content a larger budget brings in is refused unless `--allow-unchecked`. The two
   evidence refusals (drift, unchecked content) are collected over every run dir, so one refusal lists them all;
-  every other refusal stops at the first.
+  every other refusal stops at the first run dir that fires it, so the list is complete only when no other
+  refusal fires (a drifted dir followed by a pruned one reports only the pruned one, with no code).
 - **Exit codes:** `0` every re-graded assert passes (`ok: true` exactly then) · `1` any fails or is
   judge-invalid · `2` has three meanings: a usage error; a refusal before any judge call; or a failure writing a
   regrade file after earlier run dirs were already graded (their files stay written; the judge calls for them, and

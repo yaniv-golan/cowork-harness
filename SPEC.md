@@ -684,8 +684,14 @@ Two evidence refusals are decided before any judge call, for every run dir:
   `include_subagent_text`) or a larger `--authored-total-bytes`. It refuses unless `--allow-unchecked` is passed;
   accepted, it is graded, warned about and listed in `uncheckedSections[]` (`{assertionIndex, kind, path?}`) with
   `uncheckedCount` its length. A section the rebuild has is either what the live judge read or an already-reported
-  drift, so the two flags are independent. An assert whose evidence will be refused sends nothing and is not
-  measured; a smaller budget only drops content.
+  drift, so the two flags are independent. In particular, under `--allow-doc-drift` alone an ADDED drift section
+  (an old run given a larger `--authored-total-bytes` than it really used shows up this way) counts as covered,
+  so its content reaches the judge without `--allow-unchecked`: it was detected and explicitly overridden, and the
+  drift warning names its files. `--allow-unchecked` covers only content the drift check could not compare at all.
+  The harness's own evidence-health and scratch notes (fixed text and file paths, scrubbed with this process's
+  secrets) are never unchecked content, so a smaller budget — which only drops or truncates file content, and may
+  add a health note saying so — is never refused as unchecked; content it truncates makes that assert refuse its
+  own evidence. An assert whose evidence will be refused sends nothing and is not measured.
 
 Not checked: a run in which no live assert recorded a `judgedDoc` has no rebuilt document to measure against — its
 asserts are `unknown` or `live_refused`, neither drift- nor secret-checked, and are warned about before the judge
@@ -699,7 +705,10 @@ alias judge model, a scenario with no `semantic_matches`, and the two evidence r
 writing a regrade file after earlier run dirs were graded. Each is the shared error envelope. The evidence
 refusals are collected over every run dir and carry `error.code` — `doc_drift` when any dir drifted, else
 `unchecked_content` — and a top-level `refusals[]`, one entry per run dir and code: `{runDir, code,
-uncheckedCount?, uncheckedSections?, liveDocDrift?}`; every other refusal stops at the first and carries no code.
+uncheckedCount?, uncheckedSections?, liveDocDrift?}`; every other refusal stops at the first run dir that
+fires it and carries no code. So `refusals[]` is complete only when no other refusal fires: a batch with a
+drifted dir and a later dir refused for another reason (a pruned work dir, say) reports only the latter, with no
+code and no `refusals[]`.
 A write failure carries the run dirs already graded and written in a top-level `runs[]`.
 `result.json` is never modified.
 

@@ -393,6 +393,11 @@ function uncheckedSections(
     const assertionIndex = sc.assert.indexOf(a);
     for (const s of fp.sections) {
       if (exact.has(`${s.kind}\0${s.path ?? ""}\0${s.sha256}`)) continue;
+      // The evidence-health and scratch notes are the harness's own text: fixed wording plus file paths, scrubbed
+      // with this process's secrets. They carry no file content, so nothing in them is "content the live judge
+      // never read" — and a changed budget legitimately adds or reshapes them (a smaller budget truncates a file,
+      // which adds a health note no live document had).
+      if (s.kind === "health" || s.kind === "scratch_note") continue;
       if (s.kind !== "authored" && s.kind !== "subagent" && s.chars <= (longest.get(s.kind) ?? -1)) continue;
       const key = `${assertionIndex}\0${s.kind}\0${s.path ?? ""}`;
       if (seen.has(key)) continue;
@@ -414,6 +419,18 @@ const liveDriftLabel = (drift: LiveDocDrift[]): string =>
         `live assert ${liveAssertionIndex}: ${sections.map(sectionLabel).join(", ") || "whole-document hash"}`,
     )
     .join("; ");
+
+/** Scrub a refusal's string fields (the run dir and section paths) one by one. Scrubbing the serialized JSON would
+ *  break it on a secret that matches JSON syntax, and the parse back would throw. */
+function scrubRefusal(r: RegradeRefusal, secrets: string[]): RegradeRefusal {
+  const sp = <T extends { path?: string }>(x: T): T => (x.path !== undefined ? { ...x, path: scrub(x.path, secrets) } : x);
+  return {
+    ...r,
+    runDir: scrub(r.runDir, secrets),
+    ...(r.uncheckedSections ? { uncheckedSections: r.uncheckedSections.map(sp) } : {}),
+    ...(r.liveDocDrift ? { liveDocDrift: r.liveDocDrift.map((d) => ({ ...d, sections: d.sections.map(sp) })) } : {}),
+  };
+}
 
 const UNCHECKED_LIST_CAP = 20;
 /** `assert <i>: <kind> <path>` per unchecked section, the first 20 and a count of the rest. */
@@ -663,7 +680,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       kind: "runtime",
       message: scrub(refusalLines.join("\n"), secrets),
       code: refusals.some((r) => r.code === "doc_drift") ? "doc_drift" : "unchecked_content",
-      refusals: JSON.parse(scrub(JSON.stringify(refusals), secrets)) as RegradeRefusal[],
+      refusals: refusals.map((r) => scrubRefusal(r, secrets)),
     };
 
   const sc = loadScenario();
