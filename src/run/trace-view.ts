@@ -1,4 +1,4 @@
-import { warn, tildeify } from "../io.js";
+import { warn, tildeify, scrubForTerminal } from "../io.js";
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -88,7 +88,8 @@ function isDispatchTool(name: string, input: unknown): boolean {
  *  caller that ever passes something else). */
 function summarize(input: unknown, translate: (s: string) => string): string {
   try {
-    const s = translate(JSON.stringify(input));
+    // Scrubbed before the slice: a secret cut in half leaves a prefix no later scrub can match.
+    const s = scrubForTerminal(translate(JSON.stringify(input)));
     return s.length > 100 ? s.slice(0, 100) + "…" : s;
   } catch {
     return "";
@@ -122,9 +123,11 @@ function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
         },
       ];
     case "assistant_text":
-      return ev.parentToolUseId || !ev.text.trim() ? [] : [{ kind: "text", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
+      return ev.parentToolUseId || !ev.text.trim()
+        ? []
+        : [{ kind: "text", detail: scrubForTerminal(translate(ev.text.replace(/\s+/g, " "))).slice(0, 120) }];
     case "thinking":
-      return !ev.text.trim() ? [] : [{ kind: "thinking", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
+      return !ev.text.trim() ? [] : [{ kind: "thinking", detail: scrubForTerminal(translate(ev.text.replace(/\s+/g, " "))).slice(0, 120) }];
     case "decision":
       return [{ kind: "decision", name: ev.request.kind, detail: decisionDetail(ev.request) }];
     case "result":
