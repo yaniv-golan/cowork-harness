@@ -387,6 +387,24 @@ export function trustedWorkspaceFiles(health: ClassifyWorkspaceFilesResult): Wor
   return health.rootAbsent || !health.walkComplete ? undefined : health.files;
 }
 
+/** `RunResult.artifacts`: the deliverable classes of the workspace walk (output + writable connected folders),
+ *  each marked `preRun: true` when it existed before the run with the SAME content — inherited (from a
+ *  `workspace_fixture`, or already in a connected folder), not produced by this run. The one derivation every
+ *  RunResult producer uses, so the marker cannot be set at one site and missed at another. Without a pre-run
+ *  manifest nothing is marked (authorship unknown — the marker is a positive claim, never a guess). */
+export function deliverableArtifacts(
+  workspaceFiles: readonly WorkspaceFile[] | undefined,
+  preRunHashes: Record<string, string | null> | undefined,
+): Array<{ path: string; bytes: number; preRun?: true }> | undefined {
+  return workspaceFiles
+    ?.filter((f) => f.class === "output" || f.class === "mount")
+    .map((f) => {
+      const pre = preRunHashes?.[f.path];
+      const untouched = typeof pre === "string" && f.sha256 !== undefined && pre === f.sha256;
+      return untouched ? { path: f.path, bytes: f.bytes, preRun: true as const } : { path: f.path, bytes: f.bytes };
+    });
+}
+
 /** Did a scratchpad walk actually observe this run, completely?
  *
  *  This is the difference between "nothing was left undelivered" and "we cannot tell" — and it must be

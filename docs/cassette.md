@@ -83,7 +83,7 @@ skill that moved. Run both; the drift note in the "Filesystem assertions" sectio
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
-`assert`, `skills`, `requires_capabilities`, `allow_host_writes` and `allow_host_hooks` — every field the schema defines — are
+`assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks` and `workspace_fixture` — every field the schema defines — are
 all captured at record time, and a plain `replay` evaluates every one of them from that
 frozen copy — nothing in the working tree can change its verdict. Editing `scenarios/<name>.yaml` does not
 change a replay; the sibling is read only to print `::notice::` lines when it has drifted, or when it
@@ -141,7 +141,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   "effectiveFidelity": "container",       // the tier the live record actually resolved to (e.g. a `fidelity: cowork` scenario resolving to hostloop/container)
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
   "preRunPaths": ["outputs/existing.json"], // pre-run path baseline for `no_unexpected_files` (workRoot-relative)
-  "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed (evidence-unavailable, never a false "modified")
+  "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed, or an untouched file whose body the redaction policy rewrote (evidence-unavailable for `input_unmodified` and `authored: true`, never a false "modified" or "authored")
   "preRunOrigin": "local-walk", // provenance of the pre-run baseline (local-walk / remote-unavailable / local-unreadable); `local-unreadable` makes no_unexpected_files/input_unmodified fail evidence-unavailable on replay instead of diffing an incomplete baseline
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
@@ -181,6 +181,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 |---|---|---|
 | **v13** | has an `assert:` entry using the object form of `tool_called` / `tool_not_called` | v12: refuses as too new (see below) |
 | **v14** | has a `semantic_matches` entry carrying `include_fork_results` (any value), or a `semantic_pairwise` entry — one bump shared with the other keys of this release that an older reader cannot read | v13: refuses as too new — upgrade the harness, don't re-record |
+| **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value) | v13: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -617,9 +618,12 @@ folder's contents are captured with a full body exactly as `outputs/` is.
 **Uploaded files are captured body-less the same way**, tagged `truncationReason: "input"` rather than
 `"readonly"`. `record` snapshots every path under each root in `inputRoots` (default `["uploads"]`) —
 path + `bytes` + `sha256`, `truncated: true`, no `body` — regardless of size, so an uploaded fixture never
-bloats the cassette or trips the `binary` privacy finding. `truncationReason` is therefore one of four
+bloats the cassette or trips the `binary` privacy finding. `truncationReason` is therefore one of five
 values: `"size"` (over the inline cap), `"readonly"` (a `mode: r` connected-folder input), `"unreadable"`
-(the file existed but couldn't be read), or `"input"` (an `inputRoots` upload).
+(the file existed but couldn't be read), `"input"` (an `inputRoots` upload), or `"fixture"` (v14 — an
+untouched BINARY `workspace_fixture` file: its sha256 still equals its pre-run hash, so it is test input
+the step never touched, recorded hash-only; text fixture files stay inline and go through the record
+redaction policy, and a fixture file the step rewrote is a deliverable like any other).
 
 A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
@@ -918,6 +922,19 @@ for the `cowork` → `hostloop`/`container` resolution.
   **before** `promptAssetsHash` existed carries no field at all — that's a non-failing informational note
   ("`prompt-assets:` cassette predates prompt-asset fingerprinting"), not a finding. Notes are emitted at
   `::notice::` and, on a directory replay, collapsed to one summary line per note kind.
+
+- **`workspace_fixture <dir> changed since record …`** (class `fixture`) — the scenario's
+  [`workspace_fixture`](./scenario.md#starting-from-a-saved-workspace-workspace_fixture) no longer matches
+  `fingerprint.workspaceFixtureSig`, the signature recorded from the files actually staged (each file's
+  sha256 and owner-executable bit; other permission bits do not count, so a umask difference is not drift).
+  The message names the changed, added and removed files. The step under test now starts from different
+  files: re-record. Warns on the default replay gate; `--strict`, `--fail-on-skill-drift` and an explicit
+  `--session` fail it (the fixture is test input the skill reads, like the skill source itself).
+- **`workspace_fixture <dir>: … cannot verify the fixture is unchanged since record`** (class
+  `unverifiable-fixture`) — the cassette records no fixture signature, the fixture path (stored relative to
+  the cassette) has no cassette directory to resolve against, the directory is gone, or the scan refuses
+  it (a planted symlink, an untracked file in git mode). Can't verify ⇒ not green: it **fails the default
+  replay**, and `verify-cassettes` reports it as could-not-verify (exit 3).
 
 - **`session-fingerprint: predates \`model\` coverage …`** — the same non-failing shape one bullet up, for
   the session shape rather than the prompt assets. A cassette recorded before `model` joined the hashed

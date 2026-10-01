@@ -393,6 +393,20 @@ export type ToolNotCalledObject = z.infer<typeof ToolNotCalledObject>;
 
 // `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
+/** The object form of `file_exists` / `user_visible_artifact`: the path, plus whether THIS run must have written
+ *  it. Shared by both keys so the two cannot drift. */
+const AuthoredFlag = z
+  .boolean()
+  .optional()
+  .describe(
+    "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+  );
+export const PresenceObject = z.strictObject({
+  path: z.string().min(1).describe("the file's path under the work root (as in the string form)"),
+  authored: AuthoredFlag,
+});
+export type PresenceObject = z.infer<typeof PresenceObject>;
+
 export const Assertion = z.strictObject({
   transcript_contains: z
     .string()
@@ -448,12 +462,17 @@ export const Assertion = z.strictObject({
     .describe(
       "regex (case-insensitive) that must NOT match any tool result (per-result, 10,240-char cap, 32,768 for a top-level Skill result). The regex sibling of tool_result_not_contains",
     ),
-  file_exists: z.string().min(1).optional().describe("a file exists at this path under the agent's work root"),
-  user_visible_artifact: z
-    .string()
+  file_exists: z
+    .union([z.string().min(1), PresenceObject])
     .optional()
     .describe(
-      "a file exists AND is under a user-visible prefix. Write the path workRoot-relative (e.g. `outputs/x.md`), NOT with an `mnt/` prefix: the accepted prefixes are `outputs/`, each connected-folder mount (`<folder>/`), or the legacy `.projects` fallback (pre-1.14271.0). (At fidelity tiers the workRoot is the `mnt/` mount, so the file lands at `mnt/outputs/…` on disk, but the assertion value is the relative form.)",
+      "a file exists at this path under the agent's work root. OBJECT form `{path, authored}`: `authored: true` also requires that THIS run created or rewrote the file (an untouched pre-run file — a workspace_fixture file the step never touched — fails); `authored: false` states that an inherited file is fine",
+    ),
+  user_visible_artifact: z
+    .union([z.string(), PresenceObject])
+    .optional()
+    .describe(
+      "a file exists AND is under a user-visible prefix. Write the path workRoot-relative (e.g. `outputs/x.md`), NOT with an `mnt/` prefix: the accepted prefixes are `outputs/`, each connected-folder mount (`<folder>/`), or the legacy `.projects` fallback (pre-1.14271.0). (At fidelity tiers the workRoot is the `mnt/` mount, so the file lands at `mnt/outputs/…` on disk, but the assertion value is the relative form.) OBJECT form `{path, authored}` as for file_exists",
     ),
   tool_called: z
     .union([toolGlob, ToolCalledObject])
@@ -781,6 +800,7 @@ export const Assertion = z.strictObject({
       not_contains: z.array(z.string().min(1)).min(1).optional().describe("no listed substring appears in the body"),
       matches: z.string().min(1).optional().describe("the body matches this regex"),
       not_matches: z.string().min(1).optional().describe("the body does not match this regex"),
+      authored: AuthoredFlag,
     })
     .optional()
     .describe(
@@ -980,6 +1000,7 @@ export const Assertion = z.strictObject({
       exists: z.boolean().optional().describe("the path resolves to a present (non-absent) value"),
       absent: z.boolean().optional().describe("the final key is absent from its (resolved) parent — the anti-hallucination negative"),
       is_null: z.boolean().optional().describe("the resolved value is JSON null (distinct from absent)"),
+      authored: AuthoredFlag,
     })
     .optional()
     .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),
@@ -1253,6 +1274,17 @@ export const ScenarioObject = z.strictObject({
     .describe(
       "required consent for `fidelity: protocol` when a staged plugin declares runnable hooks (`<plugin>/hooks/hooks.json`) — the CLI runs them as native host processes under your account with no container sandbox; plugins without hooks need no opt-in",
     ),
+  // A saved outputs tree copied into a FRESH session's outputs/ before turn 1, so a scenario can test one late
+  // step of a long pipeline. Resolved relative to the scenario file (like `session:`); validated and staged by
+  // src/fixture/workspace.ts. The refine also refuses a whitespace-only value, which would resolve to a directory.
+  workspace_fixture: z
+    .string()
+    .min(1)
+    .refine((v) => v.trim().length > 0, { message: "workspace_fixture must name a directory (it is blank)" })
+    .optional()
+    .describe(
+      "a directory (relative to the scenario file) whose contents are copied into the session's outputs/ before turn 1 — `<dir>/report.md` lands at `outputs/report.md`. Equals re-invoking the skill in the same Cowork session after it stopped mid-work or finished, except that the run starts with a fresh conversation context. Regular files only; symlinks, hard links, agent-config paths (.claude/, .git/, .mcp.json, CLAUDE.md) and, in git mode, untracked files are refused; 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Never re-staged on --resume. Its content signature joins the cassette staleness check",
+    ),
 });
 /** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key
  *  minimum-format map) and it is the schema `gen:schema` emits. Cross-key rules live here instead, on the
@@ -1348,6 +1380,15 @@ export interface Fingerprint {
    *  behavior. Asset-file bytes (not the rendered string) keep it deterministic and host-path-free.
    *  Absent on cassettes recorded before this field existed → informational note, never a finding. */
   promptAssetsHash?: string;
+  /** v14: the `workspace_fixture` content signature — sha256 over the fixture's sorted (path, sha256, exec bit)
+   *  triples (src/fixture/workspace.ts `workspaceFixtureSig`), taken from the files actually STAGED. Replay
+   *  recomputes it from the scenario's fixture dir (resolved against the cassette): a mismatch is a `fixture`
+   *  staleness finding, a missing dir `unverifiable-fixture`. Absent when the scenario declares no fixture. */
+  workspaceFixtureSig?: string;
+  /** v14: per-file `[path, sig]` behind `workspaceFixtureSig` (fixture-relative paths, redacted like
+   *  `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file), so a drift finding names
+   *  the file. */
+  workspaceFixtureFileSigs?: Array<[string, string]>;
 }
 
 /** The cause-class of a replay staleness finding. `unverifiable-baseline` (env/platform: the latest baseline
@@ -1363,7 +1404,11 @@ export interface Fingerprint {
  *  can't verify ⇒ not green on the verify-cassettes gate. `prompt-assets` = the baseline's committed
  *  prompt-asset files changed since record under the SAME appVersion (warn-by-default, `--strict`
  *  fails, re-record); `unverifiable-prompt-assets` = a recorded prompt-asset hash exists but the live
- *  baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green. */
+ *  baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green.
+ *  `fixture` = the scenario's `workspace_fixture` content changed since record (warns by default; `--strict`,
+ *  `--fail-on-skill-drift` and an explicit `--session` fail it — the fixture is test input the skill reads);
+ *  `unverifiable-fixture` = a fixture signature was recorded but the fixture dir cannot be resolved or scanned
+ *  today — can't verify ⇒ not green, on the default replay gate too. */
 type StalenessClass =
   | "baseline"
   | "skill"
@@ -1374,7 +1419,9 @@ type StalenessClass =
   | "resolved-tier"
   | "unverifiable-tier"
   | "prompt-assets"
-  | "unverifiable-prompt-assets";
+  | "unverifiable-prompt-assets"
+  | "fixture"
+  | "unverifiable-fixture";
 export interface StalenessFinding {
   class: StalenessClass;
   message: string;
@@ -2145,7 +2192,17 @@ export interface RunResult {
   // ENV-MANIFEST: files written under the user-visible roots (outputs/ + connected folders), relative paths
   // + sizes. Paths only (no content snapshot — that is the cassette manifest). Kills path-guessing and
   // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.
-  artifacts?: { path: string; bytes: number }[];
+  artifacts?: {
+    path: string;
+    bytes: number;
+    /** True when the file existed before the run and its content is unchanged (its pre-run hash equals its
+     *  post-run hash) — inherited, e.g. from a `workspace_fixture`, not produced by this run. Absent when the
+     *  run produced or rewrote it, or when there is no pre-run manifest to tell. */
+    preRun?: true;
+  }[];
+  /** The scenario's `workspace_fixture` directory as the run resolved it (absolute on a live run; on replay, as
+   *  the cassette stores it, relative to the cassette). Absent when the scenario declares none. */
+  workspaceFixture?: string;
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
    *  against. undefined = the run didn't capture it (a --resume run, or the run predates the seam); the

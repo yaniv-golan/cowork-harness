@@ -81,11 +81,15 @@ function isBinary(path: string): boolean {
 }
 
 /**
- * Tokenize the staged input mounts (uploads, connected folders, projects) under `mntHost` and write the
- * corpus to `<outDir>/input-host-paths.json`. A no-op on a resumed turn, whose corpus is the one the first
+ * Tokenize the staged input mounts (uploads, connected folders, projects) and the staged `workspace_fixture`
+ * files under `mntHost` and write the corpus to `<outDir>/input-host-paths.json`. A no-op on a resumed turn, whose corpus is the one the first
  * turn captured. Deterministic: entries are walked in sorted order and tokens are stored sorted.
  */
-export function captureInputHostPathCorpus(plan: Pick<LaunchPlan, "mounts" | "resume">, mntHost: string, outDir: string): void {
+export function captureInputHostPathCorpus(
+  plan: Pick<LaunchPlan, "mounts" | "resume" | "workspaceFixture">,
+  mntHost: string,
+  outDir: string,
+): void {
   if (plan.resume) return;
   const tokens = new Set<string>();
   let files = 0;
@@ -127,6 +131,9 @@ export function captureInputHostPathCorpus(plan: Pick<LaunchPlan, "mounts" | "re
   };
 
   for (const m of plan.mounts) if (INPUT_KINDS.has(m.kind)) visit(join(mntHost, m.mountPath));
+  // workspace_fixture files are user-supplied input too: staged into outputs/ just before this runs, so the
+  // files there now are exactly the fixture's (visited by name — never the whole outputs dir).
+  for (const f of plan.workspaceFixture?.files ?? []) visit(join(mntHost, "outputs", ...f.path.split("/")));
   if (capped)
     warn(
       `::notice:: [scan] input files exceed ${MAX_FILES} files / ${MAX_TOTAL_BYTES / 1024 / 1024} MiB — host paths in the rest ` +

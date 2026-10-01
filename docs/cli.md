@@ -436,6 +436,8 @@ re-running every step before it.
   when no file was refused), plus `partial` and `result` once the run's `result.json` was read and `outputsDir` once
   the outputs dir was found. Only a refusal after the outputs tree was read also carries `written` (`[]`), `skipped`,
   `notes` and `bytes`; one before it omits them. The payload keys are experimental and may change in a minor release.
+- **Using it.** Point a scenario's `workspace_fixture:` at the exported directory (relative to the scenario file) and
+  commit both; see [Starting from a saved workspace](./scenario.md#starting-from-a-saved-workspace-workspace_fixture).
 
 ### Frozen references for `semantic_pairwise` (`ref`)
 
@@ -826,6 +828,7 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag, which every command takes before or after the subcommand, like `--dotenv`) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs.
 - `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` — overrides the guard that blocks `--resume` onto another project's pinned session.
 - `COWORK_HARNESS_PRERUN_HASH_CAP` — override the default cap on pre-run file hashing (bytes); raise it if `input_unmodified`/`no_unexpected_files` report evidence unavailable on a large connected folder.
+- `COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES` — the total-size cap on a scenario's `workspace_fixture` directory (bytes, a whole number ≥ 1; default 64 MiB). Over it, the run is refused at load (exit 2) — a guard against a fixture pointed at the wrong directory. A malformed value is refused, not ignored.
 - `COWORK_HARNESS_MAX_ARTIFACT_BYTES` — override the inline-artifact-body cap (default 65536 bytes;
   same knob as `record --max-artifact-bytes`, which takes precedence) so a large structured deliverable
   stays replay-checkable instead of being truncated.

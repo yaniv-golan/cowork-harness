@@ -20,6 +20,7 @@ The full schema below documents every optional field.
 - [Fidelity tiers (`fidelity:`)](#fidelity-tiers-fidelity)
 - [Scripted answers](#scripted-answers)
 - [Assertions](#assertions)
+- [Starting from a saved workspace (`workspace_fixture:`)](#starting-from-a-saved-workspace-workspace_fixture)
 - [Output](#output)
 - [Running](#running)
 - [The `microvm` tier](#the-microvm-tier--vm-init-prerequisites--troubleshooting)
@@ -81,6 +82,10 @@ allow_host_hooks: true                   # OPTIONAL — required consent to run 
                                          # to hostloop, which is what the shipped baselines do: the native
                                          # agent process gets genuine host filesystem access there, gated
                                          # only by a software check, not a container/VM wall. See below.
+
+workspace_fixture: fixtures/after-step-1 # OPTIONAL — a directory (relative to THIS file) copied into the
+                                         # session's outputs/ before turn 1, to test one late step of a
+                                         # pipeline (see "Starting from a saved workspace" below)
 
 assert:                                  # pass/fail checks (see below)
   - result: success
@@ -536,8 +541,8 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `transcript_not_contains: <str>` | it does not. **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `transcript_matches: <regex>` | the transcript matches the regex (case-insensitive) — fuzzy content for stochastic prose, e.g. `'SOM:?\s*\$[0-9.]+\s*M'`. **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace / `undefined`). **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
-| `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
-| `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — a file the agent writes under the outputs dir is already under a user-visible root, so this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. **The correct path is LANE-DEPENDENT** — see "Where a relative path actually lands" above. On the desktop-local **host-loop** lane (production today) against Desktop **2.7032.0+**, any relative `Write` — `actions.md` or `outputs/actions.md` — is **refused**; write an absolute path under the outputs dir. (Before 2.7032.0 the file tools were rooted at `outputs/`, so a bare filename landed there and `outputs/actions.md` doubled to `outputs/outputs/actions.md`.) At `fidelity: container`/`microvm` (VM-loop) the base is the session root instead, so a bare filename lands in the scratchpad and you want `{{workspaceFolder}}` or `present_files`. Measured 2026-08-27. Describing the OUTCOME rather than a path also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
+| `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`). Object form `{path, authored}`: `authored: true` also requires that THIS run created or rewrote it (see [`workspace_fixture`](#starting-from-a-saved-workspace-workspace_fixture)); `authored: false` states an inherited file is fine |
+| `user_visible_artifact: <path>` (or `{path, authored}`, as `file_exists`) | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — a file the agent writes under the outputs dir is already under a user-visible root, so this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. **The correct path is LANE-DEPENDENT** — see "Where a relative path actually lands" above. On the desktop-local **host-loop** lane (production today) against Desktop **2.7032.0+**, any relative `Write` — `actions.md` or `outputs/actions.md` — is **refused**; write an absolute path under the outputs dir. (Before 2.7032.0 the file tools were rooted at `outputs/`, so a bare filename landed there and `outputs/actions.md` doubled to `outputs/outputs/actions.md`.) At `fidelity: container`/`microvm` (VM-loop) the base is the session root instead, so a bare filename lands in the scratchpad and you want `{{workspaceFolder}}` or `present_files`. Measured 2026-08-27. Describing the OUTCOME rather than a path also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
 | `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (Cowork's outputs mount fails `unlink`/`rmdir` with `EPERM`) — **only `true` is valid**; writing `false` is rejected by the schema. **Omitting the key does NOT allow deletes**: a detected delete still fails the run via the `outputs_delete` verdict signal, which fires precisely *because* the key was not authored — authoring it turns that signal into an explicit assertion. To accept an intended delete, use `allow_outputs_delete: true`. Detects operations that UNLINK a name — a post-run bash-command scan plus a filesystem diff of `outputs/` per turn, not mount-level enforcement, so a green means none was *detected*, not that the mount enforced anything. A detected delete **fails** when the filesystem diff of `outputs/` proves it (a path present at turn start is gone), when a delete in command or call position has an `outputs/` path as its own operand (`rm`/`rmdir`/`unlink`/`shred -u` as a command — also behind `sudo`/`env`/`timeout`/`xargs`, inside `sh -c`/`eval`/`$(…)`, or launched through Python's `os.system`/`subprocess` — `find`/`fd` with `-delete` or `-exec rm`, `os.remove(…)`/`shutil.rmtree(…)`/`Path(…).unlink()`, or a move out of outputs), or when the diff could not verify the turn. A hit that rests only on the detector's inference — an unprovable target, a `cd` into outputs followed by a relative path, or an outputs path that merely shares a statement with a word like `rm` (a Python variable `rm = json.load(open(".../outputs/r.json"))`, quoted prose, a `sed`/`grep` pattern, a trailing comment) — with a clean diff is the `outputs_delete_unconfirmed` **warn** instead (an authored key passes on it; the `outputs_delete_unconfirmed` warn is still raised in the run output, and the hit is also kept as the assertion's evidence in the JSON envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `||` (quote-blind, after comments are stripped and same-command `VAR=value` assignments expanded one level), so some real deletes land in the warn tier — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)`; and quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line) still fails — waive that with `allow_outputs_delete`. A statement over 4 KiB or a command over 16 KiB is judged by the stricter original rule (a delete word, or `mv`, and an outputs path anywhere), so a huge one-line body with a variable named `rm` fails again. A command whose variable expansion would exceed the scanner's work budget (about a hundred distinct variables referenced in one 10 KB line) is not expanded: every mount it names literally counts as deleted in, and the classifier answers `named` when its own expansion is over the budget too. An operand joined through an empty variable (`$B${A}C` with `A=""`) is kept unprovable — flagged, never cleared as safe. When the diff could not verify the turn and nothing was flagged, the key distinguishes the two halves: an incomplete **post-run** walk fails it as evidence-unavailable (every output could have vanished unseen), while an incomplete **turn-start** snapshot, or a diff in `result.json` that is incomplete or malformed, passes it with the `outputs_diff_unavailable` warn (the text scan still ran and found nothing; only the pre-existing-file check is missing). Emptying a file in place (`truncate`, `>`, `shred` without `-u`) is not a delete and is permitted by Cowork, so it is not flagged |
 | `no_delete_in_mounts: true` | no delete op touched **any** delete-denied mount — `outputs` plus every `rw` connected folder — except those waived by `allow_delete_in`. Production denies `unlink`/`rmdir` on every such mount until per-mount approval, so `no_delete_in_outputs` asserts only part of the real rule; this is the mount-wide form. **Only `true` is valid.** Same post-run-scan caveat: a green means none was *detected*, not that the mount enforced anything |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay-checkable when the cassette carries `artifacts` **and** `preRunPaths`; an **incomplete** post-run filesystem walk (an unreadable subtree — permission/I-O error — not just a missing pre-run manifest) also ⇒ evidence-unavailable, so "no strays" is never trusted from a partial walk |
@@ -554,7 +559,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 > proving nothing. It also fails **evidence-unavailable** on `lane: remote` and on a pre-run origin of
 > `remote-unavailable`, where the filesystem is not locally observable.
 | `file_absent: <path>` | the named path does **not** exist under the work root after the run — the direct negative-existence check (see the note above for why `no_unexpected_files` is not a substitute). **LIVE/verify-run only**, skipped-loud on replay; fails evidence-unavailable on `lane: remote` and on `preRunOrigin: remote-unavailable`. An escaping symlink FAILS rather than reading as absent |
-| `artifact_text: {artifact, contains?, not_contains?, matches?, not_matches?}` | assert over a delivered artifact's **text body** — the companion to `artifact_json` for non-JSON deliverables, and the way to prove an internal path or filename did **not** leak into a file a user receives (a fix applied to `report.md` alone looks complete while `report.json` still carries it). `artifact` is a literal path, not a glob — one entry per delivered surface. At least one matcher is required. Manifest-class, like `artifact_json`: a body captured body-less (uploaded input, read-only folder input, **over the 64 KiB body cap** — raise `--max-artifact-bytes`) or recorded as a symlink fails **evidence-unavailable**, and for the negative matchers so does a body that is not lossless UTF-8, since a binary body read as text would "pass" against bytes it never saw |
+| `artifact_text: {artifact, contains?, not_contains?, matches?, not_matches?, authored?}` | assert over a delivered artifact's **text body** — the companion to `artifact_json` for non-JSON deliverables, and the way to prove an internal path or filename did **not** leak into a file a user receives (a fix applied to `report.md` alone looks complete while `report.json` still carries it). `artifact` is a literal path, not a glob — one entry per delivered surface. At least one matcher is required. Manifest-class, like `artifact_json`: a body captured body-less (uploaded input, read-only folder input, **over the 64 KiB body cap** — raise `--max-artifact-bytes`) or recorded as a symlink fails **evidence-unavailable**, and for the negative matchers so does a body that is not lossless UTF-8, since a binary body read as text would "pass" against bytes it never saw |
 | `no_lost_write_back: true` | fails if the run authored an interactive HTML artifact (or a `.py`/`.js` generator of one) whose **relative** Submit/POST write-back is lost under Cowork (served from Cowork's own origin → the write-back resolves non-ok and a "Saved!" is silently false). Runs the shipped **static Tier A** analyzer (`analyze-artifact`, no jsdom, deterministic) over the files the run authored (diffed against the pre-run manifest). A lost write-back on an **added** agent-authored source (`outputs/` or the scratchpad) **fails**; the same on a **pre-existing** file the skill merely modified on a read-write connected mount is **advisory** (not the skill's to own); `-suspect` findings are surfaced but pass. **Only `true` is valid** (omit to skip). **Live lane only** (needs the authored-file capture) — skipped-loud on replay; `verify-run` recomputes the authored set from the kept work dir. Runs on every live sandbox tier including **microvm** (its outputs are snapshotted from the VM into the run dir). Could-not-verify (fail-closed) on a `--resume` scratchpad walk or a candidate that couldn't be analyzed — never a silent clean |
 | `tool_called: <glob>` | a tool the agent ran matched this glob (`*`/`?`, exact when literal, anchored, case-sensitive); `mcp__workspace__*` = any workspace tool. **Legacy tool names match too:** the agent binary canonicalizes a set of legacy spellings (`Task`→`Agent`, `KillShell`/`KillBash`→`TaskStop`, …) and the spawn tool list still declares the LEGACY one, so the init inventory shows `Task` while every actual call is emitted as `Agent`. Either spelling matches, and so do globs over either (`Ta*` matches a recorded `Agent`). Glob, not regex — an empty glob, or one containing a regex/brace-expansion metacharacter (`.*`, `.+`, `\|`, `()`, `[]`, `+`, `^`, `$`, `{}`, `\d`/`\w`/`\s`/`\b`), is now **rejected at scenario/cassette load** (a hard schema error) rather than silently matched-against-nothing |
 | `tool_not_called: <glob>` | no tool the agent ran matched this glob (`mcp__*` = no MCP tool ran) — same load-time reject on an empty or regex-like glob as `tool_called`, and the same legacy-name matching. ⚠️ **A literal naming a tool the tier does not serve is REFUSED at load** (`Bash`/`WebFetch`/`NotebookEdit` at `hostloop`; `mcp__workspace__bash` at `container`/`microvm`) — those can never be violated, so the assertion verified nothing. The error names what to write instead. Globs and every other name are untouched: `--tools` gates the built-in set alone while each tier separately passes `--mcp-config`, so a session-MCP tool is offered without appearing in any tool list and is never refused |
@@ -623,7 +628,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`, and the macOS `/private/var/`, `/private/tmp/`, `/var/folders/`, `/Volumes/` roots — also inside a `file://` or `computer://` link) leaked into model-visible text (a path that came verbatim from the scenario's own input files or prompt is not a leak — see `host_path_leak` below) — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
-| `artifact_json: {…}` | assert over a JSON artifact's contents — see below |
+| `artifact_json: {…}` | assert over a JSON artifact's contents — see below. Both `artifact_*` keys take `authored: true\|false` with the `file_exists` meaning |
 | `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts (a dangling link fails, naming which target was checked — host path, work tree, or replay manifest); **requires ≥1 link** (zero links fails — use `computer_links_resolve_if_present` for the presence-free variant) — **only `true` is valid**, writing `false` is rejected by the schema **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so a `computer://` link that appeared only inside a tool call or its result is invisible to it. |
 | `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant; **only `true` is valid** **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so a `computer://` link that appeared only inside a tool call or its result is invisible to it. |
 
@@ -931,7 +936,7 @@ Two consequences for CI:
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
-`assert`, `skills`, `requires_capabilities`, `allow_host_writes` and `allow_host_hooks` — every field the schema defines — are
+`assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks` and `workspace_fixture` — every field the schema defines — are
 all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.
 
@@ -1046,6 +1051,71 @@ express. **If you're checking structured JSON content and already write Python, 
 (a YAML content-predicate would be equal power with worse tooling). Find an artifact's real field paths by
 running once with `--keep`, then `cowork-harness inspect <run-dir>` (a shallow field preview of each JSON
 artifact) or by reading the JSON under the run's `…/mnt/outputs/…` directly.
+
+## Starting from a saved workspace (`workspace_fixture:`)
+
+A long skill pipeline (score a deck, then draft the memo, then build the appendix) can be tested one step at a
+time. `workspace_fixture: <dir>` names a directory whose contents are copied into the session's `outputs/`
+before turn 1 — `<dir>/scores/deck.json` lands at `outputs/scores/deck.json` — so the prompt can ask for the
+late step alone and the run pays only for that step.
+
+```yaml
+fidelity: container
+prompt: Draft the investor memo from the scored deck.
+workspace_fixture: fixtures/after-scoring     # relative to this scenario file
+assert:
+  - file_exists: {path: outputs/memo.md, authored: true}        # the step under test wrote it
+  - artifact_json: {artifact: outputs/scores/deck.json, path: total, exists: true, authored: false}  # inherited is fine
+```
+
+**What it models.** A fixture run equals re-invoking the skill in the same Cowork session after it stopped
+mid-work or finished: the files persist in `outputs/` and the skill resumes from them. The only difference is
+that in Cowork the prior conversation context also persists, while a fixture run starts with a fresh context.
+The copy keeps regular files and their permission bits, gives them fresh modification times, and tells the
+model nothing about which files exist (no listing is added to the prompt).
+
+**What the directory may hold.** Regular files only. Refused at load (exit 2, before anything is spawned),
+each problem named: a symlink anywhere, a file with a second hard link, agent and configuration paths
+(`.claude/`, `.git/`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md` — they configure the agent, they are not
+deliverables), a directory that also is (or holds) a mounted folder, upload, plugin or skill dir, an empty
+fixture, and more than 64 MiB in total (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES` raises the cap). In git
+mode (the default; `COWORK_HARNESS_GITSET=0` turns it off) a file git does not track is refused too, so what a
+cassette's signature covers is what is committed. OS metadata files (`.DS_Store`, `Thumbs.db`) are skipped.
+Keep fixtures outside the plugin tree. `cowork-harness fixture export <run-dir> --out <dir>` turns a kept
+run's outputs into one ([cli.md](./cli.md)).
+
+**Staging.** Fresh runs only, on every tier: after the mounts, before the pre-run manifest. A `--resume` turn
+never re-stages — it sees whatever the skill left in `outputs/`. A fresh run whose outputs dir is not empty is
+refused (a pinned `--session-id` re-run at `microvm` clears the previous run's outputs first).
+
+**Authorship — what the step produced.** Because the fixture lands before the pre-run manifest is taken, an
+untouched fixture file is **pre-run**, not authored: `semantic_matches` grades only the files this run created
+or rewrote (a fixture file the step rewrote is graded; one it never touched is not), and
+`RunResult.artifacts[]` marks an untouched one `preRun: true` (`scaffold` skips those). `no_unexpected_files`
+never trips on fixture files; `input_unmodified` can guard them ("the step must not rewrite the scored deck").
+Deleting a fixture file is an outputs delete, and the run fails on it by default — that is the harness's
+policy, not production's (Cowork lets a skill delete in outputs without asking); `allow_outputs_delete: true`
+opts out.
+
+**A presence assertion on a fixture file must say what it means.** `file_exists`, `user_visible_artifact`,
+`artifact_text` and `artifact_json` check that a file is there (or what it says), not who wrote it — on a file
+the fixture provides they pass before the step does anything. So a scenario that asserts one of them on a
+fixture path is **refused at load** unless it states `authored:` — `authored: true` (this run must have created
+or rewritten the file; an untouched pre-run file fails, and so does a run with no pre-run manifest to tell) or
+`authored: false` (inheriting it is fine). `file_exists` and `user_visible_artifact` take an object form for
+it, `{path, authored}`; `artifact_text` / `artifact_json` take `authored` as a field. `authored: true` works on
+any scenario, fixture or not; it arms the pre-run manifest.
+
+**Recording and replay.** A cassette stores the fixture path relative to itself and records every fixture file
+in its manifest like any other outputs file, so replay needs no fixture and knows which files were pre-run.
+Text fixture files are inlined (and go through the record redaction policy); an untouched binary one is
+recorded hash-only (`truncationReason: "fixture"` — `file_exists` still passes on replay, a body assertion is
+evidence-unavailable). The fixture's content signature (`fingerprint.workspaceFixtureSig`) is part of the
+staleness check: replay recomputes it from the fixture directory, and a changed fixture is a `fixture` finding
+(a warning by default; `--strict`, `--fail-on-skill-drift` and an explicit `--session` fail it), while a
+fixture that cannot be found or scanned is `unverifiable-fixture`, which fails the replay. Only the
+owner-executable bit counts among permission bits. A cassette that uses `workspace_fixture` or `authored`
+stamps cassette format v14 ([cassette.md](./cassette.md)).
 
 ## Output
 

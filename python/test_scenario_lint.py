@@ -2177,3 +2177,22 @@ def test_size_caps_carry_a_binary_verification_stamp():
         r"binary-verified against agent \d+\.\d+\.\d+ \(VM ELF and native, both read\)",
         scenario._SKILL_SIZE_CAPS_VERIFIED,
     )
+
+
+# --- workspace_fixture (top-level key) and the object form of file_exists ---
+
+
+def test_workspace_fixture_is_a_known_top_level_key(tmp_path):
+    rules = _rules("workspace_fixture: fixtures/after-step-1\nassert:\n  - file_exists: outputs/step2.md\n", tmp_path)
+    assert "unknown-top-key" not in rules
+    assert "workspace_fixture" in scenario._EMBEDDED_TOP_LEVEL_KEYS
+
+
+def test_file_exists_object_form_is_not_unknown_and_joins_the_absent_contradiction(tmp_path):
+    rules = _rules("assert:\n  - file_exists: {path: outputs/x.md, authored: true}\n", tmp_path)
+    assert "unknown-assert-key" not in rules
+    rules = _rules(
+        "assert:\n  - file_exists: {path: outputs/x.md, authored: true}\n  - file_absent: outputs/x.md\n",
+        tmp_path,
+    )
+    assert "file-absent-contradiction" in rules

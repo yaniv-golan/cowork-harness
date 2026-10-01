@@ -6,6 +6,7 @@ import { resolveDeclaredSource } from "../staging/resolve.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { BoundaryError } from "../errors.js";
+import { stageWorkspaceFixture } from "../fixture/workspace.js";
 
 /** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` (not
  *  `.local-plugins/cache`) so both the gated `marketplaces/<mp>/<plugin>` and legacy `cache/<x>` plugin
@@ -72,6 +73,10 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
         throw new Error(`cowork-harness: mount source vanished after plan validation: ${mt.hostPath} -> ${mt.mountPath}`);
       }
     }
+    // workspace_fixture: turn-1 state, copied into outputs/ after the mounts and before the caller captures the
+    // pre-run manifest (so an untouched fixture file is pre-run, not authored). Inside the !resume branch: a
+    // resumed turn sees whatever the skill left in outputs/.
+    if (plan.workspaceFixture) stageWorkspaceFixture(plan.workspaceFixture, join(mntHost, "outputs"));
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
     // before — no --mcp-config, no error). Resolved HERE, not in buildLaunchPlan, because resume (the
     // else branch) must stay exempt: on resume the source may be gone but the staged copy persists.

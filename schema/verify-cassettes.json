@@ -59,7 +59,7 @@
           "unverifiable": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "StalenessFinding messages whose class IS 'unverifiable-*' (e.g. unverifiable-baseline/unverifiable-skill/unverifiable-tier/unverifiable-prompt-assets), plus a 'scenario-drift:' entry when the cassette's recorded scenario source is rejected by the loader (e.g. no `fidelity:`), so the prompt-drift check could not run \u2014 verification could NOT complete, distinct from a genuine `staleness` drift finding: exit 3 (unless the same run also carries a `staleness`/`findings`/`scenarioDrift` entry, in which case that real finding wins exit 1). The staleness entries are empty under --skip-staleness; the scenario-drift entry is empty under --skip-scenario-drift."
+            "description": "StalenessFinding messages whose class IS 'unverifiable-*' (e.g. unverifiable-baseline/unverifiable-skill/unverifiable-tier/unverifiable-prompt-assets/unverifiable-fixture), plus a 'scenario-drift:' entry when the cassette's recorded scenario source is rejected by the loader (e.g. no `fidelity:`), so the prompt-drift check could not run \u2014 verification could NOT complete, distinct from a genuine `staleness` drift finding: exit 3 (unless the same run also carries a `staleness`/`findings`/`scenarioDrift` entry, in which case that real finding wins exit 1). The staleness entries are empty under --skip-staleness; the scenario-drift entry is empty under --skip-scenario-drift."
           },
           "notes": {
             "type": "array",
