@@ -438,6 +438,11 @@ All notable changes to this project are documented here. The format is based on
   - A sub-agent's reasoning and web searches now appear in the `subagent` entries of `run.jsonl` and
     `trace.json` whenever the reasoning is captured, including on a run salvaged after an unanswered gate. Before, they
     appeared there only when the run had no usable timeline.
+- **`authored: true` no longer passes on a file the pre-run walk never covered.** The pre-run manifest walks
+  `outputs/`, `uploads/` and the connected folders only, so a file staged elsewhere under the work root before
+  the run (a plugin's or skill's own files under `.local-plugins/`, say) was missing from it and read as "new this
+  run". On `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json`, `authored: true` on such a
+  path now fails evidence-unavailable, naming the folders the manifest covers.
 
 ### Documentation
 

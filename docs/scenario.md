@@ -1123,7 +1123,9 @@ any scenario, fixture or not; it arms the pre-run manifest. Authorship is decide
 `authored: true` fails evidence-unavailable, so a turn never takes credit for what an earlier turn wrote. It
 applies to a regular file: a directory fails (assert on a file the step writes inside it), a hard-linked file is
 evidence-unavailable (the authored-file capture the judge grades excludes it too), and a symlink — or a path reached through a symlinked
-directory — is never authored evidence. The file is looked up by its on-disk name, so on a case-insensitive
+directory — is never authored evidence. A path outside the folders the pre-run manifest walks (`outputs/`,
+`uploads/` and the connected folders) — a staged plugin or skill file, say — is evidence-unavailable: it is
+absent from the manifest because it was never walked, not because the run created it. The file is looked up by its on-disk name, so on a case-insensitive
 filesystem `outputs/REPORT.md` is the fixture's `report.md` (likewise an NFC/NFD spelling of a non-ASCII
 name). A copy or rename of a fixture file to a NEW name is new content at a new path and counts as authored,
 exactly as the judge's authored capture counts it.

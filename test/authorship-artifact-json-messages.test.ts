@@ -133,6 +133,13 @@ describe("authored: true — every branch, byte-exact", () => {
       `"FAIL evidence unavailable: artifact_json {authored: true} on "outputs/new.json" — it existed before the run as a link, whose content was never hashed"`,
     );
   });
+  it("a path outside the walked pre-run roots", () => {
+    mkdirSync(join(mnt, ".local-plugins"));
+    writeFileSync(join(mnt, ".local-plugins", "x.json"), "{}");
+    expect(one(authored(".local-plugins/x.json"), ctx())).toMatchInlineSnapshot(
+      `"FAIL evidence unavailable: artifact_json {authored: true} on ".local-plugins/x.json" — it is outside the folders the pre-run manifest covers (outputs, uploads), so whether this run wrote it cannot be decided"`,
+    );
+  });
   it("a new path on a local-unreadable baseline", () => {
     expect(one(authored("outputs/new.json"), ctx({ preRunOrigin: "local-unreadable" }))).toMatchInlineSnapshot(
       `"FAIL evidence unavailable: artifact_json {authored: true} on "outputs/new.json" — the pre-run baseline is incomplete (a connected-folder source was unreadable), so a new path cannot be proven new"`,

@@ -1868,6 +1868,15 @@ export function authorshipOf(ctx: AssertContext, p: string, opts: { postHash?: s
   if (!Object.hasOwn(hashes, rel)) {
     if (ctx.preRunPaths?.some((q) => fold(q, rel)))
       return undecidable("it existed before the run as a link, whose content was never hashed");
+    // Absent from the manifest reads as NEW only where the pre-run walk looked: the user-visible roots (outputs/
+    // and the connected folders) plus uploads/ — exactly what `capturePreRunManifest` walks. Anything else under
+    // the work root (a staged plugin or skill tree, say) is absent because it was never walked, not because the
+    // run created it.
+    const walked = [...ctx.userVisiblePrefixes, "uploads"];
+    if (!walked.some((r) => lexical === r || lexical.startsWith(r + "/")))
+      return undecidable(
+        `it is outside the folders the pre-run manifest covers (${walked.join(", ")}), so whether this run wrote it cannot be decided`,
+      );
     if (ctx.preRunOrigin === "local-unreadable")
       return undecidable(
         "the pre-run baseline is incomplete (a connected-folder source was unreadable), so a new path cannot be proven new",
