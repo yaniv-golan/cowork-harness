@@ -169,7 +169,7 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
       "evals",
       f.cwd,
       { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
-      "flow",
+      { flow: "flow" },
     );
     expect(t.state.metrics.map((m) => m.id)).toContain("win_v1");
   }, 180_000);
