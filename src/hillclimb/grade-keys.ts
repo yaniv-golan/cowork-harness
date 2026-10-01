@@ -12,11 +12,19 @@
 //   claims            the pooled share of graded semantic_matches claims that passed (refused asserts
 //                     excluded); judge kind, scale 1
 //   <metric>          a scenario-declared float — the UNION over the flow's cases
+// With semantic_pairwise in the flow (any case), every row also carries — the union rule, so a case without one
+// carries the companions as 0:
+//   win_present       1 when every pairwise assert of the case was compared with the baseline reference
+//   win_<vN>_present  the same against a later variant's reference (a metric only, never the verdict)
+//   win               the mean pairwise value vs the baseline (1 win, 0.5 tie or both_bad, 0 loss); judge kind
+//   win_<vN>          the same vs <vN>'s reference
+//   both_bad          1 when the judge found both outputs bad on any pairwise assert; its companion is win_present
 // The per-index keys stay on every row as drill-down data, and are declared only when every case has the
 // identical assertion list:
 //   a<i>_present      1 when semantic assertion i was graded (its evidence was not refused)
 //   a<i>              0|1 for a non-semantic assertion i
 //   a<i>_c<j>         0|1 for claim j of semantic assertion i
+//   a<i>_win(_<vN>)   the pairwise value of assertion i, with its a<i>_win(_<vN>)_present
 // Every `_present` companion precedes the graded keys, so none can become the headline by accident.
 
 import type { Assertion } from "../types.js";
@@ -48,6 +56,53 @@ const PASS: GradeKeyDecl = { id: "pass", kind: "binary", label: "Pass" };
 const PASS_PRESENT: GradeKeyDecl = { id: "pass_present", kind: "binary", label: "pass measured" };
 const CLAIMS_PRESENT: GradeKeyDecl = { id: "claims_present", kind: "binary", label: "claims graded" };
 const CLAIMS: GradeKeyDecl = { id: "claims", kind: "judge", label: "Claims passed", scale: 1, better: "higher" };
+const BOTH_BAD: GradeKeyDecl = { id: "both_bad", kind: "binary", label: "Both bad" };
+const winId = (ref?: string) => (ref === undefined ? "win" : `win_${ref}`);
+const winDecl = (ref?: string): GradeKeyDecl => ({
+  id: winId(ref),
+  kind: "judge",
+  label: label(ref === undefined ? "Win vs base" : `Win vs ${ref}`),
+  scale: 1,
+  better: "higher",
+});
+const winPresentDecl = (ref?: string): GradeKeyDecl => ({
+  id: `${winId(ref)}_present`,
+  kind: "binary",
+  label: label(ref === undefined ? "win measured" : `win ${ref} meas`),
+});
+
+/** A flow's `semantic_pairwise` columns: present when any of its cases has the key. `metricRefs` are the later
+ *  variants' references (`v3`, …) — each a `win_<vN>` column. */
+export interface PairwiseDecls {
+  metricRefs: readonly string[];
+}
+
+/** The pairwise keys of a case, split as `perIndex` splits: companions first, graded after. `flow` adds the
+ *  flow-wide columns; `perAssert` the per-index drill-down of THIS assertion list. */
+function pairwiseKeys(
+  assertions: readonly Assertion[],
+  pw: PairwiseDecls,
+  perAssert: boolean,
+): { companions: GradeKeyDecl[]; graded: GradeKeyDecl[]; perIndexCompanions: GradeKeyDecl[]; perIndexGraded: GradeKeyDecl[] } {
+  const refs = [undefined, ...pw.metricRefs];
+  const idx = perAssert ? assertions.map((a, i) => (a.semantic_pairwise !== undefined ? i : -1)).filter((i) => i >= 0) : [];
+  return {
+    companions: refs.map(winPresentDecl),
+    graded: [...refs.map(winDecl), BOTH_BAD],
+    perIndexCompanions: idx.flatMap((i) =>
+      refs.map((r) => ({ id: `a${i}_${winId(r)}_present`, kind: "binary" as const, label: label(`a${i} ${winId(r)} meas`) })),
+    ),
+    perIndexGraded: idx.flatMap((i) =>
+      refs.map((r) => ({
+        id: `a${i}_${winId(r)}`,
+        kind: "judge" as const,
+        label: label(`a${i} ${winId(r)}`),
+        scale: 1,
+        better: "higher" as const,
+      })),
+    ),
+  };
+}
 
 /** Ids a scenario metric may not take: each would collide with a key the runner generates. */
 export function reservedMetricId(id: string): boolean {
@@ -87,16 +142,25 @@ const presentDecl = (id: string): GradeKeyDecl => ({ id: `${id}_present`, kind: 
 
 /** Every key one case's scored rows carry, in row order. `metrics` is the FLOW's union, so a case that does
  *  not declare a metric still carries its `_present` (as 0). `claims_present` is on every row. */
-export function caseKeyDecls(assertions: readonly Assertion[], metrics: readonly MetricDecl[] = []): GradeKeyDecl[] {
+export function caseKeyDecls(
+  assertions: readonly Assertion[],
+  metrics: readonly MetricDecl[] = [],
+  pairwise?: PairwiseDecls,
+): GradeKeyDecl[] {
   const idx = perIndex(assertions);
+  const pw = pairwise ? pairwiseKeys(assertions, pairwise, true) : undefined;
   return [
     PASS,
     PASS_PRESENT,
     CLAIMS_PRESENT,
+    ...(pw?.companions ?? []),
     ...metrics.map((m) => presentDecl(m.id)),
     ...idx.companions,
+    ...(pw?.perIndexCompanions ?? []),
     CLAIMS,
+    ...(pw?.graded ?? []),
     ...idx.graded,
+    ...(pw?.perIndexGraded ?? []),
     ...metrics.map(floatDecl),
   ];
 }
@@ -105,23 +169,33 @@ export function caseKeyDecls(assertions: readonly Assertion[], metrics: readonly
  *  UsageError when two cases declare one metric id differently. */
 export function flowMetricDecls(
   cases: ReadonlyArray<{ assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>,
+  pairwise: PairwiseDecls = { metricRefs: [] },
 ): GradeKeyDecl[] {
   const union = metricUnion(cases);
   const anySemantic = cases.some((c) => hasSemantic(c.assertions));
   const first = cases[0]?.assertions ?? [];
   const identical = cases.every((c) => JSON.stringify(c.assertions) === JSON.stringify(first));
   const idx = identical ? perIndex(first) : { companions: [], graded: [] };
+  const pw = flowHasPairwise(cases) ? pairwiseKeys(first, pairwise, identical) : undefined;
   return [
     PASS,
     PASS_PRESENT,
     ...(anySemantic ? [CLAIMS_PRESENT] : []),
+    ...(pw?.companions ?? []),
     ...union.map((m) => presentDecl(m.id)),
     ...idx.companions,
+    ...(pw?.perIndexCompanions ?? []),
     ...(anySemantic ? [CLAIMS] : []),
+    ...(pw?.graded ?? []),
     ...idx.graded,
+    ...(pw?.perIndexGraded ?? []),
     ...union.map(floatDecl),
   ];
 }
+
+/** Whether any case of the flow has a `semantic_pairwise` assert (every row then carries the win columns). */
+export const flowHasPairwise = (cases: ReadonlyArray<{ assertions: readonly Assertion[] }>): boolean =>
+  cases.some((c) => c.assertions.some((a) => a.semantic_pairwise !== undefined));
 
 /** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared with a
  *  different direction or bound in another case is refused: one column cannot mean two things. */

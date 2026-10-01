@@ -13,7 +13,9 @@ import { tildeify } from "../io.js";
 import { applySessionOverrides, expandHome, type SessionConfig } from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { effectiveTier, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
-import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
+import { pairwiseRefsRefusal } from "../refs/preflight.js";
+import { discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
+import { flowHasPairwise } from "./grade-keys.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { loadCostHistory } from "../eval/plan-history.js";
@@ -25,7 +27,7 @@ import type { ScenarioRunner } from "../eval/job-runner.js";
 import { gradedSkillNameFor, resolveCritiquedSkillDir } from "../critique/command.js";
 import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
-import { loadCases } from "./cases.js";
+import { loadCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
@@ -195,6 +197,20 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
         `. To fix: ${[...new Set(findings.map((f) => ANSWER_KEY_ADVICE[f.reason]))].join("; ")}.`,
     );
 
+  // semantic_pairwise: the flow's own references, found once per pass. Every pairwise assert is judged against all
+  // of them (the scenario's `refs:` is ignored here); the baseline's decides the verdict, a later variant's is a
+  // metric. The pre-spend check below and every run of the pass use this one setup.
+  const flowPairwise = flowHasPairwise(cases.map((c) => ({ assertions: c.scenario.assert ?? [] })));
+  const refs = flowPairwise ? discoverFlowRefs(resolve(deps.cwd, flowArg)) : [];
+  if (flowPairwise) {
+    const ignored = cases.filter((c) => (c.scenario.assert ?? []).some((a) => a.semantic_pairwise?.refs?.length)).map((c) => c.id);
+    say(
+      `[${v}] pairwise refs: ${refs.map((r) => r.name).join(", ")} (stores: ${refs.map((r) => tildeify(r.store)).join(", ")})` +
+        (ignored.length ? `; the scenario \`refs:\` of ${ignored.join(", ")} is ignored under hillclimb` : ""),
+    );
+  }
+  const pairwiseFor = (c: HillclimbCase) => flowPairwiseOptions(c.id, v, refs);
+
   // Per case: the session pointed at the variant's plugin, its signature from the same fingerprint call a run
   // makes, and the input checks a run makes before its run dir exists — over the SUBSTITUTED session.
   const sessions = new Map<string, SessionConfig>();
@@ -215,10 +231,21 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     const f = scenarioInputFindings(c.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
     const refusal = f.session ?? f.vacuity ?? f.inputs;
     if (refusal) throw new UsageError(`case ${c.id}: ${refusal.message}`);
-    // semantic_pairwise references: the gate a run applies before its run dir exists (eval's call), once per case,
-    // over the substituted session — a missing or damaged reference, or one a mount exposes, refuses up front.
-    const pw = pairwiseRefsRefusal(c.scenario, scenarioPairwiseSetup(c.scenario), sessionOriginSources(sub, "(inline)"));
-    if (pw) throw new UsageError(`case ${c.id}: ${pw}`);
+    // semantic_pairwise references: the gate a run applies before its run dir exists, once per case, over the
+    // substituted session and with the flow's setup — a missing or damaged baseline reference, or a store a mount
+    // exposes, refuses up front. A later variant's reference is a metric: unreadable, it blanks its own column.
+    if (flowPairwise) {
+      const o = pairwiseFor(c);
+      const pw = pairwiseRefsRefusal(
+        c.scenario,
+        { caseId: o.caseId, refsFor: () => o.refs, neutralRefs: new Set(o.neutralRefs), gateRefs: new Set(o.gateRefs) },
+        sessionOriginSources(sub, "(inline)"),
+      );
+      if (pw)
+        throw new UsageError(
+          `case ${c.id}: ${pw}\n  the baseline reference is frozen by a baseline pass from its first good row, or now with \`hillclimb freeze-ref --flow ${flowArg} --variant baseline --case ${c.id}\``,
+        );
+    }
   }
 
   // Which skill's invocation the rows record (the `skill_invoked` column): one per plugin, or none.
@@ -239,6 +266,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     extra: (spec) => ({
       session: sessions.get(spec.c.id)!,
       ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
+      ...(flowPairwise ? { pairwise: pairwiseFor(spec.c) } : {}),
     }),
     ...(deps.now ? { now: deps.now } : {}),
   });
@@ -305,6 +333,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     // The declared mounts (the live plugin among them) and the snapshot the runs actually mount.
     mountRoots: (cs) => [...new Set([...prep.mountRoots(cs), pluginDir])],
     lever: live,
+    ...(flowPairwise ? { pairwise: { metricRefs: metricRefNames(refs) } } : {}),
     expectedContentSig: (c) => sigs.get(c.id),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),

@@ -16,6 +16,7 @@ import { pMapBounded } from "../async-pool.js";
 import type { RunResult } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./cases.js";
+import type { PairwiseDecls } from "./grade-keys.js";
 import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest, listedInside } from "./gate.js";
@@ -74,6 +75,9 @@ export interface RunnerDeps {
   lever?: string;
   /** The variant snapshot's content signature for a case (each scenario's session fingerprints apart). */
   expectedContentSig?: (c: HillclimbCase) => string | undefined;
+  /** Set when any case has `semantic_pairwise`: the later variants' references this pass judges against, so every
+   *  row carries one win column per reference. */
+  pairwise?: PairwiseDecls;
   /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
@@ -303,6 +307,7 @@ async function run(
         scenarioName: c.name,
         prompt: c.scenario.prompt,
         assertions: c.scenario.assert,
+        ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
         rep,
         pin: deps.pin(c),
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),

@@ -484,18 +484,44 @@ describe("runHillclimbCommand", () => {
       expect(err.join("\n")).toContain("SYNTHETIC refusal");
     });
 
-    it("a pairwise reference that is missing refuses before spend, not as an error on every rep", async () => {
-      writeFileSync(
-        join(cwd, "evals", "alpha.yaml"),
-        SCENARIO.replace(
-          /  - semantic_matches:[\s\S]*$/,
-          `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
-        ),
-      );
-      const r = await runHillclimbCommand(args("--approve-harness"), deps());
-      expect(r.exitCode).toBe(2);
-      expect(calls).toEqual([]);
-      expect(err.join("\n")).toMatch(/case alpha: .*refstore/);
+    // The flow's own references replace the scenario's `refs:`: the baseline's is the gate. A baseline pass is neutral
+    // against it (it freezes it), so only a later variant is refused while it is missing — before spend, naming the repair.
+    describe("pairwise references come from the flow", () => {
+      const pairwise = () =>
+        writeFileSync(
+          join(cwd, "evals", "alpha.yaml"),
+          SCENARIO.replace(
+            /  - semantic_matches:[\s\S]*$/,
+            `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
+          ),
+        );
+
+      it("a later variant with no baseline reference refuses before spend, naming freeze-ref", async () => {
+        pairwise();
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        expect(calls).toEqual([]);
+        const text = err.join("\n");
+        expect(text).toMatch(/case alpha: .*reference "baseline"/);
+        expect(text).toContain("hillclimb freeze-ref --flow flow --variant baseline --case alpha");
+        // The scenario's own store is never consulted.
+        expect(text).not.toContain("refstore");
+      });
+
+      it("a baseline pass is neutral against its own missing reference, so it runs — with the flow's setup, not refs:", async () => {
+        pairwise();
+        const r = await runHillclimbCommand(args("--approve-harness"), deps());
+        expect(calls.length).toBeGreaterThan(0);
+        expect(r.exitCode).not.toBe(2);
+        const pw = calls[0]!.extra.pairwise;
+        expect(pw).toEqual({
+          caseId: "alpha",
+          refs: [{ name: "baseline", store: join(cwd, "flow", "baseline", "ref") }],
+          neutralRefs: ["baseline"],
+          gateRefs: ["baseline"],
+        });
+        expect(err.join("\n")).toMatch(/pairwise refs: baseline .*the scenario `refs:` of alpha is ignored under hillclimb/);
+      });
     });
 
     it("a flow with no judge and no LLM answering never asks", async () => {
