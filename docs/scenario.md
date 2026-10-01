@@ -1160,23 +1160,27 @@ metrics:
     artifact: outputs/stats.json   # a JSON file, relative to the work root
     path: totals.words         # dotted path to the number (items.0.score; items.length reads an array's length)
     better: higher             # REQUIRED: higher | lower
-    scale: 5000                # the full range of a bounded metric …
+    scale: 5000                # the UPPER BOUND of a bounded metric's range …
     # unbounded: true          # … or this, for one with no natural ceiling — set EXACTLY ONE of the two
-    min: 0                     # OPTIONAL: the floor of the range, when it is not 0
+    min: 0                     # OPTIONAL: the floor of the range (default 0); must be below scale
 ```
 
 Refused at load: a missing `better`, both or neither of `scale` / `unbounded`, an id that is not word characters,
 dots and hyphens (at most 129, not all dots), an id that collides with a key the hillclimb runner generates (`pass`,
 `claims`, `a<N>…`, `*_present`, `*win*`, `*both_bad*`), two ids that differ only in letter case, and an `artifact`
-that is absolute, contains `..` or is blank. Declaring a metric arms the pre-run manifest.
+that is absolute, contains `..` or a backslash, or is blank, and a `min` that is not below `scale`. The range is
+`[min, scale]`: a metric that runs from -1 to 1 is `min: -1, scale: 1`, not `scale: 2`. Declaring a metric arms the
+pre-run manifest.
 
 `RunResult.metrics` has one entry per declared id, in declaration order, each with exactly one of `value` (a finite
 number) or `unavailable` (why not). It is absent when the scenario declares none (`metrics: []` included), on a
-partial run and on `chat`. A missing value is never reported as `0`, and a string is never converted to a number.
+partial run, on `chat`, on a replay that could not drive the cassette, and on a replay whose frozen declaration is
+invalid (warned). A missing value is never reported as `0`, and a string is never converted to a number. A number is
+read as a double, so an integer above 2^53 loses precision.
 
 | `unavailable` | meaning |
 |---|---|
-| `missing_artifact` | no readable regular file at `artifact` (absent, a directory, or a symlink leaving the work root) |
+| `missing_artifact` | no readable regular file at `artifact` (absent, a directory, a FIFO or other special file, or a symlink leaving the work root), or (replay) a body that could not be read at record time |
 | `missing_path` | the JSON has no value at `path` |
 | `not_json` | the file is not valid JSON |
 | `not_a_number` | the value is not a finite number (a string, a boolean, `null`, an object, or a number too large for a double) |
@@ -1196,9 +1200,10 @@ symlinked directory, a missing pre-run manifest or hash, and a path outside the 
 So a metric should read a file under `outputs/` or a connected folder.
 
 **Replay** measures the frozen declaration against the cassette's manifest, so it needs the body inline. A metric the
-recording cannot support — no artifact manifest, a body over the inline cap, a link placeholder, a missing pre- or
-post-run hash — is reported unavailable and named once in a `::warning::` (re-record, raising
-`--max-artifact-bytes` for `size`); one that states what the run did is not warned about. `replay --assert-from` and
+recording cannot support — no artifact manifest, a body over the inline cap or unreadable at record time, a missing
+pre- or post-run hash — is reported unavailable and named once in a `::warning::`, with a remedy where a re-record
+would measure it (raise `--max-artifact-bytes` for `size`); one that states what the run did (a link, an untouched
+file, a file outside the walked folders) is not warned about. `replay --assert-from` and
 `--reassert` measure the on-disk declaration, as they do for `assert`, and `--write` freezes it with the assert
 block; a plain replay notices an on-disk `metrics:` block that differs from the frozen one. **`verify-run`** and
 **`regrade`** re-measure the current declaration from the kept work dir, but only while a file's bytes equal the

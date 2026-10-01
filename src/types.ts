@@ -1207,8 +1207,8 @@ export const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "
 
 export type FidelityTier = (typeof FIDELITY_TIERS)[number];
 
-/** Why a declared metric has no value (`RunResult.metrics[].unavailable`). ONE list: the type, the zod enum and the
- *  published JSON Schemas derive from it. See docs/scenario.md "Numeric metrics" for what each one means. */
+/** Why a declared metric has no value (`RunResult.metrics[].unavailable`). ONE list: the type derives from it, and the two
+ *  hand-maintained JSON Schemas (run-result.json, regrade.json) are pinned to it by tests. See docs/scenario.md "Numeric metrics" for what each one means. */
 export const METRIC_UNAVAILABLE = [
   "missing_artifact",
   "missing_path",

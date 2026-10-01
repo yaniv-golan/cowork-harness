@@ -126,7 +126,8 @@ workspace_fixture: fixtures/step1   # OPTIONAL — a directory (relative to this
 metrics:                            # OPTIONAL — numbers read from JSON files the run wrote, reported in
   - { id: words, artifact: outputs/stats.json, path: totals.words, better: higher, scale: 5000 }
                                     # RunResult.metrics as {id, value} or {id, unavailable}; never in the
-                                    # verdict. `better` required; exactly one of scale / unbounded: true.
+                                    # verdict. `better` required; exactly one of scale (the range's upper
+                                    # bound; `min` is the floor, default 0) / unbounded: true.
                                     # A file the run did not write (incl. one rewritten with identical
                                     # bytes) is unavailable: pre_run. Arms the pre-run manifest.
 ```
