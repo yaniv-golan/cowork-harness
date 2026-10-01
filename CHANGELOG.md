@@ -119,7 +119,10 @@ All notable changes to this project are documented here. The format is based on
   inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
   harness change (`--approve-harness` records it; the harness sha covers each scenario, its session file, its uploads
   and its `workspace_fixture` files, exec bits included; a fixture is also a read root, so a scenario or session
-  file inside one is refused like one inside a mounted folder). Rows carry the
+  file inside one is refused like one inside a mounted folder). Under `--case`, the per-case checks (the session and
+  its model pins, the scenario's inputs, its `semantic_pairwise` references, the isolation check, the mounts) cover the
+  selected cases only, so a problem in an unselected case never blocks a pass that does not run it; every scenario
+  file must still parse, and the harness gate, the files kept unreadable and the one-plugin rule cover every case. Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
