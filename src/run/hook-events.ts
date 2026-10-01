@@ -114,7 +114,7 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
                   : "the agent accepts it as a real event and loads a plugin's own hooks itself (whether a " +
                     "harness run ever reaches this event's trigger has not been verified here)"
               }. This harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: ` +
-                `\`hook_event_fired: ${name}\` / \`hook_event_blocked: ${name}\` grade it from the agent's own ` +
+                `\`hook_event_fired: ${name}\` / \`hook_event_blocked: ${name}\` (and \`hook_output_*\` for what it printed) grade it from the agent's own ` +
                 `hook_response frames (the harness passes --include-hook-events because this plugin declares ` +
                 `hooks), and if real Cowork installs a \`${name}\` hook of its own it is not reproduced here ` +
                 `(it installs hooks for PreToolUse, PostToolUse and UserPromptSubmit only). Assert the hook's ` +

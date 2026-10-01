@@ -22,7 +22,7 @@ import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
 import { finalizeRationale } from "./decide/semantic-judge.js";
-import { warn } from "./io.js";
+import { scrubForTerminal, warn } from "./io.js";
 import { DEFAULT_AUTHORED_PER_FILE_BYTES, authoredTotalBytes, collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
@@ -1590,6 +1590,104 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
 const WRITE_BACK_SOURCE_EXTS = new Set([".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".py"]);
 const SCRATCHPAD_PREFIX = "scratchpad/";
 
+/** `hook_output_contains` / `hook_output_not_contains`: a command hook's `stdout` / `stderr` on its `hook_response`
+ *  frames (RunResult.contextEvents; replay re-derives them from the frozen stream). A hook that fails OPEN and says
+ *  why on stderr passes hook_event_fired, so this reads the text it printed. Never vacuous: no frame for the event
+ *  fails both keys, because a disabled or misplaced hook is exactly what the negative form guards against.
+ *
+ *  Redaction follows the `tool_not_called` object rules: a needle a redaction policy rewrote is unknowable; a hit is
+ *  judged with every token replaced by a sentinel no needle can match into; and a MISS on a token-bearing stream is
+ *  unknown for the negative key, since the replaced bytes might have matched. */
+function checkHookOutput(
+  key: "hook_output_contains" | "hook_output_not_contains",
+  spec: { event: string; stream?: "stdout" | "stderr" | "any"; text?: string; matches?: string },
+  negative: boolean,
+  ctx: AssertContext,
+): KeyResult {
+  const fail = (message: string): KeyResult => ({ pass: false, message });
+  if (ctx.contextEvents === undefined)
+    return fail(`${key}: no context events captured (older run / lane without context events) — cannot verify`);
+  const needle = spec.text ?? spec.matches;
+  if (!needle || (spec.text !== undefined) === (spec.matches !== undefined))
+    return fail(`${key}: set exactly one non-empty \`text\` or \`matches\``);
+  if (hasRedactionToken(needle))
+    return fail(
+      `evidence unavailable: ${key}'s ${spec.text !== undefined ? "text" : "regex"} was rewritten by the cassette's redaction policy — it cannot be evaluated on replay. Match a literal the policy does not rewrite, or check it on a live run`,
+    );
+  // Over output a redaction policy rewrote, a LITERAL hit is still trustworthy — with every token replaced by a
+  // sentinel no text can contain, it lies in bytes the policy left alone — but a literal miss is not (the replaced
+  // bytes might have held it), and a REGEX says nothing either way (`.`, `[^/]` or a lookahead match the token's own
+  // text). Such a stream is `unknown`.
+  let judge: (s: string) => "hit" | "miss" | "unknown";
+  if (spec.text !== undefined) {
+    const t = spec.text;
+    judge = (s) => (s.replace(REDACTION_TOKEN_RE, "\u0000").includes(t) ? "hit" : hasRedactionToken(s) ? "unknown" : "miss");
+  } else {
+    const c = compileUserRegex(spec.matches!);
+    if ("error" in c) return fail(`${key}: bad regex "${spec.matches}": ${c.error}`);
+    judge = (s) => (hasRedactionToken(s) ? "unknown" : c.re.test(s) ? "hit" : "miss");
+  }
+  const stream = spec.stream ?? "any";
+  const fields = stream === "any" ? (["stdout", "stderr"] as const) : ([stream] as const);
+  const frames = ctx.contextEvents.filter((e) => e.subtype === "hook_response" && e.data?.hook_event === spec.event);
+  const shownNeedle = spec.text !== undefined ? JSON.stringify(spec.text) : `/${spec.matches}/i`;
+  const where = stream === "any" ? "stdout or stderr" : stream;
+  if (frames.length === 0)
+    return fail(
+      `${key}: no hook_response frame for \`${spec.event}\` was recorded — the staged plugin declares no such hook, the hook never ran, its hooks.json is not at <plugin>/hooks/hooks.json (the root is silently ignored), or the recording predates --include-hook-events`,
+    );
+  const excerpt = (s: string) => {
+    const one = scrubForTerminal(s.replace(REDACTION_TOKEN_RE, "(redacted)")).replace(/\s+/g, " ").trim();
+    return JSON.stringify(one.length > 200 ? `${one.slice(0, 200)}…` : one);
+  };
+  const name = (e: (typeof frames)[number]) => (typeof e.data?.hook_name === "string" ? e.data.hook_name : spec.event);
+  const read = frames.map((e) => {
+    const texts = fields.map((f) => (typeof e.data?.[f] === "string" ? (e.data[f] as string) : undefined));
+    const present = texts.filter((t): t is string => t !== undefined);
+    return {
+      e,
+      present,
+      missing: texts.length - present.length,
+      hit: present.find((t) => judge(t) === "hit"),
+      unknown: present.some((t) => judge(t) === "unknown"),
+    };
+  });
+  const hitFrames = read.filter((r) => r.hit !== undefined);
+  if (!negative) {
+    if (hitFrames.length > 0)
+      return {
+        pass: true,
+        evidence: `${key}: ${name(hitFrames[0]!.e)} printed ${shownNeedle} on ${where}: ${excerpt(hitFrames[0]!.hit!)}`,
+      };
+    const unreadable = read.filter((r) => r.present.length === 0).length;
+    const unknown = read.filter((r) => r.unknown).length;
+    const seen = read.map((r) => `${name(r.e)}: ${r.present.length ? r.present.map(excerpt).join(" / ") : "(no output field)"}`).join("; ");
+    // Not found — but output the check could not read, or that a redaction policy rewrote, might have held it.
+    return fail(
+      `${unreadable === read.length || unknown ? "evidence unavailable: " : ""}${key}: no \`${spec.event}\` hook printed ${shownNeedle} on ${where} across ${frames.length} frame(s)${
+        unknown ? ` (${unknown} carry output rewritten by a redaction policy)` : ""
+      }${unreadable ? ` (${unreadable} without the field)` : ""} — seen: ${seen}`,
+    );
+  }
+  if (hitFrames.length > 0)
+    return fail(
+      `${key}: ${hitFrames.length} \`${spec.event}\` hook frame(s) printed ${shownNeedle} on ${where}: ${hitFrames
+        .map((r) => `${name(r.e)} (exit ${typeof r.e.data?.exit_code === "number" ? r.e.data.exit_code : "unknown"}): ${excerpt(r.hit!)}`)
+        .join("; ")}`,
+    );
+  const unreadable = read.filter((r) => r.missing > 0).length;
+  if (unreadable > 0)
+    return fail(
+      `evidence unavailable: ${key}: ${unreadable} of ${frames.length} \`${spec.event}\` frame(s) carry no ${where === "stdout or stderr" ? "stdout and stderr" : where} field, so absence cannot be shown`,
+    );
+  const redacted = read.filter((r) => r.unknown).length;
+  if (redacted > 0)
+    return fail(
+      `evidence unavailable: ${key}: ${redacted} \`${spec.event}\` frame(s) carry output rewritten by a redaction policy, so absence of ${shownNeedle} cannot be shown`,
+    );
+  return { pass: true, evidence: `${key}: none of ${frames.length} \`${spec.event}\` frame(s) printed ${shownNeedle} on ${where}` };
+}
+
 /**
  * Evaluate `no_lost_write_back`. Selects the files the run authored (from `ctx.authoredFiles`, plus the
  * capture-health `omittedPaths`/`readErrors` so a dropped/unreadable authored source is never treated as
@@ -2795,6 +2893,13 @@ function check(
             : fail(`hook_event_blocked: no hook_response frame for \`${a.hook_event_blocked}\` was recorded — the hook never fired`),
       );
     }
+  }
+  for (const [key, spec, negative] of [
+    ["hook_output_contains", a.hook_output_contains, false],
+    ["hook_output_not_contains", a.hook_output_not_contains, true],
+  ] as const) {
+    if (spec === undefined) continue;
+    results.push(checkHookOutput(key, spec, negative, ctx));
   }
   if (a.no_scratchpad_leak !== undefined) {
     // THE HARNESS now serves present_files at BOTH container and hostloop (closing the prior coverage

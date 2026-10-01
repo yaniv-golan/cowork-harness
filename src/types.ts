@@ -385,6 +385,26 @@ export function questionOptionCountBoundError(v: { exactly?: number; min?: numbe
   return undefined;
 }
 
+/** The shared object form of `hook_output_contains` / `hook_output_not_contains`. */
+const hookOutputObject = z
+  .strictObject({
+    event: z
+      .enum(KNOWN_HOOK_EVENTS)
+      .describe("the hook event whose `hook_response` frames are read (the same names hook_event_fired takes)"),
+    stream: z
+      .enum(["stdout", "stderr", "any"])
+      .optional()
+      .describe("which output field of the frame to read: `stdout`, `stderr`, or `any` (either; the default)"),
+    text: z.string().min(1).optional().describe("a literal substring, case-sensitive; NON-EMPTY (an empty text is in every output)"),
+    matches: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("a regex, case-insensitive like every other regex key; NON-EMPTY (an empty pattern matches every output)"),
+  })
+  // Load-time, so an assert that names no needle, or two, is refused before the spawn.
+  .refine((v) => (v.text === undefined) !== (v.matches === undefined), { message: "set exactly one of `text` or `matches`" });
+
 const subagentTypeNeedsSubagentScope = (o: { scope?: string; subagent_type?: string }) =>
   o.subagent_type === undefined || o.scope === "subagent";
 const subagentTypeScopeMessage = { message: "`subagent_type` applies only with `scope: subagent`", path: ["subagent_type"] };
@@ -768,6 +788,16 @@ export const Assertion = z.strictObject({
     .optional()
     .describe(
       "that command hook BLOCKED at least once: a `hook_response` frame for the event carried `exit_code: 2` (the agent's blocking exit; the frame also carries outcome 'error'). Fails naming the exit codes/outcomes seen when the hook fired without blocking (`exit_code` is optional on the wire — a frame without it is reported as such, never counted as blocked); fails 'no hook_response' when it never fired; cannot-verify when the run has no context events. Content-class. Recorded end-to-end for `Stop`",
+    ),
+  hook_output_contains: hookOutputObject
+    .optional()
+    .describe(
+      "a COMMAND hook's output for this event contains a text: some `hook_response` frame for `event` carries `text` (a literal substring, case-sensitive) or `matches` (a regex, case-insensitive) in its `stdout`, its `stderr`, or either (`stream`, default `any`). Every frame for the event counts, blocking ones included; an event usually fires several times (each tool call for PreToolUse, each turn for Stop). Fails when the hook never fired, with the same diagnosis as hook_event_fired; cannot-verify when the run has no context events. Content-class, so it grades on replay. Frames carry no plugin id, so a host hook (`allow_host_hooks`) or a second plugin hooking the same event also counts. Recorded end-to-end for `Stop`",
+    ),
+  hook_output_not_contains: hookOutputObject
+    .optional()
+    .describe(
+      "no `hook_response` frame for `event` carries the text in the selected stream — for a hook that FAILS OPEN and says why on stderr while exiting 0, which hook_event_fired cannot see. Fails when the hook never fired (a disabled or misplaced hook is the failure this guards against, so it is never a vacuous pass); fails evidence-unavailable when a frame lacks the selected stream field, or when a stream it would pass on was rewritten by a redaction policy. Same frames, matching and caveats as hook_output_contains. Recorded end-to-end for `Stop`",
     ),
   no_scratchpad_leak: z
     .literal(true)

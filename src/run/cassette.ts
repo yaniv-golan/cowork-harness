@@ -476,7 +476,7 @@ export interface Cassette {
 //  the object form — the reason replay now refuses a future cassette before evaluating anything.) Every other
 //  scenario still stamps v12. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
 // v14: ONE interpretation bump shared by the keys of this release that an older reader cannot read. Today:
-//  `semantic_matches.include_fork_results`, `semantic_pairwise`, the `authored` forms and `question_option_count`
+//  `semantic_matches.include_fork_results`, `semantic_pairwise`, the `authored` forms, `question_option_count` and the `hook_output_*` keys
 //  (V14_ASSERT_FEATURES below), and `workspace_fixture`. Later keys of this release stamp the
 //  same version with no further bump: a top-level key adds its own KEY_REQUIRED_VERSION entry returning 14,
 //  an assert-level one appends a predicate to V14_ASSERT_FEATURES. A cassette using any of them stamps v14, so
@@ -586,6 +586,8 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   },
   // `question_option_count` — the key itself, as for `semantic_pairwise`.
   (a) => !!a && typeof a === "object" && "question_option_count" in (a as object),
+  // `hook_output_contains` / `hook_output_not_contains` — the keys themselves, as for `semantic_pairwise`.
+  (a) => !!a && typeof a === "object" && ("hook_output_contains" in (a as object) || "hook_output_not_contains" in (a as object)),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -7849,6 +7851,9 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "compaction_occurred",
   "hook_event_fired", // hook_response system frames are stream content — the re-drive reproduces them via parseMessage
   "hook_event_blocked",
+  // the same frames' stdout / stderr fields
+  "hook_output_contains",
+  "hook_output_not_contains",
   "all_tasks_completed",
   "task_count_min",
   "task_status",

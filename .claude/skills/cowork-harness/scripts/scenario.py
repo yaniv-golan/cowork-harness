@@ -146,6 +146,8 @@ CONTENT_KEYS = {
     "compaction_occurred",
     "hook_event_fired",
     "hook_event_blocked",
+    "hook_output_contains",
+    "hook_output_not_contains",
     "all_tasks_completed",
     "task_count_min",
     "task_status",
@@ -399,6 +401,10 @@ _EMBEDDED_ENUMS = {
     "assert.semantic_pairwise.order": ["random", "both"],
     "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_output_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_output_contains.stream": ["stdout", "stderr", "any"],
+    "assert.hook_output_not_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_output_not_contains.stream": ["stdout", "stderr", "any"],
 }
 
 
@@ -2365,7 +2371,8 @@ def _lint_hook_events(path):
                 "INFO", "hook-event-not-served",
                 f"`{name}` {fires} — but cowork-harness "
                 f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. "
-                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` grade it from the agent's own "
+                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` (and `hook_output_*` for what it "
+                f"printed) grade it from the agent's own "
                 f"hook_response frames (the harness passes --include-hook-events because this plugin declares "
                 f"hooks); but if real Cowork installs a `{name}` hook of its own, the harness does not reproduce "
                 f"it, so anything driven by that is absent here. (Cowork installs hooks of its own for "

@@ -2450,6 +2450,8 @@ const NESTED_REGEX_LEAVES: [parent: keyof Assertion, child: string][] = [
   ["question_context", "when_question"],
   ["question_option_count", "matches"],
   ["question_option_count", "when_question"],
+  ["hook_output_contains", "matches"],
+  ["hook_output_not_contains", "matches"],
   ["question_options", "when_question"],
   ["skill_tool_used", "skill"],
   ["skill_tool_used", "tool"],
