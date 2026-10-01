@@ -213,6 +213,62 @@ function containedRealPath(workRoot: string, abs: string): string | null {
   return real;
 }
 
+/** The evidence gates a body-reading key applies before it reads an artifact, in order, as raw signals — the
+ *  caller words its own message. Shared by `artifact_json` and the metrics extractor so the two cannot disagree on
+ *  what is readable:
+ *   - `unsafe`    the path leaves the work root lexically (absolute, `..`);
+ *   - `link`      a replay link placeholder (a symlink/hard link at record time — the cassette has no body);
+ *   - `escape`    a symlink resolves outside the work root;
+ *   - `not_found` nothing there (a dangling symlink included);
+ *   - `body_less` the body is not available: a replay entry recorded hash-only (`replayReason`), or a live
+ *                 read-only connected folder (`liveReadonly`). Kept symmetric with replay on every lane.
+ *   - `ok`        the real path to read. */
+export type ArtifactBodyGate =
+  | { kind: "unsafe" }
+  | { kind: "link"; rel: string }
+  | { kind: "escape"; rel: string }
+  | { kind: "not_found"; rel: string }
+  | {
+      kind: "body_less";
+      rel: string;
+      replayReason: "size" | "readonly" | "unreadable" | "input" | "fixture" | undefined;
+      liveReadonly: boolean;
+    }
+  | { kind: "ok"; rel: string; realFile: string };
+
+export function artifactBodyGate(
+  ctx: Pick<AssertContext, "workRoot" | "readonlyFolderRoots" | "truncatedPaths" | "linkPaths">,
+  artifact: string,
+): ArtifactBodyGate {
+  const file = containedPath(ctx.workRoot, artifact);
+  if (!file) return { kind: "unsafe" };
+  // verify the real path (after symlink resolution) is still under workRoot.
+  const realFile = containedRealPath(ctx.workRoot, file);
+  const rel = relative(resolve(ctx.workRoot), file);
+  // Reason sources by lane: LIVE/verify-run derive read-only from `readonlyFolderRoots` (no manifest exists at eval
+  // time); REPLAY reads the per-entry `truncationReason` off the materialized manifest. Complementary, not redundant.
+  const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
+  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | "input" | "fixture" | undefined>();
+  // A link entry travels a DIFFERENT channel from `truncated`: buildManifest emits it with `linkKind` and no
+  // truncation flag, and materializeManifest writes a real 0-byte placeholder, which must never be read as a body.
+  if (ctx.linkPaths?.has(rel) === true) return { kind: "link", rel };
+  if (!realFile) return { kind: "escape", rel };
+  if (!existsSync(realFile)) return { kind: "not_found", rel };
+  if (truncated.has(rel) || liveReadonly) return { kind: "body_less", rel, replayReason: truncated.get(rel), liveReadonly };
+  return { kind: "ok", rel, realFile };
+}
+
+/** The body cap of the JSON-reading keys (10 MiB). */
+export const ARTIFACT_BODY_CAP = 10 * 1024 * 1024;
+
+/** Stat, then read once — `{tooLarge: size}` over the cap. Throws what statSync/readFileSync throw: the caller holds
+ *  the try, so a stat or read failure is reported with the caller's own message. */
+export function readBodyCapped(realFile: string): { buf: Buffer } | { tooLarge: number } {
+  const size = statSync(realFile).size;
+  if (size > ARTIFACT_BODY_CAP) return { tooLarge: size };
+  return { buf: readFileSync(realFile) };
+}
+
 /**
  * Resolve a dotted path into a parsed JSON document with THREE distinct outcomes (conflating them
  * reintroduces a false-green at the field level):
@@ -1731,45 +1787,54 @@ function slashMatches(re: RegExp, ids: string[] | undefined): boolean {
  *     found" on a case-sensitive one. With no exact key, a case-folded match is taken as that pre-run file.
  *  Post-run hash: the cassette manifest on replay (`postRunHashes`), a bounded re-hash of the real file on live
  *  / verify-run. */
-function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: true; evidence?: string } | { pass: false; message: string } {
-  const unavailable = (why: string) => ({
-    pass: false as const,
-    message: `evidence unavailable: ${key} {authored: true} on "${p}" — ${why}`,
-  });
-  if (ctx.preRunOrigin === "remote-unavailable") return unavailable("the pre-run manifest is not locally observable (remote)");
+export type Authorship =
+  | { state: "new" }
+  | { state: "rewritten" }
+  | { state: "untouched" }
+  /** Cannot be decided — never read as authored. `evidence: true` when the recorded evidence (the manifest, a
+   *  pre- or post-run hash) is what is missing, rather than the shape of the path or the turn. */
+  | { state: "undecidable"; why: string; evidence: boolean }
+  | { state: "unsafe" }
+  | { state: "not_found" }
+  | { state: "directory" }
+  | { state: "not_regular" };
+
+/** The pure decision behind `authored: true` — see `authorshipCheck` for the rules. `postHash` is the sha256 of
+ *  bytes the caller already read from the real file: when given (and there is no replay `postRunHashes`), it is
+ *  used instead of a second read, so the bytes judged authored are the bytes the caller goes on to use. */
+export function authorshipOf(ctx: AssertContext, p: string, opts: { postHash?: string } = {}): Authorship {
+  const undecidable = (why: string, evidence = false): Authorship => ({ state: "undecidable", why, evidence });
+  if (ctx.preRunOrigin === "remote-unavailable") return undecidable("the pre-run manifest is not locally observable (remote)", true);
   // Authorship is decided per invocation. A --resume turn captures no pre-run manifest of its own: the one on disk
   // is the FIRST turn's (taken before turn 1), so diffing against it would credit this turn with everything earlier
   // turns wrote. Never read that as authored — keyed on the resume flag, not on the manifest being absent, because
   // a fixture scenario always has one.
   if (ctx.resume)
-    return unavailable(
+    return undecidable(
       "this is a --resume turn: authorship is decided per invocation, and a resume turn captures no pre-run manifest of its own (the one on disk is the first turn's), so what THIS turn wrote cannot be told apart from earlier turns' work",
     );
   if (ctx.preRunHashes === undefined)
-    return unavailable(
+    return undecidable(
       "no pre-run manifest for this run/cassette (it predates the manifest, or nothing armed it) — authorship cannot be decided",
+      true,
     );
   const abs = containedPath(ctx.workRoot, p);
-  if (!abs) return { pass: false, message: `unsafe ${key} path "${p}" — must stay under the work root (no absolute paths or "..")` };
+  if (!abs) return { state: "unsafe" };
   const lexical = relative(resolve(ctx.workRoot), abs).split(sep).join("/");
   let st: ReturnType<typeof lstatSync>;
   try {
     st = lstatSync(abs);
   } catch {
-    return { pass: false, message: `${key} {authored: true}: "${p}" not found — nothing this run wrote is there` };
+    return { state: "not_found" };
   }
   if (st.isSymbolicLink() || ctx.linkPaths?.has(lexical))
-    return unavailable("it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)");
-  if (st.isDirectory())
-    return {
-      pass: false,
-      message: `${key} {authored: true}: \`authored\` applies to a file — "${p}" is a directory (assert on a file the step writes inside it)`,
-    };
-  if (!st.isFile()) return { pass: false, message: `${key} {authored: true}: "${p}" is not a regular file` };
+    return undecidable("it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)");
+  if (st.isDirectory()) return { state: "directory" };
+  if (!st.isFile()) return { state: "not_regular" };
   // A second hard link is another name for an existing inode (it may be an untouched fixture file); the
   // authored-file capture the judge grades excludes such a file, so authorship cannot claim it either.
   if (st.nlink > 1)
-    return unavailable("it has a second hard link (another name for the same file) — the authored-file capture excludes it too");
+    return undecidable("it has a second hard link (another name for the same file) — the authored-file capture excludes it too");
   // The canonical on-disk name, relative to the canonical work root. A difference other than case or Unicode
   // normalization form (macOS resolves NFC and NFD spellings to one name) means the path went through a symlinked
   // directory. Lookups use the same NFC + lower-case key.
@@ -1777,22 +1842,22 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
   try {
     rel = relative(realpathSync.native(ctx.workRoot), realpathSync.native(abs)).split(sep).join("/");
   } catch {
-    return unavailable("its on-disk name could not be resolved");
+    return undecidable("its on-disk name could not be resolved");
   }
   const fold = foldsMatch;
   if (rel !== lexical && !fold(rel, lexical))
-    return unavailable("it is reached through a symlinked directory — a link is never authored evidence");
+    return undecidable("it is reached through a symlinked directory — a link is never authored evidence");
   const hashes = ctx.preRunHashes;
   if (!Object.hasOwn(hashes, rel)) {
     const folded = Object.keys(hashes).find((k) => fold(k, rel));
     if (folded !== undefined) rel = folded;
   }
-  let post: string | undefined;
   const postHash = (): string | undefined | "too-large" => {
     if (ctx.postRunHashes !== undefined) {
       const post = ctx.postRunHashes;
       return post[rel] ?? post[lexical] ?? post[Object.keys(post).find((k) => fold(k, rel)) ?? ""];
     }
+    if (opts.postHash !== undefined) return opts.postHash;
     try {
       if (st.size > postRunHashCap()) return "too-large";
       return createHash("sha256").update(readFileSync(abs)).digest("hex");
@@ -1802,31 +1867,55 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
   };
   if (!Object.hasOwn(hashes, rel)) {
     if (ctx.preRunPaths?.some((q) => fold(q, rel)))
-      return unavailable("it existed before the run as a link, whose content was never hashed");
+      return undecidable("it existed before the run as a link, whose content was never hashed");
     if (ctx.preRunOrigin === "local-unreadable")
-      return unavailable(
+      return undecidable(
         "the pre-run baseline is incomplete (a connected-folder source was unreadable), so a new path cannot be proven new",
+        true,
       );
     const h = postHash();
-    if (h === "too-large") return unavailable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)");
-    if (h === undefined) return unavailable("there is no post-run record of it as a regular file");
-    return { pass: true, evidence: `${key}: "${p}" is new this run` };
+    if (h === "too-large") return undecidable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)", true);
+    if (h === undefined) return undecidable("there is no post-run record of it as a regular file", true);
+    return { state: "new" };
   }
   const pre = hashes[rel];
   if (pre === null || pre === undefined)
-    return unavailable(
+    return undecidable(
       "its pre-run hash is unavailable (over COWORK_HARNESS_PRERUN_HASH_CAP, unreadable, or nulled because the recorded body was secret-scrubbed)",
+      true,
     );
   const h = postHash();
-  if (h === "too-large") return unavailable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)");
-  post = h;
-  if (post === undefined) return unavailable("there is no post-run hash for it (removed, or unreadable)");
-  return post === pre
-    ? {
+  if (h === "too-large") return undecidable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)", true);
+  if (h === undefined) return undecidable("there is no post-run hash for it (removed, or unreadable)", true);
+  return h === pre ? { state: "untouched" } : { state: "rewritten" };
+}
+
+function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: true; evidence?: string } | { pass: false; message: string } {
+  const a = authorshipOf(ctx, p);
+  switch (a.state) {
+    case "new":
+      return { pass: true, evidence: `${key}: "${p}" is new this run` };
+    case "rewritten":
+      return { pass: true, evidence: `${key}: "${p}" was rewritten this run` };
+    case "untouched":
+      return {
         pass: false,
         message: `${key} {authored: true}: "${p}" is an untouched pre-run file (its content equals what was there before the run — e.g. a workspace_fixture file the step never rewrote), not something this run wrote`,
-      }
-    : { pass: true, evidence: `${key}: "${p}" was rewritten this run` };
+      };
+    case "undecidable":
+      return { pass: false, message: `evidence unavailable: ${key} {authored: true} on "${p}" — ${a.why}` };
+    case "unsafe":
+      return { pass: false, message: `unsafe ${key} path "${p}" — must stay under the work root (no absolute paths or "..")` };
+    case "not_found":
+      return { pass: false, message: `${key} {authored: true}: "${p}" not found — nothing this run wrote is there` };
+    case "directory":
+      return {
+        pass: false,
+        message: `${key} {authored: true}: \`authored\` applies to a file — "${p}" is a directory (assert on a file the step writes inside it)`,
+      };
+    case "not_regular":
+      return { pass: false, message: `${key} {authored: true}: "${p}" is not a regular file` };
+  }
 }
 
 function check(
@@ -3471,56 +3560,33 @@ function check(
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
     if (aj.authored === true) results.push(authorshipCheck(ctx, aj.artifact, "artifact_json"));
-    const file = containedPath(ctx.workRoot, aj.artifact);
-    if (!file) results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
+    const gate = artifactBodyGate(ctx, aj.artifact);
+    if (gate.kind === "unsafe")
+      results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
     else {
-      // verify the real path (after symlink resolution) is still under workRoot.
-      const realFile = containedRealPath(ctx.workRoot, file);
-      // A body-less manifest entry (a read-only connected-folder input, or an artifact over the body
-      // cap) has no content in the cassette — artifact_json cannot be evaluated on replay (the 0-byte
-      // placeholder isn't parseable). To keep record/verify-run/replay SYMMETRIC (no green-record →
-      // red-replay), treat such a target as evidence-unavailable on EVERY lane: `truncatedPaths` flags
-      // it on replay; `readonlyFolderRoots` flags the read-only-input case on the live/verify-run lanes
-      // where the real file is still on disk. (Existence keys stay green — existence is provable from
-      // the recorded hash — but content is genuinely absent, so this fails loud, never vacuous.)
-      const rel = relative(resolve(ctx.workRoot), file);
-      // Reason sources by lane: LIVE/verify-run derive read-only from `readonlyFolderRoots`
-      // (no manifest exists at eval time); REPLAY reads the per-entry `truncationReason` off the
-      // materialized manifest (`truncated.get(rel)`). Keeping both is complementary, not redundant.
-      const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
-      const replayReason = truncated.get(rel); // undefined if not body-less on replay, or a pre-v8 entry with no reason
-      const isReadonlyInput = liveReadonly || replayReason === "readonly";
-      const isUploadInput = replayReason === "input"; // an uploaded file — captured hash-only, body deliberately absent
-      const isOverCap = replayReason === "size";
-      const bodyLess = truncated.has(rel) || liveReadonly;
-      // A link entry travels a DIFFERENT channel from `truncated`: buildManifest emits it with
-      // `linkKind` and no truncation flag, and materializeManifest writes a real 0-byte placeholder.
-      // artifact_json survives that only by accident — JSON.parse("") throws. Any TEXT matcher over the
-      // same block would read the placeholder and pass, so the guard belongs here, once, for every
-      // body-reading key. (`file_exists`/`user_visible_artifact` each carry their own copy.)
-      const isLink = ctx.linkPaths?.has(rel) === true;
-      if (isLink) {
+      if (gate.kind === "link") {
         results.push(
           fail(
             `evidence unavailable: "${aj.artifact}" was a symlink/hardlink at record time — its content is not in the cassette (replay materializes a 0-byte placeholder); re-record or assert on the deliverable`,
           ),
         );
-      } else if (!realFile) {
+      } else if (gate.kind === "escape") {
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
-      } else if (!existsSync(realFile)) {
+      } else if (gate.kind === "not_found") {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
-      } else if (bodyLess) {
+      } else if (gate.kind === "body_less") {
         // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
         // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
         // also falls here — it's a record-time read failure, so the both-causes text is the safe hint.
+        const { replayReason, liveReadonly } = gate;
         const cause =
           replayReason === "fixture"
             ? `(an untouched binary workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes)`
-            : isUploadInput
+            : replayReason === "input"
               ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
-              : isReadonlyInput
+              : liveReadonly || replayReason === "readonly"
                 ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
-                : isOverCap
+                : replayReason === "size"
                   ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
                   : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
         results.push(
@@ -3533,17 +3599,15 @@ function check(
       } else {
         let doc: unknown;
         let parsed = true;
-        const fileSizeLimit = 10 * 1024 * 1024;
-        // statSync must be inside the same guard as readFileSync: evaluate()/check() are synchronous with no
-        // error boundary, so a TOCTOU/EACCES/IO error here (the file existed at existsSync but stat/read
-        // throws) would crash verification instead of failing the assertion.
+        // The read is inside one guard: evaluate()/check() are synchronous with no error boundary, so a
+        // TOCTOU/EACCES/IO error here (the file existed at the gate but stat/read throws) would crash
+        // verification instead of failing the assertion.
         try {
-          const fileSize = statSync(realFile).size;
-          if (fileSize > fileSizeLimit) {
-            results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
+          const body = readBodyCapped(gate.realFile);
+          if ("tooLarge" in body) {
+            results.push(fail(`artifact_json: file too large to parse as JSON (${body.tooLarge} bytes, limit 10 MiB)`));
             parsed = false;
-          }
-          if (parsed) doc = JSON.parse(readFileSync(realFile, "utf8"));
+          } else doc = JSON.parse(body.buf.toString("utf8"));
         } catch (e) {
           parsed = false;
           results.push(fail(`artifact_json: ${aj.artifact} could not be read/parsed as JSON: ${String((e as Error).message)}`));
