@@ -341,7 +341,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       },
     );
     const payload = { flow: p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow, variants: out.variants, exitCode: out.exitCode };
-    if (out.error)
+    // A refusal's text already went to stderr through `stderr` above, so only JSON output prints it again.
+    if (json && out.error)
       return fail(
         `${CMD} regrade`,
         out.error.category,
