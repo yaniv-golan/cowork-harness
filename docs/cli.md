@@ -657,7 +657,7 @@ carry it. Also remove its entries (`<id>` and `<id>_present`) from `_state.json`
 the removal would: its value, `<id>_present`, its signature and its `meta.metrics_unavailable` reason all go.
 
 **Changing a metric's declaration** — the same id with a different artifact, path, direction, `scale`, `unbounded` or
-`min` — is refused before spending (exit 2) on `hillclimb run` and its `--dry-run`, and before any judge call on
+`min` (an omitted `min` and `min: 0` are the same declaration) — is refused before spending (exit 2) on `hillclimb run` and its `--dry-run`, and before any judge call on
 `hillclimb regrade`, naming the metric and every
 variant whose rows were graded under the old declaration: one column cannot hold two quantities. Start a new flow, or
 give the changed metric a new id. Declaring a removed id again with a different declaration is the same change. It is
