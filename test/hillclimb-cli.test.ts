@@ -139,4 +139,23 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     const validate = new Ajv({ strict: true }).compile(JSON.parse(readFileSync(schemaPath, "utf8")));
     expect(validate(env.plan.cost), JSON.stringify(validate.errors)).toBe(true);
   });
+
+  it("run --output-format json: a pre-spend refusal is the shared error envelope, its reason in error.message", () => {
+    const r = spawnSync("node", [CLI, "hillclimb", "run", "nope", "--flow", "flow", "--dry-run", "--output-format", "json"], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: join(cwd, "runs") },
+    });
+    expect(r.status).toBe(2);
+    const env = JSON.parse(r.stdout);
+    expect(env).toMatchObject({ command: "hillclimb run", ok: false, dryRun: true, scheduled: 0, exitCode: 2 });
+    expect(env.error.category).toBe("usage");
+    expect(env.error.message).toMatch(/nope/);
+  });
+
+  it("run --output-format json: an argv error names the same command as a refusal", () => {
+    const r = spawnSync("node", [CLI, "hillclimb", "run", "evals", "--bogus", "--output-format", "json"], { cwd, encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout)).toMatchObject({ command: "hillclimb run", ok: false, error: { category: "usage" } });
+  });
 });

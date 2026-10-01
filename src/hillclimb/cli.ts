@@ -97,7 +97,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     try {
       a = parseHillclimbRunArgs(rest);
     } catch (e) {
-      return usage((e as Error).message);
+      return fail(`${CMD} run`, "usage", scrub((e as Error).message, secrets), undefined, json);
     }
     if (a.help) {
       writeAllSync(2, HILLCLIMB_USAGE + "\n");
@@ -115,7 +115,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         cwd: process.cwd(),
         env: process.env,
         secrets,
-        // Through process.stderr.write, so the terminal scrub applies to model-influenced text.
+        // Through err(), so the terminal and secret scrubs apply to model-influenced text.
         stderr: (line) => err(line, secrets),
         flags: r.flags,
         runScenario: r.runScenario,
@@ -124,23 +124,32 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     } finally {
       r.close();
     }
-    if (json)
-      writeAllSync(
-        1,
-        scrub(
-          jsonPayloadEnvelope(`${CMD} run`, outcome.exitCode === 0, {
-            flow: a.flow,
-            variant: a.variant,
-            scheduled: outcome.scheduled,
-            scored: outcome.scored ?? 0,
-            failed: outcome.failed,
-            exitCode: outcome.exitCode,
-            // eval's dry-run shape: the estimate under plan.cost; a top-level cost would read as spend.
-            ...(a.dryRun ? { dryRun: true, ...(outcome.cost ? { plan: { cost: outcome.cost } } : {}) } : {}),
-          }),
-          secrets,
-        ) + "\n",
+    const payload = {
+      flow: a.flow,
+      variant: a.variant,
+      scheduled: outcome.scheduled,
+      scored: outcome.scored ?? 0,
+      failed: outcome.failed,
+      exitCode: outcome.exitCode,
+      // eval's dry-run shape: the estimate under plan.cost; a top-level cost would read as spend.
+      ...(a.dryRun ? { dryRun: true, ...(outcome.cost ? { plan: { cost: outcome.cost } } : {}) } : {}),
+    };
+    // A refusal or a mid-run stop is the shared error envelope, the payload riding along as eval's plan does.
+    // Its text already went to stderr, so only JSON output prints it again.
+    if (json && outcome.error)
+      return fail(
+        `${CMD} run`,
+        outcome.error.category,
+        scrub(outcome.error.message, secrets),
+        undefined,
+        json,
+        outcome.exitCode as 1 | 2,
+        undefined,
+        {
+          payload,
+        },
       );
+    if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} run`, outcome.exitCode === 0, payload), secrets) + "\n");
     return process.exit(outcome.exitCode);
   }
 

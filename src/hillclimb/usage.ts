@@ -23,7 +23,7 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
        [--concurrency N] [--timeout-s N (0 = no ceiling)] [--approve-harness] [flags]
        The runner for /claude-api hillclimb: runs every scenario --reps times into <flow>/<variant>/ with the
        runner-scaffold contract (results.jsonl, errors.jsonl, traces/, progress.txt, summary.json). Exit 0 all
-       attempts ok, 1 any failed attempt or a mid-run stop, 2 refused before spending. See docs/hillclimb.md.
+       attempts ok, 1 any failed attempt or a mid-run stop, 2 refused before spending. See docs/cli.md.
   --flow DIR              flow directory (default .claude/hillclimb/flow)
   --variant ID            'baseline' or 'v<N>' (default baseline)
   --model ID              concrete model id the agent must be served by; an alias is refused

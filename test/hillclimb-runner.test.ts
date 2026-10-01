@@ -112,6 +112,8 @@ describe("the harness gate (runner-scaffold.mjs l.238-277)", () => {
     expect(jobs).toEqual([]);
     expect(err.join("\n")).toMatch(/no approved harness sha in .*_state\.json \(computed [0-9a-f]{12} over: .*evals\/alpha\.yaml/);
     expect(err.join("\n")).toMatch(/run once with --approve-harness/);
+    // The reason the JSON envelope carries as error.message is the line stderr got.
+    expect(r.error).toEqual({ category: "usage", message: expect.stringMatching(/no approved harness sha/) });
   });
 
   it("--approve-harness records the sha; a later edit to a scenario refuses until re-approved", async () => {
@@ -124,6 +126,7 @@ describe("the harness gate (runner-scaffold.mjs l.238-277)", () => {
     expect(r.exitCode).toBe(2);
     expect(jobs).toEqual([]);
     expect(err.join("\n")).toMatch(/harness changed since last approved run/);
+    expect(r.error?.message).toMatch(/harness changed since last approved run/);
   });
 
   it("a --case subset computes the same sha as the full pass (a canary must not need its own approval)", async () => {
@@ -424,6 +427,7 @@ describe("failures inside the pool", () => {
     expect(jobs.map((j) => j.id).sort()).toEqual(["alpha", "beta"]); // gamma never started
     expect(betaDone).toBe(true); // the in-flight job finished before runHillclimb returned
     expect(err.join("\n")).toMatch(/stopped mid-run/);
+    expect(r.error).toEqual({ category: "runtime", message: expect.stringMatching(/^stopped mid-run/) });
     expect(existsSync(vfile("baseline", ".lock"))).toBe(false);
   });
 });

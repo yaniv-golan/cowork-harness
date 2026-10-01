@@ -86,6 +86,8 @@ export interface RunOutcome {
   failed: number;
   /** Rows appended to results.jsonl this pass — an attempt whose later writes failed is still scored. */
   scored?: number;
+  /** Why the pass refused (exit 2) or stopped mid-run (exit 1): the JSON envelope's `error.message`. */
+  error?: { category: "usage" | "runtime"; message: string };
   /** A dry run's remaining (case, rep) slots per case id — what the pass would run. */
   remaining?: Record<string, number>;
 }
@@ -112,13 +114,15 @@ export async function runHillclimb(args: HillclimbRunArgs, deps: RunnerDeps): Pr
   } catch (e) {
     // runner-scaffold.mjs l.591-602: before the workers start, anything thrown is a refusal (exit 2); after, a mid-run stop.
     if (started) {
-      say(`stopped mid-run (rows already written are kept; re-run to resume): ${message(e)}`);
-      return { exitCode: 1, scheduled: 0, ok: 0, failed: 0 };
+      const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(e)}`;
+      say(m);
+      return { exitCode: 1, scheduled: 0, ok: 0, failed: 0, error: { category: "runtime", message: m } };
     }
     if (e instanceof UsageError || e instanceof FsRefusal || e instanceof Error) {
       const m = message(e);
-      say(m.startsWith("refusing") ? m : `refusing to run: ${m}`);
-      return { exitCode: 2, scheduled: 0, ok: 0, failed: 0 };
+      const line = m.startsWith("refusing") ? m : `refusing to run: ${m}`;
+      say(line);
+      return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: line } };
     }
     throw e;
   }
@@ -206,15 +210,17 @@ async function run(
       w!.approveHarness(digest.sha);
       say(`harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${statePathShown}`);
     } else if (decision.kind === "absent") {
-      say(`no approved harness sha in ${statePathShown} (computed ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}).`);
-      say("Review the harness, then run once with --approve-harness to record it.");
-      return { exitCode: 2, scheduled: 0, ok: 0, failed: 0 };
+      const m = `no approved harness sha in ${statePathShown} (computed ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}).`;
+      const fix = "Review the harness, then run once with --approve-harness to record it.";
+      say(m);
+      say(fix);
+      return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: `${m} ${fix}` } };
     } else {
-      say(
-        `harness changed since last approved run (files: ${digest.hashed.join(", ")}); approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}.`,
-      );
-      say("Re-run with --approve-harness after reviewing the diff.");
-      return { exitCode: 2, scheduled: 0, ok: 0, failed: 0 };
+      const m = `harness changed since last approved run (files: ${digest.hashed.join(", ")}); approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}.`;
+      const fix = "Re-run with --approve-harness after reviewing the diff.";
+      say(m);
+      say(fix);
+      return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: `${m} ${fix}` } };
     }
   }
 
@@ -279,8 +285,9 @@ async function run(
     }
     if (stopError !== undefined) {
       progress();
-      say(`stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`);
-      return { exitCode: 1, scheduled: tasks.length, ok, failed: fail, scored };
+      const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
+      say(m);
+      return { exitCode: 1, scheduled: tasks.length, ok, failed: fail, scored, error: { category: "runtime", message: m } };
     }
     async function oneTask(c: HillclimbCase, rep: number): Promise<void> {
       const tStart = now();

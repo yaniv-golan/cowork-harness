@@ -102,8 +102,9 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   } catch (e) {
     if (!(e instanceof Error)) throw e;
     const m = message(e);
-    say(m.startsWith("refusing") ? m : `refusing to run: ${m}`);
-    return { exitCode: 2, scheduled: 0, ok: 0, failed: 0 };
+    const line = m.startsWith("refusing") ? m : `refusing to run: ${m}`;
+    say(line);
+    return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: line } };
   }
   const outcome = await runHillclimb(args, runner);
   if (!args.dryRun || outcome.remaining === undefined) return outcome;
