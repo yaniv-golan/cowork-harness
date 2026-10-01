@@ -524,6 +524,8 @@ export function spawnHostLoop(
     markTearingDown,
     runTag,
     sessionRoot: sessionHost,
+    /** The `--append-system-prompt` this spawn passed: the session's append plus the host-loop shell section. */
+    systemPromptAppend,
     ...(processCwd !== undefined ? { agentProcessCwd: processCwd } : {}),
   };
 }

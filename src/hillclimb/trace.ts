@@ -134,6 +134,26 @@ function snapshotOf(line: string): ChildTranscript["promptSnapshot"] | null | un
   return { last: parts[parts.length - 1] as string, builtinParts: parts.length - 1 };
 }
 
+/** The file a run dir records the main agent's `--append-system-prompt` in, exactly as the spawn passed it
+ *  (`""` when none was passed). Written by executeScenario; absent for a replay or an older run. */
+export const SYSTEM_APPEND_FILE = "system-prompt-append.txt";
+
+/** The trace's leading system turn, from the run dir's own record of what was sent — never an invented one.
+ *  Anthropic's built-in system prompt is withheld, as for a sub-agent. */
+export function mainSystemTurn(outDir: string): string {
+  let text: string | null = null;
+  try {
+    const r = NoFollowRoot.existing(outDir);
+    text = r.readIfPresent(join(r.root, SYSTEM_APPEND_FILE));
+  } catch (e) {
+    if (!(e instanceof FsRefusal) && (e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e;
+  }
+  const withheld = "Anthropic's built-in system prompt withheld";
+  if (text === null) return `[system — harness append not recorded for this run; ${withheld}]`;
+  if (text === "") return `[system — harness append: none sent; ${withheld}]`;
+  return `[system — harness append as sent; ${withheld}]\n\n${text}`;
+}
+
 /** The sub-agent append a run's session sent: `initialize.appendSubagentSystemPrompt` in the harness-written
  *  `control-out.jsonl`. Undefined when the file or the field is absent (nothing was sent). */
 export function sentSubagentAppend(outDir: string): string | undefined {

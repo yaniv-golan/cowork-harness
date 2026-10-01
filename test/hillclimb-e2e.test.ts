@@ -18,6 +18,8 @@ const MODEL = "claude-sonnet-5";
 const line = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
 
 const STUB = [
+  // the argv the agent received, NUL-separated, so the test can compare the append it was handed
+  `printf '%s\\0' "$@" > "$STUB_ARGV"`,
   `D="$CLAUDE_CONFIG_DIR/projects/-stub-cwd/stub-session/subagents"`,
   `mkdir -p "$D"`,
   `${line({ agentType: "general-purpose", description: "worker", toolUseId: "toolu_worker", spawnDepth: 1 })} > "$D/agent-a1.meta.json"`,
@@ -90,7 +92,8 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
       join(evals, "alpha.yaml"),
       "name: alpha\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n",
     );
-    const env = { ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
+    const argvFile = join(work, "argv");
+    const env = { ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token", STUB_ARGV: argvFile };
     const cli = (...a: string[]) =>
       spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
 
@@ -107,7 +110,18 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
       role: string;
       content: string;
     }>;
-    const sys = turns.filter((t) => t.role === "system").map((t) => t.content);
+    // The trace opens with the append the agent was actually handed (its argv), Anthropic's base prompt withheld.
+    const argv = readFileSync(argvFile, "utf8").split("\0");
+    const sent = argv[argv.indexOf("--append-system-prompt") + 1];
+    expect(sent.length).toBeGreaterThan(0);
+    expect(turns[0]).toMatchObject({ role: "system" });
+    const marker = "[system — harness append as sent; Anthropic's built-in system prompt withheld]\n\n";
+    expect(turns[0].content.startsWith(marker)).toBe(true);
+    expect(turns[0].content.slice(marker.length)).toBe(sent);
+    const sys = turns
+      .filter((t) => t.role === "system")
+      .map((t) => t.content)
+      .slice(1);
     expect(sys).toHaveLength(1);
     // The child's snapshot was read through the kept run. The protocol tier sends no sub-agent append, so the state
     // is "none received"; the "as received" branch is covered with SYNTHETIC lines in hillclimb-subagent-system.

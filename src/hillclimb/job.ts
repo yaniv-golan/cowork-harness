@@ -15,7 +15,7 @@ import type { RunResult, Scenario } from "../types.js";
 import type { ExecuteOptions } from "../run/execute.js";
 import { salvagedResult, type ScenarioRunner } from "../eval/job-runner.js";
 import type { JobReport, JobSpec } from "./runner.js";
-import { keptChildTranscripts, sentSubagentAppend } from "./trace.js";
+import { keptChildTranscripts, mainSystemTurn, sentSubagentAppend } from "./trace.js";
 
 export interface JobDeps<F extends { label?: string; ablateSkill?: boolean }> {
   runScenario: ScenarioRunner<F>;
@@ -85,6 +85,7 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
       children:
         outDir && fidelity ? keptChildTranscripts({ outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}) }) : [],
       ...(subagentAppend !== undefined ? { subagentAppend } : {}),
+      ...(outDir !== undefined ? { system: mainSystemTurn(outDir) } : {}),
       attemptS,
       runnerTimeout: runnerBound && result?.errorSource === "timeout",
       ...(outDir !== undefined ? { runDir: outDir } : {}),

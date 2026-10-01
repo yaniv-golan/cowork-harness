@@ -107,7 +107,7 @@ describe("makeHillclimbJobRunner", () => {
     );
   });
 
-  it("the report carries the run's events, its dir, the attempt's wall clock and no system turn yet", async () => {
+  it("the report carries the run's events, its dir and the attempt's wall clock", async () => {
     const run = makeHillclimbJobRunner(deps());
     const rep = await run({ c: kase(), rep: 2, variant: "v1", runLabel: "l", timeoutS: 0, ablate: false });
     expect(rep.events).toEqual(frames.trim().split("\n"));
@@ -115,6 +115,8 @@ describe("makeHillclimbJobRunner", () => {
     expect(rep.attemptS).toBe(5);
     expect(rep.children).toEqual([]);
     expect(rep.result?.result).toBe("success");
+    // the fake's run dir records no append: the run cannot say what was sent
+    expect(rep.system).toBe("[system — harness append not recorded for this run; Anthropic's built-in system prompt withheld]");
   });
 
   it("a thrown job (an unanswered gate) keeps the throw and salvages the result.json it left", async () => {
@@ -169,5 +171,26 @@ describe("makeHillclimbJobRunner", () => {
     );
     const rep = await run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false });
     expect(rep.subagentAppend).toBe("SYNTHETIC append");
+  });
+
+  it("the system turn is the append the run actually sent (SYNTHETIC text), or says none was sent", async () => {
+    const withAppend = (systemPromptAppend: string) =>
+      makeHillclimbJobRunner(
+        deps({
+          runScenario: async (a) => {
+            const outDir = join(root, a.scenario.name, String(a.extra.runId));
+            mkdirSync(outDir, { recursive: true });
+            writeFileSync(join(outDir, "events.jsonl"), frames);
+            // the run dir's record of exactly what the spawn passed as --append-system-prompt
+            writeFileSync(join(outDir, "system-prompt-append.txt"), systemPromptAppend);
+            return { result: "success", outDir, effectiveFidelity: "container" } as unknown as RunResult;
+          },
+        }),
+      );
+    const spec = { c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false };
+    expect((await withAppend("SYNTHETIC session append")(spec)).system).toBe(
+      "[system — harness append as sent; Anthropic's built-in system prompt withheld]\n\nSYNTHETIC session append",
+    );
+    expect((await withAppend("")(spec)).system).toBe("[system — harness append: none sent; Anthropic's built-in system prompt withheld]");
   });
 });

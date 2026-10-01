@@ -1116,6 +1116,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       let spawnedSessionRoot: string | undefined;
       let spawnedAgentCwd: string | undefined; // set only when the agent runs deliberately outside the session tree
       const agentSpawnedAtMs = Date.now(); // the orphan sweep ignores anything that started before this
+      // What the agent was handed as --append-system-prompt ("" = none), recorded in the run dir (hillclimb's
+      // trace shows it; a replay has no such record). Every tier passes the session's append except hostloop,
+      // which adds its shell section and reports what it passed.
+      let sentSystemAppend = prompts.systemPromptAppend ?? "";
       if (effectiveFidelity === "hostloop") {
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -1129,6 +1133,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           proactiveSkillSuggestEnabled,
         });
         child = hl.child;
+        sentSystemAppend = hl.systemPromptAppend;
         // No work dir: hostloop's Bash runs in the sidecar (ended by `rm -f`) and its host agent sits outside
         // the session tree; its host children are hooks and MCP servers, which the group kill and walk reach.
         signalAgent = treeAgent = agentTreeAgent(hl.child, {
@@ -1198,6 +1203,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               `on the real host cwd with no sealed filesystem, so this assertion will FAIL by design at this fidelity.\n`,
           );
       }
+      writeFileSync(join(outDir, "system-prompt-append.txt"), scrub(sentSystemAppend, secrets));
 
       if (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") {
         // Sample the agent sandbox on an interval. Async probes only (shares the agent's event loop).

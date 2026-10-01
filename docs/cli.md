@@ -729,6 +729,9 @@ turns/<N>/          ONE DIRECTORY PER TURN — written once, never renamed or ov
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)
 agent.stderr.log    the agent process's stderr (auth errors, flag rejects)
+system-prompt-append.txt  the --append-system-prompt the agent was spawned with, exactly as passed
+                    (empty = none; rewritten by each turn's spawn). `hillclimb` shows it as a trace's
+                    system turn; a replay writes none.
 ```
 
 A run dir written before this layout existed (or before 1.6.0 for `chat`) is a different, older shape —
