@@ -7,11 +7,10 @@
 // metric is `unavailable` with one reason from METRIC_UNAVAILABLE, never a 0 and never a coerced string.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { sep } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { relative, sep } from "node:path";
 import { ARTIFACT_BODY_CAP, artifactBodyGate, authorshipOf, resolveDotPath, type AssertContext } from "./assert.js";
 import type { MetricUnavailable, RunResult, ScenarioMetric } from "./types.js";
-import { foldsMatch } from "./fixture/workspace.js";
 
 /** What the extractor reads. An `AssertContext` is one. */
 export type MetricsContext = Pick<
@@ -45,6 +44,15 @@ export interface MetricMeasurement {
   evidenceLimited?: boolean;
   /** What would let the metric be measured, when the recorded evidence is what is missing. */
   remedy?: string;
+}
+
+/** The work-root-relative canonical on-disk name of `abs`, `/`-joined; undefined when it cannot be resolved. */
+function canonicalRel(workRoot: string, abs: string): string | undefined {
+  try {
+    return relative(realpathSync.native(workRoot), realpathSync.native(abs)).split(sep).join("/");
+  } catch {
+    return undefined;
+  }
 }
 
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
@@ -105,8 +113,11 @@ function measure(ctx: MetricsContext, m: ScenarioMetric): MetricMeasurement {
   if (ctx.recordedPostRunHashes !== undefined) {
     const rel = gate.rel.split(sep).join("/");
     const recorded = ctx.recordedPostRunHashes;
-    // Folded like authorship's lookups: a case or NFC/NFD spelling of the recorded path is that path.
-    const key = Object.hasOwn(recorded, rel) ? rel : Object.keys(recorded).find((k) => foldsMatch(k, rel));
+    // Looked up by the CANONICAL on-disk name (realpath.native — the on-disk case on a case-insensitive filesystem),
+    // NFC-normalized, never case-folded: on a case-sensitive filesystem `OUTPUTS/m.json` is a different file.
+    const canon = canonicalRel(ctx.workRoot, gate.realFile) ?? rel;
+    const nfc = canon.normalize("NFC");
+    const key = Object.hasOwn(recorded, canon) ? canon : Object.keys(recorded).find((k) => k.normalize("NFC") === nfc);
     if (key === undefined || recorded[key] !== hash)
       return off("pruned", "the kept work dir no longer holds what the run wrote (no recorded post-run hash, or a different one)", true);
   }

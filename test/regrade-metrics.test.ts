@@ -121,11 +121,14 @@ describe("regrade: metrics", () => {
     expect(out.runs[0].metrics).toEqual([{ id: "words", unavailable: "pruned" }]);
   });
 
-  it.runIf(caseInsensitiveFs())("the recorded-hash lookup folds case like authorship: OUTPUTS/m.json is measured, not pruned", async () => {
-    const out = await regrade(keptRun(`metrics:\n  - {id: words, artifact: OUTPUTS/m.json, path: words, better: higher, scale: 5000}\n`));
-    if (!out.ok) throw new Error(out.message);
-    expect(out.runs[0].metrics).toEqual([{ id: "words", value: 1200 }]);
-  });
+  it.runIf(caseInsensitiveFs())(
+    "the recorded-hash lookup uses the canonical on-disk name: OUTPUTS/m.json is measured, not pruned",
+    async () => {
+      const out = await regrade(keptRun(`metrics:\n  - {id: words, artifact: OUTPUTS/m.json, path: words, better: higher, scale: 5000}\n`));
+      if (!out.ok) throw new Error(out.message);
+      expect(out.runs[0].metrics).toEqual([{ id: "words", value: 1200 }]);
+    },
+  );
 
   it("absent when none are declared, and for metrics: []", async () => {
     for (const yaml of ["", "metrics: []\n"]) {

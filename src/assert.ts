@@ -1900,13 +1900,15 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
     // and the connected folders) plus uploads/ — exactly what `capturePreRunManifest` walks. Anything else under
     // the work root (a staged plugin or skill tree, say) is absent because it was never walked, not because the
     // run created it.
-    // Decided on the canonical on-disk name, folded like every lookup above, so a case or NFC/NFD spelling of a
-    // walked root is that root.
+    // Decided on the canonical on-disk name (realpath.native already returns the on-disk case on a
+    // case-insensitive filesystem), compared EXACTLY — NFC-normalized, never case-folded. Absence from the manifest
+    // is the evidence here, so a fold would err toward a pass: on a case-sensitive filesystem `Outputs/` is a
+    // different directory the walk never covered.
     const walked = [...ctx.userVisiblePrefixes, "uploads"];
-    const segs = rel.split("/");
+    const segs = rel.split("/").map((x) => x.normalize("NFC"));
     const under = (root: string) => {
-      const r = root.split("/");
-      return segs.length > r.length && r.every((part, i) => part === segs[i] || fold(part, segs[i]));
+      const r = root.split("/").map((x) => x.normalize("NFC"));
+      return segs.length > r.length && r.every((part, i) => part === segs[i]);
     };
     if (!walked.some(under))
       return undecidable(
