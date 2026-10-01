@@ -205,7 +205,7 @@ cowork-harness lint examples/scenarios/*.yaml --strict --min-severity INFO --cas
 > | Always | `transcript_*`, `tool_*`, `subagent_*`, `no_vm_path_file_op`, `dispatch_count_max`, `skill_triggered`/`no_skill_triggered`, `reference_read`/`no_observed_reference_access`, `max_cost_usd`/`max_tokens`/`tool_calls_max`/`max_turns` (against the *frozen recording's* spend, not fresh spend — a live `run` catches a real budget regression), `max_tool_errors`, `max_redundant_tool_calls`, `skill_available`, `connector_available`, `skill_tool_used`, `compaction_occurred`, `hook_event_fired`/`hook_event_blocked`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`, `present_files_called`, `result`, the verdict modifiers |
 > | Only if the cassette carries `controlOut` | `question_asked`, `question_options`, `question_context`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` |
 > | Only if the cassette carries an `artifacts` manifest | `file_exists`, `artifact_text`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`, `no_unexpected_files`, `input_unmodified` |
-> | Always skipped (live-only) | `file_absent`, `egress_*`, `expect_denied`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`, `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `no_lost_write_back` — keep these in a periodic live `run` |
+> | Always skipped (live-only) | `file_absent`, `egress_*`, `expect_denied`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`, `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `semantic_pairwise`, `no_lost_write_back` — keep these in a periodic live `run` |
 >
 > Authoritative list: `ALWAYS_CONTENT_KEYS` / `QUESTION_GATE_KEYS` / `MANIFEST_KEYS` (composed per-replay) / `LIVE_ONLY_KEYS` (excluded) in `src/run/cassette.ts`. Full per-key reference:
 > [docs/cassette.md → Assertion table](./cassette.md#assertion-table). Full rules/rationale:
@@ -437,6 +437,36 @@ re-running every step before it.
   the outputs dir was found. Only a refusal after the outputs tree was read also carries `written` (`[]`), `skipped`,
   `notes` and `bytes`; one before it omits them. The payload keys are experimental and may change in a minor release.
 
+### Frozen references for `semantic_pairwise` (`ref`)
+
+`cowork-harness ref freeze <run-dir> --scenario <scenario.yaml> --out <store> [--case-id <id>] [--allow-unchecked] [--output-format json]`
+`cowork-harness ref verify <store>… [--output-format json]`
+
+A `semantic_pairwise` assert compares a run's judged document with a **frozen reference**: the document an
+earlier run produced, stored once and never regenerated, so a win rate keeps one meaning across every later run.
+
+- **freeze** rebuilds, from a kept run dir, the judged document for each `semantic_pairwise` assert in
+  `--scenario` (the same composer `semantic_matches` uses, with the run's own capture budget) and writes it to
+  `<store>/<case-id>/`. The case id is the scenario's name (its file stem unless `name:` overrides it), made
+  path-safe; `--case-id` overrides it.
+  - Each document is checked against the fingerprint the live judge recorded for the same evidence options (a
+    `semantic_matches` or `semantic_pairwise` assert in that run). A document that **differs** — a file in the
+    kept run changed after it — is refused, with no override. A run with **no** such fingerprint is refused unless
+    `--allow-unchecked`; the document is then stored marked unchecked. To get a fingerprint, run the baseline with a
+    `semantic_matches` assert over the same evidence options.
+  - A run that ended in an error, a partial run, a replay or a chat run is refused, as is evidence the judge could
+    not see whole (the `semantic_matches` refusals).
+  - Never rewritten: a second freeze of the same case adds only compose keys the entry lacks, and only from the
+    same source run (its `result.json` sha256); anything else is refused.
+- **verify** re-hashes every document in each store and checks its layout. A leftover temp dir from an
+  interrupted freeze is a note, not a problem.
+- **The store** holds the composed document after secret scrubbing and host-path redaction (`~` for paths under
+  your home dir); the run under test gets the same redaction before the judge compares them. It is meant to be
+  committed next to the scenario. A store inside a mounted source is refused before a run spends anything.
+- **Exit codes.** `freeze`: `0` frozen or added · `2` usage or refusal (nothing written). `verify`: `0` clean ·
+  `1` a damaged entry · `2` usage. Text mode writes to stderr; `--output-format json` prints one payload document,
+  or the error envelope on a refusal. The JSON payloads are experimental and may change in a minor release.
+
 ## Exit codes
 
 **Exit-code space is per-command, not global** — the same number means different things on different
@@ -513,6 +543,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for |
 | `fixture export <run-dir> --out <dir>` | Copy a kept run's outputs tree, byte-for-byte, into a directory a scenario can start from. Refuses (writing nothing) on a secret in any file or its name, or a host path in a text file or a file name, and never alters bytes; compressed or binary formats are copied without inspection. See [Exporting a run's outputs as a fixture](#exporting-a-runs-outputs-as-a-fixture-fixture-export) | turning a run that stopped after step N into the starting state for a test of step N+1 |
+| `ref freeze <run-dir> --scenario <scenario.yaml> --out <store>` · `ref verify <store>…` | Freeze a kept run's judged document as a frozen reference for `semantic_pairwise`, once, never rewritten; re-hash a store's documents. See [Frozen references](#frozen-references-for-semantic_pairwise-ref) | setting the baseline a pairwise judge compares later runs with |
 | `trace <run-id>` | Digest a run's `events.jsonl` through one of eight `--view`s (tools, questions, dispatches, tool-durations, tool-errors, files, usage, subagent-research). Per-view detail: see [Flags worth knowing](#flags-worth-knowing) | "how many sub-agents *actually* dispatched, and which?" — plus per-tool timings, per-call stderr, a workspace-file diff, per-model cost, or each dispatch's WebSearch query+result |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |

@@ -180,7 +180,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 | Stamp | When the frozen scenario… | An older reader |
 |---|---|---|
 | **v13** | has an `assert:` entry using the object form of `tool_called` / `tool_not_called` | v12: refuses as too new (see below) |
-| **v14** | has a `semantic_matches` entry carrying `include_fork_results` (any value) — one bump shared with the other keys of this release that an older reader cannot read | v13: refuses as too new — upgrade the harness, don't re-record |
+| **v14** | has a `semantic_matches` entry carrying `include_fork_results` (any value), or a `semantic_pairwise` entry — one bump shared with the other keys of this release that an older reader cannot read | v13: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -645,8 +645,8 @@ health, so "not captured" and "not there" are indistinguishable — it would pas
 commands to re-scan), `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
 stream, so `RunResult.mcpErrors` is absent on replay), `max_peak_rss_bytes` (replay never spawns a sandbox
-to sample, so `RunResult.resources` is absent on replay), `semantic_matches` (an LLM judge call — never
-evaluable from a frozen cassette), `no_lost_write_back` (needs the run's authored-file set, which the replay
+to sample, so `RunResult.resources` is absent on replay), `semantic_matches` and `semantic_pairwise` (LLM judge
+calls — never evaluable from a frozen cassette), `no_lost_write_back` (needs the run's authored-file set, which the replay
 `AssertContext` has no `authoredFiles` for — a manifest-keyed classification would hard-fail every embedding
 cassette's replay; re-deriving authorship from the cassette manifest is a deferred follow-up capped by the
 64 KiB body cap)

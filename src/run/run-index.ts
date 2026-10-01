@@ -61,7 +61,7 @@ export interface RunIndexRow {
   turns?: number;
   cacheReadTokens?: number; // summed across all models in RunResult.modelUsage (stats surfacing)
   modelCostUsd?: number; // summed across all models in RunResult.modelUsage
-  /** `semantic_matches` judge spend, summed over `RunResult.assertions[].judgeCostUsd`. Separate model calls
+  /** Judge spend (`semantic_matches` and `semantic_pairwise`), summed over `RunResult.assertions[].judgeCostUsd`. Separate model calls
    *  from the agent's — NOT part of `costUsd`. Absent when no assert carried a priced judge call. */
   judgeCostUsd?: number;
   /** The LLM decider's spend (`RunResult.deciderCostUsd`). Separate model calls from the agent's — NOT part

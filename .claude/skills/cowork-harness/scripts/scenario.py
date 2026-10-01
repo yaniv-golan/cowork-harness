@@ -187,6 +187,7 @@ LIVE_ONLY_KEYS = {
     "no_mcp_error",
     "max_peak_rss_bytes",
     "semantic_matches",
+    "semantic_pairwise",
     "no_lost_write_back",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
@@ -385,6 +386,8 @@ _EMBEDDED_ENUMS = {
     "assert.question_options.order": ["exact", "any"],
     "assert.tool_called.scope": ["main", "subagent", "any"],
     "assert.tool_not_called.scope": ["main", "subagent", "any"],
+    "assert.semantic_pairwise.pass_if": ["win", "not_worse", "any"],
+    "assert.semantic_pairwise.order": ["random", "both"],
     "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
 }

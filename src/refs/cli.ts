@@ -3,7 +3,14 @@
 // The composition itself (scenario → `semantic_pairwise` asserts → the run's judged document per compose key,
 // compared with the live fingerprint) is injected as `FreezeDeps`, so this module holds only the freeze policy.
 
+import { parseArgs } from "../cli-args.js";
 import { pathSafeId } from "../hillclimb/ids.js";
+import { writeAllSync } from "../io.js";
+import { applyParsedCommandGlobals, withCommandGlobals } from "../run/command-globals.js";
+import { fail, isJsonOutput, jsonPayloadEnvelope } from "../run/envelope.js";
+import { collectSecrets, scrub } from "../secrets.js";
+import { composeFromRunDir } from "./compose.js";
+import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "./cli-usage.js";
 import { join } from "node:path";
 import { FsRefusal, lexists } from "../hillclimb/fs.js";
 import { REF_EXTS, addRefDoc, freezeRef, verifyStore, type RefSource } from "./store.js";
@@ -123,4 +130,59 @@ export function verifyStores(stores: readonly string[]): {
 } {
   const out = stores.map((store) => ({ store, ...verifyStore(store) }));
   return { exitCode: out.some((s) => s.problems.length > 0) ? 1 : 0, stores: out };
+}
+
+function freezeDeps(secrets: string[]): FreezeDeps {
+  return { compose: (runDir, scenarioFile) => composeFromRunDir(runDir, scenarioFile, secrets) };
+}
+
+/** `ref freeze` / `ref verify`. */
+export async function cmdRef(args: string[]): Promise<never> {
+  const CMD = "ref";
+  const json = isJsonOutput(args);
+  let p;
+  try {
+    p = parseArgs(
+      args,
+      withCommandGlobals({
+        booleans: [...REF_FREEZE_BOOLEAN_FLAGS],
+        values: [...REF_FREEZE_VALUE_FLAGS],
+        enums: { "--output-format": ["text", "json"] },
+        noDashValue: ["--scenario", "--out", "--case-id"],
+      }),
+    );
+  } catch (e) {
+    return fail(CMD, "usage", scrub((e as Error).message, collectSecrets()), undefined, json);
+  }
+  applyParsedCommandGlobals(CMD, p, json);
+  const secrets = collectSecrets();
+  const [sub, ...rest] = p.positionals;
+  if (sub === "verify") {
+    if (!rest.length || p.options["--scenario"] || p.options["--out"] || p.options["--case-id"] || p.flags["--allow-unchecked"])
+      return fail(CMD, "usage", REF_USAGE, undefined, json);
+    const v = verifyStores(rest);
+    if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, v.exitCode === 0, { stores: v.stores }), secrets) + "\n");
+    else
+      for (const s of v.stores) {
+        writeAllSync(
+          2,
+          scrub(`${s.store}: ${s.entries.length} entr${s.entries.length === 1 ? "y" : "ies"}, ${s.problems.length} problem(s)`, secrets) +
+            "\n",
+        );
+        for (const pr of s.problems) writeAllSync(2, scrub(`  ✗ ${pr.caseId || "(store)"}: ${pr.why}`, secrets) + "\n");
+        for (const n of s.notes) writeAllSync(2, scrub(`  note: ${n}`, secrets) + "\n");
+      }
+    return process.exit(v.exitCode);
+  }
+  const scenarioFile = p.options["--scenario"];
+  const out = p.options["--out"];
+  if (sub !== "freeze" || rest.length !== 1 || !scenarioFile || !out) return fail(CMD, "usage", REF_USAGE, undefined, json);
+  const o = freezeFromRun(
+    { runDir: rest[0]!, scenarioFile, out, caseId: p.options["--case-id"], allowUnchecked: p.flags["--allow-unchecked"] === true },
+    freezeDeps(secrets),
+  );
+  if (o.exitCode !== 0) return fail(CMD, "runtime", scrub(o.message, secrets), undefined, json, 2);
+  if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { ...o }), secrets) + "\n");
+  else writeAllSync(2, scrub(o.message, secrets) + "\n");
+  return process.exit(0);
 }

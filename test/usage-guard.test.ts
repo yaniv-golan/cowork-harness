@@ -51,6 +51,7 @@ const PHANTOM_EXCEPTIONS: Readonly<Record<string, readonly string[]>> = {
   "verify-cassettes": [],
   regrade: [],
   fixture: [],
+  ref: [],
 };
 
 describe("usage-guard registry shape", () => {

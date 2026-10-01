@@ -54,6 +54,7 @@
     "result",
     "self_heal_ran",
     "semantic_matches",
+    "semantic_pairwise",
     "skill_available",
     "skill_tool_used",
     "skill_triggered",
@@ -255,6 +256,15 @@
     "assert.result": [
       "success",
       "error"
+    ],
+    "assert.semantic_pairwise.order": [
+      "random",
+      "both"
+    ],
+    "assert.semantic_pairwise.pass_if": [
+      "win",
+      "not_worse",
+      "any"
     ],
     "assert.tool_called.scope": [
       "main",

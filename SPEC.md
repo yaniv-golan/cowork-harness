@@ -448,7 +448,7 @@ Every envelope, like the CLI's own output, is secret-scrubbed with the same set 
   distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`file_absent`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`,
-  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `no_lost_write_back`, `egress_*`, `expect_denied`) are always skipped on replay — absent
+  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `semantic_pairwise`, `no_lost_write_back`, `egress_*`, `expect_denied`) are always skipped on replay — absent
   from `assertions[]`. The count of skipped (full / partial) assertions is reported in
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated
   everything.
@@ -599,8 +599,9 @@ there are three families:
   `answer` (`gate`, `answers`), `fixture export` (exit `0` written, `2` usage or refusal; payload experimental,
   §12: `message`, `written`, `skipped`, `refused` (`[]`), `notes`, `bytes`, `outputsDir`, `partial`, `result`; a
   refusal is the error envelope, its message in `error.message`, carrying `refused[]` and whichever of the other
-  fields were known when it refused — `written`/`skipped`/`notes`/`bytes` only once the outputs tree was read), and
-  `regrade` (below).
+  fields were known when it refused — `written`/`skipped`/`notes`/`bytes` only once the outputs tree was read),
+  `ref freeze` (`caseId`, `frozen`, `added`; experimental, §12), `ref verify` (`stores[]`, each
+  `{store, entries, problems, notes}`; experimental, §12), and `regrade` (below).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
@@ -1163,8 +1164,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   entry using the object form of `tool_called` / `tool_not_called` stamps **v13**. A v12 `verify-cassettes`
   refuses that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and
   then crashes evaluating it, so upgrade before replaying one. From v13 on, `replay` refuses a newer-format
-  cassette before evaluating any assertion. A `semantic_matches` entry carrying `include_fork_results` stamps
-  **v14** (one bump shared with the other keys of this release that an older reader cannot read), so a v13 reader refuses it as
+  cassette before evaluating any assertion. A `semantic_matches` entry carrying `include_fork_results`, or any
+  `semantic_pairwise` entry, stamps **v14** (one bump shared with the other keys of this release that an older reader cannot read), so a v13 reader refuses it as
   too new rather than as an unrecognized assertion. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
@@ -1248,6 +1249,10 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   path) are covered above.
 - **`fixture export`'s JSON payload** — the command, its flags and exit codes are covered; the payload keys are
   experimental and may change in a minor release.
+- **The `ref freeze` / `ref verify` JSON payloads and the reference-store layout** (`<store>/<case-id>/ref.json`,
+  `doc-<key>.txt`/`.json`) — EXPERIMENTAL. The command — its name, subcommands, flags and exit codes — is covered
+  above; the payload keys and the on-disk layout may change in a minor release (a store is read only through `ref`
+  and `semantic_pairwise`).
 - **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
   the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
   (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your

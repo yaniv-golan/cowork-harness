@@ -34,8 +34,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
-- **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` stamps
-  `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
+- **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
+  `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
   `tool_called` / `tool_not_called`), so no re-record or re-stamp is needed. v14 is one bump shared with the
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
@@ -49,6 +49,24 @@ All notable changes to this project are documented here. The format is based on
   under different conditions can be told apart. `regrade` output and `eval`'s per-run lines carry it too, and a
   `critique` report records its evaluator's as `evaluatorTransport`, present with `evaluatorModel`. Absent for a
   judge a library caller injects.
+
+- **`semantic_pairwise` — judge a run against a frozen reference.** A pinned judge compares the run's judged
+  document (the one `semantic_matches` builds: final message, transcript and authored files, with the same
+  evidence options) with a reference document and answers win, tie, loss or `both_bad`. `pass_if` (default
+  `not_worse`; also `win`, or `any` for a metric) must hold against every reference in `refs:`. Which output the
+  judge sees first is a seeded coin per run, assert and reference, and `order: both` judges both orders; the judge
+  never sees the words "reference" or "baseline", and answers through `--json-schema` structured output.
+  Per-reference outcomes land in `assertions[].pairwise`; judge spend is reported like `semantic_matches`'.
+  - A missing, damaged or differently-scoped reference, or a reference store inside any mounted source, refuses
+    the run before it spends anything; `record --dry-run` previews the same check.
+  - Live-only (skipped on replay).
+  - `eval` holds a pairwise assert to a concrete judge model and the pairwise prompt hash, and counts a reference
+    it could not read as a refusal, not a fail.
+
+- **`ref freeze <run-dir> --scenario <yaml> --out <store>` and `ref verify <store>…`** freeze a kept run's judged
+  document as a reference, once and never rewritten, after checking it against the fingerprint the live judge
+  recorded (a mismatch is refused; a run with none needs `--allow-unchecked`), and re-hash a store's documents.
+  Exit `0` / `2` (freeze), `0` / `1` / `2` (verify).
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text

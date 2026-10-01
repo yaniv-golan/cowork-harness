@@ -1,6 +1,7 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
+import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
@@ -6659,6 +6660,15 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     repeatedFlags: [],
     aliases: {},
     usage: FIXTURE_USAGE,
+    allowlist: [],
+  },
+  {
+    command: "ref",
+    booleanFlags: REF_FREEZE_BOOLEAN_FLAGS,
+    valueFlags: REF_FREEZE_VALUE_FLAGS,
+    repeatedFlags: [],
+    aliases: {},
+    usage: REF_USAGE,
     allowlist: [],
   },
 ];
