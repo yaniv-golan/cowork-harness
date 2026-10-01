@@ -120,7 +120,7 @@ function judgeRetries(r: RunResult | undefined): { judge_retries: number; unreco
   let unrecorded = false;
   for (const a of authored(r)) {
     if (a.judgeModel === undefined) continue;
-    const attempts = (a as { judgeAttempts?: number }).judgeAttempts;
+    const attempts = a.judgeAttempts;
     if (typeof attempts === "number") n += Math.max(0, attempts - 1);
     else unrecorded = true;
   }

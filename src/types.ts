@@ -1812,6 +1812,9 @@ export interface RunResult {
     /** How the judge's call was made: `isolation` (the level of isolation from the operator's own Claude Code setup —
      *  no tools, safe mode, user settings only) and the host CLI's version. Absent for an injected judge. Live lane only. */
     judgeTransport?: { isolation: string; cliVersion?: string; strictMcp?: false };
+    /** How many calls the `semantic_matches` judge took for this assert: 1, or 2 when its one retry ran (a
+     *  malformed first grade). Absent where the judge never ran, and for `semantic_pairwise` (not yet counted). Live lane only. */
+    judgeAttempts?: number;
     /** Identity (16 hex) of the grading-prompt TEMPLATE the judge used. A before/after comparison must
      *  refuse to mix hashes: a prompt change can shift every pass rate. Live lane only. */
     judgePromptHash?: string;

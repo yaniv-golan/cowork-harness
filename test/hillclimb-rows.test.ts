@@ -450,6 +450,15 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     const row = errRow(attemptRow({ result: r }, ctx(r, { runnerTimeout: true })));
     expect(row).toMatchObject({ judge_retries: 0, meta: { judge_retries_unrecorded: true } });
   });
+
+  it("judge_retries: recorded attempts count the retries, and say nothing is unrecorded", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    r.assertions[3].judgeModel = "claude-haiku-4-5-20251001";
+    r.assertions[3].judgeAttempts = 2;
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.meta.judge_retries).toBe(1);
+    expect(row.meta).not.toHaveProperty("judge_retries_unrecorded");
+  });
 });
 
 describe("attemptRow — meta.judge_transport", () => {

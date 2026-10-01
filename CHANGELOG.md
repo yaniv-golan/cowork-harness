@@ -74,6 +74,9 @@ All notable changes to this project are documented here. The format is based on
   before writing any.
   Exit `0` / `2` (freeze), `0` / `1` / `2` (verify).
 
+- **A graded `semantic_matches` assert records `assertions[].judgeAttempts`:** `1`, or `2` when the judge's
+  one retry after a malformed grade ran — so a grade that needed a retry can be told apart.
+
 - **`hillclimb run | check | state-template` — the runner for `/claude-api hillclimb`.** `hillclimb run
   <scenario.yaml | dir/>` runs every scenario `--reps` times into `<flow>/<variant>/` under the published
   runner-scaffold contract (`results.jsonl`, `errors.jsonl`, `traces/`, `progress.txt`, `summary.json`), with the
