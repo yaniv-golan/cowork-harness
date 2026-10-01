@@ -520,7 +520,7 @@ export function cassetteSchemaUrl(version: number): string {
  *  every cassette, exactly the unconditional bump this mechanism exists to avoid (the falsified v1
  *  design). Returning 0 means "any supported reader interprets this value the same way" — the BASE=10
  *  floor in requiredVersionFor still applies via Math.max, so 0 is not "no version".
- *  MUST carry one entry per ScenarioObject.shape key (17 today) — enforced by a coverage test in
+ *  MUST carry one entry per ScenarioObject.shape key (18 today) — enforced by a coverage test in
  *  test/cassette-version-stamp.test.ts. Adding a scenario key without deciding its cassette-version
  *  impact must red CI, not silently default to 0. */
 export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
@@ -555,6 +555,10 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // A fixture cassette replays from its manifest (the fixture files are recorded pre-run), but an older reader
   // would skip the `workspaceFixtureSig` staleness check — a fixture edit would replay as current. Present ⇒ v14.
   workspace_fixture: (v) => (v !== undefined ? 14 : 0),
+  // Metrics are reported beside the verdict and never change it, so an older reader (its cassette reader keeps
+  // unknown scenario keys — `CassetteShape.scenario` is a loose object) replays to the same verdict and only lacks
+  // `RunResult.metrics`.
+  metrics: () => 0,
 };
 
 /** The assertion-level features that need a v14 reader — ONE list, so a later key of this release appends a predicate

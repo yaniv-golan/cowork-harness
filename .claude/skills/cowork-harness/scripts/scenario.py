@@ -330,6 +330,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "allow_host_writes",
     "allow_host_hooks",  # protocol consent: a staged plugin's hooks run as NATIVE HOST processes  # hostloop native-split: consent for a writable connected folder (pre-run gate)
     "workspace_fixture",  # a saved outputs tree staged into outputs/ before turn 1 (scenario-file-relative dir)
+    "metrics",  # numbers read from JSON files the run wrote, reported beside the verdict (RunResult.metrics)
 }
 
 
@@ -383,6 +384,7 @@ _EMBEDDED_ENUMS = {
     "execution": ["local", "cloud-describe"],
     "lane": ["local", "remote"],
     "on_unanswered": ["fail", "prompt", "llm", "first"],
+    "metrics.better": ["higher", "lower"],
     "answers.decide": ["allow", "deny"],
     "answers.else": ["allow", "deny"],
     "answers.grant": ["once", "domain"],

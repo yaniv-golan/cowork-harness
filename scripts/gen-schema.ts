@@ -210,6 +210,44 @@ function addScenarioCrossKeyRules(json: Record<string, unknown>): void {
       { allOf: [someEntryHas("no_delete_in_outputs"), someEntryWaivesOutputs] },
     ],
   };
+  addMetricRules(json);
+}
+
+/** Mirror `ScenarioMetric`'s per-item refinements (src/types.ts): exactly one of `scale` / `unbounded`, and an id
+ *  that is neither all dots nor reserved. A duplicate id (compared case-insensitively) has no JSON Schema form and
+ *  stays loader-only; the key's description says so. */
+function addMetricRules(json: Record<string, unknown>): void {
+  const props = json.properties as Record<string, { items?: Record<string, unknown> }> | undefined;
+  const items = props?.metrics?.items;
+  if (!items) throw new Error("gen-schema: scenario schema has no metrics.items to mirror the metric rules onto");
+  // ajv strict mode wants each `required` name declared in a sibling `properties` (strictRequired).
+  const has = (k: string) => ({ type: "object", required: [k], properties: { [k]: {} } });
+  items.oneOf = [
+    { ...has("scale"), not: has("unbounded") },
+    { ...has("unbounded"), not: has("scale") },
+  ];
+  const itemProps = items.properties as Record<string, Record<string, unknown>>;
+  // The artifact path stays under the work root: not blank, not absolute (POSIX, drive letter, UNC), no `..`.
+  itemProps.artifact.not = {
+    anyOf: [
+      { pattern: "^\\s*$" },
+      { pattern: "^/" },
+      { pattern: "^[A-Za-z]:[\\\\/]" },
+      { pattern: "^\\\\" },
+      { pattern: "(^|[\\\\/])\\.\\.([\\\\/]|$)" },
+      { pattern: "\\u0000" },
+    ],
+  };
+  const id = itemProps.id;
+  id.not = {
+    anyOf: [
+      { pattern: "^\\.+$" },
+      { pattern: "^(pass|claims|win|both_bad)$" },
+      { pattern: "^a\\d+(_|$)" },
+      { pattern: "_present$" },
+      { pattern: "(^|_)(win|both_bad)(_|$)" },
+    ],
+  };
 }
 
 /** Build { filename: pretty-printed-JSON } for every schema. Pure; no I/O. */

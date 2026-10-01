@@ -4784,6 +4784,52 @@
         "type": "string",
         "enum": ["local", "remote"]
       },
+      ".metrics": {
+        "type": "array"
+      },
+      ".metrics[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".metrics[].artifact": {
+        "type": "string",
+        "required": true
+      },
+      ".metrics[].better": {
+        "type": "string",
+        "enum": ["higher", "lower"],
+        "required": true
+      },
+      ".metrics[].id": {
+        "type": "string",
+        "required": true
+      },
+      ".metrics[].min": {
+        "type": "number"
+      },
+      ".metrics[].path": {
+        "type": "string",
+        "required": true
+      },
+      ".metrics[].scale": {
+        "type": "number"
+      },
+      ".metrics[].unbounded": {
+        "type": "boolean",
+        "const": true
+      },
+      ".metrics[]<oneOf:0>": {
+        "type": "object"
+      },
+      ".metrics[]<oneOf:0>.scale": {
+        "required": true
+      },
+      ".metrics[]<oneOf:1>": {
+        "type": "object"
+      },
+      ".metrics[]<oneOf:1>.unbounded": {
+        "required": true
+      },
       ".name": {
         "type": "string"
       },

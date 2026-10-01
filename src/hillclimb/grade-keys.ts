@@ -49,10 +49,8 @@ const PASS_PRESENT: GradeKeyDecl = { id: "pass_present", kind: "binary", label: 
 const CLAIMS_PRESENT: GradeKeyDecl = { id: "claims_present", kind: "binary", label: "claims graded" };
 const CLAIMS: GradeKeyDecl = { id: "claims", kind: "judge", label: "Claims passed", scale: 1, better: "higher" };
 
-/** Ids a scenario metric may not take: each would collide with a key the runner generates. */
-export function reservedMetricId(id: string): boolean {
-  return /^(pass|claims|win|both_bad)$/.test(id) || /^a\d+(_|$)/.test(id) || /_present$/.test(id) || /(^|_)(win|both_bad)(_|$)/.test(id);
-}
+/** Ids a scenario metric may not take — defined once, beside the scenario schema that refuses them. */
+export { reservedMetricId } from "../types.js";
 
 const hasSemantic = (assertions: readonly Assertion[]) => assertions.some((a) => a.semantic_matches !== undefined);
 

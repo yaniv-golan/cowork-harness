@@ -568,6 +568,9 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
     // A fixture run must always be able to tell an untouched fixture file (pre-run) from one the step rewrote
     // (authored) — for `authored`, for the judged evidence, and for `artifacts[].preRun`.
     scenario.workspace_fixture !== undefined ||
+    // A metric reads only a file the run wrote, and "wrote" is decided against this baseline: without it every
+    // declared metric would be unavailable (pre_run).
+    (scenario.metrics?.length ?? 0) > 0 ||
     isRecording
   );
 }
