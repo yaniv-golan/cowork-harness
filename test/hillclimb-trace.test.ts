@@ -6,9 +6,10 @@
 // sub-agent's turns come only from its own transcript. The parent stream ALSO carries every sub-agent tool
 // call and result (parented events) — reading both would emit each sub-agent tool turn twice.
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { turnsFromEvents, readChildTranscripts, type ChildTranscript } from "../src/hillclimb/trace.js";
+import { turnsFromEvents, readChildTranscripts, keptChildTranscripts, type ChildTranscript } from "../src/hillclimb/trace.js";
 
 const DIR = join(import.meta.dirname, "fixtures", "hillclimb-runs", "fanout-probe");
 const events = readFileSync(join(DIR, "events.jsonl"), "utf8").trim().split("\n");
@@ -147,4 +148,29 @@ describe("type check of the input shape", () => {
     const c: ChildTranscript = children[0];
     expect(c.lines.length).toBeGreaterThan(0);
   });
+});
+
+describe("keptChildTranscripts — where each tier leaves sub-agent transcripts in a kept run dir", () => {
+  const layouts: Array<[string, (out: string) => string]> = [
+    ["hostloop", (out) => join(out, "claude-config")],
+    ["protocol", (out) => join(out, "claude-config")], // the managed config dir; unmanaged protocol has none
+    ["container", (out) => join(out, "work", "session", "mnt", ".claude")],
+    ["microvm", (out) => join(out, "work", "session", "mnt", ".claude")], // the snapshot of the VM session root
+  ];
+  for (const [tier, root] of layouts)
+    it(`${tier}: finds the transcript under ${tier === "hostloop" || tier === "protocol" ? "claude-config" : "work/session/mnt/.claude"}`, () => {
+      const out = mkdtempSync(join(tmpdir(), `hc-kept-${tier}-`));
+      try {
+        const dest = join(root(out), "projects", "-enc-cwd", "0000-session", "subagents");
+        mkdirSync(dest, { recursive: true });
+        cpSync(join(DIR, "subagents"), dest, { recursive: true });
+        const found = keptChildTranscripts({ outDir: out, fidelity: tier, workDir: join(out, "work", "session", "mnt") });
+        expect(found.map((c) => c.toolUseId)).toEqual(["toolu_01XB9SXzRHWjKtHwT5nWZn3x"]);
+        // and a tier pointed at the WRONG root finds nothing, so the per-tier rule is what finds it
+        const other = tier === "container" || tier === "microvm" ? "hostloop" : "container";
+        expect(keptChildTranscripts({ outDir: out, fidelity: other, workDir: join(out, "work", "session", "mnt") })).toEqual([]);
+      } finally {
+        rmSync(out, { recursive: true, force: true });
+      }
+    });
 });

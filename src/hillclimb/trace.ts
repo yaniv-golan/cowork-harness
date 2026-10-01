@@ -195,3 +195,28 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
   const subagentTurns = dispatches === 0 ? "none" : found === dispatches ? "complete" : found === 0 ? "absent" : "partial";
   return { turns, sidecars, subagentTurns };
 }
+
+/** The sub-agent transcripts a KEPT run dir holds, found by the same per-tier rule the live capture uses
+ *  (`resolveSubagentConfigRoot`, src/run/execute.ts:307-323), mapped onto the kept copy:
+ *  - hostloop, and protocol with a managed config dir → `<outDir>/claude-config`;
+ *  - container → `<workDir>/.claude` (the bind-mounted session mnt, kept in place);
+ *  - microvm → `<workDir>/.claude` (the snapshot of the VM session root, `snapshotMicroVmWorkspace`).
+ *  Unmanaged protocol keeps none. Transcripts sit at `<root>/projects/<cwd>/<session>/subagents/`. */
+export function keptChildTranscripts(run: { outDir: string; fidelity: string; workDir?: string }): ChildTranscript[] {
+  const root =
+    run.fidelity === "hostloop" || run.fidelity === "protocol"
+      ? join(run.outDir, "claude-config")
+      : run.fidelity === "container" || run.fidelity === "microvm"
+        ? join(run.workDir ?? join(run.outDir, "work", "session", "mnt"), ".claude")
+        : undefined;
+  if (root === undefined) return [];
+  const projects = join(root, "projects");
+  if (!existsSync(projects)) return [];
+  const out: ChildTranscript[] = [];
+  for (const cwd of readdirSync(projects, { withFileTypes: true })) {
+    if (!cwd.isDirectory()) continue;
+    for (const session of readdirSync(join(projects, cwd.name), { withFileTypes: true }))
+      if (session.isDirectory()) out.push(...readChildTranscripts(join(projects, cwd.name, session.name, "subagents")));
+  }
+  return out;
+}
