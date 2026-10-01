@@ -931,7 +931,7 @@ export const Assertion = z.strictObject({
         )
         .refine((v) => !CONTROL_CHAR.test(v), CONTROL_CHAR_MESSAGE),
       case_sensitive: z
-        .literal(true)
+        .literal(true, { error: "case_sensitive takes only `true` — omit it for the case-insensitive default" })
         .optional()
         .describe(
           "match `matches` case-sensitively (default: case-insensitive, like every other regex key). It applies to the WHOLE pattern: on an `exactly: 0` rule it makes `add` miss `Add`, a false pass — keep such a rule case-insensitive, or spell both cases (`[Aa]dd`)",

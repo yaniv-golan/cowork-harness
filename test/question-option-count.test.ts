@@ -139,9 +139,9 @@ describe("question_option_count: never vacuous", () => {
   });
 });
 
-// A replayed cassette or a scrubbed run dir can carry option labels a redaction policy rewrote. A hit is judged
-// with the token replaced by a sentinel, and a miss on a token-bearing label is unknown, so `exactly: 0` cannot
-// pass on a label whose original bytes matched.
+// A replayed cassette or a scrubbed run dir can carry option labels a redaction policy rewrote. A label carrying a
+// token counts as unknown either way, and each count is the range [n, n + unknown], so `exactly: 0` cannot pass on a
+// label whose original bytes matched.
 describe("question_option_count: redaction-rewritten labels", () => {
   const TOKEN = "[REDACTED:path:0123456789ab]";
   it("exactly: 0 is evidence-unavailable when a rewritten label might have matched", () => {
