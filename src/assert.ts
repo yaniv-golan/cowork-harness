@@ -28,7 +28,6 @@ import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
-import { foldsMatch } from "./fixture/workspace.js";
 
 /** Bytes cap for re-hashing a matched input file on the live / verify-run lane (`input_unmodified`).
  *  Mirrors the pre-run manifest's 50 MiB default and the same env override so the post-run re-hash is
@@ -1804,9 +1803,10 @@ function slashMatches(re: RegExp, ids: string[] | undefined): boolean {
  *   - a symlink at the path, or a path reached through a symlinked directory, is never authored evidence (the
  *     pre-run manifest never hashes a link; replacing a fixture file with a link to other content is not
  *     "writing" it).
- *   - the lookup uses the file's CANONICAL on-disk name: on a case-insensitive filesystem (macOS APFS)
- *     `outputs/REPORT.md` is the fixture's `report.md`, and must read as that pre-run file, as it fails "not
- *     found" on a case-sensitive one. With no exact key, a case-folded match is taken as that pre-run file.
+ *   - the lookup uses the file's CANONICAL on-disk name (realpath.native), matched EXACTLY: on a case-insensitive
+ *     filesystem (macOS APFS) `outputs/REPORT.md` resolves to the fixture's stored `report.md` and reads as that
+ *     pre-run file; on a case-sensitive one it is a different name (not found, or a different file). Never folded:
+ *     a fold could only match a different file.
  *  Post-run hash: the cassette manifest on replay (`postRunHashes`), a bounded re-hash of the real file on live
  *  / verify-run. */
 export type Authorship =
@@ -1863,28 +1863,45 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
   // authored-file capture the judge grades excludes such a file, so authorship cannot claim it either.
   if (st.nlink > 1)
     return undecidable("it has a second hard link (another name for the same file) — the authored-file capture excludes it too");
-  // The canonical on-disk name, relative to the canonical work root. A difference other than case or Unicode
-  // normalization form (macOS resolves NFC and NFD spellings to one name) means the path went through a symlinked
-  // directory. Lookups use the same NFC + lower-case key.
+  // A path reached through a symlinked directory is never authored evidence. Decided by lstat on each directory
+  // between the work root and the file — not by comparing spellings, which would have to fold case on macOS and so
+  // would let a case-variant link through on a case-sensitive filesystem.
+  const parts = lexical.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    try {
+      if (lstatSync(join(ctx.workRoot, ...parts.slice(0, i))).isSymbolicLink())
+        return undecidable("it is reached through a symlinked directory — a link is never authored evidence");
+    } catch {
+      return undecidable("its on-disk name could not be resolved");
+    }
+  }
+  // The canonical on-disk name (realpath.native: the name as stored, e.g. `outputs/report.md` when asked as
+  // `OUTPUTS/REPORT.md` on a case-insensitive filesystem). Every lookup below matches it EXACTLY — no case and no
+  // Unicode fold. The pre-run walk records names as stored too, so an exact match is right on every filesystem, and
+  // a fold could only match a DIFFERENT file (on a case-sensitive one `Outputs/x.json` is not `outputs/x.json`).
   let rel: string;
   try {
     rel = relative(realpathSync.native(ctx.workRoot), realpathSync.native(abs)).split(sep).join("/");
   } catch {
     return undecidable("its on-disk name could not be resolved");
   }
-  const fold = foldsMatch;
-  if (rel !== lexical && !fold(rel, lexical))
-    return undecidable("it is reached through a symlinked directory — a link is never authored evidence");
+  // FIRST: the path must lie under a folder the pre-run walk covered — the user-visible roots (outputs/ and the
+  // connected folders) plus uploads/, exactly what `capturePreRunManifest` walks. Anything else under the work root
+  // (a staged plugin or skill tree, say) is absent from the manifest because it was never walked, not because the
+  // run created it — and it must never be matched onto a manifest entry.
+  const walked = [...ctx.userVisiblePrefixes, "uploads"];
+  const segs = rel.split("/");
+  const under = (root: string) => {
+    const r = root.split("/");
+    return segs.length > r.length && r.every((part, i) => part === segs[i]);
+  };
+  if (!walked.some(under))
+    return undecidable(
+      `it is outside the folders the pre-run manifest covers (${walked.join(", ")}), so whether this run wrote it cannot be decided`,
+    );
   const hashes = ctx.preRunHashes;
-  if (!Object.hasOwn(hashes, rel)) {
-    const folded = Object.keys(hashes).find((k) => fold(k, rel));
-    if (folded !== undefined) rel = folded;
-  }
   const postHash = (): string | undefined | "too-large" => {
-    if (ctx.postRunHashes !== undefined) {
-      const post = ctx.postRunHashes;
-      return post[rel] ?? post[lexical] ?? post[Object.keys(post).find((k) => fold(k, rel)) ?? ""];
-    }
+    if (ctx.postRunHashes !== undefined) return ctx.postRunHashes[rel];
     if (opts.postHash !== undefined) return opts.postHash;
     try {
       if (st.size > postRunHashCap()) return "too-large";
@@ -1894,26 +1911,7 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
     }
   };
   if (!Object.hasOwn(hashes, rel)) {
-    if (ctx.preRunPaths?.some((q) => fold(q, rel)))
-      return undecidable("it existed before the run as a link, whose content was never hashed");
-    // Absent from the manifest reads as NEW only where the pre-run walk looked: the user-visible roots (outputs/
-    // and the connected folders) plus uploads/ — exactly what `capturePreRunManifest` walks. Anything else under
-    // the work root (a staged plugin or skill tree, say) is absent because it was never walked, not because the
-    // run created it.
-    // Decided on the canonical on-disk name (realpath.native already returns the on-disk case on a
-    // case-insensitive filesystem), compared EXACTLY — NFC-normalized, never case-folded. Absence from the manifest
-    // is the evidence here, so a fold would err toward a pass: on a case-sensitive filesystem `Outputs/` is a
-    // different directory the walk never covered.
-    const walked = [...ctx.userVisiblePrefixes, "uploads"];
-    const segs = rel.split("/").map((x) => x.normalize("NFC"));
-    const under = (root: string) => {
-      const r = root.split("/").map((x) => x.normalize("NFC"));
-      return segs.length > r.length && r.every((part, i) => part === segs[i]);
-    };
-    if (!walked.some(under))
-      return undecidable(
-        `it is outside the folders the pre-run manifest covers (${walked.join(", ")}), so whether this run wrote it cannot be decided`,
-      );
+    if (ctx.preRunPaths?.includes(rel)) return undecidable("it existed before the run as a link, whose content was never hashed");
     if (ctx.preRunOrigin === "local-unreadable")
       return undecidable(
         "the pre-run baseline is incomplete (a connected-folder source was unreadable), so a new path cannot be proven new",

@@ -7,7 +7,7 @@
 // Synthetic data only.
 
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -61,6 +61,14 @@ describe.runIf(caseInsensitiveFs())("walked roots are matched on the canonical, 
 });
 
 describe("the walked-roots rule still refuses what was never walked, whatever the spelling", () => {
+  it("the walked-roots rule runs before any manifest lookup: a path outside the declared roots is refused even with a manifest entry", () => {
+    const mnt = join(realpathSync(mkdtempSync(join(tmpdir(), "fold-order-"))), "mnt");
+    mkdirSync(join(mnt, "other"), { recursive: true });
+    writeFileSync(join(mnt, "other", "x.json"), '{"n":2}');
+    const c = { ...ctx(mnt), preRunHashes: { "other/x.json": sha('{"n":1}') }, preRunPaths: ["other/x.json"] };
+    const [r] = evaluate([{ file_exists: { path: "other/x.json", authored: true } } as Assertion], c);
+    expect(r.message).toMatch(/outside the folders the pre-run manifest covers/);
+  });
   it("a sibling that only starts with a root's name is outside it", () => {
     const mnt = join(realpathSync(mkdtempSync(join(tmpdir(), "fold-"))), "mnt");
     mkdirSync(join(mnt, "outputsX"), { recursive: true });
@@ -93,5 +101,58 @@ describe.runIf(!caseInsensitiveFs())("on a case-sensitive filesystem, Outputs/ i
     expect(extractMetrics(c, [{ id: "n", artifact: "OUTPUTS/m.json", path: "n", better: "higher", scale: 9 }])).toEqual([
       { id: "n", unavailable: "pruned" },
     ]);
+  });
+  // The manifest holds outputs/x.json; an unwalked pre-run Outputs/x.json with DIFFERENT bytes must not be matched
+  // onto it (that would read as "rewritten"), live or on replay.
+  function twin(): { mnt: string; pre: Record<string, string | null> } {
+    const mnt = join(realpathSync(mkdtempSync(join(tmpdir(), "fold-twin-"))), "mnt");
+    mkdirSync(join(mnt, "outputs"), { recursive: true });
+    mkdirSync(join(mnt, "Outputs"), { recursive: true });
+    writeFileSync(join(mnt, "outputs", "x.json"), '{"n":1}');
+    writeFileSync(join(mnt, "Outputs", "x.json"), '{"n":7}');
+    return { mnt, pre: { "outputs/x.json": sha('{"n":1}') } };
+  }
+  const decl = (artifact: string) => [{ id: "n", artifact, path: "n", better: "higher" as const, scale: 9 }];
+  it("a case-twin of a manifest file outside the walk is not 'rewritten' (live)", () => {
+    const { mnt, pre } = twin();
+    const c = { ...ctx(mnt), preRunHashes: pre, preRunPaths: Object.keys(pre) };
+    const [r] = evaluate([{ file_exists: { path: "Outputs/x.json", authored: true } } as Assertion], c);
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/outside the folders the pre-run manifest covers/);
+    expect(extractMetrics(c, decl("Outputs/x.json"))).toEqual([{ id: "n", unavailable: "pre_run" }]);
+  });
+  it("a case-twin of a manifest file outside the walk is not 'rewritten' (replay hashes)", () => {
+    const { mnt, pre } = twin();
+    const c = {
+      ...ctx(mnt),
+      preRunHashes: pre,
+      preRunPaths: Object.keys(pre),
+      postRunHashes: { "outputs/x.json": sha('{"n":2}'), "Outputs/x.json": sha('{"n":7}') },
+    };
+    const [r] = evaluate([{ file_exists: { path: "Outputs/x.json", authored: true } } as Assertion], c);
+    expect(r.pass).toBe(false);
+    expect(extractMetrics(c, decl("Outputs/x.json"))).toEqual([{ id: "n", unavailable: "pre_run" }]);
+  });
+  it("an NFD twin of an NFC connected folder is a different, unwalked directory", () => {
+    const mnt = join(realpathSync(mkdtempSync(join(tmpdir(), "fold-nfd-"))), "mnt");
+    const nfc = "caf\u00e9";
+    const nfd = "cafe\u0301";
+    mkdirSync(join(mnt, "outputs"), { recursive: true });
+    mkdirSync(join(mnt, nfc), { recursive: true });
+    mkdirSync(join(mnt, nfd), { recursive: true });
+    writeFileSync(join(mnt, nfd, "x.json"), '{"n":3}');
+    const c = { ...ctx(mnt), userVisiblePrefixes: ["outputs", nfc] };
+    const [r] = evaluate([{ file_exists: { path: `${nfd}/x.json`, authored: true } } as Assertion], c);
+    expect(r.message).toMatch(/outside the folders the pre-run manifest covers/);
+    expect(extractMetrics(c, decl(`${nfd}/x.json`))).toEqual([{ id: "n", unavailable: "pre_run" }]);
+  });
+  it("Outputs -> outputs (a symlink) is a symlinked directory, never authored evidence", () => {
+    const mnt = join(realpathSync(mkdtempSync(join(tmpdir(), "fold-link-"))), "mnt");
+    mkdirSync(join(mnt, "outputs"), { recursive: true });
+    writeFileSync(join(mnt, "outputs", "new.json"), '{"n":4}');
+    symlinkSync("outputs", join(mnt, "Outputs"));
+    const [r] = evaluate([{ file_exists: { path: "Outputs/new.json", authored: true } } as Assertion], ctx(mnt));
+    expect(r.message).toMatch(/reached through a symlinked directory/);
+    expect(extractMetrics(ctx(mnt), decl("Outputs/new.json"))).toEqual([{ id: "n", unavailable: "pre_run" }]);
   });
 });
