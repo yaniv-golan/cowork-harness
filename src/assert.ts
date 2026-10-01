@@ -361,6 +361,11 @@ export interface AssertContext {
   judgeTransports?: Map<Assertion, import("./decide/llm-transport.js").TransportIdentity>;
   /** How many calls the semantic_matches judge took per assert (1, or 2 after its one retry). */
   judgeAttempts?: Map<Assertion, number>;
+  /** `semantic_pairwise`: the composed candidate document's fingerprint, for every assert whose evidence was not
+   *  refused (judged or all-neutral). Surfaced as `RunResult.assertions[].composedDoc`. */
+  composedDocs?: Map<Assertion, JudgedDocFingerprint>;
+  /** Set by the pairwise pre-pass when the caller's deadline passed before a comparison could start. */
+  deadlinePassed?: boolean;
   /** `semantic_matches` asserts whose judge grade was INVALID (malformed/ambiguous after a retry) —
    *  populated by runSemanticJudges. Distinct from "not graded": the check surfaces `judgeInvalid:true` so
    *  a consumer counts the rep as invalid, never silently drops it (which would inflate the score). */
@@ -1986,7 +1991,10 @@ function check(
     const outcomes = ctx.pairwiseResults?.get(a);
     const docInfo = ctx.semanticDocInfo?.get(a);
     const refusal = ctx.semanticRefused?.get(a) ?? (outcomes ? semanticRefusal(a, ctx, docInfo) : forkRecordRefusal(a, ctx));
-    const unreadable = (outcomes ?? []).filter((o) => o.status === "missing" || o.status === "integrity");
+    // Only GATE references decide: a metric-only one (`gate: false`, a hillclimb flow's later variants) is recorded
+    // beside the verdict and never changes it, readable or not.
+    const gated = (outcomes ?? []).filter((o) => o.gate !== false);
+    const unreadable = gated.filter((o) => o.status === "missing" || o.status === "integrity" || o.status === "invalid");
     if (ctx.judgeInvalid?.has(a)) {
       results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
     } else if (refusal) {
@@ -1994,7 +2002,7 @@ function check(
       results.push(fail(refusal.message));
     } else if (!outcomes) {
       results.push(fail("evidence unavailable: pairwise judge not run (semantic_pairwise is live-only; skipped on replay)"));
-    } else if (!outcomes.length) {
+    } else if (!gated.length) {
       results.push(fail("evidence unavailable: semantic_pairwise has no reference to compare with"));
     } else if (unreadable.length) {
       // Whatever pass_if says, `any` included: a comparison that did not happen is never a pass.
@@ -2010,11 +2018,17 @@ function check(
       const summary = outcomes
         .map(
           (o) =>
-            `vs ${o.ref}: ${o.status === "neutral" ? "neutral (reference variant)" : `${o.outcome}${o.positionFlip ? " (orders disagreed)" : ""}`}`,
+            `vs ${o.ref}${o.gate === false ? " (metric only)" : ""}: ${
+              o.status === "neutral"
+                ? "neutral (reference variant)"
+                : o.status === "graded"
+                  ? `${o.outcome}${o.positionFlip ? " (orders disagreed)" : ""}`
+                  : `${o.status}${o.why ? ` (${o.why})` : ""}`
+            }`,
         )
         .join("; ");
       semanticEvidence = { reason: "graded", paths: scopeAuthoredEvidence(ctx, p.evidence_files).files.map((f) => f.path) };
-      results.push(outcomes.every(passes) ? ok(`pairwise (${passIf}): ${summary}`) : fail(`pairwise (${passIf}): ${summary}`));
+      results.push(gated.every(passes) ? ok(`pairwise (${passIf}): ${summary}`) : fail(`pairwise (${passIf}): ${summary}`));
     }
   }
   if (a.tool_result_contains !== undefined) {
@@ -3824,6 +3838,7 @@ function check(
   const judgePromptHash = isJudged ? ctx.judgePromptHashes?.get(a) : undefined;
   const judgeTransport = isJudged ? ctx.judgeTransports?.get(a) : undefined;
   const judgeAttempts = isJudged ? ctx.judgeAttempts?.get(a) : undefined;
+  const composedDoc = a.semantic_pairwise !== undefined ? ctx.composedDocs?.get(a) : undefined;
   const pairwise = a.semantic_pairwise !== undefined ? ctx.pairwiseResults?.get(a) : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
@@ -3833,6 +3848,7 @@ function check(
     ...(judgeCostUsd !== undefined ? { judgeCostUsd } : {}),
     ...(judgeUsage ? { judgeUsage } : {}),
     ...(judgedDoc ? { judgedDoc } : {}),
+    ...(composedDoc ? { composedDoc } : {}),
     ...(judgePromptHash ? { judgePromptHash } : {}),
     ...(judgeTransport ? { judgeTransport } : {}),
     ...(judgeAttempts !== undefined ? { judgeAttempts } : {}),

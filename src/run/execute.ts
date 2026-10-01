@@ -187,8 +187,10 @@ export interface ExecuteOptions {
   deadline?: number;
   /** `semantic_pairwise` in a caller-owned flow (a hillclimb runner): the case's entry name, the references every
    *  pairwise assert is judged against (replacing the scenario's `refs:`), and the names of references frozen from
-   *  this very variant (neutral 0.5, no judge call). Omitted = the scenario's own setup (`scenarioPairwiseSetup`). */
-  pairwise?: { caseId?: string; refs?: PairwiseRef[]; neutralRefs?: string[] };
+   *  this very variant (neutral 0.5, no judge call). `gateRefs` names the references that decide the verdict (a
+   *  hillclimb flow: its baseline); the rest are metric-only, recorded with `gate: false`. Omitted = the scenario's
+   *  own setup (`scenarioPairwiseSetup`), where every reference gates. */
+  pairwise?: { caseId?: string; refs?: PairwiseRef[]; neutralRefs?: string[]; gateRefs?: string[] };
   /** Test seam: the structured judge transport for `semantic_pairwise` (default: the host `claude -p`). */
   pairwiseComplete?: CompleteStructured;
   /** ABLATION (`--ablate-skill`): run the SAME prompt with the skill(s)-under-test removed — a
@@ -702,6 +704,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       caseId: o?.caseId ?? base.caseId,
       refsFor: o?.refs ? () => o.refs! : base.refsFor,
       neutralRefs: new Set(o?.neutralRefs ?? []),
+      ...(o?.gateRefs ? { gateRefs: new Set(o.gateRefs) } : {}),
     };
   })();
   {
@@ -1834,6 +1837,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         caseId: pairwiseSetup.caseId,
         refsFor: pairwiseSetup.refsFor,
         neutralRefs: pairwiseSetup.neutralRefs,
+        ...(pairwiseSetup.gateRefs ? { gateRefs: pairwiseSetup.gateRefs } : {}),
+        ...(opts.deadline !== undefined ? { deadline: opts.deadline } : {}),
         sessionId,
         task: scenario.prompt,
         // One judge per resolved model; the caller's run-level pin (a paired comparison) wins over a per-assert one.
@@ -1844,6 +1849,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         mainModels: record.models ?? [],
       }),
     });
+    // The deadline can also pass between pairwise comparisons: what was not judged is not graded, and the run ends
+    // as a timeout exactly as when it passed before the judges started.
+    if (assertCtx.deadlinePassed && !pastDeadline) {
+      record.result = "error";
+      record.errorSource = "timeout";
+      warn(
+        `::warning:: ${scenario.name}: the run's deadline passed during its pairwise judging — the rest was not judged; the run ends as a timeout.\n`,
+      );
+    }
     const assertions = evaluate(scenario.assert, assertCtx);
 
     if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {

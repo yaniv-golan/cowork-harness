@@ -413,7 +413,10 @@ export function semanticRefusalReason(g: Grade): SemanticRefusalReason | undefin
   if (g.assertion.semantic_pairwise !== undefined) {
     if (g.judgeInvalid === true) return undefined;
     if (g.semanticEvidence !== undefined && g.semanticEvidence.reason !== "graded") return g.semanticEvidence.reason;
-    return g.pairwise?.some((o) => o.status === "missing" || o.status === "integrity") ? "reference_unavailable" : undefined;
+    // A metric-only reference (`gate: false`) never refuses the verdict, whatever its status.
+    return g.pairwise?.some((o) => o.gate !== false && (o.status === "missing" || o.status === "integrity"))
+      ? "reference_unavailable"
+      : undefined;
   }
   const sm = g.assertion.semantic_matches;
   if (sm === undefined) return undefined;

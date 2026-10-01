@@ -13,22 +13,39 @@ import { candidateDocument, pairwiseComposeKey } from "../run/pairwise-prepass.j
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { assertContextFromRunDir } from "../run/verify-context.js";
 import { NoFollowRoot } from "../hillclimb/fs.js";
+import { redactDeep } from "../hillclimb/flow.js";
 import type { Assertion, RunResult } from "../types.js";
 import type { ComposedForFreeze } from "./cli.js";
 
 /** Live judged asserts by the compose key their options give: the document a live judge read under the same
- *  options is the same document, whichever judged key (semantic_matches or semantic_pairwise) recorded it. */
+ *  options is the same document, whichever judged key (semantic_matches or semantic_pairwise) recorded it. A
+ *  pairwise assert no judge read (every comparison neutral: a run of the reference's own variant) still recorded
+ *  the document it composed (`composedDoc`), which is the same check. */
 function liveFingerprints(result: RunResult): Map<string, string> {
   const out = new Map<string, string>();
   for (const e of result.assertions ?? []) {
-    if (e.source !== undefined || judgedOpts(e.assertion) === undefined || e.judgedDoc === undefined) continue;
-    out.set(pairwiseComposeKey(e.assertion), e.judgedDoc.sha256);
+    if (e.source !== undefined || judgedOpts(e.assertion) === undefined) continue;
+    const fp = e.judgedDoc ?? e.composedDoc;
+    if (fp !== undefined) out.set(pairwiseComposeKey(e.assertion), fp.sha256);
   }
   return out;
 }
 
-export function composeFromRunDir(runDir: string, scenarioFile: string, secrets: string[]): ComposedForFreeze | { refused: string } {
-  const cmd = "ref freeze";
+/** Who is freezing, recorded in the entry's `source`: `ref freeze` by default; a hillclimb flow names itself and the
+ *  variant and rep the run belongs to. */
+export interface ComposeSource {
+  command: string;
+  variant?: string;
+  rep?: number;
+}
+
+export function composeFromRunDir(
+  runDir: string,
+  scenarioFile: string,
+  secrets: string[],
+  by: ComposeSource = { command: "ref freeze" },
+): ComposedForFreeze | { refused: string } {
+  const cmd = by.command;
   // The live result first: its capture budget and evidence globs decide what the recomposition captures.
   let result: RunResult;
   let resultSha256: string;
@@ -95,14 +112,17 @@ export function composeFromRunDir(runDir: string, scenarioFile: string, secrets:
   }
   return {
     caseId: pathSafeId(scenarioRef.name ?? ""),
+    // The entry is written into a store that may be committed or shared: its strings carry no secret and no host path.
     source: {
       command: cmd,
-      runDir: tildeify(runDir),
+      ...(by.variant !== undefined ? { variant: by.variant } : {}),
+      ...(by.rep !== undefined ? { rep: by.rep } : {}),
+      runDir: scrub(tildeify(runDir), secrets),
       resultSha256,
     },
     harnessVersion: pkgVersion(),
     composerId: COMPOSER_ID,
-    scenario: scenarioRef.name ?? "",
+    scenario: redactDeep(scenarioRef.name ?? "", secrets),
     taskSha256: createHash("sha256").update(scenarioRef.prompt, "utf8").digest("hex"),
     docs,
   };
