@@ -12,3 +12,8 @@ Excerpts of real kept runs of the repo's own public examples, and labelled SYNTH
   per event), reduced to those three fields. The main loop runs on `claude-opus-5`; one sub-agent runs on the same
   model and another on `claude-sonnet-5`. The real-data check for this path is the paid end-to-end run, with a
   sub-agent on a different model.
+- `fanout-probe/`: a kept hostloop run of the repo's public example `examples/scenarios/subagent-manifest-probe.yaml`
+  (one `Agent` dispatch, seven sub-agent tool calls). `events.jsonl` keeps only the `assistant`, `user`, `result` and
+  `system/init` frames; the init frame's tool, skill, plugin and agent lists were removed. Control, rate-limit and task
+  frames were dropped, since the code under test reads none of them. The run's `claude-config/projects/<cwd>/<session>/subagents/`
+  files are verbatim. In every file the home directory became `~` and the login name became `USER`.
