@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
+import { statSync } from "node:fs";
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -356,5 +357,22 @@ describe("final-review fixes", () => {
     const r = NoFollowRoot.open(join(tmp, "flow"));
     expect(() => r.appendJsonl(join(tmp, "flow", "results.jsonl"), undefined)).toThrow(TypeError);
     expect(lexists(join(tmp, "flow", "results.jsonl"))).toBe(false);
+  });
+});
+
+describe("readBytes and createFile mode", () => {
+  it("readBytes returns exact bytes (binary-safe) under the same no-follow checks", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    const bin = Buffer.from([0, 255, 254, 10, 0]);
+    writeFileSync(join(tmp, "flow", "b.bin"), bin);
+    expect(r.readBytes(join(tmp, "flow", "b.bin")).equals(bin)).toBe(true);
+    writeFileSync(join(tmp, "t"), "T");
+    symlinkSync(join(tmp, "t"), join(tmp, "flow", "l"));
+    expect(() => r.readBytes(join(tmp, "flow", "l"))).toThrow(FsRefusal);
+  });
+  it("createFile applies an explicit mode regardless of umask", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.createFile(join(tmp, "flow", "x.sh"), "#!/bin/sh\n", 0o755);
+    expect(statSync(join(tmp, "flow", "x.sh")).mode & 0o777).toBe(0o755);
   });
 });

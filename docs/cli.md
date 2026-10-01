@@ -387,6 +387,55 @@ enums, `error.code` and `refusals[]` — is a covered surface ([SPEC.md](../SPEC
 `true`), removing or renaming one is a major change. The regrade **file**'s name, layout and contents are
 experimental and may change in a minor release.
 
+### Exporting a run's outputs as a fixture (`fixture export`)
+
+`cowork-harness fixture export <run-dir> --out <dir> [--allow-host-paths] [--output-format json]`
+
+Copies the outputs a kept run produced into `<dir>`, so a later scenario can start from that state instead of
+re-running every step before it.
+
+- **Source.** The latest `result.json` the run wrote names its outputs dir (a turn with no `result.json` yet is passed
+  over). That tree is cumulative across the run's turns; there is no per-turn snapshot. Files the run wrote at the
+  session root (scratchpad deliverables) are not exported. The outputs dir must be the run dir's own
+  `work/session/mnt/outputs` or `work/outputs`: the recorded path picks which of the two, and the files are always
+  read from that path under the run dir as given, so a run dir moved or copied since it ran exports its own files
+  (never the original's). A recorded path that ends in neither shape is refused. A partial run (stopped at an
+  unanswered gate) or a failed one exports, and the report says so: its files may be truncated. A `replay` run dir is
+  refused: its outputs were materialized from a cassette, not produced.
+- **Copy.** Every regular file, byte-for-byte, with its permission bits. Symlinks, hard-linked files and files that
+  cannot be read are skipped and listed, as is anything else that is not a regular file (a FIFO, a socket), without
+  being opened. The export reads the whole tree into memory before writing. `<dir>` must not exist or must be empty,
+  and must not be inside the run dir; an export never merges. If a write fails, the export removes the files and
+  directories it created, and nothing else.
+- **Refusals.** A fixture is committed test input, so the export never edits a byte. Instead it refuses, naming each
+  file and writing nothing, when:
+  - a file's bytes, or its path in the tree, contain a secret: the credentials in `CLAUDE_CODE_OAUTH_TOKEN`,
+    `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_CUSTOM_HEADERS`, the variables named in
+    `COWORK_HARNESS_SCRUB_KEYS` and the values in `COWORK_HARNESS_SCRUB_VALUES`, each also in its base64, URL-encoded
+    and JSON-escaped forms — the same set the rest of the CLI scrubs with; run the export with the scrub settings the
+    run used. Every file's bytes are checked for each value stored verbatim as UTF-8, Latin-1, UTF-16LE or UTF-16BE; a
+    compressed format is not inspected;
+  - a text file, or a file's path, contains a host path (`/Users/…`, `/home/…`, `/System/Volumes/…`, and every other
+    root the scanner's `path` class knows). `/opt/cowork/…` is the microvm agent's guest mount, not a host path.
+    `--allow-host-paths` accepts host paths, but a path into a harness run dir, the runs dir, the VM work dir or the
+    guest session (`/sessions/<id>/mnt/…` or `/sessions/<id>/.claude/…`, the VM session layout; any other `/sessions/`
+    mention, such as the route `GET /sessions/{id}`, is not one) is refused regardless, however it is spelled (as
+    given, resolved, or `~/…`).
+- **Not inspected.** Compressed or binary formats (xlsx, docx, pdf, images) are copied without inspection: a secret
+  stored in them verbatim is caught by the byte check, but a compressed one is not, and nothing in them is checked for
+  paths. They are listed as notes — review them yourself before committing.
+- **Notes.** Emails, domains and machine identifiers in text files are listed as notes, not refused.
+- **Exit codes.** `0` written · `2` usage or refusal (nothing written). Text mode writes its report to stderr;
+  `--output-format json` prints one payload document on success, whose keys besides the frame are `message`,
+  `written`, `skipped` (`{file, why, reason?}`; `why` is `symlink`, `hard link`, `not a regular file` or
+  `unreadable`), `refused` (always `[]`), `notes` (`{file, kind, cls?, sample?}`; `kind` is `binary` or `pii`),
+  `bytes`, `outputsDir`, `partial` (the source run stopped at a gate) and `result` (the source run's `success` or
+  `error`; a `result.json` with no `result` reads as `error`). A refusal is the error envelope, its message in
+  `error.message`, always carrying `refused[]` (`{file, kind}`; `kind` is `secret`, `host_path` or `run_path`; `[]`
+  when no file was refused), plus `partial` and `result` once the run's `result.json` was read and `outputsDir` once
+  the outputs dir was found. Only a refusal after the outputs tree was read also carries `written` (`[]`), `skipped`,
+  `notes` and `bytes`; one before it omits them. The payload keys are experimental and may change in a minor release.
+
 ## Exit codes
 
 **Exit-code space is per-command, not global** — the same number means different things on different
@@ -462,6 +511,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path/machine-inventory) + a staleness check (allowlist and skip flags below); a dir argument scans `*.cassette.json` non-recursively | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for |
+| `fixture export <run-dir> --out <dir>` | Copy a kept run's outputs tree, byte-for-byte, into a directory a scenario can start from. Refuses (writing nothing) on a secret in any file or its name, or a host path in a text file or a file name, and never alters bytes; compressed or binary formats are copied without inspection. See [Exporting a run's outputs as a fixture](#exporting-a-runs-outputs-as-a-fixture-fixture-export) | turning a run that stopped after step N into the starting state for a test of step N+1 |
 | `trace <run-id>` | Digest a run's `events.jsonl` through one of eight `--view`s (tools, questions, dispatches, tool-durations, tool-errors, files, usage, subagent-research). Per-view detail: see [Flags worth knowing](#flags-worth-knowing) | "how many sub-agents *actually* dispatched, and which?" — plus per-tool timings, per-call stderr, a workspace-file diff, per-model cost, or each dispatch's WebSearch query+result |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |

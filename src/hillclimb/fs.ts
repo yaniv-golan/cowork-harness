@@ -24,6 +24,7 @@
 import {
   closeSync,
   constants as FS,
+  fchmodSync,
   linkSync,
   fstatSync,
   ftruncateSync,
@@ -189,9 +190,14 @@ export class NoFollowRoot {
   }
 
   readFile(p: string): string {
+    return this.readBytes(p).toString("utf8");
+  }
+
+  /** The exact bytes, binary-safe, under the same checks as `readFile`. */
+  readBytes(p: string): Buffer {
     const fd = this.openNoFollow(p, FS.O_RDONLY);
     try {
-      return readFileSync(fd, "utf8");
+      return readFileSync(fd);
     } finally {
       closeSync(fd);
     }
@@ -219,11 +225,14 @@ export class NoFollowRoot {
   }
 
   /** Create a NEW file. An existing entry of any kind (a planted link included) fails with a raw EEXIST and is
-   *  left untouched: the intended "already there" signal for append-only stores. */
-  createFile(p: string, data: string | Uint8Array): void {
+   *  left untouched: the intended "already there" signal for append-only stores. `mode`, when given, is set on the
+   *  new file exactly (permission bits only). */
+  createFile(p: string, data: string | Uint8Array, mode?: number): void {
     const fd = this.openNoFollow(p, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL);
     try {
       writeFileSync(fd, data);
+      // On the open fd, so the umask cannot narrow it and no path lookup can be redirected.
+      if (mode !== undefined) fchmodSync(fd, mode & 0o777);
     } finally {
       closeSync(fd);
     }
