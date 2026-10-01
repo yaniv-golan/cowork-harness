@@ -204,7 +204,7 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
       writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...JSON.parse(t.stdout) }));
       const report = checkFlowDir(flow, { profile: "harness" });
       expect(report.errors, JSON.stringify(report.findings)).toBe(0);
-      expect(report.findings.filter((x) => /predate/.test(x.message))).toEqual([]);
+      expect(report.findings.filter((x) => /do not carry metric/.test(x.message))).toEqual([]);
       expect(cli("check", "--flow", "flow").status).toBe(0);
     } finally {
       mf.cleanup();

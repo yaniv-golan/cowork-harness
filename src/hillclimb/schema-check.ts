@@ -673,7 +673,13 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
   for (const [metric, per] of d.predates) {
     const n = [...per.values()].reduce((a, b) => a + b, 0);
     const where = [...per].map(([v, k]) => `${v} ${k}`).join(", ");
-    c.note("row.grade", "_state.json", `${n} rows predate metric ${metric} (${where}); its mean covers later rows only`);
+    // `check` reads the flow alone, not the scenarios, so it cannot tell a metric added after these rows from one no
+    // scenario declares any more; it says both (`state-template --flow` names the removed ones).
+    c.note(
+      "row.grade",
+      "_state.json",
+      `${n} rows do not carry metric ${metric} (${where}): added after they were written, or no scenario declares it any more (then remove it from _state.json); its mean covers the rows that carry it only`,
+    );
   }
 
   for (const [id, sp] of d.splitIds)

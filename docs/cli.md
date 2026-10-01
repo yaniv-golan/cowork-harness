@@ -639,23 +639,30 @@ has the same keys:
 
 **Adding a metric** mid-flow is allowed. Re-run `hillclimb state-template` and merge its new `metrics` entries into
 `_state.json` (the loop owns the rest of the file); until then `hillclimb run` warns that the rows carry a metric
-`_state.json` does not declare. Rows already written are not re-run, so they predate the metric: `hillclimb check`
-reports them in one note per metric (e.g. `2 rows predate metric words (baseline 2); its mean covers later rows
-only`), not as errors. `hillclimb regrade` re-measures every metric of a row it re-grades from the kept run's work
+`_state.json` does not declare. With `--flow`, the re-run writes the new legend to `metrics.md.new` beside a
+`metrics.md` you have edited, rather than overwriting it; merge the two by hand. Rows already written are not re-run,
+so they predate the metric. `hillclimb check` reports them in one note per metric, not as errors (e.g. `2 rows do not
+carry metric words (baseline 2): added after they were written, or no scenario declares it any more (then remove it
+from _state.json); its mean covers the rows that carry it only`). `check` reads the flow and not the scenarios, so
+its note covers both causes. `hillclimb regrade` re-measures every metric of a row it re-grades from the kept run's work
 dir, so that row gains the metric — its value and `<id>_present`, its signature in `meta.metric_sigs`, and its reason
 in `meta.metrics_unavailable` when it is still unavailable; a re-measure never replaces a value the run measured. A
-row rebuilt with no judge call (a fill's neutral-only row, or a case with no judged assert) is not re-measured.
+row rebuilt with no judge call (a fill's neutral-only row, or a case with no judged assert) is not re-measured. It
+keeps no column for a metric added after it was written, so `check` still reads it as predating that metric.
 
 **Removing a metric** is allowed too. `hillclimb run` warns that the older rows keep its values and new rows will not
-carry it. A row `hillclimb regrade` rebuilds drops it — its value, `<id>_present` and its signature — as a row written
-after the removal would.
+carry it. Also remove its entries (`<id>` and `<id>_present`) from `_state.json`'s `metrics`. Merging
+`state-template`'s new entries does not remove them, but a `state-template --flow` re-run names each metric that
+`_state.json` declares and no scenario does. A row `hillclimb regrade` rebuilds drops the metric, as a row written after
+the removal would: its value, `<id>_present`, its signature and its `meta.metrics_unavailable` reason all go.
 
 **Changing a metric's declaration** — the same id with a different artifact, path, direction, `scale`, `unbounded` or
 `min` — is refused before spending (exit 2) on `hillclimb run` and its `--dry-run`, and before any judge call on
 `hillclimb regrade`, naming the metric and every
 variant whose rows were graded under the old declaration: one column cannot hold two quantities. Start a new flow, or
-give the changed metric a new id. Declaring a removed id again with a different declaration is the same change, and is
-refused the same way.
+give the changed metric a new id. Declaring a removed id again with a different declaration is the same change. It is
+refused the same way while any row still carries the old declaration's signature. Once a regrade has rebuilt every
+row without it, the id is free again.
 
 **Ranges.** `hillclimb check` warns, naming the row, about a float whose value lies outside `[min, scale]` (`min` is
 0 when not declared; an unbounded metric has no upper end and is not checked) — usually a wrong `path` or a

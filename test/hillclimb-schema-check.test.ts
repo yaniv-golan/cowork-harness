@@ -312,7 +312,7 @@ describe("schema-check: row fields", () => {
         setRows(s, rs, v);
       }
     };
-    const predateNotes = (r: SchemaCheckReport) => r.findings.filter((f) => /predate/.test(f.message));
+    const predateNotes = (r: SchemaCheckReport) => r.findings.filter((f) => /do not carry metric/.test(f.message));
 
     it("a row with no metric_sigs predates it: no error, ONE aggregated note per metric", () => {
       const s = declared();
@@ -322,7 +322,11 @@ describe("schema-check: row fields", () => {
       expect(predateNotes(r)).toEqual([
         expect.objectContaining({
           level: "note",
-          message: expect.stringMatching(new RegExp(`^${n} rows predate metric words \\(.*\\); its mean covers later rows only$`)),
+          message: expect.stringMatching(
+            new RegExp(
+              `^${n} rows do not carry metric words \\(.*\\): added after they were written, or no scenario declares it any more \\(then remove it from _state\\.json\\); its mean covers the rows that carry it only$`,
+            ),
+          ),
         }),
       ]);
     });
@@ -336,7 +340,9 @@ describe("schema-check: row fields", () => {
       });
       const r = check(s);
       expect(r.findings.filter((f) => f.level === "error")).toEqual([]);
-      expect(predateNotes(r).map((f) => f.message)).toEqual([expect.stringMatching(new RegExp(`^${n - 1} rows predate metric words `))]);
+      expect(predateNotes(r).map((f) => f.message)).toEqual([
+        expect.stringMatching(new RegExp(`^${n - 1} rows do not carry metric words `)),
+      ]);
     });
 
     it("a row whose metric_sigs HAS the id but whose grade lacks <id>_present is still an error", () => {

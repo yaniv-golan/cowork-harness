@@ -111,6 +111,24 @@ describe("stateTemplateFor", () => {
       expect(md).toMatch(/`ratio`.*`ratio` in `outputs\/stats\.json`.*higher is better.*bounded above by 1/);
     });
 
+    it("with --flow, a float _state.json declares that no scenario declares any more is named: remove its entries", () => {
+      mkdirSync(join(cwd, "flow"));
+      const st = stateTemplateFor("evals", cwd, {}).state;
+      writeFileSync(
+        join(cwd, "flow", "_state.json"),
+        JSON.stringify({
+          ...st,
+          metrics: [...st.metrics, { id: "gone_present", kind: "binary" }, { id: "gone", kind: "float", better: "higher" }],
+        }),
+      );
+      expect(stateTemplateFor("evals", cwd, {}, "flow").notes).toContainEqual(
+        "no scenario declares metric gone any more; remove its entries (gone and gone_present) from _state.json's metrics",
+      );
+      // Every metric still declared: no such note.
+      writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify(st));
+      expect(stateTemplateFor("evals", cwd, {}, "flow").notes.filter((n) => /no scenario declares/.test(n))).toEqual([]);
+    });
+
     it("one id declared two ways is a usage error", () => {
       writeFileSync(join(cwd, "evals", "c.yaml"), `name: c\n${head}${words("higher")}`);
       expect(() => stateTemplateFor("evals", cwd, {})).toThrow(/metric "words" is declared differently in a and c/);
