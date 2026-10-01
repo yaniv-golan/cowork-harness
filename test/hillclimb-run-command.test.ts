@@ -1,0 +1,183 @@
+// `hillclimb run` end to end above the scenario runner: case preparation, the variant's plugin snapshot, the
+// session pointed at that snapshot, eval's answer-key guard, and the rows. The scenario runner is a fake that
+// records what it was asked to run and returns a committed real excerpt (test/fixtures/eval-classify/
+// success-semantic.json) with the public csv-metrics run's init/result frames. Nothing spawns.
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runHillclimbCommand, type RunCommandDeps } from "../src/hillclimb/run-command.js";
+import { parseHillclimbRunArgs } from "../src/hillclimb/args.js";
+import { buildFingerprint } from "../src/run/cassette.js";
+import { loadBaseline } from "../src/baseline.js";
+import type { SessionConfig } from "../src/session.js";
+import type { RunResult, Scenario } from "../src/types.js";
+
+const FX = join(import.meta.dirname, "fixtures");
+const excerpt = JSON.parse(readFileSync(join(FX, "eval-classify", "success-semantic.json"), "utf8")) as RunResult;
+const frames = readFileSync(join(FX, "hillclimb-runs", "result-event-pair.jsonl"), "utf8")
+  .trim()
+  .split("\n");
+const MODEL = "claude-sonnet-5";
+
+let cwd: string;
+let plugin: string;
+let snaps: string;
+let err: string[];
+let calls: Array<{ scenario: Scenario; extra: Record<string, unknown> }>;
+
+const SCENARIO = `name: Alpha
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: do the thing
+assert:
+  - skill_triggered: "<redacted>"
+  - tool_no_error: "<redacted>"
+  - max_tool_errors: 0
+  - semantic_matches:
+      rubric: ["claim 1", "claim 2", "claim 3", "claim 4", "claim 5"]
+      min_pass: 3
+      judge_model: "claude-haiku-4-5-20251001"
+      include_subagent_text: false
+`;
+
+let skillActivity: Array<{ skillId: string }> | undefined;
+const rows = () =>
+  readFileSync(join(cwd, "flow", "baseline", "results.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
+  return {
+    cwd,
+    env: {},
+    snapshotRoot: snaps,
+    secrets: [],
+    stderr: (l) => err.push(l),
+    flags: { output: "json", quiet: true, verbose: false },
+    runScenario: async (a) => {
+      calls.push({ scenario: a.scenario, extra: a.extra as Record<string, unknown> });
+      const outDir = join(cwd, "runs", String(a.extra.runId));
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(
+        join(outDir, "events.jsonl"),
+        [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]].join("\n"),
+      );
+      // A real run stamps the signature of the session it staged; so does this fake.
+      const b = loadBaseline(a.scenario.baseline);
+      const fp = buildFingerprint(a.scenario.session, b.appVersion, undefined, a.scenario.skills, b, a.extra.session as SessionConfig);
+      // A real run echoes the scenario's own assertions on its grades (the excerpt's judge_model is redacted).
+      const assertions = excerpt.assertions.map((g, i) => ({ ...g, assertion: a.scenario.assert[i] }));
+      return {
+        ...excerpt,
+        outDir,
+        assertions,
+        ...(skillActivity ? { skillActivity, prompt: a.scenario.prompt, context: { availableSkills: [{ id: "my-plugin:x" }] } } : {}),
+        fingerprint: { ...excerpt.fingerprint, contentSig: fp.contentSig },
+      } as RunResult;
+    },
+    ...over,
+  };
+}
+const args = (...a: string[]) => {
+  const p = parseHillclimbRunArgs(["evals", "--flow", "flow", "--concurrency", "1", ...a]);
+  if (p.help) throw new Error("help");
+  return p;
+};
+
+beforeEach(() => {
+  cwd = realpathSync(mkdtempSync(join(tmpdir(), "hc-rc-")));
+  plugin = join(realpathSync(mkdtempSync(join(tmpdir(), "hc-rc-plugin-"))), "my-plugin");
+  mkdirSync(join(plugin, "skills", "x"), { recursive: true });
+  writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nround 1\n");
+  snaps = realpathSync(mkdtempSync(join(tmpdir(), "hc-rc-snaps-")));
+  mkdirSync(join(cwd, "evals"));
+  writeFileSync(join(cwd, "evals", "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+  writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO);
+  err = [];
+  calls = [];
+  skillActivity = undefined;
+});
+afterEach(() => {
+  for (const d of [cwd, join(plugin, ".."), snaps]) rmSync(d, { recursive: true, force: true });
+});
+
+describe("runHillclimbCommand", () => {
+  it("a pass runs the case from a snapshot of the plugin, never from the live dir", async () => {
+    expect((await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps())).exitCode).toBe(0);
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(0);
+    const session = calls[0].extra.session as { plugins: { local_plugins: string[] } };
+    expect(session.plugins.local_plugins[0]).toMatch(new RegExp(`^${snaps}/[0-9a-f]{16}/baseline/my-plugin$`));
+    expect(readFileSync(join(session.plugins.local_plugins[0], "skills", "x", "SKILL.md"), "utf8")).toMatch(/round 1/);
+    expect(existsSync(join(cwd, "flow", "baseline", "results.jsonl"))).toBe(true);
+  });
+
+  it("reps appended later run from the same snapshot after the live plugin moved on, and say it moved", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args(), deps());
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nround 2\n");
+    await runHillclimbCommand(args("--reps", "2"), deps());
+    const s = calls[1].extra.session as { plugins: { local_plugins: string[] } };
+    expect(readFileSync(join(s.plugins.local_plugins[0], "skills", "x", "SKILL.md"), "utf8")).toMatch(/round 1/);
+    expect(err.join("\n")).toMatch(/live plugin .* differs from variant baseline's snapshot/);
+  });
+
+  it("a variant with rows whose snapshot is gone is refused before spend", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args(), deps());
+    rmSync(snaps, { recursive: true, force: true });
+    mkdirSync(snaps);
+    calls = [];
+    const r = await runHillclimbCommand(args("--reps", "2"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(calls).toEqual([]);
+  });
+
+  it("a plain --dry-run takes no snapshot and runs nothing", async () => {
+    const r = await runHillclimbCommand(args("--dry-run"), deps());
+    expect(r.exitCode).toBe(0);
+    expect(calls).toEqual([]);
+    expect(existsSync(join(snaps))).toBe(true);
+    expect(readdirSync(snaps)).toEqual([]);
+  });
+
+  it("a scenario inside the plugin the loop edits is refused: the agent could read the rubric", async () => {
+    writeFileSync(join(plugin, "alpha.yaml"), SCENARIO.replace("./_session.yaml", join(cwd, "evals", "_session.yaml")));
+    const a = parseHillclimbRunArgs([join(plugin, "alpha.yaml"), "--flow", "flow", "--concurrency", "1", "--approve-harness"]);
+    if (a.help) throw new Error("help");
+    const r = await runHillclimbCommand(a, deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/answer-key/);
+  });
+
+  it("a harness_paths entry inside the plugin is refused: the gate would stop every round", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const st = JSON.parse(readFileSync(join(cwd, "flow", "_state.json"), "utf8"));
+    writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify({ ...st, harness_paths: [join(plugin, "skills", "x", "SKILL.md")] }));
+    const r = await runHillclimbCommand(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/inside the plugin the loop edits/);
+  });
+
+  it("skill_invoked records whether the run invoked the plugin's one skill, judged against the snapshot", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    skillActivity = [{ skillId: "my-plugin:x" }];
+    await runHillclimbCommand(args(), deps());
+    skillActivity = [];
+    await runHillclimbCommand(args("--reps", "2"), deps());
+    expect(rows().map((r) => r.skill_invoked)).toEqual([1, 0]);
+  });
+
+  it("a case whose input the stager would refuse is refused before spend", async () => {
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nuploads:\n  - ./missing.csv\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    const r = await runHillclimbCommand(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(calls).toEqual([]);
+    expect(err.join("\n")).toMatch(/case alpha: .*missing\.csv/);
+  });
+});

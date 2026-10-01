@@ -18,7 +18,7 @@ import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./cases.js";
 import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
-import { gateDecision, harnessDigest } from "./gate.js";
+import { gateDecision, harnessDigest, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
@@ -63,7 +63,8 @@ export interface RunnerDeps {
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
   /** Host roots the agent can read through a mount (folders, projects, uploads, plugins, skills). */
   mountRoots: (cases: readonly HillclimbCase[]) => string[];
-  /** The variant snapshot's content signature, when the variant has one. */
+  /** The live plugin dir the loop edits; a `harness_paths` entry inside it is refused. */
+  lever?: string;
   /** The variant snapshot's content signature for a case (each scenario's session fingerprints apart). */
   expectedContentSig?: (c: HillclimbCase) => string | undefined;
   /** Progress interval; the scaffold uses 30 s. */
@@ -151,7 +152,14 @@ async function run(
   // Everything that can refuse runs before --approve-harness writes anything: a refused run records no approval.
   // Ground truth must be unreachable from the agent (eval-hillclimb.md l.215): no mount may expose the flow dir (prior grades,
   // judge rationales) or a file that defines the answer.
-  const listed = (Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : []).map((p) => resolve(deps.cwd, p));
+  const listedRaw = Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [];
+  // The loop edits the plugin by design: a harness path inside it would stop every round for approval.
+  const inLever = deps.lever !== undefined ? listedInside(deps.cwd, listedRaw, deps.lever) : [];
+  if (inLever.length)
+    throw new UsageError(
+      `${statePathShown} harness_paths lists ${inLever.join(", ")}, inside the plugin the loop edits (${deps.lever}) — every round would change the harness sha; list only files that define the measurement`,
+    );
+  const listed = listedRaw.map((p) => resolve(deps.cwd, p));
   const exposed = pathsInsideMounts([flowAbs, ...deps.derivedPaths(cases), ...listed], deps.mountRoots(cases));
   if (exposed.length)
     throw new UsageError(
@@ -423,7 +431,7 @@ function ablationMix(flowAbs: string, ablate: boolean): string | undefined {
   return undefined;
 }
 
-function readVariantFileIfPresent(flowArg: string, variant: string, file: string, cwd: string): string | null {
+export function readVariantFileIfPresent(flowArg: string, variant: string, file: string, cwd: string): string | null {
   if (!lexists(resolve(cwd, flowArg, variant))) return null;
   const r = NoFollowRoot.existing(flowArg, { cwd });
   return r.readIfPresent(join(r.root, variant, file));
