@@ -25,11 +25,12 @@ All notable changes to this project are documented here. The format is based on
   settings still apply. A managed config at another path makes Claude Code refuse `--strict-mcp-config`; the call is
   then retried once without it, before any model call.
   **This needs Claude Code 2.1.197 or later on the host.** An older CLI is refused before any model call, saying
-  why and what to do. `run`, `record` and `skill` make that check before the agent spends when a scenario
+  why and what to do. `run`, `record`, `skill` and `eval` make that check before the agent spends (`eval` before its
+  manifest) when a scenario
   has a `semantic_matches` assert graded by the host `claude`, or `on_unanswered: llm` / `--decider-llm` with no
   external decider channel;
-  `critique` makes it before its task turn and `decide --decider-llm` before its model call — all exit 2. Runs
-  that use none of them are unaffected.
+  `critique` makes it before its task turn, `decide --decider-llm` before its model call and `regrade` before its
+  first grade — all exit 2. Runs that use none of them are unaffected.
 
 ### Upgrade notes
 
@@ -41,6 +42,13 @@ All notable changes to this project are documented here. The format is based on
   schema; `schema/cassette.v13.json` is retained.
 
 ### Added
+
+- **A graded `semantic_matches` assert records how its judge was called:** `assertions[].judgeTransport`
+  (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
+  `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config), so grades made
+  under different conditions can be told apart. `regrade` output and `eval`'s per-run lines carry it too, and a
+  `critique` report records its evaluator's as `evaluatorTransport`, present with `evaluatorModel`. Absent for a
+  judge a library caller injects.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text

@@ -225,6 +225,9 @@ export interface EvalDeps {
   /** Doctor's token check for a tier (`tokenCheck` in src/run/doctor.ts — the CLI passes it with the real
    *  probe). Required, so no caller can skip the preflight by omission. */
   tokenCheck: (tier: FidelityTier) => DoctorCheck;
+  /** The host-`claude` isolation preflight (`isolationRefusal` in src/decide/llm-transport.ts — the CLI passes it):
+   *  the refusal message, or undefined. Required, like `tokenCheck`, so no caller skips it by omission. */
+  isolationCheck: () => string | undefined;
   log: (s: string) => void;
   /** Test seams. */
   evalId?: string;
@@ -534,6 +537,19 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
             ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
           c.remedy,
         );
+    }
+
+    // The judge and the LLM decider run the host `claude` isolated and tool-less, which needs a CLI that accepts the
+    // isolation flags: an older one refuses the eval here, once, instead of failing every rep after its agent spend.
+    // A decider channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
+    const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
+    if (
+      scenarios.some(
+        (s) => (llmDecider && s.scenario.on_unanswered === "llm") || s.scenario.assert.some((a) => a.semantic_matches !== undefined),
+      )
+    ) {
+      const iso = deps.isolationCheck();
+      if (iso) throw new UsageError(iso);
     }
 
     // Manifest.

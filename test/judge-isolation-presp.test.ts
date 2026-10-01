@@ -134,6 +134,39 @@ describe("critique refuses an older host claude before its task turn", () => {
   });
 });
 
+describe.runIf(POSIX)("a graded run records how its judge was called", () => {
+  it("result.json carries assertions[].judgeTransport: the isolation level and the host CLI version", async () => {
+    const current = join(dir, "current-claude");
+    const grade = JSON.stringify({ results: [{ index: 0, pass: true }] });
+    const envelope = JSON.stringify({ type: "result", is_error: false, result: grade, modelUsage: { "claude-opus-4-8": {} } });
+    writeFileSync(
+      current,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi',
+        'if [ "$1" = "--help" ]; then',
+        ...["--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--setting-sources <s>", "--tools <tools...>"].map(
+          (l) => `  echo "  ${l}   x"`,
+        ),
+        "  exit 0",
+        "fi",
+        "cat >/dev/null",
+        `printf '%s\\n' '${envelope}'`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(current, 0o755);
+    setEnv("COWORK_HARNESS_CLAUDE_BIN", current);
+    resetIsolationPreflight(join(dir, "no-managed-mcp.json"));
+    const r = await executeScenario(
+      scenario(["assert:", "  - semantic_matches:", "      rubric: ['x']", "      judge_model: claude-opus-4-8"]),
+    );
+    const a = r.assertions.find((x) => x.assertion.semantic_matches !== undefined)!;
+    expect(a.judgeModel).toBe("claude-opus-4-8");
+    expect(a.judgeTransport).toEqual({ isolation: "1", cliVersion: "2.1.286" });
+  });
+});
+
 /** A CLI that predates the isolation flags, for the command-level refusals below. */
 function oldCliIn(d: string): string {
   const old = join(d, "old-claude");
@@ -145,8 +178,11 @@ function oldCliIn(d: string): string {
   return old;
 }
 
-describe("decide --decider-llm refuses an older host claude (exit 2) before any model call", () => {
-  for (const [name, argv] of [["decide --decider-llm", ["decide", "--decider-llm"]]] as const) {
+describe("decide --decider-llm and regrade refuse an older host claude (exit 2) before any model call", () => {
+  for (const [name, argv] of [
+    ["decide --decider-llm", ["decide", "--decider-llm"]],
+    ["regrade", ["regrade", "some-run-dir", "--scenario", "s.yaml"]],
+  ] as const) {
     it(name, () => {
       const d = mkdtempSync(join(tmpdir(), "iso-cmd-"));
       try {

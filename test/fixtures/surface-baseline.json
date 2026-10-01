@@ -1558,6 +1558,19 @@
       ".evaluatorModel": {
         "type": "string"
       },
+      ".evaluatorTransport": {
+        "type": "object"
+      },
+      ".evaluatorTransport.cliVersion": {
+        "type": "string"
+      },
+      ".evaluatorTransport.isolation": {
+        "type": "string",
+        "required": true
+      },
+      ".evaluatorTransport.strictMcp": {
+        "const": false
+      },
       ".evidenceBudget": {
         "type": "object",
         "closed": true

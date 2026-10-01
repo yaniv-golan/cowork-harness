@@ -14,7 +14,7 @@
 // microvm/protocol stay refused (see ./limitations.ts for why each).
 // A cross-tier resume is blocked fail-loud by the session-manifest fidelity stamp (src/run/execute.ts),
 // and at hostloop a writable connected folder requires --allow-host-writes (forwarded to both turns).
-import { isolationRefusal } from "../decide/llm-transport.js";
+import { isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
@@ -1373,6 +1373,8 @@ interface ReportState {
   /** F35: the TRANSPORT-RESOLVED evaluator model, present only when the evaluator actually completed and
    *  every pass that ran agreed on it. Never the requested alias/default. */
   evaluatorModel?: string;
+  /** How the evaluator's calls were made (isolation level, host CLI version) — present with `evaluatorModel`. */
+  evaluatorTransport?: { isolation: string; cliVersion?: string; strictMcp?: false };
   /** The requested model (opts.evaluatorModel ?? defaultEvaluatorModel()) — shown ONLY as unresolved
    *  debugging context when the evaluator never completed (infra failure or evaluator error), clearly
    *  labeled as such; never presented as if it were the resolved provenance value. */
@@ -2594,6 +2596,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       selfReportStatus,
       items,
       evaluatorModel,
+      // Present only with a completed evaluator (undefined drops out of the JSON otherwise).
+      evaluatorTransport: evaluatorModel ? transportIdentity() : undefined,
       requestedModel,
       evaluatorError,
       infraFailure,

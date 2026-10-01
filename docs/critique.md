@@ -704,6 +704,11 @@ reach into `turns/1/` yourself:
   turn's assistant messages, never from the flag — so `graded model(s): unknown` means no assistant
   message reached the run (a crash, a kill, a gate before the first reply), which passing `--model`
   does not change;
+- **how the evaluator ran is in the report itself**: `evaluatorTransport` in `--output-format json`
+  (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
+  `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config), present
+  with `evaluatorModel`, so two critiques' evaluator verdicts can be compared knowing both ran under the same
+  conditions;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /
   `gradedSkillHash` in `--output-format json`, and in the text header) — a harvester never needs a turn
   file; and

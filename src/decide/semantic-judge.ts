@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { claudeCliComplete } from "./llm-transport.js";
+import { claudeCliComplete, transportIdentity } from "./llm-transport.js";
 import type { Complete } from "./decider.js";
 import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
 import { scrub } from "../secrets.js";
@@ -282,6 +282,8 @@ export function makeSemanticJudge(opts: { model?: string; complete?: Complete } 
     // not the factory-time alias. This is the only way to thread a per-call, async-resolved value out of
     // this closure onto the (necessarily synchronous, factory-time) `.model` property.
     judge.model = resolvedModel;
+    // Only the real host transport has an identity to record; an injected `complete` (a test) does not.
+    if (opts.complete === undefined) judge.transport = transportIdentity();
     return parseJudgeResults(text, rubric);
   };
   // Seed with the requested alias so a caller reading `.model` BEFORE any call still gets something

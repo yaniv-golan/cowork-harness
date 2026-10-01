@@ -21,6 +21,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { composeJudgedDocument, evaluate, runSemanticJudges, semanticRefusal, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
+import { isolationRefusal } from "../decide/llm-transport.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -64,6 +65,7 @@ export interface RegradedAssertion {
   judgeCostUsd?: number;
   judgeUsage?: RunResult["assertions"][number]["judgeUsage"];
   judgePromptHash?: string;
+  judgeTransport?: RunResult["assertions"][number]["judgeTransport"];
   judgedDoc?: JudgedDocFingerprint;
   judgeInvalid?: boolean;
   semanticEvidence?: RunResult["assertions"][number]["semanticEvidence"];
@@ -1026,6 +1028,10 @@ export async function cmdRegrade(args: string[]): Promise<never> {
       );
     authoredTotalBytes = n;
   }
+  // Every grade is a host-`claude` judge call: one that cannot run isolated is refused here (exit 2), not graded
+  // as a run of invalid judge replies.
+  const refusal = isolationRefusal();
+  if (refusal) return fail(CMD, "usage", scrub(refusal, secrets), undefined, json);
   const outcome = await regradeRuns({
     secrets,
     runDirs: p.positionals,

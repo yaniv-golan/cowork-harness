@@ -135,12 +135,40 @@ export function isolationRefusal(): string | undefined {
   }
 }
 
+/** How a host-`claude` call was made, recorded beside a judge's grade or a critique: the isolation level
+ *  (`ISOLATION_ARGS`; bumped when that set changes), the host CLI's version, and `strictMcp: false` when the call left
+ *  out `--strict-mcp-config` for an enterprise MCP config (`--safe-mode` still kept MCP servers out). A grade from
+ *  another level, or a CLI whose safe mode differs, ran under different conditions — a comparison can tell. */
+export interface TransportIdentity {
+  isolation: "1";
+  cliVersion?: string;
+  strictMcp?: false;
+}
+const cliVersions = new Map<string, string | null>();
+export function transportIdentity(bin: string = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude"): TransportIdentity {
+  const strict = isolationArgs(bin).includes("--strict-mcp-config") ? {} : { strictMcp: false as const };
+  // Under the spawn guard nothing is launched, not even a `--version` probe: the version is then unrecorded.
+  try {
+    assertSpawnAllowed("the host `claude` version probe");
+  } catch {
+    return { isolation: "1", ...strict };
+  }
+  let v = cliVersions.get(bin);
+  if (v === undefined) {
+    const r = spawnSync(bin, ["--version"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 15_000 });
+    v = (r.stdout ?? "").trim().split(/\s+/)[0] || null;
+    cliVersions.set(bin, v);
+  }
+  return v ? { isolation: "1", cliVersion: v, ...strict } : { isolation: "1", ...strict };
+}
+
 /** Test seam: forget every cached probe, and (optionally) point the enterprise-MCP check at another path so a
  *  test controls whether the machine "has" a managed config. */
 export function resetIsolationPreflight(managedMcpPath?: string): void {
   managedMcpPathOverride = managedMcpPath;
   strictMcpRefused.clear();
   isolationChecked.clear();
+  cliVersions.clear();
 }
 
 /** A spawn rejection the retry wrapper may re-attempt: a TRANSIENT non-zero exit. Timeout / maxBytes /

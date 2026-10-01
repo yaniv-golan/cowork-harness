@@ -26,7 +26,10 @@ export interface EvidenceFacts {
 }
 
 /** The assertion fields a grade keeps. */
-export type GradedAssertion = NonNullable<ClassifiableResult["assertions"]>[number] & { judgeModel?: string };
+export type GradedAssertion = NonNullable<ClassifiableResult["assertions"]>[number] & {
+  judgeModel?: string;
+  judgeTransport?: RunResult["assertions"][number]["judgeTransport"];
+};
 
 export interface Grade {
   /** `live`: the grading the run itself did. Later re-grades append entries; the report reads entry 0. */
@@ -102,6 +105,7 @@ export function buildRunsLine(args: {
     ...(a.semanticClaims !== undefined ? { semanticClaims: a.semanticClaims } : {}),
     ...(a.judgeInvalid !== undefined ? { judgeInvalid: a.judgeInvalid } : {}),
     ...(a.judgePromptHash !== undefined ? { judgePromptHash: a.judgePromptHash } : {}),
+    ...(a.judgeTransport !== undefined ? { judgeTransport: a.judgeTransport } : {}),
     ...(a.judgeCostUsd !== undefined ? { judgeCostUsd: a.judgeCostUsd } : {}),
     ...(a.judgeModel !== undefined ? { judgeModel: a.judgeModel } : {}),
     // The reason only: the row extractor reads nothing else, and `scope_matched_nothing`'s `paths` is every

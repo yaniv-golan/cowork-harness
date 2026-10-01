@@ -2118,6 +2118,7 @@ async function cmdEval(rawArgs: string[]) {
     outcome = await runEval(parsed, {
       log,
       tokenCheck: (tier) => tokenCheck(tier),
+      isolationCheck: () => isolationRefusal(),
       runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
     });
   } catch (e) {

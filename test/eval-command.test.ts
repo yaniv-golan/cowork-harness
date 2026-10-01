@@ -141,6 +141,7 @@ const TOKEN_OK = (): DoctorCheck => ({ id: "token", title: "Auth token", status:
 const deps = (runJob: (s: EvalJobSpec) => Promise<RunResult>, log: string[] = []) => ({
   runJob,
   tokenCheck: TOKEN_OK,
+  isolationCheck: () => undefined,
   log: (s: string) => log.push(s),
   evalId: "test1",
   now: () => new Date("2026-09-30T00:00:00Z"),
@@ -855,6 +856,54 @@ describe("eval: snapshots and their signatures", () => {
     await expect(runEval(args(scen, a, a), deps(fakeRunner()))).rejects.toThrow(/identical/);
     const out = await runEval(args(scen, a, a, ["--allow-identical-arms"]), deps(fakeRunner()));
     expect(out.report.summary.exitCode).toBe(0);
+  });
+
+  it("an older host claude refuses an eval whose scenarios call the judge, before any job (exit 2)", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    await expect(
+      runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), {
+        ...deps(fakeRunner(undefined, calls)),
+        isolationCheck: () => "OLD-CLI-REFUSAL",
+      }),
+    ).rejects.toThrow(/OLD-CLI-REFUSAL/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not consult the isolation check when no scenario calls the judge or the decider", async () => {
+    const { scen, a, b } = setup();
+    let asked = 0;
+    await runEval(args(scen, a, b), { ...deps(fakeRunner()), isolationCheck: () => (asked++, undefined) });
+    expect(asked).toBe(0);
+  });
+
+  it("does not consult it for on_unanswered: llm behind a decider channel, which replaces the LLM decider", async () => {
+    const { scen, a, b } = setup();
+    writeFileSync(
+      join(scen, "csv-metrics.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: analyze\non_unanswered: llm\n${CSV_ASSERTS}`,
+    );
+    let asked = 0;
+    const isolationCheck = () => (asked++, undefined);
+    await runEval(args(scen, a, b), { ...deps(fakeRunner()), isolationCheck });
+    expect(asked).toBe(1); // armed without a channel: the control
+    asked = 0;
+    const channel = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval-2"),
+      "--quiet",
+      "--decider-dir",
+      join(root, "gates"),
+      "--concurrency",
+      "1",
+    ]);
+    await runEval(channel, { ...deps(fakeRunner()), isolationCheck });
+    expect(asked).toBe(0);
   });
 
   it("a refused eval leaves no eval dir behind", async () => {

@@ -5,7 +5,9 @@ import {
   helpDeclaresFlag,
   isolationRefusal,
   resetIsolationPreflight as resetPreflight,
+  transportIdentity,
 } from "../src/decide/llm-transport.js";
+import { makeSemanticJudge } from "../src/decide/semantic-judge.js";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -467,6 +469,45 @@ describe("isolationRefusal — the pre-spend form of the preflight", () => {
       resetIsolationPreflight();
     }
     expect(isolationRefusal()).toBeUndefined();
+  });
+});
+
+describe("transport identity", () => {
+  it("records the isolation level and the host CLI version, probed once", async () => {
+    resetIsolationPreflight();
+    expect(transportIdentity()).toEqual({ isolation: "1", cliVersion: "9.9.9" });
+  });
+  it("records strictMcp: false when the call leaves out --strict-mcp-config for an enterprise MCP config", () => {
+    const managed = join(dir, "managed-mcp-identity.json");
+    writeFileSync(managed, "{}");
+    resetIsolationPreflight(managed);
+    try {
+      expect(transportIdentity()).toEqual({ isolation: "1", cliVersion: "9.9.9", strictMcp: false });
+    } finally {
+      rmSync(managed);
+      resetIsolationPreflight();
+    }
+  });
+  it("launches nothing under the spawn guard: the version is then unrecorded", () => {
+    resetIsolationPreflight();
+    const prev = process.env.COWORK_HARNESS_FORBID_SPAWN;
+    process.env.COWORK_HARNESS_FORBID_SPAWN = "1";
+    try {
+      expect(transportIdentity()).toEqual({ isolation: "1" });
+    } finally {
+      process.env.COWORK_HARNESS_FORBID_SPAWN = prev;
+      resetIsolationPreflight();
+    }
+  });
+  it("the real-transport judge records it on every call; an injected one does not", async () => {
+    resetIsolationPreflight();
+    process.env.FAKE_COUNTER = counterPath;
+    const real = makeSemanticJudge({ model: "m" });
+    await real(["c"], "doc").catch(() => undefined); // the fake's reply is not a grade; the identity is set before parsing
+    expect(real.transport).toEqual({ isolation: "1", cliVersion: "9.9.9" });
+    const stub = makeSemanticJudge({ model: "m", complete: async () => ({ text: '{"results":[{"index":0,"pass":true}]}', model: "m" }) });
+    await stub(["c"], "doc");
+    expect(stub.transport).toBeUndefined();
   });
 });
 
