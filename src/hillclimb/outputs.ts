@@ -159,3 +159,18 @@ export function planInputCopy(paths: readonly string[], caps: { perFileBytes: nu
   }
   return plan;
 }
+
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+/** What a copied file is written to the flow as: a string (scrubbed of secrets and host paths by the flow writer)
+ *  when its bytes are text — valid UTF-8 with no NUL — whatever its name says; otherwise the bytes as they are.
+ *  By content, never by extension: an extension map leaves every unlisted text type (.yaml, .log, .env) unscrubbed.
+ *  A compressed or binary file (an image, a pdf, an xlsx) is copied without inspection. */
+export function asFlowData(data: Buffer): string | Buffer {
+  if (data.includes(0)) return data;
+  try {
+    return UTF8.decode(data);
+  } catch {
+    return data;
+  }
+}

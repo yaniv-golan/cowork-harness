@@ -45,6 +45,7 @@ assert:
 `;
 
 let skillActivity: Array<{ skillId: string }> | undefined;
+let authored: Record<string, string> | undefined;
 const rows = () =>
   readFileSync(join(cwd, "flow", "baseline", "results.jsonl"), "utf8")
     .trim()
@@ -72,8 +73,18 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
       const fp = buildFingerprint(a.scenario.session, b.appVersion, undefined, a.scenario.skills, b, a.extra.session as SessionConfig);
       // A real run echoes the scenario's own assertions on its grades (the excerpt's judge_model is redacted).
       const assertions = excerpt.assertions.map((g, i) => ({ ...g, assertion: a.scenario.assert[i] }));
+      // Files the run authored, in its work dir, as a real run records them.
+      const work = join(outDir, "work");
+      for (const [rel, body] of Object.entries(authored ?? {})) {
+        mkdirSync(join(work, rel, ".."), { recursive: true });
+        writeFileSync(join(work, rel), body);
+      }
+      const authoredFields = authored
+        ? { workDir: work, artifacts: Object.entries(authored).map(([path, b]) => ({ path, bytes: b.length })), preRunPaths: [] }
+        : { workDir: undefined, artifacts: undefined };
       return {
         ...excerpt,
+        ...authoredFields,
         outDir,
         assertions,
         ...(skillActivity ? { skillActivity, prompt: a.scenario.prompt, context: { availableSkills: [{ id: "my-plugin:x" }] } } : {}),
@@ -101,6 +112,7 @@ beforeEach(() => {
   err = [];
   calls = [];
   skillActivity = undefined;
+  authored = undefined;
 });
 afterEach(() => {
   for (const d of [cwd, join(plugin, ".."), snaps]) rmSync(d, { recursive: true, force: true });
@@ -275,6 +287,17 @@ describe("runHillclimbCommand", () => {
       expect(err.join("\n")).toMatch(/could read .*alpha\.yaml/);
     });
 
+    it("a secret in an upload with an extension outside the kind map (.yaml) never reaches the flow either", async () => {
+      writeFileSync(join(cwd, "evals", "input.yaml"), "key: sk-test-SECRET-9\n");
+      writeFileSync(
+        join(cwd, "evals", "_session.yaml"),
+        `model: ${MODEL}\nuploads:\n  - ./input.yaml\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+      );
+      expect((await pass()).exitCode).toBe(0);
+      const ref = (rows()[0].attachments as Array<{ ref: string }>)[0].ref;
+      expect(readFileSync(join(cwd, "flow", ref), "utf8")).not.toContain("sk-test-SECRET-9");
+    });
+
     it("a case with no uploads carries no attachments and no flag", async () => {
       expect((await pass()).exitCode).toBe(0);
       expect(rows()[0]).not.toHaveProperty("attachments");
@@ -295,5 +318,14 @@ describe("runHillclimbCommand", () => {
     const r = await runHillclimbCommand(args("--approve-harness"), deps());
     expect(r.exitCode).toBe(2);
     expect(calls).toEqual([]);
+  });
+
+  it("a secret in an authored output with an extension outside the kind map (.yaml) never reaches the flow", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    authored = { "outputs/config.yaml": "token: sk-test-SECRET-9\n" };
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(0);
+    const p = join(cwd, "flow", "baseline", "out", "alpha_rep0", "files", "outputs", "config.yaml");
+    expect(readFileSync(p, "utf8")).toMatch(/^token: /);
+    expect(readFileSync(p, "utf8")).not.toContain("sk-test-SECRET-9");
   });
 });

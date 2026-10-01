@@ -22,7 +22,7 @@ import { gateDecision, harnessDigest, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
-import { attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
+import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
 import { headroom } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
 
@@ -98,7 +98,6 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 
 /** Output-copy caps: one file, and every file of one rep. */
 const OUTPUT_CAPS = { perFileBytes: 2 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 };
-const TEXT_KINDS = new Set(["text", "json", "html", "svg", "code"]);
 
 export async function runHillclimb(args: HillclimbRunArgs, deps: RunnerDeps): Promise<RunOutcome> {
   const say = (line: string) => deps.stderr(termSafe(line));
@@ -392,14 +391,9 @@ async function run(
       try {
         if (traceError !== undefined) throw traceError;
         for (const s of trace!.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
-        for (const i of inputs?.copy ?? [])
-          writer.writeUnderFlow(`inputs/${i.name}`, TEXT_KINDS.has(attachmentKind(i.name)) ? i.data.toString("utf8") : i.data);
+        for (const i of inputs?.copy ?? []) writer.writeUnderFlow(`inputs/${i.name}`, asFlowData(i.data));
         // Text is redacted like every other byte in the flow; a binary is copied as it is.
-        for (const o of outputs?.copy ?? [])
-          writer.writeUnderFlow(
-            `${v}/out/${c.id}_rep${rep}/files/${o.rel}`,
-            TEXT_KINDS.has(attachmentKind(o.rel)) ? o.data.toString("utf8") : o.data,
-          );
+        for (const o of outputs?.copy ?? []) writer.writeUnderFlow(`${v}/out/${c.id}_rep${rep}/files/${o.rel}`, asFlowData(o.data));
         writer.writeTrace(c.id, rep, trace!.turns);
         ok++;
       } catch (e) {

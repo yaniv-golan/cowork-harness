@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { authoredOutputs, planOutputCopy, attachmentKind } from "../src/hillclimb/outputs.js";
+import { authoredOutputs, planOutputCopy, attachmentKind, asFlowData } from "../src/hillclimb/outputs.js";
 import type { RunResult } from "../src/types.js";
 
 let work: string;
@@ -96,5 +96,18 @@ describe("attachmentKind (SCHEMA.md Attachment.kind)", () => {
       "code",
       "file",
     ]);
+  });
+});
+
+describe("asFlowData: text is decided by content, never by extension", () => {
+  it("UTF-8 bytes with no NUL are text (redactable), whatever the name", () => {
+    expect(asFlowData(Buffer.from("token: sk-x\n"))).toBe("token: sk-x\n");
+  });
+
+  it("bytes with a NUL, or invalid UTF-8, stay bytes", () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+    expect(asFlowData(png)).toBe(png);
+    const bad = Buffer.from([0xff, 0xfe, 0x41]);
+    expect(asFlowData(bad)).toBe(bad);
   });
 });
