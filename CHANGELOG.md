@@ -101,7 +101,7 @@ All notable changes to this project are documented here. The format is based on
 - **A graded `semantic_matches` assert records `assertions[].judgeAttempts`:** `1`, or `2` when the judge's
   one retry after a malformed grade ran — so a grade that needed a retry can be told apart.
 
-- **Every live run's directory records `system-prompt-append.txt`:** the `--append-system-prompt` the agent was
+- **Every scenario run's directory records `system-prompt-append.txt`** (a `chat` session writes none): the `--append-system-prompt` the agent was
   spawned with, as passed with secrets scrubbed (empty when none). It holds the harness's append only, never
   Anthropic's built-in system prompt. A replay writes none.
 
@@ -117,7 +117,7 @@ All notable changes to this project are documented here. The format is based on
   harness change (`--approve-harness` records it). Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
-  files a run authored are copied and attached to its final turn. A trace opens with the system append the agent
+  files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
   was spawned with (Anthropic's built-in system prompt withheld), and inlines each sub-agent's turns after its
   dispatch, opened by a `system` turn saying what that child received: the harness's sub-agent append (Anthropic's
   built-in sub-agent prompt withheld), "none received", or "not recorded in its transcript". `--dry-run` prices the

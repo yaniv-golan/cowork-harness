@@ -65,7 +65,16 @@ export function variantSnapshot(
   live: string,
   opts: { snapshotRoot: string; flowHash: string; variant: string; variantRan?: boolean; checkOnly?: boolean },
 ): VariantSnapshot {
-  if (isInsideGitWorkTree(opts.snapshotRoot))
+  let inGit: boolean;
+  try {
+    inGit = isInsideGitWorkTree(opts.snapshotRoot);
+  } catch (e) {
+    // eval's message names eval's --out; here the root comes from the environment.
+    throw new UsageError(
+      `${(e as Error).message.replace(/; pass --out <dir> .*$/, "")}; set ${SNAPSHOT_ROOT_ENV} to an absolute directory git can answer for`,
+    );
+  }
+  if (inGit)
     throw new UsageError(
       `the snapshot dir ${tildeify(opts.snapshotRoot)} is inside a git work tree: the stager delivers a mount's git-tracked files only, so the variant's plugin would mount EMPTY; set ${SNAPSHOT_ROOT_ENV} to an absolute directory outside any git work tree`,
     );
@@ -76,8 +85,9 @@ export function variantSnapshot(
     const rels = [...new Set([...files(dir), ...deliverable(live)])].sort();
     const liveDiffers = digest(dir, rels) !== digest(live, rels);
     // A variant with no rows has measured nothing yet: its snapshot (left by a refused run) is re-taken
-    // when the live plugin moved on, or the pass would measure an older round under this variant's name.
-    if (opts.variantRan || !liveDiffers || opts.checkOnly) return { dir, created: false, liveDiffers };
+    // when the live plugin moved on, or the pass would measure an older round under this variant's name (a dry run
+    // falls through to check the live plugin that pass would copy).
+    if (opts.variantRan || !liveDiffers) return { dir, created: false, liveDiffers };
   }
   if (opts.variantRan) {
     if (existsSync(dir))
@@ -88,8 +98,8 @@ export function variantSnapshot(
       `variant ${opts.variant} already has rows, but its plugin snapshot ${tildeify(dir)} is missing: running it now would measure the live plugin, which may hold a later round — restore the snapshot or re-run this variant into a fresh flow`,
     );
   }
-  // A dry run checks what a pass would refuse, and stops before writing: the pass would take a snapshot of the live
-  // plugin, so the dry run checks that plugin.
+  // A dry run checks what a pass would refuse, and stops before writing: the pass would take (or re-take) a snapshot
+  // of the live plugin, so the dry run checks that plugin.
   if (opts.checkOnly) return { dir: live, created: false, liveDiffers: false };
   rmSync(marker, { force: true }); // first: a crash mid-replace must not leave a marker vouching for it
   rmSync(dir, { recursive: true, force: true }); // an interrupted or outdated copy of a variant that never ran

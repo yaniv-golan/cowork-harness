@@ -25,6 +25,29 @@ afterEach(() => {
 });
 
 describe("variantSnapshot", () => {
+  it("when git cannot answer for the snapshot root, the refusal names the env var, not eval's --out", () => {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, ".git", "config"), "[core]\n\trepositoryformatversion = 99\n"); // git refuses to read it
+    let err: unknown;
+    try {
+      variantSnapshot(live, opts());
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(UsageError);
+    expect((err as Error).message).toMatch(/could not tell whether .* is inside a git work tree/);
+    expect((err as Error).message).toMatch(/COWORK_HARNESS_HILLCLIMB_SNAPSHOTS/);
+    expect((err as Error).message).not.toMatch(/--out/);
+  });
+
+  it("a dry run of a variant with no rows, whose snapshot the live plugin moved past, checks the live plugin the pass would re-take", () => {
+    variantSnapshot(live, opts()); // left by a refused run
+    writeFileSync(join(live, "skills", "x", "SKILL.md"), "round 2");
+    const s = variantSnapshot(live, opts({ checkOnly: true }));
+    expect(s).toEqual({ dir: live, created: false, liveDiffers: false });
+    expect(readFileSync(join(root, "f00d", "v1", "my-plugin", "skills", "x", "SKILL.md"), "utf8")).toBe("round 1"); // untouched
+  });
+
   it("the first run copies the plugin under <root>/<flow-hash>/<variant>/<plugin dir name>", () => {
     const s = variantSnapshot(live, opts());
     expect(s).toMatchObject({ created: true, dir: join(root, "f00d", "v1", "my-plugin") });

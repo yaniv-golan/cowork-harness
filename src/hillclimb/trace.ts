@@ -134,8 +134,8 @@ function snapshotOf(line: string): ChildTranscript["promptSnapshot"] | null | un
   return { last: parts[parts.length - 1] as string, builtinParts: parts.length - 1 };
 }
 
-/** The file a run dir records the main agent's `--append-system-prompt` in, exactly as the spawn passed it
- *  (`""` when none was passed). Written by executeScenario; absent for a replay or an older run. */
+/** The file a run dir records the main agent's `--append-system-prompt` in, as the spawn passed it with secrets
+ *  scrubbed (`""` when none was passed). Written by executeScenario; absent for a replay or an older run. */
 export const SYSTEM_APPEND_FILE = "system-prompt-append.txt";
 
 /** The trace's leading system turn, from the run dir's own record of what was sent — never an invented one.
