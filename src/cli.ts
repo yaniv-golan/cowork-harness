@@ -125,7 +125,7 @@ import {
   eventsFromLines,
   runsRoot,
 } from "./run/trace-view.js";
-import { preflightBudget } from "./run/budget.js";
+import { preflightBudget, noHistoryCauseText } from "./run/budget.js";
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
 import {
@@ -172,7 +172,16 @@ import { buildRepeatRollup, rollupPasses, armLabel, type RepeatRollup } from "./
 import { parseRepeatFlags, RepeatFlagError } from "./run/repeat-flags.js";
 import { cmdCritique } from "./critique/command.js";
 import { EVAL_USAGE } from "./eval/usage.js";
-import { parseEvalArgs, parseEvalReportArgs, runEval, evalEnvelopePayload, EvalStagingError } from "./eval/command.js";
+import {
+  parseEvalArgs,
+  parseEvalReportArgs,
+  runEval,
+  planEvalDryRun,
+  evalEnvelopePayload,
+  EvalStagingError,
+  EvalBudgetRefusal,
+} from "./eval/command.js";
+import { planText, type EvalPlan } from "./eval/plan.js";
 import { makeEvalJobRunner } from "./eval/job-runner.js";
 import { writeEvalReport, REPORT_MD } from "./eval/report.js";
 import {
@@ -2079,10 +2088,25 @@ async function cmdRun(rawArgs: string[]) {
  *  so concurrent jobs cannot clobber each other's label) and maps the outcome to the exit contract. */
 async function cmdEval(rawArgs: string[]) {
   const json = isJsonOutput(rawArgs);
+  // A plan computed before a refusal rides on the refusal: in text it is printed first, in JSON it is the
+  // error envelope's `plan` (with `dryRun`), as `record --dry-run`'s findings ride on its refusal.
+  let plan: EvalPlan | undefined;
+  let dryRun = false;
+  const printPlan = (p: EvalPlan) => {
+    for (const line of planText(p, { tilde: tildeify, causeText: noHistoryCauseText() })) log(line);
+  };
   const failFor = (e: unknown): never => {
+    if (plan && dryRun && !json) printPlan(plan);
+    // A dry run's refusal always says it was a dry run; the plan rides along only when it was computed.
+    const payload = plan || dryRun ? { payload: { ...(dryRun ? { dryRun: true } : {}), ...(plan ? { plan } : {}) } } : {};
+    if (e instanceof EvalBudgetRefusal)
+      return fail("eval", "runtime", e.message, e.hint, json, undefined, undefined, {
+        error: { code: "budget_exceeded", budget: e.status },
+        ...payload,
+      });
     if (e instanceof EvalStagingError || e instanceof BoundaryError)
-      return fail("eval", "boundary", (e as Error).message, undefined, json, 3);
-    if (e instanceof UsageError) return fail("eval", "usage", e.message, e.hint, json);
+      return fail("eval", "boundary", (e as Error).message, undefined, json, 3, undefined, payload);
+    if (e instanceof UsageError) return fail("eval", "usage", e.message, e.hint, json, undefined, undefined, payload);
     throw e;
   };
   const emit = (evalDir: string, report: ReturnType<typeof writeEvalReport>, text: string) => {
@@ -2109,6 +2133,34 @@ async function cmdEval(rawArgs: string[]) {
     return failFor(e);
   }
   for (const g of parsed.globals) applyCommandGlobal("eval", g.flag, g.value, json);
+  if (parsed.dryRun) {
+    // A plan builds no external channel and resolves no answer policy: `--decider-cmd` would spawn its
+    // helper and `--decider-dir` would create its directory, and a dry run has no gate to answer. Their
+    // flag-level conflicts were already checked by parseEvalArgs. The runner refuses if it is ever reached.
+    dryRun = true;
+    try {
+      ({ plan } = await planEvalDryRun(parsed, {
+        log,
+        tokenCheck: (tier) => tokenCheck(tier),
+        isolationCheck: () => isolationRefusal(),
+        runJob: async () => {
+          throw new Error("eval --dry-run must never run a job");
+        },
+        onPlan: (p) => (plan = p),
+      }));
+    } catch (e) {
+      // A Ctrl-C also reaches a git the dry run was waiting on, which then fails the step it was running. Yield
+      // once so a signal already queued is handled (exit 130) before that failure is reported as a refusal.
+      await new Promise((r) => setImmediate(r));
+      return failFor(e);
+    }
+    // A Ctrl-C that arrived during the (synchronous) preparation is handled now, exiting 130, rather than
+    // being swallowed by a clean exit 0.
+    await new Promise((r) => setImmediate(r));
+    if (json) out(jsonPayloadEnvelope("eval", true, { dryRun: true, plan }));
+    else printPlan(plan!);
+    process.exit(0);
+  }
   // Runs render nothing (json-shaped output plan): concurrent jobs would interleave a live renderer on
   // stderr, so the eval prints one line per finished job instead.
   const flags: CommonFlags = {
@@ -2129,6 +2181,7 @@ async function cmdEval(rawArgs: string[]) {
       tokenCheck: (tier) => tokenCheck(tier),
       isolationCheck: () => isolationRefusal(),
       runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
+      onPlan: (p) => (plan = p),
     });
   } catch (e) {
     externalChannel?.close?.();

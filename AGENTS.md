@@ -56,7 +56,7 @@ here**, and the failure is silent. Every one below was hit by an agent working i
 - **Only two `schema/*.json` are generated.** `npm run schema` writes `scenario.schema.json` +
   `session.schema.json` (+ the skill's `assertion-keys.json`). **Everything else in `schema/` is
   hand-maintained** — `cassette.v*.json`, `run-result.json`, `doctor.json`, `protocol.v1.json`,
-  `critique-report.json`, `verify-cassettes.json`, `regrade.json`. Adding a field to those means editing the TS type **and**
+  `critique-report.json`, `verify-cassettes.json`, `regrade.json`, `schedule-cost.json`. Adding a field to those means editing the TS type **and**
   the JSON by hand; nothing syncs them. Then regenerate the surface baseline (below).
 - **Surface-baseline ordering:** edit the schema → `npm run check:surface` (review the diff, expect
   `+N -0 ~0`) → `npm run gen:surface` → `check:surface` again (now `+0 -0 ~0`). Running `gen:surface`

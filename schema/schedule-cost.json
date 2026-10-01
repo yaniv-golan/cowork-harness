@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/schedule-cost.json",
+  "title": "ScheduleCost",
+  "description": "The cost summary a planned schedule prints before any spend: `plan.cost` in the `cowork-harness eval --dry-run --output-format json` envelope (SPEC §11, §12). A covered surface of the compatibility contract: the nine keys below — their names, types and meanings — are stable. Every dollar figure is on ONE basis: each scenario's prior runs in the runs dir's index on the schedule's effective tier and baseline, turn 1 only, `hillclimb:`-labelled runs excluded, agent cost (`costUsd`) only — judge and LLM-decider spend are not in it. Each figure sums over the PRICED scenarios; a scenario with no priced run on that basis adds $0 to every figure and is named in `unpriced`, and `lowerBound` is then true. None of the figures is a bound. This schema is deliberately permissive (no `additionalProperties: false`): the object carries EXPERIMENTAL keys beside these (`budgetGateWorstUsd`, `judgeMeanUsd`, `judgeP50Usd`, `deciderMeanUsd`, `deciderP50Usd`, `items[]`) that may change in any minor release.",
+  "type": "object",
+  "required": ["jobs", "meanUsd", "p50Usd", "p95Usd", "worstObservedUsd", "lowerBound", "unpriced", "pricedRuns", "thinnest"],
+  "properties": {
+    "jobs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Agent runs scheduled, over every scenario, priced or not (an eval: 2 arms x --reps per scenario)."
+    },
+    "meanUsd": {
+      "type": "number",
+      "description": "Sum over the priced scenarios of jobs x that scenario's mean per-run cost."
+    },
+    "p50Usd": {
+      "type": "number",
+      "description": "Sum over the priced scenarios of jobs x that scenario's median per-run cost (the floor-index percentile `stats` prints)."
+    },
+    "p95Usd": {
+      "type": "number",
+      "description": "Sum over the priced scenarios of jobs x that scenario's p95 per-run cost (floor index: the max run when a scenario has 20 or fewer). Pessimistic, not a bound."
+    },
+    "worstObservedUsd": {
+      "type": "number",
+      "description": "Sum over the priced scenarios of jobs x the single most expensive run on the basis above — every run at the worst seen. Not a bound, and NOT the `--max-budget-usd` gate's figure, which reads a wider basis (any tier, baseline or turn, hillclimb runs included)."
+    },
+    "lowerBound": {
+      "type": "boolean",
+      "description": "True when at least one scenario is unpriced, so every dollar figure leaves it out."
+    },
+    "unpriced": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The scenarios with no priced run on the basis above; each contributed $0."
+    },
+    "pricedRuns": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Priced runs behind the figures, summed over the priced scenarios."
+    },
+    "thinnest": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "The priced run count of the scenario with the fewest; null when no scenario is priced."
+    }
+  }
+}

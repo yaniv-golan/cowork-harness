@@ -127,6 +127,25 @@ describe("estimateScheduleCost", () => {
     expect(c.thinnest).toBe(1);
   });
 
+  it("decider spend is totalled like the judge's: per scenario x jobs, summed, experimental in the JSON", () => {
+    const withDecider: CostHistory = {
+      ...history("d", [1, 1]),
+      samples: [{ agentUsd: 1, deciderUsd: 0.2 }, { agentUsd: 1, deciderUsd: 0.4 }, { agentUsd: 1 }],
+    };
+    const c = estimateScheduleCost([
+      { scenario: "d", jobs: 10, history: withDecider },
+      { scenario: "a", jobs: 10, history: a },
+    ]);
+    expect(c.items[0].perRep.deciderMeanUsd).toBeCloseTo(0.3, 12);
+    expect(c.items[0].deciderP50Usd).toBeCloseTo(4, 12); // p50 of [0.2, 0.4] is 0.4 (floor index), x 10
+    expect(c.deciderMeanUsd).toBeCloseTo(3, 12);
+    expect(c.deciderP50Usd).toBeCloseTo(4, 12);
+    const j = scheduleCostJson(c);
+    expect(j.deciderMeanUsd).toBeCloseTo(3, 12);
+    expect(j.deciderP50Usd).toBeCloseTo(4, 12);
+    expect(c.items[1].deciderP50Usd).toBeUndefined();
+  });
+
   it("worst-observed is on the SAME basis as p50/p95; the budget gate's wider figure is separate", () => {
     const h = history("w", [1, 1, 1], { budgetGateWorstUsd: 9, budgetGatePricedRuns: 7 });
     const c = estimateScheduleCost([{ scenario: "w", jobs: 2, history: h }]);
@@ -213,6 +232,8 @@ describe("scheduleCostJson — the one serialization", () => {
       "budgetGateWorstUsd",
       "judgeMeanUsd",
       "judgeP50Usd",
+      "deciderMeanUsd",
+      "deciderP50Usd",
       "items",
     ]);
     expect(j.unpriced).toEqual(["none"]);

@@ -118,3 +118,17 @@ describe("checkBatchBudget — the non-exiting gate", () => {
     expect(noHistoryCauseText()).toBe(a);
   });
 });
+
+describe("the history seam: rows and runs dir passed in, instead of read from the runs root", () => {
+  it("prices from the rows given (not the runs root's index) and reports the runs dir given", () => {
+    // The runs root above has a/b/c; the rows passed in price only "z", at $2, so the result can only come from them.
+    const rows = [{ ...row("z", 2, 1) }, { ...row("z", 1, 2) }];
+    const src = { rows, runsDir: { runsDir: "/elsewhere/runs", runsDirRedirected: true } };
+    expect(estimateBatchCost([{ scenario: "z", jobs: 3 }, "a"], src)).toEqual({ known: 6, unpriced: ["a"], pricedRuns: 2, thinnest: 2 });
+    const c = checkBatchBudget([{ scenario: "z", jobs: 3 }], 5, src);
+    expect(c.refuse).toBe(true);
+    expect(c.status).toMatchObject({ estimateUsd: 6, runsDir: "/elsewhere/runs", runsDirRedirected: true, enforced: true });
+    // Without the seam the same call reads the runs root, where "z" has never run.
+    expect(checkBatchBudget([{ scenario: "z", jobs: 3 }], 5).status.unpriced).toEqual(["z"]);
+  });
+});
