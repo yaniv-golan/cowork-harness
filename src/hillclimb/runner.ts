@@ -175,10 +175,20 @@ async function run(
     throw new UsageError(
       `${statePathShown} harness_paths lists ${inLever.join(", ")}, inside the plugin the loop edits (${deps.lever}) — every round would change the harness sha; list only files that define the measurement`,
     );
-  const listed = listedRaw.map((p) => resolve(deps.cwd, p));
+  // A listed entry the agent is MEANT to read (an upload, a fixture file: derived, not hidden — state-template lists
+  // them) is no exposure, and nor is one that no longer exists (the digest skips it); every other listed file is.
+  const hidden = (deps.hiddenPaths ?? deps.derivedPaths)(all);
+  const hiddenSet = new Set(hidden.map((p) => resolve(p)));
+  const inputs = new Set(
+    deps
+      .derivedPaths(all)
+      .map((p) => resolve(p))
+      .filter((p) => !hiddenSet.has(p)),
+  );
+  const listed = listedRaw.map((p) => resolve(deps.cwd, p)).filter((p) => !inputs.has(p) && lexists(p));
   // Over EVERY case, whatever --case selects: a sibling scenario reachable through a selected case's mount is
   // still the flow's answer key.
-  const exposed = pathsInsideMounts([flowAbs, ...(deps.hiddenPaths ?? deps.derivedPaths)(all), ...listed], deps.mountRoots(all));
+  const exposed = pathsInsideMounts([flowAbs, ...hidden, ...listed], deps.mountRoots(all));
   if (exposed.length)
     throw new UsageError(
       `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,

@@ -14,6 +14,7 @@ import {
   symlinkSync,
   writeFileSync,
   chmodSync,
+  renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +22,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { defaultSnapshotRoot, runHillclimbCommand, snapshotRootFrom, type RunCommandDeps } from "../src/hillclimb/run-command.js";
 import { parseHillclimbRunArgs } from "../src/hillclimb/args.js";
+import { stateTemplateFor } from "../src/hillclimb/cli.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
@@ -194,6 +196,49 @@ describe("runHillclimbCommand", () => {
       if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
       else process.env.COWORK_HARNESS_GITSET = saved;
     }
+  });
+
+  it("state-template's harness_paths, saved as _state.json, approve and run with a fixture and an upload — and after a fixture file is renamed", async () => {
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "report.md"), "# draft\n");
+    writeFileSync(join(cwd, "evals", "input.csv"), "a,b\n");
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nuploads:\n  - ./input.csv\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: ../fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      const t = stateTemplateFor("evals", cwd, {});
+      expect(t.state.harness_paths).toEqual(expect.arrayContaining(["fx/report.md", "evals/input.csv"]));
+      mkdirSync(join(cwd, "flow"));
+      writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify(t.state));
+      const first = await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      expect(first.error?.message).toBeUndefined();
+      expect(first.exitCode).toBe(0);
+      renameSync(join(cwd, "fx", "report.md"), join(cwd, "fx", "final.md")); // the listed entry no longer exists
+      const second = await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      expect(second.error?.message).toBeUndefined();
+      expect(second.exitCode).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
+  it("a listed harness file inside a connected folder is still refused: only the agent's own inputs are exempt", async () => {
+    mkdirSync(join(cwd, "shared"));
+    writeFileSync(join(cwd, "shared", "grade.mjs"), "export default 1\n");
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nfolders:\n  - from: ${join(cwd, "shared")}\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    mkdirSync(join(cwd, "flow"));
+    writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify({ harness_paths: ["shared/grade.mjs"] }));
+    const r = await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/could read .*shared\/grade\.mjs/);
   });
 
   it("a workspace_fixture that holds a scenario is refused: the fixture is copied where the agent reads", async () => {
