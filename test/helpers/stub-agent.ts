@@ -60,7 +60,12 @@ export function makeStubFixture(body: string, extraEnv: Record<string, string> =
   for (const d of [bin, cwd, runsDir, join(root, "home"), join(root, "config")]) mkdirSync(d, { recursive: true });
   const stubPidFile = join(root, "stub.pid");
   const envDump = join(root, "stub.env");
-  writeFileSync(join(bin, "claude"), `#!/bin/sh\nenv > "$STUB_ENV_DUMP"\necho $$ > "$STUB_PID"\n${body}\n`);
+  // The judge/decider transport probes `--help` / `--version` before its first call (the isolation preflight): answer
+  // FIRST, so a probe never overwrites the pid file or the env dump a test reads.
+  const probe =
+    `if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\n` +
+    `if [ "$1" = "--help" ]; then for f in --tools --safe-mode --strict-mcp-config --no-session-persistence --setting-sources --json-schema; do echo "  $f"; done; exit 0; fi\n`;
+  writeFileSync(join(bin, "claude"), `#!/bin/sh\n${probe}env > "$STUB_ENV_DUMP"\necho $$ > "$STUB_PID"\n${body}\n`);
   chmodSync(join(bin, "claude"), 0o755);
   const scenario = join(cwd, "stub.yaml");
   writeFileSync(scenario, "baseline: latest\nfidelity: protocol\nprompt: say hi\nassert:\n  - result: success\n");

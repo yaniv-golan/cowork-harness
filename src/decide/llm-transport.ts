@@ -1,14 +1,155 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { assertSpawnAllowed } from "../spawn-guard.js";
 import { warn, envPositiveNumber } from "../io.js";
 import { isUsageLimit } from "../usage-limit.js";
 import type { Complete, CompleteResult } from "./decider.js";
+
+/** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from the
+ *  operator's own setup. The model reads untrusted agent output, so it must be able to call no tool (`--tools ""`;
+ *  without it, read-only tools always run and Write/Bash/Web run whenever the operator's settings allow them), and
+ *  nothing of the operator's environment may shape its answer: no CLAUDE.md, skills, plugins, hooks or MCP servers
+ *  (`--safe-mode`, `--strict-mcp-config`), no project or local settings from the harness's working directory
+ *  (`--setting-sources user` — user settings stay, so `apiKeyHelper` auth keeps working), and no transcript written
+ *  into the operator's session history (`--no-session-persistence`). Every flag exists in Claude Code 2.1.197 and
+ *  later; `assertIsolationSupported` refuses an older CLI before any model call.
+ *
+ *  `--tools` takes a variadic value, so it goes LAST: an empty value followed by more flags parses correctly on the
+ *  CLIs measured, but nothing after it can be swallowed if a future parser reads the variadic list greedily.
+ *
+ *  On a machine with an enterprise MCP config, `isolationArgs` leaves `--strict-mcp-config` out (see there). */
+export const ISOLATION_ARGS: readonly string[] = [
+  "--safe-mode",
+  "--strict-mcp-config",
+  "--no-session-persistence",
+  "--setting-sources",
+  "user",
+  "--tools",
+  "",
+];
+/** The flags `ISOLATION_ARGS` needs the host CLI to accept, matched against its `--help`. */
+const ISOLATION_FLAGS = ["--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "--tools"];
+/** The oldest Claude Code version verified to accept every isolation flag. */
+export const ISOLATION_MIN_CLI = "2.1.197";
+
+/** True when `help` (a `claude --help` text) declares `flag` as an option: an option line starts with exactly two
+ *  spaces and the flag, then whitespace, `<`, `=` or the end. Anchored so the flag named inside another option's
+ *  wrapped description (`--strict-mcp-config` and `--tools` both appear there) does not count. An unrecognised help
+ *  format matches nothing, so the probe fails CLOSED. A plain line scan, so nothing in `flag` is read as a pattern. */
+export function helpDeclaresFlag(help: string, flag: string): boolean {
+  const lead = `  ${flag}`;
+  return help.split("\n").some((line) => {
+    if (!line.startsWith(lead)) return false;
+    const next = line.charAt(lead.length);
+    return next === "" || next === "<" || next === "=" || /\s/.test(next);
+  });
+}
+
+/** Where Claude Code reads an enterprise MCP config (`managed-mcp.json` in its managed-settings directory). */
+export function defaultManagedMcpPath(platform: NodeJS.Platform = process.platform): string {
+  if (platform === "darwin") return "/Library/Application Support/ClaudeCode/managed-mcp.json";
+  if (platform === "win32") return "C:\\Program Files\\ClaudeCode\\managed-mcp.json";
+  return "/etc/claude-code/managed-mcp.json";
+}
+
+const isolationChecked = new Map<string, true | Error>();
+let managedMcpPathOverride: string | undefined;
+/** Binaries whose Claude Code refused `--strict-mcp-config` for an enterprise MCP config at a path this harness does
+ *  not check: their calls leave the flag out from then on, as for one found at the managed-settings path. */
+const strictMcpRefused = new Set<string>();
+
+/** The isolation flags for this machine. Claude Code refuses `--strict-mcp-config` outright while an enterprise MCP
+ *  config is present ("You cannot use --strict-mcp-config when an enterprise MCP config is present"), so there the
+ *  flag is left out. `--safe-mode` already keeps every MCP server out, the organisation's managed ones included: in
+ *  safe mode Claude Code's MCP loader returns no servers before it reads the enterprise or managed scope (verified in
+ *  the 2.1.197 and 2.1.286 binaries), and its safe-mode notice says managed MCP servers do not apply. A managed config
+ *  elsewhere (Claude Code can be pointed at another managed-settings path) is learnt from the CLI's own refusal; see
+ *  `claudeCliComplete`. */
+export function isolationArgs(bin: string, managedMcpPath: string = managedMcpPathOverride ?? defaultManagedMcpPath()): readonly string[] {
+  return existsSync(managedMcpPath) || strictMcpRefused.has(bin)
+    ? ISOLATION_ARGS.filter((a) => a !== "--strict-mcp-config")
+    : ISOLATION_ARGS;
+}
+
+/** Refuse a host `claude` that does not accept every isolation flag with a clear, actionable error before any model
+ *  call, instead of an unknown-option exit retried as if it were transient. One `--help` probe per binary per process
+ *  (no model call, no stdin). A probe that could not run (missing binary, timeout) is not cached. */
+export function assertIsolationSupported(bin: string): void {
+  const cached = isolationChecked.get(bin);
+  if (cached !== undefined) {
+    if (cached !== true) throw cached;
+    return;
+  }
+  const help = spawnSync(bin, ["--help"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 15_000 });
+  if (help.error) {
+    const code = (help.error as NodeJS.ErrnoException).code;
+    // Not a version problem, and not a verdict to remember: the probe itself did not complete.
+    if (code === "ETIMEDOUT")
+      throw new Error(
+        `the host \`claude\` (${bin}) did not answer \`--help\` within 15s, so the harness cannot confirm it runs judge, decider and ` +
+          `critique-evaluator calls isolated — refusing rather than guessing. Retry, or check that ${bin} starts.`,
+      );
+    throw new Error(
+      `LLM decider transport (${bin} -p) failed to spawn: ${help.error.message} — ensure 'claude' is installed and on PATH, or set COWORK_HARNESS_CLAUDE_BIN to its path`,
+    );
+  }
+  const text = `${help.stdout ?? ""}\n${help.stderr ?? ""}`;
+  // A `--help` that crashed or was killed and printed nothing says nothing about the version: refuse, uncached.
+  if ((help.status !== 0 || help.signal) && !text.trim())
+    throw new Error(
+      `the host \`claude\` (${bin}) printed nothing for \`--help\` (${help.signal ? `killed by ${help.signal}` : `exit ${help.status}`}), so the ` +
+        `harness cannot confirm it runs judge, decider and critique-evaluator calls isolated — refusing rather than guessing. ` +
+        `Check that ${bin} --help works.`,
+    );
+  const missing = ISOLATION_FLAGS.filter((f) => !helpDeclaresFlag(text, f));
+  let verdict: true | Error = true;
+  if (missing.length) {
+    const version = spawnSync(bin, ["--version"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 15_000 });
+    const v = (version.stdout ?? "").trim() || "unknown version";
+    verdict = new Error(
+      `the host \`claude\` (${bin}, ${v}) does not accept ${missing.join(", ")} — ` +
+        `the harness runs every judge, decider and critique-evaluator call isolated from your own Claude Code setup, which ` +
+        `needs Claude Code ${ISOLATION_MIN_CLI} or later. To fix: upgrade the host \`claude\` (or point COWORK_HARNESS_CLAUDE_BIN at a newer one).`,
+    );
+  }
+  isolationChecked.set(bin, verdict);
+  if (verdict !== true) throw verdict;
+}
+
+/** The pre-spend form of `assertIsolationSupported`: the refusal message for the configured host `claude`, or
+ *  undefined when it can run isolated. For commands that spend (an agent run, critique task turns) before their first
+ *  judge, decider or evaluator call — they refuse up front (exit 2) instead of after the spend. */
+export function isolationRefusal(): string | undefined {
+  // Under the spawn guard nothing may be launched — not even a `--help` probe; the later model call is refused by
+  // the guard itself, so there is nothing to pre-empt here.
+  try {
+    assertSpawnAllowed("the host `claude` isolation probe");
+  } catch {
+    return undefined;
+  }
+  try {
+    assertIsolationSupported(process.env.COWORK_HARNESS_CLAUDE_BIN || "claude");
+    return undefined;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+/** Test seam: forget every cached probe, and (optionally) point the enterprise-MCP check at another path so a
+ *  test controls whether the machine "has" a managed config. */
+export function resetIsolationPreflight(managedMcpPath?: string): void {
+  managedMcpPathOverride = managedMcpPath;
+  strictMcpRefused.clear();
+  isolationChecked.clear();
+}
 
 /** A spawn rejection the retry wrapper may re-attempt: a TRANSIENT non-zero exit. Timeout / maxBytes /
  *  spawn-ENOENT failures leave this false so they fail loud on the first attempt (see claudeCliComplete).
  *  A usage-limit exit also sets it false — retrying into a spent quota just burns the batch. */
 class TransportExit extends Error {
   retryable: boolean;
+  /** Claude Code refused `--strict-mcp-config` for an enterprise MCP config: retry without that flag. */
+  strictMcpRefused = false;
   constructor(message: string, retryable = true) {
     super(message);
     this.retryable = retryable;
@@ -95,6 +236,13 @@ function tryExtractResultText(raw: string): string | null {
  * envelope itself doesn't parse (e.g. a failure that never reached the CLI's own JSON emitter).
  */
 function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number, maxBytes: number): Promise<CompleteResult> {
+  // The backstop for every host-`claude` call, whichever caller reaches it: never spawn the model call on a CLI
+  // that would drop (or reject) an isolation flag. Cached per binary, so a retry or a batch probes once.
+  try {
+    assertIsolationSupported(bin);
+  } catch (e) {
+    return Promise.reject(e);
+  }
   return new Promise<CompleteResult>((resolve, reject) => {
     // bound the `claude -p` spawn — a hung-but-alive child would otherwise block the harness forever.
     // On expiry SIGKILL the child and reject LOUD; clear the timer on close/error so a fast call never leaks it.
@@ -102,7 +250,8 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     // The prompt is delivered on STDIN, not argv: an argv prompt is world-readable via `ps` for the life of
     // the child (verified: `echo '...' | claude -p --output-format json` with no positional prompt reads
     // from stdin and returns the identical success envelope) — stdin is process-private.
-    const child = spawn(bin, ["-p", "--model", model, "--output-format", "json"], { stdio: ["pipe", "pipe", "pipe"] });
+    const args = isolationArgs(bin);
+    const child = spawn(bin, ["-p", "--model", model, "--output-format", "json", ...args], { stdio: ["pipe", "pipe", "pipe"] });
     // A child that exits/errors before consuming stdin (e.g. ENOENT, or a fake bin that exits immediately)
     // delivers EPIPE asynchronously as an `error` event on stdin — without a listener Node escalates it to
     // an uncaughtException. The child's own "error"/"close" handlers below already reject loud, so swallow
@@ -188,6 +337,17 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
       const o = tail(resultText ?? raw);
       const e = tail(err);
       const diag = [o && `stdout: ${o}`, e && `stderr: ${e}`].filter(Boolean).join(" | ");
+      // An enterprise MCP config somewhere other than the managed-settings path `isolationArgs` checks: Claude Code
+      // refused --strict-mcp-config before any model call. `claudeCliComplete` retries once without the flag.
+      if (/cannot use --strict-mcp-config when an enterprise MCP config is present/i.test(`${raw}\n${err}`)) {
+        const refused = new TransportExit(
+          `LLM decider transport (${bin} -p): Claude Code refused --strict-mcp-config because an enterprise MCP config is present`,
+          false,
+        );
+        refused.strictMcpRefused = args.includes("--strict-mcp-config");
+        reject(refused);
+        return;
+      }
       // Usage/quota limit: don't retry into a spent quota — fail loud & fast so a batch halts.
       if (resultText && isUsageLimit(resultText, tryExtractApiErrorStatus(raw))) {
         reject(
@@ -206,8 +366,8 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
  * (only the spawned agent child is), so a direct API call would bypass the very allowlist the harness
  * enforces. `claude -p` reuses the run's own auth path and is dogfood-consistent. Requests
  * `--output-format json` so the resolved model (`modelUsage`) can be recorded for provenance
- * even when `model` is a floating alias like `"sonnet"`. One short, tool-less
- * call per gate (one call, no recursion into the harness; model is the decider default or --decider-model).
+ * even when `model` is a floating alias like `"sonnet"`. One short, isolated, tool-less call per gate (see
+ * `ISOLATION_ARGS`) (one call, no recursion into the harness; model is the decider default or --decider-model).
  *
  * Non-zero-exit retry: a single `claude -p` spawn can exit non-zero on a TRANSIENT upstream hiccup
  * (rate-limit/overload/network) during a long back-to-back batch — observed live, not reproducible on demand.
@@ -218,8 +378,8 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
  * captured stdout names the cause, so we accept it rather than brittle stdout pattern-matching.
  *
  * Retry never double-answers: this transport has NO harness side effects (it returns a string; the gate is
- * answered exactly once, downstream of a SUCCESSFUL call — a non-zero exit delivers no string), and `claude
- * -p` runs headless with no tool approval, so the model call itself is read-only in practice. Only the
+ * answered exactly once, downstream of a SUCCESSFUL call — a non-zero exit delivers no string), and the call runs
+ * with no tools at all (`--tools ""`, `ISOLATION_ARGS`), so a retried call cannot act twice. Only the
  * non-zero-exit class retries; timeout / maxBytes-overflow / spawn-ENOENT are not transient and fail loud on
  * the first attempt. Set `COWORK_HARNESS_LLM_RETRIES=0` to disable (e.g. deterministic CI).
  */
@@ -245,8 +405,16 @@ export const claudeCliComplete: Complete = async (prompt, model) => {
     try {
       return await spawnOnce(bin, prompt, model, timeoutMs, maxBytes);
     } catch (e) {
-      const err = e as Error & { retryable?: boolean };
+      const err = e as Error & { retryable?: boolean; strictMcpRefused?: boolean };
       lastErr = err;
+      // Once per binary, and not counted against the retries: the refusal comes before any model call, and the flag
+      // only adds to what --safe-mode already keeps out (see `isolationArgs`).
+      if (err.strictMcpRefused && !strictMcpRefused.has(bin)) {
+        strictMcpRefused.add(bin);
+        warn(`${err.message} — running without --strict-mcp-config; --safe-mode keeps every MCP server out`);
+        attempt--;
+        continue;
+      }
       if (!err.retryable || attempt === retries) throw err;
       warn(`${err.message} — retrying (attempt ${attempt + 2}/${retries + 1})`);
       // Small linear backoff (250ms, 500ms, …) — enough to ride a brief rate-limit/overload window.

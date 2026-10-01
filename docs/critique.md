@@ -283,7 +283,9 @@ It does **not** record their contents — see Known limitations.
   (gate on `costUsd.complete` — `false` means the total undercounts), then decide. Caveat: the armor's
   injection-resistance is verified for the
   shipped **default** evaluator model only — changing it voids that specific verification (matters when
-  critiquing skills you did not write).
+  critiquing skills you did not write). That verification was measured with an evaluator that had tools; it has not
+  been repeated with the tool-less evaluator, isolated from your own Claude Code setup (see
+  `COWORK_HARNESS_CLAUDE_BIN` in the CLI guide).
 - **Trending spend across critiques: use the run index, not the reports.** Each critique appends a
   roll-up row (`critiqueRole:"rollup"`) carrying `critiqueTotalUsd`; its `costUsd` is the evaluator
   passes only, so `sum(costUsd)` over every row is exactly true spend — the two graded turns already
@@ -603,7 +605,9 @@ planes; it cannot make a reader immune to persuasion. Treat critique output on a
 which is how you should treat it anyway.
 
 Resistance is also **per-model and perishable**: it is verified for the shipped default evaluator model.
-Changing the evaluator model invalidates that verification.
+Changing the evaluator model invalidates that verification. It was also measured before the evaluator ran
+tool-less and isolated from your own Claude Code setup; the isolation removes what an injection could reach (no
+tool can run), but the probe has not been repeated under it.
 
 This is the same "advisory, not an attestation" property named under [Known limitations](#known-limitations):
 a skill you did not write can steer the grade, so its output is a lead to run down — never proof.
