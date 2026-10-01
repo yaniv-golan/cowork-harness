@@ -21,10 +21,10 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 34 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 35 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
-- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
+- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
@@ -217,6 +217,25 @@ The live VM hot-mount path uses `@ant/claude-swift` (`swift_addon.node`), a nati
 - **`docker cp` snapshot** — run `docker cp /local/dir/. <containerName>:/sessions/<id>/mnt/dir/` in a second terminal to inject a one-way snapshot mid-session, then tell the agent the path. Agent writes stay in the container and do not propagate back to the host.
 
 ---
+
+## A workspace fixture starts with a fresh conversation
+
+**Real Cowork behaviour:** a session's `outputs/` persists across its turns and across re-invocations of a
+skill: stop a pipeline after step 2 (or let it finish), invoke the skill again in the same session, and it
+resumes from the files already there. Its conversation context persists too.
+
+**Harness behaviour:** `workspace_fixture: <dir>` ([scenario.md](./scenario.md#starting-from-a-saved-workspace-workspace_fixture))
+copies a saved outputs tree into a fresh session's `outputs/` before turn 1. A fixture run equals re-invoking
+the skill in the same Cowork session after it stopped mid-work or finished. The only difference is the
+context: in Cowork the prior conversation also persists, while a fixture run starts with a fresh one. The copy
+keeps regular files and their permission bits with fresh modification times, and nothing about the files is
+added to the prompt (real Cowork does not list a session's files to the model either).
+
+**What follows from it:** a skill that relies on its earlier conversation (an answer the user gave in step 1,
+or a plan the agent stated but never wrote down) cannot resume from a fixture the way it would in the same
+session — the fixture tests only the state the skill persisted to `outputs/`. A run that deletes a fixture
+file fails by default; that is the harness's own outputs-delete policy (`allow_outputs_delete: true` opts
+out), not production behaviour, which lets a skill delete in `outputs/` without asking.
 
 ## Folder access in `chat` sessions
 

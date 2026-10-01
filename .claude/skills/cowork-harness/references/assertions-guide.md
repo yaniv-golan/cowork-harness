@@ -52,6 +52,7 @@ them by what you're trying to prove:
 | a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
 | every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
 | a context compaction happened | `compaction_occurred: true` |
+| THIS run wrote the file (not just that it is there) | `file_exists: {path, authored: true}` (also `user_visible_artifact`, and `authored: true` on `artifact_text`/`artifact_json`) — an untouched pre-run file fails; needs the pre-run manifest, which `authored` arms |
 
 Every one of these still obeys the two axes above — several are live-only or need a `controlOut`
 cassette on replay, so check the catalog's replay class before putting one on a PR gate.
@@ -71,3 +72,34 @@ checkable. `semantic_pairwise` asks whether the run is better than, as good as, 
 - **A per-case comparison cannot see a cross-case collapse.** If every output drifts toward one style, each can still
   "beat the reference". Pair it with a structural or set-level assert when that risk matters.
 - **Do not judge with the model under test.** Pin a different `judge_model`; the harness warns when they match.
+
+#### Step-scoped scenarios — test one late step of a long pipeline
+
+A pipeline skill (score → draft → appendix) is expensive to re-run end to end just to check its last step.
+Start the run from the state the earlier steps leave behind instead:
+
+1. Run the pipeline once to the point you want (or stop it there) with `--keep`, then
+   `cowork-harness fixture export <run-dir> --out fixtures/after-scoring` — it copies the run's `outputs/`
+   byte-for-byte and refuses (writing nothing) a file that carries a secret or a host path. Commit the directory.
+2. Point the scenario at it and ask for the late step only:
+
+   ```yaml
+   fidelity: container
+   prompt: Draft the investor memo from the scored deck.
+   workspace_fixture: fixtures/after-scoring        # copied into outputs/ before turn 1
+   assert:
+     - file_exists: {path: outputs/memo.md, authored: true}
+     - artifact_json: {artifact: outputs/scores/deck.json, path: total, exists: true, authored: false}
+     - semantic_matches: {rubric: ["the memo cites the deck's total score"], evidence_files: ["outputs/memo.md"]}
+   ```
+3. Assert on what the STEP produces. A fixture file the step never touched is pre-run, not authored, so
+   `semantic_matches` does not grade it (a rewritten one is graded). A `file_exists`/`user_visible_artifact`/
+   `artifact_text`/`artifact_json` on a fixture path is refused at load unless it says `authored: true`
+   (the step must write it) or `authored: false` (inheriting it is fine) — otherwise it would pass on the
+   fixture alone.
+
+What it models: re-invoking the skill in the same Cowork session after it stopped mid-work or finished — the
+files persist in `outputs/` and the skill resumes from them. The only difference is that the prior conversation
+context does not come along; a skill that depends on it cannot be tested this way. Editing the fixture stales
+the scenario's cassette (`fixture` staleness — re-record). Full rules: [Starting from a saved
+workspace](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#starting-from-a-saved-workspace-workspace_fixture).
