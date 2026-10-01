@@ -224,5 +224,8 @@ export function spawnProtocol(
   // every process the agent starts (see agent-tree.ts). The tag is decided here and returned, never re-derived.
   const runTag = opts.runTag ?? `r${process.hrtime.bigint().toString(36)}`;
   const child = spawn("claude", args, agentSpawnOptions({ cwd: work, env, stdio: ["pipe", "pipe", "pipe"] as const }, runTag));
-  return { child, l0HostConfigContamination, runTag, workDir: work };
+  // Where this agent's sub-agent child transcripts land, for the reasoning capture: the managed config dir,
+  // and ONLY when it is not the operator's real one — walking that would read every other session they ran.
+  const subagentConfigRoot = useManagedConfig && !l0HostConfigContamination ? plan.configDir : undefined;
+  return { child, l0HostConfigContamination, runTag, workDir: work, subagentConfigRoot };
 }

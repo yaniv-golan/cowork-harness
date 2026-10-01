@@ -278,7 +278,7 @@ and `scaffold` refuse to treat a partial run's half-finished output as a passing
 
 ## What a green does NOT prove
 
-A passing run is evidence for exactly what it checked, not a blanket certificate. Three gaps come
+A passing run is evidence for exactly what it checked, not a blanket certificate. Four gaps come
 up often enough to spell out:
 
 - **A green `replay` proves "same as when recorded," not "correct today."** `replay` never touches
@@ -309,6 +309,12 @@ up often enough to spell out:
   Cowork's own origin, or a broken blob-download fallback) is invisible to any live run, however
   faithfully sandboxed, because it only manifests in a rendered DOM a human is driving. See
   [`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md) § "Browser↔webview↔human-interaction boundary."
+- **A green says nothing about a skill edited under a running session.** Cowork re-syncs skills and
+  plugins into a live session (up to every 20 minutes); the harness stages them once per run and never
+  re-stages. This is deliberate, not a pending feature: the staged source is fixed for the run, so there
+  is no in-harness event to fire a re-sync on, and a wall-clock re-stage would make a verdict depend on
+  how long the model took. Restart the run to pick up an edit. See
+  [`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md) § "Mid-session skill/plugin re-sync."
 
 ## Relevant environment variables
 

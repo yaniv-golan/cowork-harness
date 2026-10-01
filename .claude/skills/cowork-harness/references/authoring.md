@@ -283,6 +283,13 @@ suppressed: naming it, or an unknown rule, in `--ignore-rule` is a usage error (
 WARN `lint-skill-ignore-invalid`, as is any other malformed marker. An unclosed marker is WARN
 `lint-skill-ignore-unclosed`, and one that suppresses nothing is INFO `lint-skill-ignore-unused`.
 
+**A marker is an edit to `SKILL.md`, and it costs what any edit costs.** The skill hash covers the file's
+content (unless the session's `staleness.hash_ignore` excludes it), so adding or moving a marker stales every cassette of that skill (a paid re-record to clear), and
+the agent reads the marker text like the rest of the file, which counts toward the re-attach cap. When
+either cost matters, prefer `--ignore-rule <rule>=<glob>`, which lives in your CI command and touches
+neither; it suppresses the rule for the whole file, so pair it with a check on `lint-skill --json`'s
+suppressed findings if a new site must still gate.
+
 **`cowork-harness lint` runs the loader: a file it calls clean is one `run`/`record` will load.** Anything
 the loader refuses — an unknown key, a wrong value type (a scalar `semantic_matches.rubric`), a bad regex,
 a reserved value — is ✗ ERROR `scenario-invalid` (exit 1, with or without `--strict`), and a `baseline:`
