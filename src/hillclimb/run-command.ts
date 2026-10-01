@@ -12,7 +12,8 @@ import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
 import { applySessionOverrides, expandHome, type SessionConfig } from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
-import { effectiveTier, runOutDir, scenarioInputFindings } from "../run/execute.js";
+import { effectiveTier, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
+import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { loadCostHistory } from "../eval/plan-history.js";
@@ -131,13 +132,15 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   });
   const live = prep.lever;
 
-  // The judge and the LLM decider run the host `claude` isolated and tool-less (eval's rule): a CLI that cannot is
+  // The judges (semantic_matches, semantic_pairwise) and the LLM decider run the host `claude` isolated and tool-less (eval's rule): a CLI that cannot is
   // refused here, once, instead of failing every rep after its agent spend. A decider channel replaces the LLM
   // decider, so `on_unanswered: llm` then never calls it.
   const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
   if (
     cases.some(
-      (c) => (llmDecider && c.scenario.on_unanswered === "llm") || (c.scenario.assert ?? []).some((a) => a.semantic_matches !== undefined),
+      (c) =>
+        (llmDecider && c.scenario.on_unanswered === "llm") ||
+        (c.scenario.assert ?? []).some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined),
     )
   ) {
     const iso = deps.isolationCheck();
@@ -210,6 +213,10 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     const f = scenarioInputFindings(c.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
     const refusal = f.session ?? f.vacuity ?? f.inputs;
     if (refusal) throw new UsageError(`case ${c.id}: ${refusal.message}`);
+    // semantic_pairwise references: the gate a run applies before its run dir exists (eval's call), once per case,
+    // over the substituted session — a missing or damaged reference, or one a mount exposes, refuses up front.
+    const pw = pairwiseRefsRefusal(c.scenario, scenarioPairwiseSetup(c.scenario), sessionOriginSources(sub, "(inline)"));
+    if (pw) throw new UsageError(`case ${c.id}: ${pw}`);
   }
 
   // Which skill's invocation the rows record (the `skill_invoked` column): one per plugin, or none.

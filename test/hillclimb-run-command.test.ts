@@ -469,6 +469,34 @@ describe("runHillclimbCommand", () => {
       expect(err.join("\n")).toContain("SYNTHETIC refusal");
     });
 
+    it("a pairwise-only flow refuses up front too (semantic_pairwise judges through the host claude)", async () => {
+      writeFileSync(
+        join(cwd, "evals", "alpha.yaml"),
+        SCENARIO.replace(
+          /  - semantic_matches:[\s\S]*$/,
+          `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
+        ),
+      );
+      const r = await runHillclimbCommand(args("--approve-harness"), deps({ isolationCheck: refuse }));
+      expect(r.exitCode).toBe(2);
+      expect(calls).toEqual([]);
+      expect(err.join("\n")).toContain("SYNTHETIC refusal");
+    });
+
+    it("a pairwise reference that is missing refuses before spend, not as an error on every rep", async () => {
+      writeFileSync(
+        join(cwd, "evals", "alpha.yaml"),
+        SCENARIO.replace(
+          /  - semantic_matches:[\s\S]*$/,
+          `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
+        ),
+      );
+      const r = await runHillclimbCommand(args("--approve-harness"), deps());
+      expect(r.exitCode).toBe(2);
+      expect(calls).toEqual([]);
+      expect(err.join("\n")).toMatch(/case alpha: .*refstore/);
+    });
+
     it("a flow with no judge and no LLM answering never asks", async () => {
       writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace(/  - semantic_matches:[\s\S]*$/, ""));
       let asked = false;
