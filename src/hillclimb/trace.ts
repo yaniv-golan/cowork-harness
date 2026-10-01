@@ -274,13 +274,28 @@ export function keptChildTranscripts(run: { outDir: string; fidelity: string; wo
         ? join(run.workDir ?? join(run.outDir, "work", "session", "mnt"), ".claude")
         : undefined;
   if (root === undefined) return [];
-  const projects = join(root, "projects");
-  if (!existsSync(projects)) return [];
-  const out: ChildTranscript[] = [];
-  for (const cwd of readdirSync(projects, { withFileTypes: true })) {
-    if (!cwd.isDirectory()) continue;
-    for (const session of readdirSync(join(projects, cwd.name), { withFileTypes: true }))
-      if (session.isDirectory()) out.push(...readChildTranscripts(join(projects, cwd.name, session.name, "subagents")));
+  // The container/microvm root is in the agent-writable session mount: walk it without following anything.
+  let r: NoFollowRoot;
+  try {
+    r = NoFollowRoot.existing(root);
+  } catch (e) {
+    if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw e;
   }
+  const dirs = (p: string): string[] => {
+    try {
+      return r
+        .readdirNoFollow(p)
+        .filter((d) => d.isDirectory())
+        .map((d) => join(p, d.name));
+    } catch (e) {
+      if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+      throw e;
+    }
+  };
+  const out: ChildTranscript[] = [];
+  for (const cwd of dirs(join(r.root, "projects")))
+    for (const session of dirs(cwd))
+      if (dirs(session).includes(join(session, "subagents"))) out.push(...readChildTranscripts(join(session, "subagents")));
   return out;
 }

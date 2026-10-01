@@ -6,7 +6,7 @@
 // sub-agent's turns come only from its own transcript. The parent stream ALSO carries every sub-agent tool
 // call and result (parented events) — reading both would emit each sub-agent tool turn twice.
 import { describe, it, expect } from "vitest";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -225,6 +225,28 @@ describe("a forked skill (context: fork) — its work is the skill's own and mus
     const { turns, subagentTurns } = run([]);
     expect(turns.filter((t) => t.role === "tool_call" && t.content.startsWith("[forked skill example-fork-skill] "))).toHaveLength(17);
     expect(subagentTurns).toBe("absent");
+  });
+});
+
+describe("keptChildTranscripts over an agent-writable mount", () => {
+  it("a symlinked projects/ (or session dir) planted in the session mount is not followed into a host dir", () => {
+    const out = mkdtempSync(join(tmpdir(), "hc-kept-link-"));
+    const host = mkdtempSync(join(tmpdir(), "hc-host-"));
+    try {
+      mkdirSync(join(host, "-cwd", "sess", "subagents"), { recursive: true });
+      cpSync(join(DIR, "subagents"), join(host, "-cwd", "sess", "subagents"), { recursive: true });
+      const claude = join(out, "work", "session", "mnt", ".claude");
+      mkdirSync(claude, { recursive: true });
+      symlinkSync(host, join(claude, "projects"));
+      expect(keptChildTranscripts({ outDir: out, fidelity: "container", workDir: join(out, "work", "session", "mnt") })).toEqual([]);
+      unlinkSync(join(claude, "projects"));
+      mkdirSync(join(claude, "projects"));
+      symlinkSync(join(host, "-cwd"), join(claude, "projects", "-cwd"));
+      expect(keptChildTranscripts({ outDir: out, fidelity: "container", workDir: join(out, "work", "session", "mnt") })).toEqual([]);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+      rmSync(host, { recursive: true, force: true });
+    }
   });
 });
 
