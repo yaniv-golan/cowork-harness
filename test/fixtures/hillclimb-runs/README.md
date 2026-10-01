@@ -13,10 +13,15 @@ Excerpts of real kept runs of the repo's own public examples, and labelled SYNTH
   model and another on `claude-sonnet-5`. The real-data check for this path is the paid end-to-end run, with a
   sub-agent on a different model.
 - `fanout-probe/`: a kept hostloop run of the repo's public example `examples/scenarios/subagent-manifest-probe.yaml`
-  (one `Agent` dispatch, seven sub-agent tool calls). `events.jsonl` keeps only the `assistant`, `user`, `result` and
-  `system/init` frames; the init frame's tool, skill, plugin and agent lists were removed. Control, rate-limit and task
-  frames were dropped, since the code under test reads none of them. The run's `claude-config/projects/<cwd>/<session>/subagents/`
-  files are verbatim. In every file the home directory became `~` and the login name became `USER`.
+  (one `Agent` dispatch, seven sub-agent tool calls). Real excerpts, with these changes:
+  - `events.jsonl` keeps only the `assistant`, `user`, `result` and `system/init` frames; the init frame's tool,
+    skill, plugin and agent lists were removed, as were control and task frames and one `<synthetic>`
+    rate-limit assistant frame. The `result` frame's text became `<trimmed: rate-limit message>`. Inside the
+    `Agent` tool result, the agent binary's hand-back frame and trailer were replaced with `<withheld: …>` markers.
+  - The sub-agent transcript `subagents/agent-*.jsonl` keeps only its `assistant`/`user` lines. Its attachment
+    lines were removed: they carried Anthropic's built-in sub-agent prompt and tool list, and the reader skips
+    them. `.meta.json` is verbatim.
+  - In every file the home directory became `~` and the login name became `USER`.
 - `forked-skill/`: SYNTHETIC, written by hand. It mirrors the shape of a real hostloop run in which the main loop called
   `Skill` on a `context: fork` skill: the parent stream carries the fork's 17 tool calls and results as parented events,
   and the fork's `subagents/` transcript repeats them with the same tool ids. Its `.meta.json` has no `toolUseId`, as a

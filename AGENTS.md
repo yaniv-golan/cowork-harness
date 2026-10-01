@@ -110,6 +110,11 @@ here**, and the failure is silent. Every one below was hit by an agent working i
   rejected (redirects to `--decider-llm`) to keep deciders in the `--decider-*` family. Don't reintroduce overlap
   (the legacy stdio channel was deliberately removed).
 
+- **A recorded transcript's non-assistant/user lines are never committed.** A real run's transcripts carry
+  agent-binary text that is not ours to publish (the built-in sub-agent prompt in a `prompt_snapshot`
+  attachment, tool and agent listings, the sub-agent hand-back frame). A committed `.jsonl` fixture keeps its
+  `assistant`/`user` lines only; `test/fixture-transcript-guard.test.ts` and the pre-commit hook enforce it.
+
 ## Parallel sessions — one worktree each
 
 Two agents in ONE checkout share a HEAD: every `git checkout` moves it for both. **This fails silently.**
