@@ -156,7 +156,11 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     runScenario: deps.runScenario,
     flags: deps.flags,
     runDirFor: deps.runDirFor ?? ((s, id) => runOutDir(s.name, id)),
-    extra: (spec) => ({ session: sessions.get(spec.c.id)! }),
+    // Under --judge-model only that model is live (eval's rule, resolveJudgePins): every run grades with it.
+    extra: (spec) => ({
+      session: sessions.get(spec.c.id)!,
+      ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
+    }),
     ...(deps.now ? { now: deps.now } : {}),
   });
   const baselineIds = [...new Set(cases.map((c) => prep.baseline(c).appVersion))].sort();

@@ -281,4 +281,19 @@ describe("runHillclimbCommand", () => {
       expect(rows()[0].meta as Record<string, unknown>).not.toHaveProperty("inputs_not_copied");
     });
   });
+
+  it("--judge-model reaches every run as its judge override, so a scenario's own (even alias) judge_model is never used", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace('judge_model: "claude-haiku-4-5-20251001"', "judge_model: haiku"));
+    await runHillclimbCommand(args("--approve-harness", "--dry-run", "--judge-model", "claude-opus-4-8"), deps({ indexRows: () => [] }));
+    await runHillclimbCommand(args("--judge-model", "claude-opus-4-8"), deps());
+    expect(calls).toHaveLength(1);
+    expect(calls[0].extra.judgeModelOverride).toBe("claude-opus-4-8");
+  });
+
+  it("without --judge-model no override is sent, and an alias judge_model is refused before spend", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace('judge_model: "claude-haiku-4-5-20251001"', "judge_model: haiku"));
+    const r = await runHillclimbCommand(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(calls).toEqual([]);
+  });
 });
