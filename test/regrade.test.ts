@@ -1710,6 +1710,215 @@ describe.skipIf(!existsSync(CLI))("regrade CLI", () => {
   });
 });
 
+describe("regrade checkOnly: every pre-spend step, then stop", () => {
+  /** A judge factory that fails the test if a judge is ever constructed (judgesForRun builds eagerly). */
+  const noJudge = (): SemanticJudge => {
+    throw new Error("checkOnly constructed a judge");
+  };
+  /** The two outcomes compared as a caller reads them: the refusal fields, not the per-call message order. */
+  const refusalOf = (o: { ok: boolean }) => {
+    if (o.ok) throw new Error("expected a refusal");
+    const r = o as Extract<Awaited<ReturnType<typeof regradeRuns>>, { ok: false }>;
+    return { ok: r.ok, kind: r.kind, code: r.code, refusals: r.refusals, message: r.message };
+  };
+
+  it("a clean run → ok, checkOnly, no judge constructed, no regrade file; the per-run evidence fields are reported", async () => {
+    const k = await keptRun({ author: writeReport });
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns({ ...opts(k, { makeJudge: noJudge }), checkOnly: true as const });
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(out).toMatchObject({ ok: true, checkOnly: true });
+    expect(out.runs).toHaveLength(1);
+    expect(out.runs[0]).toEqual({
+      runDir: k.runDir,
+      turn: 1,
+      scenarioSha256: createHash("sha256").update(readFileSync(k.scenarioFile)).digest("hex"),
+      uncheckedSections: [],
+      uncheckedCount: 0,
+      liveDocDrift: [],
+      blind: [],
+      authoredCapture: expect.objectContaining({ source: "persisted" }),
+    });
+    expect(regradeFiles(k)).toEqual([]);
+    expect(existsSync(join(k.runDir, "turns", "1", "regrade"))).toBe(false);
+    expect(stderr.text()).toBe("");
+  });
+
+  it("a drifted run → the same doc_drift refusal a real regrade returns, with no judge", async () => {
+    const k = await keptRun({ author: writeReport });
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const judge = judgeFactory(() => true);
+    const real = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    const check = await regradeRuns({ ...opts(k, { makeJudge: noJudge }), checkOnly: true as const });
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+    expect(refusalOf(check).code).toBe("doc_drift");
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(k)).toEqual([]);
+  });
+
+  it("unchecked content → the same unchecked_content refusal a real regrade returns", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+    });
+    const scenarioFile = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnco-")), WIDER);
+    const real = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: judgeFactory(() => true).make });
+    const check = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: noJudge, checkOnly: true });
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+    expect(refusalOf(check).code).toBe("unchecked_content");
+    expect(regradeFiles(k)).toEqual([]);
+  });
+
+  it("a multi-dir batch → the same refusals[] (every dir, both codes) as the real path", async () => {
+    const withAppendix = (w: string) => {
+      writeReport(w);
+      writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+    };
+    const clean = await keptRun({ author: withAppendix });
+    const drifted = await keptRun({ author: withAppendix });
+    writeFileSync(join(drifted.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const scenarioFile = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnco2-")), WIDER);
+    const runDirs = [clean.runDir, drifted.runDir];
+    const judge = judgeFactory(() => true);
+    const real = await regradeRuns({ runDirs, scenarioFile, makeJudge: judge.make });
+    const check = await regradeRuns({ runDirs, scenarioFile, makeJudge: noJudge, checkOnly: true });
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+    const r = refusalOf(check);
+    expect(r.code).toBe("doc_drift");
+    expect(r.refusals!.map((x) => [x.runDir, x.code])).toEqual([
+      [clean.runDir, "unchecked_content"],
+      [drifted.runDir, "doc_drift"],
+      [drifted.runDir, "unchecked_content"],
+    ]);
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it("a non-evidence refusal (a dir with no persisted budget) is the real path's refusal too", async () => {
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    delete r.authoredCapture;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const real = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    // Options built in a variable: `checkOnly` widens to boolean (the widened overload, exercised at runtime).
+    const o = { ...opts(k, { makeJudge: noJudge }), checkOnly: true };
+    const check = await regradeRuns(o);
+    expect(refusalOf(check)).toEqual(refusalOf(real));
+  });
+
+  it("allowDocDrift / allowUnchecked → success, reporting what the real run would accept", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+    });
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const scenarioFile = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnco3-")), WIDER);
+    const base = { runDirs: [k.runDir], scenarioFile, makeJudge: noJudge, checkOnly: true as const };
+    expect(await regradeRuns({ ...base, allowDocDrift: true })).toMatchObject({ ok: false, code: "unchecked_content" });
+    expect(await regradeRuns({ ...base, allowUnchecked: true })).toMatchObject({ ok: false, code: "doc_drift" });
+    // A real re-grade warns here ("grading anyway", "never read by the live judge"); the preflight prints nothing.
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns({ ...base, allowDocDrift: true, allowUnchecked: true });
+    } finally {
+      stderr.restore();
+    }
+    expect(stderr.text()).toBe("");
+    if (!out.ok) throw new Error(out.message);
+    if (!("checkOnly" in out)) throw new Error("expected a preflight outcome");
+    expect(out.checkOnly).toBe(true);
+    expect(out.runs[0].liveDocDrift).toEqual([
+      { liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/report.md", change: "changed" }] },
+    ]);
+    expect(out.runs[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "authored", path: "outputs/appendix.md" }]);
+    expect(out.runs[0].uncheckedCount).toBe(1);
+    expect(regradeFiles(k)).toEqual([]);
+  });
+
+  it("types: the overloads never type a preflight's success as a regrade's (checked by typecheck, not run)", () => {
+    // Compiled under tsconfig.test.json; the bodies are never called. An unused @ts-expect-error fails typecheck.
+    const widened = async (k: Kept) => {
+      const o = { runDirs: [k.runDir], scenarioFile: k.scenarioFile, checkOnly: true };
+      const r = await regradeRuns(o);
+      // @ts-expect-error a widened checkOnly may return RegradeCheckPassed, which has no exitCode
+      if (r.ok) void r.exitCode;
+    };
+    const literal = async (k: Kept) => {
+      const r = await regradeRuns({ runDirs: [k.runDir], scenarioFile: k.scenarioFile, checkOnly: true });
+      // @ts-expect-error a literal checkOnly: true may return RegradeCheckPassed, which has no exitCode
+      if (r.ok) void r.exitCode;
+    };
+    const plain = async (k: Kept) => {
+      for (const o of [opts(k), { ...opts(k), checkOnly: false as const }]) {
+        const r = await regradeRuns(o);
+        if (r.ok) void r.exitCode; // no checkOnly (or false): the plain RegradeOutcome
+      }
+    };
+    expect([widened, literal, plain].every((f) => typeof f === "function")).toBe(true);
+  });
+
+  /** The real path's blind-assert warning for the same run, and the preflight's `blind` for it. */
+  async function blindBoth(k: Kept, assertYaml?: string) {
+    const scenarioFile = assertYaml ? scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnbl-")), assertYaml) : k.scenarioFile;
+    const stderr = captureStderr();
+    let check;
+    try {
+      check = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: noJudge, checkOnly: true });
+    } finally {
+      stderr.restore();
+    }
+    expect(stderr.text()).toBe("");
+    if (!check.ok || !("checkOnly" in check)) throw new Error("expected a passed preflight");
+    const real = captureStderr();
+    try {
+      const out = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: judgeFactory(() => true).make });
+      if (!out.ok) throw new Error(out.message);
+    } finally {
+      real.restore();
+    }
+    const warned = /(\d+) assert\(s\) have no live document to compare with \(([^)]*)\)/.exec(real.text());
+    return { blind: check.runs[0].blind, warned: warned ? { count: Number(warned[1]), list: warned[2] } : undefined };
+  }
+
+  it("blind: a run with no live fingerprint lists exactly the asserts a real re-grade warns about", async () => {
+    // Two scopes, so each assert is judged against its own live counterpart: 0 graded live but unfingerprinted
+    // (unknown), 1 refused live with no fingerprint (live_refused).
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+      assertYaml: `${SCOPED}  - semantic_matches:\n      rubric: ["the appendix exists"]\n      evidence_files: ["outputs/appendix.md"]\n`,
+    });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    for (const a of r.assertions) delete a.judgedDoc;
+    r.assertions[1].semanticEvidence = { reason: "in_scope_omitted", paths: ["outputs/report.md"] };
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const { blind, warned } = await blindBoth(k);
+    expect(blind).toEqual([
+      { assertionIndex: 0, docMatch: "unknown" },
+      { assertionIndex: 1, docMatch: "live_refused" },
+    ]);
+    expect(warned).toEqual({ count: 2, list: "assert 0: unknown, assert 1: live_refused" });
+  });
+
+  it("blind: a clean fingerprinted run → [] and no real warning", async () => {
+    const k = await keptRun({ author: writeReport });
+    const { blind, warned } = await blindBoth(k);
+    expect(blind).toEqual([]);
+    expect(warned).toBeUndefined();
+  });
+});
+
 describe("regrade: include_fork_results is part of the judged document's scope", () => {
   it("the key on live AND in the re-grade → docMatchesLive true (the skill_result section rebuilds byte-identically)", async () => {
     const k = await keptRun({ author: writeReport, assertYaml: FORKS, forkSkill: true });

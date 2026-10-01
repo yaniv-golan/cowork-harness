@@ -133,6 +133,37 @@ export type RegradeOutcome =
       completed?: RegradeRunReport[];
     };
 
+/** One run dir's evidence as a `checkOnly` preflight saw it: the pre-spend fields of `RegradeRunReport`, under
+ *  the same keys. `liveDocDrift` / `uncheckedSections` are non-empty only where `allowDocDrift` / `allowUnchecked`
+ *  accepted them (a real re-grade would grade over them, warned). Nothing graded, so no `docMatchesLive`. */
+export type RegradeCheckRun = Pick<
+  RegradeRunReport,
+  "runDir" | "turn" | "scenarioSha256" | "uncheckedSections" | "uncheckedCount" | "liveDocDrift" | "authoredCapture"
+> & {
+  /** The asserts that will be graded with nothing live to compare their document with — exactly those a real
+   *  re-grade warns about before its spend. `docMatch` is the comparison result each would get, before an accepted
+   *  drift (`allowDocDrift`) forces its `docMatchesLive` to `false`.
+   *  Never refused: the grade goes ahead, but those documents are neither drift- nor secret-checked. */
+  blind: BlindAssert[];
+};
+
+/** An assert with no live fingerprint to compare its rebuilt document with (see `RegradeCheckRun.blind`). */
+export interface BlindAssert {
+  /** Index of the assert in the new scenario's `assert:` list. */
+  assertionIndex: number;
+  docMatch: Extract<DocMatch, "unknown" | "live_refused">;
+}
+
+/** A `checkOnly` preflight that a real re-grade with the same options would NOT refuse: every run dir passed every
+ *  pre-spend step. A refusal is the ordinary `{ ok: false }` arm of `RegradeOutcome`, identical to the real one.
+ *  Like a real re-grade's `runs[]`, this arm is NOT scrubbed in-process (run dirs, section paths): a caller that
+ *  serializes it must scrub it itself — `regradeEnvelope` accepts only the re-grade arm (with `exitCode`). */
+export interface RegradeCheckPassed {
+  ok: true;
+  checkOnly: true;
+  runs: RegradeCheckRun[];
+}
+
 export interface RegradeOptions {
   runDirs: string[];
   scenarioFile: string;
@@ -153,6 +184,18 @@ export interface RegradeOptions {
   makeJudge?: Parameters<typeof judgesForRun>[1];
   /** Test seam: the clock that names the output file. */
   now?: () => Date;
+}
+
+/** `RegradeOptions` for an evidence preflight. Kept out of `RegradeOptions` itself so a caller that never asks for
+ *  one keeps the plain `RegradeOutcome` type. */
+export interface RegradeCheckOptions extends RegradeOptions {
+  /** Evidence preflight: run every pre-spend step a real re-grade runs — the builder's refusals, the judge-model
+   *  check, the live-inputs drift rebuild, the unchecked-content measurement — over EVERY run dir, honouring
+   *  `allowDocDrift` / `allowUnchecked` exactly as a real re-grade would, then stop. No judge is constructed or
+   *  called, no regrade file is written and no warning is printed (what a real re-grade would warn about is
+   *  returned instead: `blind`, accepted `liveDocDrift`, accepted `uncheckedSections`). Returns the refusal a real re-grade with these
+   *  options would return (same `code` and `refusals[]`), else `RegradeCheckPassed`. API-only (no CLI flag). */
+  checkOnly: true;
 }
 
 const sha256Hex = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
@@ -494,8 +537,8 @@ interface Prepared {
   unchecked: UncheckedSection[];
   /** The live drift accepted with `--allow-doc-drift` (empty without the flag: a drift is then refused). */
   drift: LiveDocDrift[];
-  /** `assert <i>: unknown|live_refused` for each assert with no live fingerprint to compare with. */
-  blind: string[];
+  /** Each assert with no live fingerprint to compare with (`unknown` | `live_refused`). */
+  blind: BlindAssert[];
   /** The asserts whose evidence will be refused, so no judge is called for them (left out of both warnings). */
   willRefuse: Set<Assertion>;
   turn: number;
@@ -507,9 +550,15 @@ interface Prepared {
 
 /**
  * Re-grade every run dir. Every run dir's evidence is rebuilt (and every refusal decided) BEFORE the first
- * judge call, so one bad dir in a batch spends nothing.
+ * judge call, so one bad dir in a batch spends nothing. With `checkOnly: true` it stops there (see
+ * `RegradeCheckOptions.checkOnly`): a refusal is returned as a real re-grade would return it, else `RegradeCheckPassed`.
  */
-export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome> {
+export async function regradeRuns(opts: RegradeCheckOptions): Promise<RegradeOutcome | RegradeCheckPassed>;
+export async function regradeRuns(opts: RegradeOptions & { checkOnly?: false }): Promise<RegradeOutcome>;
+/** A `checkOnly` not known to be `true` or absent (an options object built in a variable widens it to `boolean`):
+ *  typed as either outcome, so a preflight's success is never read as a re-grade's. */
+export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }): Promise<RegradeOutcome | RegradeCheckPassed>;
+export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }): Promise<RegradeOutcome | RegradeCheckPassed> {
   // ONE secret set for the judged document, the written file and every message, so they cannot disagree.
   const secrets = opts.secrets ?? collectSecrets();
   const refuse = (kind: "usage" | "runtime", message: string): RegradeOutcome => ({ ok: false, kind, message: scrub(message, secrets) });
@@ -651,7 +700,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     const blind = newSemantic.flatMap((a, ordinal) => {
       if (willRefuse.has(a)) return [];
       const { match } = compareWithLive(a, ordinal, sc.assert.indexOf(a), newDocs.get(a), live, false);
-      return match === "unknown" || match === "live_refused" ? [`assert ${sc.assert.indexOf(a)}: ${match}`] : [];
+      return match === "unknown" || match === "live_refused" ? [{ assertionIndex: sc.assert.indexOf(a), docMatch: match }] : [];
     });
     const unchecked = uncheckedSections(
       newDocs,
@@ -691,6 +740,24 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       refusals: refusals.map((r) => scrubRefusal(r, secrets)),
     };
 
+  // The preflight ends here: everything above is what a real re-grade decides before its first judge call. The
+  // values are those a real re-grade's `runs[]` carries, unscrubbed in-process as those are.
+  if (opts.checkOnly)
+    return {
+      ok: true,
+      checkOnly: true,
+      runs: prepared.map((p) => ({
+        runDir: p.runDir,
+        turn: p.turn,
+        scenarioSha256: scenarioSha256!,
+        uncheckedSections: p.unchecked,
+        uncheckedCount: p.unchecked.length,
+        liveDocDrift: p.drift,
+        blind: p.blind,
+        authoredCapture: p.budget,
+      })),
+    };
+
   const sc = loadScenario();
   const semantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
   const runs: RegradeRunReport[] = [];
@@ -721,7 +788,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     if (blind.length)
       warn(
         scrub(
-          `::warning:: ${CMD}: ${p.dirAsGiven}: ${blind.length} assert(s) have no live document to compare with (${blind.join(", ")}) — ` +
+          `::warning:: ${CMD}: ${p.dirAsGiven}: ${blind.length} assert(s) have no live document to compare with (${blind.map((b) => `assert ${b.assertionIndex}: ${b.docMatch}`).join(", ")}) — ` +
             `unknown: this assert's scope has no live fingerprint; live_refused: the live assert refused its evidence and no fingerprint was recorded. ` +
             `Their rebuilt documents could not be checked for drift or for a secret the live run scrubbed; this process's scrub set ` +
             `is all that protects them.`,
