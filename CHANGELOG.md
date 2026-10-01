@@ -582,29 +582,35 @@ All notable changes to this project are documented here. The format is based on
   reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
   check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
   directory (a FIFO, a socket or a device).
-- **`hostloop` finds the native agent that Claude Desktop 2.19675.0 and later stage.** Those Desktops stage the
-  native macOS agent per build, `claude-code/<ver>/<build>/claude.app/…`, and move an existing flat install
+- **`hostloop` finds the native agent that Claude Desktop 2.19675.0 stages.** That Desktop stages the native
+  macOS agent per build, `claude-code/<ver>/<build>/claude.app/…`, and moves an existing flat install
   (`claude-code/<ver>/claude.app/…`) into its build dir. The harness looked only for the flat layout, so `hostloop`
   failed on every such install, and `doctor` advised opening Cowork, which changed nothing. It reads both layouts:
-  - A same-major.minor patch drift is tolerated with a stderr note, as before, whichever layout it is staged in.
-    A baseline pinning flat 2.1.284 runs a staged 2.1.286 build with that note and no env var.
-  - A build counts only when its `.verified` marker names it. A build dir without that marker is one Desktop has not
-    finished staging, and is skipped.
+  - A same-major.minor patch difference is tolerated with a stderr note, as before, whichever layout it is staged
+    in. A baseline pinning flat 2.1.284 runs a staged 2.1.286 build with that note and no env var. The note says
+    whether the version used is newer or older than the pin and, when the pinned version's build dir is present
+    but not runnable, why.
+  - A build counts only when it is a real directory whose `.verified` marker names it. A build dir with no marker
+    (one Desktop has not finished staging), a marker naming another build, no `claude.app` or a bare `claude`
+    binary is skipped, and the message names the reason. Symlinked build and version dirs are skipped.
   - When several builds of one version are staged, a pin that names a build selects it. Otherwise the newest
-    `.verified` mtime wins, then build name, with a stderr note naming the builds passed over.
+    `.verified` mtime wins, then build name, with a stderr note naming the builds passed over. When a flat pin's
+    file is still present but a verified build of that version wins, a stderr line names both paths.
   - A different build of a pinned build needs `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, like a major/minor drift.
   - `sync` writes the full path of the staged build, preferring the build the asar's own manifest names, so the
     recorded `nativeStagedPath` exists under either layout.
 - **`doctor` names the cause when the native agent is not found, and gives that cause's remedy.** The causes are no
-  staging dir, nothing staged in either layout, a build Desktop has not finished staging, an unrecognised layout, a
-  major/minor or build mismatch, and a bad `COWORK_HOST_AGENT_BINARY`. It no longer says "open Cowork once" for them:
-  off macOS it says the native agent does not exist there, and it notes that an account whose Claude runs on its
-  organization's infrastructure has nothing staged locally. With `COWORK_HOST_AGENT_BINARY` set, it no longer shows a
-  patch-drift note for a binary the run does not use.
+  staging dir, nothing staged in either layout, a build Desktop has not finished staging, a build dir that is not a
+  runnable build, an unrecognised layout, a major/minor or build mismatch, and a bad `COWORK_HOST_AGENT_BINARY`. It
+  no longer says "open Cowork once" for them: off macOS it names the tier that does run there, and it notes that an
+  account whose Claude runs on its organization's infrastructure has nothing staged locally. With
+  `COWORK_HOST_AGENT_BINARY` set, it no longer shows a patch-drift note for a binary the run does not use.
 - **A pruned pinned ELF (`container`/`microvm`) points at the recovery runbook.** The error and `doctor`'s remedy
   name the way to keep the exact pin: recover and sha-verify that version, then set `COWORK_AGENT_BINARY` to it
-  ([docs/maintenance.md](./docs/maintenance.md#recovering-an-old-agent-version)). They previously offered only
-  `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, which runs a different version.
+  ([docs/maintenance.md](./docs/maintenance.md#recovering-an-old-agent-version)). The error previously offered only
+  `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, which runs a different version, and `doctor` said to open Cowork. For an
+  ELF that was never staged, both say that Desktop stages it on macOS and that elsewhere `COWORK_AGENT_BINARY` must
+  point at a Linux ELF, instead of saying to open Cowork.
 
 ### Documentation
 

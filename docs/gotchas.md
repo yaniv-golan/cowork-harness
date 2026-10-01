@@ -35,11 +35,12 @@
     check downgrades to advisory. Use it to get unblocked once, never in CI, and never when the answer
     depends on which agent version ran.
 - **`Staged NATIVE agent binary not found` at `hostloop`.** The message says why, and `doctor --tier
-  hostloop` gives the remedy for that cause. Claude Desktop 2.19675.0 and later stage the native agent per
-  build, `claude-code/<ver>/<build>/claude.app/…`; the harness reads that layout and the older flat one. A
-  pinned version Desktop replaced with a same-major.minor patch runs with a stderr note and no env var. A
+  hostloop` gives the remedy for that cause. Claude Desktop 2.19675.0 stages the native agent per build,
+  `claude-code/<ver>/<build>/claude.app/…`; the harness reads that layout and the older flat one. A pinned
+  version Desktop replaced with a same-major.minor patch runs with a stderr note and no env var. A
   major/minor change, or a different build of a pinned build, needs `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`.
-  A build dir with no `.verified` marker is one Desktop has not finished staging and is skipped. If your
+  A build dir whose `.verified` marker is missing or names another build is skipped, and the message says
+  which. If your
   Claude runs on your organization's infrastructure, Desktop stages nothing locally: set
   `COWORK_HOST_AGENT_BINARY` to a native agent binary.
 - **`lint` exits 127.** `python3` isn't on `PATH`. Install it or point `PYTHON` at an interpreter.
