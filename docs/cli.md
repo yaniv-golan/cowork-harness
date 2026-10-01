@@ -379,8 +379,17 @@ not run again; the judge call is the only spend.
   error}`) on stdout. `runs[]` holds only graded run dirs: a refusal refuses the whole batch and prints the error
   envelope instead. On a drift or unchecked-content refusal that envelope carries `error.code` (`doc_drift` when
   any dir drifted, else `unchecked_content`) and `refusals[]` — one `{runDir, code, uncheckedCount?,
-  uncheckedSections?, liveDocDrift?}` per refused run dir and code — so a batch caller can list what to fix. After a
+  uncheckedSections?, liveDocDrift?}` per refused run dir and code — so a batch caller can list what to fix. A
+  scenario with no `semantic_matches` assert is refused with `error.code: "no_semantic_asserts"` (category
+  `usage`): nothing to re-grade, which a caller can treat as "nothing to do" rather than a failure. After a
   write failure it carries the run dirs already graded in `runs[]`.
+- **Metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade file carry `metrics`, in the
+  `RunResult.metrics` shape, re-read from the kept work dir as it is now. A file is read only while its bytes still
+  equal the run's own recorded post-run hash (`RunResult.workspaceFiles`); a file edited since the run, or one the
+  run recorded no hash for, is `unavailable: "pruned"` — even under `--allow-doc-drift`. Metrics ride on a semantic
+  re-grade: a scenario with `metrics:` and no `semantic_matches` is still refused (`no_semantic_asserts`) —
+  re-measure it with `verify-run`, which needs no judge. A file under `uploads/` is not in the run's recorded
+  post-run hashes, so it re-measures as `pruned`.
 
 **What is covered.** The JSON envelope — its frame, every `runs[]` key, the named assertion-entry keys, the
 enums, `error.code` and `refusals[]` — is a covered surface ([SPEC.md](../SPEC.md) §12), described by
@@ -549,7 +558,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); an optional seed prompt is sent as the first turn. Attachments, verbosity, tier limits and `--raw`: see [Flags worth knowing](#flags-worth-knowing) | debugging a multi-turn flow by hand |
 | `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter** (key flags below; `replay --explain` prints the evidence behind every passing assert) | **token-free, Docker-free CI** from a once-recorded run |
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path/machine-inventory) + a staleness check (allowlist and skip flags below); a dir argument scans `*.cassette.json` non-recursively | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
-| `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
+| `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s). It also re-measures the scenario's `metrics:` from the kept work dir (`results[0].metrics`), reading a file only while its bytes equal the run's recorded post-run hash (else `pruned`) — the $0 re-measure route, including for a scenario with no `semantic_matches` that `regrade` refuses | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for |
 | `fixture export <run-dir> --out <dir>` | Copy a kept run's outputs tree, byte-for-byte, into a directory a scenario can start from. Refuses (writing nothing) on a secret in any file or its name, or a host path in a text file or a file name, and never alters bytes; compressed or binary formats are copied without inspection. See [Exporting a run's outputs as a fixture](#exporting-a-runs-outputs-as-a-fixture-fixture-export) | turning a run that stopped after step N into the starting state for a test of step N+1 |
 | `ref freeze <run-dir> --scenario <scenario.yaml> --out <store>` · `ref verify <store>…` | Freeze a kept run's judged document as a frozen reference for `semantic_pairwise`, once, never rewritten; re-hash a store's documents. See [Frozen references](#frozen-references-for-semantic_pairwise-ref) | setting the baseline a pairwise judge compares later runs with |

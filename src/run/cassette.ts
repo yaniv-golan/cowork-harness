@@ -1,4 +1,5 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
+import { measureMetrics, type MetricsContext } from "../metrics.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
@@ -521,7 +522,7 @@ export function cassetteSchemaUrl(version: number): string {
  *  every cassette, exactly the unconditional bump this mechanism exists to avoid (the falsified v1
  *  design). Returning 0 means "any supported reader interprets this value the same way" — the BASE=10
  *  floor in requiredVersionFor still applies via Math.max, so 0 is not "no version".
- *  MUST carry one entry per ScenarioObject.shape key (17 today) — enforced by a coverage test in
+ *  MUST carry one entry per ScenarioObject.shape key (18 today) — enforced by a coverage test in
  *  test/cassette-version-stamp.test.ts. Adding a scenario key without deciding its cassette-version
  *  impact must red CI, not silently default to 0. */
 export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
@@ -556,6 +557,10 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // A fixture cassette replays from its manifest (the fixture files are recorded pre-run), but an older reader
   // would skip the `workspaceFixtureSig` staleness check — a fixture edit would replay as current. Present ⇒ v14.
   workspace_fixture: (v) => (v !== undefined ? 14 : 0),
+  // Metrics are reported beside the verdict and never change it, so an older reader (its cassette reader keeps
+  // unknown scenario keys — `CassetteShape.scenario` is a loose object) replays to the same verdict and only lacks
+  // `RunResult.metrics`.
+  metrics: () => 0,
 };
 
 /** The assertion-level features that need a v14 reader — ONE list, so a later key of this release appends a predicate
@@ -3270,6 +3275,33 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
   return out;
 }
 
+/** `RunResult.metrics` on replay: the frozen scenario's declared metrics, measured against the materialized manifest
+ *  through the live lane's own gates. The cassette scenario is read leniently, so the declaration is validated here;
+ *  an invalid one is skipped loudly (absent). A metric the RECORDING cannot support — no artifact manifest, a body it
+ *  did not keep, a link placeholder, a missing pre- or post-run hash — is said once, aggregated; a metric that reads
+ *  what the run did (no file, an untouched file, not a number) is the recorded truth and is not warned about. */
+export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["metrics"] {
+  if (frozen === undefined) return undefined;
+  const parsed = ScenarioObject.shape.metrics.safeParse(frozen);
+  if (!parsed.success) {
+    warn(
+      `::warning:: [replay] metrics: the cassette's frozen metrics declaration is invalid — not measured (${compactSchemaError(parsed.error.message)})\n`,
+    );
+    return undefined;
+  }
+  const decls = parsed.data ?? [];
+  if (decls.length === 0) return undefined;
+  const measured = measureMetrics(ctx, decls);
+  const limited = measured.filter((x) => x.evidenceLimited);
+  if (limited.length)
+    warn(
+      `::warning:: [replay] metrics: ${limited.length}/${measured.length} not measurable from this cassette (` +
+        limited.map((x) => `${x.id}: ${x.unavailable} — ${x.why}${x.remedy ? `; ${x.remedy}` : ""}`).join("; ") +
+        `)\n`,
+    );
+  return measured.map((x) => (x.value !== undefined ? { id: x.id, value: x.value } : { id: x.id, unavailable: x.unavailable! }));
+}
+
 /** LENIENT structural schema for a cassette — guards exactly the fields the replay/scan/staleness paths
  *  dereference (`events`, `scenario.prompt`, `scenario.session`, `scenario.assert`) so a malformed-but-valid
  *  JSON cassette is a clean error instead of a runtime crash. Deliberately loose (`z.looseObject`, NOT the
@@ -5712,6 +5744,7 @@ function replayErrorResult(file: string): RunResult {
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
     command: "replay", // #48
     lane: undefined, // unreadable cassette — no scenario to read a lane from
+    metrics: undefined, // nothing was driven, so nothing is measured
     scratchpadEvidenceComplete: false, // no run happened; nothing was observed
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
     referencesAccessed: undefined, // ditto — and `undefined` here means CANNOT VERIFY, never "no accesses" (see the field doc)
@@ -6201,6 +6234,9 @@ async function writeReassertedAssertBlock(
   const policy = loadRedactionPolicy([process.cwd(), dirname(srcPath), dirname(cassetteFile)]);
   let nextAssert: unknown[] = onDisk.assert ?? [];
   let nextExpectDenied: unknown[] = onDisk.expect_denied ?? [];
+  // `metrics` is grading-time like `assert` (replay --assert-from measures the on-disk declaration), so --write
+  // freezes it too; absent on disk ⇒ absent in the cassette.
+  let nextMetrics: unknown[] | undefined = onDisk.metrics;
   if (policy.patterns.length || policy.keyNames.length) {
     const redactedAssert = redactStructural(onDisk.assert ?? [], policy) as unknown[];
     const redactedExpectDenied = redactStructural(onDisk.expect_denied ?? [], policy) as unknown[];
@@ -6217,20 +6253,24 @@ async function writeReassertedAssertBlock(
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassetteFile));
     nextAssert = redactedAssert;
     nextExpectDenied = redactedExpectDenied;
+    if (nextMetrics !== undefined) nextMetrics = redactStructural(nextMetrics, policy) as unknown[];
   }
   // Write only if the (post-redaction) block differs from the frozen copy. Idempotent because we always
   // redact from the PLAINTEXT on-disk source (deterministic) — a second --write yields the same block.
-  const scn = rawCassette.scenario as { assert?: unknown[]; expect_denied?: unknown[] };
+  const scn = rawCassette.scenario as { assert?: unknown[]; expect_denied?: unknown[]; metrics?: unknown[] };
   const assertSame = JSON.stringify(scn.assert ?? []) === JSON.stringify(nextAssert);
   const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
-  if (assertSame && expectSame) {
-    warn(`::notice:: [replay --write] ${cassetteFile}: assert block already matches the on-disk block — no write\n`);
+  const metricsSame = JSON.stringify(scn.metrics ?? null) === JSON.stringify(nextMetrics ?? null);
+  if (assertSame && expectSame && metricsSame) {
+    warn(`::notice:: [replay --write] ${cassetteFile}: assert, expect_denied and metrics already match the on-disk scenario — no write\n`);
     return;
   }
   scn.assert = nextAssert;
   // Only manage expect_denied when it's meaningful — avoid gratuitously adding an empty field to a cassette
   // that never had one (keep the diff to what actually changed).
   if (nextExpectDenied.length || scn.expect_denied !== undefined) scn.expect_denied = nextExpectDenied;
+  if (nextMetrics !== undefined) scn.metrics = nextMetrics;
+  else delete scn.metrics;
   // A new assert block can need a newer READER (the object form of tool_called → v13): restamp exactly as
   // record does, or an older CLI meets a v12-stamped cassette carrying v13 semantics and says "re-record"
   // instead of "too new". Never LOWER the stamp: the rest of the cassette was written for the old one.
@@ -6578,7 +6618,14 @@ export async function cmdReplay(args: string[]) {
         // Shallow clone — never mutate the parsed cassette in place.
         cassette = {
           ...rc.cassette,
-          scenario: { ...rc.cassette.scenario, assert: onDisk.assert ?? [], expect_denied: onDisk.expect_denied ?? [] },
+          // `metrics` is grading-time like `assert` (it never shapes the recording, which always arms the pre-run
+          // manifest), so the on-disk declaration is the one measured; none on disk ⇒ none measured.
+          scenario: {
+            ...rc.cassette.scenario,
+            assert: onDisk.assert ?? [],
+            expect_denied: onDisk.expect_denied ?? [],
+            metrics: onDisk.metrics,
+          },
         };
         // HONESTY: the skill-drift guard only bites when a skill fingerprint was recorded. computeStaleness
         // returns [] with no `fingerprint.skillHash`, so failOnSkillDrift has nothing to escalate — claiming
@@ -6637,6 +6684,11 @@ export async function cmdReplay(args: string[]) {
                 warn(
                   `::notice:: [replay] ${src.path} has a different \`assert:\` block; replay used the assertions frozen in the cassette. ` +
                     `Re-record, or \`replay --assert-from ${src.path}\` to re-check against the on-disk block.\n`,
+                );
+              if (norm(onDisk.metrics) !== norm(rc.cassette.scenario.metrics))
+                warn(
+                  `::notice:: [replay] ${src.path} has a different \`metrics:\` block; replay measured the metrics frozen in the cassette. ` +
+                    `\`replay --assert-from ${src.path}\` measures the on-disk block (add --write to freeze it).\n`,
                 );
               // Prompt drift is invisible to the fingerprint (see scenarioContentDrift). Surface it as a
               // non-failing notice here too — the default lane never changes the verdict.
@@ -8463,6 +8515,8 @@ export async function replayCassette(
       ...budgetFields(rec),
     };
     const assertions = evaluate(replayable, assertCtx);
+    // Metrics, measured from the materialized manifest before anything below (--mutate) touches it.
+    const metrics = replayMetrics(assertCtx, cassette.scenario.metrics);
 
     // MUTATION COVERAGE (--mutate). A green replay says the assertions passed; it cannot say whether they
     // would have FAILED had the output been wrong. A real 21-cassette corpus turned out to contain seven
@@ -8714,6 +8768,7 @@ export async function replayCassette(
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       command: "replay", // #48
       mutation: mutationReport, // --mutate only; undefined otherwise
+      metrics,
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,

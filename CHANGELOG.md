@@ -23,8 +23,28 @@ All notable changes to this project are documented here. The format is based on
   schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
   assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
   `artifact_text` / `artifact_json`, or a `question_option_count` assertion, also stamps v14.
+- **`authored: true` on a path outside `outputs/`, `uploads/` and the connected folders now fails
+  evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
+  the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
+  unaffected: such a path is not in the cassette's manifest.
 
 ### Added
+
+- **Scenario `metrics:` — numbers a scenario measures, beside the verdict.** Each entry
+  (`{id, artifact, path, better, scale | unbounded, min?}`; `scale` is the upper bound of the range, `min` the floor, default 0) reads one number from a JSON file the run wrote and is
+  reported in `RunResult.metrics` as `{id, value}` or `{id, unavailable: <reason>}` — one per declared id, in order,
+  never a `0` for a missing value and never a converted string. Reasons: `missing_artifact`, `missing_path`,
+  `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`. A file the run did not write is
+  `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a file the run
+  rewrote unchanged is treated as untouched. `replay` re-measures from the cassette manifest and warns once about
+  metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration and `--write`
+  freezes it; a plain replay notices an on-disk `metrics:` drift. `verify-run` re-measures the current declaration
+  from the kept work dir — no judge, no spend. The published scenario schema mirrors every other load rule.
+  Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`.
+  Declaring a metric arms the pre-run manifest, which a scenario with no other baseline-reading key did not capture
+  before: such runs now persist `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back
+  the files the run authored (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
+  connected folder before each run (time on a large connected folder).
 
 - **`lint-skill --suppressions <file>` accepts reviewed findings from a JSON file, one site per entry.** Each
   entry (`{rule, file, match?, reason}`, `reason` required) suppresses at most one finding: of that rule, in
@@ -284,6 +304,12 @@ All notable changes to this project are documented here. The format is based on
   category stays `runtime` and exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`), so a
   consumer no longer has to match message prose to tell "refused on cost" from "did not load";
   `error.code` is absent on every other error.
+- **`regrade` names a scenario with nothing to re-grade.** Its refusal of a scenario with no `semantic_matches`
+  assert now carries `error.code: "no_semantic_asserts"` in the JSON error envelope (category `usage`, exit 2 as
+  before), so a caller can tell "nothing to re-grade" from a failure without reading the message.
+- **`regrade` re-reads declared metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade
+  file carry `metrics` (the `RunResult.metrics` shape), re-read from the kept work dir. A file is read only while
+  its bytes still equal the run's own recorded post-run hash; a file edited since the run is `pruned`.
 
 ### Changed
 
@@ -467,6 +493,17 @@ All notable changes to this project are documented here. The format is based on
   - A sub-agent's reasoning and web searches now appear in the `subagent` entries of `run.jsonl` and
     `trace.json` whenever the reasoning is captured, including on a run salvaged after an unanswered gate. Before, they
     appeared there only when the run had no usable timeline.
+- **`authored: true` no longer passes on a file the pre-run walk never covered.** The pre-run manifest walks
+  `outputs/`, `uploads/` and the connected folders only, so a file staged elsewhere under the work root before
+  the run (a plugin's or skill's own files under `.local-plugins/`, say) was missing from it and read as "new this
+  run". On `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json`, `authored: true` on such a
+  path now fails evidence-unavailable, naming the folders the manifest covers. The check, the manifest lookup and the
+  symlinked-directory check all use the file's stored on-disk name, matched exactly: on a case-sensitive filesystem
+  `Outputs/` is not `outputs/`, and a case- or normalization-twin of a manifest file is never read as that file.
+- **`artifact_json` and `artifact_text` no longer hang on a FIFO.** A FIFO at the artifact path was opened for
+  reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
+  check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
+  directory (a FIFO, a socket or a device).
 
 ### Documentation
 

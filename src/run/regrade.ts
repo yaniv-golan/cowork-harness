@@ -16,6 +16,7 @@
  * `result.json` is never modified and no run-index row is added — a re-grade is not a run, and indexing it
  * would count the run twice in `stats`.
  */
+import { remeasureMetrics } from "../metrics.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -119,6 +120,9 @@ export interface RegradeRunReport extends JudgeSpend {
   assertions: RegradedAssertion[];
   notRegraded: Array<{ assertionIndex: number; keys: string[] }>;
   authoredCapture: { totalBytes: number; perFileBytes?: number; source: "persisted" | "flag" };
+  /** The scenario's declared metrics, re-read from the kept work dir as it is now and checked against the run's own
+   *  post-run hashes (a file changed since the run is `pruned`). Absent when the scenario declares none. */
+  metrics?: NonNullable<RunResult["metrics"]>;
 }
 
 export type RegradeOutcome =
@@ -128,8 +132,9 @@ export type RegradeOutcome =
       kind: "usage" | "runtime";
       message: string;
       /** Set on an evidence refusal (`refusals` lists every refused run dir): `doc_drift` when any dir drifted,
-       *  else `unchecked_content`. */
-      code?: "doc_drift" | "unchecked_content";
+       *  else `unchecked_content`. `no_semantic_asserts`: the scenario has no `semantic_matches` assert, so there is
+       *  nothing to re-grade (a caller can tell this refusal from a failure without reading the message). */
+      code?: "doc_drift" | "unchecked_content" | "no_semantic_asserts";
       refusals?: RegradeRefusal[];
       /** A failure writing a regrade file after earlier run dirs were graded and written: their reports. */
       completed?: RegradeRunReport[];
@@ -548,6 +553,9 @@ interface Prepared {
   resultSha256: string;
   budget: RegradeRunReport["authoredCapture"];
   live: LiveSide;
+  /** The run's own post-run file record: a metric is read only from bytes that still match it (none recorded ⇒
+   *  every metric is `pruned`). */
+  workspaceFiles: RunResult["workspaceFiles"];
 }
 
 /**
@@ -603,7 +611,13 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     const sc = first.scenario;
     scenarioSha256 ??= sha256Hex(readFileSync(opts.scenarioFile)); // loaded above, so it is readable
     const semantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
-    if (semantic.length === 0) return refuse("usage", `${CMD}: ${opts.scenarioFile} has no semantic_matches assert — nothing to re-grade`);
+    if (semantic.length === 0)
+      return {
+        ok: false,
+        kind: "usage",
+        message: scrub(`${CMD}: ${opts.scenarioFile} has no semantic_matches assert — nothing to re-grade`, secrets),
+        code: "no_semantic_asserts",
+      };
     if (opts.judgeModel === undefined) {
       const bad = sc.assert.flatMap((a, i) => {
         if (!a.semantic_matches) return [];
@@ -730,6 +744,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       resultSha256: sha256Hex(readFileSync(turnArtifactPath(runDir, second.turn, "result.json"))),
       budget,
       live,
+      workspaceFiles: second.result.workspaceFiles,
     });
   }
 
@@ -808,6 +823,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
           `${CMD}: internal: assert ${sc.assert.indexOf(a)} was predicted to refuse its evidence but a judge was called for it`,
         );
     const graded = evaluate(semantic, p.ctx);
+    const metrics = remeasureMetrics(p.ctx, { workspaceFiles: p.workspaceFiles }, sc.metrics);
 
     const differing: DifferingSection[] = [];
     // A section the accepted drift touched (kind and path): an assert whose document carries one read drifted bytes.
@@ -860,6 +876,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       assertions,
       notRegraded,
       original: { resultSha256: p.resultSha256, turn: p.turn },
+      ...(metrics ? { metrics } : {}),
     };
     // Scrubbed as a whole document, as result.json is: the rationales are scrubbed at grade time, but the
     // rubric and messages echo scenario text, and one pass over the serialized body leaves no field out.
@@ -896,6 +913,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       assertions,
       notRegraded,
       authoredCapture: p.budget,
+      ...(metrics ? { metrics } : {}),
     });
   }
   return { ok: true, exitCode: runs.every((r) => r.pass) ? 0 : 1, runs };

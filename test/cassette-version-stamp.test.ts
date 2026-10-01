@@ -75,7 +75,7 @@ describe("KEY_REQUIRED_VERSION coverage — every ScenarioObject key must be cla
   // CI, not silently default to 0 (a sparse map + `?? 0` fallback would reintroduce exactly that gap).
   it("has an entry for every one of ScenarioObject.shape's keys", () => {
     const scenarioKeys = Object.keys(ScenarioObject.shape);
-    expect(scenarioKeys.length).toBe(17); // pins the count so a schema addition is visible here too
+    expect(scenarioKeys.length).toBe(18); // pins the count so a schema addition is visible here too
     for (const key of scenarioKeys) {
       expect(KEY_REQUIRED_VERSION).toHaveProperty(key);
     }

@@ -658,14 +658,16 @@ collision) prints the error envelope instead, as before.
 document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`, described by
 **`schema/regrade.json`** (a §12-covered surface). Each `runs[]` entry is one run dir:
 `{runDir, turn, scenarioSha256, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, uncheckedCount,
-uncheckedSections[], docMatchesLive, differingSections[], liveDocDrift[], assertions[], notRegraded[], authoredCapture}`,
+uncheckedSections[], docMatchesLive, differingSections[], liveDocDrift[], assertions[], notRegraded[], authoredCapture, metrics?}`,
 and the document's top level also carries `judgeCostUsd?` and `unpricedGrades` summed over every run dir. `runs[]`
 holds only graded run dirs: a refusal refuses the whole batch and prints the error envelope instead.
 `scenarioSha256` is the SHA-256 of the scenario file's bytes. `judgeCostUsd` is the sum of the priced judge
 calls and is absent when none was priced (never `0` for unknown); `unpricedGrades > 0` makes it a floor.
 `invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
 `assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
-every other assert as `{assertionIndex, keys}`.
+every other assert as `{assertionIndex, keys}`. `metrics` (only when the scenario declares `metrics:`) is the
+`RunResult.metrics` shape re-read from the kept work dir; a file whose bytes differ from the run's recorded
+post-run hash (`RunResult.workspaceFiles`) is `unavailable: "pruned"`.
 
 `docMatchesLive` is `true` | `false` | `"scope_changed"` | `"unknown"` | `"live_refused"` | `"not_graded"`. **Per
 assert** it describes that assert's own document: whether the recomposed judged document equals, section for
@@ -712,7 +714,7 @@ so its extra content can refuse. The envelope is scrubbed with the same secret s
 **Exit codes:** `0` every re-graded assert passes · `1` any fails or is judge-invalid · `2`, with three meanings:
 a usage error; a refusal before any judge call (a multi-turn, partial, replay or chat run dir, a pruned work dir,
 a missing transcript sidecar, a run that did not record `authoredCapture` without `--authored-total-bytes`, an
-alias judge model, a scenario with no `semantic_matches`, and the two evidence refusals above); or a failure
+alias judge model, a scenario with no `semantic_matches` (`error.code: "no_semantic_asserts"`), and the two evidence refusals above); or a failure
 writing a regrade file after earlier run dirs were graded. Each is the shared error envelope. The evidence
 refusals are collected over every run dir and carry `error.code` — `doc_drift` when any dir drifted, else
 `unchecked_content` — and a top-level `refusals[]`, one entry per run dir and code: `{runDir, code,
@@ -836,6 +838,7 @@ abridged to the fields most consumers branch on. The complete field list is
   "userVisibleRoots?": ["string"],               // user-visible mount roots (relative to mnt/) — `outputs` plus each connected folder's resolved mount name; plugins excluded
   "readonlyFolderRoots?": ["string"],            // subset of userVisibleRoots that are read-only (mode:"r") connected-folder mounts — inputs, not deliverables; `artifacts` excludes them
   "artifacts?": [{ "path","bytes","preRun?" }],  // files written under the user-visible roots (paths + sizes only — no content snapshot); `preRun: true` = existed before the run with the same content (inherited, e.g. from a workspace_fixture — not produced by this run)
+  "metrics?": [{ "id","value?","unavailable?" }], // the scenario's declared metrics, one per id in declaration order, exactly one of value (a finite number read from a JSON file the run wrote) or unavailable: missing_artifact|missing_path|not_json|not_a_number|readonly|size|remote|pruned|pre_run (pre_run = the run did not write the file, by content hash against the pre-run manifest; a byte-identical rewrite counts as untouched). Never part of the verdict; absent when none are declared, on a partial run, on chat, on a replay that could not drive the cassette, and on a replay whose frozen declaration is invalid
   "workspaceFixture?": "string",                 // the scenario's workspace_fixture ref as the scenario file wrote it (relative to that file; not the resolved path) — the same on live and replay; absent for a scenario not loaded from a file (an in-memory one, a `--from-embedded` re-record) and on replay of a cassette with no `scenarioSource`
   "preRunPaths?": ["string"],                    // workRoot-relative paths under the user-visible roots that existed BEFORE the agent ran — the `no_unexpected_files` baseline; absent when the run never captured one or predates the seam — a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable (every live sandbox tier captures it now, microvm included)
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
@@ -868,11 +871,12 @@ assertions (never user-authored themselves):
   "results":[],  // [] except record's post-run refusal: the refused run, beside the non-null error
   "budget?": { /* §11 --max-budget-usd marker — present when a pre-flight ran */ },
   "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string",
-             "code?": "budget_exceeded|doc_drift|unchecked_content", "budget?": { /* §11 --max-budget-usd */ } } }
+             "code?": "budget_exceeded|doc_drift|unchecked_content|no_semantic_asserts", "budget?": { /* §11 --max-budget-usd */ } } }
 ```
 `error.code` narrows a category, never replaces it: `budget_exceeded` is the `--max-budget-usd` refusal (§11);
 `doc_drift` and `unchecked_content` are `regrade`'s evidence refusals, whose error envelope also carries a
-top-level `refusals[]` (see `regrade` above).
+top-level `refusals[]` (see `regrade` above); `no_semantic_asserts` is `regrade`'s `usage` refusal of a scenario
+with no `semantic_matches` assert (nothing to re-grade).
 Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryError`→`boundary`).
 `results` is `[]` with one exception: when `record` refuses to write a cassette after the agent finished,
 the run it refused is in `results[0]` beside the non-null `error` (category `runtime`, exit `1`; see
@@ -1142,10 +1146,11 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `version` / `command` / `ok` / `error:null` / `judgeCostUsd?` / `unpricedGrades` / `runs[]`); each `runs[]`
   entry's keys (`runDir`, `turn`, `scenarioSha256`, `regradeFile`, `pass`, `invalidGrades`, `judgeCostUsd?`,
   `unpricedGrades`, `uncheckedCount`, `uncheckedSections[]`, `docMatchesLive`, `differingSections[]`,
-  `liveDocDrift[]`, `assertions[]`, `notRegraded[]`, `authoredCapture`) and their nested shapes; on an
+  `liveDocDrift[]`, `assertions[]`, `notRegraded[]`, `authoredCapture`, `metrics?`) and their nested shapes; on an
   `assertions[]` entry, only `assertionIndex`, `docMatchesLive`, `pass`, `judgeInvalid`, `judgeModel`,
   `judgeCostUsd` and `semanticClaims` (its other keys follow the `RunResult` assertion entry, which is not
-  pinned field by field); and the error envelope's `error.code` values (`doc_drift`, `unchecked_content`),
+  pinned field by field); and the error envelope's `error.code` values (`doc_drift`, `unchecked_content`,
+  `no_semantic_asserts`),
   `refusals[]` and post-write-failure `runs[]`. The enums are covered as sets: `docMatchesLive`, `change`,
   `authoredCapture.source`, a section's `kind`, `error.code`. **Adding a key or an enum value is MINOR** — a
   consumer must treat an unknown `docMatchesLive` as not `true` (one validating against an older schema copy
