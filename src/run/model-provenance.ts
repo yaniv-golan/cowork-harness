@@ -46,7 +46,7 @@ const UNRESOLVABLE_ALIASES = new Set(["best", "opusplan"]);
 /** Normalize an id the way the agent binary's own comparator does — `y(e)=e.replace(/\[1m\]$/i,"")` then
  *  a case-insensitive compare. `[1m]` is a CONTEXT-WINDOW selector Cowork's picker appends to the same
  *  model (`e.id+"[1m]"`), not a different model, so a `[1m]` pin is honored by the bare id. */
-const normalizeModelId = (m: string): string => m.replace(/\[\dm\]$/i, "").toLowerCase();
+export const normalizeModelId = (m: string): string => m.replace(/\[\dm\]$/i, "").toLowerCase();
 
 /** Is `id` a CONCRETE model id — one that names exactly one model — rather than a family alias
  *  (`opus`), a mode/any alias (`best`, `opusplan`), or nothing? `[1m]` is a context-window selector on the

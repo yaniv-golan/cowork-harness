@@ -480,3 +480,29 @@ describe("the stub's contract matches the real CLI", () => {
     expect(parsed.results[0].privacyScanned).toBe(true);
   });
 });
+
+describe("pre-commit — a recorded transcript's non-assistant/user lines are never committed", () => {
+  // Agent-binary text — the built-in sub-agent prompt in a `prompt_snapshot` attachment, the tool and agent
+  // listings, the frame around a sub-agent's report — rides in a run's transcript lines. A staged fixture
+  // transcript (.jsonl under test/fixtures/ or examples/) must not carry any of it.
+  const attachment = '{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["x"]}}\n';
+  it("blocks an attachment line in a staged fixture transcript", () => {
+    const { code, out } = runHook(
+      scratchRepo({ stubExit: 0, stageBaseline: false, stage: { "test/fixtures/r/agent-x.jsonl": attachment } }),
+    );
+    expect(code).toBe(1);
+    expect(out).toMatch(/test\/fixtures\/r\/agent-x\.jsonl/);
+  });
+
+  it("blocks a sentinel of agent-binary text in a staged example transcript", () => {
+    const line = '{"type":"user","message":{"content":"[Subagent hand-back] The text below"}}\n';
+    const { code } = runHook(scratchRepo({ stubExit: 0, stageBaseline: false, stage: { "examples/x/events.jsonl": line } }));
+    expect(code).toBe(1);
+  });
+
+  it("lets a clean fixture transcript through, and ignores .jsonl outside test/fixtures/ and examples/", () => {
+    const clean = '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n';
+    expect(runHook(scratchRepo({ stubExit: 0, stageBaseline: false, stage: { "test/fixtures/r/events.jsonl": clean } })).code).toBe(0);
+    expect(runHook(scratchRepo({ stubExit: 0, stageBaseline: false, stage: { "notes/a.jsonl": attachment } })).code).toBe(0);
+  });
+});

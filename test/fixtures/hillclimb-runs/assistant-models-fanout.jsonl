@@ -1,0 +1,13 @@
+{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5"}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5"}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5"}}
+{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"model":"claude-opus-5"}}
+{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"model":"claude-opus-5"}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5"}}
+{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"model":"claude-sonnet-5"}}
+{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"model":"claude-sonnet-5"}}
+{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"model":"claude-sonnet-5"}}
+{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"model":"claude-sonnet-5"}}
+{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"model":"claude-sonnet-5"}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5"}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5"}}

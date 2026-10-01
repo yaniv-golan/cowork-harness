@@ -39,6 +39,25 @@ if [ -n "$files" ]; then
 fi
 
 #
+# A recorded transcript's non-assistant/user lines are never committed. A run's transcript carries agent-binary
+# text that is not ours to publish — the built-in sub-agent prompt in a `prompt_snapshot` attachment, the tool
+# and agent listings, the frame the binary wraps around a sub-agent's report. Any staged .jsonl under
+# test/fixtures/ or examples/ whose STAGED blob has an attachment line or one of those sentinels is blocked.
+# (`|| true` binds to the whole pipeline: a grep that matches nothing must not kill the hook under pipefail.)
+transcript_hits=$(
+  git diff --cached --name-only --diff-filter=ACMR | grep -E '^(test/fixtures|examples)/.*\.jsonl$' | while read -r f; do
+    [ -n "$f" ] || continue
+    if git show ":$f" 2>/dev/null | grep -qE '"type": *"attachment"|You are an agent for Claude Code|Anthropic.s official CLI|prompt_snapshot|\[Subagent hand-back\]|use SendMessage with to:'; then echo "$f"; fi
+  done || true
+)
+if [ -n "$transcript_hits" ]; then
+  echo "✖ pre-commit: a staged fixture transcript carries agent-binary text (an attachment line, a built-in"
+  echo "  prompt, or the sub-agent hand-back frame). Keep only its assistant/user lines:"
+  printf '    %s\n' $transcript_hits
+  echo "  (Bypass with 'git commit --no-verify' if you must.)"
+  exit 1
+fi
+
 # Block committing a new/moved baseline (baselines/desktop-*.json) without re-stamping or
 # re-recording the committed example cassettes against it first.
 #

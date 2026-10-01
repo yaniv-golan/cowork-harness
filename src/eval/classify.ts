@@ -266,7 +266,7 @@ export interface RepClassification {
 }
 
 /** Assertions the harness injected (staleness, cassette-format, coverage) are not the author's rows. */
-const authoredGrades = (r: ClassifiableResult | undefined) => (r?.assertions ?? []).filter((a) => a.source === undefined);
+export const authoredGrades = (r: ClassifiableResult | undefined) => (r?.assertions ?? []).filter((a) => a.source === undefined);
 
 /** Does any graded `semantic_matches` carry an OBSERVED prompt identity other than the expected one? */
 function promptMismatch(r: ClassifiableResult | undefined, expected: string): boolean {
