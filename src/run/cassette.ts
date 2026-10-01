@@ -50,7 +50,10 @@ import {
   unresolvedModelPreflight,
   scenarioInputRefusal,
   scenarioInputFindings,
+  loadSessionFromFile,
+  sessionOriginSources,
 } from "./execute.js";
+import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { unresolvedModelRefusal } from "./model-provenance.js";
 import { UsageError, UnknownBaselineError, BaselineFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
@@ -799,6 +802,24 @@ export function cassetteSessionRef(session: string, cassettePath: string): strin
  *  snapshot (`--rerecord-stale --from-embedded`): the same resolution every other cassette reader uses. */
 export function embeddedSessionPath(session: string, cassettePath: string): string {
   return resolveCassetteSessionPath(session, dirname(cassettePath)).path;
+}
+
+/** Map every `semantic_pairwise.refs` store path of a scenario through `map`, copying only what changes. Record
+ *  stores them RELATIVE to the cassette (like `session:`), so a committed cassette never freezes an absolute host
+ *  path; a re-record from the embedded snapshot resolves them back against the cassette's directory. */
+export function relocatePairwiseRefs(scenario: Scenario, map: (ref: string) => string): Scenario {
+  if (!scenario.assert.some((a) => a.semantic_pairwise?.refs)) return scenario;
+  return {
+    ...scenario,
+    assert: scenario.assert.map((a) =>
+      a.semantic_pairwise?.refs ? { ...a, semantic_pairwise: { ...a.semantic_pairwise, refs: a.semantic_pairwise.refs.map(map) } } : a,
+    ),
+  };
+}
+
+/** The cassette-relative → absolute direction of `relocatePairwiseRefs`, for `--from-embedded`. */
+export function embeddedPairwiseRefs(scenario: Scenario, cassettePath: string): Scenario {
+  return relocatePairwiseRefs(scenario, (r) => (isAbsolute(r) || r.startsWith("~") ? r : resolve(dirname(cassettePath), r)));
 }
 
 function skillSourceDirs(
@@ -4567,7 +4588,7 @@ export async function cmdRecord(args: string[]) {
         }
       } else if (fromEmbedded) {
         const sessionRef = embeddedSessionPath(rc.cassette.scenario.session, cp);
-        sc = { ...rc.cassette.scenario, session: sessionRef };
+        sc = embeddedPairwiseRefs({ ...rc.cassette.scenario, session: sessionRef }, cp);
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
     }
@@ -4650,19 +4671,16 @@ export async function cmdRecord(args: string[]) {
           // --from-embedded: explicitly re-record from the embedded snapshot (edits to the YAML won't apply).
           log(`  ⚠ ${tag} --from-embedded: re-recording "${cassette.scenario.name}" from the embedded snapshot (YAML edits won't apply)`);
           const sessionRef = embeddedSessionPath(cassette.scenario.session, cp);
-          r = await recordScenarioObject(
-            { ...cassette.scenario, session: sessionRef },
-            {
-              noRedact,
-              modelOverride,
-              allowFailing,
-              cassettePath: cp,
-              maxArtifactBytes,
-              skipRedactionPreflight: true,
-              allowHostInventoryFixture,
-              allowHostInventoryFindings,
-            },
-          );
+          r = await recordScenarioObject(embeddedPairwiseRefs({ ...cassette.scenario, session: sessionRef }, cp), {
+            noRedact,
+            modelOverride,
+            allowFailing,
+            cassettePath: cp,
+            maxArtifactBytes,
+            skipRedactionPreflight: true,
+            allowHostInventoryFixture,
+            allowHostInventoryFindings,
+          });
         }
         staleBudget.add(budgetFields(r.result).costUsd);
         log(`  ✓ ${tag} ${cp} (${r.result.result})`);
@@ -5000,6 +5018,20 @@ export function preSpendVerdicts(
   const promptReject = promptPolicyRejection(scenario);
   if (promptReject) out.push({ kind: "refuse", message: promptReject });
 
+  // semantic_pairwise references — the SAME function executeScenario gates on before the run dir exists, so the
+  // preview refuses what the real path will. Mount roots come from the scenario's session; one that cannot load
+  // is the real path's own refusal, reported there, so it contributes no roots here.
+  if (scenario.assert.some((a) => a.semantic_pairwise !== undefined)) {
+    let mounts: string[] = [];
+    try {
+      mounts = sessionOriginSources(loadSessionFromFile(scenario.session), "(inline)");
+    } catch {
+      /* the session's own load error is reported by the real path */
+    }
+    const pw = pairwiseRefsRefusal(scenario, scenarioPairwiseSetup(scenario), mounts);
+    if (pw) out.push({ kind: "refuse", message: pw });
+  }
+
   // A host-inheriting tier freezes the recording machine's own inventory into the transcript, so writing
   // that to a repo-tracked path publishes the operator's tool stack (this has happened).
   const inv = hostInventoryPreflight(scenario, cassettePath, opts.allowHostInventoryFixture === true);
@@ -5143,7 +5175,9 @@ async function freezeRecordedRun(
     );
   }
   // RELOCATABLE session path (relative to the cassette dir) — metadata-only, keeps a moved bundle honest.
-  const relocatable: Scenario = { ...scenario, session: cassetteSessionRef(scenario.session, cassettePath) };
+  const relocatable: Scenario = relocatePairwiseRefs({ ...scenario, session: cassetteSessionRef(scenario.session, cassettePath) }, (r) =>
+    cassetteSessionRef(r, cassettePath),
+  );
   // buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
   // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
