@@ -52,14 +52,39 @@ describe("headroom", () => {
     expect(headroom(s)).toMatchObject({ cases: 2, ceiling: ["extract-table"], floor: ["summarize-report"] });
   });
 
-  it("a float headline with no declared bound reports that, not a number", () => {
+  it("a lower-is-better float headline with no declared floor (min) reports that, not a number", () => {
     const s = snap();
     setState(s, (st) => (st.metrics = [{ id: "words", kind: "float", better: "lower" }]));
     editRows(s, "baseline", (r) => ((r.grade as Row).words = 120));
     const h = headroom(s);
     expect(h.ceiling).toEqual([]);
     expect(h.floor).toEqual([]);
-    expect(h.warnings).toEqual(["note: words is a float with no declared bound — ceiling/floor not computed"]);
+    expect(h.warnings).toEqual([
+      "note: words is lower-is-better with no floor declared (min) — the good end is unknown, so ceiling/floor are not computed",
+    ]);
+  });
+
+  it("a lower-is-better float with a declared min: every rep at the min is the ceiling (direction-aware)", () => {
+    const s = snap();
+    setState(s, (st) => (st.metrics = [{ id: "words", kind: "float", better: "lower", min: 5 }]));
+    editRows(s, "baseline", (r) => ((r.grade as Row).words = r.prompt_id === "extract-table" ? 5 : 120));
+    expect(headroom(s)).toMatchObject({ metric: "words", better: "lower", cases: 3, ceiling: ["extract-table"], floor: [] });
+  });
+
+  it("a higher-is-better float with no declared scale has no known good end either", () => {
+    const s = snap();
+    setState(s, (st) => (st.metrics = [{ id: "ratio", kind: "float", better: "higher" }]));
+    editRows(s, "baseline", (r) => ((r.grade as Row).ratio = 1));
+    expect(headroom(s).warnings).toEqual([
+      "note: ratio is higher-is-better with no scale declared — the good end is unknown, so ceiling/floor are not computed",
+    ]);
+  });
+
+  it("a higher-is-better float at its scale on every rep is the ceiling", () => {
+    const s = snap();
+    setState(s, (st) => (st.metrics = [{ id: "ratio", kind: "float", better: "higher", scale: 1 }]));
+    editRows(s, "baseline", (r) => ((r.grade as Row).ratio = r.prompt_id === "long-answer" ? 1 : 0.5));
+    expect(headroom(s)).toMatchObject({ metric: "ratio", ceiling: ["long-answer"], floor: [] });
   });
 
   it("no baseline rows → no headroom report", () => {

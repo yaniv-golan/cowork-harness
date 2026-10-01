@@ -12,6 +12,7 @@ interface DeclaredMetric {
   kind?: string;
   better?: string;
   scale?: number;
+  min?: number;
 }
 
 export interface Headroom {
@@ -60,7 +61,9 @@ export function headroom(snap: FlowSnapshot): Headroom {
   let good: number | undefined;
   let bad: number | undefined;
   if (head.kind === "binary") [good, bad] = better === "higher" ? [1, 0] : [0, 1];
+  // A float's good end is its declared bound in the improving direction: `scale` going up, `min` going down.
   else if (better === "higher" && typeof head.scale === "number") good = head.scale;
+  else if (better === "lower" && typeof head.min === "number") good = head.min;
   if (good === undefined && bad === undefined)
     return {
       metric: head.id,
@@ -68,7 +71,9 @@ export function headroom(snap: FlowSnapshot): Headroom {
       cases: 0,
       ceiling: [],
       floor: [],
-      warnings: [`note: ${head.id} is a float with no declared bound — ceiling/floor not computed`],
+      warnings: [
+        `note: ${head.id} is ${better}-is-better with no ${better === "lower" ? "floor declared (min)" : "scale declared"} — the good end is unknown, so ceiling/floor are not computed`,
+      ],
     };
 
   const byCase = new Map<string, number[]>();
