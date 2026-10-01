@@ -239,3 +239,69 @@ describe.runIf(POSIX)("regrade: semantic_pairwise", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe.runIf(POSIX)("regrade: a fill over semantic_matches + semantic_pairwise", () => {
+  it("keeps the semantic_matches entry (copied, no judge call) and counts only what it judged", async () => {
+    // No per-assert judge_model: the injected semantic judge grades it (a per-assert model would build the real one).
+    const file = scenario(["  - semantic_matches:", "      rubric: ['gives the answer']"]);
+    const sc = parseScenarioFile(file);
+    const flow = join(dir, "flow");
+    mkdirSync(join(flow, "baseline"), { recursive: true });
+    const smJudge = (async (rubric: string[]) => rubric.map((claim, index) => ({ index, claim, pass: true }))) as never;
+    const base = await executeScenario(sc, {
+      pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)),
+      semanticJudge: smJudge,
+    });
+    expect(
+      freezeCaseRef({
+        flowAbs: flow,
+        variant: "baseline",
+        caseId: "alpha",
+        scenarioFile: file,
+        assertions: sc.assert,
+        prompt: sc.prompt,
+        results: JSON.stringify(rowFor(base.outDir)) + "\n",
+        secrets: [],
+        command: "hillclimb run",
+      }).status,
+    ).toBe("frozen");
+    const v1 = await executeScenario(sc, {
+      pairwise: flowPairwiseOptions("alpha", "v1", discoverFlowRefs(flow)),
+      pairwiseComplete: judge([]),
+      semanticJudge: smJudge,
+    });
+    // v1's own reference, so a fill has something to judge against (from a v2 row's point of view).
+    expect(
+      freezeCaseRef({
+        flowAbs: flow,
+        variant: "v1",
+        caseId: "alpha",
+        scenarioFile: file,
+        assertions: sc.assert,
+        prompt: sc.prompt,
+        results: JSON.stringify(rowFor(v1.outDir)) + "\n",
+        secrets: [],
+        command: "hillclimb freeze-ref",
+      }).status,
+    ).toBe("frozen");
+    const r = await regradeRuns({
+      runDirs: [v1.outDir],
+      scenarioFile: file,
+      secrets: [],
+      pairwise: { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["v1"] },
+      pairwiseComplete: judge([]),
+      makeJudge: () => {
+        throw new Error("a fill must not build a semantic_matches judge");
+      },
+    });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    const run = r.runs[0]!;
+    const sm = run.assertions.find((a) => a.assertion.semantic_matches !== undefined)!;
+    expect(sm).toMatchObject({ copied: true, docMatchesLive: "not_graded", pass: true });
+    // Only the pairwise assert was re-judged: one entry, priced by the fill's own call alone.
+    expect(run.unpricedGrades).toBe(1);
+    expect(run.invalidGrades).toBe(0);
+    expect(run.docMatchesLive).toBe(true);
+  });
+});
