@@ -84,6 +84,7 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage", ()
     ["init-redact", "usage: init-redact"],
     ["probe-dispatch", "usage: probe-dispatch"],
     ["eval", "usage: eval"],
+    ["hillclimb", "usage: hillclimb"],
   ];
   for (const [cmd, expected] of cases) {
     it(`\`${cmd} --help\` exits 0 with a usage line (not "unknown flag")`, () => {
