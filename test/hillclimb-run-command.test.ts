@@ -557,4 +557,27 @@ describe("runHillclimbCommand", () => {
       expect(err.join("\n")).toMatch(/another hillclimb process/);
     });
   });
+
+  it("a scenario whose longest recorded run exceeds --timeout-s is named before the pass", async () => {
+    const row = (durationMs: number) =>
+      ({
+        v: 1,
+        ts: "t",
+        command: "run",
+        scenario: "Alpha",
+        slug: "Alpha",
+        runId: `r${durationMs}`,
+        fidelity: "container",
+        baseline: "b",
+        result: "success",
+        pass: true,
+        signals: [],
+        durationMs,
+      }) as never;
+    await runHillclimbCommand(args("--dry-run", "--timeout-s", "1800"), deps({ indexRows: () => [row(600_000), row(2_055_000)] }));
+    expect(err.join("\n")).toMatch(/Alpha.*2055 ?s.*--timeout-s 1800/);
+    err = [];
+    await runHillclimbCommand(args("--dry-run", "--timeout-s", "1800"), deps({ indexRows: () => [row(600_000)] }));
+    expect(err.join("\n")).not.toMatch(/--timeout-s 1800/);
+  });
 });

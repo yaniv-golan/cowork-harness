@@ -245,8 +245,27 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
 
   // The dry run's estimate: eval's cost function on eval's basis exactly (hillclimb runs excluded), so every
   // covered key means the same on both commands.
+  // This machine's run index, read once: the dry run's estimate and the ceiling warning below.
+  let indexCache: RunIndexRow[] | undefined;
+  const indexRows = (): RunIndexRow[] => (indexCache ??= (deps.indexRows ?? (() => readIndex(runsWriteRoot())))());
+
+  // A scenario whose longest recorded run outlasts the ceiling would end every rep as a timeout row: say so first.
+  if (args.timeoutS > 0)
+    for (const c of cases) {
+      const longest = Math.max(
+        0,
+        ...indexRows()
+          .filter((r) => r.scenario === c.scenario.name && typeof r.durationMs === "number")
+          .map((r) => r.durationMs!),
+      );
+      if (longest > args.timeoutS * 1000)
+        say(
+          `[${v}] warning: ${c.scenario.name}'s longest recorded run took ${Math.round(longest / 1000)}s, over --timeout-s ${args.timeoutS}: its reps may end as timeout rows — raise --timeout-s`,
+        );
+    }
+
   const price: Prepared["price"] = (remaining) => {
-    const rows = (deps.indexRows ?? (() => readIndex(runsWriteRoot())))();
+    const rows = indexRows();
     return estimateScheduleCost(
       cases
         .filter((c) => (remaining[c.id] ?? 0) > 0)
