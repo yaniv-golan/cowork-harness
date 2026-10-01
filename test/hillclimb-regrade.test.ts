@@ -23,7 +23,7 @@ import { regradeRuns, type RegradeOptions, type RegradeRunReport } from "../src/
 import { metricSigs } from "../src/hillclimb/metric-keys.js";
 import type { ScenarioMetric } from "../src/types.js";
 import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
-import { stateTemplateFor } from "../src/hillclimb/cli.js";
+import { checkReport, stateTemplateFor } from "../src/hillclimb/cli.js";
 
 const MODEL = "claude-sonnet-5";
 const line = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
@@ -426,17 +426,25 @@ describe("mergeMetrics: a re-measure's sigs and unavailable reasons onto a rebui
   });
 
   it("a re-measure that lost a value the run measured (the grade still reads it measured) adds no reason", () => {
-    const row = { grade: { words_present: 1, words: 9 }, meta: { metric_sigs: { other: "x" } } as Record<string, unknown> };
+    const row = { grade: { words_present: 1, words: 9 }, meta: {} as Record<string, unknown> };
     mergeMetrics(row, report([{ id: "words", unavailable: "pruned" }]), [words]);
     expect(row.meta).not.toHaveProperty("metrics_unavailable");
-    expect(row.meta.metric_sigs).toEqual({ other: "x", ...metricSigs([words]) });
   });
 
-  it("an agent-failed row is untouched", () => {
+  it("metric_sigs is exactly the declarations', as `run` writes it: a removed metric's sig goes with its column", () => {
+    const row = { grade: { words_present: 1, words: 9 }, meta: { metric_sigs: { removed: "x" } } as Record<string, unknown> };
+    mergeMetrics(row, report([{ id: "words", value: 9 }]), [words]);
+    expect(row.meta.metric_sigs).toEqual(metricSigs([words]));
+    const none = { grade: {}, meta: { metric_sigs: { removed: "x" } } as Record<string, unknown> };
+    mergeMetrics(none, report(undefined), []);
+    expect(none.meta).not.toHaveProperty("metric_sigs");
+  });
+
+  it("an agent-failed row gains no unavailable reason and keeps its grade; its sigs are the declarations', as `run` writes them", () => {
     const meta = { failure_class: "errored_agent", termination_rule: "r" };
     const row = { grade: { words_present: 0 }, meta: { ...meta } as Record<string, unknown> };
     mergeMetrics(row, report([{ id: "words", unavailable: "missing_artifact" }]), [words]);
-    expect(row.meta).toEqual(meta);
+    expect(row.meta).toEqual({ ...meta, metric_sigs: metricSigs([words]) });
     expect(row.grade).toEqual({ words_present: 0 });
   });
 });
@@ -467,6 +475,57 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
       expect(Object.keys(row.meta.metric_sigs as object).sort()).toEqual(["gone", "other", "words"]);
       expect(row.meta.metrics_unavailable).toEqual({ gone: "missing_artifact" });
     }
+  }, 240_000);
+
+  it("a metric removed from the scenarios: a regraded row drops its column AND its sig, so check reads it as `run`'s rows", () => {
+    writing();
+    const { cli, flow, rows, evals } = buildFlow({ metrics: [OTHER, WORDS] });
+    // _state.json declares both metrics (the loop merged state-template's entries), and keeps them after the removal.
+    const env = { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
+    const t = stateTemplateFor("evals", f.cwd, env, "flow");
+    const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
+    writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...t.state }));
+    expect(checkReport("flow", f.cwd).exitCode).toBe(0);
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace(`${WORDS}\n`, ""));
+    const r = cli("regrade", "evals", "--flow", "flow", "--variant", "v1", "--approve-harness");
+    expect(r.status, r.stderr).toBe(0);
+    const row = rows("v1")[0]!;
+    expect(row.grade).not.toHaveProperty("words_present");
+    expect(Object.keys(row.meta.metric_sigs as object)).toEqual(["other"]);
+    const c = checkReport("flow", f.cwd);
+    // As a row `run` wrote after the removal reads: at most the predate note, never an error.
+    const words = c.report.findings.filter((x) => /words/.test(JSON.stringify(x)));
+    expect(words.map((x) => x.level)).toEqual(["note"]);
+    expect(words[0]!.message).toMatch(/1 rows predate metric words \(v1 1\)/);
+    expect(c.exitCode).toBe(0);
+  }, 240_000);
+
+  it("a fill's row rebuilt with no judge call (no re-measure) loses a removed metric's sig with its column, gains no new one", () => {
+    writing();
+    const { cli, flow, rows, evals } = buildFlow({ metrics: [OTHER, WORDS] });
+    const env = { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
+    const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
+    writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...stateTemplateFor("evals", f.cwd, env, "flow").state }));
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    // WORDS removed, GONE added: v1's row lacks only its own reference, so the fill rebuilds it with no judge call.
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace(`${WORDS}\n`, `${GONE}\n`));
+    const r = cli("regrade", "evals", "--flow", "flow", "--fill-refs", "--approve-harness");
+    expect(r.status, r.stderr).toBe(0);
+    const v1 = rows("v1")[0]!;
+    expect(v1.meta).not.toHaveProperty("regrade_doc_matches_live");
+    expect(v1.grade).toHaveProperty("win_v1");
+    expect(v1.grade).not.toHaveProperty("words_present");
+    expect(Object.keys(v1.meta.metric_sigs as object)).toEqual(["other"]);
+    // The re-measured baseline row: the added metric is sigged, with its reason.
+    expect(Object.keys(rows("baseline")[0]!.meta.metric_sigs as object).sort()).toEqual(["gone", "other"]);
+    expect(rows("baseline")[0]!.meta.metrics_unavailable).toEqual({ gone: "missing_artifact" });
+    const c = checkReport("flow", f.cwd);
+    expect(
+      c.report.findings.filter((x) => x.level === "error"),
+      JSON.stringify(c.report.findings),
+    ).toEqual([]);
   }, 240_000);
 
   it("in-process with no metricDecls dep, the flow's union is still the default (no caller can drop the columns)", async () => {

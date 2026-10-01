@@ -91,22 +91,20 @@ export interface RegradeFlowOutcome {
 /** The metrics seam: a re-measure's row metadata merges here into every row rebuilt FROM A RE-GRADE REPORT, after its
  *  grade is rebuilt and before its keys are ordered (a row rebuilt with no judge call has no report, so no re-measure to
  *  merge). The values and `_present` keys are already in `row.grade` — `gradeFor` read them from the result the report's
- *  metrics were merged into — so this sets only what the row's meta says about them, the way `run` writes it: each
- *  declared metric's signature in `meta.metric_sigs` (a row that predated a metric gains it), and
+ *  metrics were merged into — so this sets only what the row's meta says about them, the way `run` writes it:
+ *  `meta.metric_sigs` is exactly the declarations' signatures (a row that predated a metric gains its sig; a removed
+ *  metric's sig goes with its column, which the rebuilt grade no longer carries; omitted when none is declared), and
  *  `meta.metrics_unavailable` by id — a reason the re-measure gives is added or replaced, an id the grade now reads
- *  measured loses its reason, any other id's entry stays, and the key is omitted when empty. An agent-failed row
- *  scores no metric, so it is left as it is. Mutates in place. */
+ *  measured loses its reason, any other id's entry stays, and the key is omitted when empty. An agent-failed row scores
+ *  no metric, so it gains no reason. Mutates in place. */
 export function mergeMetrics(
   row: { grade: Record<string, number>; meta: Record<string, unknown> },
   report: RegradeRunReport,
   decls: readonly MetricDecl[],
 ): void {
-  if (row.meta.failure_class === "errored_agent" || !decls.length) return;
-  const prevSigs = row.meta.metric_sigs;
-  row.meta.metric_sigs = {
-    ...(prevSigs && typeof prevSigs === "object" && !Array.isArray(prevSigs) ? prevSigs : {}),
-    ...metricSigs(decls),
-  };
+  if (decls.length) row.meta.metric_sigs = metricSigs(decls);
+  else delete row.meta.metric_sigs;
+  if (row.meta.failure_class === "errored_agent") return;
   const prev = row.meta.metrics_unavailable;
   const unavailable: Record<string, unknown> = { ...(prev && typeof prev === "object" && !Array.isArray(prev) ? prev : {}) };
   for (const m of decls) {
@@ -258,6 +256,17 @@ function rebuiltRow(
   ];
   const grade = { ...g.grade };
   if (report) shape.merge({ grade, meta }, report, shape.metrics);
+  else {
+    // Not re-measured: a removed metric's sig goes with its column (the ordered grade no longer carries it), and no
+    // metric the row predates gains one — `check` still reads that row as predating it.
+    const sigs = meta.metric_sigs;
+    if (sigs && typeof sigs === "object" && !Array.isArray(sigs)) {
+      const ids = new Set(shape.metrics.map((m) => m.id));
+      const kept = Object.fromEntries(Object.entries(sigs).filter(([id]) => ids.has(id)));
+      if (Object.keys(kept).length) meta.metric_sigs = kept;
+      else delete meta.metric_sigs;
+    }
+  }
   // Replacements, by key; `undefined` removes a key the producer no longer emits.
   const repl: Record<string, unknown> = {
     grade: orderedGrade(grade, ctx),
