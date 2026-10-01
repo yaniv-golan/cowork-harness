@@ -39,14 +39,17 @@ All notable changes to this project are documented here. The format is based on
 
 - **`fixture export <run-dir> --out <dir>` copies a kept run's outputs tree into a directory** a later scenario
   can start from, byte-for-byte and keeping permission bits. It refuses, naming the files and writing nothing,
-  when any file's bytes or name hold a value from the secret set (this process's environment and
-  `COWORK_HARNESS_SCRUB_*`), or a text file or file name holds a host path (`--allow-host-paths` accepts host
-  paths, but never a path into a harness run dir, the runs dir, the VM work dir or the guest `/sessions/` tree, in
-  any spelling). Compressed or binary formats (xlsx, docx, pdf, images) are copied without inspection beyond that
-  byte check, and listed as notes with emails, domains and machine identifiers. Symlinks, hard-linked and
-  unreadable files are skipped and listed; `--out` must be absent or empty, and outside the run dir. A partial or
-  failed run exports and says so; a `replay` run dir is refused. Exit `0` written, `2` usage or refusal. The JSON
-  payload's keys are experimental.
+  when any file's bytes or name hold a secret — the credentials in `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_CUSTOM_HEADERS`, the variables named in `COWORK_HARNESS_SCRUB_KEYS` and
+  the values in `COWORK_HARNESS_SCRUB_VALUES` (each also base64-, URL- and JSON-encoded), stored verbatim as
+  UTF-8, Latin-1, UTF-16LE or UTF-16BE — or a text file or file name holds a host path (`--allow-host-paths`
+  accepts host paths, but never a path into a harness run dir, the runs dir, the VM work dir or a guest session's
+  `/sessions/<id>/mnt/` or `/sessions/<id>/.claude/`, in any spelling). The files are always read from the given
+  run dir's own tree, so a moved or copied run dir exports its own outputs. Compressed formats (xlsx, docx, pdf,
+  images) are not inspected beyond that byte check, nor are binary files scanned for paths; both are listed as
+  notes, with emails, domains and machine identifiers. Symlinks, hard-linked and unreadable files are skipped and
+  listed; `--out` must be absent or empty, and outside the run dir. A partial or failed run exports and says so; a
+  `replay` run dir is refused. Exit `0` written, `2` usage or refusal. The JSON payload's keys are experimental.
 
 - **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` asserts** with
   the judge, without running the agent again; the judge call is the only spend. `verify-run` never calls the

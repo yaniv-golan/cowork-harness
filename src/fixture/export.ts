@@ -5,7 +5,7 @@
 // What it reads: the run's latest turn `result.json` → `outputsDir` (the session's outputs, cumulative across
 // turns — there is no per-turn snapshot). Scratchpad deliverables at the session root are not exported.
 
-import { existsSync, lstatSync, readdirSync, realpathSync, rmSync, rmdirSync, type Dirent } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, rmSync, rmdirSync, type Dirent } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { FsRefusal, NoFollowRoot, isSymlink, lstatOrNull } from "../hillclimb/fs.js";
 import { isUnderRealRoot } from "../boundary-paths.js";
@@ -20,8 +20,8 @@ import type { RunResult } from "../types.js";
 export interface ExportFinding {
   file: string;
   /** `secret`: a value from the secret set (never printed), in the file's bytes or its relative path. `host_path`:
-   *  a host path. `run_path`: a path into a harness run dir, the runs root, the VM work dir or the guest
-   *  `/sessions/` tree (refused even with --allow-host-paths). */
+   *  a host path. `run_path`: a path into a harness run dir, the runs root, the VM work dir or a guest session
+   *  (`/sessions/<id>/mnt/…` or `/sessions/<id>/.claude/…`) — refused even with --allow-host-paths. */
   kind: "secret" | "host_path" | "run_path";
 }
 
@@ -41,15 +41,17 @@ export interface ExportSkip {
   reason?: string;
 }
 
+/** `written`, `skipped`, `notes` and `bytes` are present once the outputs tree was read — on success and on every
+ *  refusal after that point — and absent on a refusal before it. */
 export interface ExportOutcome {
   exitCode: 0 | 2;
   message: string;
   outputsDir?: string;
-  written: string[];
-  skipped: ExportSkip[];
+  written?: string[];
+  skipped?: ExportSkip[];
   refused: ExportFinding[];
-  notes: ExportNote[];
-  bytes: number;
+  notes?: ExportNote[];
+  bytes?: number;
   /** The source run's `partial` flag (stopped at a gate), when the run's result.json was read. */
   partial?: boolean;
   /** The source run's final result, when the run's result.json was read; a result.json with none reads as `error`. */
@@ -64,11 +66,7 @@ const NOTE_CLASSES = new Set(["email", "domain", "machine-inventory"]);
 const refuse = (message: string, extra: Partial<ExportOutcome> = {}): ExportOutcome => ({
   exitCode: 2,
   message,
-  written: [],
-  skipped: [],
   refused: [],
-  notes: [],
-  bytes: 0,
   ...extra,
 });
 
@@ -116,6 +114,17 @@ function spellings(p: string): string[] {
   return [...new Set(out)];
 }
 
+/** A guest session path: `/sessions/<id>/` followed by `mnt` or `.claude` (the VM session layout), bounded on both
+ *  sides as in `namesRunPath`, so an API route (`GET /sessions/{id}`) or a URL path is not one. */
+const GUEST_SESSION = /\/sessions\/[A-Za-z0-9._~-]+\/(?:mnt|\.claude)(?![A-Za-z0-9._~-])/g;
+function namesGuestSession(text: string): boolean {
+  for (const m of text.matchAll(GUEST_SESSION)) {
+    const before = text[m.index - 1];
+    if (before === undefined || !/[A-Za-z0-9._~-]/.test(before)) return true;
+  }
+  return false;
+}
+
 /** True when `text` names a path under one of `roots` — matched as a substring, so independently of where a
  *  host-path token would start or stop, but bounded: the character before a root does not continue a name or a
  *  URL path (`https://x/api/sessions/1` is not a guest path), nor does the one after it (`runs-old` is not
@@ -134,14 +143,12 @@ function namesRunPath(text: string, roots: readonly string[]): boolean {
   return false;
 }
 
-/** The two places a run keeps its outputs: `<run>/work/session/mnt/outputs` (container, microvm, hostloop) and
- *  `<run>/work/outputs` (protocol). */
-const outputsShapes = (runReal: string): string[] => [join(runReal, "work", "session", "mnt", "outputs"), join(runReal, "work", "outputs")];
-
-const isPlainDir = (p: string): boolean => {
-  const st = lstatOrNull(p);
-  return st !== null && st.isDirectory();
-};
+/** The two places a run keeps its outputs, as path tails under the run dir: `work/session/mnt/outputs`
+ *  (container, microvm, hostloop) and `work/outputs` (protocol). */
+const OUTPUTS_TAILS: readonly string[][] = [
+  ["work", "session", "mnt", "outputs"],
+  ["work", "outputs"],
+];
 
 export function exportFixture(opts: { runDir: string; out: string; allowHostPaths: boolean; secrets: readonly string[] }): ExportOutcome {
   const cmd = "fixture export";
@@ -170,24 +177,32 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
   const recorded = result.outputsDir;
   if (typeof recorded !== "string" || recorded === "") return refuse(`${cmd}: ${resultPath} records no outputsDir`, source);
   const runReal = realpathSync.native(opts.runDir);
-  const shapes = outputsShapes(runReal);
-  // A run dir moved since it ran records an outputs dir that is gone; its outputs moved with it.
-  const outputsDir = existsSync(recorded) ? recorded : shapes.find(isPlainDir);
-  if (outputsDir === undefined)
-    return refuse(`${cmd}: the run's outputs dir ${recorded} is gone, and ${opts.runDir} has none of its own (a pruned run?)`, source);
-  if (isSymlink(outputsDir) || !lstatSync(outputsDir).isDirectory())
-    return refuse(`${cmd}: the run's outputs dir ${outputsDir} is not a plain directory`, source);
-  // result.json is a plain file anyone can edit: the outputs it names must be THIS run's outputs dir, exactly.
-  if (!shapes.includes(realpathSync.native(outputsDir)))
+  const shapes = OUTPUTS_TAILS.map((t) => join(runReal, ...t));
+  // The outputs are always read from the given run dir's OWN tree, never from the recorded path: a run dir moved or
+  // copied since it ran records an outputs dir under its old location (which, for a copy, still exists and is a
+  // different run's). The recorded path picks WHICH of the two shapes, by its tail; result.json is a plain file
+  // anyone can edit, so a recorded path that is neither shape is refused.
+  const recordedParts = resolve(recorded).split("/");
+  const tailIdx = OUTPUTS_TAILS.findIndex((t) => recordedParts.slice(-t.length).join("/") === t.join("/"));
+  if (tailIdx === -1)
     return refuse(
-      `${cmd}: ${resultPath} names ${outputsDir}, which is not this run's outputs dir (expected work/session/mnt/outputs or work/outputs under the run dir); refusing to export it`,
+      `${cmd}: ${resultPath} names ${recorded}, which is not this run's outputs dir (expected work/session/mnt/outputs or work/outputs under the run dir); refusing to export it`,
       source,
     );
+  const named = shapes[tailIdx]!;
+  const outputsDir = lstatOrNull(named) !== null ? named : shapes.find((s) => lstatOrNull(s) !== null);
+  if (outputsDir === undefined)
+    return refuse(`${cmd}: ${opts.runDir} has no outputs dir of its own (work/session/mnt/outputs or work/outputs; a pruned run?)`, source);
+  if (isSymlink(outputsDir) || !lstatSync(outputsDir).isDirectory())
+    return refuse(`${cmd}: the run's outputs dir ${outputsDir} is not a plain directory`, { outputsDir, ...source });
   // --out inside the run dir would write into the kept run it is reading from.
   let anchor = resolve(opts.out);
   while (lstatOrNull(anchor) === null && dirname(anchor) !== anchor) anchor = dirname(anchor);
   if (isUnderRealRoot(runReal, realpathSync.native(anchor)))
-    return refuse(`${cmd}: --out ${opts.out} is inside the run dir; exporting there would alter the kept run`, source);
+    return refuse(`${cmd}: --out ${opts.out} is inside the run dir; exporting there would alter the kept run`, {
+      outputsDir,
+      ...source,
+    });
 
   const src = NoFollowRoot.existing(outputsDir);
   const files: Array<{ rel: string; data: Buffer; mode: number }> = [];
@@ -227,27 +242,42 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
   if (files.length === 0)
     return refuse(`${cmd}: ${outputsDir} holds no regular files — nothing for a later step to resume from`, {
       outputsDir,
+      written: [],
       skipped,
+      notes: [],
+      bytes: 0,
       ...source,
     });
 
-  const secrets = opts.secrets.filter((s) => s.length > 0).map((s) => ({ s, b: Buffer.from(s) }));
+  // Each secret in every encoding that stores it verbatim: UTF-8, Latin-1 (when the value fits it; for an ASCII value
+  // it is the UTF-8 bytes), UTF-16LE and UTF-16BE.
+  const secrets = opts.secrets
+    .filter((s) => s.length > 0)
+    .map((s) => ({
+      s,
+      forms: [
+        Buffer.from(s),
+        ...(/^[\u0000-\u00ff]*$/.test(s) ? [Buffer.from(s, "latin1")] : []),
+        Buffer.from(s, "utf16le"),
+        Buffer.from(s, "utf16le").swap16(),
+      ],
+    }));
   const runRoots = [...spellings(opts.runDir), ...spellings(runsWriteRoot()), ...spellings(VM_WORK_HOST)];
-  const runRootsWithGuest = [...runRoots, "/sessions/"];
   const underRunRoot = (t: string): boolean => runRoots.some((r) => t === r || t.startsWith(`${r}/`));
   const refused: ExportFinding[] = [];
   const notes: ExportNote[] = [];
   for (const f of files) {
     // Every file's raw bytes and its name, before any text/binary split: a secret is a secret in any encoding
     // that carries it verbatim. Compressed formats (xlsx, docx, pdf, images) hide it and are not inspected.
-    if (secrets.some(({ s, b }) => f.rel.includes(s) || f.data.includes(b))) {
+    if (secrets.some(({ s, forms }) => f.rel.includes(s) || forms.some((b) => f.data.includes(b)))) {
       refused.push({ file: f.rel, kind: "secret" });
       continue;
     }
     const text = asText(f.data);
     const scanned = text === null ? f.rel : `${f.rel}\n${text}`;
     const paths = hostPaths(scanned);
-    if (namesRunPath(scanned, runRootsWithGuest) || paths.some(underRunRoot)) refused.push({ file: f.rel, kind: "run_path" });
+    if (namesRunPath(scanned, runRoots) || namesGuestSession(scanned) || paths.some(underRunRoot))
+      refused.push({ file: f.rel, kind: "run_path" });
     else if (paths.length && !opts.allowHostPaths) refused.push({ file: f.rel, kind: "host_path" });
     if (text === null) {
       notes.push({ file: f.rel, kind: "binary" });
@@ -257,7 +287,7 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
       if (NOTE_CLASSES.has(s.cls)) notes.push({ file: f.rel, kind: "pii", cls: s.cls, sample: s.sample });
   }
   const bytes = files.reduce((n, f) => n + f.data.length, 0);
-  const scannedPayload = { outputsDir, skipped, notes, bytes, ...source };
+  const scannedPayload = { outputsDir, written: [], skipped, notes, bytes, ...source };
   if (refused.length)
     return refuse(
       `${cmd}: refused — ${refused.length} file(s) would carry a secret or a machine-specific path into a committed fixture: ` +
@@ -282,10 +312,10 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
     const dst = NoFollowRoot.open(opts.out);
     for (const f of files) {
       const target = join(dst.root, f.rel);
-      const parents: string[] = [];
-      for (let d = dirname(target); d !== dst.root && lstatOrNull(d) === null; d = dirname(d)) parents.unshift(d);
+      // Record every level BEFORE creating it, so a mkdir that fails partway still removes the levels it made.
+      for (let d = dirname(target); d !== dst.root && lstatOrNull(d) === null; d = dirname(d)) createdDirs.push(d);
+      createdDirs.sort((a, b) => a.length - b.length);
       dst.mkdir(dirname(target));
-      createdDirs.push(...parents);
       dst.createFile(target, f.data, f.mode);
       createdFiles.push(target);
     }

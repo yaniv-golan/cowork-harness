@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { exportFixture } from "../src/fixture/export.js";
 import { FsRefusal, NoFollowRoot } from "../src/hillclimb/fs.js";
 import { VM_WORK_HOST } from "../src/runtime/lima.js";
@@ -67,7 +67,7 @@ describe("fixture export", () => {
     expect(readFileSync(join(tmp, "fixture", "deck", "slides.bin")).equals(bin)).toBe(true);
     expect(statSync(join(tmp, "fixture", "run.sh")).mode & 0o777).toBe(0o755);
     expect(r.written).toEqual(["deck/scores.json", "deck/slides.bin", "report.md", "run.sh"]);
-    expect(r.notes.some((n) => n.file === "deck/slides.bin" && n.kind === "binary")).toBe(true);
+    expect(r.notes?.some((n) => n.file === "deck/slides.bin" && n.kind === "binary")).toBe(true);
   });
 
   it("exports a PARTIAL run (a skill stopped mid-work is a real fixture source)", () => {
@@ -132,7 +132,7 @@ describe("fixture export", () => {
     writeFileSync(join(outputs, "contact.md"), "write to someone@example.org");
     const r = exportFixture(base());
     expect(r.exitCode).toBe(0);
-    expect(r.notes.some((n) => n.file === "contact.md" && n.kind === "pii" && n.cls === "email")).toBe(true);
+    expect(r.notes?.some((n) => n.file === "contact.md" && n.kind === "pii" && n.cls === "email")).toBe(true);
   });
 
   it("skips and LISTS symlinks and hard-linked files (they could not be staged as a fixture)", () => {
@@ -154,6 +154,13 @@ describe("fixture export", () => {
     const r = exportFixture({ ...base(), secrets: ["TOP-SECRET-77"] });
     expect(r.exitCode).toBe(2);
     expect(r.refused).toEqual([{ file: "people.csv", kind: "secret" }]);
+  });
+
+  it("refuses a non-ASCII secret stored as Latin-1", () => {
+    writeFileSync(join(outputs, "legacy.csv"), Buffer.from("name,café-SECRET-5\n", "latin1"));
+    const r = exportFixture({ ...base(), secrets: ["café-SECRET-5"] });
+    expect(r.exitCode).toBe(2);
+    expect(r.refused).toEqual([{ file: "legacy.csv", kind: "secret" }]);
   });
 
   it("checks a binary file's bytes for a secret too", () => {
@@ -264,6 +271,23 @@ describe("fixture export", () => {
       writeFileSync(join(outputs, "n.md"), "docs at https://example.com/api/sessions/1");
       expect(exportFixture(allow()).exitCode).toBe(0);
     });
+
+    it.each([["GET /sessions/{id}"], ["(/sessions/abc)"], ["see /sessions/abc/notes"]])(
+      "not a /sessions/ mention outside the VM session layout (%s)",
+      (body) => {
+        writeFileSync(join(outputs, "n.md"), body);
+        expect(exportFixture(allow()).exitCode).toBe(0);
+      },
+    );
+
+    it("not a session-layout path inside a URL (the left boundary)", () => {
+      writeFileSync(join(outputs, "n.md"), "see https://example.com/api/sessions/vm-1/mnt/x");
+      expect(exportFixture(allow()).exitCode).toBe(0);
+    });
+
+    it.each([["/sessions/vm-1/mnt/outputs/x.md"], ["(/sessions/vm-1/.claude/settings.json)"]])("a guest session-layout path (%s)", (body) =>
+      expectRunPath(body),
+    );
   });
 
   it("resolves the outputs dir relative to a RELOCATED run dir", () => {
@@ -321,6 +345,8 @@ describe("fixture export", () => {
     const r = exportFixture({ ...base(), out: join(run, "fixture-copy", "deep") });
     expect(r.exitCode).toBe(2);
     expect(r.message).toMatch(/inside the run dir/);
+    expect(r.outputsDir).toBe(outputs);
+    expect(r).not.toHaveProperty("written");
     expect(readdirSync(run)).not.toContain("fixture-copy");
   });
 
@@ -385,12 +411,97 @@ describe("fixture export", () => {
   });
 
   it("refuses an empty outputs tree (nothing to resume from)", () => {
-    expect(exportFixture(base()).exitCode).toBe(2);
+    const r = exportFixture(base());
+    expect(r.exitCode).toBe(2);
+    expect(r.message).toMatch(/holds no regular files — nothing for a later step to resume from/);
   });
 
   it("refuses a run dir with no turns layout", () => {
     rmSync(join(run, "turns"), { recursive: true });
-    expect(exportFixture(base()).exitCode).toBe(2);
+    const r = exportFixture(base());
+    expect(r.exitCode).toBe(2);
+    expect(r.message).toMatch(/^fixture export: .* has neither a turns\/<N>\/ directory nor any pre-layout marker/);
+  });
+
+  it.skipIf(process.platform === "win32")("lists a FIFO in the outputs tree as not a regular file, without opening it", () => {
+    writeFileSync(join(outputs, "a.md"), "A");
+    expect(spawnSync("mkfifo", [join(outputs, "pipe")]).status).toBe(0);
+    const r = exportFixture(base());
+    expect(r.exitCode).toBe(0);
+    expect(r.written).toEqual(["a.md"]);
+    expect(r.skipped).toEqual([{ file: "pipe", why: "not a regular file" }]);
+  });
+
+  it("exports a COPIED run dir from its own tree while the original still exists", () => {
+    writeFileSync(join(outputs, "a.md"), "original");
+    const copy = join(tmp, "copy");
+    expect(spawnSync("cp", ["-R", run, copy]).status).toBe(0);
+    writeFileSync(join(copy, "work", "session", "mnt", "outputs", "a.md"), "copied");
+    writeFileSync(join(copy, "work", "session", "mnt", "outputs", "b.md"), "only in the copy");
+    const r = exportFixture({ ...base(), runDir: copy });
+    expect(r.exitCode).toBe(0);
+    expect(r.outputsDir).toBe(join(copy, "work", "session", "mnt", "outputs"));
+    expect(r.written).toEqual(["a.md", "b.md"]);
+    expect(readFileSync(join(tmp, "fixture", "a.md"), "utf8")).toBe("copied");
+  });
+
+  it("reads the outputs shape the recorded outputsDir names (work/outputs), not the other one", () => {
+    mkdirSync(join(run, "work", "outputs"));
+    writeFileSync(join(run, "work", "outputs", "p.md"), "protocol");
+    writeFileSync(join(outputs, "c.md"), "container");
+    writeResult({ outputsDir: join(tmp, "gone", "work", "outputs") });
+    const r = exportFixture(base());
+    expect(r.exitCode).toBe(0);
+    expect(r.written).toEqual(["p.md"]);
+  });
+
+  it.each([
+    ["UTF-16LE", (s: string) => Buffer.from(s, "utf16le")],
+    ["UTF-16BE", (s: string) => Buffer.from(s, "utf16le").swap16()],
+  ])("refuses a secret stored as %s", (_n, enc) => {
+    // The secret alone: with characters on both sides, a UTF-16 stream also contains the OTHER byte order shifted by
+    // one byte, so a test with neighbours would pass with either form's check removed.
+    writeFileSync(join(outputs, "wide.txt"), enc("TOP-SECRET-77"));
+    const r = exportFixture({ ...base(), secrets: ["TOP-SECRET-77"] });
+    expect(r.exitCode).toBe(2);
+    expect(r.refused).toEqual([{ file: "wide.txt", kind: "secret" }]);
+  });
+
+  it("on a mkdir that fails partway down a multi-level path, removes the levels it already created", () => {
+    mkdirSync(join(outputs, "l1", "l2"), { recursive: true });
+    writeFileSync(join(outputs, "l1", "l2", "deep.md"), "D");
+    mkdirSync(join(tmp, "fixture"));
+    const orig = NoFollowRoot.prototype.mkdir;
+    // Create the first level for real, then fail on the second — a partial `mkdir -p`.
+    const spy = vi.spyOn(NoFollowRoot.prototype, "mkdir").mockImplementation(function (this: NoFollowRoot, dir: string) {
+      orig.call(this, dirname(dir));
+      throw new FsRefusal("injected at the second level");
+    });
+    try {
+      expect(exportFixture(base()).exitCode).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(readdirSync(join(tmp, "fixture"))).toEqual([]);
+  });
+
+  it("a refusal BEFORE the scan carries no scan fields; one after it does", () => {
+    writeResult({ command: "replay" });
+    const pre = exportFixture(base());
+    expect(pre.exitCode).toBe(2);
+    for (const k of ["written", "skipped", "notes", "bytes"]) expect(pre).not.toHaveProperty(k);
+    writeResult({ partial: true });
+    const noOutputs = join(tmp, "elsewhere");
+    mkdirSync(noOutputs);
+    writeResult({ outputsDir: noOutputs, partial: true });
+    const mid = exportFixture(base());
+    expect(mid.exitCode).toBe(2);
+    expect(mid).toMatchObject({ partial: true, result: "success" });
+    for (const k of ["written", "skipped", "notes", "bytes"]) expect(mid).not.toHaveProperty(k);
+    writeResult({});
+    writeFileSync(join(outputs, "leak.md"), "TOP-SECRET-77");
+    const post = exportFixture({ ...base(), secrets: ["TOP-SECRET-77"] });
+    expect(post).toMatchObject({ exitCode: 2, written: [], skipped: [], notes: [], bytes: 13, outputsDir: outputs });
   });
 });
 
@@ -433,6 +544,15 @@ describe("fixture export — the CLI", () => {
     });
     expect(r.status).toBe(0);
     expect(r.stderr).toMatch(/exported from an incomplete\/failed run — files may be truncated/);
+  });
+
+  it("a refusal before the scan carries no scan keys in the error envelope", () => {
+    writeResult({ command: "replay" });
+    const r = cli([run, "--out", join(tmp, "fixture")]);
+    expect(r.status).toBe(2);
+    const doc = JSON.parse(r.stdout);
+    expect(doc.ok).toBe(false);
+    for (const k of ["written", "skipped", "notes", "bytes"]) expect(doc).not.toHaveProperty(k);
   });
 
   it("a refusal is exit 2 with the error envelope carrying refused[] — and the secret never appears", () => {

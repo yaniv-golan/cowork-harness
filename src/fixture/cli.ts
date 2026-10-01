@@ -14,8 +14,8 @@ function textReport(o: ExportOutcome): string[] {
   const lines = [o.message];
   if (o.exitCode === 0 && (o.partial || o.result === "error"))
     lines.push("  exported from an incomplete/failed run — files may be truncated");
-  for (const s of o.skipped) lines.push(`  skipped ${s.file} (${s.why}${s.reason ? `: ${s.reason}` : ""})`);
-  for (const n of o.notes)
+  for (const s of o.skipped ?? []) lines.push(`  skipped ${s.file} (${s.why}${s.reason ? `: ${s.reason}` : ""})`);
+  for (const n of o.notes ?? [])
     lines.push(
       n.kind === "binary"
         ? `  note: ${n.file} is binary — secret-checked byte-for-byte, but not scanned for paths; a compressed format (xlsx, docx, pdf, images) is copied without inspection`
