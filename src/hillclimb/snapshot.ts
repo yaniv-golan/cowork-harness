@@ -12,12 +12,15 @@ import { basename, join, relative } from "node:path";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
 import { isInsideGitWorkTree, snapshotDirArm } from "../eval/snapshot.js";
+import { gitModeEnabled, gitStageStats } from "../run/skill-files.js";
 
 export interface VariantSnapshot {
   dir: string;
   created: boolean;
-  /** The live plugin no longer matches the snapshot (a file changed or went away). */
+  /** The live plugin no longer matches the snapshot (a file a new snapshot would copy changed, came or went). */
   liveDiffers: boolean;
+  /** On a snapshot taken now: untracked files of the live plugin left out (the stager delivers tracked files only). */
+  untrackedExcluded?: number;
 }
 
 function files(dir: string): string[] {
@@ -32,6 +35,17 @@ function files(dir: string): string[] {
   };
   walk(dir);
   return out.sort();
+}
+
+/** The files a snapshot taken now would copy: the git-tracked set inside a work tree (the stager's delivery rule,
+ *  as snapshotDirArm applies it), every file otherwise. Comparing a raw walk with a tracked-only snapshot would
+ *  call any untracked or ignored file a difference. */
+function deliverable(live: string): string[] {
+  if (gitModeEnabled()) {
+    const { tracked } = gitStageStats(live);
+    if (tracked) return [...tracked];
+  }
+  return files(live);
 }
 
 const digest = (dir: string, rels: readonly string[]): string => {
@@ -56,7 +70,7 @@ export function variantSnapshot(
   const marker = `${dir}.complete`;
   if (existsSync(dir) && existsSync(marker)) {
     // Over both trees, so a file added to the live plugin counts as a difference too.
-    const rels = [...new Set([...files(dir), ...files(live)])].sort();
+    const rels = [...new Set([...files(dir), ...deliverable(live)])].sort();
     const liveDiffers = digest(dir, rels) !== digest(live, rels);
     // A variant with no rows has measured nothing yet: its snapshot (left by a refused run) is re-taken
     // when the live plugin moved on, or the pass would measure an older round under this variant's name.
@@ -74,12 +88,26 @@ export function variantSnapshot(
   rmSync(marker, { force: true }); // first: a crash mid-replace must not leave a marker vouching for it
   rmSync(dir, { recursive: true, force: true }); // an interrupted or outdated copy of a variant that never ran
   const tmp = `${dir}.tmp-${randomBytes(6).toString("hex")}`;
+  let untrackedExcluded = 0;
   try {
-    snapshotDirArm(live, tmp, false, `variant ${opts.variant}`);
+    try {
+      untrackedExcluded = snapshotDirArm(live, tmp, false, `variant ${opts.variant}`).untrackedExcluded;
+    } catch (e) {
+      // eval's refusal names eval's flags (--arm, --include-untracked); say it in this command's terms.
+      if (e instanceof UsageError)
+        throw new UsageError(
+          e.message
+            .replace(/^--arm [^:]*: /, `variant ${opts.variant}'s plugin: `)
+            .replace(/, or pass --include-untracked/, "")
+            .replace(/this arm/, "the plugin"),
+          e.hint,
+        );
+      throw e;
+    }
     renameSync(tmp, dir);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
   writeFileSync(marker, new Date().toISOString() + "\n");
-  return { dir, created: true, liveDiffers: false };
+  return { dir, created: true, liveDiffers: false, untrackedExcluded };
 }

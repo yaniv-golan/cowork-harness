@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { variantSnapshot } from "../src/hillclimb/snapshot.js";
 import { UsageError } from "../src/errors.js";
 
@@ -75,5 +76,40 @@ describe("variantSnapshot", () => {
 
   it("a snapshot root inside a git work tree is refused: the stager would mount the copy EMPTY", () => {
     expect(() => variantSnapshot(live, opts({ snapshotRoot: join(import.meta.dirname, "..", ".snap-test") }))).toThrow(/git work tree/);
+  });
+});
+
+describe("variantSnapshot inside a git work tree (the stager delivers tracked files only)", () => {
+  const git = (...a: string[]) =>
+    spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...a], { cwd: live, encoding: "utf8" });
+  beforeEach(() => {
+    expect(git("init", "-q").status).toBe(0);
+    expect(git("add", "-A").status).toBe(0);
+    expect(git("commit", "-q", "-m", "c").status).toBe(0);
+  });
+
+  it("an untracked file in the live plugin is left out, counted, and does not make the live dir 'differ'", () => {
+    writeFileSync(join(live, "scratch.md"), "untracked");
+    const s = variantSnapshot(live, opts());
+    expect(s.untrackedExcluded).toBe(1);
+    expect(existsSync(join(s.dir, "scratch.md"))).toBe(false);
+    const again = variantSnapshot(live, opts({ variantRan: true }));
+    expect(again.liveDiffers).toBe(false);
+  });
+
+  it("a tracked edit still makes the live dir differ", () => {
+    variantSnapshot(live, opts());
+    writeFileSync(join(live, "skills", "x", "SKILL.md"), "round 2");
+    expect(variantSnapshot(live, opts({ variantRan: true })).liveDiffers).toBe(true);
+  });
+
+  it("a plugin with no tracked files is refused in hillclimb's words, not eval's", () => {
+    expect(git("rm", "-q", "-r", "--cached", ".").status).toBe(0);
+    expect(() => variantSnapshot(live, opts())).toThrow(/0 git-tracked files/);
+    try {
+      variantSnapshot(live, opts());
+    } catch (e) {
+      expect((e as Error).message).not.toMatch(/--arm|--include-untracked/);
+    }
   });
 });

@@ -104,6 +104,10 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     const snap = variantSnapshot(live, { snapshotRoot: deps.snapshotRoot, flowHash, variant: v, variantRan });
     pluginDir = snap.dir;
     if (snap.created) say(`[${v}] plugin snapshot: ${tildeify(live)} → ${tildeify(snap.dir)}`);
+    if (snap.untrackedExcluded)
+      say(
+        `[${v}] ${snap.untrackedExcluded} untracked file(s) in the plugin were left out — the stager delivers git-tracked files only, as real Cowork does; 'git add' a file the skill needs`,
+      );
     if (snap.liveDiffers)
       say(
         `[${v}] note: the live plugin ${tildeify(live)} differs from variant ${v}'s snapshot (taken on its first run); its reps run from the snapshot`,
