@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique`'s own files are secret-scrubbed.** `critique-report.json`, `critique-evidence-package.txt`,
+  `critique-salvage.json` and the `--out` file (including `--corpus-only --out`) were written without the
+  scrub the run's `result.json`, `run.jsonl` and `trace.json` get, so a value those files show as
+  `[REDACTED]` could appear verbatim in the evaluator's replies, the self-report, the findings or the
+  evidence package. JSON files are scrubbed by value, so they still parse with any scrub value, and a
+  listed set of join and enum fields (`sessionId`, `outDir`, `gradedSkillHash`, `items[].classification`,
+  …) is kept as written ([docs/critique.md](./docs/critique.md#run-dir-artifacts)).
+- **`findingFingerprint` is hashed over the secret-scrubbed `idea` and `recommendedAction`.** It was hashed
+  over the raw text and written next to the scrubbed fields, so anyone holding a report could confirm a
+  guessed scrub value offline by hashing candidates. A finding whose text carries no scrub value
+  fingerprints exactly as before.
 - **Output printed to the terminal is now secret-scrubbed like the files a run writes.** Before, a value
   that `result.json` showed as `[REDACTED]` (an auth token, or anything in `COWORK_HARNESS_SCRUB_KEYS` /
   `COWORK_HARNESS_SCRUB_VALUES`) was printed verbatim to stdout by `--output-format json` and to stderr by
