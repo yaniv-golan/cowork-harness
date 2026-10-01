@@ -391,6 +391,61 @@ describe("the written flow, end to end", () => {
   });
 });
 
+describe("scenario metrics", () => {
+  const METRIC = (better: string, id = "words") => `metrics:
+  - id: ${id}
+    artifact: outputs/stats.json
+    path: totals.words
+    better: ${better}
+    unbounded: true
+`;
+
+  it("every row carries the flow's union: the value where measured, <id>_present 0 on a case that does not declare it", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("lower"));
+    await approved();
+    behave = (id) => (id === "alpha" ? { result: { ...excerpt, metrics: [{ id: "words", value: 412 }] } } : {});
+    expect((await runHillclimb(args("--approve-harness"), deps())).exitCode).toBe(0);
+    for (const row of rows("baseline")) {
+      if (row.prompt_id === "alpha") expect(row.grade).toMatchObject({ words_present: 1, words: 412 });
+      else {
+        expect(row.grade.words_present).toBe(0);
+        expect(row.grade).not.toHaveProperty("words");
+      }
+    }
+    // The rows read clean against the state-template's declarations for the same cases.
+    const st = JSON.parse(readFileSync(join(flowDir(), "_state.json"), "utf8"));
+    const t = stateTemplate({
+      cases: ["alpha", "beta"].map((n) => {
+        const s = parseScenarioFile(join(cwd, "evals", `${n}.yaml`));
+        return { assertions: s.assert, ...(s.metrics ? { metrics: s.metrics } : {}) };
+      }),
+      harnessPaths: [],
+      decider: false,
+    });
+    expect(t.state.metrics.map((m) => m.id)).toContain("words");
+    writeFileSync(join(flowDir(), "_state.json"), JSON.stringify({ ...st, ...t.state }));
+    expect(checkFlowDir(flowDir(), { profile: "harness" }).findings.filter((f) => f.level === "error")).toEqual([]);
+  });
+
+  it("one id declared two ways across cases refuses before spend and before any write, whatever --case selects", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("lower"));
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO("Beta") + METRIC("higher"));
+    const r = await runHillclimb(args("--approve-harness", "--case", "alpha"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(jobs).toEqual([]);
+    expect(err.join("\n")).toMatch(/metric "words" is declared differently/);
+    expect(existsSync(flowDir())).toBe(false);
+  });
+
+  it("a metric id that shadows a generated key is refused at load", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("lower", "pass"));
+    const r = await runHillclimb(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(jobs).toEqual([]);
+    expect(err.join("\n")).toMatch(/metric id "pass" collides with a key the hillclimb runner generates/);
+  });
+});
+
 describe("failures inside the pool", () => {
   it("a row that cannot be built is that attempt's error row; the pass goes on", async () => {
     await approved();

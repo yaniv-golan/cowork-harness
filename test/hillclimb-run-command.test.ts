@@ -582,6 +582,19 @@ describe("runHillclimbCommand", () => {
     expect(err.join("\n")).not.toMatch(/--timeout-s 1800/);
   });
 
+  it("one metric id declared two ways across cases refuses before the snapshot is taken", async () => {
+    const metric = (better: string) =>
+      `metrics:\n  - id: words\n    artifact: outputs/stats.json\n    path: words\n    better: ${better}\n    unbounded: true\n`;
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + metric("lower"));
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO.replace("name: Alpha", "name: Beta") + metric("higher"));
+    const r = await runHillclimbCommand(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/refusing to run: metric "words" is declared differently/);
+    expect(calls).toEqual([]);
+    expect(readdirSync(snaps)).toEqual([]);
+    expect(existsSync(join(cwd, "flow"))).toBe(false);
+  });
+
   it("a lock left by a runner that was killed (its pid gone) does not block the next pass", async () => {
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
     const dead = spawnSync(process.execPath, ["-e", ""]).pid; // a real process that has exited

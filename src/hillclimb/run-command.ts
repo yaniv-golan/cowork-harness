@@ -26,6 +26,7 @@ import { gradedSkillNameFor, resolveCritiquedSkillDir } from "../critique/comman
 import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
+import { metricUnion } from "./grade-keys.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
@@ -126,6 +127,8 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
 ): Prepared {
   const v = args.variant;
   const { cases } = loadCases(resolve(deps.cwd, args.target));
+  // One metric id declared two ways is refused before the snapshot below is taken (the runner recomputes the union).
+  metricUnion(cases.map((c) => ({ metrics: c.scenario.metrics })));
   const prep = prepareCases(cases, {
     ...(args.model !== undefined ? { modelFlag: args.model } : {}),
     ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),

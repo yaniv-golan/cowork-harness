@@ -20,6 +20,7 @@ import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
+import { metricUnion } from "./grade-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
@@ -144,6 +145,8 @@ async function run(
   // The whole case set: the id space, the split ids and the gate are judged on it, whatever --case selects.
   const { cases: all, skipped } = loadCases(resolve(deps.cwd, args.target));
   if (skipped.length) say(`[${v}] skipped ${skipped.length} non-scenario file(s): ${skipped.join(", ")}`);
+  // The flow's metric columns: the union over every case, refused here — before any write — when one id is declared two ways.
+  const metrics = metricUnion(all.map((c) => ({ metrics: c.scenario.metrics })));
 
   // Writes only when this run may write: a pass, or the human's --approve-harness. A plain --dry-run
   // creates nothing.
@@ -303,6 +306,7 @@ async function run(
         scenarioName: c.name,
         prompt: c.scenario.prompt,
         assertions: c.scenario.assert,
+        metrics,
         rep,
         pin: deps.pin(c),
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
