@@ -21,7 +21,15 @@
 
 import { basename } from "node:path";
 import type { Assertion, RunResult, TokenUsage } from "../types.js";
-import { authoredGrades, classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult } from "../eval/classify.js";
+import {
+  authoredGrades,
+  classifyRep,
+  classifyTermination,
+  repRowValues,
+  scenarioRows,
+  semanticRefusalReason,
+  type ClassifiableResult,
+} from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
 import { caseKeyDecls, type MetricDecl } from "./grade-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
@@ -205,7 +213,23 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const values = repRowValues(rows, ctx.assertions, rep, r as ClassifiableResult | undefined);
   // `pass` is the run's verdict — the persisted one, else the one producer (computeVerdict), never a re-derivation.
   const passed = r === undefined ? false : (r.verdict?.pass ?? computeVerdict(r, "live").pass);
-  const grade: Record<string, number> = { pass: !agentFailed && passed ? 1 : 0 };
+  // A verdict that failed ONLY because semantic grading was refused is not measured (user decision): recompute
+  // the verdict (the one producer) with the refused asserts counted as passing; if that passes, omit `pass`.
+  const refusedOnly =
+    !agentFailed &&
+    !passed &&
+    r !== undefined &&
+    authored(r).some((g) => semanticRefusalReason(g as never) !== undefined) &&
+    computeVerdict(
+      {
+        ...r,
+        assertions: r.assertions.map((g) =>
+          g.source === undefined && semanticRefusalReason(g as never) !== undefined ? { ...g, pass: true } : g,
+        ),
+      },
+      "live",
+    ).pass;
+  const grade: Record<string, number> = refusedOnly ? { pass_present: 0 } : { pass: !agentFailed && passed ? 1 : 0, pass_present: 1 };
   const claims: Record<string, string> = {};
   const explanation: Record<string, string> = {};
   const authoredGrades = authored(r);

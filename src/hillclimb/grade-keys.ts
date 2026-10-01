@@ -3,7 +3,9 @@
 //
 // A flow's cases usually have different assertion lists, so a per-index key means different things on
 // different rows. Declared are therefore only keys that mean the same on every row:
-//   pass              the run verdict, 0|1 — first, so it is the report's headline (L l.304; H l.148)
+//   pass              the run verdict, 0|1 — first, so it is the report's headline (L l.304; H l.148).
+//                     OMITTED when the verdict failed only because semantic grading was refused (user decision)
+//   pass_present      0 exactly then; 1 otherwise
 //   claims_present    1 when at least one semantic_matches claim was graded on this row
 //   <metric>_present  1 when the scenario-declared float <metric> was measured (F2: the float is OMITTED
 //                     when unavailable, never 0); a case that does not declare <metric> carries 0
@@ -43,6 +45,7 @@ const LABEL_MAX = 14;
 const label = (s: string): string => (s.length <= LABEL_MAX ? s : s.slice(0, LABEL_MAX));
 
 const PASS: GradeKeyDecl = { id: "pass", kind: "binary", label: "Pass" };
+const PASS_PRESENT: GradeKeyDecl = { id: "pass_present", kind: "binary", label: "pass measured" };
 const CLAIMS_PRESENT: GradeKeyDecl = { id: "claims_present", kind: "binary", label: "claims graded" };
 const CLAIMS: GradeKeyDecl = { id: "claims", kind: "judge", label: "Claims passed", scale: 1, better: "higher" };
 
@@ -81,6 +84,7 @@ export function caseKeyDecls(assertions: readonly Assertion[], metrics: readonly
   const idx = perIndex(assertions);
   return [
     PASS,
+    PASS_PRESENT,
     CLAIMS_PRESENT,
     ...metrics.map((m) => presentDecl(m.id)),
     ...idx.companions,
@@ -102,6 +106,7 @@ export function flowMetricDecls(
   const idx = identical ? perIndex(first) : { companions: [], graded: [] };
   return [
     PASS,
+    PASS_PRESENT,
     ...(anySemantic ? [CLAIMS_PRESENT] : []),
     ...union.map((m) => presentDecl(m.id)),
     ...idx.companions,

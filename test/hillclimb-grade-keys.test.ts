@@ -25,6 +25,7 @@ describe("caseKeyDecls — every key one case's rows carry, in row order", () =>
   it("pass, the companions, claims, then the per-index keys, then the floats", () => {
     expect(caseKeyDecls(mixed, [{ id: "words", better: "lower", unbounded: true }]).map((d) => d.id)).toEqual([
       "pass",
+      "pass_present",
       "claims_present",
       "words_present",
       "a1_present",
@@ -50,16 +51,23 @@ describe("caseKeyDecls — every key one case's rows carry, in row order", () =>
 describe("flowMetricDecls — what the flow declares", () => {
   it("cases with identical assertion lists: everything, per-index keys included", () => {
     const ids = flowMetricDecls([{ assertions: real.assert }, { assertions: real.assert }]).map((d) => d.id);
-    expect(ids).toEqual(["pass", "claims_present", "a0_present", "claims", ...Array.from({ length: claimCount }, (_, j) => `a0_c${j}`)]);
+    expect(ids).toEqual([
+      "pass",
+      "pass_present",
+      "claims_present",
+      "a0_present",
+      "claims",
+      ...Array.from({ length: claimCount }, (_, j) => `a0_c${j}`),
+    ]);
   });
 
   it("cases with different lists: only what means the same on every row — no per-index key", () => {
     const ids = flowMetricDecls([{ assertions: mixed }, { assertions: other }]).map((d) => d.id);
-    expect(ids).toEqual(["pass", "claims_present", "claims"]);
+    expect(ids).toEqual(["pass", "pass_present", "claims_present", "claims"]);
   });
 
   it("no semantic assert anywhere: no claims metric", () => {
-    expect(flowMetricDecls([{ assertions: other }, { assertions: [] }]).map((d) => d.id)).toEqual(["pass"]);
+    expect(flowMetricDecls([{ assertions: other }, { assertions: [] }]).map((d) => d.id)).toEqual(["pass", "pass_present"]);
   });
 
   it("G9 floats are the UNION over cases, each with its companion", () => {
@@ -67,7 +75,7 @@ describe("flowMetricDecls — what the flow declares", () => {
       { assertions: other, metrics: [{ id: "words", better: "lower", unbounded: true }] },
       { assertions: [], metrics: [{ id: "ratio", better: "higher", scale: 1 }] },
     ]).map((d) => d.id);
-    expect(ids).toEqual(["pass", "words_present", "ratio_present", "words", "ratio"]);
+    expect(ids).toEqual(["pass", "pass_present", "words_present", "ratio_present", "words", "ratio"]);
   });
 
   it("one metric id declared two different ways is refused", () => {
@@ -104,12 +112,13 @@ describe("reservedMetricId — a scenario metric may not shadow a generated key"
 
 describe("presentCompanionOf — the explicit key → companion map the _present exemption uses", () => {
   it("claims, a metric, a claim key", () => {
+    expect(presentCompanionOf("pass")).toBe("pass_present");
     expect(presentCompanionOf("claims")).toBe("claims_present");
     expect(presentCompanionOf("words")).toBe("words_present");
     expect(presentCompanionOf("a1_c0")).toBe("a1_present");
   });
 
   it("always-graded keys have none", () => {
-    for (const k of ["pass", "a0", "a1_present", "claims_present"]) expect(presentCompanionOf(k)).toBeUndefined();
+    for (const k of ["a0", "a1_present", "claims_present", "pass_present"]) expect(presentCompanionOf(k)).toBeUndefined();
   });
 });

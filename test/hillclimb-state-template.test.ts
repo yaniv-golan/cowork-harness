@@ -47,6 +47,7 @@ describe("stateTemplate", () => {
   it("metrics.md defines claims, says why per-index keys are undeclared here, and lists the floats", () => {
     expect(t.metricsMd).toMatch(/^# Metrics/);
     expect(t.metricsMd).toMatch(/`claims`.*passed.*graded/s);
+    expect(t.metricsMd).toMatch(/`pass_present`.*refused/s);
     expect(t.metricsMd).toMatch(/per-assertion keys .* not declared/i);
     const withFloat = stateTemplate({
       cases: [{ assertions: other, metrics: [{ id: "words", better: "lower", unbounded: true }] }],

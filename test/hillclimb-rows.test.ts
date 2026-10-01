@@ -57,6 +57,7 @@ describe("scored rows", () => {
     });
     expect(row.grade).toEqual({
       pass: 1,
+      pass_present: 1,
       claims_present: 1,
       a3_present: 1,
       claims: 1,
@@ -69,7 +70,7 @@ describe("scored rows", () => {
       a3_c3: 1,
       a3_c4: 1,
     });
-    expect(Object.keys(row.grade).slice(0, 4)).toEqual(["pass", "claims_present", "a3_present", "claims"]);
+    expect(Object.keys(row.grade).slice(0, 5)).toEqual(["pass", "pass_present", "claims_present", "a3_present", "claims"]);
     expect(row.model).toBe("claude-sonnet-5");
   });
 
@@ -185,9 +186,25 @@ describe("scored rows", () => {
       semanticEvidence: { reason: "in_scope_truncated" },
     } as never; // ADDED: a refusal
     const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
-    expect(row.grade).toMatchObject({ a3_present: 0, claims_present: 0 });
+    expect(row.grade).toMatchObject({ a3_present: 0, claims_present: 0, pass_present: 0 });
+    // the verdict failed ONLY because the grade was refused: the headline is not measured (user decision)
+    expect(row.grade).not.toHaveProperty("pass");
     for (let j = 0; j < 5; j++) expect(row.grade).not.toHaveProperty(`a3_c${j}`);
     expect(row.grade).not.toHaveProperty("claims");
+  });
+
+  it("a refusal beside a REAL failure still scores pass 0 — only a refusal-only fail is unmeasured", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    // ADDED: the refusal, and a genuinely failed non-semantic assertion
+    r.assertions[3] = {
+      ...r.assertions[3],
+      pass: false,
+      semanticClaims: undefined,
+      semanticEvidence: { reason: "in_scope_truncated" },
+    } as never;
+    r.assertions[0] = { ...r.assertions[0], pass: false };
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.grade).toMatchObject({ pass: 0, pass_present: 1 });
   });
 
   it("a MULTI-key semantic assertion whose evidence was refused: a<i>_present is 0, as for a single key", () => {

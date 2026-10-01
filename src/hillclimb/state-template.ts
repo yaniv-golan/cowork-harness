@@ -46,7 +46,11 @@ export function stateTemplate(opts: {
 function metricsMd(declared: readonly GradeKeyDecl[], floats: readonly MetricDecl[]): string {
   const ids = new Set(declared.map((d) => d.id));
   const L: string[] = ["# Metrics", "", "Written by `cowork-harness hillclimb state-template`. Every scored row carries these keys.", ""];
-  L.push("- `pass` — 1 when the run's verdict passed (every assertion, plus the run-level checks), else 0. The headline.");
+  L.push(
+    "- `pass` — 1 when the run's verdict passed (every assertion, plus the run-level checks), else 0. The headline.",
+    "- `pass_present` — 0 when the verdict failed ONLY because a `semantic_matches` judge's evidence was refused " +
+      "(not graded); `pass` is then absent, not 0, so a capture problem does not read as the skill regressing.",
+  );
   if (ids.has("claims"))
     L.push(
       "- `claims` — the share of the run's graded `semantic_matches` rubric claims that passed (passed / graded, 0–1). " +
