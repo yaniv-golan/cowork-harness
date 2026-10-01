@@ -2,10 +2,11 @@
 // code. The command wrappers in src/hillclimb/cli.ts only parse, print and exit; the spawned CLI is covered
 // by the guard tests (cli-structural-guard, cli-help).
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { checkReport, stateTemplateFor } from "../src/hillclimb/cli.js";
+import { checkReport, stateTemplateFor, writeMetricsMd } from "../src/hillclimb/cli.js";
 import { UsageError } from "../src/errors.js";
 
 const CLEAN_FLOW = resolve(import.meta.dirname, "fixtures", "hillclimb-flow");
@@ -47,5 +48,66 @@ describe("stateTemplateFor", () => {
     const t = stateTemplateFor("evals", cwd, {});
     expect([...t.state.harness_paths].sort()).toEqual(["evals/_session.yaml", "evals/a.yaml"]);
     expect(t.state.metrics[0].id).toBe("pass");
+  });
+});
+
+describe("writeMetricsMd (state-template --flow)", () => {
+  it("writes metrics.md into the flow dir, creating the dir", () => {
+    expect(writeMetricsMd("flow", cwd, "# Metrics\n", []).status).toBe("written");
+    expect(readFileSync(join(cwd, "flow", "metrics.md"), "utf8")).toBe("# Metrics\n");
+  });
+
+  it("a re-run with the same legend leaves it alone", () => {
+    writeMetricsMd("flow", cwd, "# Metrics\n", []);
+    expect(writeMetricsMd("flow", cwd, "# Metrics\n", []).status).toBe("unchanged");
+    expect(existsSync(join(cwd, "flow", "metrics.md.new"))).toBe(false);
+  });
+
+  it("a re-run never clobbers an edited copy: the new legend goes to metrics.md.new", () => {
+    writeMetricsMd("flow", cwd, "# Metrics\n", []);
+    writeFileSync(join(cwd, "flow", "metrics.md"), "# Metrics\nmy notes\n");
+    expect(writeMetricsMd("flow", cwd, "# Metrics\nnew metric\n", []).status).toBe("new");
+    expect(readFileSync(join(cwd, "flow", "metrics.md"), "utf8")).toBe("# Metrics\nmy notes\n");
+    expect(readFileSync(join(cwd, "flow", "metrics.md.new"), "utf8")).toBe("# Metrics\nnew metric\n");
+  });
+
+  it("a planted link at metrics.md is never followed", () => {
+    mkdirSync(join(cwd, "flow"));
+    writeFileSync(join(cwd, "outside.md"), "host file");
+    symlinkSync(join(cwd, "outside.md"), join(cwd, "flow", "metrics.md"));
+    expect(() => writeMetricsMd("flow", cwd, "# Metrics\n", [])).toThrow();
+    expect(readFileSync(join(cwd, "outside.md"), "utf8")).toBe("host file");
+  });
+
+  it("a secret in the legend (rubric text) is redacted", () => {
+    writeMetricsMd("flow", cwd, "# Metrics\nsk-secret-123\n", ["sk-secret-123"]);
+    expect(readFileSync(join(cwd, "flow", "metrics.md"), "utf8")).not.toContain("sk-secret-123");
+  });
+});
+
+const CLI = resolve(import.meta.dirname, "..", "dist", "cli.js");
+describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", () => {
+  const setup = () => {
+    mkdirSync(join(cwd, "evals"));
+    writeFileSync(join(cwd, "evals", "_session.yaml"), `model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ${SKILL}\n`);
+    writeFileSync(join(cwd, "evals", "a.yaml"), "name: a\nbaseline: latest\nsession: ./_session.yaml\nfidelity: container\nprompt: p\n");
+  };
+  const run = (...a: string[]) => spawnSync("node", [CLI, "hillclimb", "state-template", "evals", ...a], { cwd, encoding: "utf8" });
+
+  it("text mode without --flow writes nothing and says where the legend is", () => {
+    setup();
+    const r = run();
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).metrics[0].id).toBe("pass");
+    expect(r.stderr).toMatch(/--flow.*metrics\.md|metrics_md/);
+    expect(existsSync(join(cwd, ".claude"))).toBe(false);
+  });
+
+  it("--flow writes metrics.md beside the skeleton and says so", () => {
+    setup();
+    const r = run("--flow", "flow");
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(cwd, "flow", "metrics.md"), "utf8")).toMatch(/^# Metrics/);
+    expect(r.stderr).toMatch(/wrote flow\/metrics\.md/);
   });
 });

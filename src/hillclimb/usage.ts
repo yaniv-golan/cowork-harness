@@ -46,7 +46,9 @@ export const HILLCLIMB_CHECK_USAGE = `usage: hillclimb check [--flow DIR] [--out
 
 export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <scenario.yaml | dir/> [--flow DIR] [--output-format text|json]
        Prints a _state.json skeleton for the loop to save: the metrics every row carries, the perf columns and
-       the files the harness gate digests. json: the envelope also carries metrics_md, the metrics legend.`;
+       the files the harness gate digests. With --flow, also writes the metrics legend to <flow>/metrics.md
+       (an existing copy that differs is kept; the new legend goes to metrics.md.new). json: the envelope
+       also carries it as metrics_md.`;
 
 /** The whole family: `hillclimb --help`, and the usage guard's text (every flag of every subcommand). */
 export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template> ...
