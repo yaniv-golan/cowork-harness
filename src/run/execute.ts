@@ -3195,7 +3195,7 @@ export function buildPartialResult(args: {
     nonDeterministic,
     nonDeterministicTerminal,
     // A `fail` fallback ends the run ON the partly scripted batch — the finding explains why.
-    partlyScriptedGates: args.record.partlyScriptedGates.length ? args.record.partlyScriptedGates : undefined,
+    partlyScriptedGates: args.record.partlyScriptedGates?.length ? args.record.partlyScriptedGates : undefined,
     permissiveAutoAllow: undefined,
     scan: undefined,
     // Computed before the salvage branch; a filesystem-proven delete must survive into the partial result.

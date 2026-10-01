@@ -312,8 +312,13 @@ Recognize these before "fixing" a non-bug:
   `RunResult.scan` is undefined and the host-path guard and the outputs-delete **text scan did not run this
   run** (the outputs filesystem diff still did, and a delete it proves still fails). Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
+- **`partly_scripted_gate`** (`WARN`) — one `AskUserQuestion` batched several sub-questions and your
+  `answers:` matched only some. Answers are delivered as one unit, so the whole batch went to
+  `on_unanswered` and the matched answers were not delivered. The message names the matched and unmatched
+  sub-questions and who answered; `result.partlyScriptedGates` has the lists. `replay` and `verify-run`
+  re-derive it, so it clears once you script every sub-question of the batch.
 
-The full 22-code signal table (severity + per-signal opt-out) is in
+The full 23-code signal table (severity + per-signal opt-out) is in
 [`references/assertion-catalog.md`](./assertion-catalog.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 
