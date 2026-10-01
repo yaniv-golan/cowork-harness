@@ -19,6 +19,7 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
 ] as const;
 export const HILLCLIMB_RUN_REPEATED_FLAGS = ["--case"] as const;
 /** `hillclimb regrade`'s own booleans (its value flags are a subset of run's). */
+export const HILLCLIMB_REGRADE_VALUE_FLAGS = ["--flow", "--variant", "--judge-model", "--output-format"] as const;
 export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = ["--approve-harness", "--fill-refs", "--allow-doc-drift", "--allow-unchecked"] as const;
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--reps N]
@@ -30,7 +31,7 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --variant ID            'baseline' or 'v<N>' (default baseline)
   --model ID              concrete model id the agent must be served by; an alias is refused
   --reps N                reps per case (default 1)
-  --concurrency N         jobs in flight (default 4; 1 with a decider)
+  --concurrency N         jobs in flight (default 4; a decider needs --concurrency 1)
   --timeout-s N           per-case wall-clock ceiling in seconds (default 1800; 0 = none)
   --approve-harness       record the harness sha in _state.json (yours to pass, never the loop's)
   --case ID               run only this case (file stem or scenario name); repeatable

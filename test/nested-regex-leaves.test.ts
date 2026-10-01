@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { nestedRegexLeaves } from "../src/run/execute.js";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadScenarioPure, nestedRegexLeaves } from "../src/run/execute.js";
 
 // A bad regex used to reach the evaluator, i.e. AFTER the paid spawn, whenever it lived one level down in an
 // assertion object. The first fix for that was a hand-written list of three leaves under a comment claiming
@@ -29,6 +31,8 @@ describe("nested regex leaves are validated at LOAD, and the table is guarded ag
     question_context: { matches: "d", when_question: "e" },
     question_options: { when_question: "f", equals: [] },
     question_option_count: { matches: "m", when_question: "n", exactly: 1 },
+    hook_output_contains: { event: "Stop", matches: "o" },
+    hook_output_not_contains: { event: "Stop", matches: "p" },
     subagent_dispatch_healthy: { type: "g" },
     subagent_output_contains: { match: "h", contains: "i" },
     skill_tool_used: { skill: "j", tool: "k" },
@@ -42,6 +46,8 @@ describe("nested regex leaves are validated at LOAD, and the table is guarded ag
       [
         "artifact_text.matches",
         "artifact_text.not_matches",
+        "hook_output_contains.matches",
+        "hook_output_not_contains.matches",
         "path_denied.path_matches",
         "question_context.matches",
         "question_context.when_question",
@@ -82,5 +88,13 @@ describe("nested regex leaves are validated at LOAD, and the table is guarded ag
     expect(found.size).toBeGreaterThan(3);
     expect([...found]).toContain("matches");
     expect([...found]).toContain("path_matches");
+  });
+});
+
+describe("an invalid nested regex is refused at LOAD, before any spawn", () => {
+  it.each(["hook_output_contains", "hook_output_not_contains"])('%s.matches: "("', (key) => {
+    const f = join(mkdtempSync(join(tmpdir(), "nested-regex-")), "s.yaml");
+    writeFileSync(f, `name: t\nfidelity: container\nprompt: hi\nassert:\n  - ${key}: { event: Stop, matches: "(" }\n`);
+    expect(() => loadScenarioPure(f)).toThrow(new RegExp(`bad regex in ${key}\\.matches`));
   });
 });

@@ -85,6 +85,15 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
       [{ no_path_denied: true }, { vm_path_denied: true }],
       "assert:\n  - no_path_denied: true\n  - vm_path_denied: true\n",
     ],
+    [
+      // value-level: same event and needle, the negative's stream (`any`) covering the positive's
+      "hook_output_not_contains + hook_output_contains (same event and needle)",
+      [
+        { hook_output_not_contains: { event: "Stop", text: "x" } },
+        { hook_output_contains: { event: "Stop", stream: "stderr", text: "x" } },
+      ],
+      'assert:\n  - hook_output_not_contains: { event: Stop, text: "x" }\n  - hook_output_contains: { event: Stop, stream: stderr, text: "x" }\n',
+    ],
   ];
 
   it.each(PAIRS)("both sides flag %s", (label, ts, yaml) => {
@@ -106,9 +115,28 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
       "assert:\n  - questions_count_max: 0\n  - gate_answer_count_min: 0\n",
     ],
     [
+      // PyYAML (YAML 1.1) reads both as True; the harness keeps the strings "yes" and "on", which differ
+      "hook_output_* needles `yes` vs `on` (distinct strings to the harness, both True to PyYAML)",
+      [{ hook_output_not_contains: { event: "Stop", text: "yes" } }, { hook_output_contains: { event: "Stop", text: "on" } }],
+      "assert:\n  - hook_output_not_contains: { event: Stop, text: yes }\n  - hook_output_contains: { event: Stop, text: on }\n",
+    ],
+    [
       "two positive denial assertions",
       [{ vm_path_denied: true }, { path_denied: {} }],
       "assert:\n  - vm_path_denied: true\n  - path_denied: {}\n",
+    ],
+    [
+      "hook_output_* with the negative on a narrower stream (a stdout hit satisfies both)",
+      [
+        { hook_output_not_contains: { event: "Stop", stream: "stderr", text: "x" } },
+        { hook_output_contains: { event: "Stop", text: "x" } },
+      ],
+      'assert:\n  - hook_output_not_contains: { event: Stop, stream: stderr, text: "x" }\n  - hook_output_contains: { event: Stop, text: "x" }\n',
+    ],
+    [
+      "hook_output_* on different events",
+      [{ hook_output_not_contains: { event: "Stop", text: "x" } }, { hook_output_contains: { event: "SessionStart", text: "x" } }],
+      'assert:\n  - hook_output_not_contains: { event: Stop, text: "x" }\n  - hook_output_contains: { event: SessionStart, text: "x" }\n',
     ],
     [
       "two negatives on different channels",

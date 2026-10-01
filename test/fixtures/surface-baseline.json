@@ -4340,6 +4340,112 @@
           "MessageDisplay"
         ]
       },
+      ".assert[].hook_output_contains": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].hook_output_contains.event": {
+        "type": "string",
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PostToolBatch",
+          "Notification",
+          "UserPromptSubmit",
+          "UserPromptExpansion",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PreCompact",
+          "PostCompact",
+          "PreModelSwitch",
+          "PostModelSwitch",
+          "PermissionRequest",
+          "PermissionDenied",
+          "Setup",
+          "TeammateIdle",
+          "TaskCreated",
+          "TaskCompleted",
+          "Elicitation",
+          "ElicitationResult",
+          "ConfigChange",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "InstructionsLoaded",
+          "CwdChanged",
+          "FileChanged",
+          "DirectoryAdded",
+          "MessageDisplay"
+        ],
+        "required": true
+      },
+      ".assert[].hook_output_contains.matches": {
+        "type": "string"
+      },
+      ".assert[].hook_output_contains.stream": {
+        "type": "string",
+        "enum": ["stdout", "stderr", "any"]
+      },
+      ".assert[].hook_output_contains.text": {
+        "type": "string"
+      },
+      ".assert[].hook_output_not_contains": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].hook_output_not_contains.event": {
+        "type": "string",
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PostToolBatch",
+          "Notification",
+          "UserPromptSubmit",
+          "UserPromptExpansion",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PreCompact",
+          "PostCompact",
+          "PreModelSwitch",
+          "PostModelSwitch",
+          "PermissionRequest",
+          "PermissionDenied",
+          "Setup",
+          "TeammateIdle",
+          "TaskCreated",
+          "TaskCompleted",
+          "Elicitation",
+          "ElicitationResult",
+          "ConfigChange",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "InstructionsLoaded",
+          "CwdChanged",
+          "FileChanged",
+          "DirectoryAdded",
+          "MessageDisplay"
+        ],
+        "required": true
+      },
+      ".assert[].hook_output_not_contains.matches": {
+        "type": "string"
+      },
+      ".assert[].hook_output_not_contains.stream": {
+        "type": "string",
+        "enum": ["stdout", "stderr", "any"]
+      },
+      ".assert[].hook_output_not_contains.text": {
+        "type": "string"
+      },
       ".assert[].input_unmodified<anyOf:0>": {
         "type": "string"
       },

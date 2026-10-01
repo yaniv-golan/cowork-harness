@@ -24,6 +24,7 @@ import {
   HILLCLIMB_CHECK_USAGE,
   HILLCLIMB_FREEZE_REF_USAGE,
   HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
+  HILLCLIMB_REGRADE_VALUE_FLAGS,
   HILLCLIMB_REGRADE_USAGE,
   HILLCLIMB_STATE_TEMPLATE_USAGE,
   HILLCLIMB_USAGE,
@@ -278,7 +279,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         rest,
         withCommandGlobals({
           booleans: [...HILLCLIMB_REGRADE_BOOLEAN_FLAGS],
-          values: ["--flow", "--variant", "--judge-model", "--output-format"],
+          values: [...HILLCLIMB_REGRADE_VALUE_FLAGS],
           repeated: ["--case"],
           enums: { "--output-format": ["text", "json"] },
           noDashValue: ["--flow", "--variant", "--case", "--judge-model"],
