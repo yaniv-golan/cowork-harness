@@ -643,6 +643,21 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
       );
   }
 
+  // The judge and the LLM decider run the host `claude` isolated and tool-less, which needs a CLI that accepts the
+  // isolation flags: an older one refuses the eval here, once, instead of failing every rep after its agent spend.
+  // A decider channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
+  const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
+  if (
+    scenarios.some(
+      (s) =>
+        (llmDecider && s.scenario.on_unanswered === "llm") ||
+        s.scenario.assert.some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined),
+    )
+  ) {
+    const iso = deps.isolationCheck();
+    if (iso) throw new UsageError(iso);
+  }
+
   // `--max-budget-usd`: the batch gate `record` uses, over this schedule (2 x reps runs of every scenario).
   if (args.maxBudgetUsd !== undefined) budgetGate(args, deps, indexRows, runsDir, plan!);
 
@@ -810,21 +825,6 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
 
   async function afterEvalDir(): Promise<EvalOutcome> {
     const { snaps, sessions, sigs, skill, evalFiles } = prepareArms(args, deps, ctx, evalDir, "run");
-
-    // The judge and the LLM decider run the host `claude` isolated and tool-less, which needs a CLI that accepts the
-    // isolation flags: an older one refuses the eval here, once, instead of failing every rep after its agent spend.
-    // A decider channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
-    const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
-    if (
-      scenarios.some(
-        (s) =>
-          (llmDecider && s.scenario.on_unanswered === "llm") ||
-          s.scenario.assert.some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined),
-      )
-    ) {
-      const iso = deps.isolationCheck();
-      if (iso) throw new UsageError(iso);
-    }
 
     // Manifest.
     const manifestScenarios: ManifestScenario[] = scenarios.map((s) => ({

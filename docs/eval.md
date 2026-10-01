@@ -37,7 +37,9 @@ it.
 0. It runs no agent, builds no `--decider-cmd`/`--decider-dir` channel, and creates no eval dir: the arm
 snapshots it needs for the checks go to a temp dir that is removed afterwards. (The credential check still
 runs, as on `record --dry-run`; it may run the `security` Keychain probe or a container runtime's
-`--version`.) A refusal is the real eval's refusal, with the same message and exit code, so a clean dry run
+`--version`. So does the host-`claude` isolation check when a scenario calls the judge or the LLM decider: it
+runs `claude --help` / `--version`, and a CLI too old to run them isolated refuses the dry run as it refuses the
+eval.) A refusal is the real eval's refusal, with the same message and exit code, so a clean dry run
 is never refused for real on anything it could have checked. One refusal is the dry run's own: its temp dir
 must be outside any git work tree, for the same reason the eval dir must (the snapshots would hash as empty),
 so a TMPDIR inside one, or one git cannot answer for, exits 3 — set TMPDIR to a directory outside any git

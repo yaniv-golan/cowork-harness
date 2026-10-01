@@ -2142,6 +2142,7 @@ async function cmdEval(rawArgs: string[]) {
       ({ plan } = await planEvalDryRun(parsed, {
         log,
         tokenCheck: (tier) => tokenCheck(tier),
+        isolationCheck: () => isolationRefusal(),
         runJob: async () => {
           throw new Error("eval --dry-run must never run a job");
         },

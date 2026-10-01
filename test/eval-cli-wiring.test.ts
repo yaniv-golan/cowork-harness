@@ -464,6 +464,25 @@ describe.runIf(can)("eval --dry-run through the real CLI (stub agent never start
     }
   }, 180_000);
 
+  it("a host claude too old to run the judge isolated refuses the dry run (exit 2, dryRun + plan), as it refuses the eval", async () => {
+    const f = fixture();
+    try {
+      // The judge's transport probes `claude --help` for its isolation flags: this one lists none.
+      writeFileSync(
+        join(f.root, "bin", "claude"),
+        `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.1.100 (Claude Code)"; exit 0; fi\nif [ "$1" = "--help" ]; then exit 0; fi\necho $$ > "$STUB_PID"\nexit 1\n`,
+      );
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.code, r.stderr).toBe(2);
+      const env = JSON.parse(r.stdout);
+      expect(env).toMatchObject({ ok: false, dryRun: true, error: { category: "usage" } });
+      expect(env.plan.cost).toHaveProperty("jobs", 8);
+      expect(existsSync(f.stubPidFile)).toBe(false);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
   it("--target-effect without --dry-run is a usage error (exit 2)", async () => {
     const f = fixture();
     try {

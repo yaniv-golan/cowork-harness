@@ -187,6 +187,7 @@ function planDeps(rows: RunIndexRow[], extra: { log?: string[]; snapRoots?: stri
   return {
     runJob: NO_RUN,
     tokenCheck: TOKEN_OK,
+    isolationCheck: (): string | undefined => undefined,
     log: (s: string) => extra.log?.push(s),
     evalId: "plan1",
     now: () => new Date("2026-10-01T00:00:00Z"),
@@ -452,6 +453,28 @@ describe("eval --dry-run: the plan's numbers", () => {
     expect(text).toMatch(/redirected by --run-dir \/ COWORK_HARNESS_RUNS_DIR/);
     expect(text).toMatch(/LOWER BOUND/);
     expect(text).toMatch(/rate unknown · best case at --reps 5/);
+  });
+});
+
+describe("eval --dry-run: the host-claude isolation check", () => {
+  it("refuses a dry run whose scenarios call the judge, as the real eval does, before the budget gate and carrying the plan", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const plans: EvalPlan[] = [];
+    const deps = { ...planDeps([], { plans }), isolationCheck: () => "OLD-CLI-REFUSAL" };
+    const err = await planEvalDryRun(dry(scen, a, b, ["--judge-model", "claude-opus-4-8", "--max-budget-usd", "5"]), deps).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(UsageError);
+    expect((err as Error).message).toMatch(/OLD-CLI-REFUSAL/);
+    expect(plans).toHaveLength(1);
+    expect(budgetStatus()).toBeUndefined(); // refused before the budget gate ran
+  });
+
+  it("does not consult it when no scenario calls the judge or the LLM decider", async () => {
+    const { scen, a, b } = setup();
+    let asked = 0;
+    await planEvalDryRun(dry(scen, a, b), { ...planDeps([]), isolationCheck: () => (asked++, undefined) });
+    expect(asked).toBe(0);
   });
 });
 
