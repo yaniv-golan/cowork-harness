@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -142,7 +142,7 @@ export function isPatchBump(pinned: string | undefined, found: string | undefine
 export function resolveAgentBinary(baseline: PlatformBaseline, opts: { parityMount?: boolean } = {}): string {
   const override = process.env.COWORK_AGENT_BINARY;
   if (override) {
-    if (!existsSync(override)) throw new Error(`COWORK_AGENT_BINARY not found: ${override}`);
+    if (!existsSync(override)) throw new AgentBinaryError(`COWORK_AGENT_BINARY not found: ${override}`, "override");
     return verifiedElf(override, baseline, { intentionalSubstitution: true });
   }
   const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
@@ -170,13 +170,21 @@ export function resolveAgentBinary(baseline: PlatformBaseline, opts: { parityMou
   if (fallback) {
     // A fallback exists but the opt-in env is not set — fail explicitly rather than silently using a
     // different agent version that could make the run appear green while running the wrong binary.
-    throw new Error(
-      `cowork-harness: baseline agent binary not found: ${exactPath}. Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to use the newest available.`,
+    // The only remedy that keeps the exact pin is recovering that version from the release channel — so it
+    // comes first, on the one line doctor shows. COWORK_AGENT_BINARY downgrades the sha check to advisory,
+    // hence "sha-verify": the runbook's own step, which the harness cannot enforce on an override.
+    throw new AgentBinaryError(
+      `cowork-harness: baseline agent binary not found: ${exactPath}. Recover and sha-verify the pinned ` +
+        `${basename(dirname(staged))} ELF, then set COWORK_AGENT_BINARY=<path> to it (docs/maintenance.md#recovering-an-old-agent-version), ` +
+        `or set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to use the newest available.`,
+      "pruned",
     );
   }
-  throw new Error(
+  throw new AgentBinaryError(
     `Staged agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +
-      `(claude-code-vm/<ver>/claude). Open Cowork once to stage it, or set COWORK_AGENT_BINARY to its path.`,
+      `(claude-code-vm/<ver>/claude). Open Cowork once to stage it, or set COWORK_AGENT_BINARY to its path ` +
+      `(a version Desktop no longer stages: docs/maintenance.md#recovering-an-old-agent-version).`,
+    "missing",
   );
 }
 
@@ -222,121 +230,411 @@ export function newestStagedSibling(versionRoot: string, leaf: string): string |
   return resolve(join(versionRoot, versions[versions.length - 1], leaf));
 }
 
-/** Strip `n` trailing path segments via repeated `dirname`. */
-function nthParentDir(p: string, n: number): string {
-  let out = p;
-  for (let i = 0; i < n; i++) out = dirname(out);
-  return out;
+// ── Native macOS agent staging ────────────────────────────────────────────────────────────────────────
+//
+// Two layouts exist under `<userData>/claude-code/`:
+//   - flat (Desktop through 2.16120.0):       `<ver>/claude.app/Contents/MacOS/claude`
+//   - per-build (Desktop 2.19675.0 onward):   `<ver>/<build>/claude.app/Contents/MacOS/claude`
+// Binary-verified in the 2.19675.0 asar: the build dir is `Vdr(checksum)` = the first 12 hex characters of
+// the manifest checksum, lowercased, and a dir counts as a build only if its name matches `/^[0-9a-f]{12}$/`
+// (`Udr`). On darwin the checksum is the BUNDLE archive's (`platforms[darwin-<arch>].bundle.checksum`), not
+// the inner Mach-O's, so a build can never be identified by hashing the binary — the 12-hex segment of the
+// pinned path is the only build identity a baseline carries. `<build>/.verified` holds the full checksum and
+// is written LAST (after extract-to-temp + rename), so a build dir without a matching marker is one Desktop
+// itself would not run. `moveLegacyInstallNow` migrates an existing flat install into its build dir on first
+// touch (the VM ELF under `claude-code-vm/` is never moved). When several builds of one version are staged,
+// Desktop runs the one its current manifest names, and otherwise (`publishedInstallDirs`) the dirs that have a
+// `.verified`, newest `.verified` mtime first — the flat root joins that order only when its move failed.
+
+/** The leaf below a version dir (flat) or a build dir (per-build). */
+const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
+/** Desktop's build-dir rule (`Bdr`). */
+const NATIVE_BUILD_RE = /^[0-9a-f]{12}$/;
+/** Desktop's checksum rule (`zdr`) for the `.verified` marker. */
+const NATIVE_CHECKSUM_RE = /^[0-9a-fA-F]{64}$/;
+/** Lazy root: the version is the segment right after the SHORTEST root that leaves a valid tail, so a
+ *  per-build path never reads its build as the version. */
+const NATIVE_PATH_RE = /^(.*?)\/([^/]+)\/(?:([0-9a-f]{12})\/)?claude\.app\/Contents\/MacOS\/claude$/;
+
+export interface NativeStagedPath {
+  /** The `claude-code` dir the version dirs live in. */
+  root: string;
+  version: string;
+  /** The 12-hex build dir, for a per-build path. */
+  build?: string;
 }
 
-/** `.../claude-code/<ver>/claude.app/Contents/MacOS/claude` — the leaf below the `<ver>` directory. */
-const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
-/** Number of path segments to strip off a full native binary path to reach its `<ver>` directory —
- *  the 4-segment `NATIVE_LEAF` plus the `<ver>` dir itself. */
-const NATIVE_VERSION_ROOT_DEPTH = NATIVE_LEAF.split("/").length + 1;
-
-/** Extract the `<ver>` directory name from a `.../claude-code/<ver>/claude.app/Contents/MacOS/claude`
- *  path. `NATIVE_LEAF` is 4 segments (`claude.app/Contents/MacOS/claude`), so the `<ver>` dir is 4
- *  `dirname` hops up from the leaf file. Returns undefined if the path is too shallow to contain one. */
-function nativeVersionFromPath(path: string): string | undefined {
-  const verDir = nthParentDir(path, NATIVE_LEAF.split("/").length);
-  const ver = verDir.split("/").pop();
-  return ver || undefined;
+/** Parse a native agent path in either layout. Pure. */
+export function parseNativeStagedPath(p: string): NativeStagedPath | undefined {
+  const m = NATIVE_PATH_RE.exec(p);
+  if (!m) return undefined;
+  return m[3] ? { root: m[1], version: m[2], build: m[3] } : { root: m[1], version: m[2] };
 }
 
 /** The native agent version a baseline pins, read from the `<ver>` directory of
- *  `agentBinary.nativeStagedPath` (`.../claude-code/<ver>/claude.app/Contents/MacOS/claude`). This is the
- *  agent hostloop executes, and it versions independently of `agentVersion` (the VM ELF). `undefined` when
- *  the baseline pins no native binary or the path is not that shape. Pure; never touches the filesystem. */
+ *  `agentBinary.nativeStagedPath` in either layout. This is the agent hostloop executes, and it versions
+ *  independently of `agentVersion` (the VM ELF). `undefined` when the baseline pins no native binary or the
+ *  path does not sit under a `claude-code/` dir. Pure; never touches the filesystem. */
 export function pinnedNativeAgentVersion(baseline: PlatformBaseline): string | undefined {
-  return /\/claude-code\/([^/]+)\/claude\.app\/Contents\/MacOS\/claude$/.exec(baseline.agentBinary?.nativeStagedPath ?? "")?.[1];
+  const p = parseNativeStagedPath(baseline.agentBinary?.nativeStagedPath ?? "");
+  return p && /(^|\/)claude-code$/.test(p.root) ? p.version : undefined;
 }
+
+/** The build a `.verified` marker names, or undefined when the marker is absent or not a checksum. */
+function markerBuild(dir: string): { build: string; publishedMs: number } | undefined {
+  const f = join(dir, ".verified");
+  let text: string;
+  let mtimeMs: number;
+  try {
+    text = readFileSync(f, "utf8").trim();
+    mtimeMs = statSync(f).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  return NATIVE_CHECKSUM_RE.test(text) ? { build: text.slice(0, 12).toLowerCase(), publishedMs: mtimeMs } : undefined;
+}
+
+interface NativeCandidate {
+  path: string;
+  version: string;
+  layout: "nested" | "flat";
+  /** The build the candidate's marker names (always set for nested; set for a flat one with a marker). */
+  build?: string;
+  publishedMs?: number;
+}
+
+interface NativeVersionScan {
+  /** Runnable candidates, in choice order (see `scanNativeVersion`). */
+  candidates: NativeCandidate[];
+  /** `<ver>/<build>` dirs with a binary but no marker naming them — not finished, so never chosen. */
+  unfinished: string[];
+  /** `<ver>/<entry>` entries that fit neither layout (dot-entries such as `.extract-*` are Desktop's own). */
+  unknown: string[];
+}
+
+/**
+ * Scan one version dir for runnable native binaries in both layouts, in choice order:
+ *  1. builds (`<ver>/<12hex>/`, a real directory — a symlink is skipped, as Desktop's `Dirent.isDirectory()`
+ *     skips it — whose `.verified` names that same build) and a flat install that has a valid marker, sorted
+ *     by `.verified` mtime newest first, then per-build before flat, then by name — a total order, so equal
+ *     mtimes cannot make the choice depend on readdir order;
+ *  2. a flat install with no marker, only when nothing in (1) exists. That is the pre-2.19675.0 shape the
+ *     harness always accepted, kept so an older Desktop resolves exactly as before.
+ */
+function scanNativeVersion(root: string, version: string): NativeVersionScan {
+  const vdir = join(root, version);
+  const out: NativeVersionScan = { candidates: [], unfinished: [], unknown: [] };
+  let entries: import("node:fs").Dirent[] = [];
+  try {
+    entries = readdirSync(vdir, { withFileTypes: true });
+  } catch {
+    /* no such version dir */
+  }
+  const ranked: NativeCandidate[] = [];
+  for (const e of entries) {
+    if (e.name.startsWith(".") || e.name === "claude.app" || e.name === "claude") continue;
+    if (NATIVE_BUILD_RE.test(e.name)) {
+      if (!e.isDirectory()) continue;
+      const bin = join(vdir, e.name, NATIVE_LEAF);
+      const m = markerBuild(join(vdir, e.name));
+      if (existsSync(bin) && m?.build === e.name)
+        ranked.push({ path: bin, version, layout: "nested", build: e.name, publishedMs: m.publishedMs });
+      else out.unfinished.push(`${version}/${e.name}`);
+      continue;
+    }
+    out.unknown.push(`${version}/${e.name}`);
+  }
+  const flatBin = join(vdir, NATIVE_LEAF);
+  let flatUnverified: NativeCandidate | undefined;
+  if (existsSync(flatBin)) {
+    const m = markerBuild(vdir);
+    if (m) ranked.push({ path: flatBin, version, layout: "flat", build: m.build, publishedMs: m.publishedMs });
+    else flatUnverified = { path: flatBin, version, layout: "flat" };
+  }
+  ranked.sort(compareNativeCandidates);
+  out.candidates = ranked.length ? ranked : flatUnverified ? [flatUnverified] : [];
+  return out;
+}
+
+/** Choice order among verified candidates of one version: newest `.verified` mtime first, then per-build
+ *  before flat, then build name ascending. Desktop's own sort is stable, so on a tie it keeps readdir order,
+ *  which is filesystem-dependent; the name key makes the harness's choice total. Exported for tests (APFS
+ *  returns names sorted, so a tie on disk cannot tell the name key from readdir order). */
+export function compareNativeCandidates(
+  a: { publishedMs?: number; layout: "nested" | "flat"; build?: string },
+  b: { publishedMs?: number; layout: "nested" | "flat"; build?: string },
+): number {
+  return (
+    (b.publishedMs ?? 0) - (a.publishedMs ?? 0) ||
+    (a.layout === b.layout ? 0 : a.layout === "nested" ? -1 : 1) ||
+    (a.build ?? "").localeCompare(b.build ?? "")
+  );
+}
+
+/** Every version dir under `root` with at least one candidate, newest version first. */
+function stagedNativeVersions(root: string): { version: string; scan: NativeVersionScan }[] {
+  let names: string[] = [];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => !n.startsWith("."))
+    .map((version) => ({ version, scan: scanNativeVersion(root, version) }))
+    .sort((a, b) => cmpVersionStrings(b.version, a.version));
+}
+
+const buildLabel = (c: NativeCandidate) => (c.layout === "nested" ? c.build! : "flat install");
 
 /**
  * Classification of the NATIVE agent binary's staging state against its baseline pin — the single
  * source of truth shared by `resolveHostAgentBinary` and `doctor`'s `hostAgent` check so the two never
- * disagree about whether a drift is patch-only (auto-tolerated) or major/minor (env-gated/hard-fail).
+ * disagree.
  *
- * - `exact` — the pinned path exists as-is.
- * - `patch` — the pinned path is gone, but a same-major.minor, different-patch sibling exists (safe:
- *   the native binary has no sha256 pin, so a patch bump is auto-tolerated).
- * - `major-minor` — the pinned path is gone and either no sibling version could be extracted, or the
- *   best sibling differs in major or minor (today's env-gated-fallback-or-throw behavior applies).
- * - `missing` — the pinned path is gone and no sibling binary exists at all.
+ * - `exact` — the pinned version is staged. For a per-build pin, it is the pinned build; for a flat pin
+ *   (which names no build) it is the first candidate in choice order, with `relocated` when Desktop moved it
+ *   into a build dir and `others` when more than one build of that version is staged.
+ * - `build` — the pin names a build, that build is not staged, and another build of the SAME version is.
+ *   A different build is a different binary, so it is gated like `major-minor`. A flat pin never yields it.
+ * - `patch` — the pinned version is not staged; the newest staged one is a same-major.minor patch bump
+ *   (auto-tolerated: the native binary has no sha256 pin).
+ * - `major-minor` — the newest staged version differs in major or minor (env-gated fallback or throw).
+ * - `missing` — nothing runnable under either layout; `cause` says why.
  */
 export interface NativeStagingDrift {
-  kind: "exact" | "patch" | "major-minor" | "missing";
+  kind: "exact" | "build" | "patch" | "major-minor" | "missing";
   /** The baseline's configured (possibly nonexistent) staged path, tilde-expanded. */
   stagedPath: string;
-  /** The pinned version dir name, if extractable from `stagedPath`. */
+  /** The pinned version, if extractable from `stagedPath`. */
   pinned?: string;
-  /** The fallback sibling's version dir name, if one was found. */
+  /** The build the pin names (per-build pins only). */
+  pinnedBuild?: string;
+  /** The chosen version, when something was found. */
   found?: string;
-  /** The fallback sibling's resolved binary path, if one was found (kinds `patch`/`major-minor`). */
+  /** The chosen build (per-build candidates, or a flat one with a marker). */
+  foundBuild?: string;
+  /** The binary the resolver would run (every kind but `missing`). */
+  path?: string;
+  /** Same as `path` for the substitution kinds (`build`/`patch`/`major-minor`). */
   fallbackPath?: string;
+  /** Layout of the chosen candidate. */
+  layout?: "nested" | "flat";
+  /** The chosen candidate's layout differs from the pin's (Desktop migrated it). */
+  relocated?: boolean;
+  /** Other builds of the chosen version that were NOT chosen (only for a choice the pin did not decide). */
+  others?: string[];
+  /** Why nothing was found (`missing` only). */
+  cause?: "missing-root" | "missing" | "unfinished" | "unknown-layout";
+  /** The `claude-code` dir scanned. */
+  root?: string;
+  unfinished?: string[];
+  unknownEntries?: string[];
 }
 
 /** Classify the native agent binary's staging drift against `baseline.agentBinary.nativeStagedPath`.
- *  See `NativeStagingDrift` for the classification. Pure/read-only — does not touch env vars. */
+ *  See `NativeStagingDrift`. Read-only — does not touch env vars. */
 export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeStagingDrift {
   const staged = (baseline.agentBinary?.nativeStagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
-  if (staged && existsSync(staged)) {
-    const ver = nativeVersionFromPath(staged);
-    return { kind: "exact", stagedPath: staged, pinned: ver, found: ver };
+  if (!staged) return { kind: "missing", cause: "missing", stagedPath: staged };
+  const pin = parseNativeStagedPath(staged);
+  if (!pin) {
+    // Not a path in either layout (a hand-edited baseline): exact if it exists, nothing to scan otherwise.
+    return existsSync(staged)
+      ? { kind: "exact", stagedPath: staged, path: staged }
+      : { kind: "missing", cause: "missing", stagedPath: staged };
   }
-  if (!staged) return { kind: "missing", stagedPath: staged };
-  const fallback = newestStagedSibling(nthParentDir(staged, NATIVE_VERSION_ROOT_DEPTH), NATIVE_LEAF);
-  if (!fallback) return { kind: "missing", stagedPath: staged, pinned: nativeVersionFromPath(staged) };
-  const pinned = nativeVersionFromPath(staged);
-  const found = nativeVersionFromPath(fallback);
-  const patchOnly = isPatchBump(pinned, found);
-  return { kind: patchOnly ? "patch" : "major-minor", stagedPath: staged, pinned, found, fallbackPath: fallback };
+  const { root, version: pinned, build: pinnedBuild } = pin;
+  const base = { stagedPath: staged, pinned, ...(pinnedBuild ? { pinnedBuild } : {}), root };
+  const pinLayout = pinnedBuild ? "nested" : "flat";
+  const describe = (c: NativeCandidate, rest: NativeCandidate[]) => ({
+    found: c.version,
+    ...(c.build ? { foundBuild: c.build } : {}),
+    path: c.path,
+    layout: c.layout,
+    ...(c.layout !== pinLayout ? { relocated: true } : {}),
+    ...(rest.length ? { others: rest.map(buildLabel) } : {}),
+  });
+
+  const own = scanNativeVersion(root, pinned);
+  if (own.candidates.length) {
+    if (pinnedBuild) {
+      const match =
+        own.candidates.find((c) => c.layout === "nested" && c.build === pinnedBuild) ?? own.candidates.find((c) => c.build === pinnedBuild);
+      if (match) return { kind: "exact", ...base, ...describe(match, []) };
+      const c = own.candidates[0];
+      return { kind: "build", ...base, ...describe(c, own.candidates.slice(1)), fallbackPath: c.path };
+    }
+    const [c, ...rest] = own.candidates;
+    return { kind: "exact", ...base, ...describe(c, rest) };
+  }
+
+  if (!existsSync(root)) return { kind: "missing", cause: "missing-root", ...base };
+  const all = stagedNativeVersions(root);
+  const newest = all.find((v) => v.version !== pinned && v.scan.candidates.length);
+  if (newest) {
+    const [c, ...rest] = newest.scan.candidates;
+    return { kind: isPatchBump(pinned, newest.version) ? "patch" : "major-minor", ...base, ...describe(c, rest), fallbackPath: c.path };
+  }
+  const unfinished = all.flatMap((v) => v.scan.unfinished);
+  const unknownEntries = all.flatMap((v) => v.scan.unknown);
+  const cause = unfinished.length ? "unfinished" : unknownEntries.length ? "unknown-layout" : "missing";
+  return {
+    kind: "missing",
+    cause,
+    ...base,
+    ...(unfinished.length ? { unfinished } : {}),
+    ...(unknownEntries.length ? { unknownEntries } : {}),
+  };
 }
+
+/** A resolver failure that carries WHY, so `doctor` can give the remedy for that cause. */
+export class AgentBinaryError extends Error {
+  constructor(
+    message: string,
+    readonly kind: string,
+  ) {
+    super(message);
+    this.name = "AgentBinaryError";
+  }
+}
+
+const ambiguityNote = (d: NativeStagingDrift) =>
+  d.others?.length
+    ? `${d.others.length + 1} builds of native agent ${d.found} are staged; the baseline does not pin one, so using ` +
+      `${d.foundBuild ?? "the flat install"} (newest .verified, Desktop's own fallback order) over ${d.others.join(", ")}`
+    : "";
 
 /**
  * Resolve the host path to the staged NATIVE macOS agent binary (COWORK_HOST_AGENT_BINARY override >
- * baseline.agentBinary.nativeStagedPath). Desktop stages a native macOS Mach-O binary alongside the
- * Linux/arm64 ELF — `claude-code/<ver>/claude.app/Contents/MacOS/claude`. This is what hostloop spawns
- * directly (no Docker) for the agent loop; the ELF (`resolveAgentBinary`) stays the source of truth for
- * container/microvm and for hostloop's bash/web_fetch VM sidecar image.
+ * baseline.agentBinary.nativeStagedPath, in either staging layout — see `classifyNativeStagingDrift`). This
+ * is what hostloop spawns directly (no Docker) for the agent loop; the ELF (`resolveAgentBinary`) stays the
+ * source of truth for container/microvm and for hostloop's bash/web_fetch VM sidecar image.
  *
  * A mid-session Claude Desktop auto-update prunes the pinned version and stages a newer one — since the
  * native binary carries NO sha256 pin (unlike the ELF), a same-major.minor PATCH bump is auto-tolerated
- * by default (loud stderr note, no env var needed): `verifiedElf`'s hard-fail-on-mismatch doesn't apply
- * here, so silently using a patch-newer binary can't downgrade an integrity check that doesn't exist. A
- * major/minor drift keeps today's behavior — env-gated fallback or a hard throw.
+ * by default (loud stderr note, no env var needed). A major/minor drift, or a different build of a pinned
+ * build, needs COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 or throws.
  */
 export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
   const override = process.env.COWORK_HOST_AGENT_BINARY;
   if (override) {
-    if (!existsSync(override)) throw new Error(`COWORK_HOST_AGENT_BINARY not found: ${override}`);
+    if (!existsSync(override)) throw new AgentBinaryError(`COWORK_HOST_AGENT_BINARY not found: ${override}`, "override");
     return resolve(override);
   }
-  const drift = classifyNativeStagingDrift(baseline);
-  if (drift.kind === "exact") return resolve(drift.stagedPath);
-  const exactPath = drift.stagedPath || "(unknown)";
-  if (drift.kind === "patch") {
+  const d = classifyNativeStagingDrift(baseline);
+  const exactPath = d.stagedPath || "(unknown)";
+  if (d.kind === "exact") {
+    const amb = ambiguityNote(d);
+    if (amb) process.stderr.write(`cowork-harness: ${amb}.\n`);
+    return resolve(d.path!);
+  }
+  if (d.kind === "patch") {
+    const amb = ambiguityNote(d);
     process.stderr.write(
-      `cowork-harness: staged native agent ${drift.pinned} pruned by a Desktop update; using patch-newer ` +
-        `${drift.found} — behavior contract unchanged for a patch bump.\n`,
+      `cowork-harness: staged native agent ${d.pinned} pruned by a Desktop update; using patch-newer ` +
+        `${d.found}${d.foundBuild && d.layout === "nested" ? ` (build ${d.foundBuild})` : ""} — behavior contract unchanged for a patch bump` +
+        `${amb ? `; ${amb}` : ""}.\n`,
     );
-    return resolve(drift.fallbackPath!);
+    return resolve(d.path!);
   }
-  if (drift.kind === "major-minor") {
+  if (d.kind === "build" || d.kind === "major-minor") {
+    const what =
+      d.kind === "build"
+        ? `baseline NATIVE agent ${d.pinned} build ${d.pinnedBuild} is not staged; ${d.found} is staged as ${d.foundBuild ? `build ${d.foundBuild}` : "a flat install"} at "${d.path}" (a different build is a different binary)`
+        : `baseline NATIVE agent binary not found: ${exactPath}; newest staged is ${d.found} at "${d.path}" (major/minor differs)`;
     if (process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
-      process.stderr.write(
-        `cowork-harness: staged NATIVE agent binary "${exactPath}" not found; falling back to newest sibling "${drift.fallbackPath}".\n`,
-      );
-      return resolve(drift.fallbackPath!);
+      process.stderr.write(`cowork-harness: ${what}; COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 — falling back to "${d.path}".\n`);
+      return resolve(d.path!);
     }
-    throw new Error(
-      `cowork-harness: baseline NATIVE agent binary not found: ${exactPath}. Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to use the newest available.`,
+    throw new AgentBinaryError(
+      `cowork-harness: ${what}. Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to use the newest available, or COWORK_HOST_AGENT_BINARY=<path>.`,
+      d.kind,
     );
   }
-  throw new Error(
-    `Staged NATIVE agent binary not found at "${exactPath}". It is extracted from your Claude Desktop install ` +
-      `(claude-code/<ver>/claude.app/Contents/MacOS/claude). Open Cowork once to stage it, or set COWORK_HOST_AGENT_BINARY to its path.`,
+  const root = d.root ?? "(unknown)";
+  const why =
+    d.cause === "missing-root"
+      ? `${root} does not exist, so no native agent is staged on this machine`
+      : `no version under ${root} holds a binary at <ver>/claude.app/Contents/MacOS/claude or <ver>/<build>/claude.app/Contents/MacOS/claude` +
+        (d.cause === "unfinished"
+          ? `; ${d.unfinished!.join(", ")} has no .verified marker naming it — Desktop has not finished staging it`
+          : d.cause === "unknown-layout"
+            ? `; found ${d.unknownEntries!.join(", ")} — a staging layout this harness does not recognise`
+            : "");
+  throw new AgentBinaryError(
+    `Staged NATIVE agent binary not found at "${exactPath}": ${why}. Set COWORK_HOST_AGENT_BINARY to the binary's path.`,
+    d.cause ?? "missing",
   );
+}
+
+/** The build the asar's own SDK descriptor names for this host's native agent — Desktop's PRIMARY choice
+ *  among several staged builds (`installDirFor(target, ver, expectedChecksum)`). Only meaningful for
+ *  `version`: after an auto-update Desktop runs a fetched manifest the asar does not carry. */
+export function nativeManifestBuild(
+  channel: { baseUrl?: string; sdkVersion: string; nativeBuilds?: Partial<Record<string, string>> } | null | undefined,
+  arch: string,
+): { version: string; build: string } | undefined {
+  const build = channel?.nativeBuilds?.[arch === "arm64" ? "darwin-arm64" : "darwin-x64"];
+  return channel && build ? { version: channel.sdkVersion, build } : undefined;
+}
+
+/**
+ * `sync`'s derivation of `agentBinary.nativeStagedPath`. The native .app and the VM ELF version
+ * INDEPENDENTLY (Desktop stages them on separate cadences), so this scans `claude-code/` for its OWN newest
+ * staged version rather than reusing `agentVersion`, and writes the full path of the chosen candidate — in
+ * whichever layout it is staged, so the path exists. Among several builds of that version it pins the one
+ * the asar manifest names when the manifest is for that version, else the first in Desktop's fallback order.
+ * Only when nothing is staged does it fall back to the `agentVersion`-derived flat-shape path (it cannot
+ * invent a build) and warn. Pure apart from the read-only scan.
+ */
+export function deriveNativeStagedPath(a: {
+  nativeRoot: string;
+  homeDir: string;
+  oldNativeStagedPath: string;
+  agentVersion: string;
+  manifestBuild?: { version: string; build: string };
+}): { path: string; warnings: string[] } {
+  const warnings: string[] = [];
+  const tilde = (p: string) => (p.startsWith(a.homeDir) ? `~${p.slice(a.homeDir.length)}` : p);
+  const newest = stagedNativeVersions(a.nativeRoot).find((v) => v.scan.candidates.length);
+  if (newest) {
+    const cands = newest.scan.candidates;
+    let chosen = cands[0];
+    if (a.manifestBuild && a.manifestBuild.version === newest.version) {
+      const named = cands.find((c) => c.build === a.manifestBuild!.build);
+      if (named) chosen = named;
+      else
+        warnings.push(
+          `WARNING: the asar manifest names native build ${a.manifestBuild.build} of ${newest.version}, which is not staged; ` +
+            `pinning ${buildLabel(chosen)} (newest .verified).`,
+        );
+    } else if (cands.length > 1) {
+      warnings.push(
+        `NOTE: ${cands.length} builds of native agent ${newest.version} are staged; pinning ${buildLabel(chosen)} (newest .verified) ` +
+          `over ${cands.slice(1).map(buildLabel).join(", ")}.`,
+      );
+    }
+    return { path: tilde(resolve(chosen.path)), warnings };
+  }
+  const re = /claude-code\/[^/]+\/(?:[0-9a-f]{12}\/)?claude\.app\/Contents\/MacOS\/claude$/;
+  let path: string;
+  if (re.test(a.oldNativeStagedPath)) {
+    path = a.oldNativeStagedPath.replace(re, `claude-code/${a.agentVersion}/${NATIVE_LEAF}`);
+  } else {
+    path = `~/Library/Application Support/Claude/claude-code/${a.agentVersion}/${NATIVE_LEAF}`;
+    if (a.oldNativeStagedPath)
+      warnings.push(
+        `WARNING: agentBinary.nativeStagedPath layout was unexpected ("${a.oldNativeStagedPath}") — rewrote to the canonical path for ${a.agentVersion}.`,
+      );
+  }
+  warnings.push(
+    `WARNING: derived agentBinary.nativeStagedPath does not exist on this machine: ${path}`,
+    `  (No native .app is staged under claude-code/ in either layout, <ver>/claude.app or <ver>/<build>/claude.app. ` +
+      `Set COWORK_HOST_AGENT_BINARY=<path> to a staged binary or a saved copy of the .app.)`,
+    `  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`,
+  );
+  return { path, warnings };
 }
 
 /**

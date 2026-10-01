@@ -10,6 +10,8 @@ import {
   resolveAgentBinary,
   resolveHostAgentBinary,
   classifyNativeStagingDrift,
+  AgentBinaryError,
+  type NativeStagingDrift,
   loadBaseline,
   sha256File,
   isPatchBump,
@@ -121,12 +123,15 @@ export interface DoctorProbe {
   // ONLY, where this ELF is a non-executed parity mount into the bash sidecar (the binary actually
   // executed there is the native one, via `hostAgentBinary`). `note` is set only for a genuine parity-patch
   // substitution — never for a `COWORK_AGENT_BINARY` override or a major/minor fallback.
-  agentBinary(opts?: { parityMount?: boolean }): { ok: true; path: string; note?: string } | { ok: false; error: string };
+  // `kind` on a failure says WHY (`AgentBinaryError.kind`: "pruned" | "missing" | "override"), so the remedy
+  // can fit the cause; absent for any other error (e.g. a sha mismatch).
+  agentBinary(opts?: { parityMount?: boolean }): { ok: true; path: string; note?: string } | { ok: false; error: string; kind?: string };
   // Native macOS agent binary that `hostloop`/`cowork` spawn directly (distinct from the Linux ELF
   // `agentBinary()` resolves — see resolveHostAgentBinary in baseline.ts). Not meaningful for other tiers.
   // `note` is set when the resolved path came from a PATCH-tolerated staging-drift substitution (see
   // `classifyNativeStagingDrift`) — surfaced so the substitution is visible, not silent.
-  hostAgentBinary(): { ok: true; path: string; note?: string } | { ok: false; error: string };
+  // `kind` on a failure is the cause (see `nativeAgentRemedy`).
+  hostAgentBinary(): { ok: true; path: string; note?: string } | { ok: false; error: string; kind?: NativeAgentFailure };
   hasToken(): boolean;
   // macOS only: is there a Claude Code OAuth credential in the login Keychain? Used purely to improve the
   // "no token" remedy — the harness injects only env/.env into the agent (never a Keychain credential),
@@ -169,6 +174,72 @@ export function agentBuildLine(runtime: string, image: string): string {
   const dockerfile = fileURLToPath(new URL("../../docker/Dockerfile.agent", import.meta.url));
   const pkgRoot = dirname(dirname(dockerfile)); // .../docker -> package root (the build context)
   return `${runtime} build --platform linux/arm64 -t ${image} -f ${dockerfile} ${pkgRoot}`;
+}
+
+/** Why the native agent did not resolve — `AgentBinaryError.kind` from `resolveHostAgentBinary`. */
+export type NativeAgentFailure = "major-minor" | "build" | "missing-root" | "missing" | "unfinished" | "unknown-layout" | "override";
+
+/** The note doctor shows on an `ok` native agent, naming any difference from the pin. Undefined for an
+ *  exact, unambiguous match. Exported for tests. */
+export function nativeDriftNote(d: NativeStagingDrift): string | undefined {
+  const parts: string[] = [];
+  const layout = d.layout === "nested" && d.foundBuild ? ` (build ${d.foundBuild})` : "";
+  if (d.kind === "patch") parts.push(`patch-tolerated: pinned ${d.pinned}, using ${d.found}${layout}`);
+  else if (d.kind === "build")
+    parts.push(
+      `fallback (COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1): pinned build ${d.pinnedBuild}, using ${d.foundBuild ?? "a flat install"} of ${d.found}`,
+    );
+  else if (d.kind === "major-minor")
+    parts.push(`fallback (COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1): pinned ${d.pinned}, using ${d.found}${layout}`);
+  else if (d.kind === "exact" && d.relocated)
+    parts.push(
+      d.layout === "nested"
+        ? `pinned path uses the flat layout; the same version is staged at ${d.found}/${d.foundBuild}/`
+        : `pinned build ${d.pinnedBuild} found as a flat install`,
+    );
+  if (d.others?.length)
+    parts.push(`ambiguous: ${d.others.length + 1} builds of ${d.found}, using ${d.foundBuild ?? "the flat install"} (newest .verified)`);
+  return parts.length ? parts.join("; ") : undefined;
+}
+
+const NO_NATIVE_LOCALLY =
+  "Claude Desktop stages it when a Cowork session runs on this computer; if none has, or Claude runs on your organization's " +
+  "infrastructure (then nothing is staged locally), set COWORK_HOST_AGENT_BINARY=<path> to a native agent binary";
+
+/** The remedy for a native agent that did not resolve, per cause. Never "open Cowork once": wrong for a
+ *  version mismatch, for a layout this harness cannot read, off macOS, and for an account whose Claude
+ *  runs on its organization's infrastructure. Exported for tests. */
+export function nativeAgentRemedy(kind: NativeAgentFailure | undefined, platform: string): string {
+  if (kind === "override") return "fix or unset COWORK_HOST_AGENT_BINARY — it names a path that does not exist";
+  if (platform !== "darwin")
+    return `hostloop runs the native macOS agent binary, which does not exist on ${platform} — use --tier container or microvm, or set COWORK_HOST_AGENT_BINARY=<path>`;
+  switch (kind) {
+    case "major-minor":
+      return "set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to run the staged version, set COWORK_HOST_AGENT_BINARY=<path> to a saved copy of the pinned version's binary, or use a baseline that pins the staged version";
+    case "build":
+      return "set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to run the staged build of the same version, or COWORK_HOST_AGENT_BINARY=<path> to a saved copy of the pinned build";
+    case "unfinished":
+      return `Claude Desktop has not finished staging that build (it writes .verified last); it re-stages it the next time it prepares the agent. Or set COWORK_HOST_AGENT_BINARY=<path>`;
+    case "unknown-layout":
+      return "this Desktop stages the agent in a layout this harness version does not read — set COWORK_HOST_AGENT_BINARY=<path> to the staged binary, and upgrade cowork-harness";
+    case "missing-root":
+      return `no Claude Desktop agent staging dir on this machine. ${NO_NATIVE_LOCALLY}`;
+    default:
+      return `nothing runnable is staged. ${NO_NATIVE_LOCALLY}`;
+  }
+}
+
+/** The remedy for the VM/container ELF, per cause. Exported for tests. */
+export function agentRemedy(kind: string | undefined, parityMount: boolean): string {
+  const base =
+    kind === "pruned"
+      ? "a Desktop update pruned the pinned ELF: recover and sha-verify that version, then set COWORK_AGENT_BINARY=<path> to it (docs/maintenance.md#recovering-an-old-agent-version); or set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to run the newest staged one; or repin baseline: to a version you have (docs/gotchas.md)"
+      : kind === "override"
+        ? "fix or unset COWORK_AGENT_BINARY — it names a path that does not exist"
+        : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)";
+  return parityMount
+    ? `${base} — note: on this tier the ELF is a non-executed parity mount, not the binary that actually runs (that's the native \`hostAgent\` check below)`
+    : base;
 }
 
 export const realProbe: DoctorProbe = {
@@ -232,7 +303,7 @@ export const realProbe: DoctorProbe = {
         : undefined;
       return { ok: true as const, path, note };
     } catch (e) {
-      return { ok: false as const, error: (e as Error).message };
+      return { ok: false as const, error: (e as Error).message, ...(e instanceof AgentBinaryError ? { kind: e.kind } : {}) };
     }
   },
   hostAgentBinary() {
@@ -240,12 +311,12 @@ export const realProbe: DoctorProbe = {
       const baseline = loadBaseline("latest");
       const path = resolveHostAgentBinary(baseline);
       // Same classifier the resolver used internally — so doctor's note can never disagree with what
-      // resolveHostAgentBinary actually did.
-      const drift = classifyNativeStagingDrift(baseline);
-      const note = drift.kind === "patch" ? `patch-tolerated: pinned ${drift.pinned}, using ${drift.found}` : undefined;
+      // resolveHostAgentBinary actually did. An override bypasses the classifier entirely, so it gets no
+      // drift note (the drift on disk is not what runs).
+      const note = process.env.COWORK_HOST_AGENT_BINARY ? undefined : nativeDriftNote(classifyNativeStagingDrift(baseline));
       return { ok: true, path, note };
     } catch (e) {
-      return { ok: false, error: (e as Error).message };
+      return { ok: false, error: (e as Error).message, ...(e instanceof AgentBinaryError ? { kind: e.kind as NativeAgentFailure } : {}) };
     }
   },
   hasToken: () => !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
@@ -446,11 +517,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       title: parityMount ? "Staged agent binary (VM ELF, parity mount)" : "Staged agent binary (VM/container ELF)",
       status: agent.ok ? "ok" : "fail",
       detail: agent.ok ? agent.path + shaNote + parityNote : agent.error.split("\n")[0],
-      remedy: agent.ok
-        ? undefined
-        : parityMount
-          ? "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token) — note: on this tier the ELF is a non-executed parity mount, not the binary that actually runs (that's the native `hostAgent` check below)"
-          : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)",
+      remedy: agent.ok ? undefined : agentRemedy(agent.kind, parityMount),
       required: true,
     };
   };
@@ -610,9 +677,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
         title: "Staged native agent binary (hostloop)",
         status: hostAgent.ok ? "ok" : "fail",
         detail: hostAgent.ok ? hostAgent.path + note : hostAgent.error.split("\n")[0] + naNote,
-        remedy: hostAgent.ok
-          ? undefined
-          : "open Claude Cowork once to stage the native macOS binary, or set COWORK_HOST_AGENT_BINARY=<path>",
+        remedy: hostAgent.ok ? undefined : nativeAgentRemedy(hostAgent.kind, plat),
         required: runsViaHostLoop,
       });
     }

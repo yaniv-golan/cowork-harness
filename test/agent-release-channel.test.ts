@@ -17,7 +17,7 @@ const RC = "https://downloads.claude.ai/claude-code-releases/rc/aa8f2d981f0481a4
 
 /** The descriptor as Desktop actually emits it. `nested` reproduces the RC-only `manifest.baseUrl`,
  *  which PRECEDES the top-level one in the byte stream — the whole point of test 3. */
-function descriptor(opts: { version: string; baseUrl: string; nested?: string; delim?: string }): string {
+function descriptor(opts: { version: string; baseUrl: string; nested?: string; delim?: string; darwin?: Record<string, unknown> }): string {
   const d = opts.delim ?? "`";
   const manifest = {
     version: opts.version,
@@ -25,6 +25,7 @@ function descriptor(opts: { version: string; baseUrl: string; nested?: string; d
     buildDate: "2026-08-30T19:51:41Z",
     platforms: {
       "linux-arm64": { binary: "claude.zst", checksum: "a4385a4caf6f15eced01357b01dcb965ee69c0fe0043bd9f156ce32d29489b3c", size: 75681561 },
+      ...(opts.darwin ?? {}),
     },
     sdkCompat: { testedWrapperVersions: ["0.3.226", "0.3.227"], harnessSchema: 1 },
     ...(opts.nested ? { baseUrl: opts.nested } : {}),
@@ -145,5 +146,37 @@ describe("checkAgentReleaseChannel — NOTE-class only, never write-blocking", (
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain("SKIPPED");
     expect(notes[0]).toContain("unknown");
+  });
+});
+
+// Desktop 2.19675.0 names each native build dir for the first 12 hex characters of the manifest checksum it
+// installs: `platforms[darwin-<arch>].bundle.checksum` when the platform has a bundle, else its `checksum`
+// (`expectedChecksumForTarget`). Values below are the real 2.1.286 literals from the 2.19675.0 asar.
+describe("extractAgentReleaseChannel — native build dirs", () => {
+  const BUNDLE_ARM = "f2326db618029608409be774a5f4d5fde8a032d319d6aa58c3043afda393dd96";
+  const BIN_ARM = "b1be27fbd8fe95bef2418c09f60a307f91c8631dc444fe9a828a7ed2520e45b5";
+  const BIN_X64 = "e2bbc2a329924533319d0eb4f5a33e2488ce921f60329ab333bca10b0e4c02f2";
+
+  it("uses the bundle checksum when the platform has a bundle", () => {
+    const ch = extractAgentReleaseChannel(
+      descriptor({
+        version: "2.1.286",
+        baseUrl: STABLE,
+        darwin: { "darwin-arm64": { binary: "claude.zst", checksum: BIN_ARM, bundle: { checksum: BUNDLE_ARM } } },
+      }),
+    );
+    expect(ch?.nativeBuilds).toEqual({ "darwin-arm64": "f2326db61802" });
+  });
+
+  it("uses the binary checksum when the platform has no bundle", () => {
+    const ch = extractAgentReleaseChannel(
+      descriptor({ version: "2.1.286", baseUrl: STABLE, darwin: { "darwin-x64": { binary: "claude.zst", checksum: BIN_X64 } } }),
+    );
+    expect(ch?.nativeBuilds).toEqual({ "darwin-x64": "e2bbc2a32992" });
+  });
+
+  it("omits the key entirely when the descriptor names no darwin platform", () => {
+    const ch = extractAgentReleaseChannel(descriptor({ version: "2.1.286", baseUrl: STABLE }));
+    expect(ch).not.toHaveProperty("nativeBuilds");
   });
 });

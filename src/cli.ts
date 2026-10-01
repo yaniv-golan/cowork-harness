@@ -23,7 +23,8 @@ import {
   listBaselineNames,
   sha256File,
   countStringInFile,
-  newestStagedSibling,
+  deriveNativeStagedPath,
+  nativeManifestBuild,
 } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import { recordedFixtureFileSigs, recordedFixtureRefusal } from "./fixture/workspace.js";
@@ -3185,49 +3186,20 @@ async function cmdSync(args: string[]) {
     log(`  (The new agentVersion is ${res.agentVersion}. Open Cowork once to stage the binary, then re-run sync.)`);
     log(`  resolveAgentBinary will fail until the file is present or COWORK_AGENT_BINARY is set.`);
   }
-  // Same convention-derivation for the NATIVE macOS binary hostloop spawns directly for the agent loop:
-  //   ~/Library/Application Support/Claude/claude-code/<agentVersion>/claude.app/Contents/MacOS/claude
-  //
-  // Unlike the VM ELF above, the native .app and the container/microvm ELF version INDEPENDENTLY —
-  // Desktop stages the native macOS app and the VM Linux ELF on separate cadences, and real Cowork
-  // hostloop mode spawns whatever Desktop currently has staged natively (decoupled from the VM ELF by
-  // design, not a bug to paper over). Deriving nativeStagedPath from res.agentVersion (the VM
-  // .sdk-version) therefore produces a phantom path whenever the two cadences have drifted — e.g. VM
-  // ELF at 2.1.202 while claude-code/ only has 2.1.205 staged. So instead of reusing res.agentVersion,
-  // scan claude-code/ for its OWN newest present version and pin that; only fall back to the
-  // agentVersion-derived convention when no native .app is staged at all (so an empty install still
-  // produces a baseline).
-  const oldNativeStagedPath = (baseAgentBinary.nativeStagedPath as string) ?? "";
-  const nativeVersionRe = /claude-code\/[^/]+\/claude\.app\/Contents\/MacOS\/claude$/;
-  const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
+  // The NATIVE macOS binary hostloop spawns directly for the agent loop. It versions INDEPENDENTLY of the
+  // VM ELF above (Desktop stages them on separate cadences), and since Desktop 2.19675.0 it is staged per
+  // build (`claude-code/<ver>/<build>/claude.app/…`). deriveNativeStagedPath scans claude-code/ for its own
+  // newest staged version in either layout and pins the build the asar manifest names — see its doc.
   const homeDir = process.env.HOME ?? "~";
-  const nativeVersionRoot = join(homeDir, "Library/Application Support/Claude/claude-code");
-  const newestNative = newestStagedSibling(nativeVersionRoot, NATIVE_LEAF);
-  let derivedNativeStagedPath: string;
-  if (newestNative) {
-    // Store in the same ~-prefixed convention as the rest of the baseline.
-    derivedNativeStagedPath = newestNative.startsWith(homeDir) ? `~${newestNative.slice(homeDir.length)}` : newestNative;
-  } else if (nativeVersionRe.test(oldNativeStagedPath)) {
-    derivedNativeStagedPath = oldNativeStagedPath.replace(
-      nativeVersionRe,
-      `claude-code/${res.agentVersion}/claude.app/Contents/MacOS/claude`,
-    );
-  } else {
-    derivedNativeStagedPath = `~/Library/Application Support/Claude/claude-code/${res.agentVersion}/claude.app/Contents/MacOS/claude`;
-    if (oldNativeStagedPath)
-      log(
-        `WARNING: agentBinary.nativeStagedPath layout was unexpected ("${oldNativeStagedPath}") — rewrote to the canonical path for ${res.agentVersion}.`,
-      );
-  }
-  const resolvedNativeDerived = derivedNativeStagedPath.replace(/^~(?=$|\/)/, join(process.env.HOME ?? "~"));
-  if (!existsSync(resolvedNativeDerived)) {
-    log(`WARNING: derived agentBinary.nativeStagedPath does not exist on this machine: ${derivedNativeStagedPath}`);
-    log(
-      `  (No native .app is staged under claude-code/. Set COWORK_HOST_AGENT_BINARY=<path> to the staged binary, ` +
-        `or point at the backed-up .app under ~/cowork-agent-backup/<ver>/claude.app/Contents/MacOS/claude.)`,
-    );
-    log(`  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`);
-  }
+  const nativeDerived = deriveNativeStagedPath({
+    nativeRoot: join(homeDir, "Library/Application Support/Claude/claude-code"),
+    homeDir,
+    oldNativeStagedPath: (baseAgentBinary.nativeStagedPath as string) ?? "",
+    agentVersion: res.agentVersion,
+    manifestBuild: nativeManifestBuild(res.agentReleaseChannel, process.arch),
+  });
+  for (const w of nativeDerived.warnings) log(w);
+  const derivedNativeStagedPath = nativeDerived.path;
   // Agent-binary provenance (shared, non-secret): record the ELF sha256 + how we know it. Prefer a
   // measured-local hash of the staged binary (the point-of-truth) + cross-check against the official
   // release manifest; if the binary isn't staged on this machine, fall back to the official-manifest hash

@@ -27,7 +27,8 @@ export const PlatformBaseline = z.looseObject({
     // npmPackage/preferReuseStaged removed: there is NO npm path — the Linux/arm64 ELF is
     // bind-mounted from the staged Desktop install (or COWORK_AGENT_BINARY). Tolerated-but-ignored
     // if present in an old baseline (z.object strips unknown keys).
-    // Desktop ALSO stages a native macOS Mach-O binary (claude-code/<ver>/claude.app/Contents/MacOS/claude)
+    // Desktop ALSO stages a native macOS Mach-O binary (claude-code/<ver>/claude.app/Contents/MacOS/claude, or
+    // per build from Desktop 2.19675.0: claude-code/<ver>/<build>/claude.app/…; see parseNativeStagedPath)
     // alongside the Linux/arm64 ELF above — hostloop's agent loop runs on the host directly from this
     // binary (no container), while only bash/web_fetch route into a VM. The ELF stays the source of
     // truth for container/microvm and for hostloop's bash/web_fetch VM sidecar image. Optional: a

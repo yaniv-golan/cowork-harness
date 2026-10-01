@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -10,10 +10,13 @@ import {
   freshnessFor,
   ghcrRefFor,
   registryDigestFrom,
+  nativeAgentRemedy,
+  agentRemedy,
   type DoctorProbe,
   type DoctorCheck,
   type ImageFreshness,
 } from "../src/run/doctor.js";
+import { loadBaseline, pinnedNativeAgentVersion } from "../src/baseline.js";
 
 const OK_PROBE: DoctorProbe = {
   nodeMajor: () => 22,
@@ -678,5 +681,139 @@ describe("doctor — a signed-in config dir (.credentials.json) counts at protoc
       else process.env.CLAUDE_CONFIG_DIR = saved;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// The native agent's remedy is keyed on WHY it was not found. "Open Cowork once" is the wrong advice for a
+// version mismatch, for a staging layout this harness cannot read, on Linux (no native macOS agent at all),
+// and for an account whose Claude runs on its organization's infrastructure (Desktop stages nothing locally).
+describe("doctor — native agent remedy per cause", () => {
+  const kinds = ["major-minor", "build", "missing-root", "missing", "unfinished", "unknown-layout", "override"] as const;
+
+  it("every cause has its own remedy, and none says 'open Cowork once'", () => {
+    const seen = new Set<string>();
+    for (const k of kinds) {
+      const r = nativeAgentRemedy(k, "darwin");
+      expect(r, k).not.toMatch(/open (Claude )?Cowork once/i);
+      seen.add(r);
+    }
+    expect(seen.size).toBe(kinds.length);
+  });
+
+  it("version/build mismatches name the fallback env var; missing causes name COWORK_HOST_AGENT_BINARY", () => {
+    expect(nativeAgentRemedy("major-minor", "darwin")).toContain("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1");
+    expect(nativeAgentRemedy("build", "darwin")).toContain("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1");
+    for (const k of ["missing-root", "missing", "unfinished", "unknown-layout"] as const)
+      expect(nativeAgentRemedy(k, "darwin"), k).toContain("COWORK_HOST_AGENT_BINARY");
+    expect(nativeAgentRemedy("missing-root", "darwin")).toMatch(/organization/);
+    expect(nativeAgentRemedy("unfinished", "darwin")).toMatch(/\.verified|finish/);
+    expect(nativeAgentRemedy("major-minor", "darwin")).not.toMatch(/recovering-an-old-agent-version/);
+  });
+
+  it("off macOS the remedy says the native agent does not exist there", () => {
+    expect(nativeAgentRemedy("missing-root", "linux")).toMatch(/macOS/);
+    expect(nativeAgentRemedy("missing-root", "linux")).toMatch(/container|microvm/);
+  });
+
+  it("runDoctorChecks renders the remedy for the probe's kind", () => {
+    const cs = runDoctorChecks("hostloop", probe({ hostAgentBinary: () => ({ ok: false, error: "x", kind: "major-minor" }) }));
+    expect(get(cs, "hostAgent").remedy).toBe(nativeAgentRemedy("major-minor", "darwin"));
+    const linux = runDoctorChecks(
+      "hostloop",
+      probe({ platform: () => "linux", hostAgentBinary: () => ({ ok: false, error: "x", kind: "missing-root" }) }),
+    );
+    expect(get(linux, "hostAgent").remedy).toBe(nativeAgentRemedy("missing-root", "linux"));
+  });
+});
+
+// The REAL probe, end to end: loadBaseline("latest") + the resolver + the classifier + the override check.
+// HOME points at a temp dir (os.homedir() honours it on POSIX), so the staged tree is a fixture and never
+// the operator's Application Support.
+describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
+  const LEAF = ["claude.app", "Contents", "MacOS", "claude"];
+  const BUILD = "f2326db61802";
+  const pinned = () => pinnedNativeAgentVersion(loadBaseline("latest"))!;
+  const withHome = (fn: (home: string) => void) => {
+    const saved = { HOME: process.env.HOME, O: process.env.COWORK_HOST_AGENT_BINARY, F: process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK };
+    const home = mkdtempSync(join(tmpdir(), "cowork-doctor-home-"));
+    process.env.HOME = home;
+    delete process.env.COWORK_HOST_AGENT_BINARY;
+    delete process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK;
+    const write = process.stderr.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      fn(home);
+    } finally {
+      process.stderr.write = write;
+      for (const [k, v] of [
+        ["HOME", saved.HOME],
+        ["COWORK_HOST_AGENT_BINARY", saved.O],
+        ["COWORK_HARNESS_ALLOW_AGENT_FALLBACK", saved.F],
+      ] as const)
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+  const stageBuild = (home: string, ver: string) => {
+    const dir = join(home, "Library", "Application Support", "Claude", "claude-code", ver, BUILD);
+    mkdirSync(join(dir, ...LEAF.slice(0, -1)), { recursive: true });
+    writeFileSync(join(dir, ...LEAF), "#!/bin/sh\n");
+    writeFileSync(join(dir, ".verified"), BUILD + "0".repeat(52));
+    utimesSync(join(dir, ".verified"), 100, 100);
+    return join(dir, ...LEAF);
+  };
+  const patchBump = (v: string) => {
+    const [a, b, c] = v.split(".").map(Number);
+    return `${a}.${b}.${c + 2}`;
+  };
+
+  it("latest baseline's flat pin, only a patch-newer nested build staged → ok, patch-tolerated note", () => {
+    withHome((home) => {
+      const found = patchBump(pinned());
+      const bin = stageBuild(home, found);
+      const r = realProbe.hostAgentBinary();
+      expect(r).toMatchObject({ ok: true, path: bin });
+      expect(r.ok && r.note).toMatch(
+        new RegExp(`patch-tolerated: pinned ${pinned().replace(/\./g, "\\.")}, using ${found.replace(/\./g, "\\.")}`),
+      );
+      const cs = runDoctorChecks("hostloop", probe({ hostAgentBinary: realProbe.hostAgentBinary }));
+      expect(get(cs, "hostAgent").status).toBe("ok");
+      expect(blocking(cs)).not.toContain("hostAgent");
+    });
+  });
+
+  it("COWORK_HOST_AGENT_BINARY set → ok with NO drift note, even while a patch drift exists on disk", () => {
+    withHome((home) => {
+      const bin = stageBuild(home, patchBump(pinned()));
+      process.env.COWORK_HOST_AGENT_BINARY = bin;
+      const r = realProbe.hostAgentBinary();
+      expect(r).toMatchObject({ ok: true, path: bin });
+      expect(r.ok && r.note).toBeFalsy();
+    });
+  });
+
+  it("an empty HOME (no Desktop) → fail, kind missing-root, and doctor gives that cause's remedy", () => {
+    withHome(() => {
+      const r = realProbe.hostAgentBinary();
+      expect(r).toMatchObject({ ok: false, kind: "missing-root" });
+      const cs = runDoctorChecks("hostloop", probe({ hostAgentBinary: realProbe.hostAgentBinary }));
+      expect(get(cs, "hostAgent").status).toBe("fail");
+      expect(get(cs, "hostAgent").remedy).toBe(nativeAgentRemedy("missing-root", "darwin"));
+    });
+  });
+});
+
+describe("doctor — container agent remedy for a pruned pin", () => {
+  it("names the recovery runbook and COWORK_AGENT_BINARY, not 'open Cowork once'", () => {
+    const cs = runDoctorChecks("container", probe({ agentBinary: () => ({ ok: false, error: "x", kind: "pruned" }) }));
+    const r = get(cs, "agent").remedy!;
+    expect(r).toBe(agentRemedy("pruned", false));
+    expect(r).toContain("docs/maintenance.md#recovering-an-old-agent-version");
+    expect(r).toContain("COWORK_AGENT_BINARY");
+    expect(r).not.toMatch(/open Claude Cowork once/);
+  });
+  it("a never-staged ELF keeps the stage-it remedy", () => {
+    expect(agentRemedy("missing", false)).toMatch(/open Claude Cowork once/);
   });
 });
