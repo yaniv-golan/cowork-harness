@@ -475,7 +475,8 @@ export interface Cassette {
 //  the object form — the reason replay now refuses a future cassette before evaluating anything.) Every other
 //  scenario still stamps v12. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
 // v14: ONE interpretation bump shared by the keys of this release that an older reader cannot read. Today:
-//  `semantic_matches.include_fork_results` (V14_ASSERT_FEATURES below). Later keys of this release stamp the
+//  `semantic_matches.include_fork_results`, `semantic_pairwise`, the `authored` forms and `question_option_count`
+//  (V14_ASSERT_FEATURES below), and `workspace_fixture`. Later keys of this release stamp the
 //  same version with no further bump: a top-level key adds its own KEY_REQUIRED_VERSION entry returning 14,
 //  an assert-level one appends a predicate to V14_ASSERT_FEATURES. A cassette using any of them stamps v14, so
 //  a v13 reader refuses it as "too new; upgrade" instead of rejecting the frozen assertion as unrecognized
@@ -582,6 +583,8 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
     const flagged = [o.artifact_text, o.artifact_json].some((v) => !!v && typeof v === "object" && "authored" in (v as object));
     return objectForm || flagged;
   },
+  // `question_option_count` — the key itself, as for `semantic_pairwise`.
+  (a) => !!a && typeof a === "object" && "question_option_count" in (a as object),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -7904,13 +7907,19 @@ export const TOOL_USE_BLIND_KEYS: (keyof Assertion)[] = [
  *
  *  The `choose:`/answers side of this already carried the caveat (stable leading anchor, 1-based index); the
  *  ASSERT side carried it nowhere. Consumed by `test/caveat-docs-sync.test.ts`. */
-export const MODEL_AUTHORED_TEXT_KEYS: (keyof Assertion)[] = ["question_asked", "question_options", "question_context"];
+export const MODEL_AUTHORED_TEXT_KEYS: (keyof Assertion)[] = [
+  "question_asked",
+  "question_options",
+  "question_context",
+  "question_option_count",
+];
 
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
 export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "question_asked",
   "question_options",
   "question_context",
+  "question_option_count",
   "questions_count_max",
   "gate_answers_delivered",
   "gate_answer_count_min",

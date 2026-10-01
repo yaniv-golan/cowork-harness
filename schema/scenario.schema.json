@@ -966,6 +966,48 @@
             ],
             "additionalProperties": false
           },
+          "question_option_count": {
+            "description": "count the options whose LABEL matches a regex, per sub-question, and require the count to satisfy `exactly` (or `min`/`max`) on EVERY selected sub-question — a bundled AskUserQuestion with K sub-questions is K, as in questions_count_max. For a rule over gates the run composes, such as \"exactly one option per gate carries the reserved no-change prefix\". A sub-question with no options counts 0; a duplicated label counts twice. Zero sub-questions asked (or none matching `when_question`) FAILS, so `exactly: 0` alone is satisfied by any unrelated gate: pair it with a positive rule or a `when_question`. Evidence is the ask-time AskUserQuestion payload; a lane that cannot read it fails evidence-unavailable, never vacuously, and so does a count that a label or question rewritten by a redaction policy could change (text reading `[REDACTED…]` counts as rewritten). This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose",
+            "type": "object",
+            "properties": {
+              "when_question": {
+                "description": "regex narrowing to sub-questions whose label matches (the same string question_asked matches); omit to check EVERY sub-question that was asked",
+                "type": "string"
+              },
+              "matches": {
+                "type": "string",
+                "minLength": 1,
+                "description": "regex counted against each option LABEL of a sub-question (descriptions are not searched). Case-insensitive unless `case_sensitive: true`. NON-EMPTY: an empty pattern matches every label. Single-quote it in YAML: in a double-quoted string `\\b` becomes a backspace character, which is refused"
+              },
+              "case_sensitive": {
+                "description": "match `matches` case-sensitively (default: case-insensitive, like every other regex key). It applies to the WHOLE pattern: on an `exactly: 0` rule it makes `add` miss `Add`, a false pass — keep such a rule case-insensitive, or spell both cases (`[Aa]dd`)",
+                "type": "boolean",
+                "const": true
+              },
+              "exactly": {
+                "description": "every selected sub-question has exactly N matching options",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "min": {
+                "description": "every selected sub-question has at least N matching options",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "max": {
+                "description": "every selected sub-question has at most N matching options",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "matches"
+            ],
+            "additionalProperties": false
+          },
           "questions_count_max": {
             "description": "at most N sub-questions asked — a bundled AskUserQuestion with K sub-questions counts as K, not 1",
             "type": "integer",

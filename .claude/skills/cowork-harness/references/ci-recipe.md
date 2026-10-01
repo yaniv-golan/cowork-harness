@@ -178,7 +178,7 @@ The split is not just about tokens — it decides **where each lane can run**:
   `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
   `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
-  `question_context` / `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
+  `question_context` / `question_option_count` / `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
   (`file_exists` / `user_visible_artifact` / `artifact_json` / `artifact_text`) **if** it carries an artifact
   manifest. `file_absent` is in neither class — it is live/verify-run only.
   **That list is illustrative, not the authoritative set** — more keys are replay-checkable than fit a
