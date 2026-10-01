@@ -193,4 +193,29 @@ describe("makeHillclimbJobRunner", () => {
     );
     expect((await withAppend("")(spec)).system).toBe("[system — harness append: none sent; Anthropic's built-in system prompt withheld]");
   });
+
+  it("each attempt carries the runner's whole-run deadline (start + --timeout-s), none with no ceiling", async () => {
+    const run = makeHillclimbJobRunner(deps());
+    await run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 60, ablate: false });
+    await run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false });
+    expect(calls[0].extra.deadline).toBe(1_000_000 + 60_000);
+    expect(calls[1].extra).not.toHaveProperty("deadline");
+  });
+
+  it("a timeout reported once the runner's deadline passed is the runner's, even under a shorter scenario timeout", async () => {
+    // the scenario's own 1 s timeout binds the agent; the runner's 2 s deadline passes while the attempt runs (5 s)
+    const run = makeHillclimbJobRunner(
+      deps({
+        runScenario: async (a) => {
+          const outDir = join(root, a.scenario.name, String(a.extra.runId));
+          mkdirSync(outDir, { recursive: true });
+          clock += 5_000;
+          return { result: "error", errorSource: "timeout", outDir, effectiveFidelity: "container" } as unknown as RunResult;
+        },
+      }),
+    );
+    expect((await run({ c: kase(1_000), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 2, ablate: false })).runnerTimeout).toBe(
+      true,
+    );
+  });
 });

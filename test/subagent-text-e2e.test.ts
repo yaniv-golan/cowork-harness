@@ -143,4 +143,38 @@ describe.runIf(POSIX)("include_subagent_text through the real executeScenario (p
       rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("a deadline that passed before the judge phase skips every judge and ends the run as a timeout", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "subagent-e2e-deadline-"));
+    try {
+      const file = join(dir, "deadline.yaml");
+      writeFileSync(
+        file,
+        [
+          "name: deadline",
+          "baseline: latest",
+          "session: (inline)",
+          "fidelity: protocol",
+          "prompt: hi",
+          "assert:",
+          "  - semantic_matches:",
+          "      rubric: ['x']",
+          "",
+        ].join("\n"),
+      );
+      let judged = 0;
+      const judge: SemanticJudge = async (rubric) => {
+        judged++;
+        return rubric.map((claim, index) => ({ index, claim, pass: true }));
+      };
+      const res = await executeScenario(parseScenarioFile(file), { semanticJudge: judge, deadline: Date.now() - 1 });
+      expect(judged).toBe(0);
+      expect(res.result).toBe("error");
+      expect(res.errorSource).toBe("timeout");
+      // the sub-agent capture still ran: the trace keeps the child's reasoning
+      expect(res.subagents?.[0].reasoning?.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

@@ -60,6 +60,9 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const runId = attemptRunId(spec);
     const expectedDir = deps.runDirFor(scenario, runId);
     const t0 = now();
+    // The runner's ceiling covers the whole attempt: `timeout_ms` bounds the agent, and this deadline keeps a
+    // judge from starting after it (executeScenario then ends the run as a timeout).
+    const deadline = ceilingMs !== undefined ? t0 + ceilingMs : undefined;
     let result: RunResult | undefined;
     let thrown: unknown;
     try {
@@ -67,7 +70,7 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
         scenario,
         label: `${spec.variant} ${spec.c.id} r${spec.rep}`,
         flags: { ...deps.flags, label: spec.runLabel, ablateSkill: spec.ablate },
-        extra: { runId, ...(deps.extra?.(spec) ?? {}) },
+        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...(deps.extra?.(spec) ?? {}) },
         rethrowUnanswered: true,
       });
     } catch (e) {
@@ -87,7 +90,9 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
       ...(subagentAppend !== undefined ? { subagentAppend } : {}),
       ...(outDir !== undefined ? { system: mainSystemTurn(outDir) } : {}),
       attemptS,
-      runnerTimeout: runnerBound && result?.errorSource === "timeout",
+      // The runner's when its own value bound the agent, or when its deadline had passed (a judge skipped, or a
+      // scenario timeout that ran past the ceiling). A tie goes to the runner.
+      runnerTimeout: result?.errorSource === "timeout" && (runnerBound || (deadline !== undefined && now() >= deadline)),
       ...(outDir !== undefined ? { runDir: outDir } : {}),
     };
   };
