@@ -2,7 +2,7 @@ import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
-import { scanWorkspaceFixture, workspaceFixtureAssertRefusal } from "../fixture/workspace.js";
+import { recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
@@ -26,7 +26,7 @@ import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { runsWriteRoot } from "./trace-view.js";
-import { join, dirname, relative, isAbsolute, resolve, sep, extname } from "node:path";
+import { join, dirname, relative, isAbsolute, resolve, sep, extname, basename, posix } from "node:path";
 import {
   type Scenario,
   type ToolNotCalledObject,
@@ -861,6 +861,56 @@ export function workspaceFixtureStaleness(cassette: Cassette, cassetteDir: strin
     class: "fixture",
     message: `workspace_fixture ${ref} changed since record${detail ? ` — ${detail}` : ""} — the step under test now starts from different files; re-record`,
   };
+}
+
+/** Refuse, before any spend, a `workspace_fixture` the cassette could only reference by climbing above its own
+ *  repository (or, outside a git work tree, above the cassette's directory): the stored ref would then spell out
+ *  host path components (`../../Users/<name>/…`) in a committed fixture, and would not resolve on any other
+ *  checkout. Undefined when the scenario declares no fixture, or the ref stays inside. */
+export function fixtureRefPreflight(scenario: Pick<Scenario, "workspace_fixture">, cassettePath: string): string | undefined {
+  const fixture = scenario.workspace_fixture;
+  if (fixture === undefined || fixture === "~" || fixture.startsWith("~/")) return undefined;
+  const cassetteDir = resolve(dirname(cassettePath));
+  // The nearest EXISTING ancestor answers `git rev-parse` (the cassette dir may not exist before the first record).
+  let probe = cassetteDir;
+  while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe);
+  const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: probe, encoding: "utf8", env: gitEnvWithoutAmbientRepo() });
+  const inGit = top.status === 0 && top.stdout.trim() !== "";
+  const root = inGit ? realOrSelf(top.stdout.trim()) : realOrSelf(cassetteDir);
+  const rel = relative(root, realOrSelf(resolve(fixture)));
+  if (rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) return undefined;
+  return (
+    `workspace_fixture ${fixture} is outside ${inGit ? "the cassette's repository" : "the cassette's directory"} (${root}) — ` +
+    `the cassette would store a path that climbs out of it, carrying this machine's path components into a committed fixture. ` +
+    `Move the fixture inside ${inGit ? "the repository" : "the cassette's directory"} (next to the scenario), or record the cassette inside the tree that holds it.`
+  );
+}
+
+/** The realpath of `p` (or of its nearest existing ancestor, with the rest re-appended), so `/var` and
+ *  `/private/var` compare equal on macOS. */
+function realOrSelf(p: string): string {
+  let head = resolve(p);
+  const tail: string[] = [];
+  while (!existsSync(head) && dirname(head) !== head) {
+    tail.unshift(basename(head));
+    head = dirname(head);
+  }
+  try {
+    return join(realpathSync.native(head), ...tail);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** `RunResult.workspaceFixture` on replay: the fixture ref relative to the SCENARIO file, as on a live run —
+ *  derived from the cassette-relative ref and the recorded `scenarioSource` (also cassette-relative), with no
+ *  filesystem access. Undefined when the cassette declares no fixture or records no scenario source. */
+export function replayWorkspaceFixtureRef(cassette: Pick<Cassette, "scenario" | "scenarioSource">): string | undefined {
+  const ref = (cassette.scenario as { workspace_fixture?: unknown } | undefined)?.workspace_fixture;
+  if (typeof ref !== "string") return undefined;
+  if (ref === "~" || ref.startsWith("~/") || isAbsolute(ref)) return ref;
+  if (typeof cassette.scenarioSource !== "string") return undefined;
+  return posix.relative(posix.dirname(cassette.scenarioSource.split(sep).join("/")), ref.split(sep).join("/")) || ".";
 }
 
 /** A cassette's embedded scenario with its cassette-relative refs (`session:`, `workspace_fixture:`) re-resolved
@@ -2943,14 +2993,17 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   // redaction rewrote the body of a file that was UNTOUCHED (its recorded sha still equals its pre-run hash, e.g.
   // a workspace_fixture file the step never rewrote). Its committed sha256 no longer matches the raw pre-run hash,
   // so replay would read the redaction itself as "rewritten this run": `authored: true` would pass and
-  // `input_unmodified` would report a false "modified in place". Null it, so both report evidence-unavailable
-  // (the same move the record-time secret scrub makes, nullOutScrubbedPreRunHashes). A file the run DID change
-  // keeps its hash: redacted-vs-pre-run still differ, which is the true answer.
-  const untouchedRewritten = new Set(
+  // `input_unmodified` would report a false "modified in place". The raw bytes were identical before and after
+  // the run, so the redacted pre-run body equals the redacted post-run body: REMAP the pre-run hash to the
+  // redacted body's sha, and replay still reads the file as untouched — the truth. A file the run DID change
+  // keeps its raw pre-run hash: redacted-vs-pre-run still differ, which is also the truth.
+  const untouchedRewritten = new Map<string, string>(
     (cassette.artifacts ?? []).flatMap((a, i) => {
       const pre = cassette.preRunHashes?.[a.path];
       const out = redactedArtifacts?.[i];
-      return out && out.sha256 !== a.sha256 && typeof pre === "string" && pre === a.sha256 ? [out.path] : [];
+      return out && out.sha256 !== a.sha256 && typeof pre === "string" && pre === a.sha256
+        ? [[out.path, out.sha256] as [string, string]]
+        : [];
     }),
   );
   const redactedPreRunHashes =
@@ -2958,7 +3011,7 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     Object.fromEntries(
       Object.entries(cassette.preRunHashes).map(([k, v]) => {
         const key = redactText(k, policy);
-        return [key, untouchedRewritten.has(key) ? null : v];
+        return [key, untouchedRewritten.get(key) ?? v];
       }),
     );
   return {
@@ -3518,7 +3571,7 @@ export function selectStaleCassettes(dir: string): { path: string; staleness: st
     .filter((x) => x.staleness.length > 0);
 }
 
-interface RecordOpts {
+export interface RecordOpts {
   /** `--model <id>`: a one-off pin for this recording, overriding the session file's `model:`. A cassette
    *  freezes whatever model recorded it, so pinning at record time is what makes the recording's model a
    *  stated fact rather than a property of the recording machine. */
@@ -5155,6 +5208,9 @@ export function preSpendVerdicts(
     if (pw) out.push({ kind: "refuse", message: pw });
   }
 
+  const fixtureRef = fixtureRefPreflight(scenario, cassettePath);
+  if (fixtureRef) out.push({ kind: "refuse", message: fixtureRef });
+
   // A host-inheriting tier freezes the recording machine's own inventory into the transcript, so writing
   // that to a repo-tracked path publishes the operator's tool stack (this has happened).
   const inv = hostInventoryPreflight(scenario, cassettePath, opts.allowHostInventoryFixture === true);
@@ -5261,7 +5317,7 @@ async function recordScenarioObject(
 
 /** The post-run half of `recordScenarioObject`: refuse, snapshot, scrub, redact and write the run it just
  *  made. Every throw here is converted to a RecordPostRunRefusalError carrying `result` by the caller. */
-async function freezeRecordedRun(
+export async function freezeRecordedRun(
   scenario: Scenario,
   opts: RecordOpts,
   extraPolicyDirs: string[],
@@ -5332,10 +5388,11 @@ async function freezeRecordedRun(
   );
   if (fixtureFiles.length) {
     const staged = new Set(fixtureFiles.map((p) => `outputs/${p}`));
-    const inline = rawManifest.filter((a) => staged.has(a.path) && a.body !== undefined);
+    // Untouched fixture files only: one the step rewrote is that step's deliverable, not fixture content.
+    const inline = rawManifest.filter((a) => staged.has(a.path) && a.body !== undefined && result.preRunHashes?.[a.path] === a.sha256);
     const hashOnly = rawManifest.filter((a) => a.truncationReason === "fixture").length;
     warn(
-      `::notice:: record: workspace_fixture — ${inline.length} fixture file(s) (${inline.reduce((n, a) => n + a.bytes, 0)} bytes) are inlined ` +
+      `::notice:: record: workspace_fixture — ${inline.length} untouched fixture file(s) (${inline.reduce((n, a) => n + a.bytes, 0)} bytes) are inlined ` +
         `in the cassette (text, redacted with the rest of it)${hashOnly ? `; ${hashOnly} untouched binary file(s) recorded hash-only` : ""}\n`,
     );
   }
@@ -6504,14 +6561,9 @@ export async function cmdReplay(args: string[]) {
           );
         // The pre-spawn refusal a live run makes, against the fixture files this recording actually staged: an
         // on-disk presence/body assertion on one of them, with no `authored:`, passes on the fixture alone.
-        const stagedFixture = rc.cassette.fingerprint?.workspaceFixtureFileSigs;
-        if (onDisk.workspace_fixture !== undefined && stagedFixture) {
-          const vacuous = workspaceFixtureAssertRefusal(
-            onDisk,
-            stagedFixture.map(([path]) => ({ path })),
-          );
-          if (vacuous) throw new Error(`--assert-from: ${vacuous}`);
-        }
+        // A missing list, or a fixture name the redaction policy rewrote, refuses an unannotated one as unverifiable.
+        const vacuous = recordedFixtureRefusal(onDisk, rc.cassette.fingerprint?.workspaceFixtureFileSigs);
+        if (vacuous) throw new Error(`--assert-from: ${vacuous}`);
         warnUncheckableOnDiskKeys(rc.cassette, rc.cassette.scenario, onDisk);
         // Shallow clone — never mutate the parsed cassette in place.
         cassette = {
@@ -8749,7 +8801,7 @@ export async function replayCassette(
       artifacts: undefined,
       // As the cassette stores it (relative to the cassette) — replay re-stages nothing; the recorded manifest
       // already carries the fixture files and knows they were pre-run.
-      workspaceFixture: cassette.scenario.workspace_fixture,
+      workspaceFixture: replayWorkspaceFixtureRef(cassette),
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error

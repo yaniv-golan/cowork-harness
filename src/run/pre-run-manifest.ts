@@ -18,7 +18,7 @@ const FILE = "pre-run-manifest.json";
  *  unavailable for that path under input_unmodified), keeping the pre-run walk bounded on big
  *  connected folders. Default 50 MiB; override with COWORK_HARNESS_PRERUN_HASH_CAP (positive int bytes).
  *  Deliberately separate from the artifact BODY cap (COWORK_HARNESS_MAX_ARTIFACT_BYTES) — different concern. */
-function preRunHashCap(): number {
+export function preRunHashCap(): number {
   const env = process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
   if (env === undefined || env === "") return 50 * 1024 * 1024;
   const n = Number(env);

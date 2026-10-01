@@ -2200,8 +2200,10 @@ export interface RunResult {
      *  run produced or rewrote it, or when there is no pre-run manifest to tell. */
     preRun?: true;
   }[];
-  /** The scenario's `workspace_fixture` directory as the run resolved it (absolute on a live run; on replay, as
-   *  the cassette stores it, relative to the cassette). Absent when the scenario declares none. */
+  /** The scenario's `workspace_fixture` ref exactly as the scenario FILE wrote it (relative to that file), on
+   *  live runs and on replay (derived there from the cassette's ref and its `scenarioSource`) — not the resolved
+   *  absolute path, so `scaffold` can re-emit it verbatim. Absent when the scenario declares none, or was not
+   *  loaded from a file. */
   workspaceFixture?: string;
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs

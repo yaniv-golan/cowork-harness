@@ -17,6 +17,7 @@ import { loadBaseline as realLoadBaseline } from "../baseline.js";
 import { UsageError, renderIssuePath } from "../errors.js";
 import { loadScenarioPure } from "./execute.js";
 import type { Scenario } from "../types.js";
+import { scanWorkspaceFixture, workspaceFixtureAssertRefusal } from "../fixture/workspace.js";
 
 /** Python's `Finding.as_dict()` shape (`scenario.py`), field for field. */
 export interface LintFinding {
@@ -170,6 +171,43 @@ function baselineFinding(file: string, name: string, e: unknown): LintFinding {
   };
 }
 
+/** The `workspace_fixture` checks `run`/`record` make before anything is spawned: the directory scan (it is
+ *  committed next to the scenario, so it is a property of the scenario, not of the machine) and the refusal of
+ *  a presence/body assertion on a file it provides that does not state `authored:`. Read-only. */
+function fixtureFindings(file: string, scenario: Scenario): LintFinding[] {
+  if (scenario.workspace_fixture === undefined) return [];
+  const dryRun = `\`cowork-harness record ${shellQuote(file)} --dry-run\` reports the same refusal.`;
+  let files: Array<{ path: string }>;
+  try {
+    files = scanWorkspaceFixture(scenario.workspace_fixture).files;
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    return [
+      {
+        severity: "ERROR",
+        rule: "workspace-fixture-invalid",
+        message: `the run refuses this workspace_fixture: ${e.message}`,
+        fix: `Fix the fixture directory (regular, tracked files only; see docs/scenario.md, "Starting from a saved workspace"). ${dryRun}`,
+        file,
+        line: null,
+      },
+    ];
+  }
+  const refusal = workspaceFixtureAssertRefusal(scenario, files);
+  return refusal
+    ? [
+        {
+          severity: "ERROR",
+          rule: "workspace-fixture-vacuous-assert",
+          message: refusal,
+          fix: `Add \`authored: true\` (the step must write it) or \`authored: false\` (inheriting it is fine). ${dryRun}`,
+          file,
+          line: null,
+        },
+      ]
+    : [];
+}
+
 /** Loader findings for already-expanded scenario files (see `expandLintInputs`). Never throws and never
  *  writes to stdout/stderr: a failure of this function's own machinery becomes an ERROR
  *  `lint-loader-internal` finding for the file being processed, because silently falling back to the
@@ -188,6 +226,7 @@ export function loaderFindings(files: string[], deps: LoaderDeps = {}): LintFind
         out.push(...loadRefusalFindings(file, e));
         continue;
       }
+      out.push(...fixtureFindings(file, scenario));
       const name = scenario.baseline;
       // `latest` always resolves on a packaged install; an absolute path is a file on some machine, which the
       // lint lane may not be. Only a committed NAME is a property of the scenario plus this install.

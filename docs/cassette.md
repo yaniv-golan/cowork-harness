@@ -14,9 +14,9 @@ cowork-harness replay  cassettes/my-test.cassette.json # token-free re-evaluatio
 > Without `--out`, this writes to `cassettes/<scenario-name>.cassette.json` — gitignored by default. See
 > [Recording prerequisites](#recording-prerequisites) below for how to commit a cassette instead.
 
-**In CI, run both commands — `replay` alone gates only `unverifiable-skill`, not the drift classes.** A recording describes the skill as
+**In CI, run both commands — `replay` alone gates only `unverifiable-skill` and `unverifiable-fixture`, not the drift classes.** A recording describes the skill as
 it was on the day you paid for it; once the skill moves, a bare `replay` prints
-`::warning:: cassette stale` and — since 2.0.0 — **exits non-zero** when staleness could not be VERIFIED (`unverifiable-skill`); the drift classes still only warn. `verify-cassettes` exits **3** on the same tree — could-not-verify, distinct from the exit **1** it uses for a verified failure. The
+`::warning:: cassette stale` and — since 2.0.0 — **exits non-zero** when staleness could not be VERIFIED (`unverifiable-skill`, or `unverifiable-fixture` for a `workspace_fixture`); the drift classes still only warn, as does `unverifiable-baseline` (the latest baseline could not be loaded — env/platform, not the skill). `verify-cassettes` exits **3** on the same tree — could-not-verify, distinct from the exit **1** it uses for a verified failure. The
 split is deliberate — `replay` answers *"do the assertions still hold"*, `verify-cassettes` answers *"is
 this recording still current"* — but running only the first means a skill edit silently stops being
 tested:
@@ -141,7 +141,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   "effectiveFidelity": "container",       // the tier the live record actually resolved to (e.g. a `fidelity: cowork` scenario resolving to hostloop/container)
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
   "preRunPaths": ["outputs/existing.json"], // pre-run path baseline for `no_unexpected_files` (workRoot-relative)
-  "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed, or an untouched file whose body the redaction policy rewrote (evidence-unavailable for `input_unmodified` and `authored: true`, never a false "modified" or "authored")
+  "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed (evidence-unavailable, never a false "modified"); an UNTOUCHED file whose body the redaction policy rewrote carries the redacted body's sha instead, so `input_unmodified` still passes and `authored: true` still reads it as pre-run
   "preRunOrigin": "local-walk", // provenance of the pre-run baseline (local-walk / remote-unavailable / local-unreadable); `local-unreadable` makes no_unexpected_files/input_unmodified fail evidence-unavailable on replay instead of diffing an incomplete baseline
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
@@ -627,7 +627,8 @@ redaction policy, and a fixture file the step rewrote is a deliverable like any 
 
 A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
-drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leaving baseline drift a warning).
+drift, or `replay --fail-on-skill-drift` fails only on skill-source drift and a changed `workspace_fixture`
+(`fixture`), leaving baseline drift a warning.
 Either way, every replay result also reports the drift in `staleness[]` (class-tagged) for a JSON gate to read.
 
 > **On `replay`, drift WARNS by default — the staleness gate is `verify-cassettes`.** Edit a skill without

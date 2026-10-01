@@ -12,12 +12,14 @@
 // the staged set, the hashed set and the listed set cannot disagree.
 
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, type Dirent, type Stats } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, type Dirent, type Stats } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
 import { UsageError } from "../errors.js";
 import { FsRefusal, NoFollowRoot, lstatOrNull } from "../hillclimb/fs.js";
 import { gitModeEnabled, gitTrackedSet, GITSET_ENV } from "../run/skill-files.js";
 import { OS_JUNK_PATTERN } from "../run/skill-hash.js";
+import { preRunHashCap } from "../run/pre-run-manifest.js";
+import { listTurns, turnArtifactPath } from "../run/turn-layout.js";
 import type { Assertion, Fingerprint, Scenario } from "../types.js";
 
 /** The env var overriding the fixture size cap (bytes, a whole number >= 1). */
@@ -117,6 +119,7 @@ export function scanWorkspaceFixture(dir: string): ScannedWorkspaceFixture {
     throw e;
   }
   const cap = workspaceFixtureMaxBytes();
+  const hashCap = preRunHashCap();
   const tracked = gitModeEnabled() ? gitTrackedSet(root.root) : null;
 
   const problems: string[] = [];
@@ -167,7 +170,16 @@ export function scanWorkspaceFixture(dir: string): ScannedWorkspaceFixture {
       }
       if (tracked !== null && !tracked.has(rel)) {
         problems.push(
-          `${describe(rel)} is not tracked by git — only committed files are staged and hashed ('git add' it, or ${GITSET_ENV}=0 to include untracked files)`,
+          `${describe(rel)} is not tracked by git — only tracked files are staged and hashed ('git add' it, or ${GITSET_ENV}=0 to include untracked files)`,
+        );
+        continue;
+      }
+      // A file the pre-run manifest cannot hash has no decidable authorship: `authored: true` on it could only
+      // ever be evidence-unavailable, and `artifacts[].preRun` could never mark it. Refuse it here rather than
+      // stage a file the rest of the feature cannot reason about.
+      if (fst.size > hashCap) {
+        problems.push(
+          `${describe(rel)} is ${fst.size} bytes, over the pre-run hash cap (${hashCap}; COWORK_HARNESS_PRERUN_HASH_CAP raises it) — its authorship could never be decided`,
         );
         continue;
       }
@@ -278,23 +290,39 @@ export function assertedAuthored(v: unknown): boolean | undefined {
 /** The four keys whose pass proves presence or a body, not authorship. */
 export const PRESENCE_KEYS = ["file_exists", "user_visible_artifact", "artifact_text", "artifact_json"] as const;
 
-/** Normalize a workRoot-relative assertion path for comparison with `outputs/<fixture path>`. */
+/** Normalize a workRoot-relative assertion path for comparison with `outputs/<fixture path>`: separators,
+ *  `./`, `a/../`, a trailing `/`, and CASE. Case is folded on every platform: a case-insensitive filesystem
+ *  (macOS APFS, the default) resolves `outputs/REPORT.md` to the fixture's `report.md`, so comparing exactly
+ *  would let it pass on the fixture alone there; folding everywhere keeps the verdict platform-independent
+ *  (a deliberately different-case new file on a case-sensitive filesystem is over-refused, and stating
+ *  `authored:` resolves that). */
 function normRel(p: string): string {
-  return posix.normalize(p.split("\\").join("/")).replace(/^\.\//, "");
+  return posix.normalize(p.split("\\").join("/")).replace(/^\.\//, "").replace(/\/+$/, "").toLowerCase();
+}
+
+/** Every path a presence assertion could name and pass on the fixture alone: each staged file, and each
+ *  directory above one (`outputs/scores`, `outputs`) — `file_exists` passes on a directory. Case-folded. */
+function vacuousTargets(files: ReadonlyArray<{ path: string }>): Set<string> {
+  const out = new Set<string>();
+  for (const f of files) {
+    const parts = `outputs/${f.path}`.toLowerCase().split("/");
+    for (let i = 1; i <= parts.length; i++) out.add(parts.slice(0, i).join("/"));
+  }
+  return out;
 }
 
 /**
  * Refuse, before any spend, a presence/body assertion (`file_exists`, `user_visible_artifact`, `artifact_text`,
- * `artifact_json`) whose path is a file the fixture provides, unless it states `authored:`. Such an assertion
- * passes on the fixture alone — before the step under test does anything — so it verifies nothing.
- * `authored: true` makes it require that THIS run wrote the file; `authored: false` says inheriting it is fine.
- * Returns the refusal text, or undefined.
+ * `artifact_json`) whose path is a file the fixture provides — or a directory holding one — unless it states
+ * `authored:`. Such an assertion passes on the fixture alone, before the step under test does anything, so it
+ * verifies nothing. `authored: true` makes it require that THIS run wrote the file; `authored: false` says
+ * inheriting it is fine. Returns the refusal text, or undefined.
  */
 export function workspaceFixtureAssertRefusal(
   scenario: Pick<Scenario, "name" | "assert">,
   files: ReadonlyArray<{ path: string }>,
 ): string | undefined {
-  const staged = new Set(files.map((f) => `outputs/${f.path}`));
+  const targets = vacuousTargets(files);
   const hits: Array<{ key: string; path: string }> = [];
   for (const a of scenario.assert as Assertion[]) {
     for (const key of PRESENCE_KEYS) {
@@ -302,15 +330,50 @@ export function workspaceFixtureAssertRefusal(
       if (v === undefined) continue;
       const p = assertedArtifactPath(key, v);
       if (p === undefined || assertedAuthored(v) !== undefined) continue;
-      if (staged.has(normRel(p))) hits.push({ key, path: p });
+      if (targets.has(normRel(p))) hits.push({ key, path: p });
     }
   }
   if (!hits.length) return undefined;
   return (
-    `scenario "${scenario.name}": ${hits.length} assertion(s) name a file the workspace_fixture already provides, so they pass on the fixture alone ` +
+    `scenario "${scenario.name}": ${hits.length} assertion(s) name a file (or a directory) the workspace_fixture already provides, so they pass on the fixture alone ` +
     `before the step under test does anything: ${hits.map((h) => `${h.key} ${h.path}`).join(", ")}. State what you mean: \`authored: true\` ` +
-    `(this run must write it — e.g. \`file_exists: {path: ${hits[0]!.path}, authored: true}\`), \`authored: false\` (inheriting it is fine), ` +
+    `(this run must write it — e.g. \`file_exists: {path: ${hits[0]!.path}, authored: true}\`; it applies to a file, not a directory), \`authored: false\` (inheriting it is fine), ` +
     `or assert on a file the step writes.`
+  );
+}
+
+/**
+ * The same refusal, against a fixture file list a run or cassette RECORDED (`fingerprint.workspaceFixtureFileSigs`)
+ * rather than a fresh scan — for the paths that check an assertion after the fact: `verify-run`, a `--resume`
+ * turn, `replay --assert-from`. When the list is missing, or the record redaction policy rewrote a fixture path
+ * (so the real names are unknown), the check cannot run: an unannotated presence/body assertion under
+ * `outputs/` is then refused as cannot-be-checked rather than allowed to pass. Undefined when the scenario
+ * declares no fixture, or nothing is refused.
+ */
+export function recordedFixtureRefusal(
+  scenario: Pick<Scenario, "name" | "assert"> & { workspace_fixture?: string },
+  fileSigs: ReadonlyArray<readonly [string, string]> | undefined,
+): string | undefined {
+  if (scenario.workspace_fixture === undefined) return undefined;
+  const known = fileSigs !== undefined && !fileSigs.some(([p]) => p.includes("[REDACTED"));
+  if (known)
+    return workspaceFixtureAssertRefusal(
+      scenario,
+      fileSigs.map(([path]) => ({ path })),
+    );
+  const unannotated: string[] = [];
+  for (const a of scenario.assert as Assertion[])
+    for (const key of PRESENCE_KEYS) {
+      const v = (a as Record<string, unknown>)[key];
+      if (v === undefined || assertedAuthored(v) !== undefined) continue;
+      const p = assertedArtifactPath(key, v);
+      if (p !== undefined && (normRel(p) === "outputs" || normRel(p).startsWith("outputs/"))) unannotated.push(`${key} ${p}`);
+    }
+  if (!unannotated.length) return undefined;
+  return (
+    `scenario "${scenario.name}": ${unannotated.join(", ")} cannot be checked against the workspace_fixture — ` +
+    `${fileSigs === undefined ? "no record of the files it staged was found" : "the record redaction policy rewrote a fixture file name"}, ` +
+    `so it may pass on the fixture alone. State \`authored: true\` or \`authored: false\` on it.`
   );
 }
 
@@ -319,4 +382,42 @@ export function workspaceFixtureAssertRefusal(
 export function withWorkspaceFixtureSig(fp: Fingerprint, scan: ScannedWorkspaceFixture | undefined): Fingerprint {
   if (scan === undefined) return fp;
   return { ...fp, workspaceFixtureSig: scan.sig, workspaceFixtureFileSigs: scan.fileSigs };
+}
+
+/** The `workspace_fixture` ref exactly as the scenario FILE wrote it (relative to that file), kept beside the
+ *  resolved absolute path the loader stores in `scenario.workspace_fixture`. A symbol-keyed property: it
+ *  survives an object spread (every scenario copy in the run path) and is never serialized, so it cannot
+ *  reach a cassette. Undefined for a scenario not loaded from a file. */
+const AS_WRITTEN = Symbol.for("cowork-harness.workspace_fixture.as-written");
+export function setWorkspaceFixtureAsWritten<T extends object>(scenario: T, ref: string): T {
+  Object.defineProperty(scenario, AS_WRITTEN, { value: ref, enumerable: true, writable: true, configurable: true });
+  return scenario;
+}
+export function workspaceFixtureAsWritten(scenario: object): string | undefined {
+  const v = (scenario as Record<symbol, unknown>)[AS_WRITTEN];
+  return typeof v === "string" ? v : undefined;
+}
+
+/** The fixture file list a kept run recorded: the first turn's `result.json` whose fingerprint carries
+ *  `workspaceFixtureFileSigs` (turn 1 staged the fixture; a `--resume` turn stages nothing, so its own
+ *  fingerprint has none). Undefined when no turn recorded one, or the run dir is unreadable. */
+export function recordedFixtureFileSigs(runDir: string): Array<[string, string]> | undefined {
+  let turns: number[];
+  try {
+    turns = listTurns(runDir);
+  } catch {
+    return undefined;
+  }
+  for (const t of turns) {
+    try {
+      const r = JSON.parse(readFileSync(turnArtifactPath(runDir, t, "result.json"), "utf8")) as {
+        fingerprint?: { workspaceFixtureFileSigs?: unknown };
+      };
+      const sigs = r.fingerprint?.workspaceFixtureFileSigs;
+      if (Array.isArray(sigs)) return sigs as Array<[string, string]>;
+    } catch {
+      /* a turn with no (readable) result.json: try the next */
+    }
+  }
+  return undefined;
 }

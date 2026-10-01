@@ -72,6 +72,8 @@ runs:
   E  `scenario-invalid`   the loader refuses the file (schema, value types, unknown keys, bad regex,
                           reserved values) -- including a non-scenario YAML in a linted directory
   E  `baseline-unknown`   `baseline:` names no baseline this installed cowork-harness ships
+  E  `workspace-fixture-invalid` / `workspace-fixture-vacuous-assert`   the run refuses the scenario's
+                          `workspace_fixture`, or a presence assertion on a fixture file that states no `authored:`
 Run directly, this script stays offline and never parses with the loader, so prefer the CLI wrapper
 when it is installed.
 
@@ -1989,7 +1991,7 @@ def _wrapper_loader_findings():
 # Every rule id `lint` can emit, with the highest severity it is emitted at. Nothing reads this at run time
 # (`lint` has no rule suppression); it exists so a test can check that every `Finding("<SEV>", "<id>", …)`
 # in this file is claimed by exactly one of this and LINT_SKILL_RULES. The loader findings the wrapper hands
-# over (`scenario-invalid`, `baseline-unknown`) are built in TypeScript and are not listed.
+# over (`scenario-invalid`, `baseline-unknown`, `workspace-fixture-*`) are built in TypeScript and are not listed.
 LINT_RULES = {
     "assert-contradiction": "ERROR",
     "assertions-key": "ERROR",

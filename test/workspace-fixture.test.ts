@@ -599,7 +599,7 @@ describe("scaffold from a fixture run", () => {
         prompt: "do step 2",
         fidelity: "container",
         result: "success",
-        workspaceFixture: "/abs/fixtures/after-step-1",
+        workspaceFixture: "fixtures/after-step-1",
         artifacts: [
           { path: "outputs/report.md", bytes: 10, preRun: true },
           { path: "outputs/step2.md", bytes: 5 },
@@ -608,7 +608,7 @@ describe("scaffold from a fixture run", () => {
       }),
     );
     const doc = parseYaml(yaml.replace(/^#.*$/gm, "")) as { workspace_fixture: string; assert: Array<Record<string, unknown>> };
-    expect(doc.workspace_fixture).toBe("/abs/fixtures/after-step-1");
+    expect(doc.workspace_fixture).toBe("fixtures/after-step-1"); // verbatim, as the scenario wrote it
     expect(doc.assert).toContainEqual({ file_exists: "outputs/step2.md" });
     expect(doc.assert.some((a) => JSON.stringify(a).includes("outputs/report.md"))).toBe(false);
     expect(yaml).toMatch(/1 inherited file/);

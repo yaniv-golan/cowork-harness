@@ -14,6 +14,7 @@ import {
   fixtureBinariesHashOnly,
   recordingShapingDrift,
   redactCassette,
+  assertRedactionVerdictPreserved,
   replayCassette,
   scanCassette,
   CASSETTE_VERSION,
@@ -173,18 +174,18 @@ describe("redaction never manufactures authorship", () => {
     expect(unmodified!.pass).toBe(true);
   });
 
-  it("a policy that rewrites an untouched fixture body nulls its pre-run hash: `authored: true` FAILS evidence-unavailable, input_unmodified is evidence-unavailable (never 'modified in place')", async () => {
-    const red = redactCassette(recorded(), policy);
-    expect(red.preRunHashes!["outputs/report.md"]).toBeNull();
+  it("a policy that rewrites an untouched fixture body remaps its pre-run hash to the redacted sha: it stays untouched on replay (authored fails as pre-run, input_unmodified passes), and the record self-check accepts it", async () => {
+    const base = recorded();
+    const red = redactCassette(base, policy);
+    expect(red.preRunHashes!["outputs/report.md"]).toBe(red.artifacts!.find((a) => a.path === "outputs/report.md")!.sha256);
     const [report, notes, unmodified] = await results(red);
     expect(report!.pass).toBe(false);
-    expect(report!.message).toMatch(/evidence unavailable/);
-    // the file the step DID rewrite keeps its pre-run hash, so it is still (truly) authored
+    expect(report!.message).toMatch(/untouched pre-run file/);
+    // the file the step DID rewrite keeps its raw pre-run hash, so it is still (truly) authored
     expect(red.preRunHashes!["outputs/notes.md"]).toBe(sha(oldNotes));
     expect(notes!.pass).toBe(true);
-    expect(unmodified!.pass).toBe(false);
-    expect(unmodified!.message).toMatch(/evidence unavailable/);
-    expect(unmodified!.message).not.toMatch(/modified in place/);
+    expect(unmodified!.pass).toBe(true);
+    await expect(assertRedactionVerdictPreserved(base, red)).resolves.toBeUndefined();
   });
 
   it("a policy that matches nothing leaves every pre-run hash alone", () => {
@@ -242,5 +243,56 @@ describe.skipIf(!existsSync(CLI))("replay --assert-from on a fixture cassette", 
   it("accepts it once `authored:` is stated", () => {
     const r = run(setup("  - file_exists: {path: outputs/report.md, authored: false}\n").dir);
     expect(r.stderr + r.stdout).not.toMatch(/pass on the fixture alone/);
+  });
+});
+
+describe.skipIf(!existsSync(CLI))("verify-run on a fixture run", () => {
+  function keptFixtureRun(onDiskAssert: string): { root: string; scenario: string } {
+    const root = join(tmp("wsfx-vr-"), "run");
+    const workDir = join(root, "work", "session", "mnt");
+    mkdirSync(join(workDir, "outputs"), { recursive: true });
+    writeFileSync(join(workDir, "outputs", "report.md"), "# step 1\n");
+    const t1 = join(root, "turns", "1");
+    mkdirSync(t1, { recursive: true });
+    writeFileSync(
+      join(t1, "result.json"),
+      JSON.stringify({
+        scenario: "s",
+        fidelity: "container",
+        baseline: LIVE,
+        result: "success",
+        decisions: [],
+        toolCounts: {},
+        gateDeliveries: [],
+        egress: [],
+        assertions: [],
+        subagents: [],
+        outDir: root,
+        workDir,
+        durationMs: 1,
+        scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
+        fingerprint: { baseline: LIVE, workspaceFixtureSig: "x", workspaceFixtureFileSigs: [["report.md", "x"]] },
+      }),
+    );
+    writeFileSync(join(t1, "run.jsonl"), JSON.stringify({ t: "run", scenario: "s" }));
+    writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: [], steps: [] }));
+    const dir = tmp("wsfx-vr-sc-");
+    mkdirSync(join(dir, "fx"));
+    writeFileSync(join(dir, "fx", "report.md"), "# step 1\n");
+    const scenario = join(dir, "s.yaml");
+    writeFileSync(scenario, `fidelity: container\nprompt: p\nworkspace_fixture: fx\nassert:\n${onDiskAssert}`);
+    return { root, scenario };
+  }
+  it("refuses (exit 2) a presence assertion on a file the run's fixture provided, with no `authored:`", () => {
+    const { root, scenario } = keptFixtureRun("  - file_exists: outputs/report.md\n");
+    const r = spawnSync("node", [CLI, "verify-run", root, scenario], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stderr + r.stdout).toMatch(/pass on the fixture alone/);
+  });
+  it("evaluates it once `authored:` is stated", () => {
+    const { root, scenario } = keptFixtureRun("  - file_exists: {path: outputs/report.md, authored: false}\n");
+    const r = spawnSync("node", [CLI, "verify-run", root, scenario], { encoding: "utf8" });
+    expect(r.stderr + r.stdout).not.toMatch(/pass on the fixture alone/);
+    expect(r.status).toBe(0);
   });
 });

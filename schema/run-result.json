@@ -1088,7 +1088,7 @@
     },
     "workspaceFixture": {
       "type": "string",
-      "description": "the scenario's `workspace_fixture` directory as the run resolved it: absolute on a live run; on replay, as the cassette stores it (relative to the cassette). Absent when the scenario declares none."
+      "description": "the scenario's `workspace_fixture` ref exactly as the scenario file wrote it (relative to that file), on live runs and on replay (derived there from the cassette's ref and its recorded `scenarioSource`) — not the resolved absolute path (a ref written absolute stays as written). Absent when the scenario declares none, or when it was not loaded from a file (an in-memory scenario, a cassette with no `scenarioSource`)."
     },
     "workspaceFiles": {
       "type": "array",

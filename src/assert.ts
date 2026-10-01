@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve, relative, isAbsolute, sep, dirname, extname } from "node:path";
 import type {
@@ -1582,7 +1582,12 @@ function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
   const isReservedRoot = (rel: string): boolean => {
     if (rel.startsWith(SCRATCHPAD_PREFIX)) return true; // scratchpad is agent-authored by construction
     const root = ctx.userVisiblePrefixes.find((r) => rel === r || rel.startsWith(r + "/"));
-    return root === "outputs"; // `outputs/` starts empty; everything else visible is a connected mount
+    // `outputs/` holds only this session's work. A workspace_fixture pre-populates it, but a fixture stands for an
+    // EARLIER step of the same session (see docs/fidelity-gaps.md), so a fixture file the step rewrote is the
+    // skill's own artifact — a hard fail like any other outputs file — unlike a user's pre-existing file on a
+    // connected mount. (An untouched fixture file is not in the authored set at all.) Everything else visible
+    // is a connected mount.
+    return root === "outputs";
   };
   const wasModified = (rel: string): boolean => {
     if (rel.startsWith(SCRATCHPAD_PREFIX)) return false; // scratchpad files aren't in the pre-run manifest
@@ -1702,10 +1707,20 @@ function slashMatches(re: RegExp, ids: string[] | undefined): boolean {
 /** Did THIS run create or rewrite `p` (a workRoot-relative assertion path)? The same rule the authored-file capture
  *  applies (`captureAuthoredFilesWithHealth`): a path absent from the pre-run manifest is new; a pre-run path whose
  *  post-run hash differs was rewritten; an equal hash is an untouched pre-run file (a workspace_fixture file the step
- *  never touched). Anything that cannot be decided — no manifest, a null pre-run hash (over the cap, unreadable, or
- *  nulled because record-time scrubbing or redaction rewrote the committed body), no post-run hash — fails
- *  evidence-unavailable: it is never read as authored. Post-run hash: the cassette manifest on replay
- *  (`postRunHashes`), a bounded re-hash of the real file on live / verify-run. */
+ *  never touched). Anything that cannot be decided — no manifest, a null pre-run hash (over the cap or
+ *  unreadable), no post-run hash — fails evidence-unavailable: it is never read as authored.
+ *
+ *  It never passes on what the run did not write as a regular file:
+ *   - `authored` applies to a REGULAR FILE. A directory fails: the pre-run manifest records files, so a
+ *     directory the fixture created would otherwise read as "new" (assert on a file inside it instead).
+ *   - a symlink at the path, or a path reached through a symlinked directory, is never authored evidence (the
+ *     pre-run manifest never hashes a link; replacing a fixture file with a link to other content is not
+ *     "writing" it).
+ *   - the lookup uses the file's CANONICAL on-disk name: on a case-insensitive filesystem (macOS APFS)
+ *     `outputs/REPORT.md` is the fixture's `report.md`, and must read as that pre-run file, as it fails "not
+ *     found" on a case-sensitive one. With no exact key, a case-folded match is taken as that pre-run file.
+ *  Post-run hash: the cassette manifest on replay (`postRunHashes`), a bounded re-hash of the real file on live
+ *  / verify-run. */
 function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: true; evidence?: string } | { pass: false; message: string } {
   const unavailable = (why: string) => ({
     pass: false as const,
@@ -1718,30 +1733,66 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
     );
   const abs = containedPath(ctx.workRoot, p);
   if (!abs) return { pass: false, message: `unsafe ${key} path "${p}" — must stay under the work root (no absolute paths or "..")` };
-  const rel = relative(resolve(ctx.workRoot), abs).split(sep).join("/");
-  if (!Object.hasOwn(ctx.preRunHashes, rel)) {
-    if (ctx.preRunPaths?.includes(rel)) return unavailable("it existed before the run as a link, whose content was never hashed");
+  const lexical = relative(resolve(ctx.workRoot), abs).split(sep).join("/");
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(abs);
+  } catch {
+    return { pass: false, message: `${key} {authored: true}: "${p}" not found — nothing this run wrote is there` };
+  }
+  if (st.isSymbolicLink() || ctx.linkPaths?.has(lexical))
+    return unavailable("it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)");
+  if (st.isDirectory())
+    return {
+      pass: false,
+      message: `${key} {authored: true}: \`authored\` applies to a file — "${p}" is a directory (assert on a file the step writes inside it)`,
+    };
+  if (!st.isFile()) return { pass: false, message: `${key} {authored: true}: "${p}" is not a regular file` };
+  // The canonical on-disk name, relative to the canonical work root. A difference other than case means the
+  // path went through a symlinked directory.
+  let rel: string;
+  try {
+    rel = relative(realpathSync.native(ctx.workRoot), realpathSync.native(abs)).split(sep).join("/");
+  } catch {
+    return unavailable("its on-disk name could not be resolved");
+  }
+  if (rel !== lexical && rel.toLowerCase() !== lexical.toLowerCase())
+    return unavailable("it is reached through a symlinked directory — a link is never authored evidence");
+  const hashes = ctx.preRunHashes;
+  if (!Object.hasOwn(hashes, rel)) {
+    const folded = Object.keys(hashes).find((k) => k.toLowerCase() === rel.toLowerCase());
+    if (folded !== undefined) rel = folded;
+  }
+  let post: string | undefined;
+  const postHash = (): string | undefined | "too-large" => {
+    if (ctx.postRunHashes !== undefined) return ctx.postRunHashes[rel] ?? ctx.postRunHashes[lexical];
+    try {
+      if (st.size > postRunHashCap()) return "too-large";
+      return createHash("sha256").update(readFileSync(abs)).digest("hex");
+    } catch {
+      return undefined;
+    }
+  };
+  if (!Object.hasOwn(hashes, rel)) {
+    if (ctx.preRunPaths?.some((q) => q.toLowerCase() === rel.toLowerCase()))
+      return unavailable("it existed before the run as a link, whose content was never hashed");
     if (ctx.preRunOrigin === "local-unreadable")
       return unavailable(
         "the pre-run baseline is incomplete (a connected-folder source was unreadable), so a new path cannot be proven new",
       );
+    const h = postHash();
+    if (h === "too-large") return unavailable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)");
+    if (h === undefined) return unavailable("there is no post-run record of it as a regular file");
     return { pass: true, evidence: `${key}: "${p}" is new this run` };
   }
-  const pre = ctx.preRunHashes[rel];
+  const pre = hashes[rel];
   if (pre === null || pre === undefined)
     return unavailable(
-      "its pre-run hash is unavailable (over COWORK_HARNESS_PRERUN_HASH_CAP, unreadable, or nulled because the recorded body was scrubbed or redacted)",
+      "its pre-run hash is unavailable (over COWORK_HARNESS_PRERUN_HASH_CAP, unreadable, or nulled because the recorded body was secret-scrubbed)",
     );
-  let post: string | undefined;
-  if (ctx.postRunHashes !== undefined) post = ctx.postRunHashes[rel];
-  else {
-    try {
-      if (statSync(abs).size <= postRunHashCap()) post = createHash("sha256").update(readFileSync(abs)).digest("hex");
-      else return unavailable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)");
-    } catch {
-      post = undefined;
-    }
-  }
+  const h = postHash();
+  if (h === "too-large") return unavailable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)");
+  post = h;
   if (post === undefined) return unavailable("there is no post-run hash for it (removed, or unreadable)");
   return post === pre
     ? {

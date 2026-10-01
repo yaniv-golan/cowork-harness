@@ -124,7 +124,16 @@ import {
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { slashInvokedSkillIds } from "../critique/skill-invocation.js";
 import { computeVerdict } from "./verdict.js";
-import { PRESENCE_KEYS, assertedAuthored, withWorkspaceFixtureSig, workspaceFixtureAssertRefusal } from "../fixture/workspace.js";
+import {
+  PRESENCE_KEYS,
+  assertedAuthored,
+  recordedFixtureFileSigs,
+  recordedFixtureRefusal,
+  setWorkspaceFixtureAsWritten,
+  withWorkspaceFixtureSig,
+  workspaceFixtureAsWritten,
+  workspaceFixtureAssertRefusal,
+} from "../fixture/workspace.js";
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
@@ -669,6 +678,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // the run dir exists, unless it states `authored:`.
   if (launchSources.workspaceFixture) {
     const vacuousFixture = workspaceFixtureAssertRefusal(scenario, launchSources.workspaceFixture.files);
+    if (vacuousFixture) throw new UsageError(vacuousFixture);
+  }
+  // A --resume turn re-stages nothing (the fixture dir may be gone), so check against the file list turn 1
+  // recorded: an unannotated presence assertion on one of those files would still pass on the fixture alone.
+  if (opts.resume) {
+    const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(outDir));
     if (vacuousFixture) throw new UsageError(vacuousFixture);
   }
 
@@ -1549,7 +1564,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // The decider most often spent money on exactly the gate that whiffed — keep it on the salvage.
         deciderCostUsd: llmDecider?.costUsd(),
         deciderUsage: llmDecider?.usage(),
-        workspaceFixture: scenario.workspace_fixture,
+        workspaceFixture: workspaceFixtureAsWritten(scenario),
       });
       // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
       // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
@@ -2037,7 +2052,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
       // `preRun: true` marks an untouched pre-run file (e.g. from a workspace_fixture) — see deliverableArtifacts.
       artifacts: deliverableArtifacts(workspaceFiles, preRunHashes),
-      workspaceFixture: scenario.workspace_fixture,
+      workspaceFixture: workspaceFixtureAsWritten(scenario),
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
@@ -2320,7 +2335,11 @@ export function loadScenarioPure(path: string): Scenario {
   // other declared sources). `~/…` expands to the home directory; an absolute path is kept.
   if (scenario.workspace_fixture !== undefined)
     try {
-      scenario.workspace_fixture = expandUserPath(scenario.workspace_fixture, dirname(resolve(path)));
+      // Keep the ref as written (scenario-file-relative) beside the resolved path: it is what RunResult reports
+      // and scaffold re-emits, so no absolute host path reaches a result or a committed YAML.
+      const asWritten = scenario.workspace_fixture;
+      scenario.workspace_fixture = expandUserPath(asWritten, dirname(resolve(path)));
+      setWorkspaceFixtureAsWritten(scenario, asWritten);
     } catch (e) {
       throw new UsageError(`invalid scenario ${path}: workspace_fixture: ${(e as Error).message}`);
     }

@@ -99,7 +99,7 @@ export function buildScaffold(eventsFile: string): string {
     baseline: "latest",
     fidelity: result.fidelity ?? "container",
     prompt: result.prompt ?? "TODO: the prompt you ran (not recoverable from this run)",
-    // The run's fixture dir, as it resolved it (absolute): re-point it relative to wherever this file is saved.
+    // The fixture ref exactly as the run's scenario file wrote it (relative to that file) — never an absolute path.
     ...(typeof result.workspaceFixture === "string" ? { workspace_fixture: result.workspaceFixture } : {}),
     ...(answers.length ? { answers } : {}),
     assert,
@@ -127,7 +127,7 @@ export function buildScaffold(eventsFile: string): string {
     : "";
   const fixtureMarker =
     (typeof result.workspaceFixture === "string"
-      ? `# workspace_fixture is the absolute path this run staged from — make it relative to where you save this file.\n`
+      ? `# workspace_fixture is relative to the scenario file the run loaded — save this file next to it, or re-point the path.\n`
       : "") +
     (inherited.length && !partial && !artifactsUnavailable
       ? `# ${inherited.length} inherited file(s) the run did not change (${inherited
