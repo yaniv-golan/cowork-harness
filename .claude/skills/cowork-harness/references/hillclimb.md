@@ -3,7 +3,7 @@
 Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). It needs a `cowork-harness` whose `--help`
 lists `hillclimb`. The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
-while it runs. It covers `run`, `check` and `state-template`.
+while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
 
 ```bash
 cowork-harness hillclimb state-template evals/ --flow .claude/hillclimb/flow   # save stdout as <flow>/_state.json
@@ -19,7 +19,7 @@ metric sits at the ceiling or the floor).
 
 ## Always pass `--flow`
 
-All three commands default to `.claude/hillclimb/flow`, but pass `--flow <dir>` to every one, the same dir each
+Every subcommand defaults to `.claude/hillclimb/flow`, but pass `--flow <dir>` to every one, the same dir each
 time:
 
 - `state-template` writes the metrics legend to `<flow>/metrics.md` only when `--flow` is given. Without it,
@@ -90,6 +90,9 @@ plugin is refused. Review the change, then run once with `--dry-run --approve-ha
 without spending (`--approve-harness` on a live pass records it and runs the pass). It is a change detector,
 not a security boundary: the permission allowlist on the loop's command is what bounds an unattended run.
 
+`regrade` applies the same gate: a rubric fix is a scenario edit, so `regrade` refuses (exit 2) until the new sha
+is approved. `--approve-harness` on `regrade` records it, and is yours there too.
+
 ## Refused before any spend (exit 2)
 
 - an alias model or judge model, a case pinned to no concrete model;
@@ -110,6 +113,68 @@ not a security boundary: the permission allowlist on the loop's command is what 
 
 The full list is in [SPEC.md §11](https://github.com/yaniv-golan/cowork-harness/blob/main/SPEC.md#11-machine-output---output-format-json).
 
+## `freeze-ref` — a new bar for `semantic_pairwise`
+
+```bash
+cowork-harness hillclimb freeze-ref evals/ --flow .claude/hillclimb/flow --variant v2
+```
+
+In a flow, every `semantic_pairwise` assert is judged against the flow's own references, not the scenario's
+`refs:`: `<flow>/baseline/ref`, then each `<flow>/v<N>/ref`. A baseline pass freezes the baseline's reference
+itself, after the pool, for every selected pairwise case that has none (a resumed pass repairs a missing one). Any
+other variant is refused before spending while its case has no baseline reference. Only the baseline's reference
+decides `pass`.
+
+`freeze-ref` freezes a later variant's reference, so the variants after it are also compared with it
+(`win_<vN>`). Use it when `check` notes a variant scoring 0.9 or more against the newest reference. It freezes
+from the variant's lowest-rep good row (status `ok`, not an agent failure, verdict and pairwise evidence
+measured), under the variant's lock: it refuses while a run of that variant holds it. The row's run is found by
+its `meta.run_dir`, else by its run id under the current runs root (`--run-dir` / `COWORK_HARNESS_RUNS_DIR`). An
+entry that is already complete is reported (`exists`), never rewritten. One that lacks a compose key (an assert
+added or re-scoped) gains it from the run it was frozen from, marked `unchecked`, and is refused when that run is
+gone: start a fresh flow dir then.
+
+Flags: `--variant ID` (required), `--flow DIR`, `--case ID` (repeatable), `--output-format text|json` (json
+carries `{frozen, added, exists, refused}`), `--dotenv FILE`, `--run-dir DIR`.
+
+Rows written before the freeze lack its `win_<vN>` column; `regrade --fill-refs` adds it.
+
+## `regrade` — re-grade the rows without re-running the agent
+
+```bash
+cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow   # after a rubric or judge change
+cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow --fill-refs   # after freeze-ref
+```
+
+It re-grades the flow's scored rows from their kept run dirs (found by `meta.run_id` under the current runs root)
+and rewrites each row through the same producer `run` writes it with.
+
+- **Default:** every judged assert is graded again, with the flow's references as they are now, and `pass` is
+  recomputed. Use it after a judge or rubric change. A rubric fix is gated (see the harness gate above).
+- **`--fill-refs`:** only the `semantic_pairwise` comparisons a row lacks are judged (a reference frozen after the
+  row was written; a row lacking only its own variant's gets the neutral outcome, no judge call). Every other
+  outcome and every `semantic_matches` grade stays the live one, so `pass` cannot move. Every scored row then
+  carries every `win_<vN>` column, so `state-template --flow` can declare it: merge the new `metrics` entry.
+
+Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant with rows), `--case ID`
+(repeatable), `--judge-model ID`, `--fill-refs`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,
+`--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
+
+- **Everything that can refuse does so before the first judge call**, and then writes nothing: a host `claude`
+  that cannot run the judge isolated, the harness gate, a lock held on any selected variant, and drifted or
+  unchecked evidence in any batch (the refusal names every affected row; `--allow-doc-drift` /
+  `--allow-unchecked` accept it).
+- **What it writes:** `results.jsonl`, replaced atomically, the prior bytes kept as
+  `<variant>/regrade-<sha16>.bak.jsonl`; `<variant>/regrade.md` and stderr show which rows' `pass`, `claims` or
+  `win` keys moved. A re-graded row gains `meta.regraded_at` and, when a judge re-graded it, the other
+  `meta.regrade_*` keys.
+- **What it never touches:** the agent (it never runs), `result.json`, the lines it did not rewrite (kept byte for
+  byte), in a default re-grade a case with no judged assert, and an open `judge_invalid` slot in `errors.jsonl`,
+  which is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it.
+- **Listed, not re-graded (exit 1):** a row whose kept run dir is gone or refused (multi-turn, partial, replay),
+  one whose re-grade is judge-invalid or does not line up with the scenario, one whose kept outcome was judged
+  against a reference that has changed since, and an open `judge_invalid` slot.
+
 ## Exit codes
 
 - `run`: `0` every attempted (case, rep) was scored; `1` an attempt failed (an `errors.jsonl` row, or a scored
@@ -117,6 +182,12 @@ The full list is in [SPEC.md §11](https://github.com/yaniv-golan/cowork-harness
   or `summary.json` could not be written; `2` refused before spending. `--dry-run` exits `0` unless a refusal fires.
 - `check`: `0` clean, `1` an error finding, `2` usage.
 - `state-template`: `0`, or `2` on usage or a refusal.
+- `freeze-ref`: `0` no case refused (an entry already complete is reported, not refused); `1` a case refused (no
+  good row, its run not under the runs root, a damaged entry, a missing compose key whose run is gone); `2` usage
+  (a bad `--variant`, a variant with no `results.jsonl`, no selected case with `semantic_pairwise`, the variant's
+  lock held by a live run).
+- `regrade`: `0` every selected row rewritten, or nothing to do; `1` a row listed instead, or a failure after the
+  first judge call (it names the variants already rewritten); `2` usage or a refusal before any judge call.
 
 ## What lands in the flow dir
 
@@ -134,6 +205,13 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
 - **`<key>_present: 0` means the value is absent, not 0.** `pass_present: 0` marks a verdict that failed only
   because a judge's evidence was refused; `claims_present` works the same way. Averaging an absent value as 0
   reads a capture problem as a regression.
+- **`semantic_pairwise` keys.** `win` is the mean pairwise value against the baseline's reference: 1 win, 0.5
+  tie or both bad, 0 loss; 0.5 on the baseline's own rows. `win_present: 0` means no comparison with the baseline
+  could be made; `win` and `both_bad` are then absent. A row also carries `both_bad`, a `win_<vN>` /
+  `win_<vN>_present` pair per later reference (a metric only: only the baseline's reference decides `pass`),
+  per-assert `a<i>_win*` drill-down keys, and `meta.pairwise_ref_sha256`. A case with no pairwise assert carries
+  the `_present` keys as 0; an agent failure scores 0, measured. `check` errors when a reference document changed
+  under the flow.
 - **An agent's own failure is a scored row**: every graded key `0`, `meta.failure_class: "errored_agent"` and
   its `meta.termination_rule`. A row with `status: "truncated"` hit the output-token limit; the headroom check
   skips it.
