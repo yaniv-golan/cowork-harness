@@ -84,7 +84,10 @@ describe("turnsFromEvents — absence, caps, payloads", () => {
     const { turns, subagentTurns } = trace({ children: [] });
     expect(subagentTurns).toBe("absent");
     expect(turns.some((t) => /\[sub-agent general-purpose\] transcript not captured/.test(t.content))).toBe(true);
-    expect(turns.filter((t) => t.role === "tool_call")).toHaveLength(1);
+    // its tool traffic is still on the parent stream: kept, prefixed, once
+    expect(turns.filter((t) => t.role === "tool_call" && t.content.startsWith("[sub-agent general-purpose] "))).toHaveLength(
+      parentedToolUses,
+    );
   });
 
   it("one of two dispatches without a transcript ⇒ 'partial'", () => {
@@ -195,4 +198,31 @@ describe("keptChildTranscripts — where each tier leaves sub-agent transcripts 
         rmSync(out, { recursive: true, force: true });
       }
     });
+});
+
+describe("a forked skill (context: fork) — its work is the skill's own and must be in the trace", () => {
+  const FDIR = join(import.meta.dirname, "fixtures", "hillclimb-runs", "forked-skill");
+  const fevents = readFileSync(join(FDIR, "events.jsonl"), "utf8").trim().split("\n");
+  const fchildren = readChildTranscripts(join(FDIR, "subagents"));
+  const run = (children: ChildTranscript[]) =>
+    turnsFromEvents({ events: fevents, prompt: "p", children, sidecarPrefix: "baseline/out/c_rep0/blobs/" });
+
+  it("the fork's transcript has no toolUseId, yet is joined to its Skill call by the tool ids it shares", () => {
+    expect(fchildren).toHaveLength(1);
+    expect(fchildren[0].toolUseId).toBeUndefined();
+    const { turns, subagentTurns } = run(fchildren);
+    const forked = turns.filter((t) => t.role === "tool_call" && t.content.startsWith("[forked skill example-fork-skill#1] "));
+    expect(forked).toHaveLength(17); // the run recorded 18 tool calls: the Skill call itself + 17 inside the fork
+    expect(subagentTurns).toBe("complete");
+    const skillCall = turns.findIndex((t) => t.role === "tool_call" && t.name === "Skill");
+    const skillResult = turns.findIndex((t) => t.role === "tool_result" && t.name === "Skill");
+    expect(skillCall).toBeLessThan(turns.indexOf(forked[0]));
+    expect(turns.indexOf(forked[16])).toBeLessThan(skillResult);
+  });
+
+  it("with no transcript, the fork's own tool calls still appear (from the parent stream) and the trace says it is not complete", () => {
+    const { turns, subagentTurns } = run([]);
+    expect(turns.filter((t) => t.role === "tool_call" && t.content.startsWith("[forked skill example-fork-skill] "))).toHaveLength(17);
+    expect(subagentTurns).toBe("absent");
+  });
 });

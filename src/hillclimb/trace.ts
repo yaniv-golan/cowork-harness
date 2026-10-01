@@ -25,7 +25,9 @@ export interface Turn {
 }
 
 export interface ChildTranscript {
-  toolUseId: string;
+  /** The dispatch this transcript answers, from its `.meta.json`. A forked skill's meta has none: it is then
+   *  joined by the tool ids its transcript shares with the parent stream's parented events. */
+  toolUseId?: string;
   agentType?: string;
   description?: string;
   spawnDepth?: number;
@@ -70,9 +72,9 @@ export function readChildTranscripts(dir: string): ChildTranscript[] {
       continue;
     }
     const jsonl = join(dir, f.replace(/\.meta\.json$/, ".jsonl"));
-    if (typeof meta.toolUseId !== "string" || !existsSync(jsonl)) continue;
+    if (!existsSync(jsonl)) continue;
     out.push({
-      toolUseId: meta.toolUseId,
+      ...(typeof meta.toolUseId === "string" ? { toolUseId: meta.toolUseId } : {}),
       ...(typeof meta.agentType === "string" ? { agentType: meta.agentType } : {}),
       ...(typeof meta.description === "string" ? { description: meta.description } : {}),
       ...(typeof meta.spawnDepth === "number" ? { spawnDepth: meta.spawnDepth } : {}),
@@ -102,7 +104,40 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
   const cap = input.resultCapBytes ?? DEFAULT_CAP;
   const turns: Turn[] = [];
   const sidecars: TraceOutput["sidecars"] = [];
-  const byId = new Map(input.children.map((c) => [c.toolUseId, c]));
+  const byId = new Map(input.children.filter((c) => c.toolUseId !== undefined).map((c) => [c.toolUseId!, c]));
+  // The parent stream's parented events, by the dispatch they belong to. They identify a dispatch the tool
+  // name does not (a forked Skill), join a transcript that names no toolUseId, and are the fallback source
+  // when no transcript was kept.
+  const parented = new Map<string, string[]>();
+  for (const line of input.events) {
+    let pid: unknown;
+    try {
+      pid = (JSON.parse(line) as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+    } catch {
+      continue;
+    }
+    if (typeof pid === "string" && pid) (parented.get(pid) ?? parented.set(pid, []).get(pid)!).push(line);
+  }
+  const toolIds = (lines: readonly string[]): Set<string> => {
+    const ids = new Set<string>();
+    for (const l of lines)
+      try {
+        const c = (JSON.parse(l) as { type?: string; message?: { content?: unknown } }).message?.content;
+        if (Array.isArray(c)) for (const b of c as Block[]) if (b?.type === "tool_use" && b.id) ids.add(b.id);
+      } catch {
+        /* skip */
+      }
+    return ids;
+  };
+  const unnamed = input.children.filter((c) => c.toolUseId === undefined).map((c) => ({ c, ids: toolIds(c.lines), used: false }));
+  const childFor = (dispatchId: string): ChildTranscript | undefined => {
+    const named = byId.get(dispatchId);
+    if (named) return named;
+    const mine = toolIds(parented.get(dispatchId) ?? []);
+    const hit = unnamed.find((u) => !u.used && [...mine].some((id) => u.ids.has(id)));
+    if (hit) hit.used = true;
+    return hit?.c;
+  };
   const ordinals = new Map<string, number>();
   let dispatches = 0;
   let found = 0;
@@ -173,17 +208,24 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
           lastTextMsg = undefined;
           if (b.id) toolNames.set(b.id, b.name);
           push({ role: "tool_call", name: b.name, content: prefix + JSON.stringify(b.input ?? {}, null, 2) });
-          if (DISPATCH_TOOLS.has(b.name) && b.id) {
+          if (b.id && (DISPATCH_TOOLS.has(b.name) || parented.has(b.id))) {
             dispatches++;
-            const child = byId.get(b.id);
-            const declared = (b.input as { subagent_type?: unknown } | undefined)?.subagent_type;
-            const type = child?.agentType ?? (typeof declared === "string" ? declared : "unknown");
+            const child = childFor(b.id);
+            const inp = b.input as { subagent_type?: unknown; skill?: unknown } | undefined;
+            const kind =
+              b.name === "Skill"
+                ? `forked skill ${typeof inp?.skill === "string" ? inp.skill : "unknown"}`
+                : `sub-agent ${child?.agentType ?? (typeof inp?.subagent_type === "string" ? inp.subagent_type : "unknown")}`;
             if (child) {
               found++;
-              const n = (ordinals.get(type) ?? 0) + 1;
-              ordinals.set(type, n);
-              walk(child.lines, `${prefix}[sub-agent ${type}#${n}] `, false);
-            } else push({ role: "assistant", content: `${prefix}[sub-agent ${type}] transcript not captured` });
+              const n = (ordinals.get(kind) ?? 0) + 1;
+              ordinals.set(kind, n);
+              walk(child.lines, `${prefix}[${kind}#${n}] `, false);
+            } else if (parented.has(b.id)) {
+              // No transcript: the parent stream still carries its tool traffic (not its text) — keep that.
+              walk(parented.get(b.id)!, `${prefix}[${kind}] `, false);
+              push({ role: "assistant", content: `${prefix}[${kind}] transcript not captured: its text and thinking are missing` });
+            } else push({ role: "assistant", content: `${prefix}[${kind}] transcript not captured` });
           }
         } else if (o.type === "user" && b.type === "tool_result") {
           lastTextMsg = undefined;
