@@ -22,7 +22,8 @@ All notable changes to this project are documented here. The format is based on
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
   schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
   assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
-  `artifact_text` / `artifact_json`, or a `question_option_count` assertion, also stamps v14.
+  `artifact_text` / `artifact_json`, or a `question_option_count`, `hook_output_contains` or `hook_output_not_contains`
+  assertion, also stamps v14.
 - **`authored: true` on a path outside `outputs/`, `uploads/` and the connected folders now fails
   evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
   the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
@@ -56,6 +57,22 @@ All notable changes to this project are documented here. The format is based on
   every line with that text.
 - **`lint-skill --strict-ignores` reports a suppression that suppressed nothing as WARN instead of INFO**, so
   `--strict --strict-ignores` fails on a stale marker, `--ignore-rule` or suppressions entry.
+- **`hook_output_contains` / `hook_output_not_contains` read what a command hook printed.** `{event, stream?, text |
+  matches}` checks the `stdout` / `stderr` (default either) of the hook's `hook_response` frames for `event`, so a hook
+  that fails open and says why on stderr while exiting 0 — which `hook_event_fired` passes — can be caught. `text` is a
+  literal (case-sensitive), `matches` a regex. Neither passes vacuously: no frame for the event fails both. The negative
+  key fails evidence-unavailable on a frame without the selected field, when a hook for the event started and never
+  sent a response (an async hook, or one still running when the run ended), when the agent truncated a frame's output,
+  or over output a redaction policy rewrote; a miss of the positive key is labelled the same way. On a redacted
+  stream a literal hit outside a token still counts. `matches` has no multiline flag: `^` / `$` anchor the whole
+  stream. Content-class: it grades live, on `verify-run` and on replay. A needle holding a control character is
+  refused at load (and by the bundled `scenario.py` lint); `record` warns when redaction rewrites the needle or a
+  stream the check reads, and its redaction self-check compares these keys' failures by key, since their excerpts
+  quote the rewritten stream; a run warns when more than one staged plugin can answer the event, or a
+  host-installed plugin can because a `protocol` run reads the real config dir (frames carry no plugin id); and the
+  same event, needle and stream in both keys is refused as a contradiction. Evidence excerpts are scrubbed of
+  secrets before they are cut, and always show the hit.
+
 - **`question_option_count` counts the options a gate offered whose label matches a regex, on every sub-question.**
   `{matches, exactly | min/max, when_question?, case_sensitive?}` passes only when the count satisfies the
   bound on every selected sub-question, so a rule over gates the model composes, such as "exactly one option
@@ -348,6 +365,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
+  and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
+  Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers
+  (a staged plugin declares runnable hooks).
 - **A record redaction policy that rewrites an untouched file's body no longer blocks the recording.** The
   cassette kept the file's raw pre-run hash next to the redacted body's hash, so `input_unmodified` on it read
   "modified in place" and the record-time verdict check refused to write the cassette. Its pre-run hash is now

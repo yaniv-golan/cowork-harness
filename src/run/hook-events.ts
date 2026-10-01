@@ -114,7 +114,7 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
                   : "the agent accepts it as a real event and loads a plugin's own hooks itself (whether a " +
                     "harness run ever reaches this event's trigger has not been verified here)"
               }. This harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: ` +
-                `\`hook_event_fired: ${name}\` / \`hook_event_blocked: ${name}\` grade it from the agent's own ` +
+                `\`hook_event_fired: ${name}\` / \`hook_event_blocked: ${name}\` (and \`hook_output_*\` for what it printed) grade it from the agent's own ` +
                 `hook_response frames (the harness passes --include-hook-events because this plugin declares ` +
                 `hooks), and if real Cowork installs a \`${name}\` hook of its own it is not reproduced here ` +
                 `(it installs hooks for PreToolUse, PostToolUse and UserPromptSubmit only). Assert the hook's ` +
@@ -205,5 +205,49 @@ export function checkHostHookConsent(pluginRoots: string[], allowHostHooks: bool
 export function logHostHookNotice(pluginRoots: string[], warn: (m: string) => void): void {
   for (const d of pluginRootsWithRunnableHooks(pluginRoots)) {
     warn(`::warning:: [protocol] ${d.root} hooks run as native host processes (${d.events.join(", ")}) — no container sandbox\n`);
+  }
+}
+
+/** `hook_output_*` reads every `hook_response` frame for an event, and a frame carries no plugin id — so the
+ *  output cannot be attributed to the plugin under test when another hook can answer the same event: another
+ *  hook's text can satisfy `hook_output_contains` or fail `hook_output_not_contains`. Two such cases:
+ *   - more than one staged plugin declares the asserted event;
+ *   - `operatorHooksVisible`: the agent reads the operator's real config dir (at `protocol` without the sealed
+ *     managed config), so a plugin installed on the host runs its hooks in the same session. Its SessionStart /
+ *     Setup frames stream even without --include-hook-events, and with that flag every event's frames do.
+ *  (`allow_host_hooks` is NOT such a case: it is consent for the staged plugin's own hooks to run as native host
+ *  processes at `protocol`, not a second source of hooks.) Emitted regardless of `--compact`: it qualifies what a
+ *  verdict means, like the host-hook disclosure, rather than decorating the run. Never throws. */
+export function warnAmbiguousHookOutput(
+  pluginRoots: string[],
+  asserts: ReadonlyArray<{ hook_output_contains?: { event: string }; hook_output_not_contains?: { event: string } }>,
+  operatorHooksVisible: boolean,
+  warn: (msg: string) => void,
+): void {
+  const events = new Set<string>();
+  for (const a of asserts)
+    for (const v of [a.hook_output_contains, a.hook_output_not_contains]) if (v && typeof v.event === "string") events.add(v.event);
+  if (events.size === 0) return;
+  let declaring: Array<{ root: string; events: string[] }> = [];
+  try {
+    declaring = pluginRootsWithRunnableHooks(pluginRoots);
+  } catch {
+    return;
+  }
+  for (const ev of [...events].sort()) {
+    const roots = declaring.filter((d) => d.events.includes(ev)).map((d) => d.root);
+    const reasons: string[] = [];
+    if (roots.length > 1) reasons.push(`${roots.length} staged plugins declare \`${ev}\` (${roots.join(", ")})`);
+    if (operatorHooksVisible)
+      reasons.push(
+        "this protocol run reads your real config dir (no sealed managed config), so a hook from a plugin installed on this machine may also answer it",
+      );
+    if (reasons.length)
+      warn(
+        `::warning:: [hooks] hook_output_* on \`${ev}\`: ${reasons.join("; ")} — hook_response frames carry no plugin id, ` +
+          `so the output graded cannot be attributed to one hook. Stage only the plugin under test${
+            operatorHooksVisible ? " and seal the config dir (COWORK_MANAGED_CONFIG=1 with a token)" : ""
+          }, or match text only it prints.\n`,
+      );
   }
 }
