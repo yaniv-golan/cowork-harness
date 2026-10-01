@@ -113,7 +113,6 @@ export interface PlannedScenario {
   cost: ScheduleCostJson["items"][number] & {
     excluded: NonNullable<CostHistory["excluded"]>;
     distinctSkillHashes: number;
-    distinctTiers: number;
   };
   rateHistory: Omit<RowHistoryLoad, "rows" | "relaxedRows">;
   rows: PlannedRow[];
@@ -252,7 +251,6 @@ export function planEval(input: PlanInput): EvalPlan {
         ...costJson.items[si],
         excluded: s.cost.excluded ?? { notRun: 0, tier: 0, baseline: 0, turn: 0, hillclimb: 0 },
         distinctSkillHashes: s.cost.distinctSkillHashes,
-        distinctTiers: s.cost.distinctTiers,
       },
       rateHistory,
       rows,
@@ -312,7 +310,12 @@ export function planEval(input: PlanInput): EvalPlan {
 const usd = (x: number) => `$${x.toFixed(4)}`;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const pp = (x: Mdd) => (typeof x === "number" ? `${Math.round(x * 1000) / 10}pp` : x === "none" ? "none at this N" : "n/a");
-const rangeText = (r: [Mdd, Mdd]) => (r[0] === r[1] ? pp(r[0]) : `${pp(r[0])} to ${pp(r[1])}`);
+/** A range over the interval. An end that is `n/a` (no change possible in that direction) adds nothing, so only
+ *  the other end is printed. */
+const rangeText = (r: [Mdd, Mdd]) => {
+  const ends = [...new Set(r.filter((x) => x !== "n/a"))];
+  return ends.length === 0 ? "n/a" : ends.length === 1 ? pp(ends[0]) : `${pp(ends[0])} to ${pp(ends[1])}`;
+};
 
 function searchText(s: PlannedSearch): string {
   if (s.n === "impossible") return "impossible (the effect leaves 0–100% at this rate)";
@@ -323,8 +326,10 @@ function searchText(s: PlannedSearch): string {
   if (s.scheduleReps !== undefined && s.scheduleReps !== s.n) parts.push(`schedule ${s.scheduleReps} for ${s.n} valid`);
   if (s.cost)
     parts.push(
-      (s.cost.scenarioP50Usd !== undefined ? `${usd(s.cost.scenarioP50Usd)} p50 this scenario, ` : "this scenario unpriced, ") +
-        `${usd(s.cost.evalP50Usd)} p50 whole eval${s.cost.lowerBound ? " (LOWER BOUND)" : ""}`,
+      (s.cost.scenarioP50Usd !== undefined
+        ? `${usd(s.cost.scenarioP50Usd)} p50 / ${usd(s.cost.scenarioP95Usd!)} p95 this scenario, `
+        : "this scenario unpriced, ") +
+        `${usd(s.cost.evalP50Usd)} p50 / ${usd(s.cost.evalP95Usd)} p95 whole eval${s.cost.lowerBound ? " (LOWER BOUND)" : ""}`,
     );
   return `${parts[0]} (${parts.slice(1).join("; ")})`.replace(" ()", "");
 }
@@ -378,10 +383,15 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
       L.push(`  cost: no priced run on tier ${s.tier} and baseline ${s.baseline} — contributes $0 (the total is a LOWER BOUND)${cause}`);
     if (r.budgetGateWorstUsd !== undefined)
       L.push(
-        `  budget-gate basis (what --max-budget-usd refuses on): worst ${usd(r.budgetGateWorstUsd)} over ${r.budgetGatePricedRuns} priced run(s) of this scenario name on ANY tier, baseline or turn`,
+        `  budget-gate basis (what --max-budget-usd refuses on): worst ${usd(r.budgetGateWorstUsd)} over ${r.budgetGatePricedRuns} priced run(s) of this scenario name on ANY tier, baseline or turn, hillclimb runs included`,
       );
     if (c.distinctSkillHashes > 1)
       L.push(`  ⚠ the cost history spans ${c.distinctSkillHashes} skill versions: costs from different versions are pooled`);
+    const elsewhere = [
+      c.excluded.tier ? `${c.excluded.tier} run(s) on other tiers` : "",
+      c.excluded.baseline ? `${c.excluded.baseline} on other baselines` : "",
+    ].filter(Boolean);
+    if (elsewhere.length) L.push(`  left out of the cost basis: ${elsewhere.join(", ")} (the budget gate still counts them)`);
     const left = [
       c.excluded.turn ? `${c.excluded.turn} resumed turn(s)` : "",
       c.excluded.hillclimb ? `${c.excluded.hillclimb} hillclimb run(s)` : "",
@@ -437,16 +447,28 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
       L.push(`${head}: ${rateText(row)} · ${mdd}`);
       if (row.target) {
         const t = row.target;
+        const levels = (l: PlannedLevels, p80: PlannedLevels) =>
+          `possible ${searchText(l.possible)}; confirmed (single row) ${searchText(l.confirmedSingleRow)}; ` +
+          `80% power: possible ${searchText(p80.possible)}, confirmed ${searchText(p80.confirmedSingleRow)}`;
         for (const dir of ["drop", "rise"] as const) {
           const atR = t.powerAtReps[dir];
-          L.push(
-            `      ${t.effectPp}pp ${dir}: possible ${searchText(t[dir].possible)}; confirmed (single row) ${searchText(t[dir].confirmedSingleRow)}; ` +
-              `80% power: possible ${searchText(t.nForPower80[dir].possible)}, confirmed ${searchText(t.nForPower80[dir].confirmedSingleRow)}` +
-              (typeof atR.possible === "number" ? `; power at --reps ${plan.reps} ≈ ${pct(atR.possible)}` : ""),
-          );
+          if (t[dir].possible.n === "impossible" && t[dir].confirmedSingleRow.n === "impossible")
+            L.push(`      ${t.effectPp}pp ${dir}: impossible at the point estimate (the effect leaves 0–100%)`);
+          else
+            L.push(
+              `      ${t.effectPp}pp ${dir}: ${levels(t[dir], t.nForPower80[dir])}` +
+                (typeof atR.possible === "number" ? `; power at --reps ${plan.reps} ≈ ${pct(atR.possible)}` : ""),
+            );
+          const b = t.atBound?.[dir];
+          if (b)
+            L.push(
+              `      if the true rate is ${pct(b.p)} (the interval's ${dir === "rise" ? "lower" : "upper"} end), a ${t.effectPp}pp ${dir}: ` +
+                levels({ possible: b.possible, confirmedSingleRow: b.confirmedSingleRow }, b.nForPower80),
+            );
         }
       }
-      for (const note of row.notes) L.push(`      ${note}`);
+      // The interval-end N is printed in full above; the estimator's one-line note would repeat it.
+      for (const note of row.notes) if (!(row.target?.atBound && note.startsWith("if the true rate is"))) L.push(`      ${note}`);
     }
   }
 
@@ -481,6 +503,11 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
       L.push(
         `  ${seq.byRow.length - reached.length} of ${seq.byRow.length} row(s) with a known rate reach a ${plan.targetEffectPp}pp change at no look within --reps ${plan.reps}`,
       );
+    // notes[0] restates the scheme the header line gives, except its spacing caveat: keep that sentence.
+    const spacing = seq.notes[0]?.match(/A look every block[^.]*\./)?.[0];
+    if (spacing) L.push(`  ${spacing}`);
+    if (plan.correction === "bh")
+      L.push("  bh is not sequentially valid: the preview uses holm within a look, whatever --correction the fixed design uses");
     for (const note of seq.notes.slice(1)) L.push(`  ${note}`);
   }
   for (const note of plan.notes) L.push(`[eval] note: ${note}`);

@@ -336,7 +336,9 @@ describe("eval --dry-run: the plan's numbers", () => {
     // The text is drawn from the payload: the same N, its power, and the cost at that N.
     const text = planText(plan).join("\n");
     expect(text).toMatch(/row \[2\] tool_called: rate 29% \(4\/14, 95% CI 12%–55%\)/);
-    expect(text).toMatch(/50pp rise: possible N=12 \(power ≈ 61%; \$24\.0000 p50 this scenario, \$24\.0000 p50 whole eval\)/);
+    expect(text).toMatch(
+      /50pp rise: possible N=12 \(power ≈ 61%; \$24\.0000 p50 \/ \$24\.0000 p95 this scenario, \$24\.0000 p50 \/ \$24\.0000 p95 whole eval\)/,
+    );
     expect(text).toMatch(/confirmed \(single row\) N=18 \(stable from 20; power ≈ 59%/);
     expect(text).toMatch(/fixed design \(what eval runs today\), tuned section: 7 row\(s\) in the family/);
     expect(text).toMatch(/ceiling: a rise is undetectable at any N at the point estimate/);
@@ -581,4 +583,81 @@ describe.runIf(process.platform !== "win32")("eval --dry-run: a signal mid-plan"
     expect(snapRoot).toMatch(/cwh-eval-plan-/);
     expect(existsSync(snapRoot)).toBe(false);
   }, 60_000);
+});
+
+describe("eval --dry-run: the plan's text", () => {
+  it("a 3/3 ceiling: the rise is impossible at the point estimate, and the N at the interval's lower end is printed", async () => {
+    const { scen, a, b } = setup();
+    const rows = [1, 2, 3].map(() => historyRun("csv-metrics", { costUsd: 1 }));
+    const { plan } = await planEvalDryRun(dry(scen, a, b, ["--target-effect", "30pp"]), planDeps(rows));
+    const text = planText(plan).join("\n");
+    expect(text).toMatch(/row \[0\] result: rate 100% \(3\/3, 95% CI 44%–100%, THIN\)/);
+    expect(text).toMatch(/30pp rise: impossible at the point estimate \(the effect leaves 0–100%\)/);
+    expect(text).toMatch(
+      /if the true rate is 44% \(the interval's lower end\), a 30pp rise: possible N=\d+ .*; confirmed \(single row\) .*; 80% power: possible .*, confirmed /,
+    );
+    expect(text).not.toMatch(/possible impossible/);
+    expect(text).not.toMatch(/to n\/a/);
+  });
+
+  it("each target N prints its p50 and p95 cost, for the scenario and the whole eval", async () => {
+    const { scen, a, b } = setup();
+    const rows = Array.from({ length: 14 }, (_, i) => historyRun("csv-metrics", { costUsd: 1 + (i % 2), fail: i < 10 ? [2] : [] }));
+    const { plan } = await planEvalDryRun(dry(scen, a, b, ["--target-effect", "50pp"]), planDeps(rows));
+    // N=12, per-run p50 $2 (floor index of 7 x $1, 7 x $2) and p95 $2: 2 x 12 x $2 = $48 for both.
+    expect(planText(plan).join("\n")).toMatch(
+      /50pp rise: possible N=12 \(power ≈ 61%; \$48\.0000 p50 \/ \$48\.0000 p95 this scenario, \$48\.0000 p50 \/ \$48\.0000 p95 whole eval\)/,
+    );
+  });
+
+  it("the sequential preview states its spacing caveat, and under bh that bh is not sequentially valid", async () => {
+    const { scen, a, b } = setup();
+    const bh = planText((await planEvalDryRun(dry(scen, a, b), planDeps([]))).plan).join("\n");
+    expect(bh).toMatch(/A look every block is the most conservative spacing/);
+    expect(bh).toMatch(/bh is not sequentially valid: the preview uses holm within a look/);
+    const holm = planText((await planEvalDryRun(dry(scen, a, b, ["--correction", "holm"]), planDeps([]))).plan).join("\n");
+    expect(holm).not.toMatch(/not sequentially valid/);
+  });
+
+  it("history on other tiers or baselines is named as left out of the cost basis; the gate basis says it includes hillclimb runs", async () => {
+    const { scen, a, b } = setup();
+    const rows = [
+      historyRun("csv-metrics", { costUsd: 1 }),
+      historyRun("csv-metrics", { costUsd: 9, tier: "hostloop" }),
+      historyRun("csv-metrics", { costUsd: 7, baseline: "0.0.1" }),
+    ];
+    const { plan } = await planEvalDryRun(dry(scen, a, b), planDeps(rows));
+    const text = planText(plan).join("\n");
+    expect(text).toMatch(/left out of the cost basis: 1 run\(s\) on other tiers, 1 on other baselines/);
+    expect(text).toMatch(/on ANY tier, baseline or turn, hillclimb runs included/);
+    expect(plan.scenarios[0].cost).not.toHaveProperty("distinctTiers");
+  });
+
+  it("the gate notice says its BASIS is wider, not its figure", async () => {
+    const { scen, a, b } = setup();
+    const log: string[] = [];
+    await planEvalDryRun(dry(scen, a, b, ["--max-budget-usd", "20"]), planDeps([historyRun("csv-metrics", { costUsd: 1 })], { log }));
+    expect(log.join("\n")).toMatch(
+      /on a wider basis than the plan's worstObservedUsd \(any tier, baseline or turn, hillclimb runs included\), so it can be larger/,
+    );
+  });
+
+  it("a real eval's refusal text names the JSON field it can be read from, not a plan it does not print", async () => {
+    const { scen, a, b } = setup();
+    const p = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval"),
+      "--quiet",
+      "--max-budget-usd",
+      "1",
+    ]);
+    const err = (await runEval(p, planDeps([historyRun("csv-metrics", { costUsd: 1 })])).catch((e: unknown) => e)) as Error;
+    expect(err.message).toMatch(/plan\.cost\.budgetGateWorstUsd in the JSON envelope/);
+    expect(err.message).not.toMatch(/the plan's budgetGateWorstUsd/);
+  });
 });

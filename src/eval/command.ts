@@ -644,7 +644,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   }
 
   // `--max-budget-usd`: the batch gate `record` uses, over this schedule (2 x reps runs of every scenario).
-  if (args.maxBudgetUsd !== undefined) budgetGate(args, deps, ctx, indexRows, runsDir, plan);
+  if (args.maxBudgetUsd !== undefined) budgetGate(args, deps, indexRows, runsDir, plan!);
 
   return { snaps, sessions, sigs, skill, evalFiles, ...(plan ? { plan } : {}) };
 }
@@ -655,27 +655,26 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
 function budgetGate(
   args: EvalArgs,
   deps: EvalDeps,
-  ctx: EvalContext,
   indexRows: readonly RunIndexRow[],
   runsDir: { runsDir: string; runsDirRedirected: boolean },
-  plan: EvalPlan | undefined,
+  plan: EvalPlan,
 ): void {
   const cap = args.maxBudgetUsd!;
-  const jobs = 2 * args.reps;
-  const items = ctx.scenarios.map((s) => ({ scenario: s.scenario.name, jobs }));
+  // The schedule's jobs come from the plan, the one place they are computed, so the gate's estimate and
+  // `plan.cost` can never count a different schedule.
+  const items = plan.cost.items.map((i) => ({ scenario: i.scenario, jobs: i.jobs }));
   const c = checkBatchBudget(items, cap, { rows: indexRows, runsDir });
   // Recorded BEFORE any refusal, so the `budget` key is on the refusal's envelope too.
   recordBudgetStatus(c.status);
   if (c.noHistoryWarning !== undefined) deps.log(c.noHistoryWarning + noHistoryCauseText(runsDir));
-  const total = items.length * jobs;
   const basis =
-    `${total} run(s) (2 arms × ${args.reps} reps × ${items.length} scenario(s)), each scenario at its worst observed run on the gate's ` +
-    `basis — any tier, baseline or turn, so wider than the plan's worstObservedUsd — `;
+    `${plan.cost.jobs} run(s) (2 arms × ${args.reps} reps × ${items.length} scenario(s)), each scenario at its worst observed run on ` +
+    `a wider basis than the plan's worstObservedUsd (any tier, baseline or turn, hillclimb runs included), so it can be larger — `;
   const usd = (x: number) => `$${x.toFixed(4)}`;
   if (c.refuse)
     throw new EvalBudgetRefusal(
       `--max-budget-usd ${usd(cap)} refused before any run: this eval schedules ${basis}up to ${usd(c.estimate.known)} ` +
-        `(the plan's budgetGateWorstUsd)${c.status.enforced === "lower_bound" ? `, and that is a LOWER BOUND: ${c.status.unpriced.length} scenario(s) have no priced run` : ""}.`,
+        `(plan.cost.budgetGateWorstUsd in the JSON envelope)${c.status.enforced === "lower_bound" ? `, and that is a LOWER BOUND: ${c.status.unpriced.length} scenario(s) have no priced run` : ""}.`,
       `Raise the cap, lower --reps, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history: the eval is never stopped mid-way, and judge spend is not counted.`,
       c.status,
       plan,
