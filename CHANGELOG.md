@@ -33,7 +33,6 @@ All notable changes to this project are documented here. The format is based on
   now says history is read from that dir's index only and suggests reusing one runs dir across
   invocations — a fresh dir per invocation leaves every scenario unpriced every time. Stated once per
   invocation, not once per scenario. The wording is unchanged at the default runs dir.
-### Fixed
 
 - **`critique`'s own files are secret-scrubbed.** `critique-report.json`, `critique-evidence-package.txt`,
   `critique-salvage.json` and the `--out` file (including `--corpus-only --out`) were written without the
