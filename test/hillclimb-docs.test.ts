@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
+  HILLCLIMB_REGRADE_VALUE_FLAGS,
   HILLCLIMB_RUN_BOOLEAN_FLAGS,
   HILLCLIMB_RUN_REPEATED_FLAGS,
   HILLCLIMB_RUN_USAGE,
@@ -125,7 +126,7 @@ describe("the skill's hillclimb reference", () => {
 
   it("names every `hillclimb regrade` flag, and shows `--fill-refs` on a command line", () => {
     const ref = doc(REF);
-    for (const f of HILLCLIMB_REGRADE_BOOLEAN_FLAGS) expect(ref, f).toContain(`\`${f}`);
+    for (const f of [...HILLCLIMB_REGRADE_BOOLEAN_FLAGS, ...HILLCLIMB_REGRADE_VALUE_FLAGS, "--case"]) expect(ref, f).toContain(`\`${f}`);
     expect(ref).toMatch(/^cowork-harness hillclimb regrade .*--fill-refs/m);
   });
 });
