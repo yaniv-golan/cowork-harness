@@ -633,6 +633,21 @@ describe("repRowValues", () => {
       "cites a source": 0,
     });
   });
+  it("a MULTI-key assertion's roll-up keeps a refused rep as a fail; its claim rows still lose it", () => {
+    // `{semantic_matches, result}`: the grade's one `pass` is the AND of both keys, so a `result` that failed
+    // would be dropped with the refusal. Only the claims (about the semantic key alone) are excluded.
+    const multi = { ...semAssertion, result: "success" } as Assertion;
+    const both = [plainAssertion, multi];
+    const mrows = scenarioRows("s1", both);
+    const r = validRep();
+    r.assertions![1] = { assertion: multi, pass: false, semanticEvidence: { reason: "in_scope_truncated" } };
+    expect(byLabel(repRowValues(mrows, both, classifyRep({ result: r }, expected), r))).toEqual({
+      result: 1,
+      semantic_matches: 0,
+      "names the owner.": "x:evidence_unavailable",
+      "cites a source": "x:evidence_unavailable",
+    });
+  });
   describe("a runs.jsonl written before the refusal reason was kept", () => {
     // min_pass is 1 on `semAssertion`: one passing claim is enough, so a graded verdict would be a pass.
     it("a FAIL whose claims met min_pass can only have been a refusal: excluded as `unrecorded`", () => {

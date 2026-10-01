@@ -368,9 +368,12 @@ export type RowExclusion =
   | "claims_missing"
   /** A semantic_matches assert whose verdict REFUSED for unavailable evidence (`semanticEvidence.reason` is
    *  anything but `graded`): the rep is neither a pass nor a fail on that assertion, so — like a
-   *  `judge_invalid` grade — it leaves that assertion's rows (roll-up included). Claims recorded beside such
-   *  a refusal (a result written before the judge was skipped for it) were graded over incomplete evidence
-   *  and are not counted either. */
+   *  `judge_invalid` grade — it leaves that assertion's claim rows, and its roll-up row when
+   *  `semantic_matches` is the assertion's only key. Claims recorded beside such a refusal (a result written
+   *  before the judge was skipped for it) were graded over incomplete evidence and are not counted either.
+   *  A MULTI-key assertion's roll-up keeps its fail: the grade keeps one `pass` for the AND of every key, so
+   *  a sibling key that failed would be dropped with it — and a refusal that hides a real fail is the
+   *  direction an A/B comparison must not err in. */
   | "evidence_unavailable";
 
 type Grade = NonNullable<ClassifiableResult["assertions"]>[number];
@@ -425,7 +428,8 @@ export function repRowValues(
     const g = grades[row.assertionIndex];
     if (g === undefined) return { row, excluded: "grade_missing" };
     if (!sameAssertion(g.assertion, scenarioAssertions[row.assertionIndex])) return { row, excluded: "grade_misaligned" };
-    if (semanticRefusalReason(g) !== undefined) return { row, excluded: "evidence_unavailable" };
+    if (semanticRefusalReason(g) !== undefined && (row.kind === "claim" || Object.keys(g.assertion).length === 1))
+      return { row, excluded: "evidence_unavailable" };
     if (row.kind !== "claim") return { row, value: bit(g.pass) };
     if (g.semanticClaims === undefined) return { row, excluded: "claims_missing" };
     const claim = g.semanticClaims.find((sc) => sc.index === row.claimIndex);

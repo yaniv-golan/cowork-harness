@@ -281,6 +281,63 @@ describe("eval: end to end over a fake runner", () => {
     expect(readFileSync(join(out.evalDir, "report.json")).equals(js)).toBe(true);
   });
 
+  describe("refusals that differ between the arms", () => {
+    const SEM = "smoke-semantic-evidence-files";
+    const refuse = (r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) => {
+        if (!x.assertion.semantic_matches) return x;
+        const { semanticClaims: _c, ...rest } = x;
+        void _c;
+        return { ...rest, pass: false, semanticEvidence: { reason: "in_scope_truncated" } };
+      }),
+    });
+    const refusing = (arm: string, reps: number[]) =>
+      fakeRunner((s, r) => (s.scenario.name === SEM && s.job.arm === arm && reps.includes(s.job.rep) ? refuse(r) : r));
+    const semRows = (rep: Awaited<ReturnType<typeof runEval>>["report"]) =>
+      [...rep.sections.tuned!.rows, ...rep.sections.tuned!.derivedRows].filter((r) => r.scenario === SEM && r.assertionIndex === 3);
+
+    it("the CANDIDATE refusing more pushes the rows below threshold: insufficient_refusals, a warning, exit 1 without --fail-on", async () => {
+      const { scen, a, b } = setup({ semantic: true });
+      const out = await runEval(args(scen, a, b), deps(refusing("after", [1, 2])));
+      // On the previous build these rows were plain `insufficient` and the eval exited 0 — the drop hidden.
+      expect(semRows(out.report).map((r) => r.label)).toEqual(Array(3).fill("insufficient_refusals"));
+      expect(out.report.summary.refusalImbalances).toEqual([
+        { scenario: SEM, assertionIndex: 3, a: { refused: 0, scored: 5 }, b: { refused: 2, scored: 5 }, gates: true },
+      ]);
+      expect(out.report.summary.refusalsGated).toBe(true);
+      expect(out.report.summary.failOnHit).toBe(false); // not a drop: its own exit-1 reason
+      expect(out.report.summary.exitCode).toBe(1);
+      const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+      expect(md).toContain(`⚠ ${SEM} #3 (semantic_matches) refused for unavailable evidence: A 0/5, B 2/5 scored reps`);
+      expect(md).toContain("insufficient_refusals");
+    });
+
+    it("the BASELINE refusing more warns but does not gate", async () => {
+      const { scen, a, b } = setup({ semantic: true });
+      const out = await runEval(args(scen, a, b), deps(refusing("before", [1, 2])));
+      expect(semRows(out.report).map((r) => r.label)).toEqual(Array(3).fill("insufficient"));
+      expect(out.report.summary.refusalImbalances).toEqual([
+        { scenario: SEM, assertionIndex: 3, a: { refused: 2, scored: 5 }, b: { refused: 0, scored: 5 }, gates: false },
+      ]);
+      expect(out.report.summary.refusalsGated).toBe(false);
+      expect(out.report.summary.exitCode).toBe(0);
+    });
+
+    it("balanced, infrequent refusals raise no warning and no gate", async () => {
+      const { scen, a, b } = setup({ semantic: true });
+      // One refusal per arm in 10 reps: a gap of 0 and a 10% share.
+      const both = await runEval(
+        args(scen, a, b, ["--reps", "10"]),
+        deps(fakeRunner((s, r) => (s.scenario.name === SEM && s.job.rep === 1 ? refuse(r) : r))),
+      );
+      expect(semRows(both.report).every((r) => r.n1 === 9 && r.n2 === 9)).toBe(true);
+      expect(both.report.summary.refusalImbalances).toEqual([]);
+      expect(both.report.summary.refusalsGated).toBe(false);
+      expect(both.report.summary.exitCode).toBe(0);
+    });
+  });
+
   it("a collapsed row is a drop: reported with evidence links, but the DEFAULT does not gate (exit 0)", async () => {
     const { scen, a, b } = setup();
     // Flip: arm `after` fails `tool_called: Bash` (index 2) in every rep.
