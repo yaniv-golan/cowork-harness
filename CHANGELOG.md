@@ -48,7 +48,8 @@ All notable changes to this project are documented here. The format is based on
   still fails `--strict`, and no `SKILL.md` edit is needed, so no cassette goes stale (keep the file outside the
   plugin). A malformed file or an unknown or provable rule is a usage error (exit 2). In `--json`, a finding a
   file entry suppressed carries `"suppressed": {"by": "file", …, "source": "<file>#<entry index>"}`; `by` gains the
-  value `"file"`.
+  value `"file"`. When one line text has more findings than entries, the unsuppressed finding's message lists
+  every line with that text.
 - **`lint-skill --strict-ignores` reports a suppression that suppressed nothing as WARN instead of INFO**, so
   `--strict --strict-ignores` fails on a stale marker, `--ignore-rule` or suppressions entry.
 
@@ -187,6 +188,9 @@ All notable changes to this project are documented here. The format is based on
   `error.code` is absent on every other error.
 
 ### Changed
+
+- **`lint-skill` lints a file once when two arguments reach it** (a relative and an absolute path to the same
+  skill, or a symlinked alias). It used to report each finding once per argument.
 
 - **Verdict change: a top-level `Skill` result is now captured up to 32,768 characters, up from 10,240.**
   This closes a false green. A `tool_result_not_contains` / `tool_result_not_matches` used to pass over the

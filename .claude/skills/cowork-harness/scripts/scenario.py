@@ -3289,9 +3289,11 @@ def _suppressions_file(value):
         raise argparse.ArgumentTypeError(f"--suppressions {value}: {msg}")
 
     try:
-        doc = json.loads(Path(value).read_text(encoding="utf-8"))
+        doc = json.loads(Path(value).read_text(encoding="utf-8-sig"))
     except OSError as e:
         bad(f"cannot read the file ({e.strerror or e})")
+    except RecursionError:
+        bad("not valid JSON (nested too deeply)")
     except (UnicodeDecodeError, ValueError) as e:
         bad(f"not valid JSON ({e})")
     if not isinstance(doc, dict):
@@ -3299,7 +3301,7 @@ def _suppressions_file(value):
     extra = sorted(set(doc) - _SUPPRESSIONS_TOP_KEYS)
     if extra:
         bad(f"unknown top-level key(s): {', '.join(extra)}; allowed: version, suppressions")
-    if doc.get("version") != 1:
+    if not (type(doc.get("version")) is int and doc.get("version") == 1):
         bad(f"`version` must be 1 (got {json.dumps(doc.get('version'))})")
     items = doc.get("suppressions")
     if not isinstance(items, list):
@@ -3502,6 +3504,13 @@ def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
             if pick is not None:
                 pick["used"] = True
                 f.suppressed = {"by": "file", "marker_line": None, "reason": pick["reason"], "source": pick["source"]}
+    for f, root in suppressible:
+        for sp in specs:
+            if sp["rule"] == f.rule and (sp["glob"] is None or _glob_matches(sp["glob"], f.file, root)):
+                sp["used"] = True
+                if f.suppressed is None:
+                    f.suppressed = {"by": "flag", "marker_line": None, "reason": None}
+    if entries:
         # A class with more findings than entries reds on one of them, which need not be the newly added site:
         # name every line of the class on each unsuppressed one.
         for f, root in suppressible:
@@ -3518,13 +3527,6 @@ def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
                 f"{len(same)} finding(s) on lines {', '.join(str(n) for n in same)} — the unsuppressed one need "
                 "not be the newest site.)"
             )
-
-    for f, root in suppressible:
-        for sp in specs:
-            if sp["rule"] == f.rule and (sp["glob"] is None or _glob_matches(sp["glob"], f.file, root)):
-                sp["used"] = True
-                if f.suppressed is None:
-                    f.suppressed = {"by": "flag", "marker_line": None, "reason": None}
     unused = []
     for rg in ranges:
         for rid in rg["rules"]:
@@ -3568,6 +3570,9 @@ def cmd_lint_skill(args):
     # The exact lines each finding was computed from, so a suppressions-file `match` compares against the same
     # text the linter saw (never a re-read that could differ).
     lines_by_file = {}
+    # A file reached through two arguments (`sk` and `$PWD/sk`, a symlinked alias) is linted once, so its findings,
+    # markers and suppressions are never doubled.
+    linted = set()
     n_files = 0
     for arg in args.paths:
         start = len(all_findings)
@@ -3584,7 +3589,11 @@ def cmd_lint_skill(args):
                 )
             )
             continue  # an ERROR, never suppressible, so it needs no tag
+        if md is not None and str(Path(md).resolve()) in linted:
+            md = None
+        hooks = [hp for hp in hooks if str(Path(hp).resolve()) not in linted]
         if md is not None:
+            linted.add(str(Path(md).resolve()))
             n_files += 1
             md_lines = Path(md).read_text(encoding="utf-8").splitlines()
             lines_by_file.setdefault(md, md_lines)
@@ -3596,28 +3605,22 @@ def cmd_lint_skill(args):
             all_findings.extend(_lint_skill_corpus_size(md))
             all_findings.extend(_lint_skill_sizes(md))
         for hp in hooks:
+            linted.add(str(Path(hp).resolve()))
             n_files += 1
             hp_lines = Path(hp).read_text(encoding="utf-8").splitlines()
             lines_by_file.setdefault(hp, hp_lines)
             all_findings.extend(_lint_skill_text(hp, hp_lines, force_json=True))
             all_findings.extend(_lint_hook_events(hp))
         tagged.extend((f, root) for f in all_findings[start:])
-    # One finding reported twice (the same skill reached through two arguments) would need two entries to
-    # suppress; drop the repeat before suppression.
-    seen = set()
-    dropped = set()
-    kept = []
-    for f, root in tagged:
-        key = (f.rule, str(Path(f.file).resolve()), f.line, f.message)
-        if key in seen:
-            dropped.add(id(f))
-            continue
-        seen.add(key)
-        kept.append((f, root))
-    if dropped:
-        all_findings = [f for f in all_findings if id(f) not in dropped]
-    tagged = kept
-    unused = _apply_suppressions(tagged, ranges, args.ignore_rule or [], args.suppressions or [], lines_by_file)
+    # The same suppressions file named twice must not double its entries (a repeated CI glob would then absorb a
+    # new paste): each file counts once.
+    files, seen_files = [], set()
+    for sf in args.suppressions or []:
+        key = str(Path(sf["path"]).resolve())
+        if key not in seen_files:
+            seen_files.add(key)
+            files.append(sf)
+    unused = _apply_suppressions(tagged, ranges, args.ignore_rule or [], files, lines_by_file)
     # --strict-ignores: a suppression that suppressed nothing (marker, --ignore-rule or file entry) is a WARN
     # for this run, so `--strict` fails on it and the printed severity says why.
     if args.strict_ignores:

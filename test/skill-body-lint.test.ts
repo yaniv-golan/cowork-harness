@@ -1041,11 +1041,70 @@ describe.skipIf(!havePython)("lint-skill — per-rule suppression", () => {
       expect(unused(r)).toEqual([]);
     });
 
-    it("the same skill reached twice is linted once for suppression: one entry covers its one finding", () => {
-      const d = namedSkill(["# S", "", ...fence(OTHER)]);
-      const r = run([d, join(d, "SKILL.md"), "--json", "--strict", "--suppressions", supFile([entry(OTHER)])]);
+    it("a skill reached through two spellings is linted once: no doubled finding, and its used marker is not reported unused", () => {
+      const d = namedSkill(["# S", "", START, ...fence(FWD), END, ...fence(OTHER)]);
+      const parent = join(d, "..");
+      const r = spawnSync(
+        py,
+        [SCRIPT, "lint-skill", "sk", d, "--json", "--strict", "--strict-ignores", "--suppressions", supFile([entry(OTHER)])],
+        {
+          encoding: "utf8",
+          cwd: parent,
+        },
+      );
+      const findings = JSON.parse(r.stdout || "[]") as SFinding[];
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(findings.filter((f) => f.rule === "plugin-root-in-vm-bash")).toHaveLength(2);
+      expect(findings.filter((f) => f.rule === "lint-skill-ignore-unused")).toEqual([]);
+    });
+
+    it("two genuine findings on one line stay two (each needs its own entry)", () => {
+      const d = namedSkill(["# S", "", 'Dispatch subagent_type: "foo-agent" then again subagent_type: "foo-agent".', ""]);
+      const r = run([d, "--json"]);
+      expect(r.findings.filter((f) => f.rule === "subagent-type-unknown")).toHaveLength(2);
+    });
+
+    it("the same suppressions file named twice counts once, so a pasted copy still reds", () => {
+      const d = namedSkill(["# S", "", ...fence(OTHER), ...fence(OTHER)]);
+      const f = supFile([entry(undefined)]);
+      expect(run([d, "--strict", "--suppressions", f]).status).toBe(1);
+      expect(run([d, "--strict", "--suppressions", f, "--suppressions", f]).status).toBe(1);
+      // Two DIFFERENT files each contribute their entries; the `=` form works too.
+      expect(run([d, "--strict", `--suppressions=${f}`, "--suppressions", supFile([entry(undefined)])]).status).toBe(0);
+    });
+
+    it("the line-list note goes only on a finding left unsuppressed (not one an --ignore-rule then covered)", () => {
+      const d = namedSkill(["# S", "", ...fence(OTHER), ...fence(OTHER)]);
+      const r = run([d, "--json", "--suppressions", supFile([entry(OTHER)]), "--ignore-rule", "plugin-root-in-vm-bash"]);
+      const byFlag = flagged(r).find((x) => x.suppressed?.by === "flag");
+      expect(byFlag).toBeDefined();
+      expect(byFlag!.message).not.toMatch(/Suppressions file:/);
+    });
+
+    it("CRLF lines with tabs and trailing spaces match a stripped `match`", () => {
+      const parent = mkdtempSync(join(tmpdir(), "cwh-sup-crlf-"));
+      mkdirSync(join(parent, "sk"));
+      writeFileSync(join(parent, "sk", "SKILL.md"), ["# S", "", "```bash", `\t${OTHER}   `, "```", ""].join("\r\n"));
+      const r = run([join(parent, "sk"), "--json", "--strict", "--suppressions", supFile([entry(OTHER)])]);
       expect(r.status, JSON.stringify(r.findings)).toBe(0);
-      expect(flagged(r)).toHaveLength(1);
+      expect(flagged(r)[0]!.suppressed).toMatchObject({ by: "file" });
+    });
+
+    it("a hooks.json finding is matched against the hooks file's own line", () => {
+      const d = namedSkill(["# S", ""]);
+      mkdirSync(join(d, "hooks"));
+      writeFileSync(join(d, "hooks", "hooks.json"), ["{", '  "hooks": {', '    "Stop": []', "  }", "}", ""].join("\n"));
+      const f = supFile([{ rule: "hook-event-not-served", file: "sk/hooks/hooks.json", match: '"Stop": []', reason: "r" }]);
+      const r = run([d, "--json", "--suppressions", f]);
+      expect(r.findings.find((x) => x.rule === "hook-event-not-served")?.suppressed).toMatchObject({ by: "file" });
+      expect(unused(r)).toEqual([]);
+    });
+
+    it("a UTF-8 BOM is accepted", () => {
+      const d = namedSkill(["# S", "", ...fence(OTHER)]);
+      const f = join(mkdtempSync(join(tmpdir(), "cwh-sup-bom-")), "s.json");
+      writeFileSync(f, "﻿" + JSON.stringify({ version: 1, suppressions: [entry(OTHER)] }));
+      expect(run([d, "--strict", "--suppressions", f]).status).toBe(0);
     });
 
     it("never edits the skill: SKILL.md bytes are unchanged", () => {
@@ -1114,15 +1173,24 @@ describe.skipIf(!havePython)("lint-skill — per-rule suppression", () => {
           expect(r.stderr).toMatch(rx);
         });
       }
-      it("wrong version, malformed JSON, a missing file", () => {
+      it("wrong version (incl. true and 1.0), malformed or too-deep JSON, a missing file", () => {
         const dir = mkdtempSync(join(tmpdir(), "cwh-sup-bad-"));
-        const v2 = join(dir, "v2.json");
-        writeFileSync(v2, JSON.stringify({ version: 2, suppressions: [] }));
-        const broken = join(dir, "broken.json");
-        writeFileSync(broken, "{ not json");
+        const write = (name: string, body: string) => {
+          const f = join(dir, name);
+          writeFileSync(f, body);
+          return f;
+        };
+        const v2 = write("v2.json", JSON.stringify({ version: 2, suppressions: [] }));
+        const vTrue = write("vtrue.json", '{"version": true, "suppressions": []}');
+        const vFloat = write("vfloat.json", '{"version": 1.0, "suppressions": []}');
+        const broken = write("broken.json", "{ not json");
+        const deep = write("deep.json", "[".repeat(200_000) + "]".repeat(200_000));
         for (const [f, rx] of [
           [v2, /`version` must be 1/],
+          [vTrue, /`version` must be 1/],
+          [vFloat, /`version` must be 1/],
           [broken, /not valid JSON/],
+          [deep, /nested too deeply/],
           [join(dir, "absent.json"), /cannot read the file/],
         ] as const) {
           const r = run([namedSkill(["# S", ""]), "--suppressions", f]);
@@ -1137,10 +1205,10 @@ describe.skipIf(!havePython)("lint-skill — per-rule suppression", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-lint-sup-"));
     const f = join(d, "s.yaml");
     writeFileSync(f, "name: s\nfidelity: container\nprompt: hi\nassert:\n  - result: success\n");
-    for (const flag of [["--suppressions", "x.json"], ["--strict-ignores"]]) {
+    for (const flag of [["--suppressions", "x.json"], ["--suppressions=x.json"], ["--strict-ignores"]]) {
       const r = spawnSync(py, [SCRIPT, "lint", f, ...flag], { encoding: "utf8" });
       expect(r.status).toBe(2);
-      expect(r.stderr).toContain(`(${flag[0]} is a \`lint-skill\` flag; \`lint\` has no rule suppression)`);
+      expect(r.stderr).toContain(`(${flag[0].split("=")[0]} is a \`lint-skill\` flag; \`lint\` has no rule suppression)`);
     }
   });
 
