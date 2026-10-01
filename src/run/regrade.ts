@@ -74,7 +74,10 @@ export interface RegradedAssertion {
   judgedDoc?: JudgedDocFingerprint;
   judgeInvalid?: boolean;
   semanticEvidence?: RunResult["assertions"][number]["semanticEvidence"];
+  /** For an entry this re-grade kept from the live run (a fill: its `semantic_matches` grades) — `not_graded`, and
+   *  `copied: true`. Left out of the run's `docMatchesLive`, spend and counts. */
   docMatchesLive: DocMatch;
+  copied?: true;
 }
 
 /** Judge spend over a set of grades: the sum of the priced ones (`undefined` when none was priced — unpriced
@@ -897,19 +900,26 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       differing.push(...c.differing);
       const now = p.ctx.judgedDocs?.get(a) ?? p.ctx.composedDocs?.get(a);
       const readDrift = c.match !== "not_graded" && now?.sections.some((x) => drifted.has(`${x.kind}\0${x.path ?? ""}`)) === true;
+      // A fill kept this semantic_matches entry from the live run: nothing re-read it, so it carries no new document
+      // comparison and is marked as kept.
+      if (fill && a.semantic_matches !== undefined)
+        return { assertionIndex, ...g, docMatchesLive: "not_graded", copied: true } as RegradedAssertion;
       return {
         assertionIndex,
         ...g,
         docMatchesLive: readDrift ? false : c.match,
       } as RegradedAssertion;
     });
+    // What this re-grade actually judged: in a fill, the pairwise asserts only — the kept entries' spend, invalid
+    // grades and document comparisons belong to the live run, not to this one.
+    const rejudged = fill ? assertions.filter((a) => a.assertion.semantic_pairwise !== undefined) : assertions;
     // Per assert, the value describes that assert's own document; the run's value never reads true (or not_graded)
     // over a drift that was detected and accepted.
-    const docMatchesLive = p.drift.length ? false : aggregate(assertions.map((a) => a.docMatchesLive));
+    const docMatchesLive = p.drift.length ? false : aggregate(rejudged.map((a) => a.docMatchesLive));
     const notRegraded = sc.assert.flatMap((a, i) => (judgedOpts(a) !== undefined ? [] : [{ assertionIndex: i, keys: Object.keys(a) }]));
     const pass = assertions.every((a) => a.pass);
-    const spend = judgeSpend(assertions);
-    const invalidGrades = assertions.filter((a) => a.judgeInvalid === true).length;
+    const spend = judgeSpend(rejudged);
+    const invalidGrades = rejudged.filter((a) => a.judgeInvalid === true).length;
 
     const at = (opts.now ?? (() => new Date()))().toISOString();
     const stem = regradeFileStem(assertions, opts.judgeModel, at);
@@ -926,7 +936,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       liveDocDrift: p.drift,
       // An all-invalid round (a judge outage) is still written, and these counts are what tell it apart from
       // a failing grade without walking `assertions[]`.
-      regraded: assertions.length,
+      regraded: rejudged.length,
       uncheckedSections: p.unchecked,
       uncheckedCount: p.unchecked.length,
       invalidGrades,

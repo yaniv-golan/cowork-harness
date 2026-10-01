@@ -49,7 +49,8 @@ const realOr = (p: string): string => {
 /** Throws UsageError (exit 2) on anything an unattended loop cannot run or measure. */
 export function prepareCases(
   cases: readonly HillclimbCase[],
-  opts: { modelFlag?: string; judgeModelFlag?: string; env: NodeJS.ProcessEnv },
+  /** `skipAgentPins`: a caller that never runs the agent (`hillclimb regrade`) has no agent model to resolve. */
+  opts: { modelFlag?: string; judgeModelFlag?: string; env: NodeJS.ProcessEnv; skipAgentPins?: boolean },
 ): PreparedCases {
   const sessions = new Map<string, { session: SessionConfig; file: string; baseline: PlatformBaseline }>();
   for (const c of cases) {
@@ -91,10 +92,11 @@ export function prepareCases(
   };
   let pins: ReturnType<typeof resolveAgentPins> = [];
   try {
-    pins = resolveAgentPins(
-      cases.map((c) => ({ scenario: c.scenario, sessionModel: sessions.get(c.id)!.session.model })),
-      opts.modelFlag,
-    );
+    if (!opts.skipAgentPins)
+      pins = resolveAgentPins(
+        cases.map((c) => ({ scenario: c.scenario, sessionModel: sessions.get(c.id)!.session.model })),
+        opts.modelFlag,
+      );
     resolveJudgePins(
       cases.map((c) => c.scenario),
       opts.judgeModelFlag,
@@ -102,7 +104,7 @@ export function prepareCases(
   } catch (e) {
     reword(e);
   }
-  const pinOf = new Map(cases.map((c, i) => [c.id, pins[i].model]));
+  const pinOf = new Map(cases.map((c, i) => [c.id, pins[i]?.model]));
   return {
     lever: expandHome(sessions.get(cases[0].id)!.session.plugins.local_plugins[0]),
     session: (c) => sessions.get(c.id)!.session,
