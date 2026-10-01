@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { COMPOSER_ID, judgedOpts, semanticRefusal, type AssertContext } from "../assert.js";
 import { pathSafeId } from "../hillclimb/ids.js";
 import { tildeify } from "../io.js";
+import { scrub } from "../secrets.js";
 import { parseScenarioFile } from "../run/execute.js";
 import { pkgVersion } from "../run/envelope.js";
 import { candidateDocument, pairwiseComposeKey } from "../run/pairwise-prepass.js";
@@ -51,10 +52,12 @@ export function composeFromRunDir(runDir: string, scenarioFile: string, secrets:
     return { refused: (e as Error).message };
   }
   // The run must be OF this scenario: a reference is the answer to one task, and freezing another scenario's run under
-  // this name would make every later comparison grade against an answer to a different question.
-  if (result.scenario !== scenarioRef.name)
-    return { refused: `${runDir} is a run of scenario "${result.scenario}", not "${scenarioRef.name}" (--scenario)` };
-  if (typeof result.prompt === "string" && result.prompt !== scenarioRef.prompt)
+  // this name would make every later comparison grade against an answer to a different question. result.json is
+  // written scrubbed, so the scenario's own values are compared in the same scrubbed form; the task identity recorded
+  // below stays the hash of the RAW prompt (what the pre-spend check and the prepass hash).
+  const name = scrub(scenarioRef.name ?? "", secrets);
+  if (result.scenario !== name) return { refused: `${runDir} is a run of scenario "${result.scenario}", not "${name}" (--scenario)` };
+  if (typeof result.prompt === "string" && result.prompt !== scrub(scenarioRef.prompt, secrets))
     return {
       refused: `${runDir} ran a different prompt than ${scenarioFile} declares — re-run the scenario, or freeze with the scenario that run used`,
     };

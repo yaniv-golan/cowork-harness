@@ -6,13 +6,16 @@
 // existing documents and never replaces one.
 //
 // Layout of one entry, `<store>/<case-id>/`:
-//   ref.json              immutable: which run the entry was frozen from, and by what
+//   ref.json              immutable: which run the entry was frozen from, for which task, and by what
 //   doc-<key>.txt         one frozen judged document per compose key
-//   doc-<key>.json        its sidecar: sha256, length, composer, `unchecked`
+//   doc-<key>.json        its sidecar: sha256, length, composer, `unchecked`, and the sha256 of ref.json's bytes
 // The store is model-influenced (it sits in a flow dir the agent under test can reach in principle), so every
 // read and write goes through the no-follow layer, and every read re-verifies the document's sha256 against its
-// sidecar. Integrity covers accidental and partial edits; a CONSISTENT rewrite of a doc and its sidecar is caught
-// one level up, by checking each row's recorded reference sha across variants.
+// sidecar and ref.json's bytes against the hash every sidecar recorded, so an edited ref.json (its task identity
+// included) reads as damaged, and an entry with no task identity is damaged rather than "any task". Integrity covers
+// accidental and partial edits; a CONSISTENT rewrite of a doc and its sidecar (or of ref.json and every sidecar) is not
+// caught here — a rewritten document is caught one level up, by checking each row's recorded reference sha across
+// variants.
 //
 // The store holds text it is given. Composing, scrubbing and host-path redaction happen in the caller.
 
@@ -46,9 +49,10 @@ interface EntryManifest {
   composerId: string;
   frozenAt: string;
   /** The scenario name the reference was frozen for, and sha256 of its prompt — what the output answered. A run with
-   *  a different task is refused rather than compared with an answer to another question. */
-  scenario?: string;
-  taskSha256?: string;
+   *  a different task is refused rather than compared with an answer to another question. Required: an entry without
+   *  either is damaged, never "any task". */
+  scenario: string;
+  taskSha256: string;
 }
 
 interface DocSidecar {
@@ -59,6 +63,9 @@ interface DocSidecar {
   chars: number;
   /** Frozen without a live fingerprint to check the recomposed document against. */
   unchecked?: true;
+  /** sha256 of ref.json's bytes when this document was written. ref.json is never rewritten, so every sidecar of an
+   *  entry records the same value, and a read whose current ref.json hashes differently is an integrity failure. */
+  refJsonSha256: string;
   addedAt: string;
 }
 
@@ -70,13 +77,15 @@ export type ReadRefResult =
       composerId: string;
       source: RefSource;
       unchecked?: true;
-      scenario?: string;
-      taskSha256?: string;
+      scenario: string;
+      taskSha256: string;
     }
   | { status: "missing"; why: string }
   | { status: "integrity"; why: string };
 
 const DOC_RE = /^doc-([0-9a-f]{16})\.(txt|json)$/;
+const KEY_RE = /^[0-9a-f]{16}$/;
+const TASK_RE = /^[0-9a-f]{64}$/;
 const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
 /** Which compose options produced a document: composer identity, `include_subagent_text`, `include_fork_results`
@@ -98,7 +107,19 @@ function assertCaseId(caseId: string): void {
 const now = (): string => new Date().toISOString();
 const json = (v: unknown): string => JSON.stringify(v, null, 2) + "\n";
 
-function writeDoc(root: NoFollowRoot, dir: string, key: string, text: string, composerId: string, unchecked: boolean): void {
+function assertKey(key: string): void {
+  if (!KEY_RE.test(key)) throw new FsRefusal(`refusing: compose key ${JSON.stringify(key)} is not 16 lowercase hex`);
+}
+
+function writeDoc(
+  root: NoFollowRoot,
+  dir: string,
+  key: string,
+  text: string,
+  composerId: string,
+  unchecked: boolean,
+  refJsonSha256: string,
+): void {
   const sidecar: DocSidecar = {
     format: 1,
     composeKey: key,
@@ -106,6 +127,7 @@ function writeDoc(root: NoFollowRoot, dir: string, key: string, text: string, co
     sha256: sha256(text),
     chars: text.length,
     ...(unchecked ? { unchecked: true as const } : {}),
+    refJsonSha256,
     addedAt: now(),
   };
   // Document first, sidecar second: a crash between them leaves a document with no sidecar, which every
@@ -122,10 +144,14 @@ export function freezeRef(
   source: RefSource,
   /** By compose key: the document text, or `{text, unchecked}` for one frozen without a live fingerprint. */
   docs: Record<string, string | { text: string; unchecked?: boolean }>,
-  meta: { harnessVersion: string; composerId: string; unchecked?: boolean; scenario?: string; taskSha256?: string },
+  /** `scenario` and `taskSha256` (sha256 of the RAW scenario prompt) are the task the reference answers: required. */
+  meta: { harnessVersion: string; composerId: string; unchecked?: boolean; scenario: string; taskSha256: string },
 ): { status: "frozen" | "exists"; entryDir: string } {
   assertCaseId(caseId);
   if (Object.keys(docs).length === 0) throw new Error("freezeRef: no documents to freeze");
+  for (const key of Object.keys(docs)) assertKey(key);
+  if (typeof meta.scenario !== "string" || !TASK_RE.test(meta.taskSha256))
+    throw new FsRefusal("refusing to freeze a reference without a task identity (scenario name and the prompt's sha256)");
   const root = NoFollowRoot.open(storeDir); // runs the preflight; every path below is built from root.root
   const store = root.root;
   const entryDir = join(store, caseId);
@@ -141,10 +167,11 @@ export function freezeRef(
       harnessVersion: meta.harnessVersion,
       composerId: meta.composerId,
       frozenAt: now(),
-      ...(meta.scenario !== undefined ? { scenario: meta.scenario } : {}),
-      ...(meta.taskSha256 !== undefined ? { taskSha256: meta.taskSha256 } : {}),
+      scenario: meta.scenario,
+      taskSha256: meta.taskSha256,
     };
-    root.createFile(join(tmp, "ref.json"), json(manifest));
+    const manifestBytes = json(manifest);
+    root.createFile(join(tmp, "ref.json"), manifestBytes);
     for (const [key, d] of Object.entries(docs))
       writeDoc(
         root,
@@ -153,6 +180,7 @@ export function freezeRef(
         typeof d === "string" ? d : d.text,
         meta.composerId,
         meta.unchecked === true || (typeof d !== "string" && d.unchecked === true),
+        sha256(manifestBytes),
       );
     // Re-probe every spelling right before the rename (the rename itself checks only `<case-id>`). What remains is the
     // directory-rename window renameNoFollow documents.
@@ -169,7 +197,9 @@ export function freezeRef(
 }
 
 type Inspected =
-  { status: "ok"; manifest: EntryManifest; keys: Set<string> } | { status: "missing"; why: string } | { status: "integrity"; why: string };
+  | { status: "ok"; manifest: EntryManifest; keys: Set<string>; refJsonSha256: string }
+  | { status: "missing"; why: string }
+  | { status: "integrity"; why: string };
 
 /** The store's absolute path (a user-typed relative path, `./` allowed, resolved once), or the refusal. */
 function absStore(storeDir: string): { store: string } | { why: string } {
@@ -180,7 +210,8 @@ function absStore(storeDir: string): { store: string } | { why: string } {
   }
 }
 
-/** Structural check of one entry: the layout, the manifest, and doc/sidecar pairing. Does not hash documents. */
+/** Structural check of one entry: the layout, the manifest (its task identity included), doc/sidecar pairing, and
+ *  ref.json's bytes against the hash every sidecar recorded. Does not hash documents. */
 function inspectEntry(storeDir: string, caseId: string): { root?: NoFollowRoot; entryDir: string; result: Inspected } {
   const a = absStore(storeDir);
   if ("why" in a) return { entryDir: "", result: { status: "integrity", why: a.why } };
@@ -217,14 +248,31 @@ function inspectEntry(storeDir: string, caseId: string): { root?: NoFollowRoot; 
   for (const k of txt) if (!side.has(k)) return fail(`doc-${k}.txt has no sidecar (an interrupted add?)`);
   for (const k of side) if (!txt.has(k)) return fail(`doc-${k}.json has no document`);
   let manifest: EntryManifest;
+  let manifestBytes: string;
   try {
-    manifest = JSON.parse(root.readFile(join(entryDir, "ref.json"))) as EntryManifest;
+    manifestBytes = root.readFile(join(entryDir, "ref.json"));
+    manifest = JSON.parse(manifestBytes) as EntryManifest;
   } catch (e) {
     return fail(`${join(entryDir, "ref.json")}: ${(e as Error).message}`);
   }
   if (manifest?.format !== 1 || manifest.caseId !== caseId || typeof manifest.source?.resultSha256 !== "string")
     return fail(`${join(entryDir, "ref.json")} does not describe case ${caseId}`);
-  return { root, entryDir, result: { status: "ok", manifest, keys: txt } };
+  // An entry that does not say which task it answers could be compared with an answer to any question: damaged, never
+  // a wildcard. Checked before the hash, so a consistently forged entry without one still says why.
+  if (typeof manifest.scenario !== "string" || typeof manifest.taskSha256 !== "string" || !TASK_RE.test(manifest.taskSha256))
+    return fail(`${join(entryDir, "ref.json")} was frozen without a task identity (scenario name and prompt sha256)`);
+  const refJsonSha256 = sha256(manifestBytes);
+  for (const k of [...side].sort()) {
+    let recorded: unknown;
+    try {
+      recorded = (JSON.parse(root.readFile(join(entryDir, `doc-${k}.json`))) as Partial<DocSidecar>)?.refJsonSha256;
+    } catch (e) {
+      return fail(`doc-${k}.json: ${(e as Error).message}`);
+    }
+    if (recorded !== refJsonSha256)
+      return fail(`${join(entryDir, "ref.json")} does not match the sha256 doc-${k}.json recorded — the entry's ref.json was edited`);
+  }
+  return { root, entryDir, result: { status: "ok", manifest, keys: txt, refJsonSha256 } };
 }
 
 function readDoc(root: NoFollowRoot, entryDir: string, key: string): { text: string; sidecar: DocSidecar } | { why: string } {
@@ -261,8 +309,8 @@ export function readRefDoc(storeDir: string, caseId: string, key: string): ReadR
     composerId: d.sidecar.composerId,
     source: result.manifest.source,
     ...(d.sidecar.unchecked ? { unchecked: true as const } : {}),
-    ...(result.manifest.scenario !== undefined ? { scenario: result.manifest.scenario } : {}),
-    ...(result.manifest.taskSha256 !== undefined ? { taskSha256: result.manifest.taskSha256 } : {}),
+    scenario: result.manifest.scenario,
+    taskSha256: result.manifest.taskSha256,
   };
 }
 
@@ -270,45 +318,71 @@ export function readRefDoc(storeDir: string, caseId: string, key: string): ReadR
 export function readRefEntry(
   storeDir: string,
   caseId: string,
-): { status: "ok"; source: RefSource; scenario?: string; taskSha256?: string } | { status: "missing" | "integrity"; why: string } {
+): { status: "ok"; source: RefSource; scenario: string; taskSha256: string } | { status: "missing" | "integrity"; why: string } {
   assertCaseId(caseId);
   const { result } = inspectEntry(storeDir, caseId);
   if (result.status !== "ok") return result;
   const m = result.manifest;
-  return {
-    status: "ok",
-    source: m.source,
-    ...(m.scenario !== undefined ? { scenario: m.scenario } : {}),
-    ...(m.taskSha256 !== undefined ? { taskSha256: m.taskSha256 } : {}),
-  };
+  return { status: "ok", source: m.source, scenario: m.scenario, taskSha256: m.taskSha256 };
 }
 
-/** Add a document for a NEW compose key to an existing entry, composed from the SAME source run. Never rewrites:
- *  an existing key reports `exists`. A different source run, a missing entry, or a damaged entry throws. */
+/** Add documents for NEW compose keys to an existing entry, composed from the SAME source run (and, when given, for
+ *  the same task). Never rewrites: a key the entry already has is reported in `existing`. EVERY key is checked —
+ *  its format, the source, the task — before ANY is written, so a refusal (a throw) leaves the entry unchanged.
+ *  A missing or damaged entry throws too. */
+export function addRefDocs(
+  storeDir: string,
+  caseId: string,
+  docs: ReadonlyArray<{ key: string; text: string; unchecked?: boolean }>,
+  from: { resultSha256: string; composerId: string; taskSha256?: string },
+): { added: string[]; existing: string[] } {
+  assertCaseId(caseId);
+  const refuse = (why: string): FsRefusal => new FsRefusal(`refusing to add to the reference for case ${caseId}: ${why}`);
+  const { root, entryDir, result } = inspectEntry(storeDir, caseId);
+  if (result.status !== "ok") throw refuse(result.why);
+  if (result.manifest.source.resultSha256 !== from.resultSha256)
+    throw refuse(
+      `it was frozen from a different source run (result.json sha256 ${result.manifest.source.resultSha256.slice(0, 12)}…); ` +
+        `every document in one entry must come from one run`,
+    );
+  if (from.taskSha256 !== undefined && result.manifest.taskSha256 !== from.taskSha256)
+    throw refuse("it was frozen for a different task (prompt); nothing written");
+  const fresh: Array<{ key: string; text: string; unchecked?: boolean }> = [];
+  const existing: string[] = [];
+  const seen = new Set<string>();
+  for (const d of docs) {
+    if (!KEY_RE.test(d.key)) throw refuse(`compose key ${JSON.stringify(d.key)} is not 16 lowercase hex; nothing written`);
+    if (seen.has(d.key)) continue;
+    seen.add(d.key);
+    if (result.keys.has(d.key)) existing.push(d.key);
+    else if (lexists(join(entryDir, `doc-${d.key}.txt`)) || lexists(join(entryDir, `doc-${d.key}.json`)))
+      throw refuse(`doc-${d.key} appeared after inspection (a concurrent add?); nothing written`);
+    else fresh.push(d);
+  }
+  const added: string[] = [];
+  for (const d of fresh) {
+    try {
+      writeDoc(root!, entryDir, d.key, d.text, from.composerId, d.unchecked === true, result.refJsonSha256);
+      added.push(d.key);
+    } catch (e) {
+      // A concurrent add of the same key won the exclusive create: the key now exists, written by that add.
+      if ((e as NodeJS.ErrnoException)?.code === "EEXIST") existing.push(d.key);
+      else throw e;
+    }
+  }
+  return { added, existing };
+}
+
+/** Add one document for a NEW compose key (see `addRefDocs`): `exists` when the entry already has the key. */
 export function addRefDoc(
   storeDir: string,
   caseId: string,
   key: string,
   text: string,
-  from: { resultSha256: string; composerId: string; unchecked?: boolean },
+  from: { resultSha256: string; composerId: string; unchecked?: boolean; taskSha256?: string },
 ): { status: "added" | "exists" } {
-  assertCaseId(caseId);
-  const { root, entryDir, result } = inspectEntry(storeDir, caseId);
-  if (result.status !== "ok") throw new FsRefusal(`refusing to add to the reference for case ${caseId}: ${result.why}`);
-  if (result.manifest.source.resultSha256 !== from.resultSha256)
-    throw new FsRefusal(
-      `refusing to add to the reference for case ${caseId}: it was frozen from a different source run (result.json sha256 ` +
-        `${result.manifest.source.resultSha256.slice(0, 12)}…); every document in one entry must come from one run`,
-    );
-  if (result.keys.has(key)) return { status: "exists" };
-  try {
-    writeDoc(root!, entryDir, key, text, from.composerId, from.unchecked === true);
-  } catch (e) {
-    // A concurrent add of the same key won the exclusive create: the key now exists, written by that add.
-    if ((e as NodeJS.ErrnoException)?.code === "EEXIST") return { status: "exists" };
-    throw e;
-  }
-  return { status: "added" };
+  const r = addRefDocs(storeDir, caseId, [{ key, text, unchecked: from.unchecked }], from);
+  return { status: r.added.length ? "added" : "exists" };
 }
 
 /** Check a whole store: every entry's layout, manifest and document hashes. Problems make the store unusable for

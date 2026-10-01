@@ -13,7 +13,7 @@ import { composeFromRunDir } from "./compose.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "./cli-usage.js";
 import { join } from "node:path";
 import { FsRefusal, lexists } from "../hillclimb/fs.js";
-import { REF_EXTS, addRefDoc, freezeRef, readRefEntry, verifyStore, type RefSource } from "./store.js";
+import { REF_EXTS, addRefDocs, freezeRef, verifyStore, type RefSource } from "./store.js";
 
 /** One kept run, composed for freezing. `live` compares the recomposed document with the fingerprint the live
  *  judge recorded: `match`, `differs`, or `unknown` (no fingerprint: a run recorded before the assert existed). */
@@ -96,21 +96,14 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
         added: [],
       };
     }
-    // An existing entry gains only compose keys it lacks, and only for the same task it was frozen for.
-    const existing = readRefEntry(opts.out, caseId);
-    const entryTask = existing.status === "ok" ? existing.taskSha256 : undefined;
-    if (entryTask !== undefined && entryTask !== c.taskSha256)
-      return refuse(`ref freeze: case ${caseId} in ${opts.out} was frozen for a different task (prompt); nothing written`, caseId);
-    const added: string[] = [];
-    for (const d of c.docs)
-      if (
-        addRefDoc(opts.out, caseId, d.key, d.text, {
-          resultSha256: c.source.resultSha256,
-          composerId: c.composerId,
-          unchecked: unchecked.has(d.key),
-        }).status === "added"
-      )
-        added.push(d.key);
+    // An existing entry gains only compose keys it lacks, and only for the same run and task it was frozen for. Every
+    // key is checked before any is written, so a refusal leaves the entry as it was.
+    const { added } = addRefDocs(
+      opts.out,
+      caseId,
+      c.docs.map((d) => ({ key: d.key, text: d.text, unchecked: unchecked.has(d.key) })),
+      { resultSha256: c.source.resultSha256, composerId: c.composerId, taskSha256: c.taskSha256 },
+    );
     if (added.length === 0)
       return refuse(
         `ref freeze: case ${caseId} is already frozen in ${opts.out} with every compose key; a frozen reference is never rewritten`,

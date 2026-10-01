@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freezeFromRun, verifyStores, type FreezeDeps, type ComposedForFreeze } from "../src/refs/cli.js";
@@ -88,7 +88,18 @@ describe("freezeFromRun", () => {
 
 describe("verifyStores", () => {
   it("exit 0 when clean, 1 on any integrity problem, and reports per store", () => {
-    freezeRef(join(tmp, "a"), "c", composed().source, { [K1]: "D" }, { harnessVersion: "t", composerId: "c1" });
+    freezeRef(
+      join(tmp, "a"),
+      "c",
+      composed().source,
+      { [K1]: "D" },
+      {
+        harnessVersion: "t",
+        composerId: "c1",
+        scenario: "c",
+        taskSha256: "1".repeat(64),
+      },
+    );
     expect(verifyStores([join(tmp, "a")]).exitCode).toBe(0);
     writeFileSync(join(tmp, "a", "c", `doc-${K1}.txt`), "tampered");
     const r = verifyStores([join(tmp, "a")]);
@@ -120,5 +131,27 @@ describe("freezeFromRun — task identity and atomicity", () => {
     const r = freezeFromRun(base(), deps(other));
     expect(r.exitCode).toBe(2);
     expect(r.message).toMatch(/different task/);
+  });
+});
+
+describe("freezeFromRun — adding to an existing entry writes all or nothing", () => {
+  it("a second key that would fail refuses the add BEFORE the first new key is written", () => {
+    expect(freezeFromRun(base(), deps(composed())).exitCode).toBe(0);
+    const before = readdirSync(join(tmp, "refs", "case_1")).sort();
+    const r = freezeFromRun(
+      base(),
+      deps(
+        composed({
+          docs: [
+            { key: K2, text: "NEW", live: "match" },
+            { key: "not-a-key", text: "BAD", live: "match" },
+          ],
+        }),
+      ),
+    );
+    expect(r.exitCode).toBe(2);
+    expect(r.message).toMatch(/compose key/);
+    expect(readdirSync(join(tmp, "refs", "case_1")).sort()).toEqual(before);
+    expect(readRefDoc(join(tmp, "refs"), "case_1", K2).status).toBe("missing");
   });
 });

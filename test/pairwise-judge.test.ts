@@ -226,3 +226,54 @@ describe("makePairwiseJudge", () => {
     expect(user).toContain("~/b/report.md");
   });
 });
+
+describe("makePairwiseJudge — order: both keeps the rationale of the outcome it kept", () => {
+  const input = { task: "T", rubric: [], candidate: "CAND", reference: "REF", sessionId: "s1", assertIndex: 0, refName: "baseline" };
+  /** Call n answers `outcomes[n]` from the candidate's side, with rationale `CALL<n+1>`. */
+  const scripted = (outcomes: PairwiseOutcome[]): CompleteStructured => {
+    let n = 0;
+    return async (c) => {
+      const o = outcomes[n]!;
+      const rationale = `CALL${++n}`;
+      const candIsA = c.user.indexOf("CAND") < c.user.indexOf("REF");
+      const verdict = o === "win" ? (candIsA ? "A" : "B") : o === "loss" ? (candIsA ? "B" : "A") : o;
+      return { structured: { rationale, verdict }, model: "claude-x", usage };
+    };
+  };
+  it.each<[PairwiseOutcome, PairwiseOutcome, PairwiseOutcome, string]>([
+    ["win", "win", "win", "CALL1"],
+    ["win", "loss", "tie", "CALL1 | CALL2"],
+    ["loss", "win", "tie", "CALL1 | CALL2"],
+    ["tie", "loss", "loss", "CALL2"],
+    ["loss", "tie", "loss", "CALL1"],
+    ["both_bad", "win", "both_bad", "CALL1"],
+    ["win", "both_bad", "both_bad", "CALL2"],
+  ])("%s then %s ⇒ %s, rationale %s", async (first, second, outcome, rationale) => {
+    const r = await makePairwiseJudge({ model: "claude-x", complete: scripted([first, second]) })({ ...input, order: "both" });
+    expect(r).toMatchObject({ outcome, rationale });
+  });
+});
+
+describe("relabel — a bare leading A/B", () => {
+  const input = { task: "T", rubric: [], candidate: "CAND", reference: "REF", sessionId: "s1", assertIndex: 0, refName: "baseline" };
+  const said = async (rationale: string): Promise<string> =>
+    (
+      await makePairwiseJudge({
+        model: "claude-x",
+        complete: async () => ({ structured: { rationale, verdict: "tie" }, model: "claude-x", usage }),
+      })(input)
+    ).rationale!;
+  const cf = candidateFirst("s1", 0, "baseline");
+  const [a, b] = cf ? ["the candidate", "the reference"] : ["the reference", "the candidate"];
+  it("restates 'A is' / 'B gives' / 'A's' before a verb-like word", async () => {
+    expect(await said("A is concise; B gives no source.")).toBe(`${a} is concise; ${b} gives no source.`);
+    expect(await said("B cites two papers while A names none.")).toBe(`${b} cites two papers while ${a} names none.`);
+    expect(await said("A's was clearer.")).toBe(`${a}'s was clearer.`);
+  });
+  it("leaves an A or B that is not a bare subject before such a verb untouched", async () => {
+    expect(await said("A good answer cites a source.")).toBe("A good answer cites a source.");
+    expect(await said("Both answer part B correctly.")).toBe("Both answer part B correctly.");
+    expect(await said("ABC is a company.")).toBe("ABC is a company.");
+    expect(await said("A's answer is longer.")).toBe("A's answer is longer.");
+  });
+});

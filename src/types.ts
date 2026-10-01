@@ -1822,7 +1822,8 @@ export interface RunResult {
     /** Per-reference outcomes of a `semantic_pairwise` assert, in the order its references were resolved. `status`
      *  `graded`: the judge compared the run with the frozen reference — `outcome` from the run's side, `value` 1 win
      *  / 0.5 tie / 0 loss / 0.5 both_bad, `order` which output the judge saw first, `positionFlip` when the two calls
-     *  of `order: both` disagreed (scored as a tie). `neutral`: the reference was frozen from this very run's variant,
+     *  of `order: both` disagreed (a win/loss split scores as a tie; any other disagreement keeps the worse outcome,
+     *  and `rationale` is the kept call's, or both joined by " | " for a win/loss tie). `neutral`: the reference was frozen from this very run's variant,
      *  so no judge was called and the value is 0.5. `missing` / `integrity`: the reference could not be read (absent,
      *  or failing its recorded sha256), and the assert is evidence-unavailable. `rationale` is the judge's reason
      *  restated from the run's side (untrusted model text). `refDocSha256` is the frozen document's sha256 — constant

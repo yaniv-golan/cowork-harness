@@ -69,7 +69,10 @@ All notable changes to this project are documented here. The format is based on
 - **`ref freeze <run-dir> --scenario <yaml> --out <store>` and `ref verify <store>…`** freeze a kept run's judged
   document as a reference, once and never rewritten, after checking that the run is of `--scenario` (same name
   and prompt) and that the document matches the fingerprint the live judge recorded (a mismatch is refused; a run
-  with none needs `--allow-unchecked`), and re-hash a store's documents.
+  with none needs `--allow-unchecked`), and re-hash a store's documents. Every document's sidecar records the
+  hash of the entry's `ref.json` (which names the scenario and its prompt's hash); an entry whose `ref.json` was
+  edited, or that names no task, is damaged and refused. Adding compose keys to an existing entry checks every key
+  before writing any.
   Exit `0` / `2` (freeze), `0` / `1` / `2` (verify).
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own

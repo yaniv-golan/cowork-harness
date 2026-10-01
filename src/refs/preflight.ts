@@ -17,8 +17,9 @@ export interface RefRequirement {
   refName: string;
   store: string;
   composeKey: string;
-  /** sha256 of the task (scenario prompt) the run will answer; a reference frozen for another task is refused. */
-  taskSha256?: string;
+  /** sha256 of the task (the RAW scenario prompt) the run will answer; a reference frozen for another task is refused.
+   *  Required on both sides: an entry with no task identity reads as damaged (integrity), never as "any task". */
+  taskSha256: string;
 }
 
 /** Every (case, assert, reference) a run will judge against must already resolve, with integrity, to a document
@@ -30,7 +31,7 @@ export function checkRefsBeforeSpend(
   for (const r of reqs) {
     const got = readRefDoc(r.store, r.caseId, r.composeKey);
     if (got.status === "ok") {
-      if (r.taskSha256 === undefined || got.taskSha256 === undefined || got.taskSha256 === r.taskSha256) continue;
+      if (got.taskSha256 === r.taskSha256) continue;
       out.push({
         ...r,
         status: "missing",

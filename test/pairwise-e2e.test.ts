@@ -8,6 +8,9 @@ import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import { freezeRef } from "../src/refs/store.js";
 import { composeFromRunDir } from "../src/refs/compose.js";
 import { POSIX, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
+import { createHash } from "node:crypto";
+
+const sha = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
 // semantic_pairwise through the REAL executeScenario with only the agent and the judge transport replaced: the
 // stub `claude` streams a short answer; the structured transport is injected and records what it was sent. No
@@ -89,7 +92,7 @@ describe.runIf(POSIX)("semantic_pairwise through the real executeScenario (proto
       "pairwise-e2e",
       { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
       { [pairwiseComposeKey(sc.assert[0]!)]: "FROZEN REFERENCE ANSWER" },
-      { harnessVersion: "t", composerId: "c" },
+      { harnessVersion: "t", composerId: "c", scenario: "pairwise-e2e", taskSha256: sha("what is the answer?") },
     );
     const calls: StructuredCall[] = [];
     const complete: CompleteStructured = async (c) => {
@@ -120,6 +123,29 @@ describe.runIf(POSIX)("semantic_pairwise through the real executeScenario (proto
       /semantic_pairwise: refusing before the run spends anything[\s\S]*reference "refs": reference store \S+ does not exist/,
     );
     expect(existsSync(f.stubPidFile)).toBe(false);
+  });
+
+  it("a reference frozen for ANOTHER prompt is refused BEFORE the agent spawns (nothing is spent)", async () => {
+    const file = scenario();
+    const sc = parseScenarioFile(file);
+    freezeRef(
+      join(dir, "refs"),
+      "pairwise-e2e",
+      { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
+      { [pairwiseComposeKey(sc.assert[0]!)]: "AN ANSWER TO ANOTHER QUESTION" },
+      { harnessVersion: "t", composerId: "c", scenario: "pairwise-e2e", taskSha256: sha("what is the capital of France?") },
+    );
+    const calls: StructuredCall[] = [];
+    await expect(
+      executeScenario(sc, {
+        pairwiseComplete: async (c) => {
+          calls.push(c);
+          return { structured: { rationale: "x", verdict: "A" }, model: "x", subtype: "success" };
+        },
+      }),
+    ).rejects.toThrow(/semantic_pairwise: refusing before the run spends anything[\s\S]*frozen for a different task/);
+    expect(existsSync(f.stubPidFile)).toBe(false);
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -199,5 +225,34 @@ describe.runIf(POSIX)("ref freeze composition from a REAL kept run (the live-fin
     );
     const c = composeFromRunDir(runDir, other, []);
     expect("refused" in c && c.refused).toMatch(/run of scenario "pairwise-e2e", not "other"/);
+  });
+
+  it("a prompt carrying a secret value freezes: result.json holds it scrubbed, and that is not 'a different prompt'", async () => {
+    const SECRET = "ZZPAIRWISESECRET9137";
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", SECRET);
+    const body = (asserts: string[]): string =>
+      [
+        "baseline: latest",
+        "session: (inline)",
+        "fidelity: protocol",
+        `prompt: use the token ${SECRET} to answer`,
+        "assert:",
+        ...asserts,
+        "",
+      ].join("\n");
+    const base = join(dir, "pairwise-e2e.yaml");
+    writeFileSync(base, body(["  - semantic_matches:", "      rubric: ['gives the answer']"]));
+    const judge = (async (rubric: string[]) => rubric.map((_c, i) => ({ index: i, claim: _c, pass: true }))) as never;
+    const res = await executeScenario(parseScenarioFile(base), { semanticJudge: judge });
+    const resultJson = readFileSync(join(res.outDir, "turns", "1", "result.json"), "utf8");
+    expect(resultJson).not.toContain(SECRET); // the precondition: the run's own record is scrubbed
+    const pdir = join(dir, "p");
+    mkdirSync(pdir);
+    const pairwiseFile = join(pdir, "pairwise-e2e.yaml");
+    writeFileSync(pairwiseFile, body(["  - semantic_pairwise:", "      refs: [refs]"]));
+    const c = composeFromRunDir(res.outDir, pairwiseFile, [SECRET]);
+    expect("refused" in c ? c.refused : "").toBe("");
+    // The task identity is the RAW prompt's hash — what the pre-spend check and the prepass hash.
+    expect((c as { taskSha256: string }).taskSha256).toBe(sha(`use the token ${SECRET} to answer`));
   });
 });

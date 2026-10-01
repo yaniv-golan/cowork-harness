@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
@@ -47,10 +48,15 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
 
 const SRC = { command: "test", runDir: "~/r", resultSha256: "a".repeat(64), sessionId: "base" };
 
-/** Freeze the document a run with `finalMessage` would produce, into `store`, for assertion `a`. */
-function freezeFrom(store: string, a: Assertion, finalMessage: string): void {
+const TASK = "Summarise X";
+const taskSha = (t: string): string => createHash("sha256").update(t, "utf8").digest("hex");
+/** The task identity a reference frozen for `task` records (the prepass hashes the RAW task). */
+const META = (task = TASK) => ({ harnessVersion: "t", composerId: "c", scenario: "case_1", taskSha256: taskSha(task) });
+
+/** Freeze the document a run with `finalMessage` would produce, into `store`, for assertion `a`, for `task`. */
+function freezeFrom(store: string, a: Assertion, finalMessage: string, task = TASK): void {
   const doc = candidateDocument(ctx({ finalMessage }), a).candidate;
-  freezeRef(store, "case_1", SRC, { [pairwiseComposeKey(a)]: doc }, { harnessVersion: "t", composerId: "c" });
+  freezeRef(store, "case_1", SRC, { [pairwiseComposeKey(a)]: doc }, META(task));
 }
 
 /** A judge that always returns `outcome`, recording every input it saw. */
@@ -73,7 +79,7 @@ function opts(a: Assertion, over: Partial<PairwisePrepassOpts> = {}): PairwisePr
   return {
     caseId: "case_1",
     sessionId: "s1",
-    task: "Summarise X",
+    task: TASK,
     refsFor: () => [{ name: "baseline", store: join(tmp, "baseline") }],
     judgeFor: fakeJudge("win"),
     modelFor: () => "claude-judge-1",
@@ -245,7 +251,7 @@ describe("semantic_pairwise — pre-pass and check", () => {
 
   it("the task and the rationale are scrubbed of the run's secrets", async () => {
     const a = assertOf();
-    freezeFrom(join(tmp, "baseline"), a, "R");
+    freezeFrom(join(tmp, "baseline"), a, "R", "use S3CR3T");
     const c = ctx({ finalMessage: "C", secrets: ["S3CR3T"] });
     const seen: PairwiseInput[] = [];
     const judgeFor =
@@ -286,16 +292,31 @@ describe("semantic_pairwise — review fixes", () => {
     expect(writes.filter((w) => /judge model .* is also the model under test/.test(w))).toHaveLength(1);
   });
 
+  it.each([
+    ["claude-sonnet-5", ["claude-sonnet-5-20260101"], 1],
+    ["claude-sonnet-5-20260101", ["claude-sonnet-5[1m]"], 1],
+    ["Claude-Sonnet-5[1M]", ["claude-sonnet-5"], 1],
+    ["claude-sonnet-5", ["claude-opus-5-20260101"], 0],
+    ["claude-sonnet-5", ["claude-sonnet-5-1"], 0],
+  ] as const)("self-judge: judge %s vs run model(s) %j ⇒ %i warning(s), across date and context suffixes", async (judge, mains, n) => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "R");
+    const c = ctx({ finalMessage: "C" });
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => (writes.push(String(chunk)), true)) as typeof process.stderr.write;
+    try {
+      await runPairwiseJudges([a], c, opts(a, { modelFor: () => judge, mainModels: mains }));
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(writes.filter((w) => /judge model .* is also the model under test/.test(w))).toHaveLength(n);
+  });
+
   it("an unchecked reference is visible on its outcome", async () => {
     const a = assertOf();
     const doc = candidateDocument(ctx({ finalMessage: "R" }), a).candidate;
-    freezeRef(
-      join(tmp, "baseline"),
-      "case_1",
-      SRC,
-      { [pairwiseComposeKey(a)]: doc },
-      { harnessVersion: "t", composerId: "c", unchecked: true },
-    );
+    freezeRef(join(tmp, "baseline"), "case_1", SRC, { [pairwiseComposeKey(a)]: doc }, { ...META(), unchecked: true });
     const c = ctx({ finalMessage: "C" });
     await runPairwiseJudges([a], c, opts(a));
     expect(evaluate([a], c)[0]!.pairwise![0]).toMatchObject({ status: "graded", unchecked: true });
@@ -342,19 +363,31 @@ describe("semantic_pairwise — task identity", () => {
   it("a reference frozen for a different task is never compared (missing, with the reason)", async () => {
     const a = assertOf();
     const doc = candidateDocument(ctx({ finalMessage: "R" }), a).candidate;
-    freezeRef(
-      join(tmp, "baseline"),
-      "case_1",
-      SRC,
-      { [pairwiseComposeKey(a)]: doc },
-      { harnessVersion: "t", composerId: "c", taskSha256: "9".repeat(64) },
-    );
+    freezeRef(join(tmp, "baseline"), "case_1", SRC, { [pairwiseComposeKey(a)]: doc }, { ...META(), taskSha256: "9".repeat(64) });
     const c = ctx({ finalMessage: "C" });
     const seen: PairwiseInput[] = [];
     await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge("win", seen) }));
     const [r] = evaluate([a], c);
     expect(r!.pass).toBe(false);
     expect(r!.pairwise![0]).toMatchObject({ status: "missing", why: expect.stringMatching(/different task/) });
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe("semantic_pairwise — a reference without a task identity", () => {
+  it("is an integrity failure at judge time, never compared", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "R");
+    const ref = join(tmp, "baseline", "case_1", "ref.json");
+    const m = JSON.parse(readFileSync(ref, "utf8")) as Record<string, unknown>;
+    delete m.taskSha256;
+    writeFileSync(ref, JSON.stringify(m, null, 2) + "\n");
+    const c = ctx({ finalMessage: "C" });
+    const seen: PairwiseInput[] = [];
+    await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge("win", seen) }));
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(false);
+    expect(r!.pairwise![0]).toMatchObject({ status: "integrity", why: expect.stringMatching(/task identity/) });
     expect(seen).toHaveLength(0);
   });
 });

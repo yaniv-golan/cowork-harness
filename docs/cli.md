@@ -459,8 +459,13 @@ earlier run produced, stored once and never regenerated, so a win rate keeps one
   - A run that ended in an error, a partial run, a replay or a chat run is refused, as is evidence the judge could
     not see whole (the `semantic_matches` refusals).
   - Never rewritten: a second freeze of the same case adds only compose keys the entry lacks, and only from the
-    same source run (its `result.json` sha256); anything else is refused.
-- **verify** re-hashes every document in each store and checks its layout. A leftover temp dir from an
+    same source run (its `result.json` sha256) and for the same prompt; anything else is refused. Every key is
+    checked before any is written, so a refusal writes nothing.
+  - Each document's sidecar records the sha256 of the entry's `ref.json`, which holds the task identity; an entry
+    whose `ref.json` does not hash to that value, or that names no scenario or prompt hash, is damaged — refused
+    before a run spends anything, and reported by `verify`.
+- **verify** re-hashes every document in each store, checks each entry's `ref.json` against the hash its documents
+  recorded, and checks the layout. A leftover temp dir from an
   interrupted freeze is a note, not a problem.
 - **The store** holds the composed document after secret scrubbing and host-path redaction (`~` for paths under
   your home dir); the run under test gets the same redaction before the judge compares them. It is meant to be

@@ -41,6 +41,16 @@ export interface PairwisePrepassOpts {
 
 type Outcome = NonNullable<RunResult["assertions"][number]["pairwise"]>[number];
 
+/** One model, however it is spelled: case-folded, without a context-window suffix (`[1m]`) or a trailing release
+ *  date (`-20250101`). Used only for the self-judge warning, so an alias and its dated id are the same model. */
+function sameModelKey(m: string): string {
+  return m
+    .trim()
+    .toLowerCase()
+    .replace(/\[\d+[km]\]$/, "")
+    .replace(/-\d{8}$/, "");
+}
+
 /** The composed candidate document for one assert, with the host-path transform every frozen reference received
  *  — applied to both sides, or `~/…` against `/Users/…` would tell the judge which output is the reference. */
 export function candidateDocument(ctx: AssertContext, a: Assertion): ReturnType<typeof composeJudgedDocument> & { candidate: string } {
@@ -118,12 +128,12 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         outcomes.push({ ref: ref.name, status: got.status, why: got.why });
         continue;
       }
-      if (got.taskSha256 !== undefined && got.taskSha256 !== taskSha256) {
+      if (got.taskSha256 !== taskSha256) {
         outcomes.push({ ref: ref.name, status: "missing", why: "frozen for a different task (the scenario's prompt changed)" });
         continue;
       }
       const resolved = opts.modelFor(a);
-      if (!warnedSelfJudge && opts.mainModels?.includes(resolved)) {
+      if (!warnedSelfJudge && opts.mainModels?.some((m) => sameModelKey(m) === sameModelKey(resolved))) {
         warnedSelfJudge = true;
         warn(
           `::warning:: [semantic_pairwise] assert ${i}: the judge model ${resolved} is also the model under test — a model judging its own ` +

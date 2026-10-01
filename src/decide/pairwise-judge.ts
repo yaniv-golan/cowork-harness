@@ -91,8 +91,9 @@ export function toCandidateOutcome(v: PairwiseVerdict, candidateIsA: boolean): P
   return (v === "A") === candidateIsA ? "win" : "loss";
 }
 
-/** Combine the two calls of `order: both`. Agreement keeps the outcome; ANY disagreement is position bias, so the
- *  case scores as a tie and is flagged (eval-audit.md l.173: "score both orders and average"). */
+/** Combine the two calls of `order: both`. Agreement keeps the outcome. Any disagreement is flagged as a position
+ *  flip: a win/loss split scores as a tie (eval-audit.md l.173: "score both orders and average"); any other
+ *  disagreement keeps the worse outcome. */
 export function combineOrders(first: PairwiseOutcome, second: PairwiseOutcome): { outcome: PairwiseOutcome; positionFlip: boolean } {
   if (first === second) return { outcome: first, positionFlip: false };
   // A win in one order and a loss in the other is pure position bias: neither output is better. Any other split keeps
@@ -119,9 +120,14 @@ export function parsePairwiseVerdict(structured: unknown): { verdict: PairwiseVe
 /** Restate a rationale from the candidate's perspective, so a stored rationale never needs the order to be read. */
 function relabel(rationale: string, candidateIsA: boolean): string {
   const name = (letter: "A" | "B"): string => ((letter === "A") === candidateIsA ? "the candidate" : "the reference");
-  return rationale
-    .replace(/\b(?:[Oo]utputs|[Rr]esponses) A and B\b/g, "both outputs")
-    .replace(/\b(?:[Oo]utput|[Rr]esponse) ([AB])\b/g, (_m, l: "A" | "B") => name(l));
+  return (
+    rationale
+      .replace(/\b(?:[Oo]utputs|[Rr]esponses) A and B\b/g, "both outputs")
+      .replace(/\b(?:[Oo]utput|[Rr]esponse) ([AB])\b/g, (_m, l: "A" | "B") => name(l))
+      // A bare "A is …" / "B's was …": only a lone capital A or B (not inside a word, not after an apostrophe), with or
+      // without `'s`, directly followed by a verb-like word — so "A good answer", "A's answer" or "part B" stays as written.
+      .replace(/(?<![\w'’])([AB])(?=(?:'s)?\s+(?:is|was|has|gives|cites|names)\b)/g, (_m, l: "A" | "B") => name(l))
+  );
 }
 
 export interface StructuredCall {
@@ -226,12 +232,14 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
       const a = await once(seeded);
       const b = await once(!seeded);
       const { outcome, positionFlip } = combineOrders(a.outcome, b.outcome);
+      // The stored rationale explains the KEPT outcome: the call that produced it, or both for a win/loss tie.
+      const rationale = a.outcome === outcome ? a.rationale : b.outcome === outcome ? b.rationale : `${a.rationale} | ${b.rationale}`;
       return {
         outcome,
         value: outcomeValue(outcome, policy),
         order: "both",
         positionFlip,
-        rationale: a.rationale,
+        rationale,
         model: model!,
         ...(cost !== undefined ? { costUsd: cost } : {}),
         ...(tokens !== undefined ? { usage: tokens } : {}),
