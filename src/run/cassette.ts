@@ -6262,7 +6262,7 @@ async function writeReassertedAssertBlock(
   const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
   const metricsSame = JSON.stringify(scn.metrics ?? null) === JSON.stringify(nextMetrics ?? null);
   if (assertSame && expectSame && metricsSame) {
-    warn(`::notice:: [replay --write] ${cassetteFile}: assert block already matches the on-disk block — no write\n`);
+    warn(`::notice:: [replay --write] ${cassetteFile}: assert, expect_denied and metrics already match the on-disk scenario — no write\n`);
     return;
   }
   scn.assert = nextAssert;

@@ -107,8 +107,11 @@ describe.runIf(can)("metrics over a recorded cassette (record → replay, stub a
       expect(JSON.parse(plain.stdout).results[0].metrics).toEqual([{ id: "words", value: 1200 }]);
       const w = await cli(f, ["replay", cass, "--assert-from", edited, "--write", "--output-format", "json"]);
       expect(w.code, w.stderr).toBe(0);
-      expect(w.stderr).not.toMatch(/already matches/);
+      expect(w.stderr).not.toMatch(/already match/);
       expect(JSON.parse(readFileSync(cass, "utf8")).scenario.metrics.map((m: { id: string }) => m.id)).toEqual(["words", "again"]);
+      // A second --write has nothing to do, and says what it compared.
+      const again = await cli(f, ["replay", cass, "--assert-from", edited, "--write", "--output-format", "json"]);
+      expect(again.stderr).toMatch(/assert, expect_denied and metrics already match the on-disk scenario — no write/);
       const after = await cli(f, ["replay", cass, "--output-format", "json"]);
       expect(JSON.parse(after.stdout).results[0].metrics).toEqual([
         { id: "words", value: 1200 },

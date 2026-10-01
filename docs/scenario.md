@@ -1168,7 +1168,7 @@ metrics:
 Refused at load: a missing `better`, both or neither of `scale` / `unbounded`, an id that is not word characters,
 dots and hyphens (at most 129, not all dots), an id that collides with a key the hillclimb runner generates (`pass`,
 `claims`, `a<N>…`, `*_present`, `*win*`, `*both_bad*`), two ids that differ only in letter case, and an `artifact`
-that is absolute, contains `..` or a backslash, or is blank, and a `min` that is not below `scale`. The range is
+that starts with `/` or a drive root (`c:/`), contains a `..` segment, a backslash or a NUL, or is blank (a colon alone is fine: `a:b.json` is a POSIX name), and a `min` that is not below `scale`. The published schema mirrors all of these except the duplicate-id check and `min` below `scale`. The range is
 `[min, scale]`: a metric that runs from -1 to 1 is `min: -1, scale: 1`, not `scale: 2`. Declaring a metric arms the
 pre-run manifest.
 

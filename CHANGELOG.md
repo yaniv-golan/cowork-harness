@@ -39,11 +39,11 @@ All notable changes to this project are documented here. The format is based on
   rewrote unchanged is treated as untouched. `replay` re-measures from the cassette manifest and warns once about
   metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration and `--write`
   freezes it; a plain replay notices an on-disk `metrics:` drift. `verify-run` re-measures the current declaration
-  from the kept work dir — no judge, no spend. The
-  published scenario schema mirrors every load rule but the duplicate-id check. Declaring a metric arms the pre-run
-  manifest, which a scenario with no other baseline-reading key did not capture before: such runs now persist
-  `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back the files the run authored
-  (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
+  from the kept work dir — no judge, no spend. The published scenario schema mirrors every other load rule.
+  Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`.
+  Declaring a metric arms the pre-run manifest, which a scenario with no other baseline-reading key did not capture
+  before: such runs now persist `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back
+  the files the run authored (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
   connected folder before each run (time on a large connected folder).
 
 - **`lint-skill --suppressions <file>` accepts reviewed findings from a JSON file, one site per entry.** Each
@@ -498,9 +498,10 @@ All notable changes to this project are documented here. The format is based on
   the run (a plugin's or skill's own files under `.local-plugins/`, say) was missing from it and read as "new this
   run". On `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json`, `authored: true` on such a
   path now fails evidence-unavailable, naming the folders the manifest covers.
-- **`artifact_json` and `artifact_text` no longer hang on a FIFO.** A FIFO (or socket or device) at the artifact
-  path was opened for reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's
-  evaluation. Both keys now check the file type first and fail with "is not a regular file".
+- **`artifact_json` and `artifact_text` no longer hang on a FIFO.** A FIFO at the artifact path was opened for
+  reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
+  check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
+  directory (a FIFO, a socket or a device).
 
 ### Documentation
 

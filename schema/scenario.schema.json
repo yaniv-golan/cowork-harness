@@ -1279,7 +1279,7 @@
       "minLength": 1
     },
     "metrics": {
-      "description": "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible here): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
+      "description": "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
       "type": "array",
       "items": {
         "type": "object",
@@ -1318,16 +1318,16 @@
                   "pattern": "^\\s*$"
                 },
                 {
+                  "pattern": "\\\\"
+                },
+                {
                   "pattern": "^/"
                 },
                 {
-                  "pattern": "^[A-Za-z]:[\\\\/]"
+                  "pattern": "^[A-Za-z]:(/|$)"
                 },
                 {
-                  "pattern": "^\\\\"
-                },
-                {
-                  "pattern": "(^|[\\\\/])\\.\\.([\\\\/]|$)"
+                  "pattern": "(^|/)\\.\\.(/|$)"
                 },
                 {
                   "pattern": "\\u0000"

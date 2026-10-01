@@ -1245,12 +1245,20 @@ export function isMetricIdSafe(id: string): boolean {
   return new RegExp(METRIC_ID_PATTERN).test(id) && id.length <= METRIC_ID_MAX && !/^\.+$/.test(id);
 }
 
-/** A relative path under the work root: not blank, not absolute, no `..` segment, no NUL. */
+/** What a metric's `artifact` path may not be — ONE list: the loader tests it and the published JSON Schema emits it
+ *  (`artifact.not.anyOf`), pinned by a parity test. Each is an unanchored-flag-free ECMAScript pattern. A backslash
+ *  is refused anywhere: on POSIX it is part of a file name, so `outputs\m.json` would never name the file the author
+ *  meant. A colon alone is legal (`a:b.json` is a POSIX name); a drive root (`c:/…`, bare `c:`) is not. */
+export const METRIC_ARTIFACT_REFUSED_PATTERNS = [
+  "^\\s*$", // blank
+  "\\\\", // a backslash anywhere
+  "^/", // absolute
+  "^[A-Za-z]:(/|$)", // a drive root
+  "(^|/)\\.\\.(/|$)", // a `..` segment
+  "\\u0000", // NUL
+] as const;
 function isContainedRelPath(p: string): boolean {
-  // A backslash is refused outright: on POSIX it is part of a file name, so `outputs\m.json` would never name the
-  // file the author meant and would always report missing_artifact.
-  if (p.trim().length === 0 || p.includes("\0") || p.includes("\\") || p.startsWith("/") || /^[A-Za-z]:/.test(p)) return false;
-  return !p.split(/[\\/]/).includes("..");
+  return !METRIC_ARTIFACT_REFUSED_PATTERNS.some((r) => new RegExp(r, "u").test(p));
 }
 
 export const ScenarioMetric = z
@@ -1266,7 +1274,7 @@ export const ScenarioMetric = z
       .string()
       .refine(isContainedRelPath, {
         message:
-          "a metric artifact is a path relative to the work root, with forward slashes (no absolute path, no `..`, no backslash, not blank)",
+          "a metric artifact is a path relative to the work root, with forward slashes: not blank, not starting with `/` or a drive root (`c:/`), no `..` segment, no backslash, no NUL",
       })
       .describe(
         "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder",
@@ -1444,7 +1452,7 @@ export const ScenarioObject = z.strictObject({
     })
     .optional()
     .describe(
-      "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible here): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
+      "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
     ),
 });
 /** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key

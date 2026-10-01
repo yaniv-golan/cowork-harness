@@ -131,6 +131,48 @@ describe("the published schema's id rules agree with the loader", () => {
       expect(validate({ ...base, metrics: [metric({ id })] }), id).toBe(loader);
     }
   });
+  it("artifact paths: the JSON Schema refuses exactly what the loader refuses", () => {
+    const corpus = [
+      "outputs/m.json",
+      "outputs\\m.json",
+      "c:x.json",
+      "a:b.json",
+      "c:/x.json",
+      "C:/x.json",
+      "c:",
+      "/etc/x.json",
+      "../x.json",
+      "outputs/../x.json",
+      "outputs/..x.json",
+      "outputs/x..json",
+      "  ",
+      "",
+      "outputs/a\0b",
+      "./outputs/m.json",
+      "outputs/",
+      "\\\\host\\x",
+    ];
+    for (const artifact of corpus) {
+      const loader = Scenario.safeParse({ ...base, metrics: [metric({ artifact })] }).success;
+      expect(validate({ ...base, metrics: [metric({ artifact })] }), JSON.stringify(artifact)).toBe(loader);
+    }
+  });
+  it("a POSIX name with a colon is legal; a drive root is not", () => {
+    expect(parse([metric({ artifact: "outputs/a:b.json" })]).success).toBe(true);
+    expect(parse([metric({ artifact: "a:b.json" })]).success).toBe(true);
+    expect(parse([metric({ artifact: "c:/x.json" })]).success).toBe(false);
+    expect(parse([metric({ artifact: "c:" })]).success).toBe(false);
+  });
+  it("min: 5, scale: 1 is refused by the loader and accepted by the schema (loader-only, named as such)", () => {
+    expect(parse([metric({ scale: 1, min: 5 })]).success).toBe(false);
+    expect(validate({ ...base, metrics: [metric({ scale: 1, min: 5 })] })).toBe(true);
+  });
+  it("the loader-only rules are named identically in the schema description and the CHANGELOG", () => {
+    const LOADER_ONLY =
+      "Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`.";
+    expect(schema.properties.metrics.description).toContain(LOADER_ONLY);
+    expect(readFileSync("CHANGELOG.md", "utf8")).toContain(LOADER_ONLY);
+  });
   it("min below scale is loader-only and the schema description says so", () =>
     expect(JSON.stringify(schema.properties.metrics)).toContain("`min` below `scale`"));
 });
