@@ -177,13 +177,57 @@
             "minLength": 1
           },
           "file_exists": {
-            "description": "a file exists at this path under the agent's work root",
-            "type": "string",
-            "minLength": 1
+            "description": "a file exists at this path under the agent's work root. OBJECT form `{path, authored}`: `authored: true` also requires that THIS run created or rewrote the file (an untouched pre-run file — a workspace_fixture file the step never touched — fails); `authored: false` states that an inherited file is fine",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "the file's path under the work root (as in the string form)"
+                  },
+                  "authored": {
+                    "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            ]
           },
           "user_visible_artifact": {
-            "description": "a file exists AND is under a user-visible prefix. Write the path workRoot-relative (e.g. `outputs/x.md`), NOT with an `mnt/` prefix: the accepted prefixes are `outputs/`, each connected-folder mount (`<folder>/`), or the legacy `.projects` fallback (pre-1.14271.0). (At fidelity tiers the workRoot is the `mnt/` mount, so the file lands at `mnt/outputs/…` on disk, but the assertion value is the relative form.)",
-            "type": "string"
+            "description": "a file exists AND is under a user-visible prefix. Write the path workRoot-relative (e.g. `outputs/x.md`), NOT with an `mnt/` prefix: the accepted prefixes are `outputs/`, each connected-folder mount (`<folder>/`), or the legacy `.projects` fallback (pre-1.14271.0). (At fidelity tiers the workRoot is the `mnt/` mount, so the file lands at `mnt/outputs/…` on disk, but the assertion value is the relative form.) OBJECT form `{path, authored}` as for file_exists",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "the file's path under the work root (as in the string form)"
+                  },
+                  "authored": {
+                    "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            ]
           },
           "tool_called": {
             "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way. OBJECT form `{tool, input, input_any, result, scope, subagent_type, count}` asserts what the call carried, where it ran and what its paired result said — use it, not transcript_*, to check a command that RAN",
@@ -766,7 +810,7 @@
             "const": true
           },
           "no_unexpected_files": {
-            "description": "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), except a --resume run (no fresh manifest ⇒ fails loud)",
+            "description": "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), and a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable",
             "type": "array",
             "items": {
               "type": "string",
@@ -814,6 +858,10 @@
                 "description": "the body does not match this regex",
                 "type": "string",
                 "minLength": 1
+              },
+              "authored": {
+                "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                "type": "boolean"
               }
             },
             "required": [
@@ -1027,6 +1075,10 @@
               "is_null": {
                 "description": "the resolved value is JSON null (distinct from absent)",
                 "type": "boolean"
+              },
+              "authored": {
+                "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                "type": "boolean"
               }
             },
             "required": [
@@ -1178,6 +1230,11 @@
     "allow_host_hooks": {
       "description": "required consent for `fidelity: protocol` when a staged plugin declares runnable hooks (`<plugin>/hooks/hooks.json`) — the CLI runs them as native host processes under your account with no container sandbox; plugins without hooks need no opt-in",
       "type": "boolean"
+    },
+    "workspace_fixture": {
+      "description": "a directory (relative to the scenario file) whose contents are copied into the session's outputs/ before turn 1 — `<dir>/report.md` lands at `outputs/report.md`. Equals re-invoking the skill in the same Cowork session after it stopped mid-work or finished, except that the run starts with a fresh conversation context. Regular files only; symlinks, hard links, agent-config paths (.claude/, .git/, .mcp.json, CLAUDE.md) and, in git mode, untracked files are refused; 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Never re-staged on --resume. Its content signature joins the cassette staleness check",
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [

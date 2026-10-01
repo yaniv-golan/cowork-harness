@@ -114,6 +114,14 @@ allow_host_hooks: true              # OPTIONAL — required to run `protocol` fi
                                     # NEEDS cowork-harness >= 3.0.0. The loader is a strict object, so an
                                     # OLDER CLI does not default it — it hard-errors
                                     # `Unrecognized key: "allow_host_hooks"` and exits 2.
+
+workspace_fixture: fixtures/step1   # OPTIONAL — a directory (relative to this file) copied into the
+                                    # session's outputs/ before turn 1, to test one late step of a pipeline
+                                    # (fresh runs only; never re-staged on --resume). Regular files only:
+                                    # symlinks, hard links, .claude/.git/.mcp.json/CLAUDE.md and (git mode)
+                                    # untracked files are refused at load, as is a presence/body assertion
+                                    # on a fixture file that does not state `authored: true|false`.
+                                    # 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Stamps v14.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
@@ -322,7 +330,7 @@ A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re
 
 **Scenario source — the WHOLE scenario is frozen; only `assert:` (+`expect_denied:`) can be opted back to
 disk.** A cassette captures every key (`name`/`prompt`/`session`/`baseline`/`fidelity`/`lane`/`skills`/
-`answers`/`execution`/`requires_capabilities`/`expect_denied`/`assert`), and a plain `replay` evaluates
+`answers`/`execution`/`requires_capabilities`/`workspace_fixture`/`expect_denied`/`assert`), and a plain `replay` evaluates
 **all** of them from that frozen copy (byte-deterministic, ignores the working tree); editing
 `scenarios/<name>.yaml` does not change it — replay only prints a `::notice::` when a sibling's
 `assert:`/`prompt:` differs, or when it fails to load at all. An edited `lane:`/`fidelity:`/`baseline:` reaches a replay ONLY by re-recording. `replay --assert-from

@@ -75,6 +75,8 @@ runs:
   E  `scenario-invalid`   the loader refuses the file (schema, value types, unknown keys, bad regex,
                           reserved values) -- including a non-scenario YAML in a linted directory
   E  `baseline-unknown`   `baseline:` names no baseline this installed cowork-harness ships
+  E  `workspace-fixture-invalid` / `workspace-fixture-vacuous-assert`   the run refuses the scenario's
+                          `workspace_fixture`, or a presence assertion on a fixture file that states no `authored:`
 Run directly, this script stays offline and never parses with the loader, so prefer the CLI wrapper
 when it is installed.
 
@@ -327,6 +329,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "requires_capabilities",  # Fix 4b: scenario-level required-capability declaration (pre-flight gate)
     "allow_host_writes",
     "allow_host_hooks",  # protocol consent: a staged plugin's hooks run as NATIVE HOST processes  # hostloop native-split: consent for a writable connected folder (pre-run gate)
+    "workspace_fixture",  # a saved outputs tree staged into outputs/ before turn 1 (scenario-file-relative dir)
 }
 
 
@@ -1777,7 +1780,12 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
     # E: `file_exists: X` and `file_absent: X` on the SAME path cannot both hold. Checked here rather
     # than in the TS contradiction groups because those match on key PRESENCE across the array and
     # cannot compare values; the linter already has the parsed YAML, so the value comparison is free.
-    exists_paths = {v for v in _assert_values(items, "file_exists") if isinstance(v, str)}
+    # `file_exists` has a string form and an object form `{path, authored}` — both name the same path.
+    exists_paths = {
+        v if isinstance(v, str) else v.get("path")
+        for v in _assert_values(items, "file_exists")
+        if isinstance(v, str) or (isinstance(v, dict) and isinstance(v.get("path"), str))
+    }
     absent_paths = {v for v in _assert_values(items, "file_absent") if isinstance(v, str)}
     both = sorted(exists_paths & absent_paths)
     if both:
@@ -1989,7 +1997,7 @@ def _wrapper_loader_findings():
 # Every rule id `lint` can emit, with the highest severity it is emitted at. Nothing reads this at run time
 # (`lint` has no rule suppression); it exists so a test can check that every `Finding("<SEV>", "<id>", …)`
 # in this file is claimed by exactly one of this and LINT_SKILL_RULES. The loader findings the wrapper hands
-# over (`scenario-invalid`, `baseline-unknown`) are built in TypeScript and are not listed.
+# over (`scenario-invalid`, `baseline-unknown`, `workspace-fixture-*`) are built in TypeScript and are not listed.
 LINT_RULES = {
     "assert-contradiction": "ERROR",
     "assertions-key": "ERROR",

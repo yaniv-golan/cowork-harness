@@ -18,7 +18,7 @@ const FILE = "pre-run-manifest.json";
  *  unavailable for that path under input_unmodified), keeping the pre-run walk bounded on big
  *  connected folders. Default 50 MiB; override with COWORK_HARNESS_PRERUN_HASH_CAP (positive int bytes).
  *  Deliberately separate from the artifact BODY cap (COWORK_HARNESS_MAX_ARTIFACT_BYTES) — different concern. */
-function preRunHashCap(): number {
+export function preRunHashCap(): number {
   const env = process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
   if (env === undefined || env === "") return 50 * 1024 * 1024;
   const n = Number(env);
@@ -208,7 +208,7 @@ export function readPreRunManifestLinkAware(outDir: string): boolean {
   }
 }
 
-/** undefined = no manifest (an older kept run, a --resume run, or a run that didn't capture) — the
+/** undefined = no manifest (an older kept run, or a run that didn't capture; a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable) — the
  *  assertion then fails evidence-unavailable rather than vacuously passing. (Every live sandbox tier
  *  captures now, microvm included — its session tree is snapshotted from the VM into the run dir.) */
 export function readPreRunManifest(outDir: string): string[] | undefined {

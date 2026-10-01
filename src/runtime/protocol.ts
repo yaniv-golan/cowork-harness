@@ -12,6 +12,7 @@ import { BoundaryError } from "../errors.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { pluginDirArgs } from "./argv.js";
 import { agentSpawnOptions } from "./agent-tree.js";
+import { stageWorkspaceFixture } from "../fixture/workspace.js";
 
 /**
  * Pure builder for L0's spawn env. Protocol spawns the host `claude` over the OPERATOR's full shell env
@@ -126,6 +127,11 @@ export function spawnProtocol(
       warn(`::warning:: [mount] source missing at staging, skipped (COWORK_HARNESS_SOFT_MISSING): ${m.hostPath} → ${m.mountPath}\n`);
     }
   }
+
+  // workspace_fixture: turn-1 state. Protocol re-copies its mounts on EVERY turn (no resume guard above), so the
+  // fixture needs its own: re-staging on a resumed turn would overwrite what turn 1 wrote over the fixture (and
+  // the non-empty-outputs refusal would fire). Before the manifest, so an untouched fixture file is pre-run.
+  if (plan.workspaceFixture && !plan.resume) stageWorkspaceFixture(plan.workspaceFixture, join(work, "outputs"));
 
   // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
   capturePreRunManifest(plan, work, outDir, "protocol");

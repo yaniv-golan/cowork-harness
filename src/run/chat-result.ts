@@ -5,7 +5,7 @@ import type { RunResult } from "../types.js";
 import { infraErrorsForResult, evidenceErrorsForResult, type RunRecord } from "./run.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
-import { classifyWorkspaceFilesWithHealth, trustedWorkspaceFiles } from "./artifacts.js";
+import { classifyWorkspaceFilesWithHealth, deliverableArtifacts, trustedWorkspaceFiles } from "./artifacts.js";
 import { readTimeline } from "../agent/timeline.js";
 import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
@@ -143,7 +143,8 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     outputsDir: join(opts.workRoot, "outputs"),
     userVisibleRoots: opts.userVisibleRoots,
     readonlyFolderRoots: opts.readonlyFolderRoots.length ? opts.readonlyFolderRoots : undefined,
-    artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    artifacts: deliverableArtifacts(workspaceFiles, undefined), // chat captures no pre-run manifest: nothing is marked preRun
+    workspaceFixture: undefined, // a chat session has no scenario, so no workspace_fixture
     workspaceFiles,
     contextEvents: record.contextEvents,
     mcpErrors: record.mcpErrors,

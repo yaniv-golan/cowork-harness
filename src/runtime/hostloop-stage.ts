@@ -7,6 +7,7 @@ import { warn } from "../io.js";
 import type { LaunchPlan } from "../session.js";
 import type { HostLoopBindMount } from "./argv.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
+import { stageWorkspaceFixture } from "../fixture/workspace.js";
 
 export type { HostLoopBindMount };
 
@@ -55,6 +56,8 @@ export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string): { mcp
         throw new Error(`cowork-harness: mount source vanished after plan validation: ${mt.hostPath} -> ${mt.mountPath}`);
       }
     }
+    // workspace_fixture: fresh runs only, after the mounts, before the pre-run manifest (as stageWorkspace).
+    if (plan.workspaceFixture) stageWorkspaceFixture(plan.workspaceFixture, join(mntHost, "outputs"));
     // mcp.json: resolved via resolveDeclaredSource exactly as stageWorkspace does, but into
     // join(plan.configDir, "mcp.json") — the native argv's --mcp-config takes this HOST path (there is
     // no configGuest for a native process). Same softMissing/resume exemptions.

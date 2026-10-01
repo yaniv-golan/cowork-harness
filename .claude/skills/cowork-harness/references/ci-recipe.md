@@ -532,9 +532,9 @@ skipped live-only assertions is reported on each replay result as `skippedAssert
 ## Staleness mostly does NOT fail a replay — read it from the JSON
 
 A plain `replay` **warns** on a DRIFTED cassette (skill/baseline drift) but stays `ok:true` — a green
-replay does **not** imply the recording is still valid. **Since 2.0.0 there is one exception:**
-`unverifiable-skill` — staleness that could not be checked at all, most often a cassette that moved —
-FAILS a bare `replay`. Recover with `--session <file>` rather than re-recording. Each replay result carries `staleness[]`, an array of
+replay does **not** imply the recording is still valid. **Two exceptions fail a bare `replay`:**
+`unverifiable-skill` (since 2.0.0) — staleness that could not be checked at all, most often a cassette that
+moved — and `unverifiable-fixture`, a `workspace_fixture` whose signature cannot be checked. Recover `unverifiable-skill` with `--session <file>` rather than re-recording; recover `unverifiable-fixture` by restoring the fixture directory where the cassette expects it (its stored path is relative to the cassette — `--session` does not change it), or by re-recording after moving it. Each replay result carries `staleness[]`, an array of
 `{class, message}`, so a token-free gate can act on it without `ok` being the whole story:
 
 | `class` | meaning | concern |
@@ -546,19 +546,23 @@ FAILS a bare `replay`. Recover with `--session <file>` rather than re-recording.
 | `unverifiable-skill` | skill dirs unresolvable, **or** the cassette predates the hash-format epoch (v12) so its digest is not comparable | couldn't verify the skill. **Fails a bare `replay`.** For the epoch case try `rehash` first — it migrates without a re-record where it can prove the content unchanged (`rehash <file> --session <s.yaml>` if the cassette moved) |
 | `resolved-tier` | a `fidelity: cowork` cassette's recorded `effectiveFidelity` no longer matches what the baseline resolves to today (the host-loop gate flipped) | **high** (the recording exercises the wrong tier) |
 | `unverifiable-tier` | tier check couldn't run for a `fidelity: cowork` cassette (no recorded `effectiveFidelity`, or its pinned baseline failed to load) | couldn't verify the tier — re-record |
+| `prompt-assets` | the baseline's committed prompt assets changed since record under the same appVersion | re-record (warns; `--strict` fails) |
+| `unverifiable-prompt-assets` | a recorded prompt-asset hash exists but the live baseline's assets can't be hashed | couldn't verify the prompt |
+| `fixture` | the scenario's `workspace_fixture` content changed since record (names the files) | **high** (the step now starts from different files) — re-record; `--fail-on-skill-drift` fails it |
+| `unverifiable-fixture` | a `workspace_fixture` signature can't be checked: none recorded, no cassette dir, the dir is gone, or the scan refuses it | couldn't verify the fixture. **Fails a bare `replay`** |
 
 (A pre-`effectiveFidelity` cassette with an **explicit** tier is statically knowable — it passes the tier
 check with a non-failing informational note in the `verify-cassettes` envelope's per-file `notes[]`, a
 `·`-prefixed row in text output. On `verify-cassettes` every staleness *finding* above still fails the
 gate (`ok:false`) — but it is class-AWARE on the EXIT CODE: a `baseline`/`skill`/`shared-root`/
-`format`/`resolved-tier` class lands in the envelope's `staleness[]` (verified & failed — exit `1`),
+`format`/`resolved-tier`/`prompt-assets`/`fixture` class lands in the envelope's `staleness[]` (verified & failed — exit `1`),
 while an `unverifiable-*` class lands in `unverifiable[]` (could not verify — exit `3`). Notes never
 fail it either way.)
 
 To gate in CI, pick the severity you want:
 
 - `replay --strict` — fail (exit 1) on **any** staleness class.
-- `replay --fail-on-skill-drift` — fail on the skill-source DRIFT classes (`skill` / `shared-root`); `unverifiable-skill` needs no flag, it fails the default verdict since 2.0.0;
+- `replay --fail-on-skill-drift` — fail on the skill-source DRIFT classes (`skill` / `shared-root`) and a changed `workspace_fixture` (`fixture`); `unverifiable-skill` and `unverifiable-fixture` need no flag, they fail the default verdict;
   baseline / format / `unverifiable-baseline` stay non-failing warnings.
   Note `--allow-failing` waives this gate wholesale, including the copy `--assert-from` turns on for you:
   `replay --assert-from … --write --allow-failing` will persist an assert block validated against a

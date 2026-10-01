@@ -25,6 +25,7 @@ import {
   newestStagedSibling,
 } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
+import { recordedFixtureFileSigs, recordedFixtureRefusal } from "./fixture/workspace.js";
 import {
   executeScenario,
   parseScenarioFile,
@@ -277,7 +278,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
                                (--assert-from <scenario.yaml> / --reassert: opt-in token-free re-check against on-disk assert:)
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
-      [--fail-on-skill-drift]  fail only on skill-source DRIFT (skill/shared-root); baseline drift stays a warning
+      [--fail-on-skill-drift]  fail only on skill-source DRIFT (skill/shared-root) and a changed workspace_fixture
+                               (fixture); baseline drift stays a warning
                                (staleness that could NOT BE VERIFIED fails a bare replay — no flag needed)
       [--session <file>]       resolve skill sources from THIS session — the fix for a MOVED cassette, whose
                                recorded session path no longer resolves. One cassette at a time.
@@ -300,7 +302,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
                                and that each one loads: the run/record loader's schema, regex and named-baseline
-                               checks are ERRORs (scenario-invalid / baseline-unknown)
+                               checks are ERRORs (scenario-invalid / baseline-unknown), and so is a workspace_fixture
+                               the run would refuse (workspace-fixture-invalid / workspace-fixture-vacuous-assert)
       [--strict]               fail on WARN too, not just ERROR; its default floor is WARN, so INFO is
                                hidden and never fails (add --min-severity INFO to fail on INFO too)
       [--min-severity <S>]     drop findings below ERROR|WARN|INFO before printing AND before the exit
@@ -4470,6 +4473,10 @@ async function cmdVerifyRun(args: string[]) {
     return fail("verify-run", loaded.kind, loaded.message, undefined, isJsonOutput(args));
   }
   const { ctx, result, scenario, sidecarTranscript, sidecarQuestions } = loaded;
+  // The pre-spawn refusal a live run makes, against the fixture files this kept run recorded: an on-disk
+  // presence/body assertion on one of them with no `authored:` would pass on the fixture alone.
+  const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(runDir) ?? result.fingerprint?.workspaceFixtureFileSigs);
+  if (vacuousFixture) return fail("verify-run", "usage", `verify-run: ${vacuousFixture}`, undefined, isJsonOutput(args));
 
   const assertions = evaluate(scenario.assert, ctx);
   // Same helper the live run uses (evaluate() does not handle expect_denied). Passing ctx.egressMissing

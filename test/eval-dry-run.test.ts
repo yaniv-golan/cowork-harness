@@ -500,6 +500,40 @@ describe("eval --dry-run: the host-claude isolation check", () => {
     expect(asked).toBe(1);
   });
 
+  it("refuses a semantic_pairwise reference store inside the scenario's workspace_fixture (the fixture is copied into outputs/)", async () => {
+    const { scen, a, b } = setup();
+    const key = composeKey(COMPOSER_ID, { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+    mkdirSync(join(root, "fx"), { recursive: true });
+    writeFileSync(join(root, "fx", "scores.md"), "step 1 output\n");
+    freezeRef(
+      join(root, "fx", "refs"),
+      "pairwise",
+      { command: "ref freeze", runDir: "~/r", resultSha256: "a".repeat(64) },
+      { [key]: "a reference answer" },
+      {
+        harnessVersion: "t",
+        composerId: COMPOSER_ID,
+        scenario: "pairwise",
+        taskSha256: createHash("sha256").update("write", "utf8").digest("hex"),
+      },
+    );
+    rmSync(join(scen, "csv-metrics.yaml"));
+    writeFileSync(
+      join(scen, "pairwise.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: write\nworkspace_fixture: ../fx\nassert:\n  - semantic_pairwise:\n      judge_model: claude-opus-4-8\n      refs: [../fx/refs]\n`,
+    );
+    const prev = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0";
+    try {
+      await expect(planEvalDryRun(dry(scen, a, b), { ...planDeps([]), isolationCheck: () => undefined })).rejects.toThrow(
+        /overlaps the mounted source/,
+      );
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = prev;
+    }
+  });
+
   it("does not consult it when no scenario calls the judge or the LLM decider", async () => {
     const { scen, a, b } = setup();
     let asked = 0;
