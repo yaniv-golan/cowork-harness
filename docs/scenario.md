@@ -1182,7 +1182,7 @@ partial run and on `chat`. A missing value is never reported as `0`, and a strin
 | `readonly` | the file is a read-only connected-folder input |
 | `size` | the file is over the 10 MiB body cap, or (replay) over the cassette's inline-body cap |
 | `remote` | `lane: remote` — the lane's filesystem is not locally observable |
-| `pruned` | there is no work tree to read (a replay of a cassette with no artifact manifest), or (regrade) the kept file no longer matches what the run wrote |
+| `pruned` | there is no work tree to read (a replay of a cassette with no artifact manifest), or (regrade) the kept file differs from what the run wrote |
 | `pre_run` | the run did not write the file — see below |
 
 **`pre_run`: a metric reads only what the run wrote.** "Wrote" is the rule `authored: true` uses: the file's content

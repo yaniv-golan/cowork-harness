@@ -664,7 +664,7 @@ calls and is absent when none was priced (never `0` for unknown); `unpricedGrade
 `invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
 `assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
 every other assert as `{assertionIndex, keys}`. `metrics` (only when the scenario declares `metrics:`) is the
-`RunResult.metrics` shape re-read from the kept work dir; a file whose bytes no longer equal the run's recorded
+`RunResult.metrics` shape re-read from the kept work dir; a file whose bytes differ from the run's recorded
 post-run hash (`RunResult.workspaceFiles`) is `unavailable: "pruned"`.
 
 `docMatchesLive` is `true` | `false` | `"scope_changed"` | `"unknown"` | `"live_refused"` | `"not_graded"`. **Per
