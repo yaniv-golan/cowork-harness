@@ -28,8 +28,8 @@ import {
 const history = (scenario: string, agent: number[], extra: Partial<CostHistory> = {}): CostHistory => ({
   scenario,
   samples: agent.map((agentUsd) => ({ agentUsd })),
-  worstObservedUsd: agent.length ? Math.max(...agent) : undefined,
-  gatePricedRuns: agent.length,
+  budgetGateWorstUsd: agent.length ? Math.max(...agent) : undefined,
+  budgetGatePricedRuns: agent.length,
   distinctSkillHashes: 1,
   distinctTiers: 1,
   ...extra,
@@ -56,9 +56,18 @@ describe("constants", () => {
 });
 
 describe("perRepCost — percentiles by hand", () => {
-  it("[1,2,3,4,5]: p50 3, p95 5, mean 3, worst from the gate basis", () => {
-    const c = perRepCost(history("s", [5, 1, 4, 2, 3]));
-    expect(c).toMatchObject({ pricedRuns: 5, p50Usd: 3, p95Usd: 5, meanUsd: 3, worstObservedUsd: 5, thin: false, p95IsMax: true });
+  it("[1,2,3,4,5]: p50 3, p95 5, mean 3, worst 5 on the cost basis; the gate figure carried apart", () => {
+    const c = perRepCost(history("s", [5, 1, 4, 2, 3], { budgetGateWorstUsd: 8 }));
+    expect(c).toMatchObject({
+      pricedRuns: 5,
+      p50Usd: 3,
+      p95Usd: 5,
+      meanUsd: 3,
+      worstObservedUsd: 5,
+      budgetGateWorstUsd: 8,
+      thin: false,
+      p95IsMax: true,
+    });
   });
 
   it("[0.2]: p50 = p95 = 0.2, thin", () => {
@@ -77,8 +86,8 @@ describe("perRepCost — percentiles by hand", () => {
     const h: CostHistory = {
       ...history("s", []),
       samples: [{ agentUsd: 2, judgeUsd: 0.1 }, { agentUsd: undefined, judgeUsd: 0.3 }, { agentUsd: 4 }],
-      worstObservedUsd: 4,
-      gatePricedRuns: 2,
+      budgetGateWorstUsd: 4,
+      budgetGatePricedRuns: 2,
     };
     const c = perRepCost(h);
     expect(c.pricedRuns).toBe(2);
@@ -118,11 +127,39 @@ describe("estimateScheduleCost", () => {
     expect(c.thinnest).toBe(1);
   });
 
-  it("worst-observed comes from the gate basis even where the cost basis differs", () => {
-    const h = history("w", [1, 1, 1], { worstObservedUsd: 9, gatePricedRuns: 7 });
+  it("worst-observed is on the SAME basis as p50/p95; the budget gate's wider figure is separate", () => {
+    const h = history("w", [1, 1, 1], { budgetGateWorstUsd: 9, budgetGatePricedRuns: 7 });
     const c = estimateScheduleCost([{ scenario: "w", jobs: 2, history: h }]);
     expect(c.p95Usd).toBe(2);
-    expect(c.worstObservedUsd).toBe(18);
+    expect(c.worstObservedUsd).toBe(2);
+    expect(c.budgetGateWorstUsd).toBe(18);
+  });
+
+  it("a scenario priced only on another tier or baseline adds nothing to any covered figure", () => {
+    // No cost-basis history, but the gate (any tier/baseline) has one $2 run.
+    const h = history("s", [], { budgetGateWorstUsd: 2, budgetGatePricedRuns: 1 });
+    const c = estimateScheduleCost([{ scenario: "s", jobs: 10, history: h }]);
+    expect(c).toMatchObject({ worstObservedUsd: 0, p50Usd: 0, lowerBound: true, unpriced: ["s"], pricedRuns: 0, thinnest: null });
+    expect(c.budgetGateWorstUsd).toBe(20);
+    const line = scheduleCostLine(c);
+    expect(line).toMatch(/worst observed \$0\.0000/);
+    expect(line).not.toMatch(/\$20/);
+  });
+
+  it("the line says p95 is the max whenever it is (20 or fewer priced runs), not only below 5", () => {
+    const c = estimateScheduleCost([{ scenario: "a", jobs: 2, history: history("a", [1, 2, 3, 4, 5, 6]) }]);
+    expect(scheduleCostLine(c)).toMatch(/p95 is the max observed run/);
+    const many = estimateScheduleCost([
+      {
+        scenario: "a",
+        jobs: 2,
+        history: history(
+          "a",
+          Array.from({ length: 21 }, (_, i) => i + 1),
+        ),
+      },
+    ]);
+    expect(scheduleCostLine(many)).not.toMatch(/p95 is the max observed run/);
   });
 
   it("an unpriced scenario contributes 0, is named, and makes the total a lower bound", () => {
@@ -146,9 +183,11 @@ describe("estimateScheduleCost", () => {
   it("the text line labels p95 and worst as not bounds, and a thin history as a max", () => {
     const c = estimateScheduleCost([{ scenario: "b", jobs: 10, history: b }]);
     const line = scheduleCostLine(c);
-    expect(line).toMatch(/not a bound/);
-    expect(line).toMatch(/budget-gate basis/);
-    expect(line).toMatch(/thinnest scenario has 1/);
+    expect(line).toMatch(/p95 \$5\.0000 \(pessimistic: every run at its scenario's p95 — not a bound\)/);
+    expect(line).toMatch(/worst observed \$5\.0000 \(every run at its scenario's worst on this basis — not a bound\)/);
+    expect(line).toMatch(/thinnest scenario has 1 \(thin\); p95 is the max observed run for 1 scenario/);
+    // The budget gate's wider basis is never printed on this line.
+    expect(line).not.toMatch(/budget-gate/);
   });
 });
 
@@ -169,13 +208,24 @@ describe("scheduleCostJson — the one serialization", () => {
       "unpriced",
       "pricedRuns",
       "thinnest",
+      "budgetGateWorstUsd",
       "judgeMeanUsd",
       "judgeP50Usd",
       "items",
     ]);
     expect(j.unpriced).toEqual(["none"]);
     expect(j.thinnest).toBe(3);
-    expect(Object.keys(j.items[0])).toEqual(["scenario", "jobs", "priced", "meanUsd", "p50Usd", "p95Usd", "worstObservedUsd", "perRep"]);
+    expect(Object.keys(j.items[0])).toEqual([
+      "scenario",
+      "jobs",
+      "priced",
+      "meanUsd",
+      "p50Usd",
+      "p95Usd",
+      "worstObservedUsd",
+      "budgetGateWorstUsd",
+      "perRep",
+    ]);
     // Survives a JSON round trip unchanged: no undefined-valued covered key can silently disappear.
     expect(JSON.parse(JSON.stringify(j))).toEqual(j);
   });
@@ -190,9 +240,9 @@ describe("scheduleCostJson — the one serialization", () => {
 });
 
 describe("the p-value cache is the report's own MDD", () => {
-  it("cachedMdd equals minimumDetectableDifference for every k1, N <= 40, at three levels", () => {
+  it("cachedMdd equals minimumDetectableDifference for every k1, N <= 100, at three levels", () => {
     for (const level of [0.05, 0.05 / 7, 0.1 / 7]) {
-      for (let N = 1; N <= 40; N++) {
+      for (let N = 1; N <= 100; N++) {
         for (let k1 = 0; k1 <= N; k1++) {
           expect(cachedMdd(k1, N, level), `k1=${k1} N=${N} level=${level}`).toEqual(minimumDetectableDifference(k1, N, N, level));
         }
@@ -261,14 +311,31 @@ describe("planRow — the ~30% row, a 50pp rise", () => {
     expect(t.nForPower80.drop.possible.n).toBe("impossible");
   });
 
+  it("nForPower80 is stable from the N it names (power is not monotone in N, so this is checked)", () => {
+    expect(t.nForPower80.rise.possible.stableFrom).toBe(18);
+    expect(t.nForPower80.rise.confirmedSingleRow.stableFrom).toBe(27);
+  });
+
   it("power at --reps is reported for the target", () => {
-    expect(typeof t.powerAtReps.rise.possible).toBe("number");
+    expect(t.powerAtReps.rise.possible).toBeCloseTo(0.242958, 5);
+    // No table at N = 5 reaches 0.05/7 (the floor there is 1/126), so the region is empty.
+    expect(t.powerAtReps.rise.confirmedSingleRow).toBe(0);
     expect(t.powerAtReps.drop.possible).toBe("impossible");
   });
 
   it("the valid-rep fraction inflates the scheduled N", () => {
     const p = planRow({ k: 4, n: 14 }, opts({ targetEffect: 0.5, validFraction: 0.8 }));
     expect(p.target!.rise.possible.scheduleReps).toBe(15); // ceil(12 / 0.8)
+  });
+});
+
+describe("planRow — under BH", () => {
+  it("the single-row confirmed level is min(alpha, q/m) = 0.1/7: N = 16, stable from 18; 80% power at 24", () => {
+    const t = planRow({ k: 4, n: 14 }, opts({ correction: "bh", q: 0.1, targetEffect: 0.5 })).target!;
+    expect(t.rise.confirmedSingleRow).toMatchObject({ n: 16, stableFrom: 18 });
+    expect(t.nForPower80.rise.confirmedSingleRow).toMatchObject({ n: 24, stableFrom: 24 });
+    // `possible` does not depend on the correction.
+    expect(t.rise.possible).toMatchObject({ n: 12, stableFrom: 12 });
   });
 });
 
@@ -294,6 +361,20 @@ describe("planRow — the ceiling", () => {
     expect(p.target!.atBound?.rise?.p).toBe(lo);
     expect(typeof p.target!.atBound?.rise?.possible.n).toBe("number");
     expect(p.notes.join("\n")).toMatch(new RegExp(`if the true rate is ${Math.round(lo * 100)}%, a 50pp rise needs N = \\d+`));
+  });
+});
+
+describe("planRow — the floor (the ceiling's mirror)", () => {
+  it("0/3: a drop is undetectable at the point estimate; the target is recomputed at the Wilson UPPER bound", () => {
+    const p = planRow({ k: 0, n: 3 }, opts({ targetEffect: 0.5 }));
+    expect(p.mddAtReps!.drop).toBe("n/a");
+    expect(p.target!.drop.possible.n).toBe("impossible");
+    const hi = wilsonInterval(0, 3).upper;
+    expect(p.target!.atBound?.drop?.p).toBe(hi);
+    expect(p.target!.atBound?.drop?.possible).toMatchObject({ n: 12, stableFrom: 12 });
+    expect(p.target!.atBound?.rise).toBeUndefined();
+    expect(p.notes.join("\n")).toMatch(/a drop is undetectable at any N at the point estimate/);
+    expect(p.notes.join("\n")).toMatch(/if the true rate is 56%, a 50pp drop needs N = 12/);
   });
 });
 
@@ -389,20 +470,21 @@ describe("sequentialPreview — best case under the assumed scheme", () => {
     expect(s.firstConfirmableLook).toEqual({ look: 3, repsPerArm: 6 });
   });
 
-  it("raising --reps can move the first confirmable look LATER (L grows)", () => {
-    // Found by search below, then pinned.
-    let found: [number, number] | undefined;
-    for (let a = 2; a <= 40 && !found; a++)
-      for (let b = a + 1; b <= 40 && !found; b++) {
-        const fa = sequentialPreview({ reps: a, m: 3, alpha: 0.05 }).firstConfirmableLook;
-        const fb = sequentialPreview({ reps: b, m: 3, alpha: 0.05 }).firstConfirmableLook;
-        if (fa && fb && fb.repsPerArm > fa.repsPerArm) found = [a, b];
-      }
-    expect(found).toBeDefined();
-    const [a, b] = found!;
-    expect(sequentialPreview({ reps: b, m: 3, alpha: 0.05 }).firstConfirmableLook!.repsPerArm).toBeGreaterThan(
-      sequentialPreview({ reps: a, m: 3, alpha: 0.05 }).firstConfirmableLook!.repsPerArm,
-    );
+  it("raising --reps can move the first confirmable look LATER (L grows): m = 3, reps 15 -> 16", () => {
+    // reps 15: L = 7, per-row level 0.05/21 = 0.00238; floor(6,6) = 0.00216 meets it at look 3.
+    // reps 16: L = 8, level 0.05/24 = 0.00208; floor(6,6) misses, floor(8,8) = 0.000155 meets it at look 4.
+    expect(sequentialPreview({ reps: 15, m: 3, alpha: 0.05 }).firstConfirmableLook).toEqual({ look: 3, repsPerArm: 6 });
+    expect(sequentialPreview({ reps: 16, m: 3, alpha: 0.05 }).firstConfirmableLook).toEqual({ look: 4, repsPerArm: 8 });
+  });
+
+  it("a look counts from 2 completed reps per arm; there is no planned-reps threshold on an interim look", () => {
+    // Every rep a look, alpha 0.9 so a 3-rep look can reach its level (floor(3,3) = 0.1 <= 0.9/6).
+    expect(sequentialPreview({ reps: 6, m: 1, alpha: 0.9, lookEveryReps: 1 }).firstConfirmableLook).toEqual({ look: 3, repsPerArm: 3 });
+  });
+
+  it("rejects a non-positive or fractional look spacing", () => {
+    for (const bad of [0, -2, 1.5, Number.NaN])
+      expect(() => sequentialPreview({ reps: 6, m: 1, alpha: 0.05, lookEveryReps: bad }), String(bad)).toThrow(RangeError);
   });
 
   it("odd --reps: looks only at complete blocks, and the unpaired rep is noted", () => {
@@ -417,7 +499,8 @@ describe("sequentialPreview — best case under the assumed scheme", () => {
     const s = sequentialPreview({ reps: 40, m: 1, alpha: 0.05, rows: [{ id: "r", p: 4 / 14 }], targetEffect: 0.5 });
     const r = s.byRow![0];
     expect(r.id).toBe("r");
-    expect(r.firstLookForTarget.rise).not.toBeNull();
+    // L = 20, level 0.05/20; the projected 50pp rise first reaches it at 22 reps per arm.
+    expect(r.firstLookForTarget.rise).toEqual({ look: 11, repsPerArm: 22 });
     expect(r.firstLookForTarget.drop).toBeNull();
   });
 });

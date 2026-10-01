@@ -241,6 +241,7 @@ export function estimateBatchCost(items: readonly BatchItem[]): {
   }
   return { known, unpriced, pricedRuns, thinnest };
 }
+
 /** The one-line estimate, phrased so a partially-unpriced total can never read as authoritative. An
  *  unqualified "$0.00" over a corpus that has never run is worse than no number at all. */
 export function batchCostEstimateLine(

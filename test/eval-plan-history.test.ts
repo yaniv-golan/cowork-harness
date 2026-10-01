@@ -6,17 +6,24 @@
 //   - success-semantic.json: the passing multi-assertion base. Edits: `models` / `modelPinHonored` (pin
 //     cases), `fingerprint.contentSig` (exact-content cases), `ablated: true`, one grade's `pass` flipped
 //     (rate cases), a `judgePromptHash` on the semantic grade (prompt-mismatch case).
-//   - exit-agent.json: an agent-error rep. Edit: `models` set to the pin, so only the termination differs.
+//   - exit-agent.json: an agent-error rep. Edits: `models` set to the pin (so only the termination
+//     differs), to another live model, or emptied with `modelUsage` removed (a crash before any model
+//     answered).
 //   - auth-exit.json: an infrastructure (sign-in) failure, used as is.
+//   - slash-success-synthetic.json: a `/plugin:skill` run whose main loop reports only `<synthetic>`, so
+//     only `modelUsage` vouches for the model. Used as is.
+//   - success-semantic.json also gets a `judgeModel` on its semantic grade (judge-model cases), and the
+//     run fields `indexRowFromResult` reads (`outDir`, `fidelity`, `baseline`, `turn`) for the producer case.
 // Every copy also has its `scenario` renamed to the test scenario.
 import { describe, it, expect, beforeEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Assertion } from "../src/types.js";
-import { buildStats, type RunIndexRow } from "../src/run/run-index.js";
+import type { Assertion, RunResult } from "../src/types.js";
+import { buildStats, indexRowFromResult, type RunIndexRow } from "../src/run/run-index.js";
 import { HILLCLIMB_LABEL_PREFIX, loadCostHistory, loadRowHistory, type RowHistoryOptions } from "../src/eval/plan-history.js";
-import { perRepCost } from "../src/eval/planner.js";
+import { estimateScheduleCost, perRepCost } from "../src/eval/planner.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
 const fixture = (name: string): Record<string, unknown> => JSON.parse(readFileSync(join(FX, name), "utf8"));
@@ -313,14 +320,14 @@ describe("loadRowHistory — verdict rate is context only", () => {
     const rows = [run(undefined), run(undefined), run(undefined)];
     const h = loadRowHistory(rows, opts());
     expect(h.rows.every((r) => r.history.n === 0)).toBe(true);
-    expect(h.verdictRate).toEqual({ pass: 3, runs: 3 });
+    expect(h.verdictRate).toEqual({ pass: 3, runs: 3, basis: "index" });
   });
 
   it("all-pruned at 60%: still unknown rows", () => {
     const rows = [run(undefined), run(undefined), run(undefined, { pass: false }), run(undefined, { pass: false }), run(undefined)];
     const h = loadRowHistory(rows, opts());
     expect(h.rows.every((r) => r.history.n === 0)).toBe(true);
-    expect(h.verdictRate).toEqual({ pass: 3, runs: 5 });
+    expect(h.verdictRate).toEqual({ pass: 3, runs: 5, basis: "index" });
   });
 });
 
@@ -353,8 +360,8 @@ describe("loadCostHistory — the cost basis", () => {
     const rows = [run(undefined, { costUsd: 1 }), run(undefined, { costUsd: 7, fidelity: "hostloop", baseline: "desktop-0.9.0" })];
     rows.push(run(undefined, { costUsd: 5, critiqueRole: "rollup" })); // a roll-up is not a run: never in either basis
     const h = loadCostHistory(rows, { scenario: SCEN, baseline: BASELINE, tier: "container" });
-    expect(h.worstObservedUsd).toBe(7);
-    expect(h.gatePricedRuns).toBe(2);
+    expect(h.budgetGateWorstUsd).toBe(7);
+    expect(h.budgetGatePricedRuns).toBe(2);
     expect(perRepCost(h).p95Usd).toBe(1);
   });
 
@@ -365,5 +372,214 @@ describe("loadCostHistory — the cost basis", () => {
       { agentUsd: 1, judgeUsd: 0.1 },
       { agentUsd: 2, deciderUsd: 0.05 },
     ]);
+  });
+});
+
+describe("loadRowHistory — a crash before any model answered (intention to treat)", () => {
+  /** exit-agent.json with no model evidence at all: the agent failed before its first model call. */
+  const crashNoModel = () => {
+    const err = fixture("exit-agent.json");
+    err.scenario = SCEN;
+    err.models = [];
+    delete err.modelUsage;
+    delete err.modelPinHonored;
+    return err;
+  };
+
+  it("scores 0 on every row, as the eval would: 9 passing + 1 crash is 9/10, not 9/9", () => {
+    const rows = Array.from({ length: 9 }, () => run(passing()));
+    rows.push(run(crashNoModel()));
+    const h = loadRowHistory(rows, opts());
+    expect(h.excludedByKey.model).toBe(0);
+    expect(h.reps).toBe(10);
+    expect(h.rows.every((r) => r.history.n === 10)).toBe(true);
+    expect(rowById(h, 0)).toMatchObject({ k: 9, n: 10 });
+  });
+
+  it("a crash that DID report a different live model is still excluded by the model key", () => {
+    const err = fixture("exit-agent.json"); // reports claude-opus-5; the pin is claude-sonnet-5
+    err.scenario = SCEN;
+    const h = loadRowHistory([run(err)], opts());
+    expect(h.excludedByKey.model).toBe(1);
+    expect(h.modelsExcluded).toEqual({ "claude-opus-5": 1 });
+  });
+
+  it("a SUCCESS with no model evidence cannot vouch for the pin and is excluded", () => {
+    const h = loadRowHistory(
+      [
+        run(
+          passing((r) => {
+            r.models = [];
+            delete r.modelPinHonored;
+          }),
+        ),
+      ],
+      opts(),
+    );
+    expect(h.excludedByKey.model).toBe(1);
+    expect(h.modelsExcluded).toEqual({ "(no live model)": 1 });
+  });
+});
+
+describe("loadRowHistory — a /plugin:skill run vouched for by modelUsage only", () => {
+  it("counts: the main loop reports only <synthetic>, the billed model is the pin", () => {
+    const slash = fixture("slash-success-synthetic.json");
+    slash.scenario = SCEN;
+    const assertions = (slash.assertions as Array<{ assertion: Assertion }>).map((g) => g.assertion);
+    const h = loadRowHistory([run(slash)], opts({ assertions }));
+    expect(h.excludedByKey.model).toBe(0);
+    expect(h.reps).toBe(1);
+    expect(h.rows.every((r) => r.history.k === 0 && r.history.n === 1)).toBe(true); // both asserts failed in that run
+  });
+});
+
+describe("loadRowHistory — the judge model", () => {
+  const judgedBy =
+    (model: string): Edit =>
+    (r) => {
+      (r.assertions as Array<Record<string, unknown>>)[SEMANTIC_INDEX].judgeModel = model;
+    };
+
+  it("a different judge model excludes only the claim and rollup rows of that run, and is counted", () => {
+    const h = loadRowHistory(
+      [run(passing(judgedBy("claude-haiku-4-5"))), run(passing(judgedBy("claude-opus-5")))],
+      opts({ judgeModelPin: "claude-opus-5" }),
+    );
+    expect(h.judgeModelDiffers).toBe(1);
+    expect(rowById(h, 0)).toMatchObject({ k: 2, n: 2 });
+    const rollup = rowById(h, SEMANTIC_INDEX, "semantic_rollup");
+    expect(rollup).toMatchObject({ k: 1, n: 1 });
+    expect(rollup.excluded?.judge_model_differs).toBe(1);
+    const claims = h.rows.filter((x) => x.row.kind === "claim");
+    expect(claims.length).toBeGreaterThan(0);
+    expect(claims.every((x) => x.history.n === 1 && x.history.excluded?.judge_model_differs === 1)).toBe(true);
+  });
+
+  it("no judge pin: the judge model is not checked", () => {
+    const h = loadRowHistory([run(passing(judgedBy("claude-haiku-4-5")))], opts());
+    expect(h.judgeModelDiffers).toBe(0);
+    expect(rowById(h, SEMANTIC_INDEX, "semantic_rollup")).toMatchObject({ k: 1, n: 1 });
+  });
+});
+
+describe("loadRowHistory — exclusions that do not take a window slot", () => {
+  it("model and ablated exclusions are skipped, and older qualifying runs fill the window", () => {
+    const rows: RunIndexRow[] = [];
+    for (let i = 0; i < 3; i++) rows.push(run(passing(failRow0))); // oldest, qualifying
+    rows.push(
+      run(
+        passing((r) => {
+          r.models = ["claude-opus-5"];
+        }),
+      ),
+    );
+    rows.push(
+      run(
+        passing((r) => {
+          r.ablated = true;
+        }),
+      ),
+    );
+    const h = loadRowHistory(rows, opts({ window: 3 }));
+    expect(h.reps).toBe(3);
+    expect(h.reads).toBe(5);
+    expect(h.excludedByKey).toMatchObject({ model: 1, ablated: 1 });
+    expect(rowById(h, 0)).toMatchObject({ k: 0, n: 3 });
+  });
+
+  it("the 60-run window reads exactly 50 files", () => {
+    const rows: RunIndexRow[] = [];
+    for (let i = 0; i < 60; i++) rows.push(run(passing()));
+    const h = loadRowHistory(rows, opts());
+    expect(h.reads).toBe(50);
+    expect(h.validFraction).toBe(1);
+  });
+});
+
+describe("loadRowHistory — malformed and non-regular result files are unreadable, never guessed", () => {
+  it("valid JSON of the wrong shape", () => {
+    const rows = [
+      run(passing((r) => void (r.models = "claude-sonnet-5"))),
+      run(passing((r) => void (r.assertions = "nope"))),
+      run(passing((r) => void delete r.result)),
+    ];
+    const h = loadRowHistory(rows, opts());
+    expect(h.excludedByKey.unreadable).toBe(3);
+    expect(h.reps).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")("a FIFO is not opened for reading, and a symlinked result is refused", () => {
+    const fifoRow = run(undefined);
+    mkdirSync(join(fifoRow.outDir, "turns", "1"), { recursive: true });
+    execFileSync("mkfifo", [join(fifoRow.outDir, "turns", "1", "result.json")]);
+    const linkRow = run(undefined);
+    const target = join(root, "elsewhere.json");
+    writeFileSync(target, JSON.stringify(passing()));
+    mkdirSync(join(linkRow.outDir, "turns", "1"), { recursive: true });
+    symlinkSync(target, join(linkRow.outDir, "turns", "1", "result.json"));
+    const h = loadRowHistory([fifoRow, linkRow], opts());
+    expect(h.excludedByKey.unreadable).toBe(2);
+  });
+});
+
+describe("loadRowHistory — index rows built by the real producer", () => {
+  it("a row from indexRowFromResult passes every hard key", () => {
+    const i = ++seq;
+    const outDir = join(root, SCEN, `local_${i}`);
+    const r = passing((x) => {
+      x.outDir = outDir;
+      x.fidelity = "container";
+      x.baseline = BASELINE;
+      x.turn = 1;
+      x.runLabel = "eval:e1:a";
+      x.cost = { usd: 0.4 };
+    });
+    mkdirSync(join(outDir, "turns", "1"), { recursive: true });
+    writeFileSync(join(outDir, "turns", "1", "result.json"), JSON.stringify(r));
+    const row = indexRowFromResult(r as unknown as RunResult, {
+      command: "run",
+      partial: false,
+      ts: "2026-09-02T00:00:00.000Z",
+      git: { branch: null, sha: null },
+    });
+    const h = loadRowHistory([row], opts());
+    expect(h.reps).toBe(1);
+    expect(h.evalReps).toBe(1);
+    expect(perRepCost(loadCostHistory([row], { scenario: SCEN, baseline: BASELINE, tier: "container" })).pricedRuns).toBe(1);
+  });
+});
+
+describe("loadCostHistory — exclusion counts and the hillclimb seam", () => {
+  it("counts each filtered key, and includes hillclimb runs behind the option", () => {
+    const rows = [
+      run(undefined, { costUsd: 1 }),
+      run(undefined, { costUsd: 2, fidelity: "hostloop" }),
+      run(undefined, { costUsd: 3, baseline: "desktop-0.9.0" }),
+      run(undefined, { costUsd: 4, turn: 2 }),
+      run(undefined, { costUsd: 5, runLabel: `${HILLCLIMB_LABEL_PREFIX}flow:v1` }),
+      run(undefined, { costUsd: 6, critiqueRole: "rollup" }),
+    ];
+    const f = { scenario: SCEN, baseline: BASELINE, tier: "container" };
+    const h = loadCostHistory(rows, f);
+    expect(h.excluded).toEqual({ notRun: 1, tier: 1, baseline: 1, turn: 1, hillclimb: 1 });
+    expect(perRepCost(h).pricedRuns).toBe(1);
+    const withHc = loadCostHistory(rows, { ...f, includeHillclimb: true });
+    expect(withHc.excluded?.hillclimb).toBe(0);
+    expect(perRepCost(withHc).pricedRuns).toBe(2);
+  });
+});
+
+describe("cost at a target N matches `stats`", () => {
+  it("estimateScheduleCost at jobs = 2N has p50 = the stats p50 x 2N for the same rows", () => {
+    const rows = [1.2, 0.4, 3.1, 0.9, 2.2, 0.7].map((c) => run(undefined, { costUsd: c }));
+    const N = 12;
+    const stats = buildStats(rows, { scenario: SCEN, baseline: BASELINE, groupBy: "fidelity" }).summaries.find(
+      (s) => s.fidelity === "container",
+    )!;
+    const est = estimateScheduleCost([
+      { scenario: SCEN, jobs: 2 * N, history: loadCostHistory(rows, { scenario: SCEN, baseline: BASELINE, tier: "container" }) },
+    ]);
+    expect(est.p50Usd).toBe(stats.p50CostUsd! * 2 * N);
+    expect(est.p95Usd).toBe(stats.p95CostUsd! * 2 * N);
   });
 });

@@ -7,7 +7,7 @@
 //     gate's own unfiltered worst-observed figure (see `CostHistory`).
 //   - RATES (index, then result.json): each run re-classified by the eval's own classifier, so an
 //     infrastructure failure is excluded and an agent error scores 0 exactly as it would in the eval.
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync } from "node:fs";
 import type { Assertion } from "../types.js";
 import { isLiveModelId } from "../types.js";
 import { isRun, scenarioCostHistory, tierOf, type RunIndexRow } from "../run/run-index.js";
@@ -43,18 +43,22 @@ const isHillclimb = (r: RunIndexRow) => r.runLabel?.startsWith(HILLCLIMB_LABEL_P
 /** A fresh run is turn 1; a row written before turns were recorded has none and is a fresh run too. */
 const isFirstTurn = (r: RunIndexRow) => r.turn === undefined || r.turn <= 1;
 
-/** The cost basis for one scenario (index only), plus the budget gate's own worst-observed figure. */
+/** The cost basis for one scenario (index only), with how many runs each filter left out, plus — kept apart
+ *  — the budget gate's own wider worst-observed figure. */
 export function loadCostHistory(rows: readonly RunIndexRow[], f: HistoryFilters): CostHistory {
-  const basis = rows.filter(
-    (r) =>
-      isRun(r) &&
-      r.scenario === f.scenario &&
-      r.baseline === f.baseline &&
-      tierOf(r) === f.tier &&
-      isFirstTurn(r) &&
-      (f.includeHillclimb === true || !isHillclimb(r)),
-  );
-  // The gate's basis, not the filtered one: this is the figure `--max-budget-usd` refuses on.
+  const excluded = { notRun: 0, tier: 0, baseline: 0, turn: 0, hillclimb: 0 };
+  const basis = rows
+    .filter((r) => r.scenario === f.scenario)
+    .filter((r) => {
+      if (!isRun(r)) return (void excluded.notRun++, false);
+      if (tierOf(r) !== f.tier) return (void excluded.tier++, false);
+      if (r.baseline !== f.baseline) return (void excluded.baseline++, false);
+      if (!isFirstTurn(r)) return (void excluded.turn++, false);
+      if (f.includeHillclimb !== true && isHillclimb(r)) return (void excluded.hillclimb++, false);
+      return true;
+    });
+  // The gate's basis, not the filtered one: the figure `--max-budget-usd` refuses on. Carried separately;
+  // it never feeds a covered cost figure.
   const gate = scenarioCostHistory([...rows], f.scenario);
   return {
     scenario: f.scenario,
@@ -63,10 +67,11 @@ export function loadCostHistory(rows: readonly RunIndexRow[], f: HistoryFilters)
       ...(typeof r.judgeCostUsd === "number" ? { judgeUsd: r.judgeCostUsd } : {}),
       ...(typeof r.deciderCostUsd === "number" ? { deciderUsd: r.deciderCostUsd } : {}),
     })),
-    ...(gate.length ? { worstObservedUsd: Math.max(...gate) } : {}),
-    gatePricedRuns: gate.length,
+    ...(gate.length ? { budgetGateWorstUsd: Math.max(...gate) } : {}),
+    budgetGatePricedRuns: gate.length,
     distinctSkillHashes: new Set(basis.map((r) => r.skillHash).filter((h): h is string => h !== undefined)).size,
     distinctTiers: new Set(basis.map(tierOf)).size,
+    excluded,
   };
 }
 
@@ -79,6 +84,9 @@ export interface RowHistoryOptions extends HistoryFilters {
   armASig?: string;
   /** The current grading-prompt identity. A run graded under another prompt keeps its structural rows. */
   judgePromptHash?: string;
+  /** The eval's judge model pin, when one is set. A run whose semantic grade names a different `judgeModel`
+   *  keeps its structural rows; only that assertion's claim and roll-up rows lose the run. */
+  judgeModelPin?: string;
   window?: number;
   maxReads?: number;
   maxResultBytes?: number;
@@ -119,12 +127,17 @@ export interface RowHistoryLoad {
   excludedByKey: ExcludedByKey;
   /** Model-key exclusions by the run's live main model(s); "(no live model)" when it reported none. */
   modelsExcluded: Record<string, number>;
+  /** Runs in the window with at least one semantic grade by a judge model other than `judgeModelPin`. */
+  judgeModelDiffers: number;
   /** The window's oldest and newest `ts`. */
   tsSpan?: { from: string; to: string };
-  /** Index verdicts over the newest `window` runs passing the index keys — CONTEXT ONLY. A passing verdict
-   *  says nothing certain about any one row (a `min_pass` rubric passes with failed claims, and an older
-   *  assert list grades different rows), so no rate is derived from it. */
-  verdictRate: { pass: number; runs: number };
+  /** Index verdicts — CONTEXT ONLY. Its basis (`basis: "index"`) is the newest `window` runs that pass the
+   *  INDEX keys (scenario, tier, baseline, command, turn, hillclimb), BEFORE any result.json is read, so it
+   *  can include runs the rates above exclude (pruned, unreadable, ablated, another model). That is on
+   *  purpose: it is the only figure left when every run dir was pruned. A passing verdict says nothing
+   *  certain about any one row (a `min_pass` rubric passes with failed claims, and an older assert list
+   *  grades different rows), so no rate is derived from it. */
+  verdictRate: { pass: number; runs: number; basis: "index" };
   reads: number;
   readCapHit: boolean;
 }
@@ -135,28 +148,56 @@ type Loaded = ClassifiableResult & {
   modelUsage?: Record<string, unknown>;
 };
 
+/** The fields the classifier and the model check dereference, checked before either sees the object: a
+ *  result.json that parses but has the wrong shape is `unreadable`, never half-read. */
+function wellShaped(x: unknown): x is Loaded {
+  if (x === null || typeof x !== "object" || Array.isArray(x)) return false;
+  const r = x as Record<string, unknown>;
+  const optArray = (v: unknown) => v === undefined || Array.isArray(v);
+  const optObject = (v: unknown) => v === undefined || (v !== null && typeof v === "object" && !Array.isArray(v));
+  return (
+    typeof r.result === "string" &&
+    optArray(r.models) &&
+    (r.models === undefined || (r.models as unknown[]).every((m) => typeof m === "string")) &&
+    optArray(r.modelFallbacks) &&
+    optObject(r.modelUsage) &&
+    optObject(r.fingerprint) &&
+    optArray(r.assertions) &&
+    (r.assertions === undefined ||
+      (r.assertions as unknown[]).every((a) => a !== null && typeof a === "object" && optObject((a as Record<string, unknown>).assertion)))
+  );
+}
+
+/** Read one run's result.json: a REGULAR file only (opened without following a symlink, and non-blocking so
+ *  a FIFO cannot stall the read), at most `maxBytes`. */
 function readResult(row: RunIndexRow, maxBytes: number): Loaded | "pruned" | "unreadable" {
   const turn = row.turn ?? latestTurn(row.outDir);
   if (turn === undefined) return "pruned";
   const p = turnArtifactPath(row.outDir, turn, "result.json");
-  let size: number;
+  let fd: number;
   try {
-    size = statSync(p).size;
-  } catch {
-    return "pruned";
+    fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? "pruned" : "unreadable";
   }
-  if (size > maxBytes) return "unreadable";
   try {
-    const parsed: unknown = JSON.parse(readFileSync(p, "utf8"));
-    return parsed !== null && typeof parsed === "object" ? (parsed as Loaded) : "unreadable";
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > maxBytes) return "unreadable";
+    const parsed: unknown = JSON.parse(readFileSync(fd, "utf8"));
+    return wellShaped(parsed) ? parsed : "unreadable";
   } catch {
     return "unreadable";
+  } finally {
+    closeSync(fd);
   }
 }
 
 const isSemanticRow = (row: RowKey) => row.kind === "semantic_rollup" || row.kind === "claim";
 
-function tally(rows: readonly RowKey[], reps: ReadonlyArray<ReturnType<typeof repRowValues>>) {
+/** One rep's value on one row; `excluded` adds the planner's own reasons to the eval's row exclusions. */
+type RowValueLike = { row: RowKey; value?: 0 | 1; excluded?: string };
+
+function tally(rows: readonly RowKey[], reps: ReadonlyArray<readonly RowValueLike[]>) {
   return rows.map((row, i) => {
     const h: RowHistory = { k: 0, n: 0, excluded: {} };
     for (const values of reps) {
@@ -188,6 +229,7 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
     unreadable: 0,
   };
   const modelsExcluded: Record<string, number> = {};
+  let judgeModelDiffers = 0;
 
   // Index keys first: no file is opened for a row the index alone rules out.
   const candidates = rows
@@ -205,7 +247,7 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
   const verdictWindow = candidates.slice(0, window);
 
   const sRows = scenarioRows(o.scenario, o.assertions);
-  const used: Array<{ row: RunIndexRow; result: Loaded; values: ReturnType<typeof repRowValues>; valid: boolean; exact: boolean }> = [];
+  const used: Array<{ row: RunIndexRow; result: Loaded; values: RowValueLike[]; valid: boolean; exact: boolean }> = [];
   let reads = 0;
   let readCapHit = false;
   for (const r of candidates) {
@@ -226,10 +268,15 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
     }
     // Termination before the model key: an infrastructure failure (a sign-in error reports only a
     // `<synthetic>` model) is excluded as infrastructure, inside the window, exactly as the eval would.
-    const infra = classifyTermination({ result }).bucket === "errored_infra";
+    const termination = classifyTermination({ result }).bucket;
+    const infra = termination === "errored_infra";
     if (!infra) {
       const honoured = deriveModelProvenance(o.agentPin, result.models, result.modelFallbacks, result.modelUsage).modelPinHonored;
-      if (honoured !== true) {
+      // The eval's own precedence: an agent error ranks above a model mismatch, so a crash before any model
+      // answered (no evidence either way) is scored 0 on every row, not dropped from the denominator. Only
+      // POSITIVE evidence of another model excludes a run — or, for a success, no evidence at all (nothing
+      // vouches for the pin).
+      if (honoured === false || (honoured === undefined && termination === "valid")) {
         ex.model++;
         const live = (result.models ?? []).filter(isLiveModelId);
         const key = live.length ? [...new Set(live)].join(", ") : "(no live model)";
@@ -248,8 +295,21 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
       promptMismatch = true;
       c = classifyRep({ result: asScored }, {});
     }
-    let values = repRowValues(sRows, o.assertions, c, asScored);
-    if (promptMismatch) values = values.map((v) => (isSemanticRow(v.row) ? { row: v.row, excluded: "judge_prompt_mismatch" as const } : v));
+    let values: RowValueLike[] = repRowValues(sRows, o.assertions, c, asScored);
+    if (promptMismatch) values = values.map((v) => (isSemanticRow(v.row) ? { row: v.row, excluded: "judge_prompt_mismatch" } : v));
+    // A different judge model graded this run's semantic assertion(s): those rows lose the run, the
+    // structural rows keep it. An agent error is 0 on every row regardless (no grade was the judge's).
+    if (o.judgeModelPin !== undefined && c.bucket !== "errored_agent") {
+      const grades = (asScored.assertions ?? []).filter((a) => a.source === undefined);
+      const other = (i: number) => {
+        const m = (grades[i] as { judgeModel?: unknown } | undefined)?.judgeModel;
+        return typeof m === "string" && m !== o.judgeModelPin;
+      };
+      if (sRows.some((row) => isSemanticRow(row) && other(row.assertionIndex))) judgeModelDiffers++;
+      values = values.map((v) =>
+        isSemanticRow(v.row) && v.value !== undefined && other(v.row.assertionIndex) ? { row: v.row, excluded: "judge_model_differs" } : v,
+      );
+    }
     const valid = c.bucket === "valid" || c.bucket === "judge_invalid" || c.bucket === "errored_agent";
     const exact = valid && o.armASig !== undefined && result.fingerprint?.contentSig === o.armASig;
     used.push({ row: r, result, values, valid, exact });
@@ -279,8 +339,9 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
     evalReps: used.filter((u) => u.row.runLabel?.startsWith(EVAL_LABEL_PREFIX) === true).length,
     excludedByKey: ex,
     modelsExcluded,
+    judgeModelDiffers,
     ...(ts.length ? { tsSpan: { from: ts[0], to: ts[ts.length - 1] } } : {}),
-    verdictRate: { pass: verdictWindow.filter((r) => r.pass).length, runs: verdictWindow.length },
+    verdictRate: { pass: verdictWindow.filter((r) => r.pass).length, runs: verdictWindow.length, basis: "index" },
     reads,
     readCapHit,
   };

@@ -10,7 +10,7 @@
 //   - Power is the probability that a TRUE difference of the target size is observed AND reaches the level,
 //     in the right direction, under independent binomial sampling of each arm. At the smallest detectable N
 //     it is typically only about 60%, which is why every N carries its power and `nForPower80` exists.
-import { fisherTwoSided, insufficientThreshold, wilsonInterval, type Correction, type Mdd } from "./stats.js";
+import { fisherTwoSided, wilsonInterval, type Correction, type Mdd } from "./stats.js";
 import { percentile } from "../run/run-index.js";
 
 /** Rate history window: the newest this-many qualifying runs per scenario. */
@@ -38,18 +38,23 @@ export interface CostSample {
 
 /** A scenario's cost history, already filtered by the loader.
  *
- *  Two bases on purpose. `samples` is the cost basis — the runs `stats <name> --baseline <b> --group-by
- *  fidelity` aggregates for the eval's effective tier — and drives p50/p95/mean. `worstObservedUsd` and
- *  `gatePricedRuns` are the `--max-budget-usd` gate's own basis (scenario name only, any tier or baseline),
- *  because that is the figure the gate refuses on; filtering it would preview a refusal the real gate does
- *  not make. The two can differ, and the plan labels each. */
+ *  `samples` is THE cost basis: the runs `stats <name> --baseline <b> --group-by fidelity` aggregates for
+ *  the eval's effective tier, minus resumed turns (turn > 1) and hillclimb runs. Every covered cost figure
+ *  — mean, p50, p95, worst observed, priced runs, thinnest, lower bound — is computed from it and nothing
+ *  else.
+ *
+ *  `budgetGateWorstUsd` / `budgetGatePricedRuns` are a different, wider basis: the `--max-budget-usd`
+ *  gate's own (scenario name only, any tier or baseline, every turn). They are carried only so a caller can
+ *  preview what the gate would refuse on; they never feed a covered figure. */
 export interface CostHistory {
   scenario: string;
   samples: CostSample[];
-  worstObservedUsd?: number;
-  gatePricedRuns: number;
+  budgetGateWorstUsd?: number;
+  budgetGatePricedRuns: number;
   distinctSkillHashes: number;
   distinctTiers: number;
+  /** Runs of this scenario each cost-basis filter left out (from the loader). */
+  excluded?: { notRun: number; tier: number; baseline: number; turn: number; hillclimb: number };
 }
 
 export interface PerRepCost {
@@ -68,9 +73,11 @@ export interface PerRepCost {
   judgeUnpriced: number;
   deciderP50Usd?: number;
   deciderP95Usd?: number;
-  /** The gate basis: the worst single run of this scenario name, any tier or baseline. */
+  /** The worst single priced run on the cost basis. */
   worstObservedUsd?: number;
-  gatePricedRuns: number;
+  /** The budget gate's wider basis (any tier or baseline): its worst run and how many priced runs it has. */
+  budgetGateWorstUsd?: number;
+  budgetGatePricedRuns: number;
   /** Fewer than THIN_BELOW priced runs. */
   thin: boolean;
 }
@@ -98,8 +105,9 @@ export function perRepCost(h: CostHistory): PerRepCost {
     judgeUnpriced: h.samples.length - judge.length,
     ...opt("deciderP50Usd", pct(decider, 0.5)),
     ...opt("deciderP95Usd", pct(decider, 0.95)),
-    ...opt("worstObservedUsd", h.worstObservedUsd),
-    gatePricedRuns: h.gatePricedRuns,
+    ...opt("worstObservedUsd", agent.length ? agent[agent.length - 1] : undefined),
+    ...opt("budgetGateWorstUsd", h.budgetGateWorstUsd),
+    budgetGatePricedRuns: h.budgetGatePricedRuns,
     thin: agent.length < THIN_BELOW,
   };
 }
@@ -121,6 +129,8 @@ export interface ScheduleCostItemEstimate {
   p50Usd?: number;
   p95Usd?: number;
   worstObservedUsd?: number;
+  /** jobs x the budget gate's worst (experimental; a different basis from every other figure). */
+  budgetGateWorstUsd?: number;
   judgeMeanUsd?: number;
   judgeP50Usd?: number;
   perRep: PerRepCost;
@@ -133,8 +143,11 @@ export interface ScheduleCost {
   meanUsd: number;
   p50Usd: number;
   p95Usd: number;
-  /** jobs x worst, from the gate basis — every run at the worst ever seen. */
+  /** Sum over the priced scenarios of jobs x the worst cost-basis run — every run at the worst seen. */
   worstObservedUsd: number;
+  /** Sum over scenarios with gate history of jobs x the gate's worst (any tier or baseline). Experimental:
+   *  a preview of the `--max-budget-usd` gate's basis, which is wider than every other figure here. */
+  budgetGateWorstUsd: number;
   judgeMeanUsd: number;
   judgeP50Usd: number;
   unpriced: string[];
@@ -153,6 +166,7 @@ export function estimateScheduleCost(items: readonly ScheduleCostItem[]): Schedu
     p50Usd: 0,
     p95Usd: 0,
     worstObservedUsd: 0,
+    budgetGateWorstUsd: 0,
     judgeMeanUsd: 0,
     judgeP50Usd: 0,
     unpriced: [],
@@ -173,16 +187,18 @@ export function estimateScheduleCost(items: readonly ScheduleCostItem[]): Schedu
     set("p50Usd", times(perRep.p50Usd));
     set("p95Usd", times(perRep.p95Usd));
     set("worstObservedUsd", times(perRep.worstObservedUsd));
+    set("budgetGateWorstUsd", times(perRep.budgetGateWorstUsd));
     set("judgeMeanUsd", times(perRep.judgeMeanUsd));
     set("judgeP50Usd", times(perRep.judgeP50Usd));
     out.jobs += it.jobs;
-    out.worstObservedUsd += est.worstObservedUsd ?? 0;
+    out.budgetGateWorstUsd += est.budgetGateWorstUsd ?? 0;
     out.judgeMeanUsd += est.judgeMeanUsd ?? 0;
     out.judgeP50Usd += est.judgeP50Usd ?? 0;
     if (priced) {
       out.meanUsd += est.meanUsd!;
       out.p50Usd += est.p50Usd!;
       out.p95Usd += est.p95Usd!;
+      out.worstObservedUsd += est.worstObservedUsd!;
       out.pricedRuns += perRep.pricedRuns;
       out.thinnest = out.thinnest === null ? perRep.pricedRuns : Math.min(out.thinnest, perRep.pricedRuns);
     } else out.unpriced.push(it.scenario);
@@ -196,22 +212,26 @@ const usd = (x: number) => `$${x.toFixed(4)}`;
 
 /** The one-line text estimate. Phrased so a partially-unpriced total can never read as authoritative (the
  *  same LOWER BOUND wording as the batch budget line), and so neither p95 nor the worst-observed sum reads
- *  as a bound — neither is one. */
+ *  as a bound — neither is one. Every figure on it is on the one cost basis; the budget gate's wider figure
+ *  is not printed here, so it can never sit beside "contribute $0". */
 export function scheduleCostLine(c: ScheduleCost): string {
   const n = c.items.length;
   const bound = c.lowerBound
     ? ` — LOWER BOUND (${c.unpriced.length}/${n} scenario(s) have no priced run history and contribute $0: ` +
       `${c.unpriced.slice(0, 5).join(", ")}${c.unpriced.length > 5 ? `, +${c.unpriced.length - 5} more` : ""})`
     : "";
+  // Floor-index p95 is the max for 20 or fewer runs: say so whenever it is, not only for thin history.
+  const p95AtMax = c.items.filter((i) => i.priced && i.perRep.p95IsMax).length;
   const basis =
     c.thinnest === null
       ? ""
       : ` — basis: ${c.pricedRuns} prior run(s) on THIS machine, thinnest scenario has ${c.thinnest}` +
-        (c.thinnest < THIN_BELOW ? ` (thin: its p95 is the max of ${c.thinnest} run(s))` : "");
+        (c.thinnest < THIN_BELOW ? " (thin)" : "") +
+        (p95AtMax ? `; p95 is the max observed run for ${p95AtMax} scenario(s) (20 or fewer priced runs)` : "");
   return (
     `estimated cost of ${c.jobs} run(s): p50 ${usd(c.p50Usd)} · mean ${usd(c.meanUsd)} · ` +
     `p95 ${usd(c.p95Usd)} (pessimistic: every run at its scenario's p95 — not a bound) · ` +
-    `worst observed ${usd(c.worstObservedUsd)} (budget-gate basis: every run at the worst ever seen — not a bound)` +
+    `worst observed ${usd(c.worstObservedUsd)} (every run at its scenario's worst on this basis — not a bound)` +
     `${bound}${basis}`
   );
 }
@@ -221,9 +241,13 @@ export function scheduleCostLine(c: ScheduleCost): string {
  *
  *  COVERED (stable from this release on both commands): `jobs` (agent runs scheduled), `meanUsd`, `p50Usd`,
  *  `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced`, `pricedRuns`, `thinnest`. Every covered key is
- *  always present (`thinnest` is null when nothing was priced).
+ *  always present (`thinnest` is null when nothing was priced), and every one describes ONE basis: the
+ *  scenario's runs on the eval's effective tier and baseline, turn 1, hillclimb runs excluded by default
+ *  (see `CostHistory`). The dollar figures sum over the priced scenarios only; an unpriced one adds $0 to
+ *  each of them and is named in `unpriced`.
  *
- *  EXPERIMENTAL (may change): `judgeMeanUsd`, `judgeP50Usd` and `items[]` (with its `perRep`). */
+ *  EXPERIMENTAL (may change): `budgetGateWorstUsd` (the `--max-budget-usd` gate's wider any-tier basis),
+ *  `judgeMeanUsd`, `judgeP50Usd` and `items[]` (with its `perRep`). */
 export interface ScheduleCostJson {
   // ---- covered ----
   jobs: number;
@@ -236,6 +260,7 @@ export interface ScheduleCostJson {
   pricedRuns: number;
   thinnest: number | null;
   // ---- experimental ----
+  budgetGateWorstUsd: number;
   judgeMeanUsd: number;
   judgeP50Usd: number;
   items: Array<Omit<ScheduleCostItemEstimate, "perRep"> & { perRep: PerRepCost }>;
@@ -253,6 +278,7 @@ export function scheduleCostJson(c: ScheduleCost): ScheduleCostJson {
     pricedRuns: c.pricedRuns,
     thinnest: c.thinnest,
     // ---- experimental below ----
+    budgetGateWorstUsd: c.budgetGateWorstUsd,
     judgeMeanUsd: c.judgeMeanUsd,
     judgeP50Usd: c.judgeP50Usd,
     items: c.items.map((i) => ({
@@ -263,6 +289,7 @@ export function scheduleCostJson(c: ScheduleCost): ScheduleCostJson {
       ...(i.p50Usd !== undefined ? { p50Usd: i.p50Usd } : {}),
       ...(i.p95Usd !== undefined ? { p95Usd: i.p95Usd } : {}),
       ...(i.worstObservedUsd !== undefined ? { worstObservedUsd: i.worstObservedUsd } : {}),
+      ...(i.budgetGateWorstUsd !== undefined ? { budgetGateWorstUsd: i.budgetGateWorstUsd } : {}),
       ...(i.judgeMeanUsd !== undefined ? { judgeMeanUsd: i.judgeMeanUsd } : {}),
       ...(i.judgeP50Usd !== undefined ? { judgeP50Usd: i.judgeP50Usd } : {}),
       perRep: { ...i.perRep },
@@ -607,7 +634,6 @@ export interface SequentialPreviewOptions {
   /** Reps per arm between looks. 2 = a look after every complete ABBA block: the most looks, so the most
    *  conservative per-look alpha. */
   lookEveryReps?: number;
-  allowUnderpowered?: boolean;
   rows?: Array<{ id: string; p: number }>;
   targetEffect?: number;
 }
@@ -640,6 +666,7 @@ export interface SequentialPreview {
  *  floor(reps / lookEveryReps) looks, each at alpha / L (Bonferroni across looks), Holm within a look. */
 export function sequentialPreview(o: SequentialPreviewOptions): SequentialPreview {
   const every = o.lookEveryReps ?? 2;
+  if (!Number.isInteger(every) || every < 1) throw new RangeError(`lookEveryReps must be a positive integer, got ${every}`);
   const L = Math.floor(o.reps / every);
   const m = Math.max(1, o.m);
   const perLookAlpha = L > 0 ? o.alpha / L : 0;
@@ -647,7 +674,9 @@ export function sequentialPreview(o: SequentialPreviewOptions): SequentialPrevie
   let first: SequentialPreview["firstConfirmableLook"] = null;
   for (let look = 1; look <= L && first === null; look++) {
     const r = look * every;
-    if (r >= insufficientThreshold(r, o.allowUnderpowered ?? false) && cachedFloor(r) <= level) first = { look, repsPerArm: r };
+    // No planned-reps threshold here: the design takes the threshold from reps COMPLETED, which any look of
+    // 2+ reps meets (`insufficientThreshold(r) <= r`), and a 1-rep look's floor (1) can never reach a level.
+    if (cachedFloor(r) <= level) first = { look, repsPerArm: r };
   }
   const unpairedReps = o.reps - L * every;
   const notes = [
