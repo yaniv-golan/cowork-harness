@@ -18,6 +18,7 @@
 //
 // Pure: `checkFlowSnapshot` reads nothing; `loadFlowSnapshot` is the only function that touches the disk, and
 // it never follows a symlink (it records one as a finding instead).
+import { presentCompanionOf } from "./present.js";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -436,10 +437,16 @@ function checkRow(
       if (!isFiniteNum(v) && typeof v !== "boolean")
         c.error("row.grade", file, `grade.${k} must be a number or boolean; the report drops it silently`, line);
     for (const m of d.metrics) {
+      // A key whose `_present` companion is 0 was not measured on this row and is OMITTED, never scored 0
+      // (a 0 would be a fabricated failure, or a win for a lower-is-better float). Ours, not upstream: the
+      // report just shows a blank cell. Applied in both profiles — both are our reading of the contract.
+      const companion = presentCompanionOf(m.id);
+      const unmeasured = companion !== undefined && (grade[companion] === 0 || grade[companion] === false);
       if (!(m.id in grade)) {
-        c.error("row.grade", file, `declared metric ${m.id} is missing from grade`, line);
+        if (!unmeasured) c.error("row.grade", file, `declared metric ${m.id} is missing from grade`, line);
         continue;
       }
+      if (unmeasured) c.error("row.grade", file, `grade.${m.id} is present but ${companion} is 0`, line);
       const v = grade[m.id];
       if (m.kind === "binary" && !(v === 0 || v === 1 || typeof v === "boolean"))
         c.error("row.grade", file, `grade.${m.id} is declared binary but is ${JSON.stringify(v)}`, line);

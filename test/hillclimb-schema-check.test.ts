@@ -236,6 +236,60 @@ describe("schema-check: row fields", () => {
     expect(r.findings[0]!.message).toMatch(/a0 is missing/);
   });
 
+  describe("grade: a declared metric may be omitted only when its _present companion is 0 (F2 / addendum Q4)", () => {
+    const refused = (row: Row) => {
+      const g = row.grade as Row;
+      delete g.a1_c0;
+      delete g.a1_c1;
+      g.a1_present = 0;
+      // A refused assert was never judged, so it has no rationale either.
+      const e = row.explanation as Row | undefined;
+      if (e) {
+        delete e.a1_c0;
+        delete e.a1_c1;
+        if (Object.keys(e).length === 0) {
+          delete row.explanation;
+          delete (row.meta as Row).explanation_untrusted;
+        }
+      }
+    };
+    for (const profile of ["harness", "schema"] as const)
+      it(`claims of an evidence-refused assert, covered by a1_present: 0, are clean (${profile})`, () => {
+        expect(check(withRow(refused), profile).findings.filter((f) => f.level === "error")).toEqual([]);
+      });
+
+    it("the same omission with a1_present: 1 is still a missing metric", () => {
+      const r = check(
+        withRow((row) => {
+          refused(row);
+          (row.grade as Row).a1_present = 1;
+        }),
+      );
+      expectOnly(r, "error", "row.grade");
+      expect(r.findings.map((f) => f.message)).toEqual([
+        expect.stringMatching(/a1_c0 is missing/),
+        expect.stringMatching(/a1_c1 is missing/),
+      ]);
+    });
+
+    it("a graded key alongside a companion that says it was not measured is a contradiction", () => {
+      const r = check(withRow((row) => ((row.grade as Row).a1_present = 0)));
+      expectOnly(r, "error", "row.grade");
+      expect(r.findings[0]!.message).toMatch(/a1_c0 is present but a1_present is 0/);
+    });
+
+    it("a float metric omitted with <id>_present: 0 is clean", () => {
+      const s = withState((st) => (st.metrics as Row[]).push({ id: "words", kind: "float", better: "lower" }));
+      for (const v of Object.keys(s.variants)) {
+        if (!s.variants[v]!.results) continue;
+        const rs = rows(s, v);
+        for (const r of rs) (r.grade as Row).words_present = 0;
+        setRows(s, rs, v);
+      }
+      expect(check(s).findings.filter((f) => f.level === "error")).toEqual([]);
+    });
+  });
+
   it("grade: a binary-declared metric must be 0/1; a non-numeric value is an error", () => {
     expectOnly(check(withRow((row) => ((row.grade as Row).pass = 0.5))), "error", "row.grade");
     expectOnly(check(withRow((row) => ((row.grade as Row).extra = "yes"))), "error", "row.grade");
