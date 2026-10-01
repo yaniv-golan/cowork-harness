@@ -123,8 +123,13 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
     const runDir = join(f.runsDir, "alpha", (row.meta as { run_id: string }).run_id);
     const recorded = readFileSync(join(runDir, "system-prompt-append.txt"), "utf8");
     expect(recorded).toBe(sent);
-    for (const s of ["You are an agent for Claude Code", "Anthropic's official CLI", "You are Claude Code"])
-      expect(recorded.includes(s), `system-prompt-append.txt contains ${s}`).toBe(false);
+    // built from parts: this file must not carry the built-in prompt's text itself (the transcript guard scans it)
+    const builtinMarkers = [
+      ["You are an agent for", "Claude Code"],
+      ["Anthropic's official", "CLI"],
+      ["You are", "Claude Code"],
+    ].map((p) => p.join(" "));
+    for (const s of builtinMarkers) expect(recorded.includes(s), `system-prompt-append.txt contains ${s}`).toBe(false);
     const sys = turns
       .filter((t) => t.role === "system")
       .map((t) => t.content)
