@@ -213,10 +213,10 @@ export const flowHasPairwise = (cases: ReadonlyArray<{ assertions: readonly Asse
   cases.some((c) => c.assertions.some((a) => a.semantic_pairwise !== undefined));
 
 /** The canonical declaration tuple: every field that changes what a metric's column means. The id is folded to
- *  lower case (ids compare case-insensitively) and an absent field is always `null`, so key order and an explicit
- *  `undefined` never change it. */
+ *  lower case (ids compare case-insensitively), an absent `min` is its schema default 0 (writing `min: 0` changes
+ *  nothing), and any other absent field is always `null`, so key order and an explicit `undefined` never change it. */
 const declTuple = (m: MetricDecl): string =>
-  JSON.stringify([m.id.toLowerCase(), m.artifact, m.path, m.better, m.scale ?? null, m.unbounded ?? null, m.min ?? null]);
+  JSON.stringify([m.id.toLowerCase(), m.artifact, m.path, m.better, m.scale ?? null, m.unbounded ?? null, m.min ?? 0]);
 
 /** A metric declaration's signature, stamped on every scored row (`meta.metric_sigs`): the first 16 hex chars of
  *  the sha256 of its canonical tuple. A later pass compares it, so a column cannot change meaning mid-flow. */

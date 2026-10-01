@@ -6,7 +6,14 @@
 // (their union). Per-index keys stay on every row as drill-down data and are declared only when every case
 // has the identical assertion list. One producer for the row writer and `state-template`.
 import { describe, it, expect } from "vitest";
-import { caseKeyDecls, flowMetricDecls, metricSig, presentCompanionOf, reservedMetricId } from "../src/hillclimb/grade-keys.js";
+import {
+  caseKeyDecls,
+  flowMetricDecls,
+  metricSig,
+  metricUnion,
+  presentCompanionOf,
+  reservedMetricId,
+} from "../src/hillclimb/grade-keys.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import { UsageError } from "../src/errors.js";
 import type { Assertion, ScenarioMetric } from "../src/types.js";
@@ -179,6 +186,15 @@ describe("metricSig — a short, stable signature of one metric's declaration, s
       scale: undefined,
     } as ScenarioMetric;
     expect(metricSig(b)).toBe(metricSig(a));
+  });
+
+  it("`min` omitted and `min: 0` (its default) are one declaration: the same sig, and no conflict across cases", () => {
+    expect(metricSig(metric("score", { min: 0 }))).toBe(metricSig(metric("score")));
+    const u = metricUnion([
+      { name: "a", metrics: [metric("score")] },
+      { name: "b", metrics: [metric("score", { min: 0 })] },
+    ]);
+    expect(u.map((m) => m.id)).toEqual(["score"]);
   });
 });
 
