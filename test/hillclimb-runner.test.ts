@@ -399,6 +399,18 @@ describe("absolute paths", () => {
 });
 
 describe("--dry-run", () => {
+  it("reads the rows already written: a complete variant has nothing to run, and an error slot is named", async () => {
+    await approved();
+    behave = (id) => (id === "beta" ? "throw" : {});
+    await runHillclimb(args(), deps());
+    jobs = [];
+    err = [];
+    expect((await runHillclimb(args("--dry-run"), deps())).exitCode).toBe(0);
+    expect(err).toContain("[baseline] 1 of 2 (id,rep) to run");
+    expect(err.join("\n")).toMatch(/1 slot\(s\) re-run after a failed attempt: beta rep0/);
+    expect(jobs).toEqual([]);
+  });
+
   it("refuses a _state.json that is not an object, as the real run does", async () => {
     mkdirSync(flowDir(), { recursive: true });
     writeFileSync(join(flowDir(), "_state.json"), "[1,2]");

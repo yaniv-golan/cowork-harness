@@ -92,17 +92,12 @@ export class FlowWriter {
 
   /** The (prompt_id, rep) pairs already scored (S l.401-407). Error rows never occupy a slot. */
   resumeSet(): Set<string> {
-    const done = new Set<string>();
-    for (const line of (this.r.readIfPresent(this.vpath("results.jsonl")) ?? "").split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const row = JSON.parse(line) as { prompt_id?: unknown; rep?: unknown };
-        done.add(`${row.prompt_id}\0${row.rep}`);
-      } catch {
-        /* a torn line names no slot */
-      }
-    }
-    return done;
+    return slotsIn(this.r.readIfPresent(this.vpath("results.jsonl")));
+  }
+
+  /** A variant file's text, or null when absent (read-only, no-follow). */
+  readVariantFile(name: string): string | null {
+    return this.r.readIfPresent(this.vpath(name));
   }
 
   appendResult(row: Record<string, unknown>): void {
@@ -188,4 +183,19 @@ function alive(pid: number): boolean {
   } catch (e) {
     return (e as NodeJS.ErrnoException)?.code === "EPERM";
   }
+}
+
+/** The (prompt_id, rep) slots named by a JSONL file's rows; a torn or malformed line names none. */
+export function slotsIn(text: string | null): Set<string> {
+  const out = new Set<string>();
+  for (const line of (text ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const r = JSON.parse(line) as { prompt_id?: unknown; rep?: unknown };
+      out.add(`${r.prompt_id}\0${r.rep}`);
+    } catch {
+      /* a torn line names no slot */
+    }
+  }
+  return out;
 }

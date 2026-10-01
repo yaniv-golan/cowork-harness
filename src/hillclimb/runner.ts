@@ -17,7 +17,7 @@ import { pMapBounded } from "../async-pool.js";
 import type { RunResult } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./cases.js";
-import { FlowWriter, redactDeep } from "./flow.js";
+import { FlowWriter, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
@@ -190,10 +190,18 @@ async function run(
   // The lock is taken BEFORE the resume set is read: two runners must not both see a slot as free.
   const release = args.dryRun ? () => {} : w!.lock();
   try {
-    const done = w ? w.resumeSet() : new Set<string>();
+    // A dry run reads the same rows a pass would (read-only), so its scope matches what the pass will run.
+    const results = w ? w.readVariantFile("results.jsonl") : readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd);
+    const errors = w ? w.readVariantFile("errors.jsonl") : readVariantFileIfPresent(flowArg, v, "errors.jsonl", deps.cwd);
+    const done = slotsIn(results);
     const tasks: Array<{ c: HillclimbCase; rep: number }> = [];
     for (const c of cases) for (let rep = 0; rep < args.reps; rep++) if (!done.has(`${c.id}\0${rep}`)) tasks.push({ c, rep });
     say(`[${v}] ${tasks.length} of ${cases.length * args.reps} (id,rep) to run`);
+    // Error slots re-run on every pass (S semantics); a permanent infra fault re-runs forever, so name them.
+    const failedBefore = slotsIn(errors);
+    const rerun = tasks.filter((t) => failedBefore.has(`${t.c.id}\0${t.rep}`));
+    if (rerun.length)
+      say(`[${v}] ${rerun.length} slot(s) re-run after a failed attempt: ${rerun.map((t) => `${t.c.id} rep${t.rep}`).join(", ")}`);
     if (args.dryRun) return { exitCode: 0, scheduled: tasks.length, ok: 0, failed: 0 };
 
     const writer = w!;
@@ -376,4 +384,10 @@ function ablationMix(flowAbs: string, ablate: boolean): string | undefined {
       }
     }
   return undefined;
+}
+
+function readVariantFileIfPresent(flowArg: string, variant: string, file: string, cwd: string): string | null {
+  if (!lexists(resolve(cwd, flowArg, variant))) return null;
+  const r = NoFollowRoot.existing(flowArg, { cwd });
+  return r.readIfPresent(join(r.root, variant, file));
 }
