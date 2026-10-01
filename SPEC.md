@@ -658,8 +658,7 @@ every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `fa
 section, the `judgedDoc` the live run recorded (`unknown` when this assert's scope has no live fingerprint, never
 `true`; `live_refused` when every live assert with that scope refused its evidence and no fingerprint was
 recorded — one that recorded a `judgedDoc` is compared like a graded one; `not_graded` when the re-grade's own
-assert refused its evidence and no document was handed to a judge — an assert that refused after its judge read
-a document is compared like any other). The run-level value is the worst over the asserts in the order `false`,
+assert refused its evidence, so no judge was called for it and no document was handed to one). The run-level value is the worst over the asserts in the order `false`,
 `live_refused`, `unknown`, `scope_changed`, `true`, and `not_graded` only when every assert is; none of these
 values changes the exit code. `differingSections[]` entries are
 `{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert

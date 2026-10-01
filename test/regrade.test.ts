@@ -15,7 +15,7 @@ import {
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty, DEFAULT_AUTHORED_TOTAL_BYTES } from "../src/run/artifacts.js";
 import { authoredCaptureOpts } from "../src/run/authored-capture-opts.js";
 import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
-import { evaluate, runSemanticJudges, type AssertContext, type SemanticJudge } from "../src/assert.js";
+import { composeJudgedDocument, evaluate, runSemanticJudges, type AssertContext, type SemanticJudge } from "../src/assert.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { collectSecrets } from "../src/secrets.js";
 import { parseScenarioFile } from "../src/run/execute.js";
@@ -115,6 +115,10 @@ async function keptRun(opts: {
   liveJudge?: ReturnType<typeof judgeFactory>;
   /** The live capture's total budget (default: the default). */
   totalBytes?: number;
+  /** Record a `judgedDoc` for every live assert that refused its evidence, as a run recorded while the harness
+   *  still called the judge before deciding a refusal did — the fingerprint of the document that judge was
+   *  handed, composed by the production function. Off, a refused assert records none (the judge is not called). */
+  oldRunRefusedJudgedDoc?: boolean;
 }): Promise<Kept> {
   const runDir = mkdtempSync(join(tmpdir(), "cwh-rg-"));
   const workRoot = join(runDir, "work", "session", "mnt");
@@ -162,6 +166,14 @@ async function keptRun(opts: {
   const live = opts.liveJudge ?? judgeFactory(() => false);
   const j = live.make();
   await runSemanticJudges(scenario.assert, liveCtx, j);
+  if (opts.oldRunRefusedJudgedDoc) {
+    expect(liveCtx.semanticRefused?.size ?? 0).toBeGreaterThan(0);
+    for (const a of liveCtx.semanticRefused!.keys())
+      liveCtx.judgedDocs!.set(
+        a,
+        composeJudgedDocument(liveCtx, a.semantic_matches!.include_subagent_text === true, a.semantic_matches!.evidence_files).fingerprint,
+      );
+  }
   const assertions = evaluate(scenario.assert, liveCtx);
 
   const result = {
@@ -356,13 +368,33 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     });
     const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
     expect(r.authoredCapture.totalBytes).toBe(1024);
-    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    // Live, the 1 KiB budget cut the intermediates, so the unscoped assert refused and its judge was not called.
+    expect(r.assertions[1].semanticEvidence.reason).toBe("evidence_incomplete");
+    expect(r.assertions[1].judgedDoc).toBeUndefined();
+    const judge = judgeFactory(() => true);
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    } finally {
+      stderr.restore();
+    }
     if (!out.ok) throw new Error(out.message);
+    // The scoped assert's document is the live one (the priority glob kept the report whole); the unscoped one
+    // refuses exactly as it did live — proof the persisted 1 KiB budget, not the default, cut the intermediates.
+    expect(out.runs[0].assertions.map((a) => a.docMatchesLive)).toEqual([true, "not_graded"]);
+    expect(out.runs[0].assertions[1].semanticEvidence?.reason).toBe("evidence_incomplete");
     expect(out.runs[0].docMatchesLive).toBe(true);
-    // Overriding the budget is a changed scope, reported as such rather than as a match or a drift.
+    expect(judge.calls).toHaveLength(1);
+    // Nothing is sent for the refusing assert, so nothing about its document is warned about.
+    expect(stderr.text()).not.toContain("::warning:: regrade:");
+    // Overriding the budget is a changed scope, reported as such rather than as a match or a drift; the larger
+    // budget lets the unscoped assert grade, against a live assert that refused with no fingerprint — live_refused,
+    // which outranks scope_changed at the run level.
     const over = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, authoredTotalBytes: 4096 }));
     if (!over.ok) throw new Error(over.message);
-    expect(over.runs[0].docMatchesLive).toBe("scope_changed");
+    expect(over.runs[0].assertions.map((a) => a.docMatchesLive)).toEqual(["scope_changed", "live_refused"]);
+    expect(over.runs[0].docMatchesLive).toBe("live_refused");
   });
 
   it("a secret this process does not scrub, but the live run did, is refused as drift before it reaches the judge", async () => {
@@ -491,23 +523,32 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(big.length).toBeGreaterThan(16 * 1024);
     const k = await keptRun({ author: (w) => writeFileSync(join(w, "outputs", "report.md"), big), assertYaml: SCOPED });
     const judge = judgeFactory(() => true);
-    const out = await regradeRuns({
-      runDirs: [k.runDir],
-      scenarioFile: scenarioAt(
-        mkdtempSync(join(tmpdir(), "cwh-rg-scn10-")),
-        `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
-      ),
-      makeJudge: judge.make,
-    });
-    // No drift refusal, and the judge is called. The re-grade's own unscoped assert then refuses the capped file
-    // on its own terms (evidence-unavailable) — visible in its pass/message — while the document its judge read
-    // is still compared and reported.
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns({
+        runDirs: [k.runDir],
+        scenarioFile: scenarioAt(
+          mkdtempSync(join(tmpdir(), "cwh-rg-scn10-")),
+          `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
+        ),
+        makeJudge: judge.make,
+      });
+    } finally {
+      stderr.restore();
+    }
+    // No drift refusal: the live (scoped) document was rebuilt with the live union and matched. The re-grade's
+    // own unscoped assert then refuses the capped file on its own terms (evidence-unavailable) — visible in its
+    // pass/message — so no judge is called and nothing is compared.
     if (!out.ok) throw new Error(out.message);
-    expect(judge.calls).toHaveLength(1);
+    expect(judge.calls).toHaveLength(0);
     const a = out.runs[0].assertions[0];
-    expect(a.semanticEvidence?.reason).not.toBe("graded");
+    expect(a.semanticEvidence?.reason).toBe("evidence_incomplete");
     expect(a.pass).toBe(false);
-    expect(a.docMatchesLive).toBe("scope_changed");
+    expect(a.docMatchesLive).toBe("not_graded");
+    expect(out.runs[0].docMatchesLive).toBe("not_graded");
+    // The capped report is in a document no judge receives: no "never read by the live judge" warning for it.
+    expect(stderr.text()).not.toContain("::warning:: regrade:");
   });
 
   it("unknown: graded, warned before the judge call that nothing was drift- or secret-checked", async () => {
@@ -572,8 +613,9 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(regradeTextReport(out).join("\n")).toContain("the live assert refused its evidence and no fingerprint was recorded");
   });
 
-  // The live and re-grade sides of the P1 probes: an unscoped assert over a file past the 16 KiB per-file cap
-  // refuses evidence-unavailable, but the judge is called first, so a judgedDoc is recorded on both sides.
+  // An unscoped assert over a file past the 16 KiB per-file cap refuses evidence-unavailable, and no judge is
+  // called for it, live or re-graded. A run recorded while the harness still called the judge before refusing
+  // DID record a judgedDoc for it, and such kept runs are still re-graded: `overCapRun` builds one.
   const BIG = `# Notes\n${"Concentration is the main risk.\n".repeat(700)}`;
   const UNSCOPED = `  - semantic_matches:\n      rubric: ["the notes name the risk"]\n`;
   async function overCapRun(assertYaml: string): Promise<Kept> {
@@ -583,6 +625,7 @@ describe("regrade: is the judged document the one the live judge read?", () => {
         writeFileSync(join(w, "outputs", "big.md"), BIG);
       },
       assertYaml,
+      oldRunRefusedJudgedDoc: true,
     });
     const live = JSON.parse(readFileSync(k.resultPath, "utf8")).assertions.find(
       (a: { assertion: { semantic_matches?: { evidence_files?: string[] } } }) =>
@@ -594,35 +637,55 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     return k;
   }
 
-  it("a refusing assert whose judge read a drifted document is reported false, not hidden as not_graded", async () => {
+  it("an old run whose refused live assert recorded a judgedDoc: a drift in its document is refused before any judge call", async () => {
     const k = await overCapRun(UNSCOPED);
-    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, allowDocDrift: true }));
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain("live assert 0: changed authored outputs/big.md");
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it("an old run's drifted refused assert, re-graded with --allow-doc-drift, still refuses: not_graded, no judge call", async () => {
+    const k = await overCapRun(UNSCOPED);
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
     if (!out.ok) throw new Error(out.message);
     const a = out.runs[0].assertions[0];
     expect(a.pass).toBe(false); // the refusal stays visible on the assert itself
-    expect(a.docMatchesLive).toBe(false);
-    expect(out.runs[0].differingSections).toContainEqual({
-      assertionIndex: 0,
-      kind: "authored",
-      path: "outputs/big.md",
-      change: "changed",
-    });
-    expect(out.runs[0].docMatchesLive).toBe(false);
-    expect(regradeTextReport(out).join("\n")).toContain("judged document DIFFERS");
+    expect(a.semanticEvidence?.reason).toBe("evidence_incomplete");
+    expect(a.docMatchesLive).toBe("not_graded");
+    expect(a.judgedDoc).toBeUndefined();
+    expect(out.runs[0].docMatchesLive).toBe("not_graded");
+    expect(out.runs[0].differingSections).toEqual([]);
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeTextReport(out).join("\n")).toContain("judged document: not graded");
   });
 
-  it("with a graded sibling, the run still reports the drift — never 'identical'", async () => {
+  it("an old run with a graded sibling: the drift in the refused assert's document is still refused", async () => {
+    // The scoped sibling's document matches; the refused assert's recorded one does not. The drift check runs over
+    // every live assert with a judgedDoc, refused or not, so the sibling's match cannot hide it.
     const k = await overCapRun(`${UNSCOPED}${SCOPED}`);
-    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, allowDocDrift: true }));
-    if (!out.ok) throw new Error(out.message);
-    expect(out.runs[0].docMatchesLive).toBe(false);
-    const text = regradeTextReport(out).join("\n");
-    expect(text).toContain("judged document DIFFERS");
-    expect(text).not.toContain("identical to the one the live judge read");
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make }));
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain("live assert 0: changed authored outputs/big.md");
+    expect(out.message).not.toContain("live assert 1");
+    expect(judge.calls).toHaveLength(0);
+    // Accepting the drift: only the sibling is graded, and its document IS the live one. The refused assert sent
+    // nothing, so it contributes nothing to the run's value.
+    const allowed = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
+    if (!allowed.ok) throw new Error(allowed.message);
+    expect(allowed.runs[0].assertions.map((x) => x.docMatchesLive)).toEqual(["not_graded", true]);
+    expect(allowed.runs[0].docMatchesLive).toBe(true);
+    expect(judge.calls).toHaveLength(1);
   });
 
   it("not_graded only when the re-grade's assert refused AND no document was handed to a judge", async () => {
-    // Unreachable end to end while the judge is called before a refusal is decided; pinned on the comparison.
+    // End to end every refusal is not_graded now (no judge is called for it); the compare-first rule for a
+    // refusal that DID come with a document is pinned on the comparison.
     const k = await keptRun({ author: writeReport });
     const live = JSON.parse(readFileSync(k.resultPath, "utf8"));
     const sc = parseScenarioFile(k.scenarioFile);
