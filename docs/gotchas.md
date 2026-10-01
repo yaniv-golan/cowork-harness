@@ -8,8 +8,13 @@
   update deletes the previous version's staged payload while often leaving an EMPTY version directory
   behind, so a `baseline:` pinning that agent version now resolves to nothing. `doctor` does not catch
   this: it validates the agent for its OWN current baseline, not the one each scenario pins, so it can
-  print `✓ ready for container` seconds before the run dies. Three remedies, and they are NOT
+  print `✓ ready for container` seconds before the run dies. Four remedies, and they are NOT
   equivalent:
+  - **Recover the pinned ELF.** The only remedy that keeps the exact pin: re-download that version from
+    the release channel, check its sha256 against the baseline's, and set `COWORK_AGENT_BINARY` to it
+    ([maintenance.md → Recovering an old agent version](./maintenance.md#recovering-an-old-agent-version)).
+    Do the sha check yourself: an override makes the harness's own check advisory. This is what the error
+    message points at.
   - **Repin `baseline:` to a version you actually have.** `cowork-harness list` does NOT answer this — it enumerates the baseline
     definitions shipped with the harness, which are present whatever Desktop pruned locally, so a pruned
     pin lists as healthy. Check the staged binary itself (note `stagedPath` is `~`-prefixed, and the
@@ -29,6 +34,14 @@
     of the pinned one, which is exactly the substitution the hard failure exists to prevent, and the sha
     check downgrades to advisory. Use it to get unblocked once, never in CI, and never when the answer
     depends on which agent version ran.
+- **`Staged NATIVE agent binary not found` at `hostloop`.** The message says why, and `doctor --tier
+  hostloop` gives the remedy for that cause. Claude Desktop 2.19675.0 and later stage the native agent per
+  build, `claude-code/<ver>/<build>/claude.app/…`; the harness reads that layout and the older flat one. A
+  pinned version Desktop replaced with a same-major.minor patch runs with a stderr note and no env var. A
+  major/minor change, or a different build of a pinned build, needs `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`.
+  A build dir with no `.verified` marker is one Desktop has not finished staging and is skipped. If your
+  Claude runs on your organization's infrastructure, Desktop stages nothing locally: set
+  `COWORK_HOST_AGENT_BINARY` to a native agent binary.
 - **`lint` exits 127.** `python3` isn't on `PATH`. Install it or point `PYTHON` at an interpreter.
 - **A local skill folder loses its untracked files — and is REFUSED outright if nothing is tracked.**
   Untracked files are invisible to the mount, and zero tracked files is a hard failure rather than an

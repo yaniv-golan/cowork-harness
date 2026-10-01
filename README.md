@@ -318,7 +318,7 @@ Set the tier with `fidelity:` in a scenario, or `--fidelity` on `skill` / `chat`
 > **Only the L0 `protocol` tier spawns `claude` from your `PATH`.** Every other tier runs a binary staged
 > by your own Claude Desktop install: `container`/`microvm` bind-mount the Linux VM ELF
 > (`claude-code-vm/<ver>/claude`), while `hostloop` spawns the separate **native macOS** binary
-> (`claude-code/<ver>/claude.app/…`) directly on the host, with no container around it — two different
+> (`claude-code/<ver>/[<build>/]claude.app/…`) directly on the host, with no container around it — two different
 > staged binaries, in two different version namespaces. That is what makes the run Cowork-shaped rather
 > than CLI-shaped. See [Why not just `claude -p`](#why-not-just-claude--p-or-the-agent-sdk).
 
