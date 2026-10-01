@@ -61,6 +61,9 @@ lint-skill flags (skill bodies + any sibling hooks.json):
 
 lint-skill suppression (judgement-call WARN/INFO rules only; a provable rule is refused with exit 2):
   --ignore-rule RULE[=GLOB]    repeatable; a run-level decision, e.g. an accepted size cap
+  --suppressions FILE          repeatable; a JSON file of reviewed sites {rule, file, match?, reason},
+                               each entry suppressing at most one finding (keep it outside the plugin)
+  --strict-ignores             a suppression that suppressed nothing is WARN, so --strict fails on it
   <!-- lint-skill: ignore-start RULE[,RULE…]: reason -->  …  <!-- lint-skill: ignore-end -->
                                in a SKILL.md, outside any fence (wrap the whole fence); same file only
   A suppressed finding is still printed and kept in --json with a `suppressed` record; it just stops
@@ -463,8 +466,8 @@ class Finding:
         self.fix = fix
         self.file = file
         self.line = line
-        # lint-skill only: {"by": "flag"|"marker", "marker_line": int|None, "reason": str|None} when a
-        # reviewed suppression covers this finding. The finding is still reported with its own severity;
+        # lint-skill only: {"by": "flag"|"marker"|"file", "marker_line": int|None, "reason": str|None} when a
+        # reviewed suppression covers this finding ("file" adds `source`: "<suppressions file>#<entry index>"). The finding is still reported with its own severity;
         # it only leaves the exit computation.
         self.suppressed = None
 
@@ -1911,6 +1914,8 @@ def _print_findings(
         elif sup["by"] == "marker":
             why = f" — {sup['reason']}" if sup["reason"] else ""
             print(f"⊘ {x.severity} [{x.rule}] {loc} (suppressed by marker at :{sup['marker_line']}{why})")
+        elif sup["by"] == "file":
+            print(f"⊘ {x.severity} [{x.rule}] {loc} (suppressed by {sup['source']}: {sup['reason']})")
         else:
             print(f"⊘ {x.severity} [{x.rule}] {loc} (suppressed by --ignore-rule)")
         print(f"    {x.message}")
@@ -1924,7 +1929,8 @@ def _print_findings(
     if suppressed:
         groups = {}
         for x in suppressed:
-            key = (x.rule, "marker" if x.suppressed["by"] == "marker" else "--ignore-rule")
+            by = x.suppressed["by"]
+            key = (x.rule, "marker" if by == "marker" else "suppressions file" if by == "file" else "--ignore-rule")
             groups[key] = groups.get(key, 0) + 1
         parts = ", ".join(f"{rule} ×{n} by {by}" for (rule, by), n in sorted(groups.items()))
         tail = f"; {len(suppressed)} suppressed ({parts})."
@@ -3225,8 +3231,19 @@ LINT_SKILL_RULES = {
     "skill-reference-over-read-cap": ("WARN", True),
     "lint-skill-ignore-invalid": ("WARN", False),
     "lint-skill-ignore-unclosed": ("WARN", False),
-    "lint-skill-ignore-unused": ("INFO", False),
+    "lint-skill-ignore-unused": ("INFO", False),  # INFO; WARN only under --strict-ignores
 }
+
+# Suppressible rules whose findings never carry a line (the size caps). A suppressions-file entry with `match`
+# can never match them, so naming one with `match` is a usage error rather than an entry that silently matches
+# nothing. A test checks every emission of these rules has no line.
+LINELESS_SKILL_RULES = frozenset({
+    "skill-body-over-reattach-cap",
+    "skill-body-near-reattach-cap",
+    "skill-reference-over-read-cap",
+    "skill-corpus-over-evidence-ceiling",
+    "skill-corpus-near-evidence-ceiling",
+})
 
 
 def _suppressible_rules():
@@ -3256,6 +3273,70 @@ def _ignore_rule_spec(value):
     if sep and not glob.strip():
         raise argparse.ArgumentTypeError(f"empty glob in `{value}` — use `{rule}` alone to apply it to every file")
     return {"raw": value, "rule": rule, "glob": glob.strip() if sep else None, "used": False}
+
+
+_SUPPRESSIONS_TOP_KEYS = {"version", "suppressions"}
+_SUPPRESSIONS_ENTRY_KEYS = {"rule", "file", "match", "reason"}
+
+
+def _suppressions_file(value):
+    """argparse `type=` for `--suppressions <file>`: load and validate a reviewed-suppressions file. Any problem
+    (unreadable, malformed JSON, a wrong `version`, an unknown key, an unknown or provable rule, a missing
+    `reason`, a `match` on a rule whose findings carry no line) is a usage error (exit 2) naming the file and the
+    entry index, never an entry that silently matches nothing."""
+
+    def bad(msg):
+        raise argparse.ArgumentTypeError(f"--suppressions {value}: {msg}")
+
+    try:
+        doc = json.loads(Path(value).read_text(encoding="utf-8"))
+    except OSError as e:
+        bad(f"cannot read the file ({e.strerror or e})")
+    except (UnicodeDecodeError, ValueError) as e:
+        bad(f"not valid JSON ({e})")
+    if not isinstance(doc, dict):
+        bad('the top level must be an object: {"version": 1, "suppressions": [...]}')
+    extra = sorted(set(doc) - _SUPPRESSIONS_TOP_KEYS)
+    if extra:
+        bad(f"unknown top-level key(s): {', '.join(extra)}; allowed: version, suppressions")
+    if doc.get("version") != 1:
+        bad(f"`version` must be 1 (got {json.dumps(doc.get('version'))})")
+    items = doc.get("suppressions")
+    if not isinstance(items, list):
+        bad("`suppressions` must be a list of entries")
+    entries = []
+    for i, e in enumerate(items):
+        where = f"entry #{i}"
+        if not isinstance(e, dict):
+            bad(f"{where} must be an object with rule, file, reason and an optional match")
+        extra = sorted(set(e) - _SUPPRESSIONS_ENTRY_KEYS)
+        if extra:
+            bad(f"{where}: unknown key(s): {', '.join(extra)}; allowed: rule, file, match, reason")
+        rule = e.get("rule")
+        if not isinstance(rule, str) or not rule.strip():
+            bad(f"{where}: `rule` is required")
+        rule = rule.strip()
+        why = _why_not_suppressible(rule)
+        if why:
+            bad(f"{where}: {why}")
+        file = e.get("file")
+        if not isinstance(file, str) or not file.strip():
+            bad(f"{where}: `file` is required (the finding's file as printed, or relative to the skill's parent directory)")
+        reason = e.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            bad(f"{where}: `reason` is required and must say why the finding is accepted")
+        match = e.get("match")
+        if match is not None:
+            if not isinstance(match, str) or not match.strip():
+                bad(f"{where}: `match` must be a non-empty string (the finding's source line, compared exactly)")
+            if rule in LINELESS_SKILL_RULES:
+                bad(f"{where}: `{rule}` findings carry no line, so a `match` can never apply — drop `match`")
+            match = match.strip()
+        entries.append({
+            "index": i, "rule": rule, "file": Path(file.strip()).as_posix(), "match": match,
+            "reason": reason.strip(), "source": f"{value}#{i}", "used": False,
+        })
+    return {"path": value, "entries": entries}
 
 
 # A marker line, outside any fence: an HTML comment (recommended), a `[//]: # (…)` link comment, or a bare
@@ -3367,18 +3448,78 @@ def _glob_matches(glob, file, base):
     return any(fnmatch.fnmatchcase(c, glob) for c in cand)
 
 
-def _apply_suppressions(tagged, ranges, specs):
-    """Mark each finding a marker or an --ignore-rule covers. A marker applies to the SAME file, a rule it
-    names, and a line inside its range; it wins over a flag for the record. Returns the unused-diagnostics."""
-    for f, root in tagged:
-        if not LINT_SKILL_RULES.get(f.rule, ("", False))[1]:
-            continue
+def _file_candidates(file, base):
+    """The forms a finding's `file` can be named by: as printed, and relative to the PARENT of the skill
+    directory it came from (so it starts with the skill's own directory name, `deck-review/SKILL.md`)."""
+    cand = [Path(file).as_posix()]
+    try:
+        cand.append(Path(os.path.relpath(Path(file).resolve(), base)).as_posix())
+    except ValueError:
+        pass
+    return cand
+
+
+def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
+    """Mark each finding a marker, a suppressions-file entry or an --ignore-rule covers, in that order of
+    precedence for the `suppressed` record. A marker applies to the SAME file, a rule it names, and a line
+    inside its range. A suppressions-file entry suppresses at most ONE finding: its rule, its exact file, and,
+    when it has `match`, the finding's exact source line (surrounding whitespace stripped). A finding a marker
+    already covers consumes no entry. Returns the unused-diagnostics."""
+    lines_by_file = lines_by_file or {}
+
+    def line_text(f):
+        lines = lines_by_file.get(f.file)
+        if f.line is None or lines is None or not (1 <= f.line <= len(lines)):
+            return None
+        return lines[f.line - 1].strip()
+
+    suppressible = [(f, root) for f, root in tagged if LINT_SKILL_RULES.get(f.rule, ("", False))[1]]
+    for f, _root in suppressible:
         for rg in ranges:
             if (rg["file"] == f.file and f.rule in rg["rules"] and f.line is not None
                     and rg["start"] <= f.line <= rg["end"]):
                 rg["used"].add(f.rule)
                 if f.suppressed is None:
                     f.suppressed = {"by": "marker", "marker_line": rg["start"], "reason": rg["reason"]}
+
+    # Suppressions file: findings in a fixed order (file, line, rule; a line-less finding last), each taking the
+    # first unconsumed matching entry in file order, entries WITH `match` before entries without, so a broad
+    # entry never takes a site a specific one was written for. Exact matching puts every entry with `match` in
+    # one (rule, file, line text) class, so this greedy order is optimal.
+    entries = [e for sf in files for e in sf["entries"]]
+    if entries:
+        order = sorted(
+            (pair for pair in suppressible if pair[0].suppressed is None),
+            key=lambda p: (str(p[0].file), p[0].line is None, p[0].line or 0, p[0].rule),
+        )
+        for f, root in order:
+            cand = _file_candidates(f.file, root)
+            text = line_text(f)
+            fitting = [e for e in entries if not e["used"] and e["rule"] == f.rule and e["file"] in cand]
+            pick = next((e for e in fitting if e["match"] is not None and e["match"] == text), None)
+            if pick is None:
+                pick = next((e for e in fitting if e["match"] is None), None)
+            if pick is not None:
+                pick["used"] = True
+                f.suppressed = {"by": "file", "marker_line": None, "reason": pick["reason"], "source": pick["source"]}
+        # A class with more findings than entries reds on one of them, which need not be the newly added site:
+        # name every line of the class on each unsuppressed one.
+        for f, root in suppressible:
+            text = line_text(f)
+            if f.suppressed is not None or text is None:
+                continue
+            cand = _file_candidates(f.file, root)
+            n_entries = sum(1 for e in entries if e["rule"] == f.rule and e["file"] in cand and e["match"] == text)
+            if n_entries == 0:
+                continue
+            same = sorted(g.line for g, _ in suppressible if g.rule == f.rule and g.file == f.file and line_text(g) == text)
+            f.message += (
+                f" (Suppressions file: {n_entries} entr{'y' if n_entries == 1 else 'ies'} for this exact line text, "
+                f"{len(same)} finding(s) on lines {', '.join(str(n) for n in same)} — the unsuppressed one need "
+                "not be the newest site.)"
+            )
+
+    for f, root in suppressible:
         for sp in specs:
             if sp["rule"] == f.rule and (sp["glob"] is None or _glob_matches(sp["glob"], f.file, root)):
                 sp["used"] = True
@@ -3395,6 +3536,18 @@ def _apply_suppressions(tagged, ranges, specs):
                     "range wraps the whole fence.",
                     rg["file"], rg["start"],
                 ))
+    for e in entries:
+        if not e["used"]:
+            what = f"`{e['rule']}` in {e['file']}" + (f" matching {json.dumps(e['match'])}" if e["match"] is not None else "")
+            unused.append(Finding(
+                "INFO", "lint-skill-ignore-unused",
+                f"suppressions entry #{e['index']} ({what}) suppressed nothing.",
+                "Remove the entry if the finding it was written for is gone; otherwise check `file` against the "
+                "finding's `file` in `--json` (or the path relative to the skill's parent directory) and `match` "
+                "against its source line (exact, surrounding whitespace ignored). Lint every skill the file covers "
+                "in one invocation, or another skill's entries report as unused.",
+                e["source"].rsplit("#", 1)[0],
+            ))
     for sp in specs:
         if not sp["used"]:
             unused.append(Finding(
@@ -3412,6 +3565,9 @@ def cmd_lint_skill(args):
     # (finding, the parent of the argument's skill dir) — the base an --ignore-rule glob is also tried against
     tagged = []
     ranges = []
+    # The exact lines each finding was computed from, so a suppressions-file `match` compares against the same
+    # text the linter saw (never a re-read that could differ).
+    lines_by_file = {}
     n_files = 0
     for arg in args.paths:
         start = len(all_findings)
@@ -3431,6 +3587,7 @@ def cmd_lint_skill(args):
         if md is not None:
             n_files += 1
             md_lines = Path(md).read_text(encoding="utf-8").splitlines()
+            lines_by_file.setdefault(md, md_lines)
             md_ranges, md_diags = _lint_skill_markers(md, md_lines)
             ranges.extend(md_ranges)
             all_findings.extend(md_diags)
@@ -3440,12 +3597,33 @@ def cmd_lint_skill(args):
             all_findings.extend(_lint_skill_sizes(md))
         for hp in hooks:
             n_files += 1
-            all_findings.extend(
-                _lint_skill_text(hp, Path(hp).read_text(encoding="utf-8").splitlines(), force_json=True)
-            )
+            hp_lines = Path(hp).read_text(encoding="utf-8").splitlines()
+            lines_by_file.setdefault(hp, hp_lines)
+            all_findings.extend(_lint_skill_text(hp, hp_lines, force_json=True))
             all_findings.extend(_lint_hook_events(hp))
         tagged.extend((f, root) for f in all_findings[start:])
-    all_findings.extend(_apply_suppressions(tagged, ranges, args.ignore_rule or []))
+    # One finding reported twice (the same skill reached through two arguments) would need two entries to
+    # suppress; drop the repeat before suppression.
+    seen = set()
+    dropped = set()
+    kept = []
+    for f, root in tagged:
+        key = (f.rule, str(Path(f.file).resolve()), f.line, f.message)
+        if key in seen:
+            dropped.add(id(f))
+            continue
+        seen.add(key)
+        kept.append((f, root))
+    if dropped:
+        all_findings = [f for f in all_findings if id(f) not in dropped]
+    tagged = kept
+    unused = _apply_suppressions(tagged, ranges, args.ignore_rule or [], args.suppressions or [], lines_by_file)
+    # --strict-ignores: a suppression that suppressed nothing (marker, --ignore-rule or file entry) is a WARN
+    # for this run, so `--strict` fails on it and the printed severity says why.
+    if args.strict_ignores:
+        for u in unused:
+            u.severity = "WARN"
+    all_findings.extend(unused)
     if args.json:
         print(json.dumps([x.as_dict() for x in all_findings], indent=2))
     else:
@@ -3729,7 +3907,14 @@ def main(argv=None):
             "suppresses the named rules on the lines between, in that file only; a marker inside a fenced block "
             "is ignored, so wrap the whole fence. references/ files are not linted, so a marker there does "
             "nothing. A suppressed finding is still printed (glyph ⊘) and kept in --json with its severity and "
-            "a `suppressed` record ({by, marker_line, reason}); it only stops gating. Provable rules (ERROR, "
+            "a `suppressed` record ({by, marker_line, reason}, plus `source` for a suppressions-file entry); it "
+            "only stops gating. `--suppressions FILE` (repeatable) reads reviewed sites from a JSON file kept "
+            "OUTSIDE the plugin, so editing it changes no skill bytes: "
+            '{"version": 1, "suppressions": [{"rule", "file", "match"?, "reason"}]}. Each entry suppresses AT '
+            "MOST ONE finding: its rule, in exactly that file (as printed, or relative to the skill's parent "
+            "directory), and, with `match`, on exactly that source line (surrounding whitespace ignored). A new "
+            "copy of an accepted line therefore still fails `--strict`. `--strict-ignores` makes a marker, "
+            "`--ignore-rule` or entry that suppressed nothing a WARN instead of INFO. Provable rules (ERROR, "
             "`hooks-json-misplaced`, `subagent-type-not-found-in-plugin`) cannot be suppressed. A bad marker "
             "is WARN `lint-skill-ignore-invalid` (unknown or provable rule, no rule, nested, stray end), an "
             "unclosed one WARN `lint-skill-ignore-unclosed`, and one that suppressed nothing INFO "
@@ -3763,6 +3948,27 @@ def main(argv=None):
         "still reported (it keeps its severity; `--json` adds a `suppressed` record) but no longer gates. "
         "An unknown rule, or a provable one (ERROR, `hooks-json-misplaced`, `subagent-type-not-found-in-plugin`), "
         "is a usage error. Unscoped, it also hides the next new finding of that rule in any file.",
+    )
+    lsp.add_argument(
+        "--suppressions",
+        action="append",
+        type=_suppressions_file,
+        metavar="FILE",
+        help="a JSON file of reviewed suppressions (repeatable): "
+        '{"version": 1, "suppressions": [{"rule": ..., "file": ..., "match": ..., "reason": ...}]}. '
+        "Each entry suppresses at most one finding of `rule` in exactly `file` (as printed, or relative to the "
+        "skill's parent directory); with `match`, only on the source line equal to it (surrounding whitespace "
+        "ignored). `reason` is required. Entries with `match` are used before entries without. A size-cap rule "
+        "has no line, so its entry takes no `match`. A malformed file, an unknown or provable rule, a missing "
+        "reason or an unknown key is a usage error. Keep the file outside the plugin (or list it in "
+        ".cowork-hashignore): the cassette hash covers the plugin, so editing it there would stale cassettes.",
+    )
+    lsp.add_argument(
+        "--strict-ignores",
+        action="store_true",
+        help="report a marker, `--ignore-rule` or suppressions entry that suppressed nothing as WARN instead of "
+        "INFO, so `--strict --strict-ignores` fails on a stale suppression. Lint every skill a suppressions file "
+        "covers in one invocation, or the other skills' entries report as unused.",
     )
     lsp.set_defaults(func=cmd_lint_skill)
 
@@ -3820,10 +4026,12 @@ def main(argv=None):
             e == "--min-severity" or e.startswith("--min-severity=") for e in extras
         ):
             (target or ap).error("unrecognized arguments: " + " ".join(extras) + " (--min-severity is a `lint` flag, not `lint-skill` — rerun with `cowork-harness lint` instead)")
-        if getattr(args, "command", None) == "lint" and any(
-            e == "--ignore-rule" or e.startswith("--ignore-rule=") for e in extras
-        ):
-            (target or ap).error("unrecognized arguments: " + " ".join(extras) + " (--ignore-rule is a `lint-skill` flag; `lint` has no rule suppression)")
+        if getattr(args, "command", None) == "lint":
+            for flag in ("--ignore-rule", "--suppressions", "--strict-ignores"):
+                if any(e == flag or e.startswith(flag + "=") for e in extras):
+                    (target or ap).error(
+                        "unrecognized arguments: " + " ".join(extras) + f" ({flag} is a `lint-skill` flag; `lint` has no rule suppression)"
+                    )
         (target or ap).error("unrecognized arguments: " + " ".join(extras))
     if getattr(args, "command", None) == "lint" and getattr(args, "cassette_dir", None) == "":
         sub.choices["lint"].error("--cassette-dir needs a path")

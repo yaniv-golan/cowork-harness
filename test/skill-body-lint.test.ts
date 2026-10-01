@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -886,6 +886,264 @@ describe.skipIf(!havePython)("lint-skill — per-rule suppression", () => {
     });
   });
 
+  // `--suppressions FILE`: reviewed sites listed outside the skill, each entry suppressing AT MOST ONE finding (its
+  // rule, exactly its file, and with `match` exactly its source line), so a new copy of an accepted line still reds.
+  describe("--suppressions FILE", () => {
+    type Entry = { rule?: unknown; file?: unknown; match?: unknown; reason?: unknown; [k: string]: unknown };
+    function supFile(entries: Entry[], extra: Record<string, unknown> = {}): string {
+      const d = mkdtempSync(join(tmpdir(), "cwh-sup-file-"));
+      const f = join(d, "suppressions.json");
+      writeFileSync(f, JSON.stringify({ version: 1, suppressions: entries, ...extra }));
+      return f;
+    }
+    /** A skill dir named `sk` under a fresh parent, so entries can name `sk/SKILL.md` (relative to the parent). */
+    function namedSkill(lines: string[]): string {
+      const parent = mkdtempSync(join(tmpdir(), "cwh-sup-parent-"));
+      const d = join(parent, "sk");
+      mkdirSync(d);
+      writeFileSync(join(d, "SKILL.md"), lines.join("\n"));
+      return d;
+    }
+    const fence = (line: string) => ["```bash", line, "```", ""];
+    const SAME = '  --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"';
+    const OTHER = 'bash "${CLAUDE_PLUGIN_ROOT}/x.sh"';
+    const entry = (match: string | undefined, reason = "reviewed: host path is right") => ({
+      rule: "plugin-root-in-vm-bash",
+      file: "sk/SKILL.md",
+      ...(match === undefined ? {} : { match }),
+      reason,
+    });
+    const flagged = (r: { findings: SFinding[] }) => r.findings.filter((f) => f.rule === "plugin-root-in-vm-bash");
+    const unused = (r: { findings: SFinding[] }) => r.findings.filter((f) => f.rule === "lint-skill-ignore-unused");
+    // The consumer's shape: three byte-identical flagged lines plus one distinct one.
+    const CONSUMER = ["# S", "", ...fence(SAME), ...fence(SAME), ...fence(SAME), ...fence(OTHER)];
+    const FOUR = () => [entry(SAME.trim(), "r0"), entry(SAME.trim(), "r1"), entry(SAME.trim(), "r2"), entry(OTHER, "r3")];
+
+    it("one entry per site: three identical lines + one distinct, four entries → --strict 0, every finding suppressed by file", () => {
+      const d = namedSkill(CONSUMER);
+      const f = supFile(FOUR());
+      const r = run([d, "--json", "--strict", "--suppressions", f]);
+      expect(r.status, r.stderr).toBe(0);
+      const fl = flagged(r);
+      expect(fl).toHaveLength(4);
+      for (const x of fl) expect(x.suppressed).toMatchObject({ by: "file", marker_line: null });
+      // Byte-identical duplicate entries are allowed and each consumes one finding.
+      expect(fl.map((x) => (x.suppressed as Sup & { source: string }).source).sort()).toEqual([0, 1, 2, 3].map((i) => `${f}#${i}`));
+      expect(fl.find((x) => x.line === 16)?.suppressed).toMatchObject({ reason: "r3", source: `${f}#3` });
+      expect(unused(r)).toEqual([]);
+    });
+
+    it("a pasted 4th copy of an accepted line fails --strict, and its message names every line of that text", () => {
+      const d = namedSkill([...CONSUMER, ...fence(SAME)]);
+      const r = run([d, "--json", "--strict", "--suppressions", supFile(FOUR())]);
+      expect(r.status).toBe(1);
+      const open = flagged(r).filter((x) => !x.suppressed);
+      expect(open).toHaveLength(1);
+      expect(open[0]!.message).toMatch(/3 entries for this exact line text, 4 finding\(s\) on lines 4, 8, 12, 20/);
+    });
+
+    it("a fixed site leaves its entry unused: INFO by default (exit 0), WARN under --strict-ignores (exit 1)", () => {
+      const d = namedSkill(["# S", "", ...fence(SAME), ...fence(SAME), ...fence(OTHER)]);
+      const f = supFile(FOUR());
+      const plain = run([d, "--json", "--strict", "--suppressions", f]);
+      expect(plain.status).toBe(0);
+      expect(unused(plain)).toHaveLength(1);
+      expect(unused(plain)[0]).toMatchObject({ severity: "INFO", file: f, line: null });
+      expect(unused(plain)[0]!.message).toMatch(/suppressions entry #2 \(`plugin-root-in-vm-bash` in sk\/SKILL\.md matching/);
+      const strict = run([d, "--json", "--strict", "--strict-ignores", "--suppressions", f]);
+      expect(strict.status).toBe(1);
+      expect(unused(strict).map((u) => u.severity)).toEqual(["WARN"]);
+      // Without --strict the promoted WARN is advisory only.
+      expect(run([d, "--json", "--strict-ignores", "--suppressions", f]).status).toBe(0);
+    });
+
+    it("--strict-ignores also promotes a stale marker and a stale --ignore-rule", () => {
+      const d = skill(["# S", "", START, "plain prose", END, ""]);
+      const r = run([d, "--json", "--strict", "--strict-ignores", "--ignore-rule", "hook-host-side-write"]);
+      expect(r.status).toBe(1);
+      expect(unused(r).map((u) => u.severity)).toEqual(["WARN", "WARN"]);
+      const plain = run([d, "--json", "--strict", "--ignore-rule", "hook-host-side-write"]);
+      expect(plain.status).toBe(0);
+      expect(unused(plain).map((u) => u.severity)).toEqual(["INFO", "INFO"]);
+    });
+
+    it("a size cap (no line) is suppressed by an entry without match; an entry with match on it is a usage error", () => {
+      const d = namedSkill(["# S", "", BIG]);
+      const ok = run([
+        d,
+        "--json",
+        "--strict",
+        "--suppressions",
+        supFile([{ rule: "skill-body-over-reattach-cap", file: "sk/SKILL.md", reason: "accepted" }]),
+      ]);
+      expect(ok.status, ok.stderr).toBe(0);
+      expect(ok.findings.find((x) => x.rule === "skill-body-over-reattach-cap")?.suppressed).toMatchObject({ by: "file" });
+      const bad = run([
+        d,
+        "--suppressions",
+        supFile([{ rule: "skill-body-over-reattach-cap", file: "sk/SKILL.md", match: "x", reason: "r" }]),
+      ]);
+      expect(bad.status).toBe(2);
+      expect(bad.stderr).toMatch(/entry #0: `skill-body-over-reattach-cap` findings carry no line/);
+    });
+
+    it("a corpus finding's file is the skill directory itself", () => {
+      const d = namedSkill(["# S", ""]);
+      mkdirSync(join(d, "references"));
+      for (let i = 0; i < 10; i++) writeFileSync(join(d, "references", `p${i}.md`), "y".repeat(54_000));
+      const r = run([
+        d,
+        "--json",
+        "--strict",
+        "--suppressions",
+        supFile([{ rule: "skill-corpus-over-evidence-ceiling", file: "sk", reason: "big on purpose" }]),
+      ]);
+      expect(r.findings.find((x) => x.rule === "skill-corpus-over-evidence-ceiling")?.suppressed).toMatchObject({ by: "file" });
+    });
+
+    it("entries with match are used before entries without, so a broad entry never takes a specific entry's site", () => {
+      // The broad entry comes FIRST in the file; greedy file order alone would hand it the SAME line.
+      const d = namedSkill(["# S", "", ...fence(SAME), ...fence(OTHER)]);
+      const f = supFile([entry(undefined, "broad"), entry(SAME.trim(), "specific")]);
+      const r = run([d, "--json", "--strict", "--suppressions", f]);
+      expect(r.status).toBe(0);
+      expect(flagged(r).find((x) => x.line === 4)?.suppressed).toMatchObject({ reason: "specific" });
+      expect(flagged(r).find((x) => x.line === 8)?.suppressed).toMatchObject({ reason: "broad" });
+      expect(unused(r)).toEqual([]);
+    });
+
+    it("exact matching: short-text entries and longer superset lines are separate classes (all suppressed, none unused)", () => {
+      // The consumer's real shape: two lines are the short line's text PLUS more arguments. Under substring
+      // matching the three short entries could be spent on the longer lines first and leave a short site red
+      // (or vice versa); exact matching puts each entry in exactly one class, where greedy is optimal.
+      const LONG = `${SAME.trim()} --extra "y"`;
+      const d = namedSkill(["# S", "", ...fence(LONG), ...fence(SAME), ...fence(LONG), ...fence(SAME), ...fence(SAME)]);
+      const f = supFile([entry(SAME.trim()), entry(SAME.trim()), entry(SAME.trim()), entry(LONG), entry(LONG)]);
+      const r = run([d, "--json", "--strict", "--suppressions", f]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(flagged(r).every((x) => x.suppressed)).toBe(true);
+      expect(unused(r)).toEqual([]);
+    });
+
+    it("a finding a marker covers consumes no entry (the entry reports unused); an --ignore-rule still counts as used", () => {
+      const d = namedSkill(["# S", "", START, ...fence(FWD), END, ""]);
+      const f = supFile([{ rule: "plugin-root-in-vm-bash", file: "sk/SKILL.md", match: FWD, reason: "r" }]);
+      const r = run([d, "--json", "--strict", "--suppressions", f, "--ignore-rule", "plugin-root-in-vm-bash"]);
+      expect(r.status).toBe(0);
+      expect(flagged(r)[0]!.suppressed).toMatchObject({ by: "marker" });
+      expect(unused(r).map((u) => u.message)).toEqual([expect.stringMatching(/suppressions entry #0/)]);
+    });
+
+    it("a file entry wins over --ignore-rule for the record", () => {
+      const d = namedSkill(["# S", "", ...fence(OTHER)]);
+      const r = run([d, "--json", "--suppressions", supFile([entry(OTHER, "why")]), "--ignore-rule", "plugin-root-in-vm-bash"]);
+      expect(flagged(r)[0]!.suppressed).toMatchObject({ by: "file", reason: "why" });
+      expect(unused(r)).toEqual([]);
+    });
+
+    it("the same skill reached twice is linted once for suppression: one entry covers its one finding", () => {
+      const d = namedSkill(["# S", "", ...fence(OTHER)]);
+      const r = run([d, join(d, "SKILL.md"), "--json", "--strict", "--suppressions", supFile([entry(OTHER)])]);
+      expect(r.status, JSON.stringify(r.findings)).toBe(0);
+      expect(flagged(r)).toHaveLength(1);
+    });
+
+    it("never edits the skill: SKILL.md bytes are unchanged", () => {
+      const d = namedSkill(CONSUMER);
+      const before = readFileSync(join(d, "SKILL.md"));
+      run([d, "--strict", "--suppressions", supFile(FOUR())]);
+      expect(readFileSync(join(d, "SKILL.md")).equals(before)).toBe(true);
+    });
+
+    it("text mode names the entry and its reason, and groups the summary by suppressions file", () => {
+      const d = namedSkill(["# S", "", ...fence(OTHER)]);
+      const f = supFile([entry(OTHER, "host-side read")]);
+      const r = run([d, "--strict", "--suppressions", f]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`(suppressed by ${f}#0: host-side read)`);
+      expect(r.stdout).toMatch(/1 suppressed \(plugin-root-in-vm-bash ×1 by suppressions file\)\./);
+    });
+
+    it("a relative --suppressions path resolves against the working directory", () => {
+      const d = namedSkill(["# S", "", ...fence(OTHER)]);
+      const f = supFile([entry(OTHER)]);
+      const r = spawnSync(py, [SCRIPT, "lint-skill", d, "--strict", "--suppressions", "suppressions.json"], {
+        encoding: "utf8",
+        cwd: join(f, ".."),
+      });
+      expect(r.status, r.stderr).toBe(0);
+    });
+
+    describe("usage errors (exit 2), naming the file and the entry", () => {
+      const cases: Array<[string, () => string, RegExp]> = [
+        [
+          "unknown rule",
+          () => supFile([{ rule: "no-such-rule", file: "sk/SKILL.md", reason: "r" }]),
+          /entry #0: unknown lint-skill rule: no-such-rule/,
+        ],
+        [
+          "provable rule",
+          () => supFile([{ rule: "hooks-json-misplaced", file: "sk/SKILL.md", reason: "r" }]),
+          /entry #0: `hooks-json-misplaced` cannot be suppressed/,
+        ],
+        ["missing reason", () => supFile([{ rule: "plugin-root-in-vm-bash", file: "sk/SKILL.md" }]), /entry #0: `reason` is required/],
+        [
+          "blank reason",
+          () => supFile([{ rule: "plugin-root-in-vm-bash", file: "sk/SKILL.md", reason: "  " }]),
+          /entry #0: `reason` is required/,
+        ],
+        ["missing file", () => supFile([{ rule: "plugin-root-in-vm-bash", reason: "r" }]), /entry #0: `file` is required/],
+        [
+          "unknown entry key",
+          () => supFile([{ rule: "plugin-root-in-vm-bash", file: "sk/SKILL.md", reason: "r", glob: "*" }]),
+          /entry #0: unknown key\(s\): glob/,
+        ],
+        ["unknown top-level key", () => supFile([], { notes: "x" }), /unknown top-level key\(s\): notes/],
+        [
+          "blank match",
+          () => supFile([{ rule: "plugin-root-in-vm-bash", file: "sk/SKILL.md", match: " ", reason: "r" }]),
+          /entry #0: `match` must be a non-empty string/,
+        ],
+      ];
+      for (const [name, make, rx] of cases) {
+        it(name, () => {
+          const f = make();
+          const r = run([namedSkill(["# S", ""]), "--suppressions", f]);
+          expect(r.status).toBe(2);
+          expect(r.stderr).toContain(`--suppressions ${f}`);
+          expect(r.stderr).toMatch(rx);
+        });
+      }
+      it("wrong version, malformed JSON, a missing file", () => {
+        const dir = mkdtempSync(join(tmpdir(), "cwh-sup-bad-"));
+        const v2 = join(dir, "v2.json");
+        writeFileSync(v2, JSON.stringify({ version: 2, suppressions: [] }));
+        const broken = join(dir, "broken.json");
+        writeFileSync(broken, "{ not json");
+        for (const [f, rx] of [
+          [v2, /`version` must be 1/],
+          [broken, /not valid JSON/],
+          [join(dir, "absent.json"), /cannot read the file/],
+        ] as const) {
+          const r = run([namedSkill(["# S", ""]), "--suppressions", f]);
+          expect(r.status, f).toBe(2);
+          expect(r.stderr).toMatch(rx);
+        }
+      });
+    });
+  });
+
+  it("`lint --suppressions` / `lint --strict-ignores` name lint-skill as the owner", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-sup-"));
+    const f = join(d, "s.yaml");
+    writeFileSync(f, "name: s\nfidelity: container\nprompt: hi\nassert:\n  - result: success\n");
+    for (const flag of [["--suppressions", "x.json"], ["--strict-ignores"]]) {
+      const r = spawnSync(py, [SCRIPT, "lint", f, ...flag], { encoding: "utf8" });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(`(${flag[0]} is a \`lint-skill\` flag; \`lint\` has no rule suppression)`);
+    }
+  });
+
   it("`lint --ignore-rule` names lint-skill as the owner instead of a bare unrecognized-arguments error", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-lint-ignore-rule-"));
     const f = join(d, "s.yaml");
@@ -930,6 +1188,43 @@ describe.skipIf(!havePython)("lint rule registries cover every emitted rule id",
     for (const [id, sevs] of Object.entries(lits)) {
       const max = sevs.reduce((a, b) => (order[a] <= order[b] ? a : b));
       expect(skill[id] ?? lint[id], `max severity of ${id}`).toBe(max);
+    }
+  });
+});
+
+// A suppressions entry with `match` on a rule in LINELESS_SKILL_RULES is a usage error, because those findings never
+// carry a line. Pin that: every emission of those rules passes no line, and every other suppressible rule passes one.
+describe.skipIf(!havePython)("LINELESS_SKILL_RULES matches how each rule is emitted", () => {
+  it("lineless rules emit no line; the other suppressible rules always pass one", () => {
+    const code = [
+      "import ast, importlib.util, json, sys",
+      "p = sys.argv[1]",
+      "spec = importlib.util.spec_from_file_location('scenario_mod', p)",
+      "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)",
+      "out = {}",
+      "for n in ast.walk(ast.parse(open(p, encoding='utf-8').read())):",
+      "    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'Finding' and len(n.args) >= 2 \\",
+      "            and isinstance(n.args[1], ast.Constant) and n.args[1].value in m.LINT_SKILL_RULES and m.LINT_SKILL_RULES[n.args[1].value][1]:",
+      "        has_line = len(n.args) > 5 or any(k.arg == 'line' for k in n.keywords)",
+      "        out.setdefault(n.args[1].value, []).append(has_line)",
+      "print(json.dumps({'emits': out, 'lineless': sorted(m.LINELESS_SKILL_RULES)}))",
+    ].join("\n");
+    const r = spawnSync(py, ["-c", code, SCRIPT], { encoding: "utf8" });
+    expect(r.status, r.stderr).toBe(0);
+    const { emits, lineless } = JSON.parse(r.stdout) as { emits: Record<string, boolean[]>; lineless: string[] };
+    expect(Object.keys(emits).length).toBeGreaterThan(8);
+    for (const rule of lineless) expect(emits[rule], rule).toBeDefined();
+    for (const [rule, lines] of Object.entries(emits)) {
+      if (lineless.includes(rule))
+        expect(
+          lines.every((x) => !x),
+          `${rule} emits a line`,
+        ).toBe(true);
+      else
+        expect(
+          lines.every((x) => x),
+          `${rule} emits without a line`,
+        ).toBe(true);
     }
   });
 });

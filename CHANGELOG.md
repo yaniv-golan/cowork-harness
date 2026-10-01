@@ -42,6 +42,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`lint-skill --suppressions <file>` accepts reviewed findings from a JSON file, one site per entry.** Each
+  entry (`{rule, file, match?, reason}`, `reason` required) suppresses at most one finding: of that rule, in
+  exactly that file, and with `match`, on the source line equal to it. A new copy of an accepted line therefore
+  still fails `--strict`, and no `SKILL.md` edit is needed, so no cassette goes stale (keep the file outside the
+  plugin). A malformed file or an unknown or provable rule is a usage error (exit 2). In `--json`, a finding a
+  file entry suppressed carries `"suppressed": {"by": "file", …, "source": "<file>#<entry index>"}`; `by` gains the
+  value `"file"`.
+- **`lint-skill --strict-ignores` reports a suppression that suppressed nothing as WARN instead of INFO**, so
+  `--strict --strict-ignores` fails on a stale marker, `--ignore-rule` or suppressions entry.
+
 - **A graded `semantic_matches` or `semantic_pairwise` assert records how its judge was called:** `assertions[].judgeTransport`
   (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
   `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config), so grades made

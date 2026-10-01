@@ -275,8 +275,9 @@ Cowork host-loop footguns (`${CLAUDE_PLUGIN_ROOT}` in a VM bash step, hook event
 start of an invoked skill — and `skill-body-near-reattach-cap` (INFO) from 80% of that;
 `skill-reference-over-read-cap` (WARN) fires on a `references/**.md` over 60,000 B, past which a
 whole-file Read returns a partial view. `--strict` fails on WARN, never on INFO. To accept a reviewed
-judgement-call finding, pass `--ignore-rule <rule>[=<glob>]` (repeatable; the glob matches the finding's
-file) or fence the text in `SKILL.md` with `<!-- lint-skill: ignore-start <rule>[,<rule>…]: <reason> -->`
+judgement-call finding, list it in a `--suppressions <file>` JSON file (one entry per accepted site:
+`rule`, `file`, the exact source line as `match`, and a required `reason`), pass `--ignore-rule
+<rule>[=<glob>]` (repeatable; the glob matches the finding's file) or fence the text in `SKILL.md` with `<!-- lint-skill: ignore-start <rule>[,<rule>…]: <reason> -->`
 … `<!-- lint-skill: ignore-end -->` (outside any code fence). A suppressed finding is still printed; it
 stops gating. A provable rule (an ERROR, a misplaced `hooks.json`, a missing pinned agent) cannot be
 suppressed: naming it, or an unknown rule, in `--ignore-rule` is a usage error (exit 2); in a marker it is
@@ -286,9 +287,10 @@ WARN `lint-skill-ignore-invalid`, as is any other malformed marker. An unclosed 
 **A marker is an edit to `SKILL.md`, and it costs what any edit costs.** The skill hash covers the file's
 content (unless the session's `staleness.hash_ignore` excludes it), so adding or moving a marker stales every cassette of that skill (a paid re-record to clear), and
 the agent reads the marker text like the rest of the file, which counts toward the re-attach cap. When
-either cost matters, prefer `--ignore-rule <rule>=<glob>`, which lives in your CI command and touches
-neither; it suppresses the rule for the whole file, so pair it with a check on `lint-skill --json`'s
-suppressed findings if a new site must still gate.
+either cost matters, prefer `--suppressions <file>`, kept outside the plugin: it touches neither, and each
+entry accepts exactly one site, so a new copy of an accepted line still fails `--strict`. Add
+`--strict-ignores` so an entry whose site is gone fails too. `--ignore-rule <rule>=<glob>` also touches
+neither, but it suppresses the rule for the whole file, including any new site.
 
 **`cowork-harness lint` runs the loader: a file it calls clean is one `run`/`record` will load.** Anything
 the loader refuses — an unknown key, a wrong value type (a scalar `semantic_matches.rubric`), a bad regex,
