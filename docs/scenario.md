@@ -1078,13 +1078,18 @@ model nothing about which files exist (no listing is added to the prompt).
 each problem named: a symlink anywhere, a file with a second hard link, agent and configuration paths
 (`.claude/`, `.git/`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md` — they configure the agent, they are not
 deliverables), a directory that also is (or holds) a mounted folder, upload, plugin or skill dir, an empty
-fixture, and more than 64 MiB in total (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES` raises the cap). In git
+fixture, more than 64 MiB in total (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES` raises the cap), and a single
+file over the pre-run hash cap (50 MiB, `COWORK_HARNESS_PRERUN_HASH_CAP`), whose authorship could never be decided. In git
 mode (the default; `COWORK_HARNESS_GITSET=0` turns it off) a file git does not track is refused too, so what a
 cassette's signature covers is what is committed. OS metadata files (`.DS_Store`, `Thumbs.db`) are skipped.
-Keep fixtures outside the plugin tree. `cowork-harness fixture export <run-dir> --out <dir>` turns a kept
+Keep fixtures outside the plugin tree, and inside the repository that holds the cassette: `record` refuses a
+fixture its cassette could only reference by climbing out of that repository (the stored path would carry this
+machine's directory names). `cowork-harness fixture export <run-dir> --out <dir>` turns a kept
 run's outputs into one ([cli.md](./cli.md)).
 
-**Staging.** Fresh runs only, on every tier: after the mounts, before the pre-run manifest. A `--resume` turn
+**Staging.** Fresh runs only, on every tier: after the mounts, before the pre-run manifest. A host path a
+fixture file contains counts as user-supplied input, so quoting it is not a `host_path_leak` — the same
+exemption uploads get, at `container` and `microvm` (the tiers where that signal is armed). A `--resume` turn
 never re-stages — it sees whatever the skill left in `outputs/`. A fresh run whose outputs dir is not empty is
 refused (a pinned `--session-id` re-run at `microvm` clears the previous run's outputs first).
 
@@ -1100,18 +1105,22 @@ opts out.
 **A presence assertion on a fixture file must say what it means.** `file_exists`, `user_visible_artifact`,
 `artifact_text` and `artifact_json` check that a file is there (or what it says), not who wrote it — on a file
 the fixture provides they pass before the step does anything. So a scenario that asserts one of them on a
-fixture path is **refused at load** — by `run`, `record` (and its `--dry-run`), `eval` and
-`replay --assert-from`, before anything is spawned; `cowork-harness lint` does not read the fixture directory,
-so it does not report it — unless it states `authored:` — `authored: true` (this run must have created
+fixture path — or names a directory the fixture provides, in any letter case — is **refused at load**
+(`cowork-harness lint` reports it, and `run`, `record` and its `--dry-run`, `eval`, a `--resume` turn,
+`verify-run` and `replay --assert-from` refuse it before evaluating anything) unless it states `authored:` — `authored: true` (this run must have created
 or rewritten the file; an untouched pre-run file fails, and so does a run with no pre-run manifest to tell) or
 `authored: false` (inheriting it is fine). `file_exists` and `user_visible_artifact` take an object form for
 it, `{path, authored}`; `artifact_text` / `artifact_json` take `authored` as a field. `authored: true` works on
-any scenario, fixture or not; it arms the pre-run manifest.
+any scenario, fixture or not; it arms the pre-run manifest. It applies to a regular file: a directory fails
+(assert on a file the step writes inside it), and a symlink — or a path reached through a symlinked
+directory — is never authored evidence. The file is looked up by its on-disk name, so on a case-insensitive
+filesystem `outputs/REPORT.md` is the fixture's `report.md`.
 
 **Recording and replay.** A cassette stores the fixture path relative to itself and records every fixture file
 in its manifest like any other outputs file, so replay needs no fixture and knows which files were pre-run.
-Text fixture files are inlined (and go through the record redaction policy); an untouched binary one is
-recorded hash-only (`truncationReason: "fixture"` — `file_exists` still passes on replay, a body assertion is
+Text fixture files are inlined (and go through the record redaction policy — when the policy rewrites an
+untouched one, its pre-run hash is recorded as the redacted body's, so it still reads as unchanged and
+`input_unmodified` on it stays checkable on replay); an untouched binary one is recorded hash-only (`truncationReason: "fixture"` — `file_exists` still passes on replay, a body assertion is
 evidence-unavailable). The fixture's content signature (`fingerprint.workspaceFixtureSig`) is part of the
 staleness check: replay recomputes it from the fixture directory, and a changed fixture is a `fixture` finding
 (a warning by default; `--strict`, `--fail-on-skill-drift` and an explicit `--session` fail it), while a

@@ -109,15 +109,15 @@ All notable changes to this project are documented here. The format is based on
   (exit 2, before anything is spawned), each problem named: a symlink, a hard-linked file, an agent or
   configuration path (`.claude/`, `.git/`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`), a file git does not
   track (in git mode), a fixture that overlaps a mounted folder, upload, plugin or skill dir, an empty one, and
-  more than 64 MiB (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`). An untouched fixture file is pre-run, not
+  more than 64 MiB (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`), or one file over the pre-run hash cap. An untouched fixture file is pre-run, not
   authored: `semantic_matches` grades only what the step created or rewrote, and `RunResult.artifacts[]`
   marks an untouched one `preRun: true`. Deleting a fixture file fails the run by default (the harness's
-  outputs-delete policy; `allow_outputs_delete` opts out). `RunResult.workspaceFixture` names the directory,
-  and `scaffold` re-emits it, asserting only what the step produced. The fixture's content signature is part of
+  outputs-delete policy; `allow_outputs_delete` opts out). `RunResult.workspaceFixture` is the ref as the
+  scenario file wrote it, and `scaffold` re-emits it verbatim, asserting only what the step produced. The fixture's content signature is part of
   the cassette staleness check: a changed fixture is a `fixture` finding (a warning by default; `--strict`,
   `--fail-on-skill-drift` and an explicit `--session` fail it), and one that cannot be found or scanned is
   `unverifiable-fixture`, which fails the replay and makes `verify-cassettes` exit 3. A cassette stores the
-  path relative to itself; text fixture files are inlined and redacted like any outputs file, while an
+  path relative to itself (`record` refuses a fixture outside the cassette's repository); text fixture files are inlined and redacted like any outputs file, while an
   untouched binary one is recorded hash-only (`truncationReason: "fixture"`). `fixture export` writes one.
 - **`authored: true|false` on `file_exists`, `user_visible_artifact`, `artifact_text` and `artifact_json`.**
   Those keys prove a file is there (or what it says), not who wrote it. `authored: true` also requires that
@@ -125,8 +125,11 @@ All notable changes to this project are documented here. The format is based on
   manifest to tell (evidence-unavailable); on replay the cassette's manifest hashes decide, and a hash that
   record-time scrubbing or redaction rewrote is evidence-unavailable, never authored. `file_exists` and
   `user_visible_artifact` take it through a new object form, `{path, authored}`; the string form is
-  unchanged. On a `workspace_fixture` scenario, one of these keys on a file the fixture provides is refused at
-  load unless it states `authored:` — `authored: false` says inheriting it is fine.
+  unchanged. `authored: true` applies to a regular file: a directory fails, and a symlink is never authored
+  evidence. On a `workspace_fixture` scenario, one of these keys on a file (or directory) the fixture provides
+  is refused unless it states `authored:` — by `lint` (two new ERROR rules, `workspace-fixture-invalid` and
+  `workspace-fixture-vacuous-assert`), and before evaluating anything by `run`, `record`, `eval`, a `--resume`
+  turn, `verify-run` and `replay --assert-from`. `authored: false` says inheriting it is fine.
 - **`fixture export <run-dir> --out <dir>` copies a kept run's outputs tree into a directory** a later scenario
   can start from, byte-for-byte and keeping permission bits. It refuses, naming the files and writing nothing,
   when any file's bytes or name hold a secret — the credentials in `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
@@ -231,11 +234,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **A record redaction policy no longer makes an untouched file read as changed on replay.** When the policy
-  rewrote the body of a file the run never touched, the cassette kept its raw pre-run hash next to the
-  redacted body's hash, so `input_unmodified` reported a false "modified in place". Its pre-run hash is now
-  recorded as unavailable (`null`), the same way record-time secret scrubbing already did, so the key reports
-  evidence-unavailable. A file the run did change keeps its hash. Applies to cassettes recorded from now on.
+- **A record redaction policy that rewrites an untouched file's body no longer blocks the recording.** The
+  cassette kept the file's raw pre-run hash next to the redacted body's hash, so `input_unmodified` on it read
+  "modified in place" and the record-time verdict check refused to write the cassette. Its pre-run hash is now
+  recorded as the redacted body's hash (the raw bytes did not change, so neither do the redacted ones), and the
+  file reads as unchanged on replay. A file the run did change keeps its raw hash. Applies to cassettes recorded
+  from now on.
 - **A fresh `--session-id` re-run at `microvm` no longer starts with the previous run's outputs.** The tier
   stages into the VM work tree, which a fresh same-project re-run did not clear; its `outputs/` is now cleared
   first.

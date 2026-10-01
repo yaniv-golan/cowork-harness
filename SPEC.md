@@ -831,7 +831,7 @@ abridged to the fields most consumers branch on. The complete field list is
   "userVisibleRoots?": ["string"],               // user-visible mount roots (relative to mnt/) — `outputs` plus each connected folder's resolved mount name; plugins excluded
   "readonlyFolderRoots?": ["string"],            // subset of userVisibleRoots that are read-only (mode:"r") connected-folder mounts — inputs, not deliverables; `artifacts` excludes them
   "artifacts?": [{ "path","bytes","preRun?" }],  // files written under the user-visible roots (paths + sizes only — no content snapshot); `preRun: true` = existed before the run with the same content (inherited, e.g. from a workspace_fixture — not produced by this run)
-  "workspaceFixture?": "string",                 // the scenario's workspace_fixture dir as the run resolved it (absolute live; cassette-relative on replay)
+  "workspaceFixture?": "string",                 // the scenario's workspace_fixture ref as the scenario file wrote it (relative to that file; not the resolved path) — the same on live and replay
   "preRunPaths?": ["string"],                    // workRoot-relative paths under the user-visible roots that existed BEFORE the agent ran — the `no_unexpected_files` baseline; absent on a --resume run or when the run predates the seam (every live sandbox tier captures it now, microvm included)
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
