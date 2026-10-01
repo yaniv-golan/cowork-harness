@@ -1090,6 +1090,24 @@
       "type": "string",
       "description": "the scenario's `workspace_fixture` ref exactly as the scenario file wrote it (relative to that file), on live runs and on replay (derived there from the cassette's ref and its recorded `scenarioSource`) — not the resolved absolute path (a ref written absolute stays as written). Absent when the scenario declares none, or when it was not loaded from a file (an in-memory scenario, a cassette with no `scenarioSource`)."
     },
+    "metrics": {
+      "type": "array",
+      "description": "The scenario's declared `metrics`, measured: one entry per declared id, in declaration order, each with exactly one of `value` (a finite number read from the artifact) or `unavailable` (why not). Never part of the verdict. Absent when the scenario declares none (an empty list included), on a partial run, on chat, and on a replay that could not drive the cassette. Reasons: missing_artifact (no readable regular file there), missing_path (the dotted path does not resolve), not_json (the file is not valid JSON), not_a_number (the value is not a finite number — never coerced), readonly (a read-only connected-folder input), size (over the 10 MiB body cap, or a body the recording did not keep), remote (lane: remote — nothing locally observable), pruned (no work tree to read, or it no longer holds what the run wrote), pre_run (the run did not write the file: an untouched pre-run file, one rewritten with identical bytes, or one whose authorship cannot be decided).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "value": { "type": "number" },
+          "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"] }
+        },
+        "oneOf": [
+          { "required": ["value"], "properties": { "value": {} }, "not": { "required": ["unavailable"], "properties": { "unavailable": {} } } },
+          { "required": ["unavailable"], "properties": { "unavailable": {} }, "not": { "required": ["value"], "properties": { "value": {} } } }
+        ]
+      }
+    },
     "workspaceFiles": {
       "type": "array",
       "description": "Working folder panel's canonical file model (\u00a76.3, M6) \u2014 every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it).",

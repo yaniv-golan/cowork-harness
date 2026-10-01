@@ -1802,7 +1802,13 @@ export type Authorship =
 /** The pure decision behind `authored: true` — see `authorshipCheck` for the rules. `postHash` is the sha256 of
  *  bytes the caller already read from the real file: when given (and there is no replay `postRunHashes`), it is
  *  used instead of a second read, so the bytes judged authored are the bytes the caller goes on to use. */
-export function authorshipOf(ctx: AssertContext, p: string, opts: { postHash?: string } = {}): Authorship {
+/** The fields `authorshipOf` reads. */
+export type AuthorshipContext = Pick<
+  AssertContext,
+  "workRoot" | "userVisiblePrefixes" | "preRunHashes" | "preRunPaths" | "preRunOrigin" | "postRunHashes" | "linkPaths" | "resume"
+>;
+
+export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash?: string } = {}): Authorship {
   const undecidable = (why: string, evidence = false): Authorship => ({ state: "undecidable", why, evidence });
   if (ctx.preRunOrigin === "remote-unavailable") return undecidable("the pre-run manifest is not locally observable (remote)", true);
   // Authorship is decided per invocation. A --resume turn captures no pre-run manifest of its own: the one on disk

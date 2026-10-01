@@ -76,6 +76,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     generator: "cowork-harness",
     mode: "chat",
     lane: "local", // the chat lane is a local interactive session by construction
+    metrics: undefined, // a chat session has no scenario, so no metrics
     scratchpadEvidenceComplete: false, // chat passes no scratchpad root — the walk never runs
     command: "chat", // #48
     // RunResult.turn documents "absent on replay/chat lanes" (types.ts) — kept undefined even though

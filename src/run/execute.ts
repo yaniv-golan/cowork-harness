@@ -1,4 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
+import { metricsFor } from "../metrics.js";
 import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
@@ -1848,6 +1849,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       }),
     });
     const assertions = evaluate(scenario.assert, assertCtx);
+    // Measured from the same context (and so the same evidence gates and pre-run baseline) the asserts just read.
+    const metrics = metricsFor(assertCtx, scenario.metrics);
 
     if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
       warn(`::warning:: ${scenario.name}: a network tool ran at L0 (protocol) — egress is NOT enforced here.\n`);
@@ -2027,6 +2030,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       generator: "cowork-harness",
       mode: "run",
       lane: scenario.lane,
+      metrics,
       scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
       runLabel: opts.runLabel, // run-identity: user --label tag (undefined if not passed)
@@ -3013,6 +3017,7 @@ export function buildPartialResult(args: {
     mode: "run",
     command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
     lane: args.lane, // the scenario's declared Cowork lane, threaded so a salvaged partial keeps its contract
+    metrics: undefined, // a partial run is not graded, so nothing is measured either
     scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
     runLabel: args.runLabel, // run-identity: threaded through so a salvaged partial keeps its generation label
     skillCommit: args.skillCommit,

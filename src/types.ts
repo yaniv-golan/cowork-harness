@@ -2292,6 +2292,11 @@ export interface RunResult {
    *  absolute path, so `scaffold` can re-emit it verbatim. Absent when the scenario declares none, or was not
    *  loaded from a file. */
   workspaceFixture?: string;
+  /** The scenario's declared `metrics`, measured: one entry per declared id, in declaration order, each carrying
+   *  exactly one of `value` (a finite number read from the artifact) or `unavailable` (why not — see
+   *  METRIC_UNAVAILABLE). Never part of the verdict. Absent when the scenario declares none (an empty list included),
+   *  on a partial run, on chat, and on a replay that could not drive the cassette. */
+  metrics?: Array<{ id: string; value?: number; unavailable?: MetricUnavailable }>;
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
    *  against. undefined = the run didn't capture it (it never armed one, or predates the seam; a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable); the

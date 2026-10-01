@@ -5713,6 +5713,7 @@ function replayErrorResult(file: string): RunResult {
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
     command: "replay", // #48
     lane: undefined, // unreadable cassette — no scenario to read a lane from
+    metrics: undefined, // nothing was driven, so nothing is measured
     scratchpadEvidenceComplete: false, // no run happened; nothing was observed
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
     referencesAccessed: undefined, // ditto — and `undefined` here means CANNOT VERIFY, never "no accesses" (see the field doc)
@@ -8709,6 +8710,7 @@ export async function replayCassette(
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       command: "replay", // #48
       mutation: mutationReport, // --mutate only; undefined otherwise
+      metrics: undefined,
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,

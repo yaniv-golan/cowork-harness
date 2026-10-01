@@ -3144,6 +3144,30 @@
       ".mcpErrors[]": {
         "type": "object"
       },
+      ".metrics": {
+        "type": "array"
+      },
+      ".metrics[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".metrics[].id": {
+        "type": "string",
+        "required": true
+      },
+      ".metrics[].unavailable": {
+        "type": "string",
+        "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"]
+      },
+      ".metrics[].value": {
+        "type": "number"
+      },
+      ".metrics[]<oneOf:0>.value": {
+        "required": true
+      },
+      ".metrics[]<oneOf:1>.unavailable": {
+        "required": true
+      },
       ".missingCapabilityUse": {
         "type": "array"
       },
