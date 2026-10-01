@@ -430,7 +430,7 @@ Every envelope, like the CLI's own output, is secret-scrubbed with the same set 
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
   `allow_l0_host_config_contamination`, `allow_stall`, `allow_undelivered_deliverables`, `allow_outputs_delete`,
   `allow_delete_in`),
-  and (when `controlOut` is present) `question_asked`,
+  and (when `controlOut` is present) `question_asked`, `question_option_count`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
   `no_hook_blocked` (illustrative — see `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts` for the authoritative
   set; this list is not re-verified exhaustive on every addition). `max_cost_usd`/`max_tokens` are evaluated against the *frozen recording's*
@@ -462,7 +462,7 @@ green. Each finding is surfaced class-tagged in `RunResult.staleness[]` for a to
 drift classes (`skill` / `shared-root`). All realize the gate as failing `assertions[]` entries (so
 `ok`/exit stay consistent). A cassette carrying no `fingerprint.skillHash` is unaffected — there was
 nothing to verify — and keeps replaying green.
-- **`question_asked` / `questions_count_max` / `gate_answers_delivered` / `gate_answer_count_min` /
+- **`question_asked` / `question_option_count` / `questions_count_max` / `gate_answers_delivered` / `gate_answer_count_min` /
   `hook_blocked` / `no_hook_blocked`** additionally require `controlOut`. Without it, a loud
   `::warning::` fires and these keys are excluded (not vacuously passed). The hook keys need
   `controlOut` for a different reason than the question keys: a custom hook's block/allow decision is

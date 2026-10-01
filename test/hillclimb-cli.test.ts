@@ -80,6 +80,40 @@ describe("stateTemplateFor --skill", () => {
   });
 });
 
+describe("stateTemplateFor: workspace_fixture", () => {
+  const withGitsetOff = <T>(fn: () => T): T => {
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  };
+  const setup = (fixture: string) => {
+    mkdirSync(join(cwd, "evals"));
+    writeFileSync(join(cwd, "evals", "_session.yaml"), `model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ${SKILL}\n`);
+    writeFileSync(
+      join(cwd, "evals", "a.yaml"),
+      `name: a\nbaseline: latest\nsession: ./_session.yaml\nfidelity: container\nprompt: p\nworkspace_fixture: ${fixture}\n`,
+    );
+  };
+
+  it("harness_paths lists the fixture's files", () => {
+    setup("../fx");
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "report.md"), "# draft\n");
+    const t = withGitsetOff(() => stateTemplateFor("evals", cwd, {}));
+    expect(t.state.harness_paths).toContain("fx/report.md");
+  });
+
+  it("a fixture staging would refuse is a usage error", () => {
+    setup("../missing");
+    expect(() => withGitsetOff(() => stateTemplateFor("evals", cwd, {}))).toThrow(UsageError);
+  });
+});
+
 describe("writeMetricsMd (state-template --flow)", () => {
   it("writes metrics.md into the flow dir, creating the dir", () => {
     expect(writeMetricsMd("flow", cwd, "# Metrics\n", []).status).toBe("written");

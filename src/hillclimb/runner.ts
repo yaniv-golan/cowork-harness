@@ -63,6 +63,8 @@ export interface RunnerDeps {
   pin: (c: HillclimbCase) => string | undefined;
   /** Every file that defines the measurement (scenario, session, answers, uploads) — the gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
+  /** Named values the gate hashes beside the derived files: what a file's bytes leave out (a fixture's exec bits). */
+  derivedValues?: (cases: readonly HillclimbCase[]) => Record<string, string>;
   /** The files the agent must not read (scenarios, session files); `derivedPaths` when absent. Uploads are in the
    *  gate's set but are inputs: an upload is a mount by design. */
   hiddenPaths?: (cases: readonly HillclimbCase[]) => string[];
@@ -173,10 +175,20 @@ async function run(
     throw new UsageError(
       `${statePathShown} harness_paths lists ${inLever.join(", ")}, inside the plugin the loop edits (${deps.lever}) — every round would change the harness sha; list only files that define the measurement`,
     );
-  const listed = listedRaw.map((p) => resolve(deps.cwd, p));
+  // A listed entry the agent is MEANT to read (an upload, a fixture file: derived, not hidden — state-template lists
+  // them) is no exposure, and nor is one that no longer exists (the digest skips it); every other listed file is.
+  const hidden = (deps.hiddenPaths ?? deps.derivedPaths)(all);
+  const hiddenSet = new Set(hidden.map((p) => resolve(p)));
+  const inputs = new Set(
+    deps
+      .derivedPaths(all)
+      .map((p) => resolve(p))
+      .filter((p) => !hiddenSet.has(p)),
+  );
+  const listed = listedRaw.map((p) => resolve(deps.cwd, p)).filter((p) => !inputs.has(p) && lexists(p));
   // Over EVERY case, whatever --case selects: a sibling scenario reachable through a selected case's mount is
   // still the flow's answer key.
-  const exposed = pathsInsideMounts([flowAbs, ...(deps.hiddenPaths ?? deps.derivedPaths)(all), ...listed], deps.mountRoots(all));
+  const exposed = pathsInsideMounts([flowAbs, ...hidden, ...listed], deps.mountRoots(all));
   if (exposed.length)
     throw new UsageError(
       `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,
@@ -200,7 +212,11 @@ async function run(
       cwd: deps.cwd,
       listed: Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [],
       derived: deps.derivedPaths(all),
-      virtual: { "cowork-harness-version": deps.virtual.harnessVersion, baseline: deps.virtual.baselineId },
+      virtual: {
+        ...deps.derivedValues?.(all),
+        "cowork-harness-version": deps.virtual.harnessVersion,
+        baseline: deps.virtual.baselineId,
+      },
       tags: skillTag(skill),
     });
   const digest = digestFor(args.skill);

@@ -105,6 +105,12 @@ describe("listedInside — a harness path inside the skill dir would stop every 
     put("eval/grade.mjs", "g");
     expect(listedInside(cwd, ["plugin/skills/x/SKILL.md", "eval/grade.mjs"], join(cwd, "plugin"))).toEqual(["plugin/skills/x/SKILL.md"]);
   });
+
+  it("a listed entry that no longer exists is no error: outside the skill dir it passes, inside it is still named", () => {
+    put("plugin/skills/x/SKILL.md", "s");
+    // e.g. a fixture file renamed after state-template listed it: the digest skips it with a warning
+    expect(listedInside(cwd, ["fx/gone.csv", "plugin/skills/x/gone.md"], join(cwd, "plugin"))).toEqual(["plugin/skills/x/gone.md"]);
+  });
 });
 
 describe("gateDecision (runner-scaffold.mjs l.259-276)", () => {

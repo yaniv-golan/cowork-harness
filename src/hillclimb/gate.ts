@@ -4,8 +4,8 @@
 // The scaffold hashes its own source, any lockfile beside it or in cwd, and `_state.json.harness_paths`. Our runner has
 // no source file in the user's tree, so the harness itself enters as two virtual entries (harness version
 // and platform baseline), and the files that define the measurement — every scenario the positional resolves
-// to (independent of --case, so a canary and the full pass agree), its session, answers, decider config and
-// uploads — enter as the DERIVED set. The skill dir never does: the loop edits it every round.
+// to (independent of --case, so a canary and the full pass agree), its session file, its uploads and its
+// workspace_fixture files — enter as the DERIVED set. The skill dir never does: the loop edits it every round.
 //
 // Like the scaffold's, this is a change detector, not a security boundary: the sha and the list live where the loop
 // agent can write. What bounds an unattended run is the permission allowlist on the runner command.
@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
-import { containedRealPath } from "../boundary-paths.js";
+import { pathsInsideMounts } from "./answer-key.js";
 
 const LOCKFILES = ["package-lock.json", "bun.lock", "bun.lockb", "yarn.lock", "pnpm-lock.yaml"];
 
@@ -73,9 +73,16 @@ export function harnessDigest(input: DigestInput): Digest {
 }
 
 /** The `harness_paths` entries that resolve inside the skill dir. Listing one would make every round stop
- *  for approval, because the loop edits that dir by design. */
+ *  for approval, because the loop edits that dir by design. An entry that no longer exists resolves through its
+ *  nearest existing ancestor (the exposure check's rule), so a renamed file is no error here: the digest skips it. */
 export function listedInside(cwd: string, listed: readonly string[], skillDir: string): string[] {
-  return listed.filter((p) => containedRealPath(skillDir, resolve(cwd, p)));
+  const inside = new Set(
+    pathsInsideMounts(
+      listed.map((p) => resolve(cwd, p)),
+      [skillDir],
+    ).map((x) => x.path),
+  );
+  return listed.filter((p) => inside.has(resolve(cwd, p)));
 }
 
 export type GateDecision = { kind: "ok" } | { kind: "approve" } | { kind: "absent" } | { kind: "mismatch" };
