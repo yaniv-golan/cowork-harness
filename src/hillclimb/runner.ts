@@ -23,6 +23,7 @@ import { gateDecision, harnessDigest } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
+import { attachmentKind, authoredOutputs, planOutputCopy } from "./outputs.js";
 import { headroom } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
 
@@ -85,6 +86,10 @@ const CONTROL = /[\x00-\x1f\x7f-\x9f]/g;
 export const termSafe = (s: string): string => s.replace(ESC_SEQ, "").replace(CONTROL, "");
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Output-copy caps: one file, and every file of one rep. */
+const OUTPUT_CAPS = { perFileBytes: 2 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 };
+const TEXT_KINDS = new Set(["text", "json", "html", "svg", "code"]);
 
 export async function runHillclimb(args: HillclimbRunArgs, deps: RunnerDeps): Promise<RunOutcome> {
   const say = (line: string) => deps.stderr(termSafe(line));
@@ -325,6 +330,7 @@ async function run(
       const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
       let trace: ReturnType<typeof turnsFromEvents> | undefined;
       let traceError: unknown;
+      let outputs: ReturnType<typeof planOutputCopy> | undefined;
       try {
         trace = turnsFromEvents({
           events: report.events,
@@ -335,6 +341,15 @@ async function run(
           redact: (t) => redactDeep(t, deps.secrets),
         });
         (out.row.meta as Record<string, unknown>).subagent_turns = trace.subagentTurns;
+        // The files the run authored: attached to the final assistant turn now, copied after the row.
+        if (report.result?.workDir) {
+          outputs = planOutputCopy(report.result.workDir, authoredOutputs(report.result), OUTPUT_CAPS);
+          const filesPrefix = `${v}/out/${c.id}_rep${rep}/files/`;
+          const last = [...trace.turns].reverse().find((t) => t.role === "assistant");
+          if (last && outputs.copy.length)
+            last.attachments = outputs.copy.map((o) => ({ kind: attachmentKind(o.rel), ref: filesPrefix + o.rel }));
+          if (outputs.skipped.length) (out.row.meta as Record<string, unknown>).outputs_skipped = outputs.skipped;
+        }
       } catch (e) {
         traceError = e;
       }
@@ -345,6 +360,12 @@ async function run(
       try {
         if (traceError !== undefined) throw traceError;
         for (const s of trace!.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
+        // Text is redacted like every other byte in the flow; a binary is copied as it is.
+        for (const o of outputs?.copy ?? [])
+          writer.writeUnderFlow(
+            `${v}/out/${c.id}_rep${rep}/files/${o.rel}`,
+            TEXT_KINDS.has(attachmentKind(o.rel)) ? o.data.toString("utf8") : o.data,
+          );
         writer.writeTrace(c.id, rep, trace!.turns);
         ok++;
       } catch (e) {
