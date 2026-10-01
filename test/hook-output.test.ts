@@ -1,7 +1,7 @@
 // `hook_output_contains` / `hook_output_not_contains` over hook_response frames exactly as a run records them
 // (parseMessage over the committed recording test/fixtures/hook-frames/), and through `verify-run` over real kept run
 // dirs (copied first — verify-run reads them; nothing here writes into ~/.cowork-harness).
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,6 +11,8 @@ import { parseMessage } from "../src/agent/session.js";
 import { ScenarioObject, type Assertion } from "../src/types.js";
 import {
   CASSETTE_VERSION,
+  assertRedactionVerdictPreserved,
+  freezeRecordedRun,
   redactCassette,
   redactionRewroteHookOutput,
   replayCassette,
@@ -19,9 +21,10 @@ import {
 } from "../src/run/cassette.js";
 import { loadRedactionPolicy } from "../src/redact.js";
 import { loadBaseline } from "../src/baseline.js";
-import { assertContradiction, hookOutputContradictions } from "../src/run/execute.js";
+import { assertContradiction, hookOutputContradictions, warnAmbiguousHookOutputForPlan } from "../src/run/execute.js";
 import { warnAmbiguousHookOutput } from "../src/run/hook-events.js";
-import type { Scenario } from "../src/types.js";
+import type { RunResult, Scenario } from "../src/types.js";
+import type { LaunchPlan } from "../src/session.js";
 import { loadHookFrames } from "./helpers/hook-frames.js";
 
 /** contextEvents as Run records them, optionally with each frame's fields edited (still the recorded frames). */
@@ -362,13 +365,263 @@ describe("warnAmbiguousHookOutput: output that cannot be attributed to one plugi
     expect(out[0]).toMatch(/hook_output_\* on `Stop`: 2 staged plugins declare `Stop`.*carry no plugin id/);
   });
 
-  it("warns when allow_host_hooks is set, even with one plugin", () => {
-    expect(msgs([plugin(["Stop"])], NOT, true)[0]).toMatch(/`allow_host_hooks` is set/);
+  it("warns when the operator's hooks are visible (protocol off the sealed config dir), even with one plugin", () => {
+    const out = msgs([plugin(["Stop"])], NOT, true);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/reads your real config dir.*plugin installed on this machine may also answer it/);
+    expect(out[0]).not.toMatch(/allow_host_hooks/);
   });
 
   it("is silent with one declaring plugin, when the second declares another event, or with no hook_output_* key", () => {
     expect(msgs([plugin(["Stop"])], NOT)).toEqual([]);
     expect(msgs([plugin(["Stop"]), plugin(["PreToolUse"])], NOT)).toEqual([]);
     expect(msgs([plugin(["Stop"]), plugin(["Stop"])], [{ hook_event_fired: "Stop" }], true)).toEqual([]);
+  });
+});
+
+// A hook_started whose hook_response never arrived (paired by hook_id): an async or backgrounded hook, or one still
+// running at teardown. Built from the recorded frames by DROPPING response lines, never by typing new ones.
+describe("hook_output_*: a hook that started without a response", () => {
+  const responses = loadHookFrames().filter((f) => f.subtype === "hook_response");
+  const without = (...ids: unknown[]) =>
+    ctx(
+      loadHookFrames()
+        .filter((f) => !(f.subtype === "hook_response" && ids.includes(f.hook_id)))
+        .flatMap((f) => parseMessage(f))
+        .flatMap((e) => (e.type === "system_event" ? [{ subtype: e.subtype, data: e.data }] : [])),
+    );
+  const second = responses[1]!.hook_id;
+
+  it("not_contains is evidence-unavailable, not a pass, when the clean second response is missing", () => {
+    // Control: with both responses the same assertion passes.
+    expect(run({ hook_output_not_contains: { event: "Stop", text: "no handover.txt" } } as Assertion, ctx(recorded())).pass).toBe(true);
+    const r = run({ hook_output_not_contains: { event: "Stop", text: "no handover.txt" } } as Assertion, without(second));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/^evidence unavailable: hook_output_not_contains: 1 `Stop` hook\(s\) started without a response/);
+  });
+
+  it("a hit on a frame that did respond still fails not_contains and passes contains", () => {
+    const c = without(second);
+    expect(run({ hook_output_not_contains: { event: "Stop", text: STOP_STDERR } } as Assertion, c).message).toMatch(
+      /^hook_output_not_contains: 1 `Stop` hook frame/,
+    );
+    expect(run({ hook_output_contains: { event: "Stop", text: STOP_STDERR } } as Assertion, c).pass).toBe(true);
+  });
+
+  it("contains: a miss names the unanswered hook and is evidence-unavailable", () => {
+    const r = run({ hook_output_contains: { event: "Stop", text: "never printed" } } as Assertion, without(second));
+    expect(r.message).toMatch(/^evidence unavailable: hook_output_contains: .*\(1 `Stop` hook\(s\) started without a response\)/);
+  });
+
+  it("no response at all: both keys evidence-unavailable, never 'the plugin declares no such hook'", () => {
+    for (const k of ["hook_output_contains", "hook_output_not_contains"]) {
+      const r = run({ [k]: { event: "Stop", text: "x" } } as unknown as Assertion, without(...responses.map((f) => f.hook_id)));
+      expect(r.message).toMatch(/^evidence unavailable: .*2 `Stop` hook\(s\) started without a response/);
+      expect(r.message).not.toMatch(/declares no such hook/);
+    }
+  });
+
+  it("a recording without hook_started frames grades as before", () => {
+    const c = ctx(recorded().filter((e) => e.subtype !== "hook_started"));
+    expect(run({ hook_output_not_contains: { event: "Stop", text: "no handover.txt" } } as Assertion, c).pass).toBe(true);
+  });
+});
+
+// The agent's spill note (read from the staged binary): an async hook's output past the in-memory cap is cut, the
+// note is appended to stdout, and stderr comes back "".
+describe("hook_output_*: output the agent truncated", () => {
+  const SPILL = "\nOutput truncated (9000KB total). Full output saved to: /tmp/x/tasks/abc.output";
+  const truncated = (stdout: string) =>
+    ctx(recorded((f) => (f.subtype === "hook_response" && f.exit_code === 0 ? { ...f, stdout: `${stdout}${SPILL}`, stderr: "" } : f)));
+
+  it("not_contains is evidence-unavailable on a miss", () => {
+    const r = run({ hook_output_not_contains: { event: "Stop", stream: "stderr", text: "no handover.txt" } } as Assertion, truncated("ok"));
+    expect(r.message).toMatch(/^evidence unavailable: .*1 `Stop` frame\(s\) carry output the agent truncated/);
+  });
+
+  it("a hit before the note still counts; the note itself is never matched", () => {
+    expect(
+      run({ hook_output_contains: { event: "Stop", stream: "stdout", text: "kept part" } } as Assertion, truncated("kept part")).pass,
+    ).toBe(true);
+    const r = run({ hook_output_contains: { event: "Stop", matches: "output truncated" } } as Assertion, truncated("ok"));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/^evidence unavailable: .*\(1 carry output the agent truncated\)/);
+  });
+});
+
+describe("hook_output_* evidence excerpts", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const withStderr = (stderr: string) => ctx(recorded((f) => (f.subtype === "hook_response" ? { ...f, stderr } : f)));
+  const shown = (evidence: string) => JSON.parse(evidence.slice(evidence.indexOf(': "') + 2)) as string;
+
+  it.each([
+    ["labelled tokens", TOKEN],
+    ["bare tokens (as long as their rendering)", "[REDACTED]"],
+  ])("widening the start around %s never cuts the hit off the end", (_l, tok) => {
+    const s = "a".repeat(500) + tok.repeat(30) + "NEEDLE";
+    const r = run({ hook_output_contains: { event: "Stop", stream: "stderr", text: "NEEDLE" } } as Assertion, withStderr(s));
+    expect(r.pass).toBe(true);
+    expect(shown(r.evidence!)).toMatch(/NEEDLE$/);
+    // With text after the hit, the widened start pulls the end in by the same amount: the ~200-char bound holds.
+    const tail = run(
+      { hook_output_contains: { event: "Stop", stream: "stderr", text: "NEEDLE" } } as Assertion,
+      withStderr(`${s} ${"b".repeat(300)}`),
+    );
+    expect(shown(tail.evidence!)).toContain("NEEDLE");
+    expect(shown(tail.evidence!).length).toBeLessThanOrEqual(202);
+    expect(shown(r.evidence!)).not.toMatch(/REDACTED/);
+  });
+
+  it("the whole stream is scrubbed before it is cut: a secret at the window's edge leaves no fragment", () => {
+    const secret = "sk-test-0123456789abcdefSECRET";
+    vi.stubEnv("COWORK_HARNESS_SCRUB_VALUES", secret);
+    // The un-scrubbed window would start mid-secret (its tail "SECRET" visible); scrubbed first, it cannot.
+    for (const pad of [80, 90, 95, 100, 110]) {
+      const s = "x".repeat(300) + secret + "y".repeat(pad) + "NEEDLE" + "z".repeat(300);
+      const r = run({ hook_output_contains: { event: "Stop", stream: "stderr", text: "NEEDLE" } } as Assertion, withStderr(s));
+      expect(r.pass).toBe(true);
+      const ex = shown(r.evidence!);
+      expect(ex).toContain("NEEDLE");
+      for (let n = 4; n <= secret.length; n++) expect(ex).not.toContain(secret.slice(-n));
+      for (let n = 4; n <= secret.length; n++) expect(ex).not.toContain(secret.slice(0, n));
+    }
+  });
+});
+
+// record's redaction self-check: a failing hook_output_* assertion over a stream the policy rewrote is not a
+// verdict manufactured by redaction (only its quoted excerpt and evidence label change), so it must not refuse.
+describe("record's redaction self-check over hook_output_* failures", () => {
+  const tokenised = (s: string) => `${s} (cwd /Users/acme/project)`;
+  it.each([
+    ["a contains miss", { hook_output_contains: { event: "Stop", stream: "stderr", text: "never printed" } }],
+    ["a not_contains hit", { hook_output_not_contains: { event: "Stop", stream: "stderr", text: "PINEAPPLE" } }],
+  ])("%s does not make record refuse", async (_l, a) => {
+    const base = hookCassette([a], tokenised);
+    const red = redactCassette(base, POLICY);
+    // the messages really do differ — this is the case the carve-out exists for
+    const [mb, mr] = [(await replayed(base, Object.keys(a)[0]!)).message, (await replayed(red, Object.keys(a)[0]!)).message];
+    expect(mb).not.toBe(mr);
+    await expect(assertRedactionVerdictPreserved(base, red)).resolves.toBeUndefined();
+  });
+
+  it("GUARD-SENSITIVITY: a pass that redaction turns into a fail is still refused", async () => {
+    const base = hookCassette([{ hook_output_not_contains: { event: "Stop", stream: "stderr", text: "no handover.txt" } }], tokenised);
+    await expect(assertRedactionVerdictPreserved(base, redactCassette(base, POLICY))).rejects.toThrow(
+      /redaction changed assertion failures/,
+    );
+  });
+
+  it("another key's failing message keeps the full comparison", async () => {
+    const base = hookCassette(
+      [{ transcript_contains: "never said" }, { hook_output_contains: { event: "Stop", text: "PINEAPPLE" } }],
+      tokenised,
+    );
+    await expect(assertRedactionVerdictPreserved(base, redactCassette(base, POLICY))).resolves.toBeUndefined();
+  });
+});
+
+// The record path end to end: freezeRecordedRun over a run dir whose Stop stderr the repo policy tokenises.
+describe("freezeRecordedRun emits the hook_output_* redaction finding", () => {
+  it("warns naming the assertion, and still writes the cassette", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "hook-output-freeze-"));
+    const frames = loadHookFrames().map((f) =>
+      f.subtype === "hook_response" && typeof f.stderr === "string" && f.stderr
+        ? { ...f, stderr: `${f.stderr} (cwd /Users/acme/project)` }
+        : f,
+    );
+    writeFileSync(
+      join(outDir, "events.jsonl"),
+      [
+        line({ type: "system", subtype: "init", tools: [], skills: [] }),
+        ...frames.map(line),
+        line({ type: "result", subtype: "success", is_error: false }),
+      ].join("\n"),
+    );
+    writeFileSync(join(outDir, "control-out.jsonl"), "");
+    const scenario = ScenarioObject.parse({
+      name: "hook-output-freeze",
+      fidelity: "container",
+      prompt: "hi",
+      assert: [{ hook_output_contains: { event: "Stop", stream: "stderr", text: "PINEAPPLE" } }],
+    }) as unknown as Scenario;
+    const result = {
+      mode: "run",
+      command: "record",
+      scenario: scenario.name,
+      prompt: scenario.prompt,
+      fidelity: "container",
+      effectiveFidelity: "container",
+      result: "success",
+      baseline: LIVE,
+      outDir,
+      userVisibleRoots: ["outputs"],
+      fingerprint: { baseline: LIVE, hashFormat: "jcs1" },
+      assertions: [],
+      egress: [],
+    } as unknown as RunResult;
+    const errSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const cassettePath = join(outDir, "c.cassette.json");
+      await freezeRecordedRun(scenario, { noRedact: false, allowFailing: true, cassettePath }, [], result);
+      const stderr = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
+      expect(stderr).toMatch(
+        /::warning:: record: assert\[0\] hook_output_contains on Stop: 1 `Stop` hook_response frame carries a redaction token in stderr/,
+      );
+      expect(existsSync(cassettePath)).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+});
+
+// The plan-level wiring: which mounts count, and when the operator's own hooks are visible.
+describe("warnAmbiguousHookOutputForPlan", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const hooked = () => {
+    const root = mkdtempSync(join(tmpdir(), "hook-output-plan-"));
+    mkdirSync(join(root, "hooks"));
+    writeFileSync(
+      join(root, "hooks", "hooks.json"),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "true" }] }] } }),
+    );
+    return root;
+  };
+  const NOT = [{ hook_output_not_contains: { event: "Stop", text: "x" } }] as Assertion[];
+  const msgs = (plan: Partial<LaunchPlan>, tier: string) => {
+    const out: string[] = [];
+    warnAmbiguousHookOutputForPlan(plan as LaunchPlan, tier, NOT, (m) => out.push(m));
+    return out;
+  };
+  const configDir = () => mkdtempSync(join(tmpdir(), "hook-output-cfg-"));
+
+  it("counts plugin mounts only: a folder holding a hooks.json is not a second plugin", () => {
+    const mounts = [
+      { kind: "local-plugin", hostPath: hooked() },
+      { kind: "folder", hostPath: hooked() },
+    ] as LaunchPlan["mounts"];
+    expect(msgs({ mounts, configDir: configDir() }, "container")).toEqual([]);
+    const two = [
+      { kind: "local-plugin", hostPath: hooked() },
+      { kind: "marketplace-plugin", hostPath: hooked() },
+    ] as LaunchPlan["mounts"];
+    expect(msgs({ mounts: two, configDir: configDir() }, "container")[0]).toMatch(/2 staged plugins declare `Stop`/);
+  });
+
+  it("protocol reading the operator's real config dir warns; sealed, or another tier, does not", () => {
+    const operator = configDir();
+    vi.stubEnv("CLAUDE_CONFIG_DIR", operator);
+    for (const k of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"]) vi.stubEnv(k, "");
+    const mounts = [{ kind: "local-plugin", hostPath: hooked() }] as LaunchPlan["mounts"];
+    const plan = { mounts, configDir: configDir(), baseEnv: {} };
+    vi.stubEnv("COWORK_MANAGED_CONFIG", "0");
+    expect(msgs(plan, "protocol")[0]).toMatch(/reads your real config dir/);
+    expect(msgs(plan, "container")).toEqual([]);
+    vi.stubEnv("COWORK_MANAGED_CONFIG", "1");
+    expect(msgs(plan, "protocol")).toEqual([]);
+    // managed, but the "managed" dir IS the operator's: still visible
+    expect(msgs({ ...plan, configDir: operator }, "protocol")[0]).toMatch(/reads your real config dir/);
+    // a bad COWORK_MANAGED_CONFIG is left for the spawn to refuse
+    vi.stubEnv("COWORK_MANAGED_CONFIG", "yes");
+    expect(() => msgs(plan, "protocol")).not.toThrow();
   });
 });

@@ -61,11 +61,17 @@ All notable changes to this project are documented here. The format is based on
   matches}` checks the `stdout` / `stderr` (default either) of the hook's `hook_response` frames for `event`, so a hook
   that fails open and says why on stderr while exiting 0 — which `hook_event_fired` passes — can be caught. `text` is a
   literal (case-sensitive), `matches` a regex. Neither passes vacuously: no frame for the event fails both. The negative
-  key fails evidence-unavailable on a frame without the selected field, or over output a redaction policy rewrote
-  (a literal hit there still counts). Content-class: it grades live, on `verify-run` and on replay. A needle holding a
-  control character is refused at load; `record` warns when redaction rewrites the needle or a stream the check
-  reads; a run warns when more than one staged plugin, or a host hook, can answer the event (frames carry no plugin
-  id); and the same event, needle and stream in both keys is refused as a contradiction.
+  key fails evidence-unavailable on a frame without the selected field, when a hook for the event started and never
+  sent a response (an async hook, or one still running when the run ended), when the agent truncated a frame's output,
+  or over output a redaction policy rewrote; a miss of the positive key is labelled the same way. On a redacted
+  stream a literal hit outside a token still counts. `matches` has no multiline flag: `^` / `$` anchor the whole
+  stream. Content-class: it grades live, on `verify-run` and on replay. A needle holding a control character is
+  refused at load (and by the bundled `scenario.py` lint); `record` warns when redaction rewrites the needle or a
+  stream the check reads, and its redaction self-check compares these keys' failures by key, since their excerpts
+  quote the rewritten stream; a run warns when more than one staged plugin can answer the event, or a
+  host-installed plugin can because a `protocol` run reads the real config dir (frames carry no plugin id); and the
+  same event, needle and stream in both keys is refused as a contradiction. Evidence excerpts are scrubbed of
+  secrets before they are cut, and always show the hit.
 
 - **`question_option_count` counts the options a gate offered whose label matches a regex, on every sub-question.**
   `{matches, exactly | min/max, when_question?, case_sensitive?}` passes only when the count satisfies the
@@ -359,6 +365,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
+  and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
+  Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers
+  (a staged plugin declares runnable hooks).
 - **A record redaction policy that rewrites an untouched file's body no longer blocks the recording.** The
   cassette kept the file's raw pre-run hash next to the redacted body's hash, so `input_unmodified` on it read
   "modified in place" and the record-time verdict check refused to write the cassette. Its pre-run hash is now

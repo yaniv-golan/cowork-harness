@@ -115,6 +115,12 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
       "assert:\n  - questions_count_max: 0\n  - gate_answer_count_min: 0\n",
     ],
     [
+      // PyYAML (YAML 1.1) reads both as True; the harness keeps the strings "yes" and "on", which differ
+      "hook_output_* needles `yes` vs `on` (distinct strings to the harness, both True to PyYAML)",
+      [{ hook_output_not_contains: { event: "Stop", text: "yes" } }, { hook_output_contains: { event: "Stop", text: "on" } }],
+      "assert:\n  - hook_output_not_contains: { event: Stop, text: yes }\n  - hook_output_contains: { event: Stop, text: on }\n",
+    ],
+    [
       "two positive denial assertions",
       [{ vm_path_denied: true }, { path_denied: {} }],
       "assert:\n  - vm_path_denied: true\n  - path_denied: {}\n",

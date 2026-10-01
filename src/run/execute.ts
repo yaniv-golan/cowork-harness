@@ -43,8 +43,9 @@ import {
   isConnectedContent,
   applySessionOverrides,
   expandUserPath,
+  type LaunchPlan,
 } from "../session.js";
-import { spawnProtocol } from "../runtime/protocol.js";
+import { spawnProtocol, protocolReadsOperatorConfig } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
@@ -471,6 +472,34 @@ const CONTRADICTION_GROUPS: {
     why: "both read the same path-denial list — the denial the positive key requires is one `no_path_denied` requires not to exist",
   },
 ];
+
+/** The plan-level wiring of warnAmbiguousHookOutput: the plugin mounts it scans, and whether the agent can see
+ *  hooks the operator installed. That is the case at `protocol` off the sealed config dir — the agent reads the
+ *  operator's real config, so a host-installed plugin's hooks run and stream their frames too. Asked of the same
+ *  function spawnProtocol uses (protocolReadsOperatorConfig), never re-derived; a bad COWORK_MANAGED_CONFIG
+ *  is left for the spawn to refuse. Exported for tests. */
+export function warnAmbiguousHookOutputForPlan(
+  plan: Pick<LaunchPlan, "mounts"> & Partial<LaunchPlan>,
+  tier: string,
+  asserts: Assertion[],
+  warn: (msg: string) => void,
+): void {
+  let operatorHooksVisible = false;
+  if (tier === "protocol")
+    try {
+      operatorHooksVisible = protocolReadsOperatorConfig(plan as LaunchPlan);
+    } catch {
+      operatorHooksVisible = false;
+    }
+  warnAmbiguousHookOutput(
+    plan.mounts
+      .filter((mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin")
+      .map((mt) => mt.hostPath),
+    asserts,
+    operatorHooksVisible,
+    warn,
+  );
+}
 
 /** `hook_output_not_contains` + `hook_output_contains` on the same event and the same needle (same `text`, or the
  *  same `matches`), where the negative's stream covers the positive's (equal, or `any`): the frame the positive
@@ -932,16 +961,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // HOST sources (pre-stage) so it reports a real path the author can open. Tier-independent by design —
   // the served set is a property of the harness, not of the fidelity tier. Suppressed under --compact
   // alongside the other informational notices.
-  // hook_output_* grades every frame for its event, and frames carry no plugin id: say when the output may not be
-  // the plugin under test's. Not gated on --compact (it qualifies a verdict; see warnAmbiguousHookOutput).
-  warnAmbiguousHookOutput(
-    plan.mounts
-      .filter((mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin")
-      .map((mt) => mt.hostPath),
-    scenario.assert,
-    scenario.allow_host_hooks ?? false,
-    warn,
-  );
   if (!opts.compact)
     warnUnservedHookEvents(
       plan.mounts
@@ -949,6 +968,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         .map((mt) => mt.hostPath),
       warn,
     );
+  // hook_output_* grades every frame for its event, and frames carry no plugin id: say when the output may not be
+  // the plugin under test's. Not gated on --compact (it qualifies a verdict; see warnAmbiguousHookOutput).
+  warnAmbiguousHookOutputForPlan(plan, effectiveFidelity, scenario.assert, warn);
   // Pre-run baseline capture (the full manifest): only when something will consume it — the scenario
   // asserts one of the keys scenarioArmsPreRunManifest lists, or this is a recording (cassettes always carry
   // the baseline so a later assert-add stays replayable without re-record). The outputs-delete filesystem

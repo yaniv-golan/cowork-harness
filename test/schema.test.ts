@@ -81,6 +81,8 @@ describe("hook_event_fired / hook_event_blocked take a hook event the agent reco
     for (const e of KNOWN_HOOK_EVENTS) {
       expect(Assertion.safeParse({ hook_event_fired: e }).success).toBe(true);
       expect(Assertion.safeParse({ hook_event_blocked: e }).success).toBe(true);
+      expect(Assertion.safeParse({ hook_output_contains: { event: e, text: "x" } }).success).toBe(true);
+      expect(Assertion.safeParse({ hook_output_not_contains: { event: e, matches: "x" } }).success).toBe(true);
     }
   });
 });

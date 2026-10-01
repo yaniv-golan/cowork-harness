@@ -3218,10 +3218,18 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
   //    kept the original literal, manufacturing a false "redaction changed assertions" failure. Widen the
   //    pattern to tolerate the optional `:label:hash` suffix.
   const normalizeMsg = (msg: string | undefined): string => (msg ?? "").replace(/\[REDACTED(?::[^\]]+)?\]/g, "");
+  // `hook_output_*` failures are compared by KEY only. Their messages quote excerpts of the very stream the policy
+  // rewrites, centred on offsets that move when it does, and a miss over a tokenised stream is re-labelled
+  // evidence-unavailable — so base and redacted messages differ whenever redaction touched that output, with no
+  // change to what was graded. A pass flipping to a fail is still refused (the pairs compare above), and
+  // redactionRewroteHookOutput names the downgrade at record time.
+  // Keyed off the message, not the entry: one `assert:` entry can carry several keys, and only this key's own
+  // message is exempt.
+  const HOOK_OUTPUT_MSG = /^(?:evidence unavailable: )?(hook_output_(?:not_)?contains)(?::|'s) /;
   const failedMsgs = (result: RunResult): string[] =>
     result.assertions
       .filter((a) => !a.pass)
-      .map((a) => normalizeMsg(a.message))
+      .map((a) => HOOK_OUTPUT_MSG.exec(a.message ?? "")?.[1] ?? normalizeMsg(a.message))
       .sort();
 
   // 3. INTERNAL sha256 consistency of the REDACTED cassette: every committed body's stored sha256 must

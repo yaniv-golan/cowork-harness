@@ -208,15 +208,20 @@ export function logHostHookNotice(pluginRoots: string[], warn: (m: string) => vo
   }
 }
 
-/** `hook_output_*` reads every `hook_response` frame for an event, and a frame carries no plugin id — so when
- *  more than one staged plugin declares the asserted event, or host hooks are allowed (`allow_host_hooks`), the
- *  output cannot be attributed to the plugin under test: another hook's text can satisfy `hook_output_contains`
- *  or fail `hook_output_not_contains`. Emitted regardless of `--compact`: it qualifies what a verdict means,
- *  like the host-hook disclosure, rather than decorating the run. Never throws. */
+/** `hook_output_*` reads every `hook_response` frame for an event, and a frame carries no plugin id — so the
+ *  output cannot be attributed to the plugin under test when another hook can answer the same event: another
+ *  hook's text can satisfy `hook_output_contains` or fail `hook_output_not_contains`. Two such cases:
+ *   - more than one staged plugin declares the asserted event;
+ *   - `operatorHooksVisible`: the agent reads the operator's real config dir (at `protocol` without the sealed
+ *     managed config), so a plugin installed on the host runs its hooks in the same session. Its SessionStart /
+ *     Setup frames stream even without --include-hook-events, and with that flag every event's frames do.
+ *  (`allow_host_hooks` is NOT such a case: it is consent for the staged plugin's own hooks to run as native host
+ *  processes at `protocol`, not a second source of hooks.) Emitted regardless of `--compact`: it qualifies what a
+ *  verdict means, like the host-hook disclosure, rather than decorating the run. Never throws. */
 export function warnAmbiguousHookOutput(
   pluginRoots: string[],
   asserts: ReadonlyArray<{ hook_output_contains?: { event: string }; hook_output_not_contains?: { event: string } }>,
-  allowHostHooks: boolean,
+  operatorHooksVisible: boolean,
   warn: (msg: string) => void,
 ): void {
   const events = new Set<string>();
@@ -233,11 +238,16 @@ export function warnAmbiguousHookOutput(
     const roots = declaring.filter((d) => d.events.includes(ev)).map((d) => d.root);
     const reasons: string[] = [];
     if (roots.length > 1) reasons.push(`${roots.length} staged plugins declare \`${ev}\` (${roots.join(", ")})`);
-    if (allowHostHooks) reasons.push("`allow_host_hooks` is set, so a host hook may also answer it");
+    if (operatorHooksVisible)
+      reasons.push(
+        "this protocol run reads your real config dir (no sealed managed config), so a hook from a plugin installed on this machine may also answer it",
+      );
     if (reasons.length)
       warn(
         `::warning:: [hooks] hook_output_* on \`${ev}\`: ${reasons.join("; ")} — hook_response frames carry no plugin id, ` +
-          `so the output graded cannot be attributed to one hook. Stage only the plugin under test, or match text only it prints.\n`,
+          `so the output graded cannot be attributed to one hook. Stage only the plugin under test${
+            operatorHooksVisible ? " and seal the config dir (COWORK_MANAGED_CONFIG=1 with a token)" : ""
+          }, or match text only it prints.\n`,
       );
   }
 }

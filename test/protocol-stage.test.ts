@@ -99,6 +99,22 @@ describe("spawnProtocol — L0 --effort emission (reasoning-config fidelity, Pha
   });
 });
 
+// Hook lifecycle frames at L0, on the same rule as the other tiers: only when a staged plugin declares hooks.
+describe("spawnProtocol — --include-hook-events follows plan.includeHookEvents", () => {
+  beforeEach(() => spawnMock.mockClear());
+  const argsFor = (over: Partial<LaunchPlan>) => {
+    spawnProtocol(SCENARIO, BASELINE, minimalPlan([], over), join(mkdtempSync(join(tmpdir(), "proto-hooks-")), "out"));
+    return (spawnMock.mock.calls[0] as unknown as [string, string[]])[1];
+  };
+  it("emits it when the plan says a staged plugin declares hooks", () =>
+    expect(argsFor({ includeHookEvents: true })).toContain("--include-hook-events"));
+  it("omits it otherwise", () => {
+    expect(argsFor({ includeHookEvents: false })).not.toContain("--include-hook-events");
+    spawnMock.mockClear();
+    expect(argsFor({})).not.toContain("--include-hook-events");
+  });
+});
+
 // The sub-agent reasoning capture walks whatever root spawnProtocol reports. Under managed config that is the
 // run's own config dir (the agent's CLAUDE_CONFIG_DIR). Off it — or when the "managed" dir IS the operator's
 // real one — the agent reads the operator's config, which holds every session they ever ran: no root.

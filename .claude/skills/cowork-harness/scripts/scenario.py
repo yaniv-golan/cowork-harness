@@ -31,6 +31,7 @@ lint flags (see references/scenario-schema.md for the why of each):
                                `on_unanswered: agent` → `llm` rename hint
   E  authored `replay_protocol_fidelity` assertion   (replay-synthesized only)
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
+  E  `hook-output-control-char` a control char in a hook_output_* text/matches (YAML `\\b`; run refuses it)
   E  a presence assert + its absence sibling            (unsatisfiable; run/skill/record refuse it:
                                                        questions_count_max:0 vs gate presence,
                                                        no_hook_blocked vs hook_blocked,
@@ -1695,8 +1696,10 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 continue
             n_stream = n.get("stream", "any")
             p_stream = p.get("stream", "any")
-            same_needle = ("text" in n and n.get("text") == p.get("text")) or (
-                "matches" in n and n.get("matches") == p.get("matches")
+            # Only str needles compare: PyYAML (YAML 1.1) reads `yes` / `on` as True where the harness's loader keeps
+            # the strings, so `text: yes` and `text: on` would compare equal here and not there.
+            same_needle = any(
+                isinstance(n.get(f), str) and isinstance(p.get(f), str) and n.get(f) == p.get(f) for f in ("text", "matches")
             )
             if n.get("event") != p.get("event") or not same_needle or not (n_stream == "any" or n_stream == p_stream):
                 continue
@@ -1720,6 +1723,26 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 path,
             )
         )
+    # E: a control character in a hook_output_* needle. The harness's loader refuses it (src/types.ts, CONTROL_CHAR):
+    # it is almost always a YAML double-quoted escape (`"\bfailed\b"` loads a backspace), and a needle no hook
+    # prints makes the negative key pass silently. Mirrored so this linter rejects what `run` rejects.
+    for key in ("hook_output_contains", "hook_output_not_contains"):
+        for v in _assert_values(items, key):
+            if not isinstance(v, dict):
+                continue
+            for f in ("text", "matches"):
+                s = v.get(f)
+                if isinstance(s, str) and _HOOK_NEEDLE_CONTROL_CHAR.search(s):
+                    findings.append(
+                        Finding(
+                            "ERROR",
+                            "hook-output-control-char",
+                            f"`{key}.{f}` {json.dumps(s)} contains a control character — in a double-quoted YAML "
+                            f"string `\\b` is a backspace, not a word boundary. The harness refuses this scenario at load.",
+                            "Single-quote the value (e.g. '\\bfailed open\\b').",
+                            path,
+                        )
+                    )
 
     # W: mixed-class assert item → the live-only half is dropped on replay (manifest-backed keys are NOT)
     for idx, item in enumerate(items):
@@ -1864,6 +1887,9 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
 
     return findings
 
+
+# The same class as the harness's CONTROL_CHAR (src/types.ts): tab, newline and carriage return are allowed.
+_HOOK_NEEDLE_CONTROL_CHAR = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 _DQ_REGEX_LINE = re.compile(
     r'^\s*-?\s*(' + "|".join(sorted(REGEX_KEYS)) + r')\s*:\s*"([^"]*\\[^"]*)"'
@@ -2048,6 +2074,7 @@ LINT_RULES = {
     "fidelity-missing": "ERROR",
     "file-absent-contradiction": "ERROR",
     "gate-needs-controlout": "INFO",
+    "hook-output-control-char": "ERROR",
     "host-path-assert-cowork": "WARN",
     "host-path-assert-tier": "ERROR",
     "lane-remote-incompatible-key": "ERROR",
