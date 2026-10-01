@@ -74,9 +74,7 @@ describe("stateTemplateFor --skill", () => {
   it("an unknown skill is a usage error naming the plugin's skills", () => {
     multi();
     expect(() => stateTemplateFor("evals", cwd, {}, "nope")).toThrow(UsageError);
-    expect(() => stateTemplateFor("evals", cwd, {}, "nope")).toThrow(
-      /--skill nope: no skills\/nope\/SKILL\.md under .* — available skills: a, b/,
-    );
+    expect(() => stateTemplateFor("evals", cwd, {}, "nope")).toThrow(/--skill nope: .* registers no skill nope — its skills: a, b/);
   });
 });
 

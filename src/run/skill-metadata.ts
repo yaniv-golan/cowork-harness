@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { gitCpFilter, gitModeEnabled } from "./skill-files.js";
@@ -48,11 +48,18 @@ export function readSkillDescription(skillMdPath: string): string | undefined {
   return typeof fm.description === "string" ? fm.description : typeof fm.when_to_use === "string" ? fm.when_to_use : undefined;
 }
 
+/** The agent's plugin skill loader skips a SKILL.md larger than this (bytes), as it skips one that is not a regular
+ *  file (the staged agent, 2.1.284). */
+export const SKILL_MD_MAX_BYTES = 1048576;
+
 /** Read a SKILL.md's frontmatter `name`, trimmed; `undefined` when the file, the frontmatter or a non-empty
- *  string `name` is missing. Best-effort like `readSkillDescription`, over the same frontmatter split. */
+ *  string `name` is missing, or when the file is one the loader skips (not a regular file, or over
+ *  `SKILL_MD_MAX_BYTES`). Best-effort like `readSkillDescription`, over the same frontmatter split. */
 export function readSkillFrontmatterName(skillMdPath: string): string | undefined {
   let content: string;
   try {
+    const st = statSync(skillMdPath);
+    if (!st.isFile() || st.size > SKILL_MD_MAX_BYTES) return undefined;
     content = readFileSync(skillMdPath, "utf8");
   } catch {
     return undefined;

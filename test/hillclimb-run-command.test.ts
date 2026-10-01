@@ -771,7 +771,7 @@ describe("skill_invoked: which skill the rows track", () => {
     const r = await runHillclimbCommand(args("--skill", "nope", "--approve-harness"), deps());
     expect(r.exitCode).toBe(2);
     expect(calls).toEqual([]);
-    expect(r.error?.message).toMatch(/--skill nope: no skills\/nope\/SKILL\.md under .* — available skills: x, y/);
+    expect(r.error?.message).toMatch(/--skill nope: .* registers no skill nope — its skills: x, y/);
     // Refused before the gate: nothing was approved.
     expect(existsSync(join(cwd, "flow", "_state.json"))).toBe(false);
   });
@@ -791,7 +791,7 @@ describe("skill_invoked: which skill the rows track", () => {
     // ...and the live plugin's new name is not in the snapshot.
     const r = await runHillclimbCommand(args("--skill", "z", "--reps", "3"), deps());
     expect(r.exitCode).toBe(2);
-    expect(r.error?.message).toMatch(/--skill z: no skills\/z\/SKILL\.md under .* — available skills: x, y/);
+    expect(r.error?.message).toMatch(/--skill z: .* registers no skill z — its skills: x, y/);
   });
 
   it("--skill joins the harness sha: switching it refuses, naming the old and new skill, until re-approved", async () => {
