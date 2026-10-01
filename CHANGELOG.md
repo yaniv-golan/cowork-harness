@@ -107,7 +107,8 @@ All notable changes to this project are documented here. The format is based on
   refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
   inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
   harness change (`--approve-harness` records it; the harness sha covers each scenario, its session file, its uploads
-  and its `workspace_fixture` files). Rows carry the
+  and its `workspace_fixture` files, exec bits included; a fixture is also a read root, so a scenario or session
+  file inside one is refused like one inside a mounted folder). Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent

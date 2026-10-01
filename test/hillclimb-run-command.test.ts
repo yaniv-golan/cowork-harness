@@ -3,7 +3,18 @@
 // records what it was asked to run and returns a committed real excerpt (test/fixtures/eval-classify/
 // success-semantic.json) with the public csv-metrics run's init/result frames. Nothing spawns.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -159,6 +170,25 @@ describe("runHillclimbCommand", () => {
       const r = await runHillclimbCommand(args(), deps());
       expect(r.exitCode).toBe(2);
       expect(r.error?.message).toMatch(/harness changed since last approved run \(files: .*fx\/report\.md/);
+      expect(calls).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
+  it("a fixture file's exec bit is part of the harness: flipping it refuses until re-approved, as staging carries it", async () => {
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "run.sh"), "echo hi\n");
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: ../fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      expect((await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps())).exitCode).toBe(0);
+      chmodSync(join(cwd, "fx", "run.sh"), 0o755);
+      const r = await runHillclimbCommand(args(), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toMatch(/harness changed since last approved run/);
       expect(calls).toEqual([]);
     } finally {
       if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;

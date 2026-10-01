@@ -63,6 +63,8 @@ export interface RunnerDeps {
   pin: (c: HillclimbCase) => string | undefined;
   /** Every file that defines the measurement (scenario, session, answers, uploads) — the gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
+  /** Named values the gate hashes beside the derived files: what a file's bytes leave out (a fixture's exec bits). */
+  derivedValues?: (cases: readonly HillclimbCase[]) => Record<string, string>;
   /** The files the agent must not read (scenarios, session files); `derivedPaths` when absent. Uploads are in the
    *  gate's set but are inputs: an upload is a mount by design. */
   hiddenPaths?: (cases: readonly HillclimbCase[]) => string[];
@@ -196,7 +198,11 @@ async function run(
     cwd: deps.cwd,
     listed: Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [],
     derived: deps.derivedPaths(all),
-    virtual: { "cowork-harness-version": deps.virtual.harnessVersion, baseline: deps.virtual.baselineId },
+    virtual: {
+      ...deps.derivedValues?.(all),
+      "cowork-harness-version": deps.virtual.harnessVersion,
+      baseline: deps.virtual.baselineId,
+    },
   });
   for (const s of digest.skipped) say(`warning: harness path '${s.path}' not readable (${s.code}) - skipped`);
   const decision = gateDecision(state, digest.sha, args.approveHarness);

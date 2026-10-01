@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
-import { containedRealPath } from "../boundary-paths.js";
+import { pathsInsideMounts } from "./answer-key.js";
 
 const LOCKFILES = ["package-lock.json", "bun.lock", "bun.lockb", "yarn.lock", "pnpm-lock.yaml"];
 
@@ -65,9 +65,16 @@ export function harnessDigest(input: DigestInput): Digest {
 }
 
 /** The `harness_paths` entries that resolve inside the skill dir. Listing one would make every round stop
- *  for approval, because the loop edits that dir by design. */
+ *  for approval, because the loop edits that dir by design. An entry that no longer exists resolves through its
+ *  nearest existing ancestor (the exposure check's rule), so a renamed file is no error here: the digest skips it. */
 export function listedInside(cwd: string, listed: readonly string[], skillDir: string): string[] {
-  return listed.filter((p) => containedRealPath(skillDir, resolve(cwd, p)));
+  const inside = new Set(
+    pathsInsideMounts(
+      listed.map((p) => resolve(cwd, p)),
+      [skillDir],
+    ).map((x) => x.path),
+  );
+  return listed.filter((p) => inside.has(resolve(cwd, p)));
 }
 
 export type GateDecision = { kind: "ok" } | { kind: "approve" } | { kind: "absent" } | { kind: "mismatch" };

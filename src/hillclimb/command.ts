@@ -25,6 +25,9 @@ export interface PreparedCases {
   pin: (c: HillclimbCase) => string;
   /** Every file that defines the measurement — the harness gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
+  /** Per case with a workspace_fixture, its signature (`workspace-fixture:<case id>`): it covers each file's exec
+   *  bit, which staging carries and the derived files' bytes do not. */
+  derivedValues: (cases: readonly HillclimbCase[]) => Record<string, string>;
   /** The files that define the answer and must stay unreadable: each scenario and its session file. Uploads and
    *  fixtures are in the gate's set but are the agent's inputs, meant to be read. */
   hiddenPaths: (cases: readonly HillclimbCase[]) => string[];
@@ -123,6 +126,13 @@ export function prepareCases(
         }),
       ),
     ],
+    derivedValues: (cs) =>
+      Object.fromEntries(
+        cs.flatMap((c) => {
+          const fixture = scenarioWorkspaceFixture(c.scenario);
+          return fixture ? [[`workspace-fixture:${c.id}`, fixture.sig]] : [];
+        }),
+      ),
     hiddenPaths: (cs) => [...new Set(cs.flatMap((c) => [resolve(c.file), sessions.get(c.id)!.file]))],
     mountRoots: (cs) => [
       ...new Set(
