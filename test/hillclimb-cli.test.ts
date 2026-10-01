@@ -235,8 +235,10 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     const r = run("--skill", "nope");
     expect(r.status).toBe(2);
     expect(r.stdout).toBe("");
-    // The fixture plugin is a root-SKILL.md plugin: critique's refusal for --skill on one, not an unknown-flag error.
-    expect(r.stderr).toMatch(/--skill nope: .* is itself a skill folder/);
+    // The fixture plugin is a root-SKILL.md plugin: hillclimb's refusal for --skill on one, not an unknown-flag error.
+    expect(r.stderr).toMatch(
+      /--skill nope: this plugin has one skill, cowork-harness, tracked without --skill; pass --skill cowork-harness or drop it/,
+    );
   });
 
   it("--flow writes metrics.md beside the skeleton and says so", () => {
