@@ -409,6 +409,8 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 
 ## 11. Machine output (`--output-format json`)
 
+Every envelope, like the CLI's own output, is secret-scrubbed with the same set as the run's files (CB-6: the known auth tokens, `COWORK_HARNESS_SCRUB_KEYS`, `COWORK_HARNESS_SCRUB_VALUES` and their encoded forms), so a value `result.json` shows as `[REDACTED]` reads `[REDACTED]` in the envelope too. The scrub replaces matching TEXT, so the envelope stays parseable for secrets of realistic length; a very short or common value, or one equal to a JSON token (`e`, `1`, `true`), is redacted wherever that text appears, JSON syntax included, and can make the envelope unparseable. What is not scrubbed (child processes that write to the terminal directly, and the other exceptions) is listed in [docs/cli.md](./docs/cli.md#secret-scrubbing-and-cassette-redaction).
+
 ### 11.0 Replay fidelity contract
 
 `replay` consumes BOTH recorded protocol directions:
@@ -594,7 +596,7 @@ there are three families:
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload, `eval` and `eval report` (`evalDir`, `arms`, `pins`,
   `sections`, `summary`, `cost`, `stoppedEarly`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
-  and `answer` (`gate`, `answers`).
+  `answer` (`gate`, `answers`), and `regrade` (below).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
@@ -641,10 +643,92 @@ unless `--allow-budget-stop`. `--rerecord-stale` with nothing stale prints `ok: 
 A refusal before the first recording (no credentials, an unresolved model, the budget pre-flight, a slug
 collision) prints the error envelope instead, as before.
 
+**`regrade`** re-grades a kept run's `semantic_matches` asserts with the judge and prints one payload-shaped
+document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`. Each `runs[]` entry is one run dir:
+`{runDir, turn, scenarioSha256, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, uncheckedSections[],
+docMatchesLive, differingSections[], assertions[], notRegraded[], authoredCapture}`, and the document's top level also carries
+`judgeCostUsd?` and `unpricedGrades` summed over every run dir. `runs[]` holds only graded run dirs: a refusal
+refuses the whole batch and prints the error envelope instead. `scenarioSha256` is the SHA-256 of the scenario
+file's bytes. `judgeCostUsd` is the sum of the priced judge
+calls and is absent when none was priced (never `0` for unknown); `unpricedGrades > 0` makes it a floor.
+`invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
+`assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
+every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `false` | `"scope_changed"` |
+`"unknown"` | `"live_refused"` | `"not_graded"`: whether the recomposed judged document equals, section for
+section, the `judgedDoc` the live run recorded (`unknown` when this assert's scope has no live fingerprint, never
+`true`; `live_refused` when every live assert with that scope refused its evidence and no fingerprint was
+recorded — one that recorded a `judgedDoc` is compared like a graded one; `not_graded` when the re-grade's own
+assert refused its evidence, so no judge was called for it and no document was handed to one). The run-level value is the worst over the asserts in the order `false`,
+`live_refused`, `unknown`, `scope_changed`, `true`, and `not_graded` only when every assert is; none of these
+values changes the exit code. `differingSections[]` entries are
+`{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
+passed. `docMatchesLive: false` says the bytes differ, not why (an authored file changed since the run, a
+different secret-scrub set, a sub-agent section). The refusal is decided separately, before any judge call:
+each live assert that recorded a `judgedDoc` is rebuilt from the live run's own inputs (its scope, the live
+`evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture` existed, the
+`--authored-total-bytes` value passed) with this process's secrets, and any difference refuses unless
+`--allow-doc-drift` is passed — whatever the new scenario's scope. Not checked: a live assert that recorded no
+`judgedDoc` (`unknown`) or refused its evidence and recorded none (`live_refused`), neither for drift nor for an unscrubbed secret
+(warned about before the judge call); and content only a widened scope or a
+larger `--authored-total-bytes` brings in, which is graded, warned about and listed in `uncheckedSections[]`
+(`{assertionIndex, kind, path?}`). The envelope is scrubbed with the same secret set as the file. **Exit codes:** `0` every re-graded assert passes · `1` any
+fails or is judge-invalid · `2` usage, or a refusal (a multi-turn, partial, replay or chat run dir, a pruned work
+dir, a missing transcript sidecar, a live document whose rebuild differs from its `judgedDoc` without
+`--allow-doc-drift`, a run that did not record `authoredCapture` without `--authored-total-bytes`,
+an alias judge model, a scenario with no `semantic_matches`), or a failure writing a regrade file after earlier
+run dirs were graded; a refusal is the shared error envelope, decided for every run dir before any judge call.
+`result.json` is never modified.
+
 The command lists above are illustrative, not a frozen contract — this is not a single universal
 envelope across every command, so check a given command's own section (or grep its
 `jsonEnvelope`/`jsonPayloadEnvelope` call site in `src/run/envelope.ts`/`src/cli.ts`) for its exact
 shape before parsing it generically.
+
+**`--max-budget-usd` in JSON: the `budget` marker and `error.code`.** The cap is a fact about the
+invocation, not about any one `RunResult`, so it is published on the envelope frame — beside `ok` and
+`error`, on every family (`results[]`-bearing, payload-shaped, and the error envelope) — as a top-level
+`budget` key, whenever a `--max-budget-usd` pre-flight ran: `run` (a file, `<dir/>`, `--matrix`), `skill`,
+and `record` (a file, `<dir/>`, `--rerecord-stale`, and both `--dry-run` arms). It is **absent** when no cap
+was passed and on a `--repeat` lane, which skips the pre-flight and enforces a running total instead
+(reported as `rollups[].stoppedEarly: "budget"`). One shape, used in both places below:
+
+```jsonc
+"budget": {
+  "capUsd": 0.5,                       // the --max-budget-usd value
+  "basis": "single" | "batch",         // single: each scenario's OWN worst observed cost vs the cap (run, skill,
+                                       //   a record file, each scenario of run <dir/>); batch: the SUM over a
+                                       //   record <dir/> / --rerecord-stale batch vs the cap
+  "enforced": true | false | "lower_bound",
+                                       // true: every scenario was priced. false (single): at least one scenario
+                                       //   had no history and ran with NO cap. "lower_bound" (batch): unpriced
+                                       //   scenarios contributed $0, so the cap was checked against a lower bound
+  "reason?": "no_history",             // present exactly when enforced !== true
+  "estimateUsd?": 0.31,                // single: the largest worst-observed cost among the priced scenarios;
+                                       //   batch: the summed estimate. Absent when nothing was priced
+  "unpriced": ["<scenario>"],          // scenarios with no priced history in runsDir's index; [] when enforced
+  "runsDir": "<abs path>",             // the runs root whose index.jsonl was read
+  "runsDirRedirected": bool            // --run-dir / COWORK_HARNESS_RUNS_DIR moved it off the default
+}
+```
+
+History is read from `runsDir`'s index only; a `--run-dir` that points somewhere new each invocation
+therefore starts every scenario unpriced. When `runsDirRedirected` is true the stderr warning says so and
+names `--run-dir` / `COWORK_HARNESS_RUNS_DIR` as the cause (the flag works by setting the variable, so the
+two are not distinguished).
+
+A budget **refusal** is the error envelope with `error.category: "runtime"` (unchanged), plus
+**`error.code: "budget_exceeded"`** and **`error.budget`** — the same shape as above, describing the
+estimate that was refused (`enforced` is `true`, or `"lower_bound"` when the known part of a batch alone
+exceeds the cap). Exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`). `error.code` narrows a
+category and never replaces one; it is **absent** on every other error, so `error.code ===
+"budget_exceeded"` is the whole test for "refused on cost" and a load failure is never mistaken for it.
+When the refusal replaces a payload envelope, that payload's findings stay on the error envelope as the
+same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `target`, `scenarios`,
+`skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
+`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`. (Through 4.2.0
+these went to stderr only, and the message prose was the only discriminator.)
+On `run <dir/>` each scenario is pre-flighted on its own, so the top-level `budget` (merged across every
+scenario checked so far) can differ from `error.budget`, which describes the refused scenario only.
 
 `ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass) && computeVerdict(r).pass)`.
 `result:"success"` and passing assertions are necessary but **not sufficient** — `computeVerdict` adds a
@@ -733,7 +817,9 @@ assertions (never user-authored themselves):
 ```jsonc
 { "tool":"cowork-harness","version":"...","command":"...","ok":false,
   "results":[],  // [] except record's post-run refusal: the refused run, beside the non-null error
-  "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string" } }
+  "budget?": { /* §11 --max-budget-usd marker — present when a pre-flight ran */ },
+  "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string",
+             "code?": "budget_exceeded", "budget?": { /* §11 --max-budget-usd */ } } }
 ```
 Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryError`→`boundary`).
 `results` is `[]` with one exception: when `record` refuses to write a cassette after the agent finished,
@@ -787,7 +873,7 @@ prints the same exclusion warning the run prints. `verify-run` follows the same 
 not exist or is a file, or a scenario file that does not load, is `usage`; a directory holding no completed
 run stays `runtime`. `answer` splits the same way: a directory or gate that is not there is `usage`; a gate
 request that exists but cannot be read or parsed, or an answer that cannot be written, is `runtime`.
-**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `eval` (and `eval report`) exits `0` when the comparison completed — whatever drops the rows show, unless `--fail-on` was given; `1` for a drop at the `--fail-on` level (`possible` or `confirmed`; no gating without the flag), every row `insufficient`, or a judge model that differed across reps; `2` for a usage error or any refusal before the first run (an alias model, an eval dir inside a git work tree, identical arms, the answer-key guard, a scenario input a run would refuse, an unreachable `--fail-on confirmed`); `3` when an arm snapshot could not be copied or failed its staging preflight. Its `--output-format json` envelope is `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`, with `ok` ⇔ exit `0`. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
+**Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `eval` (and `eval report`) exits `0` when the comparison completed — whatever drops the rows show, unless `--fail-on` was given; `1` for a drop at the `--fail-on` level (`possible` or `confirmed`; no gating without the flag — under `possible` a drop includes an `insufficient_refusals` row, one the candidate's excess `semantic_matches` refusals for unavailable evidence took below the rep threshold, which would otherwise hide a drop as `insufficient`), every row `insufficient`, or a judge model that differed across reps; `2` for a usage error or any refusal before the first run (an alias model, an eval dir inside a git work tree, identical arms, the answer-key guard, a scenario input a run would refuse, an unreachable `--fail-on confirmed`); `3` when an arm snapshot could not be copied or failed its staging preflight. Its `--output-format json` envelope is `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`, with `ok` ⇔ exit `0`. `lint` exits `127` when `python3` is missing (spawn error), and `1` — never `0` — when the scenario loader rejected a file but its findings could not be handed to the linter (an unwritable temp directory); `replay` exits
 `2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
 shape, unsupported version, unrecognized assertion key) or any per-file throw, plus the batch loop's
 own source-resolution failures (`--assert-from`/`--reassert` drift, scenario-parse errors, `--write`
@@ -983,7 +1069,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
 - **Baseline JSON shape** — the `baselines/desktop-*.json` field structure (CI's committed source of
   truth; consumers commit and diff these).
 - **RunResult envelope** — `schema/run-result.json` under `--output-format json` (§11): the
-  `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0). Renaming or removing a key, or
+  `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0), and the `--max-budget-usd`
+  `budget` marker and `error.code` values (§11). Renaming or removing a key, or
   changing what an existing key means, is breaking; adding one is not. For `toolDurations` (keyed by tool
   name) the set of entries is not the key's meaning: adding an entry, such as a tool listed with
   `calls: 0`, is additive. This is stated per key, not for every map — `toolCounts`, for example, lists
@@ -1095,6 +1182,9 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
   explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
 - **`trace` row shapes** and other debug/diagnostic output.
+- **The `regrade` output file** (`turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`) — its name and
+  layout are EXPERIMENTAL and may change in any minor release. The `regrade` command itself — its name, flags and
+  exit codes — is covered by the CLI-surface clause above.
 - **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
   the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
   (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your

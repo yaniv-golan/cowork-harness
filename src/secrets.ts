@@ -38,9 +38,13 @@ export function collectSecrets(): string[] {
   return out;
 }
 
+/** Replace every occurrence of every secret form with `[REDACTED]`. LONGEST FIRST: a secret's forms
+ *  overlap (the JSON-escaped form of a secret ending in a backslash starts with the raw form), and
+ *  replacing the shorter one first leaves the remainder behind — in JSON text, a dangling backslash that
+ *  is an invalid escape. */
 export function scrub(text: string, secrets: string[]): string {
   let t = text;
-  for (const s of secrets) if (s) t = t.split(s).join("[REDACTED]");
+  for (const s of [...secrets].sort((a, b) => b.length - a.length)) if (s) t = t.split(s).join("[REDACTED]");
   return t;
 }
 

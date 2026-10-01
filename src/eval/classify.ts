@@ -63,7 +63,12 @@ export type ClassifiableResult = Partial<
   durationMs?: number;
   assertions?: Array<
     Pick<RunResult["assertions"][number], "assertion" | "pass"> &
-      Partial<Pick<RunResult["assertions"][number], "source" | "semanticClaims" | "judgeInvalid" | "judgePromptHash" | "judgeCostUsd">>
+      Partial<
+        Pick<
+          RunResult["assertions"][number],
+          "source" | "semanticClaims" | "judgeInvalid" | "judgePromptHash" | "judgeCostUsd" | "semanticEvidence"
+        >
+      >
   >;
 };
 
@@ -363,7 +368,39 @@ export type RowExclusion =
   /** The grade at this index is for a different assertion than the frozen scenario's. */
   | "grade_misaligned"
   /** A semantic_matches grade with no per-claim results (the judge never graded the claims). */
-  | "claims_missing";
+  | "claims_missing"
+  /** A semantic_matches assert whose verdict REFUSED for unavailable evidence (`semanticEvidence.reason` is
+   *  anything but `graded`): the rep is neither a pass nor a fail on that assertion, so — like a
+   *  `judge_invalid` grade — it leaves that assertion's claim rows, and its roll-up row when
+   *  `semantic_matches` is the assertion's only key. Claims recorded beside such a refusal (a result written
+   *  before the judge was skipped for it) were graded over incomplete evidence and are not counted either.
+   *  A MULTI-key assertion's roll-up keeps its fail: the grade keeps one `pass` for the AND of every key, so
+   *  a sibling key that failed would be dropped with it — and a refusal that hides a real fail is the
+   *  direction an A/B comparison must not err in. */
+  | "evidence_unavailable";
+
+type Grade = NonNullable<ClassifiableResult["assertions"]>[number];
+
+/** Why a `semantic_matches` grade's evidence was unavailable — its typed reason, or `unrecorded` for a refusal
+ *  proven from a grade that predates the persisted reason (see below). */
+export type SemanticRefusalReason = Exclude<NonNullable<Grade["semanticEvidence"]>["reason"], "graded"> | "unrecorded";
+
+/** The refusal reason of a `semantic_matches` grade whose evidence was unavailable, else undefined.
+ *
+ *  Read from `semanticEvidence` — never from the message text, which a grade does not keep. A runs.jsonl
+ *  line written before that field was persisted carries none, so for it only the case that is PROVABLE from
+ *  the persisted fields is recognised: a grade whose assertion has `semantic_matches` as its only key, with
+ *  per-claim results that meet `min_pass`, no `judgeInvalid`, and `pass: false`. The check sets `pass` to
+ *  exactly "claims met min_pass" when it grades, so a fail there can only have been a refusal (`unrecorded`).
+ *  A refused grade whose claims ALSO missed `min_pass` looks exactly like a graded fail, and is left as one. */
+export function semanticRefusalReason(g: Grade): SemanticRefusalReason | undefined {
+  const sm = g.assertion.semantic_matches;
+  if (sm === undefined) return undefined;
+  if (g.semanticEvidence !== undefined) return g.semanticEvidence.reason === "graded" ? undefined : g.semanticEvidence.reason;
+  if (g.pass || g.judgeInvalid === true || g.semanticClaims === undefined || Object.keys(g.assertion).length !== 1) return undefined;
+  const need = sm.min_pass === undefined || sm.min_pass === "all" ? sm.rubric.length : sm.min_pass;
+  return g.semanticClaims.filter((c) => c.pass).length >= need ? "unrecorded" : undefined;
+}
 
 export interface RowValue {
   row: RowKey;
@@ -375,7 +412,8 @@ export interface RowValue {
 const sameAssertion = (a: Assertion, b: Assertion): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /** One rep's contribution to each row. `errored_agent` is 0 on every row (intention to treat); the excluded
- *  buckets drop the rep from every row; `judge_invalid` drops it from that assertion's rows only. A grade
+ *  buckets drop the rep from every row; `judge_invalid` drops it from that assertion's rows only, and so does
+ *  a `semantic_matches` grade that refused for unavailable evidence (`evidence_unavailable`). A grade
  *  that cannot be lined up with the frozen scenario is excluded with a reason, never guessed. */
 export function repRowValues(
   rows: readonly RowKey[],
@@ -393,6 +431,8 @@ export function repRowValues(
     const g = grades[row.assertionIndex];
     if (g === undefined) return { row, excluded: "grade_missing" };
     if (!sameAssertion(g.assertion, scenarioAssertions[row.assertionIndex])) return { row, excluded: "grade_misaligned" };
+    if (semanticRefusalReason(g) !== undefined && (row.kind === "claim" || Object.keys(g.assertion).length === 1))
+      return { row, excluded: "evidence_unavailable" };
     if (row.kind !== "claim") return { row, value: bit(g.pass) };
     if (g.semanticClaims === undefined) return { row, excluded: "claims_missing" };
     const claim = g.semanticClaims.find((sc) => sc.index === row.claimIndex);

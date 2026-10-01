@@ -352,7 +352,7 @@
           },
           "findingFingerprint": {
             "type": "string",
-            "description": "sha256/16 over normalized idea+classification+recommendedAction (evidence excluded). Cross-INPUT clustering key — HIGH-PRECISION, LOW-RECALL: idea is model-authored free text, so a MATCH proves the same finding recurred; a MISMATCH does NOT prove non-reproduction (the same finding reworded fingerprints differently)"
+            "description": "sha256/16 over normalized, secret-scrubbed idea+classification+recommendedAction (evidence excluded). Cross-INPUT clustering key — HIGH-PRECISION, LOW-RECALL: idea is model-authored free text, so a MATCH proves the same finding recurred; a MISMATCH does NOT prove non-reproduction (the same finding reworded fingerprints differently)"
           }
         }
       }

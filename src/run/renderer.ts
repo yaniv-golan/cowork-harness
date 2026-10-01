@@ -1,4 +1,4 @@
-import { tildeify, writeAllSync } from "../io.js";
+import { scrubForTerminal, tildeify, writeAllSync } from "../io.js";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
@@ -90,7 +90,8 @@ export function toolMarker(name: string): string {
 
 function truncate(text: string, verbose: boolean): string {
   if (verbose) return text;
-  let t = text;
+  // Scrubbed BEFORE any cut: a secret straddling the cut leaves a prefix the sink's scrub cannot match.
+  let t = scrubForTerminal(text);
   const lines = t.split("\n");
   if (lines.length > TRUNC_LINES) t = lines.slice(0, TRUNC_LINES).join("\n") + "\n… (truncated)";
   if (t.length > TRUNC_CHARS) t = t.slice(0, TRUNC_CHARS) + " … (truncated)";
@@ -107,7 +108,8 @@ export function collapseSessionRoot(s: string): string {
 
 export function inputSummary(input: unknown, compact = false, translate?: (s: string) => string): string {
   try {
-    let s = JSON.stringify(input);
+    // Scrubbed before the 80-char slice (see `truncate`).
+    let s = scrubForTerminal(JSON.stringify(input));
     // translate (hostloop display rewrite) runs before compact's collapse — the two are mutually
     // exclusive in practice (shareable output forces translate to identity, see display-translate.ts),
     // but ordering it first keeps the rule "translate real paths, then apply the shareable transform"
@@ -187,7 +189,7 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
             // ordering, so --compact stays consistent between a tool's input line and its outcome line.
             // No `plan.linkify` here either, same reason as the tool_use branch above: this line is
             // hard-sliced to 80 chars, so linkifying it could wrap a truncated (wrong-target) URL.
-            let head = e.text.split("\n")[0];
+            let head = scrubForTerminal(e.text.split("\n")[0]); // before the slice (see `truncate`)
             if (plan.translate) head = plan.translate(head);
             if (plan.compact) head = collapseSessionRoot(head);
             head = head.slice(0, 80);

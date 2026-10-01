@@ -8,6 +8,7 @@ import {
   repRowValues,
   scenarioRows,
   armMedians,
+  semanticRefusalReason,
   type ArmMedians,
   type RepBucket,
   type RowKey,
@@ -33,7 +34,16 @@ export const REPORT_MD = "report.md";
 
 type RowKind = "assertion" | "claim" | "semantic_rollup" | "errored_agent_rate" | "invocation_rate";
 
-export interface ReportRow extends FamilyRowOutput {
+/** `insufficient_refusals`: the row is `insufficient`, the CANDIDATE arm refused at least 2 more
+ *  `semantic_matches` grades for unavailable evidence than the baseline, and that excess alone is what took it
+ *  below the threshold. A DROP signal at the `possible` level: `--fail-on possible` gates on it (never
+ *  `confirmed`, which needs a tested row), and without `--fail-on` nothing gates — a refusal is excluded from
+ *  the rows, so an edit that makes the deliverable outgrow the evidence budget would otherwise hide its own
+ *  regression behind `insufficient`. */
+export type ReportRowLabel = FamilyRowOutput["label"] | "insufficient_refusals";
+
+export interface ReportRow extends Omit<FamilyRowOutput, "label"> {
+  label: ReportRowLabel;
   scenario: string | null;
   kind: RowKind;
   /** Display text: the assertion key, or the claim. */
@@ -60,6 +70,20 @@ export interface ReportSection {
   rows: ReportRow[];
   derivedRows: ReportRow[];
   classificationRows: ReportRow[];
+  /** Per `semantic_matches` assertion whose refusals for unavailable evidence are unbalanced between the arms
+   *  (they differ by ≥ 2 reps) or frequent (≥ 20% of an arm's scored reps). */
+  refusalImbalances: RefusalImbalance[];
+}
+
+export interface RefusalImbalance {
+  scenario: string;
+  assertionIndex: number;
+  /** Refused grades of this assertion over the arm's scored reps (valid, judge_invalid, errored_agent). */
+  a: { refused: number; scored: number };
+  b: { refused: number; scored: number };
+  /** The candidate's excess refusals left at least one of this assertion's rows `insufficient_refusals` — a
+   *  drop signal that `--fail-on possible` gates on. */
+  insufficientRefusals: boolean;
 }
 
 export interface ReportArm {
@@ -75,6 +99,10 @@ export interface ReportArm {
   errorSources: Record<string, number>;
   unclassified: number;
   ambiguousExit: number;
+  /** `semantic_matches` grades that refused for unavailable evidence, by reason — counted once per (rep,
+   *  assertion) over this arm's valid and judge_invalid reps. Each leaves that assertion's rows for that rep
+   *  (`evidence_unavailable`), so this count is what keeps an arm that refuses more often visible. */
+  evidenceUnavailable: Record<string, number>;
   medians: ArmMedians;
 }
 
@@ -116,6 +144,8 @@ export interface EvalReport {
     }>;
     labels: Record<string, number>;
     allInsufficient: boolean;
+    /** Every section's `refusalImbalances`, tuned first. */
+    refusalImbalances: RefusalImbalance[];
     failOnHit: boolean;
     judgeDisagreement: boolean;
     missingJobs: number;
@@ -175,9 +205,13 @@ function sectionOf(
     n1: number;
     k2: number;
     n2: number;
+    /** Reps of each arm this row excluded because the assertion refused for unavailable evidence. */
+    rA: number;
+    rB: number;
     a: Array<[string, 0 | 1]>;
     b: Array<[string, 0 | 1]>;
   }> = [];
+  const refusalImbalances: RefusalImbalance[] = [];
   const derivedInputs: typeof familyInputs = [];
   for (const name of scenarioNames) {
     const scen = m.scenarios.find((s) => s.name === name)!;
@@ -185,13 +219,28 @@ function sectionOf(
     const perRow = new Map(
       rows.map((row) => [
         row.id,
-        { key: row, k1: 0, n1: 0, k2: 0, n2: 0, a: [] as Array<[string, 0 | 1]>, b: [] as Array<[string, 0 | 1]> },
+        {
+          key: row,
+          k1: 0,
+          n1: 0,
+          k2: 0,
+          n2: 0,
+          rA: 0,
+          rB: 0,
+          a: [] as Array<[string, 0 | 1]>,
+          b: [] as Array<[string, 0 | 1]>,
+        },
       ]),
     );
     for (const { line, c } of classified) {
       if (line.scenario !== name || comparedNothing.has(name)) continue;
       const ev = repEvidenceOf(line);
       for (const v of repRowValues(rows, scen.assertions, c, ev.result)) {
+        if (v.excluded === "evidence_unavailable") {
+          const acc = perRow.get(v.row.id)!;
+          if (line.arm === A.label) acc.rA++;
+          else if (line.arm === B.label) acc.rB++;
+        }
         if (v.value === undefined) continue;
         const acc = perRow.get(v.row.id)!;
         const dir = line.runDir ?? "(no run dir)";
@@ -207,6 +256,32 @@ function sectionOf(
       }
     }
     for (const acc of perRow.values()) (acc.key.kind === "semantic_rollup" ? derivedInputs : familyInputs).push(acc);
+    // Refusals per assertion, read off its roll-up and claim rows (an assertion's rows share one count).
+    if (!comparedNothing.has(name)) {
+      const scored = (arm: string) =>
+        classified.filter((x) => x.line.scenario === name && x.line.arm === arm && SCORED.has(x.c.bucket)).length;
+      const sA = scored(A.label);
+      const sB = scored(B.label);
+      for (const acc of perRow.values()) {
+        if (acc.key.kind !== "semantic_rollup") continue;
+        // A multi-key assertion's roll-up keeps its refused reps as fails, so its refusals are counted on its
+        // claim rows (every rubric has at least one; all of them carry the same count).
+        const claim = [...perRow.values()].find((c) => c.key.kind === "claim" && c.key.assertionIndex === acc.key.assertionIndex);
+        const rA = Math.max(acc.rA, claim?.rA ?? 0);
+        const rB = Math.max(acc.rB, claim?.rB ?? 0);
+        const frequent = (r: number, n: number) => n > 0 && r >= REFUSAL_SHARE * n;
+        if (Math.abs(rA - rB) >= REFUSAL_GAP || frequent(rA, sA) || frequent(rB, sB))
+          refusalImbalances.push({
+            scenario: name,
+            assertionIndex: acc.key.assertionIndex,
+            a: { refused: rA, scored: sA },
+            b: { refused: rB, scored: sB },
+            insufficientRefusals: [...perRow.values()].some(
+              (r) => r.key.assertionIndex === acc.key.assertionIndex && refusalsGate(r, threshold),
+            ),
+          });
+      }
+    }
   }
   const fam = evaluateFamily(
     familyInputs.map((x) => ({ id: x.key.id, k1: x.k1, n1: x.n1, k2: x.k2, n2: x.n2 })),
@@ -249,6 +324,7 @@ function sectionOf(
       const note = noteFor(base);
       return {
         ...base,
+        ...(base.label === "insufficient" && refusalsGate(x, threshold) ? { label: "insufficient_refusals" as const } : {}),
         scenario: x.key.scenario,
         kind: x.key.kind,
         text: x.key.kind === "claim" ? x.key.claim! : x.key.label,
@@ -317,7 +393,22 @@ function sectionOf(
     rows,
     derivedRows,
     classificationRows,
+    refusalImbalances,
   };
+}
+
+/** A refusal gap or share worth a header warning. */
+const REFUSAL_GAP = 2;
+const REFUSAL_SHARE = 0.2;
+
+/** Did the CANDIDATE's EXCESS refusals for unavailable evidence push this row below the threshold? The baseline
+ *  had enough reps, the candidate refused at least REFUSAL_GAP more grades than it, and with only that excess
+ *  credited back it would have had enough too — so one stray refusal, or a refusal beside some other lost rep,
+ *  never labels a row. A baseline that refuses more is warned about but never labels: that is not the edit
+ *  hiding a drop. */
+function refusalsGate(x: { n1: number; n2: number; rA: number; rB: number }, threshold: number): boolean {
+  const excess = x.rB - x.rA;
+  return excess >= REFUSAL_GAP && x.n1 >= threshold && x.n2 < threshold && x.n2 + excess >= threshold;
 }
 
 /** Build the report model from the eval dir's manifest and runs. */
@@ -370,7 +461,13 @@ export function buildEvalReport(evalDir: string): EvalReport {
     const mine = classified.filter((x) => x.line.arm === a.label);
     const buckets: Partial<Record<RepBucket, number>> = {};
     const errorSources: Record<string, number> = {};
+    const evidenceUnavailable: Record<string, number> = {};
     for (const x of mine) {
+      if (x.c.bucket === "valid" || x.c.bucket === "judge_invalid")
+        for (const g of (repEvidenceOf(x.line).result?.assertions ?? []).filter((g) => g.source === undefined)) {
+          const reason = g.judgeInvalid === true ? undefined : semanticRefusalReason(g);
+          if (reason !== undefined) evidenceUnavailable[reason] = (evidenceUnavailable[reason] ?? 0) + 1;
+        }
       buckets[x.c.bucket] = (buckets[x.c.bucket] ?? 0) + 1;
       const key = x.line.thrown
         ? `thrown:${x.line.thrown.kind}`
@@ -390,6 +487,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       errorSources: Object.fromEntries(Object.entries(errorSources).sort(([x], [y]) => x.localeCompare(y))),
       unclassified: mine.filter((x) => x.c.termination.unclassified).length,
       ambiguousExit: mine.filter((x) => x.c.termination.ambiguousExit).length,
+      evidenceUnavailable: Object.fromEntries(Object.entries(evidenceUnavailable).sort(([x], [y]) => x.localeCompare(y))),
       medians: armMedians(mine.map((x) => ({ bucket: x.c.bucket, result: repEvidenceOf(x.line).result }))),
     };
   });
@@ -419,9 +517,13 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const failOnHit =
     m.settings.failOn !== null &&
     gatingRows.some((r) =>
-      m.settings.failOn === "confirmed" ? r.label === "confirmed drop" : r.label === "possible drop" || r.label === "confirmed drop",
+      m.settings.failOn === "confirmed"
+        ? r.label === "confirmed drop"
+        : r.label === "possible drop" || r.label === "confirmed drop" || r.label === "insufficient_refusals",
     );
+  // Plain `insufficient` only: an `insufficient_refusals` row is a drop signal, gated by --fail-on alone.
   const allInsufficient = familyRows.length > 0 && familyRows.every((r) => r.label === "insufficient");
+  const refusalImbalances = [...(tuned?.refusalImbalances ?? []), ...(heldOut?.refusalImbalances ?? [])];
   const judgeDisagreement = judgeDisagreements.length > 0;
   const recordedIdx = new Set(lines.map((l) => l.index));
   const missingJobs = m.settings.reps * m.scenarios.length * 2 - recordedIdx.size;
@@ -455,6 +557,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       judgeDisagreement,
       missingJobs,
       tornFinalLine,
+      refusalImbalances,
       exitCode: failOnHit || allInsufficient || judgeDisagreement || comparedNothing.size > 0 ? 1 : 0,
     },
     cost: {
@@ -476,7 +579,7 @@ const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
 const fmtUsd = (x: number | undefined) => (x === undefined ? "—" : `$${x.toFixed(4)}`);
 
 function rowLine(r: ReportRow): string {
-  const tested = r.label !== "insufficient";
+  const tested = r.label !== "insufficient" && r.label !== "insufficient_refusals";
   const ci = r.interval ? `${fmtDiff(r.interval.difference)} [${fmtDiff(r.interval.lower)}, ${fmtDiff(r.interval.upper)}]` : "—";
   const mdd = r.mdd && r.label === "no detectable change" ? `MDD drop ${fmtMdd(r.mdd.drop)}, rise ${fmtMdd(r.mdd.rise)}` : "";
   const note = [r.minPass !== undefined ? `min_pass ${r.minPass}` : "", mdd, r.note ?? ""].filter(Boolean).join("; ");
@@ -602,6 +705,17 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
       L.push(
         `  - ⚠ ${a.ambiguousExit} rep(s) ended in a nonzero agent exit — an out-of-memory kill and a skill-caused crash look alike here; scored as the agent's error.`,
       );
+    const refused = Object.values(a.evidenceUnavailable).reduce((n, v) => n + v, 0);
+    if (refused > 0)
+      L.push(
+        `  - ⚠ ${refused} semantic_matches grade(s) refused for unavailable evidence (${Object.entries(a.evidenceUnavailable)
+          .map(([k, v]) => `${k} ${v}`)
+          .join(", ")}) — neither a pass nor a fail, so each leaves that assertion's rows for that rep. An arm that refuses more ` +
+          `often is producing evidence the judge cannot see whole; read those run dirs.` +
+          (a.evidenceUnavailable.unrecorded
+            ? ` (\`unrecorded\`: a runs.jsonl written before the reason was kept; there, a refusal whose claims also missed min_pass reads as a fail.)`
+            : ""),
+      );
     const md = a.medians;
     L.push(
       `  - medians over ${md.eligibleReps} scored rep(s): cost ${fmtUsd(md.costUsd.median)} (n=${md.costUsd.n}), judge ${fmtUsd(md.judgeCostUsd.median)} (n=${md.judgeCostUsd.n}), turns ${md.turns.median ?? "—"} (n=${md.turns.n}), duration ${md.durationMs.median === undefined ? "—" : `${Math.round(md.durationMs.median / 1000)}s`} (n=${md.durationMs.n})`,
@@ -619,6 +733,18 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
         erroredHint(e.dominant),
       "",
     );
+  for (const r of rep.summary.refusalImbalances) {
+    L.push(
+      `**⚠ ${r.scenario} #${r.assertionIndex} (semantic_matches) refused for unavailable evidence: A ${r.a.refused}/${r.a.scored}, B ${r.b.refused}/${r.b.scored} scored reps** — ` +
+        `a refused grade leaves the rows, so the rates are over the reps that were graded. ` +
+        (r.insufficientRefusals
+          ? `The candidate's excess refusals left its rows \`insufficient_refusals\` — a drop signal (\`--fail-on possible\` gates on it): the edit may have made the deliverable outgrow the evidence the judge can see, hiding a drop rather than showing none.`
+          : r.b.refused > r.a.refused
+            ? "Read the candidate's run dirs: a deliverable that outgrew the evidence budget can hide a drop."
+            : "Read those run dirs before trusting this assertion's rows."),
+      "",
+    );
+  }
   if (rep.judgeDisagreements.length) {
     L.push("**⚠ Judge model differed across reps** (exit 1):");
     for (const d of rep.judgeDisagreements) L.push(`- ${d.scenario} #${d.assertionIndex}: ${d.models.join(", ")}`);
@@ -634,9 +760,19 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
         .join(", ") || "none"
     }.`,
   );
-  if (rep.summary.allInsufficient) L.push("Every row is insufficient — see the errorSource histogram above for why reps were lost.");
+  if (rep.summary.allInsufficient)
+    L.push(
+      `Every row is insufficient — see the errorSource histogram above for why reps were lost${
+        rep.arms.some((a) => Object.keys(a.evidenceUnavailable).length > 0)
+          ? ", and the evidence-refusal counts per arm: a refused semantic_matches grade also leaves its rows"
+          : ""
+      }.`,
+    );
   L.push(`Cost: agent ${fmtUsd(rep.cost.agentUsd)}, judge ${fmtUsd(rep.cost.judgeUsd)}.`);
-  L.push(`Exit: ${rep.summary.exitCode}${rep.summary.failOnHit ? ` (a drop at the --fail-on ${rep.settings.failOn} level)` : ""}.`, "");
+  L.push(
+    `Exit: ${rep.summary.exitCode}${rep.summary.failOnHit ? ` (a drop at the --fail-on ${rep.settings.failOn} level)` : ""}${rep.summary.failOnHit && [...(rep.sections.tuned?.rows ?? []), ...(rep.sections.tuned?.derivedRows ?? []), ...(rep.sections.heldOut?.rows ?? []), ...(rep.sections.heldOut?.derivedRows ?? [])].some((r) => r.label === "insufficient_refusals") ? " — including an insufficient_refusals row" : ""}.`,
+    "",
+  );
   const { text, redacted } = redactHostPaths(L.join("\n"));
   return { text: text.replace(REDACTION_PLACEHOLDER, String(redacted)), redacted };
 }
