@@ -98,3 +98,39 @@ describe("spawnProtocol — L0 --effort emission (reasoning-config fidelity, Pha
     expect(args[args.indexOf("--effort") + 1]).toBe("high");
   });
 });
+
+// The sub-agent reasoning capture walks whatever root spawnProtocol reports. Under managed config that is the
+// run's own config dir (the agent's CLAUDE_CONFIG_DIR). Off it — or when the "managed" dir IS the operator's
+// real one — the agent reads the operator's config, which holds every session they ever ran: no root.
+describe("spawnProtocol — the config root it reports for the sub-agent reasoning capture", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    spawnMock.mockClear();
+    warnSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    for (const k of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"]) vi.stubEnv(k, "");
+    vi.stubEnv("CLAUDE_CONFIG_DIR", mkdtempSync(join(tmpdir(), "proto-operator-config-")));
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
+  const run = (plan: LaunchPlan) => spawnProtocol(SCENARIO, BASELINE, plan, join(mkdtempSync(join(tmpdir(), "proto-root-")), "out"));
+
+  it("managed config: the plan's config dir", () => {
+    vi.stubEnv("COWORK_MANAGED_CONFIG", "1");
+    const plan = minimalPlan([]);
+    expect(run(plan).subagentConfigRoot).toBe(plan.configDir);
+  });
+
+  it("not managed: none — the operator's real config dir is never walked", () => {
+    vi.stubEnv("COWORK_MANAGED_CONFIG", "0");
+    expect(run(minimalPlan([])).subagentConfigRoot).toBeUndefined();
+  });
+
+  it("managed, but the config dir IS the operator's: none", () => {
+    vi.stubEnv("COWORK_MANAGED_CONFIG", "1");
+    const plan = minimalPlan([]);
+    vi.stubEnv("CLAUDE_CONFIG_DIR", plan.configDir);
+    expect(run(plan).subagentConfigRoot).toBeUndefined();
+  });
+});
