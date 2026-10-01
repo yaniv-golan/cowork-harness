@@ -528,7 +528,7 @@ async function run(
   }
 }
 
-function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknown> {
+export function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknown> {
   if (!lexists(resolve(cwd, flowArg))) return {};
   const r = NoFollowRoot.existing(flowArg, { cwd });
   const text = r.readIfPresent(join(r.root, "_state.json"));

@@ -941,7 +941,13 @@ describe("regrade: refusals (exit 2), all before any judge call", () => {
       scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scn4-")), `  - file_exists: outputs/report.md\n`),
       makeJudge: judgeFactory(() => true).make,
     });
-    expect(out).toMatchObject({ ok: false, kind: "usage" });
+    expect(out).toMatchObject({ ok: false, kind: "usage", code: "no_semantic_asserts" });
+    // A stable code in the JSON error envelope, so a caller branches on it, not on the message.
+    if (out.ok) throw new Error("unreachable");
+    const env = JSON.parse(regradeErrorEnvelope(out, []));
+    expect(env.error).toMatchObject({ category: "usage", code: "no_semantic_asserts" });
+    const validate = new Ajv({ strict: true }).compile(JSON.parse(readFileSync(resolve("schema/regrade.json"), "utf8")));
+    expect(validate(env), JSON.stringify(validate.errors)).toBe(true);
   });
 });
 

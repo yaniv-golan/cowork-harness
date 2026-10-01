@@ -96,6 +96,7 @@
     "expect_denied",
     "fidelity",
     "lane",
+    "metrics",
     "name",
     "on_unanswered",
     "prompt",
@@ -292,6 +293,10 @@
     "lane": [
       "local",
       "remote"
+    ],
+    "metrics.better": [
+      "higher",
+      "lower"
     ],
     "on_unanswered": [
       "fail",

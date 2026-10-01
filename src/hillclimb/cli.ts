@@ -21,7 +21,15 @@ import { termSafe } from "./runner.js";
 import { checkFlowDir, loadFlowSnapshot, type SchemaCheckReport } from "./schema-check.js";
 import { trackedSkill } from "./skill.js";
 import { stateTemplate, type StateTemplate } from "./state-template.js";
-import { HILLCLIMB_CHECK_USAGE, HILLCLIMB_FREEZE_REF_USAGE, HILLCLIMB_STATE_TEMPLATE_USAGE, HILLCLIMB_USAGE } from "./usage.js";
+import {
+  HILLCLIMB_CHECK_USAGE,
+  HILLCLIMB_FREEZE_REF_USAGE,
+  HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
+  HILLCLIMB_REGRADE_USAGE,
+  HILLCLIMB_STATE_TEMPLATE_USAGE,
+  HILLCLIMB_USAGE,
+} from "./usage.js";
+import { regradeFlow } from "./regrade.js";
 import { freezeRefCommand } from "./freeze-ref.js";
 import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
@@ -286,6 +294,66 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       if (e instanceof FsRefusal) return usage(e.message);
       throw e;
     }
+  }
+
+  if (sub === "regrade") {
+    let p;
+    try {
+      p = parseArgs(
+        rest,
+        withCommandGlobals({
+          booleans: [...HILLCLIMB_REGRADE_BOOLEAN_FLAGS],
+          values: ["--flow", "--variant", "--judge-model", "--output-format"],
+          repeated: ["--case"],
+          enums: { "--output-format": ["text", "json"] },
+          noDashValue: ["--flow", "--variant", "--case", "--judge-model"],
+        }),
+      );
+    } catch (e) {
+      return usage((e as Error).message, HILLCLIMB_REGRADE_USAGE);
+    }
+    if (p.flags["--help"] === true) {
+      writeAllSync(2, HILLCLIMB_REGRADE_USAGE + "\n");
+      return process.exit(0);
+    }
+    applyParsedCommandGlobals(CMD, p, json);
+    if (p.positionals.length !== 1) return usage(`hillclimb regrade takes exactly one scenario file or directory`, HILLCLIMB_REGRADE_USAGE);
+    const out = await regradeFlow(
+      {
+        target: p.positionals[0],
+        flow: p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow,
+        variant: p.options["--variant"] ?? "all",
+        cases: (p.repeated?.["--case"] as string[] | undefined) ?? [],
+        ...(p.options["--judge-model"] !== undefined ? { judgeModel: p.options["--judge-model"] } : {}),
+        fillRefs: p.flags["--fill-refs"] === true,
+        approveHarness: p.flags["--approve-harness"] === true,
+        allowDocDrift: p.flags["--allow-doc-drift"] === true,
+        allowUnchecked: p.flags["--allow-unchecked"] === true,
+      },
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        secrets: [...secrets],
+        stderr: (l) => err(l, secrets),
+        isolationCheck: () => isolationRefusal(),
+      },
+    );
+    const payload = { flow: p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow, variants: out.variants, exitCode: out.exitCode };
+    if (out.error)
+      return fail(
+        `${CMD} regrade`,
+        out.error.category,
+        scrub(out.error.message, secrets),
+        undefined,
+        json,
+        out.exitCode as 1 | 2,
+        undefined,
+        {
+          payload,
+        },
+      );
+    if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} regrade`, out.exitCode === 0, payload), secrets) + "\n");
+    return process.exit(out.exitCode);
   }
 
   if (sub === "freeze-ref") {

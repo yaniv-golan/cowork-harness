@@ -1399,6 +1399,21 @@ def test_enum_value_invalid_on_fidelity(tmp_path):
     assert code == 1  # ERROR alone (no --strict) already fails the run
 
 
+def test_enum_value_invalid_on_metrics_better(tmp_path):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nfidelity: protocol\nprompt: hi\n"
+        "metrics:\n  - {id: words, artifact: outputs/m.json, path: words, better: hgher, scale: 100}\n"
+        "assert:\n  - result: success\n",
+        encoding="utf-8",
+    )
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert "metrics.better: hgher" in hits[0]["message"]
+    assert code == 1
+
+
 def test_enum_value_invalid_on_present_but_null_value(tmp_path):
     # `fidelity:` with nothing after it parses as null. The loader rejects it; the rule must too.
     # The retired on_unanswered check guarded with `.get(...) is not None`, which skipped exactly this
@@ -2186,6 +2201,16 @@ def test_workspace_fixture_is_a_known_top_level_key(tmp_path):
     rules = _rules("workspace_fixture: fixtures/after-step-1\nassert:\n  - file_exists: outputs/step2.md\n", tmp_path)
     assert "unknown-top-key" not in rules
     assert "workspace_fixture" in scenario._EMBEDDED_TOP_LEVEL_KEYS
+
+
+def test_metrics_is_a_known_top_level_key(tmp_path):
+    rules = _rules(
+        "metrics:\n  - {id: words, artifact: outputs/m.json, path: words, better: higher, scale: 100}\n"
+        "assert:\n  - file_exists: outputs/m.json\n",
+        tmp_path,
+    )
+    assert "unknown-top-key" not in rules
+    assert "metrics" in scenario._EMBEDDED_TOP_LEVEL_KEYS
 
 
 def test_file_exists_object_form_is_not_unknown_and_joins_the_absent_contradiction(tmp_path):
