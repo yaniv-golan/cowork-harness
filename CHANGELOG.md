@@ -87,8 +87,7 @@ All notable changes to this project are documented here. The format is based on
   files a run authored are copied and attached to its final turn. Traces inline each sub-agent's turns after its
   dispatch, opened by a `system` turn saying what that child received: the harness's sub-agent append (Anthropic's
   built-in sub-agent prompt withheld), "none received", or "not recorded in its transcript". `--dry-run` prices the
-  remaining runs from this machine's history at `plan.cost`, counting the flow's own prior runs (flows sharing a
-  directory basename share cost history). `hillclimb check` checks a flow dir against our reading of the published
+  remaining runs from this machine's history at `plan.cost`, on `eval --dry-run`'s basis (hillclimb runs excluded). `hillclimb check` checks a flow dir against our reading of the published
   schema and warns on a baseline case with no headroom; `hillclimb state-template` prints a `_state.json` skeleton
   and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy).
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a

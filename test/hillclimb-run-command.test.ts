@@ -195,7 +195,7 @@ describe("runHillclimbCommand", () => {
     expect(err.join("\n")).toMatch(/case alpha: .*missing\.csv/);
   });
 
-  it("--dry-run prices the remaining slots from this machine's history: this flow's own runs count, another flow's never", async () => {
+  it("--dry-run prices the remaining slots on eval's basis: plain runs only, every hillclimb run excluded", async () => {
     const row = (costUsd: number, runLabel?: string) => ({
       v: 1,
       ts: "2026-10-01T00:00:00Z",
@@ -214,7 +214,8 @@ describe("runHillclimbCommand", () => {
     const indexRows = () => [row(1, "hillclimb:flow:baseline"), row(3), row(100, "hillclimb:flow-null:baseline")] as never;
     const r = await runHillclimbCommand(args("--dry-run", "--reps", "2"), deps({ indexRows }));
     expect(r.exitCode).toBe(0);
-    expect(r.cost).toMatchObject({ jobs: 2, pricedRuns: 2, worstObservedUsd: 6, lowerBound: false, unpriced: [] });
+    // the flow's own hillclimb run ($1) and another flow's ($100) are both out; only the plain $3 run prices
+    expect(r.cost).toMatchObject({ jobs: 2, pricedRuns: 1, worstObservedUsd: 6, meanUsd: 6, lowerBound: false, unpriced: [] });
     expect(err.join("\n")).toMatch(/estimated cost of 2 run\(s\)/);
   });
 

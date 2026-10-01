@@ -15,7 +15,7 @@ import { buildFingerprint } from "../run/cassette.js";
 import { effectiveTier, runOutDir, scenarioInputFindings } from "../run/execute.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
-import { HILLCLIMB_LABEL_PREFIX, loadCostHistory } from "../eval/plan-history.js";
+import { loadCostHistory } from "../eval/plan-history.js";
 import { estimateScheduleCost, scheduleCostJson, scheduleCostLine, type ScheduleCostJson } from "../eval/planner.js";
 import { pkgVersion } from "../run/envelope.js";
 import { ANSWER_KEY_ADVICE, answerKeyFindings } from "../eval/snapshot.js";
@@ -219,14 +219,10 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   });
   const baselineIds = [...new Set(cases.map((c) => prep.baseline(c).appVersion))].sort();
 
-  // The dry run's estimate: E1a's one cost function. A flow's own prior passes are the closest predictor of its
-  // next one, so this flow's hillclimb runs count; another flow's never do — the index cannot tell an ablated
-  // run apart, and a null run always lives in its own (sibling) flow.
-  const ownLabel = `${HILLCLIMB_LABEL_PREFIX}${basename(flowArg)}:`;
+  // The dry run's estimate: eval's cost function on eval's basis exactly (hillclimb runs excluded), so every
+  // covered key means the same on both commands.
   const price: Prepared["price"] = (remaining) => {
-    const rows = (deps.indexRows ?? (() => readIndex(runsWriteRoot())))().filter(
-      (r) => !r.runLabel?.startsWith(HILLCLIMB_LABEL_PREFIX) || r.runLabel.startsWith(ownLabel),
-    );
+    const rows = (deps.indexRows ?? (() => readIndex(runsWriteRoot())))();
     return estimateScheduleCost(
       cases
         .filter((c) => (remaining[c.id] ?? 0) > 0)
@@ -239,7 +235,6 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
               scenario: c.scenario.name,
               baseline: baseline.appVersion,
               tier: effectiveTier(c.scenario.fidelity, baseline),
-              includeHillclimb: true,
             }),
           };
         }),
