@@ -582,6 +582,36 @@ All notable changes to this project are documented here. The format is based on
   reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
   check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
   directory (a FIFO, a socket or a device).
+- **`hostloop` finds the native agent that Claude Desktop 2.19675.0 stages.** That Desktop stages the native
+  macOS agent per build, `claude-code/<ver>/<build>/claude.app/…`, and moves an existing flat install
+  (`claude-code/<ver>/claude.app/…`) into its build dir. The harness looked only for the flat layout, so `hostloop`
+  failed on every such install, and `doctor` advised opening Cowork, which changed nothing. It reads both layouts:
+  - A same-major.minor patch difference is tolerated with a stderr note, as before, whichever layout it is staged
+    in. A baseline pinning flat 2.1.284 runs a staged 2.1.286 build with that note and no env var. The note says
+    whether the version used is newer or older than the pin and, when the pinned version's build dir is present
+    but not runnable, why.
+  - A build counts only when it is a real directory whose `.verified` marker names it. A build dir with no marker
+    (one Desktop has not finished staging), a marker naming another build, no `claude.app` or a bare `claude`
+    binary is skipped, and the message names the reason. A symlinked build dir is skipped, as Desktop skips it.
+    The fallback search over other versions also skips a symlinked version dir, which is a harness rule.
+  - When several builds of one version are staged, a pin that names a build selects it. Otherwise the newest
+    `.verified` mtime wins, then build name, with a stderr note naming the builds passed over. When a flat pin's
+    file is still present but a verified build of that version wins, a stderr line names both paths.
+  - A different build of a pinned build needs `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, like a major/minor drift.
+  - `sync` writes the full path of the staged build, preferring the build the asar's own manifest names, so the
+    recorded `nativeStagedPath` exists under either layout.
+- **`doctor` names the cause when the native agent is not found, and gives that cause's remedy.** The causes are no
+  staging dir, nothing staged in either layout, a build Desktop has not finished staging, a build dir that is not a
+  runnable build, an unrecognised layout, a major/minor or build mismatch, and a bad `COWORK_HOST_AGENT_BINARY`. It
+  no longer says "open Cowork once" for them: off macOS it names the tier that does run there, and it notes that an
+  account whose Claude runs on its organization's infrastructure has nothing staged locally. With
+  `COWORK_HOST_AGENT_BINARY` set, it no longer shows a patch-drift note for a binary the run does not use.
+- **A pruned pinned ELF (`container`/`microvm`) points at the recovery runbook.** The error and `doctor`'s remedy
+  name the way to keep the exact pin: recover and sha-verify that version, then set `COWORK_AGENT_BINARY` to it
+  ([docs/maintenance.md](./docs/maintenance.md#recovering-an-old-agent-version)). The error previously offered only
+  `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, which runs a different version, and `doctor` said to open Cowork. For an
+  ELF that was never staged, both say that Desktop stages it on macOS and that elsewhere `COWORK_AGENT_BINARY` must
+  point at a Linux ELF, instead of saying to open Cowork.
 
 ### Documentation
 
@@ -595,6 +625,10 @@ All notable changes to this project are documented here. The format is based on
 - The companion skill now says what a `lint-skill` ignore marker costs: it is an edit to `SKILL.md`, so it
   changes the skill hash (staling that skill's cassettes) and adds text the agent reads. `--suppressions <file>`
   (one entry per accepted site) or `--ignore-rule` avoids both.
+- [docs/maintenance.md](./docs/maintenance.md) describes the per-build native staging layout and how the harness
+  chooses among builds, and the ELF recovery runbook notes the `linux-x64` ELF on an x64 Mac. The troubleshooting
+  FAQ and the companion skill list recovering the pinned ELF as the remedy that keeps the exact pin, and the FAQ has
+  an entry for a native agent that is not found at `hostloop`.
 
 ## [4.2.1] — 2026-10-01
 
