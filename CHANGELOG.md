@@ -154,14 +154,26 @@ All notable changes to this project are documented here. The format is based on
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
 
+- **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
+  `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
+  run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric
+  change) and `pass` is recomputed; `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot
+  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, takes every
+  selected variant's lock, and preflights every batch's evidence before any judge call (a refusal writes nothing).
+  `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
+  `<variant>/regrade.md`, and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
+  now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
+  spend, and drift-checks an all-neutral run against its `composedDoc`; `no_semantic_asserts` now means the scenario has
+  neither judged key. A re-grade that only adds comparisons records the outcomes it kept as `pairwise[].copied: true`.
+
 - **`semantic_pairwise` inside a hillclimb flow, and `hillclimb freeze-ref`.** Under `hillclimb run` every pairwise
   assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of
   the scenario's `refs:`. A baseline pass is neutral against its own reference and freezes it after the pool from each
   case's lowest-rep good row; any other variant is refused before spending while its case has none. Only the
   baseline's reference decides `pass`; rows gain `win` / `win_present` / `both_bad` (which `state-template` declares
   and the metrics legend explains), a `win_<vN>` column per later reference, and per-assert drill-down keys. A
-  `win_<vN>` column is declared only when every scored row carries it; rows written before that reference was
-  frozen never do, so it stays drill-down data on them.
+  `win_<vN>` column is declared only when every scored row carries it; `hillclimb regrade --fill-refs` adds it to
+  the rows written before that reference was frozen.
   `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar;
   `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
   90% of its rows. A `semantic_pairwise` result now records `composedDoc` (the composed document's fingerprint, even

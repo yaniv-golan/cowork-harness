@@ -136,7 +136,7 @@ export type RegradeOutcome =
       kind: "usage" | "runtime";
       message: string;
       /** Set on an evidence refusal (`refusals` lists every refused run dir): `doc_drift` when any dir drifted,
-       *  else `unchecked_content`. `no_semantic_asserts`: the scenario has no `semantic_matches` assert, so there is
+       *  else `unchecked_content`. `no_semantic_asserts`: the scenario has no judged (`semantic_matches` / `semantic_pairwise`) assert, so there is
        *  nothing to re-grade (a caller can tell this refusal from a failure without reading the message). */
       code?: "doc_drift" | "unchecked_content" | "no_semantic_asserts";
       refusals?: RegradeRefusal[];
