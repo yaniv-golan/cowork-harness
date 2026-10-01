@@ -140,12 +140,17 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
     for (const ref of opts.refsFor(a)) {
       const gate = opts.gateRefs === undefined || opts.gateRefs.has(ref.name);
       const tag = gate ? {} : { gate: false as const };
-      if (opts.onlyRefs && !opts.onlyRefs.has(ref.name)) {
+      if (opts.onlyRefs) {
+        // A fill never re-judges an outcome the live run has: only a missing one is compared.
         const kept = opts.copyOutcome?.(i, ref.name);
-        outcomes.push(
-          kept ? { ...kept, copied: true } : { ref: ref.name, ...tag, status: "missing", why: "the live run recorded no outcome to keep" },
-        );
-        continue;
+        if (kept) {
+          outcomes.push({ ...kept, copied: true });
+          continue;
+        }
+        if (!opts.onlyRefs.has(ref.name)) {
+          outcomes.push({ ref: ref.name, ...tag, status: "missing", why: "the live run recorded no outcome to keep" });
+          continue;
+        }
       }
       if (opts.neutralRefs?.has(ref.name)) {
         outcomes.push({ ref: ref.name, ...tag, status: "neutral", value: 0.5 });

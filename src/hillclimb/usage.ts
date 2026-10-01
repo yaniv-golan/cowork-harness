@@ -66,7 +66,7 @@ export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml 
        judged assert is graded again with the flow's references now (a judge or rubric change). --fill-refs: only the
        pairwise comparisons a row lacks are judged (a reference frozen after it), so pass cannot move and every row
        carries every win column. Gated like run. Exit 0 rewritten or nothing to do, 1 some rows listed (not
-       re-graded), 2 refused before any judge call.`;
+       re-graded) or a failure after the first judge call, 2 refused before any judge call.`;
 
 /** The whole family: `hillclimb --help`, and the usage guard's text (every flag of every subcommand). */
 export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template | freeze-ref | regrade> ...

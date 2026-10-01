@@ -29,7 +29,7 @@ import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
 import { lexists, normalizeRootArg, NoFollowRoot } from "./fs.js";
 import { gateDecision, harnessDigest } from "./gate.js";
-import type { MetricDecl } from "./grade-keys.js";
+import { flowHasPairwise, type MetricDecl } from "./grade-keys.js";
 import { discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
@@ -120,6 +120,9 @@ function shownRunPath(p: string, secrets: readonly string[]): string {
   return redactDeep(tildeify(p), secrets);
 }
 
+/** A core message as the flow, the JSON envelope and stderr show it: no secret, no host path. */
+const shownMessage = (m: string, secrets: readonly string[]): string => redactDeep(m, secrets);
+
 function readResult(runDir: string): RunResult | undefined {
   try {
     const turn = latestTurn(runDir);
@@ -175,7 +178,9 @@ function rebuiltRow(
   row: Row,
   result: RunResult,
   c: HillclimbCase,
-  shape: { metricRefs: readonly string[]; metrics: readonly MetricDecl[]; merge: typeof mergeMetrics },
+  /** `pairwise` only when the flow has semantic_pairwise — exactly what `run` passes — so a rebuilt row carries the
+   *  keys `run` would write, no more. */
+  shape: { pairwise?: { metricRefs: readonly string[] }; metrics: readonly MetricDecl[]; merge: typeof mergeMetrics },
   extraMeta: Record<string, unknown>,
   judgeFieldsFrom: RunResult | undefined,
   report: RegradeRunReport | undefined,
@@ -185,11 +190,18 @@ function rebuiltRow(
     return { why: `the re-grade is invalid (judge) on assertion(s) ${rep.judgeInvalidAssertions.join(", ")}` };
   const agentFailed = rep.bucket === "errored_agent";
   // The same declarations `run` grades a row with: its metric union and the flow's later references.
-  const ctx = { assertions: c.scenario.assert, metrics: shape.metrics, pairwise: { metricRefs: shape.metricRefs } };
+  const ctx = { assertions: c.scenario.assert, metrics: shape.metrics, ...(shape.pairwise ? { pairwise: shape.pairwise } : {}) };
   const g = gradeFor(result, ctx, rep, agentFailed);
   if ("misaligned" in g) return { why: `assertion ${g.misaligned} no longer lines up with the scenario (${g.excluded})` };
+  // Rebuilt IN PLACE: a key assigned keeps its position; the producer's keys (and every earlier re-grade's own) that
+  // this rebuild does not set are removed at the end, so no stale value from a previous grade or re-grade survives.
   const meta: Record<string, unknown> = { ...(row.meta ?? {}) };
-  for (const k of [
+  const set = new Set<string>();
+  const put = (k: string, v: unknown) => {
+    meta[k] = v;
+    set.add(k);
+  };
+  const clear = [
     "claims",
     "pairwise_ref_sha256",
     "explanation_untrusted",
@@ -197,8 +209,13 @@ function rebuiltRow(
     "judge_transport",
     "judge_transports",
     "judge_retries_unrecorded",
-  ])
-    delete meta[k];
+    "regrade_fill",
+    "regrade_judge_usd",
+    "regrade_doc_matches_live",
+    "regrade_unchecked",
+    "regrade_file",
+    "regraded_at",
+  ];
   const grade = { ...g.grade };
   if (report) shape.merge({ grade, meta }, report, shape.metrics);
   // Replacements, by key; `undefined` removes a key the producer no longer emits.
@@ -213,28 +230,29 @@ function rebuiltRow(
     if ("claims" in g.explanation) e.claims = g.explanation.claims;
     for (const [k, v] of Object.entries(g.explanation)) if (k !== "claims") e[k] = v;
     repl.explanation = e;
-    meta.explanation_untrusted = true;
+    put("explanation_untrusted", true);
   }
-  if (Object.keys(g.claims).length) meta.claims = g.claims;
-  if (Object.keys(g.refShas).length) meta.pairwise_ref_sha256 = g.refShas;
+  if (Object.keys(g.claims).length) put("claims", g.claims);
+  if (Object.keys(g.refShas).length) put("pairwise_ref_sha256", g.refShas);
   // Who judged: the re-graded result in a full re-grade; in a fill, the row's own judge fields stand (its grades are
   // the live ones) and the fill's spend is said beside them.
   if (judgeFieldsFrom) {
     const { judges, transports, jr } = judgeFieldsOf(judgeFieldsFrom);
     repl.judge_model = judges.judge_model;
     repl.judge_usage = judges.judge_usage;
-    if (judges.judge_models !== undefined) meta.judge_models = judges.judge_models;
-    if (transports.length === 1) meta.judge_transport = transports[0];
-    else if (transports.length > 1) meta.judge_transports = transports;
-    meta.judge_retries = jr.judge_retries;
-    if (jr.unrecorded) meta.judge_retries_unrecorded = true;
+    if (judges.judge_models !== undefined) put("judge_models", judges.judge_models);
+    if (transports.length === 1) put("judge_transport", transports[0]);
+    else if (transports.length > 1) put("judge_transports", transports);
+    put("judge_retries", jr.judge_retries);
+    if (jr.unrecorded) put("judge_retries_unrecorded", true);
   } else {
-    for (const k of ["judge_models", "judge_transport", "judge_transports", "judge_retries_unrecorded"])
-      if (row.meta && k in row.meta) meta[k] = row.meta[k];
+    // A fill's grades are the live ones: so are its judge fields (kept as they are).
+    for (const k of ["judge_models", "judge_transport", "judge_transports", "judge_retries_unrecorded"]) if (k in meta) set.add(k);
     repl.judge_model = row.judge_model;
     repl.judge_usage = row.judge_usage;
   }
-  Object.assign(meta, extraMeta);
+  for (const [k, v] of Object.entries(extraMeta)) put(k, v);
+  for (const k of clear) if (!set.has(k)) delete meta[k];
   repl.meta = meta;
   // Every field in its original place; a key the row did not have goes where `run` would put it (before meta).
   const out: Row = {};
@@ -266,13 +284,18 @@ function withOwnNeutral(result: RunResult, c: HillclimbCase, variant: string, re
 
 /** The references whose COPIED outcome (kept from the live run by a fill) recorded a document other than the one the
  *  flow's store holds now. */
-function staleCopied(report: RegradeRunReport, c: HillclimbCase, refs: ReadonlyArray<{ name: string; store: string }>): string[] {
+function staleCopied(
+  entries: ReadonlyArray<{ assertionIndex: number; pairwise?: NonNullable<RunResult["assertions"][number]["pairwise"]> }>,
+  c: HillclimbCase,
+  refs: ReadonlyArray<{ name: string; store: string }>,
+  copiedOnly = true,
+): string[] {
   const out = new Set<string>();
-  for (const a of report.assertions) {
+  for (const a of entries) {
     const asrt = c.scenario.assert[a.assertionIndex];
     if (!asrt?.semantic_pairwise) continue;
-    for (const o of (a as { pairwise?: NonNullable<RunResult["assertions"][number]["pairwise"]> }).pairwise ?? []) {
-      if (!o.copied || o.refDocSha256 === undefined) continue;
+    for (const o of a.pairwise ?? []) {
+      if ((copiedOnly && !o.copied) || o.refDocSha256 === undefined) continue;
       const store = refs.find((r) => r.name === o.ref)?.store;
       const now = store ? readRefDoc(store, c.id, pairwiseComposeKey(asrt)) : undefined;
       if (now?.status === "ok" && now.sha256 !== o.refDocSha256) out.add(o.ref);
@@ -386,7 +409,13 @@ async function regradeFlowInner(
     }
     const refs = discoverFlowRefs(flowAbs);
     const regrade = deps.regrade ?? regradeRuns;
-    const shape = { metricRefs: metricRefNames(refs), metrics: deps.metricDecls?.(all) ?? [], merge: deps.mergeMetrics ?? mergeMetrics };
+    const shape = {
+      ...(flowHasPairwise(all.map((c) => ({ assertions: c.scenario.assert ?? [] })))
+        ? { pairwise: { metricRefs: metricRefNames(refs) } }
+        : {}),
+      metrics: deps.metricDecls?.(all) ?? [],
+      merge: deps.mergeMetrics ?? mergeMetrics,
+    };
     const refNames = refs.map((r) => r.name);
     const outcome: RegradeFlowOutcome = { exitCode: 0, variants: [] };
 
@@ -442,7 +471,7 @@ async function regradeFlowInner(
         if (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed) {
           // No comparison to judge: an agent failure scores 0 whatever the judge says, and a row lacking only its own
           // variant's (neutral) outcome needs no judge call. A fill still rebuilds it, so it carries every column.
-          if (args.fillRefs) plain.push(t);
+          plain.push(t);
           continue;
         }
         const key = `${id}\0${args.fillRefs ? t.missing.join(",") : ""}`;
@@ -515,7 +544,11 @@ async function regradeFlowInner(
       }
       skip.add(b);
       for (const t of b.targets)
-        vr.listed.push({ prompt_id: b.c.id, rep: Number(t.line.row?.rep), why: `refused: ${pre.message.split("\n")[0]}` });
+        vr.listed.push({
+          prompt_id: b.c.id,
+          rep: Number(t.line.row?.rep),
+          why: shownMessage(`refused: ${pre.message.split("\n")[0]}`, deps.secrets),
+        });
     }
     if (evidence.length)
       return refuse(
@@ -528,7 +561,6 @@ async function regradeFlowInner(
         `harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${join(flowArg, "_state.json")}`,
       );
     }
-    progress.spent = true;
 
     // The spend.
     const rebuilt = new Map<Line, Row>();
@@ -537,20 +569,25 @@ async function regradeFlowInner(
     for (const b of batches) {
       if (skip.has(b)) continue;
       const vr = perVariant.get(b.variant)!.v;
+      progress.spent = true;
       const r = (await regrade(optsFor(b, false) as RegradeOptions)) as RegradeOutcome;
       const reports = r.ok ? r.runs : "completed" in r && r.completed ? r.completed : [];
-      if (!r.ok) say(`  [${b.variant}] ${b.c.id}: ${r.message.split("\n")[0]}`);
+      if (!r.ok) say(`  [${b.variant}] ${b.c.id}: ${shownMessage(r.message.split("\n")[0]!, deps.secrets)}`);
       for (const t of b.targets) {
         const rep = Number(t.line.row?.rep);
         const report = reports.find((x) => real(x.runDir) === real(t.runDir));
         if (!report) {
-          vr.listed.push({ prompt_id: b.c.id, rep, why: r.ok ? "no report for its run dir" : `stopped: ${r.message.split("\n")[0]}` });
+          vr.listed.push({
+            prompt_id: b.c.id,
+            rep,
+            why: r.ok ? "no report for its run dir" : shownMessage(`stopped: ${r.message.split("\n")[0]}`, deps.secrets),
+          });
           continue;
         }
         vr.regradeFiles.push(shownRunPath(report.regradeFile, deps.secrets));
         // A fill keeps every outcome it did not judge: one copied against a reference that has since changed (re-frozen
         // by hand) would mix two references in one row — listed, never written.
-        const stale = args.fillRefs ? staleCopied(report, b.c, refs) : [];
+        const stale = args.fillRefs ? staleCopied(report.assertions as never, b.c, refs) : [];
         if (stale.length) {
           vr.listed.push({
             prompt_id: b.c.id,
@@ -586,12 +623,28 @@ async function regradeFlowInner(
       }
     }
     for (const t of plain) {
+      // A fill keeps every live outcome of a row it does not judge: the same changed-reference rule applies.
+      if (args.fillRefs) {
+        let k = 0;
+        const entries = (t.result.assertions ?? []).flatMap((e) =>
+          e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],
+        );
+        const stale = staleCopied(entries, t.c, refs, false);
+        if (stale.length) {
+          perVariant.get(t.variant)!.v.listed.push({
+            prompt_id: t.c.id,
+            rep: Number(t.line.row?.rep),
+            why: `its kept outcome against ${stale.join(", ")} was judged against a reference that has changed since`,
+          });
+          continue;
+        }
+      }
       const got = rebuiltRow(
         t.line.row!,
         withOwnNeutral(t.result, t.c, t.variant, refNames),
         t.c,
         shape,
-        { regraded_at: at, regrade_fill: t.missing },
+        { regraded_at: at, ...(args.fillRefs ? { regrade_fill: t.missing } : {}) },
         undefined,
         undefined,
       );
