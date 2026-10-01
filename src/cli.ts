@@ -343,7 +343,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
-  regrade <run-dir>… --scenario <yaml>   re-grade kept runs' semantic_matches asserts with the judge (no live agent; see 'regrade --help')
+  regrade <run-dir>… --scenario <yaml>   re-grade kept runs' semantic_matches and semantic_pairwise asserts with the judge (no live agent; see 'regrade --help')
       [--judge-model <id>] [--authored-total-bytes <N>] [--output-format json]
   fixture export <run-dir> --out <dir>   copy a kept run's outputs tree into a directory a scenario can start from
       [--allow-host-paths] [--output-format json]

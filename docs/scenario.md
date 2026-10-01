@@ -1208,8 +1208,8 @@ file, a file outside the walked folders) is not warned about. `replay --assert-f
 block; a plain replay notices an on-disk `metrics:` block that differs from the frozen one. **`verify-run`** and
 **`regrade`** re-measure the current declaration from the kept work dir, but only while a file's bytes equal the
 run's recorded post-run hash; otherwise `pruned` (a file under `uploads/` has no recorded hash, so it is always
-`pruned` there). `verify-run` needs no judge, so it is the way to re-measure a scenario with no `semantic_matches`,
-which `regrade` refuses (`no_semantic_asserts`).
+`pruned` there). `verify-run` needs no judge, so it is the way to re-measure a scenario with no `semantic_matches`
+or `semantic_pairwise` assert, which `regrade` refuses (`no_semantic_asserts`).
 
 ## Output
 
