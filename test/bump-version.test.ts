@@ -236,6 +236,7 @@ describe("TARGET_FILES", () => {
       ".claude/skills/cowork-harness/references/measurement.md",
       ".claude/skills/cowork-harness/references/run-record-replay.md",
       ".claude/skills/cowork-harness/references/scenario-schema.md",
+      ".claude/skills/cowork-harness/references/semantic-judging.md",
       ".claude/skills/cowork-harness/references/task-recipes.md",
       ".claude/skills/cowork-harness/references/ci-recipe.md",
       "examples/replays/README.md",

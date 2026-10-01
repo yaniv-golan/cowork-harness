@@ -181,7 +181,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 |---|---|---|
 | **v13** | has an `assert:` entry using the object form of `tool_called` / `tool_not_called` | v12: refuses as too new (see below) |
 | **v14** | has a `semantic_matches` entry carrying `include_fork_results` (any value), or a `semantic_pairwise` entry — one bump shared with the other keys of this release that an older reader cannot read | v13: refuses as too new — upgrade the harness, don't re-record |
-| **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value) | v13: refuses as too new — upgrade the harness, don't re-record |
+| **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a `question_option_count` entry | v13: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -539,6 +539,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `task_status` | a task whose `subject` OR `id` matches the `match` regex reached the given `status` — evidence-unavailable when `tasks` telemetry is absent |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `question_context` | a regex matched the gate's founder-visible payload (question label + option labels + option descriptions) |
+| `question_option_count` | every selected sub-question offered `exactly` (or `min`/`max`) options whose label matches a regex |
 | `question_options` | the option set + order that gate offered the user |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered: true` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min: >= 1` to also require a gate, or drop it and declare `questions_count_max: 0` in a gate-clean scenario |
@@ -561,7 +562,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_delete_in` | verdict modifier — kept on replay → no-op pass (the live per-mount delete scan it waives is zeroed on replay, same as its outputs-scoped sibling) |
 | `allow_undelivered_deliverables` | verdict modifier — kept on replay → no-op pass (suppresses the `undelivered_deliverables` WARN; a replay runs no scratchpad walk of its own, so the signal is evidence-unavailable there regardless) |
 
-**`question_asked`, `question_options`, `question_context`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
+**`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
 `no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these keys are excluded from evaluation — not vacuously
 passed — and a loud warning fires (see §Backward compatibility). The hook and path-denial keys need
@@ -691,7 +692,7 @@ When the cassette carries `controlOut`, replay consumes **both** recorded direct
 On replay, the replay decider (built by `buildReplayDecider()`) indexes `controlOut` by `request_id` and serves the recorded response to
 the decision pipeline instead of consulting a live decider or asking the user. This makes the full
 `Run.handleDecision` path execute on replay, which populates `rec.questions`, `rec.gateAnswers`, and
-`rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `question_options`, `question_context`, `questions_count_max`,
+`rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
 `gate_answers_delivered`, and `gate_answer_count_min` are now genuinely evaluated, not silently skipped
 or vacuously passed.
 
@@ -775,7 +776,7 @@ regressing to the prior false-green behavior:
    ::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions
    are NOT checked; re-record to enable them
    ```
-2. **`question_asked`, `question_options`, `question_context`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
+2. **`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
    excluded** from the evaluated assertion set for that run — not vacuously passed, absent.
 3. All other content assertions (transcript, tool, subagent, result) evaluate normally.
 

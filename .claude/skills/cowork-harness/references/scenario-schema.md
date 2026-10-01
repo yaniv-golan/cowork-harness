@@ -349,7 +349,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
-**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `questions_count_max`,
+**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
 `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
 `path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see
 [`assertion-catalog.md`](./assertion-catalog.md)). With `controlOut` present they evaluate; on an old
@@ -454,7 +454,7 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
    concern per item; run the linter. (`LIVE_ONLY_KEYS`/`MANIFEST_KEYS` in `src/run/cassette.ts`.)
 
 2. **Gate keys need a `controlOut` cassette.** `question_asked`, `question_options`, `question_context`,
-   `questions_count_max`,
+   `question_option_count`, `questions_count_max`,
    `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked` only evaluate on
    replay with `controlOut`; on an old cassette they warn and are excluded (not passed).
    `gate_answers_delivered` **fails on
