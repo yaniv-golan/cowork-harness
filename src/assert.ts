@@ -3305,10 +3305,10 @@ function check(
     const boundError = questionOptionCountBoundError(qc);
     // Fail CLOSED on every "we cannot see the gates" path, as question_options does: a count over a list the
     // lane never populated would pass `exactly: 0` / `max` on no evidence.
-    if (ctx.gateOptionsMissing || ctx.gateOptions === undefined) {
-      results.push(fail("evidence unavailable: gate-option evidence absent for this run — cannot evaluate question_option_count"));
-    } else if (boundError !== undefined) {
+    if (boundError !== undefined) {
       results.push(fail(boundError));
+    } else if (ctx.gateOptionsMissing || ctx.gateOptions === undefined) {
+      results.push(fail("evidence unavailable: gate-option evidence absent for this run — cannot evaluate question_option_count"));
     } else if (!qc.matches) {
       results.push(fail("question_option_count: `matches` is empty, so it would match every label"));
     } else if (hasRedactionToken(qc.matches) || (qc.when_question !== undefined && hasRedactionToken(qc.when_question))) {
@@ -3333,13 +3333,18 @@ function check(
       }
       let pool = ctx.gateOptions;
       let selector = "";
+      // A sub-question whose text a redaction policy rewrote cannot be said to match `when_question` or not: it is
+      // left out of the pool, and its being uncertain blocks a pass (a universal rule cannot skip a sub-question it
+      // might cover), never a fail the selected ones already earned.
+      let unsureSelected = 0;
       if (re !== undefined && qc.when_question !== undefined) {
         const w = compileUserRegex(qc.when_question);
         if ("error" in w) {
           results.push(fail(`question_option_count: bad regex "${qc.when_question}": ${w.error}`));
           re = undefined;
         } else {
-          pool = pool.filter((g) => w.re.test(g.question));
+          unsureSelected = pool.filter((g) => hasRedactionToken(g.question)).length;
+          pool = pool.filter((g) => !hasRedactionToken(g.question) && w.re.test(g.question));
           selector = ` matching /${qc.when_question}/i`;
         }
       }
@@ -3350,20 +3355,26 @@ function check(
       const flags = qc.case_sensitive ? "" : "i";
       if (re === undefined) {
         /* already reported */
+      } else if (pool.length === 0 && unsureSelected > 0) {
+        results.push(
+          fail(
+            `evidence unavailable: question_option_count: no sub-question${selector} can be identified — ${unsureSelected} carry question text rewritten by a redaction policy`,
+          ),
+        );
       } else if (pool.length === 0) {
         // Never vacuous: a rule over every gate proves nothing on a run where no gate fired.
         results.push(fail(`question_option_count: no question${selector} was asked (${ctx.gateOptions.length} gate(s) recorded)`));
       } else {
-        // A label a redaction policy rewrote (a replayed cassette, a scrubbed verify-run) hides its bytes: a HIT is
-        // judged with every token replaced by a sentinel no regex can match into, and a MISS on a token-bearing
-        // label is UNKNOWN. So each count is a range [n, n + unknown], and only a range wholly inside (pass) or
-        // wholly outside (fail) the bound is a verdict — otherwise `exactly: 0` could pass on a rewritten label.
+        // A label a redaction policy rewrote (a replayed cassette, a scrubbed verify-run) hides its bytes, so whether
+        // it matches is UNKNOWN either way — a regex like `.` or `[^/]` can match the token's own text, so no
+        // substitution makes a hit trustworthy. Each count is a range [n, n + unknown], and only a range wholly inside
+        // (pass) or wholly outside (fail) the bound is a verdict.
         const counted = pool.map((g) => {
           let n = 0;
           let unknown = 0;
           for (const o of g.options) {
-            if (re!.test(o.label.replace(REDACTION_TOKEN_RE, "\u0000"))) n++;
-            else if (hasRedactionToken(o.label)) unknown++;
+            if (hasRedactionToken(o.label)) unknown++;
+            else if (re!.test(o.label)) n++;
           }
           return { g, n, unknown };
         });
@@ -3391,10 +3402,17 @@ function check(
                   .map(shown)
                   .join("; ")}`,
               )
-            : unsure.length > 0
+            : unsure.length > 0 || unsureSelected > 0
               ? fail(
-                  `evidence unavailable: question_option_count: ${unsure.length} sub-question(s) carry option labels rewritten by a redaction policy, so the count cannot be decided: ${unsure
-                    .map(shown)
+                  `evidence unavailable: question_option_count: ${[
+                    unsure.length
+                      ? `${unsure.length} sub-question(s) carry option labels rewritten by a redaction policy, so the count cannot be decided: ${unsure.map(shown).join("; ")}`
+                      : "",
+                    unsureSelected
+                      ? `${unsureSelected} sub-question(s) carry question text rewritten by a redaction policy, so whether \`when_question\` selects them cannot be decided`
+                      : "",
+                  ]
+                    .filter(Boolean)
                     .join("; ")}`,
                 )
               : ok(

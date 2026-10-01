@@ -120,6 +120,10 @@ describe("question_option_count: never vacuous", () => {
     expect(msg(run({ matches: "x", when_question: "(", exactly: 1 }, ctx({ gateOptions: GATES })))).toMatch(/bad regex "\("/);
   });
 
+  it("reports a bad bound before missing evidence, so the message does not depend on the lane", () => {
+    expect(msg(run({ matches: "x" }, ctx({ gateOptions: undefined })))).toMatch(/checks nothing/);
+  });
+
   it("repeats the bound check for a hand-built context that skipped parse", () => {
     expect(msg(run({ matches: "x" }, ctx({ gateOptions: GATES })))).toMatch(/checks nothing/);
     expect(msg(run({ matches: "x", exactly: 1, min: 1 }, ctx({ gateOptions: GATES })))).toMatch(/not both/);
@@ -151,6 +155,31 @@ describe("question_option_count: redaction-rewritten labels", () => {
   it("a regex never hits a token's own text", () => {
     const g = [gate("Pick", [TOKEN])];
     expect(msg(run({ matches: "REDACTED", min: 1 }, ctx({ gateOptions: g })))).toMatch(/^evidence unavailable/);
+  });
+
+  // No substitution makes a hit on a rewritten label trustworthy: `.`, `[^/]` and a negative lookahead all match a
+  // token's own text. Each of these was a definite (wrong) verdict when a hit was judged on a sentinel.
+  it.each([
+    ["^Keep [^/]", { exactly: 1 }, [`Keep ${TOKEN}`, "Other"]],
+    ["^Write to .$", { exactly: 0 }, [`Write to ${TOKEN}`]],
+    ["^(?!.*/Users)", { exactly: 1 }, [`Save to ${TOKEN}`, "Skip"]],
+  ])("/%s/ over a rewritten label is evidence-unavailable, never a verdict", (matches, bound, labels) => {
+    const r = run({ matches, ...bound }, ctx({ gateOptions: [gate("Pick", labels as string[])] }));
+    expect(r.pass).toBe(false);
+    expect(msg(r)).toMatch(/^evidence unavailable: .*redaction/);
+  });
+
+  it("a when_question that cannot see a rewritten question blocks a pass, never a fail the others earned", () => {
+    const g = [gate(`Save ${TOKEN}?`, ["keep a", "keep b"]), gate("Save /Users/b?", ["keep a"])];
+    const r = run({ when_question: "/Users/", matches: "^keep", exactly: 1 }, ctx({ gateOptions: g }));
+    expect(msg(r)).toMatch(/^evidence unavailable: .*question text rewritten/);
+    // A definite violation among the identifiable ones still fails as a violation.
+    const bad = [gate(`Save ${TOKEN}?`, ["keep a"]), gate("Save /Users/b?", ["keep a", "keep b"])];
+    expect(msg(run({ when_question: "/Users/", matches: "^keep", exactly: 1 }, ctx({ gateOptions: bad })))).toMatch(/did not/);
+    // Only rewritten questions: nothing identifiable, evidence-unavailable rather than "no question was asked".
+    expect(
+      msg(run({ when_question: "/Users/", matches: "^keep", exactly: 1 }, ctx({ gateOptions: [gate(`Save ${TOKEN}?`, ["keep"])] }))),
+    ).toMatch(/^evidence unavailable: .*no sub-question/);
   });
 
   it("a frozen regex the policy rewrote is evidence-unavailable", () => {
