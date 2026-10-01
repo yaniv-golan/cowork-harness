@@ -103,6 +103,14 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     expect(existsSync(join(cwd, ".claude"))).toBe(false);
   });
 
+  it("the note fires even when the default flow exists, and names the default path to copy", () => {
+    setup();
+    mkdirSync(join(cwd, ".claude", "hillclimb", "flow"), { recursive: true });
+    const r = run();
+    expect(r.stderr).toContain("--flow .claude/hillclimb/flow");
+    expect(existsSync(join(cwd, ".claude", "hillclimb", "flow", "metrics.md"))).toBe(false);
+  });
+
   it("--flow writes metrics.md beside the skeleton and says so", () => {
     setup();
     const r = run("--flow", "flow");

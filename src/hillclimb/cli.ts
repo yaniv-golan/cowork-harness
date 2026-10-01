@@ -206,7 +206,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
           `save this as ${flow}/_state.json; on a re-run, merge by adding NEW metrics entries only (the loop owns the rest).` +
             (md
               ? ""
-              : " The metrics legend (metrics.md) was not written: pass --flow DIR to write it, or read metrics_md under --output-format json."),
+              : ` The metrics legend (metrics.md) was not written: pass --flow ${HILLCLIMB_RUN_DEFAULTS.flow} (or your flow dir) to write it, or read metrics_md under --output-format json.`),
           secrets,
         );
       }
