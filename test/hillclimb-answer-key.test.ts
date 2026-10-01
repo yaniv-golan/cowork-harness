@@ -25,9 +25,17 @@ describe("pathsInsideMounts (what the agent under test could read)", () => {
     mkdirSync(join(tmp, "mount"));
     expect(pathsInsideMounts([join(tmp, "mount")], [join(tmp, "mount")])).toHaveLength(1);
   });
-  it("a mount nested INSIDE the path does not expose the path", () => {
-    mkdirSync(join(tmp, "refs", "mnt"), { recursive: true });
-    expect(pathsInsideMounts([join(tmp, "refs")], [join(tmp, "refs", "mnt")])).toEqual([]);
+  it("a mount nested INSIDE a protected path exposes that part of it (fail closed both ways)", () => {
+    mkdirSync(join(tmp, "refs", "case_1"), { recursive: true });
+    expect(pathsInsideMounts([join(tmp, "refs")], [join(tmp, "refs", "case_1")])).toEqual([
+      { path: join(tmp, "refs"), mount: join(tmp, "refs", "case_1") },
+    ]);
+  });
+
+  it("a dangling symlink on the path fails closed (it cannot be proven outside every mount)", () => {
+    mkdirSync(join(tmp, "mnt"));
+    symlinkSync(join(tmp, "mnt", "notyet"), join(tmp, "dangling"));
+    expect(pathsInsideMounts([join(tmp, "dangling", "store")], [join(tmp, "mnt")])).toHaveLength(1);
   });
   it("a path that does not exist yet is judged by its nearest existing ancestor", () => {
     mkdirSync(join(tmp, "mount"));

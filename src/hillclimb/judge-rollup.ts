@@ -17,8 +17,9 @@ export interface JudgedAssert {
 export interface JudgeRollup {
   judge_model?: string;
   judge_usage?: TokenUsage;
-  /** Present only when more than one judge model graded the run. */
-  judge_models?: Record<string, TokenUsage>;
+  /** Present only when more than one judge model graded the run: every model, `null` for one that reported no
+   *  tokens. Usage from an assert with no recorded model appears only in `judge_usage`. */
+  judge_models?: Record<string, TokenUsage | null>;
 }
 
 /** Combine the judge provenance of every judged assert in one run. No judged assert ⇒ `{}`: both keys absent,
@@ -28,7 +29,8 @@ export interface JudgeRollup {
  *  `input_tokens` alone can be tiny); a tie goes to the lexicographically first id, so the result never depends on
  *  assert order. `"unknown"` (a transport that reported no model) is never named while a real model is present,
  *  and alone it names none. `judge_models` — present only with more than one model — belongs under the row's
- *  `meta`; the caller places it there. */
+ *  `meta`; the caller places it there. Usage from an assert with no recorded model is in `judge_usage` only, so the
+ *  breakdown can sum to less than the total. */
 export function combineJudges(asserts: readonly JudgedAssert[]): JudgeRollup {
   const byModel = new Map<string, TokenUsage | undefined>();
   let total: TokenUsage | undefined;
@@ -48,11 +50,8 @@ export function combineJudges(asserts: readonly JudgedAssert[]): JudgeRollup {
     out.judge_model = named.reduce((best, m) => (input(m) > input(best) ? m : best));
   }
   if (byModel.size > 1) {
-    const breakdown: Record<string, TokenUsage> = {};
-    for (const m of [...byModel.keys()].sort()) {
-      const usage = byModel.get(m);
-      if (usage !== undefined) breakdown[m] = usage;
-    }
+    const breakdown: Record<string, TokenUsage | null> = {};
+    for (const m of [...byModel.keys()].sort()) breakdown[m] = byModel.get(m) ?? null;
     out.judge_models = breakdown;
   }
   return out;

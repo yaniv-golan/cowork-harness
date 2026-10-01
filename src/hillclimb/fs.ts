@@ -12,7 +12,8 @@
 //   - refuses a regular file with a second hard link (O_NOFOLLOW and lstat cannot see one);
 //   - is bound to the root's native realpath, captured once, so an intermediate directory swapped for a link is
 //     refused when the check sees it.
-// Every such refusal is an `FsRefusal` (callers map it to exit 2); a missing file stays a raw ENOENT.
+// Every such refusal is an `FsRefusal` (callers map it to exit 2); a missing file stays a raw ENOENT, and an
+// existing one under `createFile` a raw EEXIST.
 // Residual, as in the scaffold: the check and the open are separate lookups (Node's sync fs has no openat), so a
 // directory swapped in between is still followed.
 //
@@ -23,6 +24,7 @@
 import {
   closeSync,
   constants as FS,
+  linkSync,
   fstatSync,
   ftruncateSync,
   lstatSync,
@@ -33,6 +35,7 @@ import {
   readSync,
   realpathSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
   type Dirent,
   type Stats,
@@ -68,14 +71,25 @@ export const isSymlink = (p: string): boolean => lstatOrNull(p)?.isSymbolicLink(
  *  follows) it. */
 export const lexists = (p: string): boolean => lstatOrNull(p) !== null;
 
-const hasDotSegment = (p: string): boolean => p.split("/").some((seg) => seg === "." || seg === "..");
+/** Why a METHOD path is unusable, or undefined. Method paths are built by the caller from `root.root`, so they
+ *  must be absolute, and must carry no `.`/`..` segment and no trailing separator: `lstat("link/")` and
+ *  `lstat("link/.")` both follow the final link, which blinds every leaf check, and the kernel resolves `link/..` to
+ *  the parent of the link's TARGET. */
+function badMethodPath(p: string): string | undefined {
+  if (!isAbsolute(p)) return "a method path must be absolute (build it from root.root)";
+  if (p.length > 1 && p.endsWith("/")) return "trailing '/'";
+  if (p.split("/").some((seg) => seg === "." || seg === "..")) return "'.' or '..' segment";
+  return undefined;
+}
 
-/** Strip trailing separators (`lstat("link/")` follows the final link, which would blind every leaf check) and
- *  refuse `.`/`..` segments (they make the leaf check resolve a different component than the named one). */
+/** Normalize a ROOT argument (a user-typed `--flow`/store path): strip trailing separators and `.` segments (`./flow`
+ *  is a common spelling; a lexical `.` names the same entry), refuse `..` segments. */
 export function normalizeRootArg(arg: string): string {
-  const stripped = arg.replace(/(.)\/+$/, "$1");
-  if (hasDotSegment(stripped)) throw new FsRefusal(`refusing: ${JSON.stringify(arg)} must not contain '.' or '..' segments`);
-  return stripped;
+  const parts = arg.split("/");
+  if (parts.some((seg) => seg === "..")) throw new FsRefusal(`refusing: ${JSON.stringify(arg)} must not contain '..' segments`);
+  const kept = parts.filter((seg, i) => seg !== "." && (seg !== "" || i === 0));
+  const out = kept.join("/");
+  return out === "" ? (arg.startsWith("/") ? "/" : ".") : out;
 }
 
 /** Before any spend: refuse a symlink at the root or at any listed path, and — for a RELATIVE root — at every
@@ -99,7 +113,13 @@ export function preflightRoot(rootArg: string, paths: readonly string[], cwd: st
 function asRefusal(e: unknown, p: string): unknown {
   const code = (e as NodeJS.ErrnoException)?.code;
   if (code === "ELOOP" || code === "EMLINK" || code === "EFTYPE") return new FsRefusal(`refusing to open through symlink: ${p}`);
-  if (code === "EISDIR" || code === "ENXIO") return new FsRefusal(`refusing to use non-regular file: ${p}`);
+  if (code === "EISDIR" || code === "ENXIO" || code === "EOPNOTSUPP" || code === "ENOTSUP" || code === "ENOTDIR")
+    return new FsRefusal(`refusing to use non-regular file: ${p}`);
+  // A socket's open fails with an errno libuv may not name; decide from what is actually there.
+  if (code !== "ENOENT" && code !== "EEXIST" && code !== "EACCES") {
+    const st = lstatOrNull(p);
+    if (st !== null && !st.isFile()) return new FsRefusal(`refusing to use non-regular file: ${p}`);
+  }
   return e;
 }
 
@@ -137,9 +157,10 @@ export class NoFollowRoot {
       throw new FsRefusal(`refusing to ${what}: ${dir} resolves outside ${this.root}`);
   }
 
-  /** The shared path checks: no dot segment, no symlinked parent, parent inside the root. */
+  /** The shared path checks: absolute, no dot segment, no trailing slash, no symlinked parent, parent inside the root. */
   private checkPath(p: string, what: string): void {
-    if (hasDotSegment(p)) throw new FsRefusal(`refusing to ${what} ${JSON.stringify(p)}: '.' or '..' segment`);
+    const bad = badMethodPath(p);
+    if (bad !== undefined) throw new FsRefusal(`refusing to ${what} ${JSON.stringify(p)}: ${bad}`);
     const dir = dirname(p);
     if (isSymlink(dir)) throw new FsRefusal(`refusing to ${what} through symlinked directory: ${dir}`);
     this.assertIn(dir, what);
@@ -222,6 +243,7 @@ export class NoFollowRoot {
    *  merge two rows into one permanently unparseable line, so a missing trailing newline is added first
    *  (runner-scaffold.mjs l.452-455, checked per append rather than once per run). */
   appendJsonl(p: string, value: unknown): void {
+    if (typeof JSON.stringify(value) !== "string") throw new TypeError(`appendJsonl: ${String(value)} has no JSON encoding`);
     const fd = this.openNoFollow(p, FS.O_RDWR | FS.O_CREAT | FS.O_APPEND);
     try {
       const size = fstatSync(fd).size;
@@ -231,7 +253,9 @@ export class NoFollowRoot {
         readSync(fd, last, 0, 1, size - 1);
         torn = last[0] !== 0x0a;
       }
-      writeFileSync(fd, `${torn ? "\n" : ""}${JSON.stringify(value)}\n`);
+      const line = JSON.stringify(value);
+      if (typeof line !== "string") throw new TypeError(`appendJsonl: ${String(value)} has no JSON encoding`);
+      writeFileSync(fd, `${torn ? "\n" : ""}${line}\n`);
     } finally {
       closeSync(fd);
     }
@@ -240,8 +264,11 @@ export class NoFollowRoot {
   /** `mkdir -p` one component at a time from the root, refusing a symlink at any component — so, unlike a
    *  recursive mkdir, nothing is ever created outside the root. */
   mkdir(dir: string): void {
-    if (hasDotSegment(dir)) throw new FsRefusal(`refusing to create directory ${JSON.stringify(dir)}: '.' or '..' segment`);
-    const rel = relative(this.root, resolve(dir));
+    const bad = badMethodPath(dir);
+    if (bad !== undefined) throw new FsRefusal(`refusing to create directory ${JSON.stringify(dir)}: ${bad}`);
+    // Lexical against the bound root: a path spelled through a different alias of the root (/tmp vs /private/tmp on
+    // macOS) is refused rather than resolved — fail closed.
+    const rel = relative(this.root, dir);
     if (rel === ".." || rel.startsWith("../") || isAbsolute(rel))
       throw new FsRefusal(`refusing to create directory: ${dir} is outside ${this.root}`);
     let cur = this.root;
@@ -258,28 +285,45 @@ export class NoFollowRoot {
   /** List a directory's entries WITHOUT following them: a symlinked entry is reported as a link. Refuses a
    *  symlinked or out-of-root directory. */
   readdirNoFollow(dir: string): Dirent[] {
-    if (hasDotSegment(dir)) throw new FsRefusal(`refusing to list ${JSON.stringify(dir)}: '.' or '..' segment`);
+    const bad = badMethodPath(dir);
+    if (bad !== undefined) throw new FsRefusal(`refusing to list ${JSON.stringify(dir)}: ${bad}`);
     const st = lstatOrNull(dir);
     if (st?.isSymbolicLink()) throw new FsRefusal(`refusing to list symlinked directory: ${dir}`);
+    if (st !== null && !st.isDirectory()) throw new FsRefusal(`refusing to list ${dir}: not a directory`);
     this.assertIn(dir, "list");
     return readdirSync(dir, { withFileTypes: true });
   }
 
-  /** Atomic rename inside the root. The source must not be a link. `replace: false` returns `exists` when ANY
-   *  entry (a planted link included) is at the destination, and moves nothing; `replace: true` replaces only a
-   *  plain regular file with a single link — a link, a hard-linked file or a directory there is refused. */
+  /** Atomic rename inside the root. The source must not be a link.
+   *  - `replace: false` returns `exists` when any entry (a planted link included) is at the destination, and moves
+   *    nothing. For a regular-file source this is atomic (`link` then `unlink`: the kernel refuses an existing name).
+   *    For a DIRECTORY source it is checked, then renamed: an entry that appears in between is caught only when it is
+   *    a non-empty directory (EEXIST/ENOTEMPTY); a file or EMPTY directory planted in that window is replaced.
+   *  - `replace: true` needs a regular-file source and replaces only a plain regular file with a single link — a
+   *    link, a hard-linked file or a directory there is refused. */
   renameNoFollow(from: string, to: string, opts: { replace: boolean }): "renamed" | "exists" {
     this.checkPath(from, "rename from");
     this.checkPath(to, "rename to");
     const src = lstatOrNull(from);
     if (src === null) throw Object.assign(new Error(`ENOENT: no such file or directory, rename '${from}'`), { code: "ENOENT" });
     if (src.isSymbolicLink()) throw new FsRefusal(`refusing to rename a symlink: ${from}`);
+    if (opts.replace && !src.isFile()) throw new FsRefusal(`refusing to replace with a non-regular file: ${from}`);
     const dst = lstatOrNull(to);
     if (dst !== null) {
       if (!opts.replace) return "exists";
       if (dst.isSymbolicLink()) throw new FsRefusal(`refusing to replace a symlink: ${to}`);
       if (!dst.isFile()) throw new FsRefusal(`refusing to replace a non-regular file: ${to}`);
       if (dst.nlink > 1) throw new FsRefusal(`refusing to replace ${to}: it has a second hard link`);
+    }
+    if (!opts.replace && src.isFile()) {
+      try {
+        linkSync(from, to);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === "EEXIST") return "exists";
+        throw e;
+      }
+      unlinkSync(from);
+      return "renamed";
     }
     try {
       renameSync(from, to);

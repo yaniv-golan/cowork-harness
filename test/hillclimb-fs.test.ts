@@ -16,7 +16,7 @@ describe("normalizeRootArg", () => {
     expect(normalizeRootArg("a/b///")).toBe("a/b");
     expect(normalizeRootArg("/")).toBe("/");
   });
-  it.each(["a/./b", "a/../b", "a/b/.", ".."])("refuses a dot segment: %s", (p) => {
+  it.each(["a/../b", "..", "a/b/.."])("refuses a '..' segment: %s", (p) => {
     expect(() => normalizeRootArg(p)).toThrow(FsRefusal);
   });
 });
@@ -55,8 +55,8 @@ describe("NoFollowRoot", () => {
     const r = NoFollowRoot.open(join(tmp, "flow"));
     writeFileSync(join(tmp, "secret"), "SECRET");
     symlinkSync(join(tmp, "secret"), join(tmp, "flow", "ref.txt"));
-    expect(() => r.readFile(join(tmp, "flow", "ref.txt"))).toThrow();
-    expect(() => r.readIfPresent(join(tmp, "flow", "ref.txt"))).toThrow();
+    expect(() => r.readFile(join(tmp, "flow", "ref.txt"))).toThrow(FsRefusal);
+    expect(() => r.readIfPresent(join(tmp, "flow", "ref.txt"))).toThrow(FsRefusal);
     expect(r.readIfPresent(join(tmp, "flow", "absent.txt"))).toBeNull();
     expect(lexists(join(tmp, "flow", "ref.txt"))).toBe(true);
     expect(isSymlink(join(tmp, "flow", "ref.txt"))).toBe(true);
@@ -66,8 +66,8 @@ describe("NoFollowRoot", () => {
     const r = NoFollowRoot.open(join(tmp, "flow"));
     writeFileSync(join(tmp, "victim"), "ORIGINAL");
     symlinkSync(join(tmp, "victim"), join(tmp, "flow", "results.jsonl"));
-    expect(() => r.writeFile(join(tmp, "flow", "results.jsonl"), "x")).toThrow();
-    expect(() => r.appendFile(join(tmp, "flow", "results.jsonl"), "x")).toThrow();
+    expect(() => r.writeFile(join(tmp, "flow", "results.jsonl"), "x")).toThrow(FsRefusal);
+    expect(() => r.appendFile(join(tmp, "flow", "results.jsonl"), "x")).toThrow(FsRefusal);
     expect(readFileSync(join(tmp, "victim"), "utf8")).toBe("ORIGINAL");
   });
 
@@ -84,8 +84,8 @@ describe("NoFollowRoot", () => {
     const r = NoFollowRoot.open(join(tmp, "flow"));
     mkdirSync(join(tmp, "outside"));
     symlinkSync(join(tmp, "outside"), join(tmp, "flow", "v1"));
-    expect(() => r.writeFile(join(tmp, "flow", "v1", "results.jsonl"), "x")).toThrow();
-    expect(() => r.mkdir(join(tmp, "flow", "v1", "traces"))).toThrow();
+    expect(() => r.writeFile(join(tmp, "flow", "v1", "results.jsonl"), "x")).toThrow(FsRefusal);
+    expect(() => r.mkdir(join(tmp, "flow", "v1", "traces"))).toThrow(FsRefusal);
     expect(lexists(join(tmp, "outside", "results.jsonl"))).toBe(false);
   });
 
@@ -96,7 +96,7 @@ describe("NoFollowRoot", () => {
     expect(r.readFile(join(tmp, "flow", "a.txt"))).toBe("one");
     writeFileSync(join(tmp, "victim"), "V");
     symlinkSync(join(tmp, "victim"), join(tmp, "flow", "l.txt"));
-    expect(() => r.createFile(join(tmp, "flow", "l.txt"), "x")).toThrow();
+    expect(() => r.createFile(join(tmp, "flow", "l.txt"), "x")).toThrow(/EEXIST/);
     expect(readFileSync(join(tmp, "victim"), "utf8")).toBe("V");
   });
 
@@ -284,5 +284,77 @@ describe("readdirNoFollow", () => {
     symlinkSync(join(tmp, "outside"), join(tmp, "flow", "v1"));
     expect(() => r.readdirNoFollow(join(tmp, "flow", "v1"))).toThrow(FsRefusal);
     expect(() => r.readdirNoFollow(join(tmp, "outside"))).toThrow(/outside/);
+  });
+});
+
+describe("final-review fixes", () => {
+  it("a trailing slash never makes lstat follow a link: rename, readdir, read and mkdir refuse it", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    mkdirSync(join(tmp, "outdir"));
+    writeFileSync(join(tmp, "outdir", "f"), "F");
+    symlinkSync(join(tmp, "outdir"), join(tmp, "flow", "dl"));
+    expect(() => r.renameNoFollow(`${tmp}/flow/dl/`, join(tmp, "flow", "moved"), { replace: false })).toThrow(FsRefusal);
+    expect(lexists(join(tmp, "outdir", "f"))).toBe(true);
+    expect(lexists(join(tmp, "flow", "moved"))).toBe(false);
+    r.mkdir(join(tmp, "flow", "real"));
+    symlinkSync(join(tmp, "flow", "real"), join(tmp, "flow", "alias"));
+    expect(() => r.readdirNoFollow(`${tmp}/flow/alias/`)).toThrow(FsRefusal);
+    expect(() => r.readFile(`${tmp}/flow/alias/`)).toThrow(FsRefusal);
+    expect(() => r.mkdir(`${tmp}/flow/alias/`)).toThrow(FsRefusal);
+  });
+
+  it("a './' prefix on a ROOT argument is accepted; '..' still is not", () => {
+    expect(normalizeRootArg("./flow")).toBe("flow");
+    expect(normalizeRootArg("a/./b/")).toBe("a/b");
+    expect(() => normalizeRootArg("a/../b")).toThrow(FsRefusal);
+    expect(() => NoFollowRoot.open("./flow", { cwd: tmp })).not.toThrow();
+  });
+
+  it("method paths must be absolute (built from root.root), never resolved against the process cwd", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    expect(() => r.readFile("flow/x")).toThrow(/absolute/);
+    expect(() => r.mkdir("flow/x")).toThrow(/absolute/);
+  });
+
+  it("no-replace rename of a FILE is atomic: an existing destination is never overwritten", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.writeFile(join(tmp, "flow", "src"), "S");
+    r.writeFile(join(tmp, "flow", "dst"), "D");
+    expect(r.renameNoFollow(join(tmp, "flow", "src"), join(tmp, "flow", "dst"), { replace: false })).toBe("exists");
+    expect(r.readFile(join(tmp, "flow", "dst"))).toBe("D");
+    expect(r.renameNoFollow(join(tmp, "flow", "src"), join(tmp, "flow", "dst2"), { replace: false })).toBe("renamed");
+    expect(r.readFile(join(tmp, "flow", "dst2"))).toBe("S");
+    expect(lexists(join(tmp, "flow", "src"))).toBe(false);
+  });
+
+  it("replace: true requires a regular-file source", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    r.mkdir(join(tmp, "flow", "d"));
+    r.writeFile(join(tmp, "flow", "f"), "F");
+    expect(() => r.renameNoFollow(join(tmp, "flow", "d"), join(tmp, "flow", "f"), { replace: true })).toThrow(FsRefusal);
+  });
+
+  it("a planted socket, a file where a directory is expected, and a FIFO listed as a dir are all FsRefusal", async () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    const net = await import("node:net");
+    const srv = net.createServer();
+    await new Promise<void>((res) => srv.listen(join(tmp, "flow", "sock"), res));
+    try {
+      expect(() => r.readFile(join(tmp, "flow", "sock"))).toThrow(FsRefusal);
+      expect(() => r.writeFile(join(tmp, "flow", "sock"), "x")).toThrow(FsRefusal);
+      expect(() => r.appendJsonl(join(tmp, "flow", "sock"), {})).toThrow(FsRefusal);
+    } finally {
+      srv.close();
+    }
+    r.writeFile(join(tmp, "flow", "afile"), "x");
+    expect(() => r.readFile(join(tmp, "flow", "afile", "x"))).toThrow(FsRefusal);
+    execFileSync("mkfifo", [join(tmp, "flow", "fifo")]);
+    expect(() => r.readdirNoFollow(join(tmp, "flow", "fifo"))).toThrow(FsRefusal);
+  });
+
+  it("appendJsonl refuses a value JSON cannot encode as a row", () => {
+    const r = NoFollowRoot.open(join(tmp, "flow"));
+    expect(() => r.appendJsonl(join(tmp, "flow", "results.jsonl"), undefined)).toThrow(TypeError);
+    expect(lexists(join(tmp, "flow", "results.jsonl"))).toBe(false);
   });
 });

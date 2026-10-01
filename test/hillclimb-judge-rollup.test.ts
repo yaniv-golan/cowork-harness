@@ -81,3 +81,11 @@ describe("review fixes", () => {
     expect(Object.keys(only).sort()).toEqual(["judge_usage"]);
   });
 });
+
+describe("judge_models breakdown", () => {
+  it("lists every named model, null for one that reported no tokens, and only when >1 model graded", () => {
+    const r = combineJudges([{ judgeModel: "a" }, { judgeModel: "b", judgeUsage: u(3) }]);
+    expect(r.judge_models).toEqual({ a: null, b: u(3) });
+    expect(combineJudges([{ judgeModel: "a", judgeUsage: u(1) }]).judge_models).toBeUndefined();
+  });
+});
