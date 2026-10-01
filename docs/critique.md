@@ -521,6 +521,20 @@ Beyond stdout, every critique leaves durable artifacts at the run-dir root (best
 | `critique-evidence-package.txt` | when the evaluator ran | the **armored** corpus the evaluator actually graded against — re-grade a disputed finding offline against the exact record |
 | `critique-salvage.json` | exit 2 only | the self-report + each evaluator pass's RAW reply (captured **pre-parse**), so salvage is a file read, not console scraping |
 
+These files, and the `--out` file, are secret-scrubbed like the run's own `result.json`: every value in
+`COWORK_HARNESS_SCRUB_VALUES`, the env vars named in `COWORK_HARNESS_SCRUB_KEYS` and the known auth tokens
+is written as `[REDACTED]` ([docs/cli.md](./cli.md#secret-scrubbing-and-cassette-redaction)). The text
+files are scrubbed as text. The JSON files are scrubbed **by value**, so they parse whatever the scrub set,
+and these fields are kept as written because they are join keys or closed enums: `sessionId`, `outDir`,
+`skillFolder`, `skillDir`, `gradedSkill`, `gradedSkillHash`, `findingFingerprint`, the model ids
+(`gradedModels`, `evaluatorModel`, `requestedModel`) and the enum fields (`fidelity`, `classification`,
+`source`, `taskResult`, …). Two consequences:
+
+- `findingFingerprint` is computed over the unscrubbed text, so it still clusters a finding across runs,
+  but it can't be recomputed from a report whose `idea`/`recommendedAction` was scrubbed.
+- An item's `evidence` excerpt stays a substring of `critique-evidence-package.txt`, except where the
+  excerpt starts or ends partway through a scrubbed value.
+
 These artifacts (and the report's JSON shape) are part of critique's **EXPERIMENTAL** surface — useful
 and stable in practice, but not yet a frozen SPEC §12 covered surface; field additions are expected.
 The report's field names and shapes are authoritatively described by

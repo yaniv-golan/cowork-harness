@@ -45,6 +45,7 @@ import { decideLoopFromBaseline } from "../loop-decision.js";
 import { parseDotenv } from "../dotenv.js";
 import { unresolvedModelRefusal, envModelDefault } from "../run/model-provenance.js";
 import type { CritiqueItem } from "./evidence.js";
+import { critiqueFileText, scrubCritiqueJson, type CritiqueFileContent } from "./scrub-artifacts.js";
 
 const REFLECTION_PROMPT_VERSION = 2;
 
@@ -1881,10 +1882,12 @@ export function writeGradedAliases(outDir: string): void {
 }
 
 /** Best-effort write of one critique run-dir artifact. Warns on stderr rather than failing the
- *  critique — these are durable convenience copies; stdout remains the authoritative report. */
-function writeRunArtifact(outDir: string, name: string, content: string): void {
+ *  critique — these are durable convenience copies; stdout remains the authoritative report.
+ *  Secret-scrubbed like the run's result.json (see `scrub-artifacts.ts`): the content is typed, so a JSON
+ *  file is scrubbed by value and a caller cannot hand this an unscrubbed string. */
+function writeRunArtifact(outDir: string, name: string, content: CritiqueFileContent): void {
   try {
-    writeFileSync(join(outDir, name), content);
+    writeFileSync(join(outDir, name), critiqueFileText(content));
   } catch (e) {
     process.stderr.write(`critique: could not write ${name} under ${tildeify(outDir)}: ${String(e)}\n`);
   }
@@ -1903,35 +1906,31 @@ export function persistCritiqueArtifacts(
   evidenceText: string | undefined,
   salvage: { selfReport?: string; rawEvaluatorReplies: Array<{ pass: 1 | 2; raw: string }> },
 ): void {
-  writeRunArtifact(outDir, "critique-report.json", JSON.stringify(buildJsonReport(state), null, 2) + "\n");
-  if (evidenceText !== undefined) writeRunArtifact(outDir, "critique-evidence-package.txt", evidenceText);
+  writeRunArtifact(outDir, "critique-report.json", { json: buildJsonReport(state), indent: 2 });
+  if (evidenceText !== undefined) writeRunArtifact(outDir, "critique-evidence-package.txt", { text: evidenceText });
   if (state.infraFailure || state.evaluatorError)
-    writeRunArtifact(
-      outDir,
-      "critique-salvage.json",
-      JSON.stringify(
-        {
-          infraFailure: state.infraFailure,
-          // The phase and kind ride WITH the reason here too. A salvage consumer reading the top-level
-          // `infraFailure` and nothing else would otherwise get the bare reason — the same wrong-subsystem
-          // reading the report header was fixed for.
-          infraFailurePhase: state.infraFailurePhase,
-          infraFailureKind: state.infraFailureKind,
-          evaluatorError: state.evaluatorError,
-          selfReport: salvage.selfReport,
-          rawEvaluatorReplies: salvage.rawEvaluatorReplies,
-          reportState: buildJsonReport(state),
-        },
-        null,
-        2,
-      ) + "\n",
-    );
+    writeRunArtifact(outDir, "critique-salvage.json", {
+      json: {
+        infraFailure: state.infraFailure,
+        // The phase and kind ride WITH the reason here too. A salvage consumer reading the top-level
+        // `infraFailure` and nothing else would otherwise get the bare reason — the same wrong-subsystem
+        // reading the report header was fixed for.
+        infraFailurePhase: state.infraFailurePhase,
+        infraFailureKind: state.infraFailureKind,
+        evaluatorError: state.evaluatorError,
+        selfReport: salvage.selfReport,
+        rawEvaluatorReplies: salvage.rawEvaluatorReplies,
+        reportState: buildJsonReport(state),
+      },
+      indent: 2,
+    });
 }
 
 /** `--out`: ALSO write the selected-format report to an explicit file. Loud on failure (the user asked
  *  for this file by name) but never changes the exit taxonomy — the stdout report already shipped. */
-function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" | "text"): void {
-  const content = outputFormat === "json" ? JSON.stringify(buildJsonReport(state)) + "\n" : buildTextReport(state) + "\n";
+export function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" | "text"): void {
+  // Secret-scrubbed like the run-dir copies (`critiqueFileText`); the JSON one by value, so it still parses.
+  const content = critiqueFileText(outputFormat === "json" ? { json: buildJsonReport(state) } : { text: buildTextReport(state) + "\n" });
   try {
     writeFileSync(outPath, content);
   } catch (e) {
@@ -2033,23 +2032,27 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
       `[critique] --corpus-only: ${opts.ignoredFlags.length} run-shaping flag(s) validated but not acted on: ${opts.ignoredFlags.join(", ")}\n`,
     );
   let content: string;
+  // The `--out` file's bytes: secret-scrubbed like every other critique file (`scrub-artifacts.ts`) — the
+  // JSON payload by value, before the envelope, so the file still parses whatever the scrub set.
+  let fileContent: string;
   if (opts.outputFormat === "json") {
     // The standard envelope, not the critique REPORT shape: `tool`/`command` are the discriminator (a
     // report carries neither), and the six-field `corpus` object is a documented SUBSET of a report's
     // `evidenceBudget` — same field names, so a consumer reading `evidenceBudget.corpusBytes` off a report
     // reads `corpus.corpusBytes` here with the same code and the same meaning.
-    content =
-      jsonPayloadEnvelope("critique", true, {
-        mode: "corpus-only",
-        // Raw paths by machine-capture contract — the full JSON report keeps `skillFolder` raw too, and a
-        // consumer resolving `~/…` gets `<cwd>/~/…`. `tildeify` is a display formatter for text and stderr.
-        skillFolder: opts.skillFolder,
-        skillDir: resolved.skillDir,
-        skill,
-        corpus,
-        ignoredFlags: opts.ignoredFlags,
-        note,
-      }) + "\n";
+    const payload = {
+      mode: "corpus-only",
+      // Raw paths by machine-capture contract — the full JSON report keeps `skillFolder` raw too, and a
+      // consumer resolving `~/…` gets `<cwd>/~/…`. `tildeify` is a display formatter for text and stderr.
+      skillFolder: opts.skillFolder,
+      skillDir: resolved.skillDir,
+      skill,
+      corpus,
+      ignoredFlags: opts.ignoredFlags,
+      note,
+    };
+    content = jsonPayloadEnvelope("critique", true, payload) + "\n";
+    fileContent = jsonPayloadEnvelope("critique", true, scrubCritiqueJson(payload)) + "\n";
   } else {
     const pct = ((corpus.corpusBytes * 100) / corpus.corpusCeiling).toFixed(1);
     content =
@@ -2062,11 +2065,12 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
         `  packaged: ${corpus.corpusPackaged?.length ?? 0} file(s)`,
         `  ${note}`,
       ].join("\n") + "\n";
+    fileContent = critiqueFileText({ text: content });
   }
   writeAllSync(1, content);
   if (opts.out) {
     try {
-      writeFileSync(opts.out, content);
+      writeFileSync(opts.out, fileContent);
     } catch (e) {
       process.stderr.write(`critique: --out ${tildeify(opts.out)} could not be written: ${String(e)}\n`);
     }

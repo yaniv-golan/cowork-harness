@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`critique`'s own files are secret-scrubbed.** `critique-report.json`, `critique-evidence-package.txt`,
+  `critique-salvage.json` and the `--out` file (including `--corpus-only --out`) were written without the
+  scrub the run's `result.json`, `run.jsonl` and `trace.json` get, so a value those files show as
+  `[REDACTED]` could appear verbatim in the evaluator's replies, the self-report, the findings or the
+  evidence package. JSON files are scrubbed by value, so they still parse with any scrub value, and the
+  join and enum fields (`sessionId`, `outDir`, `gradedSkillHash`, `findingFingerprint`, `classification`, …)
+  are kept as written ([docs/critique.md](./docs/critique.md#run-dir-artifacts)).
+
 ## [4.2.0] — 2026-09-30
 
 Groundwork for skill hillclimbing: `eval` for paired before/after comparisons of a skill edit, plus
