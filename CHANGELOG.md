@@ -65,6 +65,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **An `eval` `report.md` row whose text holds a backslash before a pipe no longer splits the table.**
+  A row's assertion or claim text (and its note) escaped `|` but not `\`, so a claim containing `\|`
+  rendered as `\\|`: the backslash escaped the backslash and the pipe became a live column separator,
+  adding a column to that row. Backslashes are now escaped before pipes. `report.json` is unchanged.
 - **A `semantic_matches` assert whose evidence is unavailable no longer calls the judge.** Every
   evidence-unavailable reason (`scope_matched_nothing`, `in_scope_omitted`, `in_scope_truncated`,
   `evidence_incomplete`, `no_pre_run_manifest`, `authored_evidence_truncated`) depends only on the

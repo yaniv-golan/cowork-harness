@@ -44,6 +44,8 @@ import { tokenCheck, type DoctorCheck, type DoctorProbe } from "../src/run/docto
 import { hostPathTokens } from "../src/run/host-path-tokens.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
+// report.md's row table: row | assertion / claim | A | B | B − A [95% CI] | p | adj. p | label | note.
+const TABLE_COLUMNS = 9;
 const fixture = (name: string): RunResult => JSON.parse(readFileSync(join(FX, `${name}.json`), "utf8")) as RunResult;
 
 // The public csv-metrics example's assertions, verbatim (the fixture `public-scenario-pinned` is a run of it).
@@ -240,6 +242,27 @@ describe("eval: end to end over a fake runner", () => {
     writeEvalReport(out.evalDir);
     expect(readFileSync(join(out.evalDir, "report.md")).equals(md)).toBe(true);
     expect(readFileSync(join(out.evalDir, "report.json")).equals(js)).toBe(true);
+  });
+
+  it("a row whose text holds a backslash before a pipe stays one row of nine cells in report.md", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    // The first rubric claim carries `\|` (a backslash, then a pipe) and a bare `|`. YAML single quotes keep
+    // the backslash literal, so the claim text the report renders is exactly `... a\|b or c|d ...`.
+    const claim = "The document says a\\|b or c|d about the six filler files.";
+    writeFileSync(
+      join(scen, "smoke-semantic-evidence-files.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: write\n${SEM_ASSERTS.replace(
+        "The document reports that six filler files were created under a _work directory.",
+        `'${claim}'`,
+      )}`,
+    );
+    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    const row = md.split("\n").find((l) => l.startsWith("|") && l.toLowerCase().includes("a\\"));
+    expect(row, "the claim row is rendered").toBeDefined();
+    // A GFM column separator is a `|` NOT preceded by an odd run of backslashes; a nine-column row has ten.
+    const separators = [...row!.matchAll(/(?<!\\)(?:\\\\)*\|/g)].length;
+    expect(separators).toBe(TABLE_COLUMNS + 1);
   });
 
   it("a semantic grade refused for unavailable evidence leaves its rows, is counted per arm, and survives `eval report`", async () => {
