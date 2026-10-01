@@ -12,7 +12,7 @@ beforeEach(() => {
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
 describe("checkRefsBeforeSpend", () => {
-  const K = composeKey("c1", false, undefined);
+  const K = composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
   const SRC = { command: "ref freeze", runDir: "~/r", resultSha256: "a".repeat(64) };
   it("passes when every (case, ref, key) resolves with integrity", () => {
     freezeRef(join(tmp, "refs"), "case_1", SRC, { [K]: "D" }, { harnessVersion: "t", composerId: "c1" });
@@ -22,7 +22,7 @@ describe("checkRefsBeforeSpend", () => {
   });
   it("lists every miss with a remedy, before any spend", () => {
     freezeRef(join(tmp, "refs"), "case_1", SRC, { [K]: "D" }, { harnessVersion: "t", composerId: "c1" });
-    const K2 = composeKey("c1", true, undefined);
+    const K2 = composeKey("c1", { includeSubagentText: true, includeForkResults: false, evidenceFiles: undefined });
     const problems = checkRefsBeforeSpend([
       { caseId: "case_2", assertIndex: 0, refName: "refs", store: join(tmp, "refs"), composeKey: K },
       { caseId: "case_1", assertIndex: 1, refName: "refs", store: join(tmp, "refs"), composeKey: K2 },

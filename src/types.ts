@@ -1033,6 +1033,63 @@ export const Assertion = z.strictObject({
     .describe(
       "LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*). The judged document is finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — it excludes every tool_use/tool_result, no sub-agent text (even fork-scoped) unless include_subagent_text is set, and no `Skill` tool result (where a `context: fork` skill's answer arrives) unless include_fork_results is set. A rubric claim about whether a TOOL was called therefore cannot grade true — except that with include_fork_results a `Skill result: <skill>` / `Fork skill result: <skill>` section lets the judge confirm skill <skill> ran; use tool_called/present_files_called/subagent_dispatched for tool claims",
     ),
+  semantic_pairwise: z
+    .strictObject({
+      rubric: z
+        .array(z.string().min(1))
+        .min(1)
+        .optional()
+        .describe(
+          "optional short comparative criteria the judge weighs (concrete, checkable claims); omitted = overall quality for the task",
+        ),
+      refs: z
+        .array(z.string().min(1))
+        .min(1)
+        .refine((r) => r.every((x) => x.trim().length > 0), { message: "refs entries must not be blank" })
+        .refine((r) => new Set(r.map((x) => x.replace(/\/+$/, "").split("/").pop())).size === r.length, {
+          message: "refs entries must have distinct directory names — the name identifies the reference in results",
+        })
+        .optional()
+        .describe(
+          "frozen reference STORES (directories written by `ref freeze`), relative to the scenario file. Each holds one entry per case; " +
+            "the run is judged against every store. In a hillclimb flow the flow's own references replace these",
+        ),
+      pass_if: z
+        .enum(["win", "not_worse", "any"])
+        .optional()
+        .describe(
+          "default not_worse: the assert passes when, against EVERY reference, the run wins (win), wins or ties (not_worse), or was graded at all (any — metric only). both_bad fails win and not_worse",
+        ),
+      order: z
+        .enum(["random", "both"])
+        .optional()
+        .describe(
+          "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a disagreement scores as a tie",
+        ),
+      judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
+      evidence_files: z
+        .array(z.string().min(1))
+        .min(1)
+        .refine((globs) => globs.every((g) => g.trim().length > 0), {
+          message: "evidence_files entries must not be blank — a whitespace-only glob matches no authored path",
+        })
+        .optional()
+        .describe(
+          "scope the run's AUTHORED-FILE evidence exactly as semantic_matches.evidence_files does; the frozen reference must have been composed with the same scope",
+        ),
+      include_subagent_text: z
+        .boolean()
+        .optional()
+        .describe("as semantic_matches.include_subagent_text; part of what the reference must match"),
+      include_fork_results: z
+        .boolean()
+        .optional()
+        .describe("as semantic_matches.include_fork_results; part of what the reference must match"),
+    })
+    .optional()
+    .describe(
+      "LIVE-ONLY: a pinned LLM judge compares this run's judged document with a FROZEN reference (a baseline run's document, written once by `ref freeze` and never regenerated) and answers win, tie, loss or both_bad; skipped-loud on replay. The judged document is the one semantic_matches builds: finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — it excludes every tool_use/tool_result, and no sub-agent text unless include_subagent_text is set; a criterion about whether a TOOL was called cannot be judged from it. A missing or damaged reference is refused before the run spends",
+    ),
 });
 export type Assertion = z.infer<typeof Assertion>;
 
@@ -1780,6 +1837,25 @@ export interface RunResult {
      *  Present only on the live lane, whenever the judge pre-pass ran. On every reason but `graded` the judge
      *  was NOT called — the refusal is decided from the composed evidence first — so such an assert carries
      *  no `semanticClaims`, `judgeModel`, `judgeCostUsd`, `judgeUsage`, `judgePromptHash` or `judgedDoc`. */
+    /** Per-reference outcomes of a `semantic_pairwise` assert, in the order its references were resolved. `status`
+     *  `graded`: the judge compared the run with the frozen reference — `outcome` from the run's side, `value` 1 win
+     *  / 0.5 tie / 0 loss / 0.5 both_bad, `order` which output the judge saw first, `positionFlip` when the two calls
+     *  of `order: both` disagreed (scored as a tie). `neutral`: the reference was frozen from this very run's variant,
+     *  so no judge was called and the value is 0.5. `missing` / `integrity`: the reference could not be read (absent,
+     *  or failing its recorded sha256), and the assert is evidence-unavailable. `rationale` is the judge's reason
+     *  restated from the run's side (untrusted model text). `refDocSha256` is the frozen document's sha256 — constant
+     *  across every run judged against that reference. Live lane only. */
+    pairwise?: Array<{
+      ref: string;
+      status: "graded" | "neutral" | "missing" | "integrity";
+      outcome?: "win" | "tie" | "loss" | "both_bad";
+      value?: number;
+      order?: "candidate_first" | "ref_first" | "both";
+      positionFlip?: boolean;
+      rationale?: string;
+      refDocSha256?: string;
+      why?: string;
+    }>;
     semanticEvidence?: {
       reason:
         | "graded"

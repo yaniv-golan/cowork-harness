@@ -549,6 +549,9 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
     const sm = a && typeof a === "object" ? (a as Record<string, unknown>).semantic_matches : undefined;
     return !!sm && typeof sm === "object" && "include_fork_results" in (sm as object);
   },
+  // `semantic_pairwise` — the key itself: a v13 reader's strict assertion schema rejects it ("re-record", the wrong
+  // remedy); v14 routes the cassette to "too new; upgrade". Live-only, so a v14 replay skips it loudly.
+  (a) => !!a && typeof a === "object" && "semantic_pairwise" in (a as object),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -7558,6 +7561,7 @@ export const TOOL_USE_BLIND_KEYS: (keyof Assertion)[] = [
   "computer_links_resolve",
   "computer_links_resolve_if_present",
   "semantic_matches",
+  "semantic_pairwise",
 ];
 
 /** Keys that match text the MODEL composed, and which therefore red on rewording alone.
@@ -7628,6 +7632,7 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   "no_mcp_error",
   "max_peak_rss_bytes",
   "semantic_matches", // LIVE-ONLY: LLM-judge grade; skipped-loud on replay (the judge is a live model call)
+  "semantic_pairwise", // LIVE-ONLY: the same judged document compared with a frozen reference; a live model call
   // LIVE-ONLY: needs the authored-file set (captured live), which the replay AssertContext has no
   // `authoredFiles` for; a MANIFEST_KEYS classification would evaluate on every manifest-carrying cassette
   // with authoredFiles===undefined → could-not-verify → hard-fail every embedding replay. Replay eval is a

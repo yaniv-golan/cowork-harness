@@ -26,8 +26,7 @@ import {
 } from "./stats.js";
 import { readManifest, type EvalManifest } from "./manifest.js";
 import { readRunsLines, repEvidenceOf, RUNS_FILE, type RunsLine } from "./runs.js";
-import { hostPathTokenOccurrences } from "../run/host-path-tokens.js";
-import { tildeify } from "../io.js";
+import { redactHostPaths } from "../run/host-path-tokens.js";
 
 export const REPORT_JSON = "report.json";
 export const REPORT_MD = "report.md";
@@ -779,23 +778,7 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   return { text: text.replace(REDACTION_PLACEHOLDER, String(redacted)), redacted };
 }
 
-/** Replace each host-path token with its `~` form when it is under $HOME, else `<host-path>`. Deterministic
- *  for a given text and $HOME, so a re-render is byte-identical. */
-export function redactHostPaths(text: string): { text: string; redacted: number } {
-  const tokens = [...new Set(hostPathTokenOccurrences(text).map((o) => o.token))].sort((a, b) => b.length - a.length);
-  let out = text;
-  let redacted = 0;
-  for (const t of tokens) {
-    const home = tildeify(t);
-    const replacement = home !== t ? home : "<host-path>";
-    const parts = out.split(t);
-    if (parts.length > 1) {
-      redacted += parts.length - 1;
-      out = parts.join(replacement);
-    }
-  }
-  return { text: out, redacted };
-}
+export { redactHostPaths } from "../run/host-path-tokens.js";
 
 /** Build, render and write `report.json` + `report.md`. The single path for both the live eval and
  *  `eval report`. */

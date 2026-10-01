@@ -20,17 +20,31 @@ const SRC: RefSource = {
   resultSha256: "a".repeat(64),
   sessionId: "s1",
 };
-const K1 = composeKey("c1", false, undefined);
-const K2 = composeKey("c1", false, ["outputs/report.md"]);
+const K1 = composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+const K2 = composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: ["outputs/report.md"] });
 
 describe("composeKey", () => {
   it("is stable, order-insensitive over evidence_files, and moves with every input", () => {
-    expect(composeKey("c1", false, ["b", "a"])).toBe(composeKey("c1", false, ["a", "b"]));
-    expect(new Set([K1, K2, composeKey("c2", false, undefined), composeKey("c1", true, undefined)]).size).toBe(4);
+    expect(composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: ["b", "a"] })).toBe(
+      composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: ["a", "b"] }),
+    );
+    expect(
+      new Set([
+        K1,
+        K2,
+        composeKey("c2", { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined }),
+        composeKey("c1", { includeSubagentText: true, includeForkResults: false, evidenceFiles: undefined }),
+      ]).size,
+    ).toBe(4);
     expect(K1).toMatch(/^[0-9a-f]{16}$/);
   });
+  it("include_fork_results is part of the key", () => {
+    expect(composeKey("c1", { includeSubagentText: false, includeForkResults: true, evidenceFiles: undefined })).not.toBe(K1);
+  });
   it("does not conflate an absent scope with an empty-string glob", () => {
-    expect(composeKey("c1", false, undefined)).not.toBe(composeKey("c1", false, [""]));
+    expect(composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined })).not.toBe(
+      composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: [""] }),
+    );
   });
 });
 

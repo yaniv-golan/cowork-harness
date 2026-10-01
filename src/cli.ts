@@ -4621,7 +4621,10 @@ function cmdAssert(args: string[]) {
  *  nobody reads. That mirrors how `scenario-docs-sync` already forces a doc row for every new key. */
 export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { title: string; members: T[] }[] {
   const FAMILIES: { title: string; match: (k: string) => boolean }[] = [
-    { title: "Outcome", match: (k) => k === "result" || k === "compaction_occurred" || k === "semantic_matches" },
+    {
+      title: "Outcome",
+      match: (k) => k === "result" || k === "compaction_occurred" || k === "semantic_matches" || k === "semantic_pairwise",
+    },
     { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
     { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
     { title: "Hooks", match: (k) => k.endsWith("hook_blocked") || k.startsWith("hook_event_") },

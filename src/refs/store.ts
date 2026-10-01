@@ -66,12 +66,15 @@ export type ReadRefResult =
 const DOC_RE = /^doc-([0-9a-f]{16})\.(txt|json)$/;
 const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
-/** Which compose options produced a document: composer identity, `include_subagent_text`, and the
- *  `evidence_files` scope (order-insensitive; absent ≠ any list). 16 hex. A composer change therefore surfaces
- *  as a missing document for the new key, never as a silent comparison across composers. */
-export function composeKey(composerId: string, includeSubagentText: boolean, evidenceFiles: readonly string[] | undefined): string {
-  const scope = evidenceFiles === undefined ? null : [...evidenceFiles].sort();
-  return sha256(JSON.stringify([composerId, includeSubagentText, scope])).slice(0, 16);
+/** Which compose options produced a document: composer identity, `include_subagent_text`, `include_fork_results`
+ *  and the `evidence_files` scope (order-insensitive; absent ≠ any list). 16 hex. A composer change therefore
+ *  surfaces as a missing document for the new key, never as a silent comparison across composers. */
+export function composeKey(
+  composerId: string,
+  o: { includeSubagentText: boolean; includeForkResults: boolean; evidenceFiles: readonly string[] | undefined },
+): string {
+  const scope = o.evidenceFiles === undefined ? null : [...o.evidenceFiles].sort();
+  return sha256(JSON.stringify([composerId, o.includeSubagentText, o.includeForkResults, scope])).slice(0, 16);
 }
 
 function assertCaseId(caseId: string): void {

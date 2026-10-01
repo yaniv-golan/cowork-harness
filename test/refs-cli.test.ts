@@ -11,8 +11,8 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
-const K1 = composeKey("c1", false, undefined);
-const K2 = composeKey("c1", false, ["outputs/a.md"]);
+const K1 = composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+const K2 = composeKey("c1", { includeSubagentText: false, includeForkResults: false, evidenceFiles: ["outputs/a.md"] });
 const composed = (over: Partial<ComposedForFreeze> = {}): ComposedForFreeze => ({
   caseId: "case_1",
   source: { command: "ref freeze", runDir: "~/runs/r1", resultSha256: "a".repeat(64), sessionId: "s1" },
