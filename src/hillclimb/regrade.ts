@@ -333,7 +333,7 @@ async function regradeFlowInner(
   // No agent runs here, so no agent model needs resolving (a flow run with --model would otherwise be refused).
   const prep = prepareCases(all, {
     env: deps.env,
-    skipAgentPins: true,
+    noAgentRun: true,
     ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
   });
 

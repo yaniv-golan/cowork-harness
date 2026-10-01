@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
-import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
+import { candidateFirst, type CompleteStructured } from "../src/decide/pairwise-judge.js";
 import { regradeRuns } from "../src/run/regrade.js";
 import { freezeCaseRef } from "../src/hillclimb/freeze-ref.js";
 import { discoverFlowRefs, flowPairwiseOptions } from "../src/hillclimb/pairwise.js";
@@ -122,7 +122,12 @@ async function flowWithV1() {
   });
   expect(frozen.status).toBe("frozen");
   const liveCalls: Array<{ candidateFirst: boolean }> = [];
+  // A run id whose seeded order differs between assert index 0 and 1, so a re-grade that lost the assert's index
+  // in the scenario (judging a filtered list) shows the OTHER order — deterministically, never by a coin flip.
+  let k = 0;
+  while (candidateFirst(`local_seed${k}`, 0, "baseline") === candidateFirst(`local_seed${k}`, 1, "baseline")) k++;
   const v1 = await executeScenario(sc, {
+    runId: `local_seed${k}`,
     pairwise: flowPairwiseOptions("alpha", "v1", discoverFlowRefs(flow)),
     pairwiseComplete: judge(liveCalls),
   });
