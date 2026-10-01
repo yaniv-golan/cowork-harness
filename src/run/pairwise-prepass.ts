@@ -36,6 +36,10 @@ export interface PairwisePrepassOpts {
    *  the set is a metric only: its outcome is recorded with `gate: false`, and one that cannot be compared (missing,
    *  integrity, a judge reply that stayed invalid) degrades that outcome alone instead of the assert. */
   gateRefs?: ReadonlySet<string>;
+  /** Fill mode (a re-grade that only adds comparisons): judge only these references; every other outcome is the
+   *  live run's, from `copyOutcome`, recorded `copied: true` — no judge call, so it cannot move. */
+  onlyRefs?: ReadonlySet<string>;
+  copyOutcome?: (assertIndex: number, ref: string) => Outcome | undefined;
   /** Epoch ms after which no judge call may start. A comparison not started by then is not made, and
    *  `deadlinePassed` is set on the context, so the caller ends the run as a timeout. */
   deadline?: number;
@@ -136,6 +140,13 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
     for (const ref of opts.refsFor(a)) {
       const gate = opts.gateRefs === undefined || opts.gateRefs.has(ref.name);
       const tag = gate ? {} : { gate: false as const };
+      if (opts.onlyRefs && !opts.onlyRefs.has(ref.name)) {
+        const kept = opts.copyOutcome?.(i, ref.name);
+        outcomes.push(
+          kept ? { ...kept, copied: true } : { ref: ref.name, ...tag, status: "missing", why: "the live run recorded no outcome to keep" },
+        );
+        continue;
+      }
       if (opts.neutralRefs?.has(ref.name)) {
         outcomes.push({ ref: ref.name, ...tag, status: "neutral", value: 0.5 });
         continue;

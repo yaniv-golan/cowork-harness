@@ -19,8 +19,12 @@
 import { remeasureMetrics } from "../metrics.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { composeJudgedDocument, evaluate, runSemanticJudges, semanticRefusal, type AssertContext } from "../assert.js";
+import { basename, join, resolve } from "node:path";
+import { claudeCliCompleteStructured, transportIdentity } from "../decide/llm-transport.js";
+import { makePairwiseJudge, type CompleteStructured } from "../decide/pairwise-judge.js";
+import { pairwiseRefsRefusal, scenarioPairwiseSetup, type PairwiseSetup } from "../refs/preflight.js";
+import { runPairwiseJudges, type PairwiseRef } from "./pairwise-prepass.js";
+import { composeJudgedDocument, evaluate, judgedOpts, runSemanticJudges, semanticRefusal, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
 import { isolationRefusal } from "../decide/llm-transport.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
@@ -191,6 +195,13 @@ export interface RegradeOptions {
   makeJudge?: Parameters<typeof judgesForRun>[1];
   /** Test seam: the clock that names the output file. */
   now?: () => Date;
+  /** `semantic_pairwise` in a caller-owned flow (a hillclimb flow): the case's entry name, the references to compare
+   *  with (replacing the scenario's `refs:`), the ones neutral for this run, and the gating ones — as
+   *  `ExecuteOptions.pairwise`. `onlyRefs` makes it a FILL: only those references are judged; every other outcome,
+   *  and every semantic_matches grade, is the live run's, kept unchanged. Omitted = the scenario's own setup. */
+  pairwise?: { caseId?: string; refs?: PairwiseRef[]; neutralRefs?: string[]; gateRefs?: string[]; onlyRefs?: string[] };
+  /** Test seam: the structured judge transport for `semantic_pairwise` (default: the host `claude -p`). */
+  pairwiseComplete?: CompleteStructured;
 }
 
 /** `RegradeOptions` for an evidence preflight. Kept out of `RegradeOptions` itself so a caller that never asks for
@@ -219,17 +230,18 @@ export function judgeSpend(grades: ReadonlyArray<{ judgeCostUsd?: number }>): Ju
 /** What the judged document depends on besides the shared capture: an assert's own sub-agent and Skill-result
  *  opt-ins and its `evidence_files` scope (order-free; an empty list is unscoped, as `scopeAuthoredEvidence`
  *  reads it). */
-function ownScopeKey(sm: NonNullable<Assertion["semantic_matches"]>): string {
-  return JSON.stringify([
-    sm.include_subagent_text === true,
-    [...new Set(sm.evidence_files ?? [])].sort(),
-    sm.include_fork_results === true,
-  ]);
+function ownScopeKey(a: Assertion): string {
+  const o = judgedOpts(a)!;
+  return JSON.stringify([o.includeSubagentText, [...new Set(o.evidenceFiles ?? [])].sort(), o.includeForkResults]);
 }
+
+/** The document a live judged assert recorded: `judgedDoc` (what its judge read) or, for a `semantic_pairwise`
+ *  assert no judge read (every comparison neutral), `composedDoc` — the same fingerprint of the same document. */
+const liveDoc = (r: LiveResult): JudgedDocFingerprint | undefined => r.judgedDoc ?? r.composedDoc;
 
 /** The capture's priority globs — the same expression the live run uses. */
 function evidenceUnion(asserts: Array<Assertion | undefined>): string[] {
-  return [...new Set(asserts.flatMap((a) => a?.semantic_matches?.evidence_files ?? []))];
+  return [...new Set(asserts.flatMap((a) => (a ? (judgedOpts(a)?.evidenceFiles ?? []) : [])))];
 }
 
 const sameSet = (a: string[], b: string[]): boolean => {
@@ -285,24 +297,24 @@ interface LiveSide {
  *  refusing) is compared like a graded one. A result without `semanticEvidence` predates the field and is read
  *  as graded. */
 const liveRefused = (r: LiveResult): boolean =>
-  r.judgedDoc === undefined && r.semanticEvidence !== undefined && r.semanticEvidence.reason !== "graded";
+  liveDoc(r) === undefined && r.semanticEvidence !== undefined && r.semanticEvidence.reason !== "graded";
 
 /** A live assert whose recorded document can be compared with: it has a `judgedDoc`, refused or not. */
-const comparable = (r: LiveResult): boolean => r.judgedDoc !== undefined;
+const comparable = (r: LiveResult): boolean => liveDoc(r) !== undefined;
 
 /** Why an assert has nothing live to compare with, whatever its own document: every same-scope live assert
  *  refused with no fingerprint recorded (`live_refused`), or no live assert recorded one at all (`unknown`).
  *  `compareWithLive` also reports `unknown` for an assert whose own scope has no live fingerprint. */
 function nothingLive(a: Assertion, live: LiveSide): "live_refused" | "unknown" | undefined {
-  const key = ownScopeKey(a.semantic_matches!);
-  const sameScope = live.liveSemantic.filter((r) => ownScopeKey(r.assertion.semantic_matches!) === key);
+  const key = ownScopeKey(a);
+  const sameScope = live.liveSemantic.filter((r) => ownScopeKey(r.assertion) === key);
   if (sameScope.length > 0 && sameScope.every(liveRefused)) return "live_refused";
   if (!live.liveSemantic.some(comparable)) return "unknown";
   return undefined;
 }
 
 function liveSide(result: RunResult, sc: Scenario, budgetChanged: boolean): LiveSide {
-  const liveSemantic = (result.assertions ?? []).filter((r) => r.assertion?.semantic_matches !== undefined);
+  const liveSemantic = (result.assertions ?? []).filter((r) => r.assertion !== undefined && judgedOpts(r.assertion) !== undefined);
   const captureMoved = budgetChanged || !sameSet(evidenceUnion(liveSemantic.map((r) => r.assertion)), evidenceUnion(sc.assert));
   return { liveSemantic, captureMoved };
 }
@@ -329,21 +341,18 @@ export function compareWithLive(
   // The document is a function of the shared capture and the assert's own scope, so any live assert with
   // the same own scope read the same document. With none, the one at the same position among the
   // semantic asserts is compared, for the section list, and the scope is reported changed.
-  const key = ownScopeKey(a.semantic_matches!);
-  const sameScope = live.liveSemantic.filter((r) => ownScopeKey(r.assertion.semantic_matches!) === key && !liveRefused(r));
+  const key = ownScopeKey(a);
+  const sameScope = live.liveSemantic.filter((r) => ownScopeKey(r.assertion) === key && !liveRefused(r));
   const positional = live.liveSemantic[ordinal];
   const counterpart =
-    sameScope.find((r) => r.judgedDoc) ?? sameScope[0] ?? (positional && !liveRefused(positional) ? positional : undefined);
+    sameScope.find((r) => liveDoc(r)) ?? sameScope[0] ?? (positional && !liveRefused(positional) ? positional : undefined);
   // The assert's own scope ran live but recorded no fingerprint: nothing to compare with, whatever else moved.
-  if (sameScope.length > 0 && !sameScope.some((r) => r.judgedDoc)) return { match: "unknown", differing: [] };
+  if (sameScope.length > 0 && !sameScope.some((r) => liveDoc(r))) return { match: "unknown", differing: [] };
   const scopeChanged = sameScope.length === 0 || live.captureMoved;
-  if (!counterpart || !counterpart.judgedDoc || !now) return { match: scopeChanged ? "scope_changed" : "unknown", differing: [] };
-  const differing = diffSections(counterpart.judgedDoc, now, assertionIndex);
-  const match: DocMatch = scopeChanged
-    ? "scope_changed"
-    : differing.length === 0 && counterpart.judgedDoc.sha256 === now.sha256
-      ? true
-      : false;
+  const counterDoc = counterpart ? liveDoc(counterpart) : undefined;
+  if (!counterDoc || !now) return { match: scopeChanged ? "scope_changed" : "unknown", differing: [] };
+  const differing = diffSections(counterDoc, now, assertionIndex);
+  const match: DocMatch = scopeChanged ? "scope_changed" : differing.length === 0 && counterDoc.sha256 === now.sha256 ? true : false;
   return { match, differing };
 }
 
@@ -371,7 +380,7 @@ function liveDocDrift(
   // builds it), but only those that recorded a `judgedDoc` have anything to be compared with.
   const allLive = (result.assertions ?? [])
     .map((r, liveIndex) => ({ r, liveIndex }))
-    .filter(({ r }) => r.assertion?.semantic_matches !== undefined);
+    .filter(({ r }) => r.assertion !== undefined && judgedOpts(r.assertion) !== undefined);
   // Only an assert with a recorded document can be checked (see `comparable`).
   const live = allLive.filter(({ r }) => comparable(r));
   if (live.length === 0) return { drift: [], rebuilt: [] };
@@ -399,15 +408,16 @@ function liveDocDrift(
   const cache = new Map<string, JudgedDocFingerprint>();
   const drift: Array<{ liveIndex: number; sections: DifferingSection[] }> = [];
   for (const { r, liveIndex } of live) {
-    const sm = r.assertion.semantic_matches!;
-    const key = ownScopeKey(sm);
+    const o = judgedOpts(r.assertion)!;
+    const key = ownScopeKey(r.assertion);
     let fp = cache.get(key);
     if (!fp) {
-      fp = composeJudgedDocument(ctx, sm.include_subagent_text === true, sm.evidence_files, sm.include_fork_results === true).fingerprint;
+      fp = composeJudgedDocument(ctx, o.includeSubagentText, o.evidenceFiles, o.includeForkResults).fingerprint;
       cache.set(key, fp);
     }
-    const sections = diffSections(r.judgedDoc!, fp, liveIndex);
-    if (sections.length || r.judgedDoc!.sha256 !== fp.sha256) drift.push({ liveIndex, sections });
+    const recorded = liveDoc(r)!;
+    const sections = diffSections(recorded, fp, liveIndex);
+    if (sections.length || recorded.sha256 !== fp.sha256) drift.push({ liveIndex, sections });
   }
   return { drift, rebuilt: [...cache.values()] };
 }
@@ -556,6 +566,21 @@ interface Prepared {
   /** The run's own post-run file record: a metric is read only from bytes that still match it (none recorded ⇒
    *  every metric is `pruned`). */
   workspaceFiles: RunResult["workspaceFiles"];
+  /** The live result's assertion entries, by scenario index (a fill-mode re-grade keeps the ones it does not redo). */
+  liveEntries: RunResult["assertions"];
+}
+
+/** What a re-grade's `semantic_pairwise` comparisons read: the caller's setup (a hillclimb flow's references, its
+ *  gate, its own variant neutral), else the scenario's own `refs:`. */
+function pairwiseSetupFor(sc: Scenario, opts: RegradeOptions): PairwiseSetup {
+  const base = scenarioPairwiseSetup(sc);
+  const o = opts.pairwise;
+  return {
+    caseId: o?.caseId ?? base.caseId,
+    refsFor: o?.refs ? () => o.refs! : base.refsFor,
+    neutralRefs: new Set(o?.neutralRefs ?? []),
+    ...(o?.gateRefs ? { gateRefs: new Set(o.gateRefs) } : {}),
+  };
 }
 
 /**
@@ -610,25 +635,32 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     }
     const sc = first.scenario;
     scenarioSha256 ??= sha256Hex(readFileSync(opts.scenarioFile)); // loaded above, so it is readable
-    const semantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
+    const semantic = sc.assert.filter((a) => judgedOpts(a) !== undefined);
     if (semantic.length === 0)
       return {
         ok: false,
         kind: "usage",
-        message: scrub(`${CMD}: ${opts.scenarioFile} has no semantic_matches assert — nothing to re-grade`, secrets),
+        message: scrub(`${CMD}: ${opts.scenarioFile} has no semantic_matches or semantic_pairwise assert — nothing to re-grade`, secrets),
         code: "no_semantic_asserts",
       };
     if (opts.judgeModel === undefined) {
       const bad = sc.assert.flatMap((a, i) => {
-        if (!a.semantic_matches) return [];
-        const m = a.semantic_matches.judge_model ?? defaultJudgeModel();
+        const o = judgedOpts(a);
+        if (!o) return [];
+        const m = o.judgeModel ?? defaultJudgeModel();
         return isConcreteModelId(m) ? [] : [`assertion ${i}: "${m}"`];
       });
       if (bad.length)
         return refuse(
           "usage",
-          `${CMD} needs a concrete judge model for every semantic_matches assert: ${bad.join("; ")}. Pass --judge-model <id> to grade every assert with one model.`,
+          `${CMD} needs a concrete judge model for every judged assert: ${bad.join("; ")}. Pass --judge-model <id> to grade every assert with one model.`,
         );
+    }
+    // semantic_pairwise: every reference a comparison will read must resolve before any spend. The agent already ran,
+    // so there is no mount to expose a store through (mountRoots: []).
+    if (sc.assert.some((a) => a.semantic_pairwise !== undefined)) {
+      const pw = pairwiseRefsRefusal(sc, pairwiseSetupFor(sc, opts), []);
+      if (pw) return refuse("runtime", `${CMD}: ${pw}`);
     }
 
     const persisted = first.result.authoredCapture;
@@ -700,16 +732,12 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     // fingerprint to compare with at all. An assert whose evidence will be refused is decided here by the same
     // `semanticRefusal` over the same context, and left out: no judge is called for it, so its document
     // reaches no one and there is nothing to warn about.
-    const newSemantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
+    const newSemantic = sc.assert.filter((a) => judgedOpts(a) !== undefined);
     const willRefuse = new Set<Assertion>();
     const newDocs = new Map<Assertion, JudgedDocFingerprint>();
     for (const a of newSemantic) {
-      const built = composeJudgedDocument(
-        second.ctx,
-        a.semantic_matches!.include_subagent_text === true,
-        a.semantic_matches!.evidence_files,
-        a.semantic_matches!.include_fork_results === true,
-      );
+      const o = judgedOpts(a)!;
+      const built = composeJudgedDocument(second.ctx, o.includeSubagentText, o.evidenceFiles, o.includeForkResults);
       if (semanticRefusal(a, second.ctx, built)) willRefuse.add(a);
       else newDocs.set(a, built.fingerprint);
     }
@@ -733,6 +761,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       );
     }
     prepared.push({
+      liveEntries: second.result.assertions ?? [],
       runDir,
       dirAsGiven: dir,
       turn: second.turn,
@@ -776,7 +805,8 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     };
 
   const sc = loadScenario();
-  const semantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
+  const semantic = sc.assert.filter((a) => judgedOpts(a) !== undefined);
+  const fill = opts.pairwise?.onlyRefs !== undefined;
   const runs: RegradeRunReport[] = [];
   for (const p of prepared) {
     // Accepted with --allow-unchecked (refused above otherwise), and said before the spend.
@@ -812,9 +842,35 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
           secrets,
         ),
       );
-    const { judge, judgeFor } = judgesForRun({ modelOverride: opts.judgeModel }, opts.makeJudge);
-    // The SAME array to both calls: `check` reads the judge's results back by assertion identity.
-    await runSemanticJudges(semantic, p.ctx, judge, judgeFor);
+    // Fill mode only adds pairwise comparisons: a semantic_matches grade is not repeated (its live entry is kept below).
+    if (!fill) {
+      const { judge, judgeFor } = judgesForRun({ modelOverride: opts.judgeModel }, opts.makeJudge);
+      // The SAME array to both calls: `check` reads the judge's results back by assertion identity.
+      await runSemanticJudges(semantic, p.ctx, judge, judgeFor);
+    }
+    if (sc.assert.some((a) => a.semantic_pairwise !== undefined)) {
+      const setup = pairwiseSetupFor(sc, opts);
+      const liveEntries = p.liveEntries;
+      // The FULL assert list: the comparison order is seeded by the assert's index in the scenario, as it was live,
+      // and by the run id the live pre-pass used (the run dir's name).
+      await runPairwiseJudges(sc.assert, p.ctx, {
+        caseId: setup.caseId,
+        sessionId: basename(p.runDir),
+        task: sc.prompt,
+        refsFor: setup.refsFor,
+        neutralRefs: setup.neutralRefs,
+        ...(setup.gateRefs ? { gateRefs: setup.gateRefs } : {}),
+        ...(opts.pairwise?.onlyRefs
+          ? {
+              onlyRefs: new Set(opts.pairwise.onlyRefs),
+              copyOutcome: (i: number, ref: string) => liveEntries[i]?.pairwise?.find((o) => o.ref === ref),
+            }
+          : {}),
+        judgeFor: (model) => makePairwiseJudge({ model, complete: opts.pairwiseComplete ?? claudeCliCompleteStructured }),
+        ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity() }),
+        modelFor: (a) => opts.judgeModel ?? a.semantic_pairwise?.judge_model ?? defaultJudgeModel(),
+      });
+    }
     // The warnings above left out the asserts predicted to refuse. Had a judge been handed one of their
     // documents after all, it went out unwarned — fail loudly rather than report it as not_graded.
     for (const a of p.willRefuse)
@@ -822,7 +878,11 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
         throw new Error(
           `${CMD}: internal: assert ${sc.assert.indexOf(a)} was predicted to refuse its evidence but a judge was called for it`,
         );
-    const graded = evaluate(semantic, p.ctx);
+    // In fill mode a semantic_matches entry is the live one, unchanged: nothing about it was re-graded.
+    const graded = evaluate(semantic, p.ctx).map((g, k) => {
+      const live = p.liveEntries[sc.assert.indexOf(semantic[k]!)];
+      return fill && semantic[k]!.semantic_matches !== undefined && live ? (live as typeof g) : g;
+    });
     const metrics = remeasureMetrics(p.ctx, { workspaceFiles: p.workspaceFiles }, sc.metrics);
 
     const differing: DifferingSection[] = [];
@@ -833,9 +893,9 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       const assertionIndex = sc.assert.indexOf(a);
       // Over the fingerprint of what the judge was handed, not the drift check's copy.
       const refusedNow = g.semanticEvidence !== undefined && g.semanticEvidence.reason !== "graded";
-      const c = compareWithLive(a, ordinal, assertionIndex, p.ctx.judgedDocs?.get(a), p.live, refusedNow);
+      const c = compareWithLive(a, ordinal, assertionIndex, p.ctx.judgedDocs?.get(a) ?? p.ctx.composedDocs?.get(a), p.live, refusedNow);
       differing.push(...c.differing);
-      const now = p.ctx.judgedDocs?.get(a);
+      const now = p.ctx.judgedDocs?.get(a) ?? p.ctx.composedDocs?.get(a);
       const readDrift = c.match !== "not_graded" && now?.sections.some((x) => drifted.has(`${x.kind}\0${x.path ?? ""}`)) === true;
       return {
         assertionIndex,
@@ -846,9 +906,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     // Per assert, the value describes that assert's own document; the run's value never reads true (or not_graded)
     // over a drift that was detected and accepted.
     const docMatchesLive = p.drift.length ? false : aggregate(assertions.map((a) => a.docMatchesLive));
-    const notRegraded = sc.assert.flatMap((a, i) =>
-      a.semantic_matches !== undefined ? [] : [{ assertionIndex: i, keys: Object.keys(a) }],
-    );
+    const notRegraded = sc.assert.flatMap((a, i) => (judgedOpts(a) !== undefined ? [] : [{ assertionIndex: i, keys: Object.keys(a) }]));
     const pass = assertions.every((a) => a.pass);
     const spend = judgeSpend(assertions);
     const invalidGrades = assertions.filter((a) => a.judgeInvalid === true).length;
@@ -985,7 +1043,7 @@ export function regradeTextReport(outcome: Extract<RegradeOutcome, { ok: true }>
     log(`regrade ${tildeify(r.runDir)}`);
     for (const a of r.assertions) {
       log(
-        `${a.pass ? "✓" : "✗"} semantic_matches (assert ${a.assertionIndex})${a.message ? ` — ${a.message}` : ""}${a.judgeModel ? `  [judge ${a.judgeModel}]` : ""}`,
+        `${a.pass ? "✓" : "✗"} ${judgedOpts(a.assertion)?.key ?? "semantic_matches"} (assert ${a.assertionIndex})${a.message ? ` — ${a.message}` : ""}${a.judgeModel ? `  [judge ${a.judgeModel}]` : ""}`,
       );
       for (const c of a.semanticClaims ?? []) log(`    ${c.pass ? "✓" : "✗"} ${c.claim}`);
     }
