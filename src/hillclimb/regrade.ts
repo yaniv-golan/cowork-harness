@@ -282,7 +282,9 @@ function staleCopied(report: RegradeRunReport, c: HillclimbCase, refs: ReadonlyA
 }
 
 /** The references a row's pairwise asserts have no live outcome against (its own variant's included: neutral, no
- *  judge call, but the column must be there). */
+ *  judge call, but the column must be there). An outcome that exists but could not be compared live (`missing`,
+ *  `integrity`) counts as present: re-judging it could move a gating comparison, which a fill never does — a full
+ *  re-grade is the tool for that. */
 function missingRefs(result: RunResult, c: HillclimbCase, refNames: readonly string[]): string[] {
   const pairwiseIdx = c.scenario.assert.map((a, i) => (a.semantic_pairwise !== undefined ? i : -1)).filter((i) => i >= 0);
   if (!pairwiseIdx.length) return [];
