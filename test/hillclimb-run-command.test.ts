@@ -926,6 +926,8 @@ describe("--case: per-case checks cover the selected cases only", () => {
     await runHillclimbCommand(args("--approve-harness", "--case", "alpha"), deps());
     const sub = sig();
     expect(sub).toMatch(/^[0-9a-f]{64}$/);
+    // summary.json keeps the first writer's keys: clear it so the full pass records its own.
+    rmSync(join(cwd, "flow", "baseline", "summary.json"));
     await runHillclimbCommand(args(), deps());
     expect(calls.map((c) => c.scenario.name)).toEqual(["Alpha", "Beta"]);
     expect(sig()).toBe(sub);
