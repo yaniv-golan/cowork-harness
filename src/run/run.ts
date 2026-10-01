@@ -3,6 +3,7 @@ import { isUsageLimit } from "../usage-limit.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
 import type { UsageInfo, CostInfo, RunResult, InfraErrorSource, ToolCallRecord } from "../types.js";
+import { SKILL_RESULT_ASSERT_CAP } from "../types.js";
 
 /** A frozen cassette row's `source` is untrusted text — narrow it before it reaches the typed record,
  *  so an unrecognized value falls back to the fatal class rather than silently minting a new severity. */
@@ -652,6 +653,8 @@ export class Run {
   // its parent is positively confirmed here, so an unrecognized parent stays dropped/sub-agent-attributed
   // exactly as before — fail-safe toward undercount, never toward overcount.
   private forkScopedIds = new Set<string>();
+  /** toolUseIds of top-level `Skill` calls — their results are captured at SKILL_RESULT_ASSERT_CAP, not 10 KB. */
+  private topLevelSkillUseIds = new Set<string>();
   /** THE origin classifier — shared by `fileToolAttempts` and `toolCalls` so the two can never disagree.
    *  `main`: no parent, or a confirmed fork parent (a Skill call, an Agent(fork) dispatch) — the same
    *  predicate `toolsCalled` counts by. `subagent`: the parent is a dispatch THIS RUN RECORDED; every
@@ -868,6 +871,10 @@ export class Run {
             const origin = this.classifyOrigin(ev.parentToolUseId);
             // Every non-synthetic call, with capped inputs — the object form of tool_called reads this.
             // Synthetic = the MCP round-trip echo of a call that already arrived as a real tool_use block.
+            // TOP-LEVEL Skill calls only: a Skill inside a fork is `main`-origin too (fork children inherit the
+            // main context), but its result is not the run's answer and keeps the generic 10 KB cap.
+            if (!ev.synthetic && ev.name === "Skill" && origin === "main" && !ev.parentToolUseId && ev.toolUseId)
+              this.topLevelSkillUseIds.add(ev.toolUseId);
             if (!ev.synthetic)
               this.rec.toolCalls.push({
                 toolUseId: ev.toolUseId,
@@ -973,12 +980,17 @@ export class Run {
             break;
           }
           case "tool_result": {
+            // A top-level Skill result (where a foreground fork's WHOLE answer arrives) is captured at the
+            // larger SKILL_RESULT_ASSERT_CAP, re-sliced from the 200K provenance flatten — same join, wider
+            // slice. Every other result keeps the session's 10 KB assert cap, so no other tool's
+            // tool_result_* semantics move.
+            const skillWide = ev.toolUseId !== undefined && this.topLevelSkillUseIds.has(ev.toolUseId) && ev.provenanceText !== undefined;
             this.rec.toolResults.push({
               toolUseId: ev.toolUseId,
               isError: ev.isError,
               text: ev.text,
-              assertText: ev.assertText,
-              assertTextTruncated: ev.assertTextTruncated,
+              assertText: skillWide ? ev.provenanceText!.slice(0, SKILL_RESULT_ASSERT_CAP) : ev.assertText,
+              assertTextTruncated: skillWide ? ev.provenanceText!.length > SKILL_RESULT_ASSERT_CAP : ev.assertTextTruncated,
             });
             if (ev.toolUseId) this.notePresentedFiles(ev.toolUseId, ev.textBlocks);
             if (ev.toolUseId) {

@@ -669,7 +669,7 @@ drift is never reported as `true` or `not_graded` at the run level, even beside 
 document is `true`. None of these values changes the exit code. `differingSections[]` entries are
 `{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
 passed, i.e. iff the exit code is `0`. `docMatchesLive: false` says the bytes differ, not why (an authored file
-changed since the run, a different secret-scrub set, a sub-agent section).
+changed since the run, a different secret-scrub set, a sub-agent section, a Skill-result section).
 
 Two evidence refusals are decided before any judge call, for every run dir:
 
@@ -681,7 +681,7 @@ Two evidence refusals are decided before any judge call, for every run dir:
   the LIVE run's `assertions[]`; an empty `sections` means only the whole-document hash differs).
 - **Unchecked content.** A graded document's sections are measured against the live documents just rebuilt: a
   section none of them has is content the live judge never read — brought in by a widened scope (`evidence_files`,
-  `include_subagent_text`) or a larger `--authored-total-bytes`. It refuses unless `--allow-unchecked` is passed;
+  `include_subagent_text`, `include_fork_results`) or a larger `--authored-total-bytes`. It refuses unless `--allow-unchecked` is passed;
   accepted, it is graded, warned about and listed in `uncheckedSections[]` (`{assertionIndex, kind, path?}`) with
   `uncheckedCount` its length. A section the rebuild has is either what the live judge read or an already-reported
   drift, so the two flags are independent. In particular, under `--allow-doc-drift` alone an ADDED drift section
@@ -828,7 +828,7 @@ abridged to the fields most consumers branch on. The complete field list is
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
   "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier|prompt-assets|unverifiable-prompt-assets", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS by default since 2.0.0. `--strict` fails on every class, `--fail-on-skill-drift` adds skill/shared-root. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines. `prompt-assets` = the baseline's committed prompt-asset files (spawn.promptTemplate/subagentAppend/subagentAppendHostLoop), or the sub-agent prompt text the harness generates rather than reads from an asset (the folder manifest + trailing sentence, Desktop >=1.46388.3), changed since record under the SAME appVersion — warn by default, `--strict` fails, re-record; `unverifiable-prompt-assets` = a recorded `fingerprint.promptAssetsHash` exists but the live baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
-  "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains and their regex siblings tool_result_matches/tool_result_not_matches
+  "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10,240 chars; 32,768 for a top-level main-agent Skill result); backs tool_result_contains/tool_result_not_contains and their regex siblings tool_result_matches/tool_result_not_matches
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
   "slashInvokedSkills?": ["string"],             // staged skill ids the turn's prompt invoked by a leading slash command (`/<skill> …`, `/<plugin>:<skill> …`), resolved against the init skill inventory — the agent expands these itself with no Skill tool_use, so they never appear in skillsInvoked. [] = none; absent = cannot tell (ambiguous bare name, a slash prompt with no inventory, or an older result). skill_triggered/no_skill_triggered read both
   "skillToolAvailable?": bool,                    // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
@@ -1140,8 +1140,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   every re-graded assert passes (`ok: true` iff exit `0`) · `1` any fails or is judge-invalid · `2` a usage
   error, a refusal before any judge call (the evidence refusals carry `error.code`), or a failure writing a
   regrade file after earlier run dirs were graded (§11). The regrade output FILE is not part of this (below).
-- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **13**
-  (`schema/cassette.v13.json`) and its verdict-modifier assertion keys.
+- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **14**
+  (`schema/cassette.v14.json`) and its verdict-modifier assertion keys.
 
   `cassetteVersion` means **the minimum reader for the whole cassette**, which covers how its digests are
   computed as well as which `scenario` keys it uses: a reader older than the cassette's hash format
@@ -1159,11 +1159,13 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   entry using the object form of `tool_called` / `tool_not_called` stamps **v13**. A v12 `verify-cassettes`
   refuses that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and
   then crashes evaluating it, so upgrade before replaying one. From v13 on, `replay` refuses a newer-format
-  cassette before evaluating any assertion. The minimum supported read version is **v9**
+  cassette before evaluating any assertion. A `semantic_matches` entry carrying `include_fork_results` stamps
+  **v14** (one bump shared with the other keys of this release that an older reader cannot read), so a v13 reader refuses it as
+  too new rather than as an unrecognized assertion. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`
-  through `schema/cassette.v13.json`). A cassette whose stamped version exceeds what a given build understands is
+  through `schema/cassette.v14.json`). A cassette whose stamped version exceeds what a given build understands is
   refused loudly by both `replay` and `verify-cassettes`; `replay` alone offers an opt-in override
   (`--best-effort-future-cassette`), which `verify-cassettes` does not accept — a verification gate has no
   "read it anyway" path. `record --rerecord-stale`'s selection and `rehash`'s own version check accept a

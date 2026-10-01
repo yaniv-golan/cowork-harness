@@ -6,7 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` stamps
+  `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
+  don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
+  `tool_called` / `tool_not_called`), so no re-record or re-stamp is needed. v14 is one bump shared with the
+  other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
+  schema; `schema/cassette.v13.json` is retained.
+
 ### Added
+
+- **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
+  answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
+  nor a sub-agent dispatch, so until now the judge never saw it, and `include_subagent_text` could not
+  reach it. The new opt-in joins every top-level `Skill` call to its result by `toolUseId` (never by
+  position: a fork's result arrives after all of its children's) and appends each result to the judged
+  document. The heading is `## Fork skill result: <skill>` when the result carries the agent's
+  `completed (forked execution)` marker, and `## Skill result: <skill>` otherwise (an inline skill's
+  result is only its launch line). Such a section also lets a claim like "skill X ran" grade true. The
+  judge sees the whole answer or the assert refuses before any grade is made, with a typed
+  `semanticEvidence.reason` (`paths` lists the `Skill` calls' skill names):
+  - `fork_result_truncated`: a result was cut at its capture cap, by the aggregate document cap, or
+    at the per-section cap after secret scrubbing lengthened it.
+  - `fork_result_unpaired`: a `Skill` call has no paired result.
+  - `fork_result_background`: the fork ran in the background, so its result is only the launch line
+    and carries no answer.
+  - `fork_calls_unrecorded`: the result.json has no tool-call record.
+
+  `judgedDoc.sections[].kind` gains `skill_result`. With the key unset, the judged document and its
+  fingerprint are byte-identical to before.
 
 - **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` asserts** with
   the judge, without running the agent again; the judge call is the only spend. `verify-run` never calls the
@@ -17,8 +46,9 @@ All notable changes to this project are documented here. The format is based on
     with the same `COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS` as the live run.
   - `docMatchesLive` reports whether the rebuilt document equals, section by section, the `judgedDoc` the live
     run recorded: `true`, `false` (the differing sections are listed by kind and path; an authored file changed
-    since the run, a different scrub set, or a sub-agent section can each cause it), `scope_changed` (the
-    evidence scope or budget changed), `unknown` (this assert's scope has no live fingerprint), `live_refused`
+    since the run, a different scrub set, or a sub-agent or Skill-result section can each cause it),
+    `scope_changed` (the evidence scope — `evidence_files`, `include_subagent_text`, `include_fork_results` — or
+    budget changed), `unknown` (this assert's scope has no live fingerprint), `live_refused`
     (the live assert refused its evidence and no fingerprint was recorded; one that recorded a `judgedDoc` is
     compared like a graded one), or `not_graded` (the re-grade's own assert refused its evidence and no document
     was handed to a judge; one that refused after its judge read a document is compared like any other). The
@@ -33,8 +63,8 @@ All notable changes to this project are documented here. The format is based on
     not. So a changed scope or an `--authored-total-bytes` override does not skip the check of what the live
     judge read. `--allow-doc-drift` grades anyway, with a warning; the accepted drift is listed in `liveDocDrift`
     (by live assert and file) and makes the run's `docMatchesLive` `false`.
-  - Content the live judge never read — brought in by a widened scope (`evidence_files`, `include_subagent_text`)
-    or a larger `--authored-total-bytes`, measured against the live documents rebuilt from the live inputs — is
+  - Content the live judge never read — brought in by a widened scope (`evidence_files`, `include_subagent_text`,
+    `include_fork_results`) or a larger `--authored-total-bytes`, measured against the live documents rebuilt from the live inputs — is
     refused before any judge call too. `--allow-unchecked` grades it anyway, with a warning, listing it in
     `uncheckedSections` with `uncheckedCount`; this process's scrub set is then all that protects it. The two
     flags are independent: a file changed in place is drift, not unchecked content.
@@ -74,6 +104,23 @@ All notable changes to this project are documented here. The format is based on
   category stays `runtime` and exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`), so a
   consumer no longer has to match message prose to tell "refused on cost" from "did not load";
   `error.code` is absent on every other error.
+
+### Changed
+
+- **Verdict change: a top-level `Skill` result is now captured up to 32,768 characters, up from 10,240.**
+  This closes a false green. A `tool_result_not_contains` / `tool_result_not_matches` used to pass over the
+  part of a long `Skill` result past 10,240 characters, which it never saw. On a result between 10,240 and
+  32,768 characters it now sees the whole text, so it can fail where it used to pass. That applies on live
+  runs and on replay of an older cassette, since replay re-reads the frozen stream. No committed cassette is
+  affected: none has a `Skill` result near the old cap.
+  - This is where a foreground fork's whole answer arrives. The largest fork answer measured in kept runs
+    was 9,657 characters, so under the old cap any longer answer would have been refused as truncated.
+  - The new cap is the judged document's own per-answer budget (the final-answer cap).
+  - It applies to a `Skill` call the main agent makes at the top level. Every other tool result keeps
+    10,240, including a fork's child calls, a `Skill` invoked inside a fork, and a `Skill` call made inside
+    a sub-agent.
+  - `tool_result_contains` / `tool_result_matches`, their negations, and the `result:` predicates of
+    `tool_called` all see the larger capture.
 
 ### Fixed
 

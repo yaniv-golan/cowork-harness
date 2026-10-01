@@ -785,7 +785,7 @@ def test_unreadable_cassette_is_visible_and_keeps_advice_with_healthy_sibling(tm
         ("[]", "top level is not a JSON object"),
         ('{"cassetteVersion": 13}', "missing or empty scenarioSource"),
         ('{"cassetteVersion": 13, "scenarioSource": "/tmp/authored.yaml"}', "scenarioSource is absolute"),
-        ('{"cassetteVersion": 14, "scenarioSource": "../scenarios/authored.yaml"}', "outside the supported range"),
+        ('{"cassetteVersion": 15, "scenarioSource": "../scenarios/authored.yaml"}', "outside the supported range"),
     ],
 )
 def test_skipped_cassette_names_why_and_never_suppresses(tmp_path, cassette_body, reason):

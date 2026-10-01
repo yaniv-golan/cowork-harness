@@ -18,7 +18,14 @@ import { jsonError } from "../src/run/envelope.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty, DEFAULT_AUTHORED_TOTAL_BYTES } from "../src/run/artifacts.js";
 import { authoredCaptureOpts } from "../src/run/authored-capture-opts.js";
 import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
-import { composeJudgedDocument, evaluate, runSemanticJudges, type AssertContext, type SemanticJudge } from "../src/assert.js";
+import {
+  composeJudgedDocument,
+  evaluate,
+  runSemanticJudges,
+  toolResultEvidence,
+  type AssertContext,
+  type SemanticJudge,
+} from "../src/assert.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { collectSecrets } from "../src/secrets.js";
 import { parseScenarioFile } from "../src/run/execute.js";
@@ -122,6 +129,8 @@ async function keptRun(opts: {
    *  still called the judge before deciding a refusal did — the fingerprint of the document that judge was
    *  handed, composed by the production function. Off, a refused assert records none (the judge is not called). */
   oldRunRefusedJudgedDoc?: boolean;
+  /** Record one main-agent `context: fork` Skill call and its result (live ctx AND result.json). */
+  forkSkill?: boolean;
 }): Promise<Kept> {
   const runDir = mkdtempSync(join(tmpdir(), "cwh-rg-"));
   const workRoot = join(runDir, "work", "session", "mnt");
@@ -165,6 +174,7 @@ async function keptRun(opts: {
     skillsInvoked: [],
     skillToolAvailable: true,
     slashInvokedSkills,
+    ...(opts.forkSkill ? { toolCalls: FORK_CALLS, toolResults: FORK_RESULTS.map(toolResultEvidence) } : {}),
   };
   const live = opts.liveJudge ?? judgeFactory(() => false);
   const j = live.make();
@@ -200,6 +210,7 @@ async function keptRun(opts: {
     readonlyFolderRoots: [],
     preRunHashes: readPreRunManifestHashes(runDir),
     authoredCapture: { ...authored.budget, scratchpadWalked: authored.scratchpadWalked },
+    ...(opts.forkSkill ? { toolCalls: FORK_CALLS, toolResults: FORK_RESULTS } : {}),
   };
   const t1 = join(runDir, "turns", "1");
   mkdirSync(t1, { recursive: true });
@@ -214,6 +225,10 @@ async function keptRun(opts: {
 }
 
 const REPORT = "# Report\nThe main risk is customer concentration.\n";
+const FORK_TEXT = 'Skill "plug:analyst" completed (forked execution).\n\nResult:\nThe fork says the risk is concentration.';
+const FORK_CALLS = [{ toolUseId: "sk1", name: "Skill", input: { skill: { text: "plug:analyst" } }, origin: "main" as const }];
+const FORK_RESULTS = [{ toolUseId: "sk1", isError: false, text: FORK_TEXT.slice(0, 500), assertText: FORK_TEXT }];
+const FORKS = `  - semantic_matches:\n      rubric: ["the report names the risk"]\n      evidence_files: ["outputs/report.md"]\n      include_fork_results: true\n`;
 const writeReport = (w: string) => writeFileSync(join(w, "outputs", "report.md"), REPORT);
 
 function opts(k: Kept, extra: Partial<RegradeOptions> = {}): RegradeOptions {
@@ -1692,5 +1707,69 @@ describe.skipIf(!existsSync(CLI))("regrade CLI", () => {
     const r = cli(["regrade", "somedir", "--scenario", "s.yaml", "--authored-total-bytes", "0.5"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("--authored-total-bytes");
+  });
+});
+
+describe("regrade: include_fork_results is part of the judged document's scope", () => {
+  it("the key on live AND in the re-grade → docMatchesLive true (the skill_result section rebuilds byte-identically)", async () => {
+    const k = await keptRun({ author: writeReport, assertYaml: FORKS, forkSkill: true });
+    const live = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    expect(live.assertions[0].judgedDoc.sections.map((x: { kind: string }) => x.kind)).toContain("skill_result");
+    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].docMatchesLive).toBe(true);
+    expect(out.runs[0].differingSections).toEqual([]);
+  });
+
+  it("the key turned ON at re-grade → refused unchecked_content before any judge call (the live judge never read it)", async () => {
+    const k = await keptRun({ author: writeReport, assertYaml: SCOPED, forkSkill: true });
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-fork-")), FORKS),
+      makeJudge: judge.make,
+    });
+    expect(out).toMatchObject({ ok: false, kind: "runtime", code: "unchecked_content" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain("assert 0: skill_result");
+    expect(out.message).toContain("include_fork_results");
+    expect(out.refusals).toEqual([
+      { runDir: k.runDir, code: "unchecked_content", uncheckedCount: 1, uncheckedSections: [{ assertionIndex: 0, kind: "skill_result" }] },
+    ]);
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(k)).toEqual([]);
+    // The JSON error envelope carries the code and the refusal (and validates — `skill_result` is a SectionKind).
+    const env = JSON.parse(regradeErrorEnvelope(out));
+    expect(env.error.code).toBe("unchecked_content");
+    expect(env.refusals[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "skill_result" }]);
+    checkSchema(env);
+  });
+
+  it("the key turned ON with allowUnchecked → scope_changed, the skill_result section added and listed unchecked", async () => {
+    const k = await keptRun({ author: writeReport, assertYaml: SCOPED, forkSkill: true });
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-fork-")), FORKS),
+      makeJudge: judgeFactory(() => true).make,
+      allowUnchecked: true,
+    });
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].docMatchesLive).toBe("scope_changed");
+    expect(out.runs[0].differingSections).toContainEqual({ assertionIndex: 0, kind: "skill_result", change: "added" });
+    expect(out.runs[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "skill_result" }]);
+    // A regrade envelope carrying a skill_result section validates against the published and the strict schema.
+    checkSchema(JSON.parse(regradeEnvelope(out)));
+  });
+
+  it("the key turned OFF at re-grade → scope_changed, the skill_result section removed", async () => {
+    const k = await keptRun({ author: writeReport, assertYaml: FORKS, forkSkill: true });
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-fork-")), SCOPED),
+      makeJudge: judgeFactory(() => true).make,
+    });
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].docMatchesLive).toBe("scope_changed");
+    expect(out.runs[0].differingSections).toContainEqual({ assertionIndex: 0, kind: "skill_result", change: "removed" });
   });
 });
