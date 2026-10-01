@@ -16,7 +16,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
 import { scrub } from "../secrets.js";
 import { redactHostPaths } from "../eval/report.js";
-import { FsRefusal, lstatOrNull, NoFollowRoot, preflightRoot } from "./fs.js";
+import { FsRefusal, lexists, lstatOrNull, NoFollowRoot, preflightRoot } from "./fs.js";
 
 /** Redact every string in a JSON value (keys are left alone): secrets, then host paths. */
 export function redactDeep<T>(value: T, secrets: readonly string[]): T {
@@ -159,10 +159,7 @@ export class FlowWriter {
       } catch (err) {
         if (err instanceof FsRefusal) throw err;
       }
-      if (typeof holder.pid === "number" && alive(holder.pid))
-        throw new UsageError(
-          `another hillclimb process (pid ${holder.pid}) holds ${p}; wait for it, or remove the file if that process is gone`,
-        );
+      if (typeof holder.pid === "number" && alive(holder.pid)) throw new UsageError(lockHeldMessage(holder.pid, p));
       this.r.writeFile(p, mine);
     }
     return () => {
@@ -171,6 +168,23 @@ export class FlowWriter {
     };
   }
 }
+
+/** The pid of a LIVE process holding `<flow>/<variant>/.lock`, if any (read-only, no-follow). A runner checks it
+ *  before touching the variant's plugin snapshot, which a live holder may be mounting. */
+export function liveLockHolder(flowArg: string, variant: string, cwd: string): number | undefined {
+  if (!lexists(resolve(cwd, flowArg, variant))) return undefined;
+  const r = NoFollowRoot.existing(flowArg, { cwd });
+  let holder: { pid?: unknown } = {};
+  try {
+    holder = JSON.parse(r.readIfPresent(join(r.root, variant, ".lock")) ?? "{}");
+  } catch (e) {
+    if (e instanceof FsRefusal) throw e;
+  }
+  return typeof holder.pid === "number" && alive(holder.pid) ? holder.pid : undefined;
+}
+
+export const lockHeldMessage = (pid: number, path: string): string =>
+  `another hillclimb process (pid ${pid}) holds ${path}; wait for it, or remove the file if that process is gone`;
 
 function alive(pid: number): boolean {
   try {

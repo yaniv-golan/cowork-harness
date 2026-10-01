@@ -328,4 +328,19 @@ describe("runHillclimbCommand", () => {
     expect(readFileSync(p, "utf8")).toMatch(/^token: /);
     expect(readFileSync(p, "utf8")).not.toContain("sk-test-SECRET-9");
   });
+
+  it("a runner refused by another live runner's lock never re-takes the snapshot that runner is mounting", async () => {
+    // A refused run (no approved harness) leaves a snapshot of round 1 for a variant with no rows.
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(2);
+    const snapDir = readdirSync(snaps).map((h) => join(snaps, h, "baseline", "my-plugin"))[0];
+    expect(readFileSync(join(snapDir, "skills", "x", "SKILL.md"), "utf8")).toMatch(/round 1/);
+    // Another runner holds the variant's lock (this process: alive); the live plugin moves on.
+    writeFileSync(join(cwd, "flow", "baseline", ".lock"), JSON.stringify({ pid: process.pid }));
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nround 2\n");
+    const r = await runHillclimbCommand(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/another hillclimb process/);
+    expect(readFileSync(join(snapDir, "skills", "x", "SKILL.md"), "utf8")).toMatch(/round 1/);
+    expect(calls).toEqual([]);
+  });
 });

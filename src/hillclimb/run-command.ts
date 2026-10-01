@@ -25,7 +25,7 @@ import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
 import { prepareCases } from "./command.js";
-import { flowHashOf, slotsIn } from "./flow.js";
+import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
 import { readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
@@ -101,6 +101,9 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   let pluginDir = live;
   if (!args.dryRun) {
     const variantRan = ["results.jsonl", "errors.jsonl"].some((f) => slotsIn(readVariantFileIfPresent(flowArg, v, f, deps.cwd)).size > 0);
+    // A live runner of this variant may be mounting its snapshot: never re-take it under that runner.
+    const holder = liveLockHolder(flowArg, v, deps.cwd);
+    if (holder !== undefined) throw new UsageError(lockHeldMessage(holder, join(flowArg, v, ".lock")));
     const snap = variantSnapshot(live, { snapshotRoot: deps.snapshotRoot, flowHash, variant: v, variantRan });
     pluginDir = snap.dir;
     if (snap.created) say(`[${v}] plugin snapshot: ${tildeify(live)} → ${tildeify(snap.dir)}`);
