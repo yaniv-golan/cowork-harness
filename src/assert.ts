@@ -804,7 +804,7 @@ export function forkRecordRefusal(a: Assertion, ctx: AssertContext): SemanticRef
     );
   if (truncated.length)
     bits.push(
-      `${truncated.length} Skill result(s) cut at the tool-result capture cap (${truncated.join(", ")}; ${SKILL_RESULT_ASSERT_CAP} chars for a top-level Skill result, 10240 on a run recorded before that cap) — the judge would grade a prefix of the answer`,
+      `${truncated.length} Skill result(s) cut at the tool-result capture cap (${truncated.join(", ")}; a top-level Skill result is captured up to ${SKILL_RESULT_ASSERT_CAP} chars, and a record with no assertText keeps only the 500-char display text) — the judge would grade a prefix of the answer`,
     );
   return {
     semanticEvidence,
@@ -1179,7 +1179,7 @@ const FORKED_SKILL_RESULT = /^Skill "[^"]*" completed \(forked execution\)/;
  *  Grading a rubric over it would be a silent false red, so the check refuses it (`fork_result_background`). */
 const BACKGROUND_FORK_RESULT = /^Skill "[^"]*" launched \(forked execution, running in the background\)/;
 
-/** Every main-agent `Skill` call joined to its result BY `toolUseId` (never by position — a parallel or
+/** Every top-level `Skill` call joined to its result BY `toolUseId` (never by position — a parallel or
  *  interleaved call would otherwise pair a skill with its neighbour's answer), plus the three ways the join can
  *  leave the judge with less than the whole answer.
  *

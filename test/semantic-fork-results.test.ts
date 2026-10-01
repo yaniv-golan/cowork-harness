@@ -144,7 +144,9 @@ describe("semantic_matches.include_fork_results — refusals are typed, never a 
     const r = evaluate([a], c)[0];
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/^evidence unavailable: include_fork_results/);
-    expect(r.message).toMatch(/cut at the tool-result capture cap \(plug:big; 32768 chars for a top-level Skill result/);
+    expect(r.message).toMatch(
+      /cut at the tool-result capture cap \(plug:big; a top-level Skill result is captured up to 32768 chars, and a record with no assertText keeps only the 500-char display text\)/,
+    );
     expect(r.semanticEvidence).toEqual({ reason: "fork_result_truncated", paths: ["plug:big"] });
   });
 

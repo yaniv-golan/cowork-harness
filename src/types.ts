@@ -1026,7 +1026,7 @@ export const Assertion = z.strictObject({
         .boolean()
         .optional()
         .describe(
-          "default false: also send the result of every top-level `Skill` call to the judge, joined to its call by toolUseId — the only channel that carries a FOREGROUND `context: fork` skill's own answer (a fork is not a dispatch, so it has no subagents[] entry and include_subagent_text cannot see it). Each result is headed `Fork skill result: <skill>` when it carries the agent's `completed (forked execution)` marker, else `Skill result: <skill>` (an inline skill's result is only its launch line). A main-agent Skill result is captured up to 32,768 characters (every other tool result keeps 10,240); one cut at that cap fails the assert evidence-unavailable (`fork_result_truncated`), as does a Skill call with no paired result (`fork_result_unpaired`), a fork launched in the BACKGROUND, whose result is only its launch line (`fork_result_background`), or a lane with no tool-call record (`fork_calls_unrecorded`) — never a grade over a partial answer or a launch line. Opt-in because it enlarges the judged document, which can re-grade an existing rubric",
+          "default false: also send the result of every top-level `Skill` call to the judge, joined to its call by toolUseId — the only channel that carries a FOREGROUND `context: fork` skill's own answer (a fork is not a dispatch, so it has no subagents[] entry and include_subagent_text cannot see it). Each result is headed `Fork skill result: <skill>` when it carries the agent's `completed (forked execution)` marker, else `Skill result: <skill>` (an inline skill's result is only its launch line). A top-level Skill result is captured up to 32,768 characters (every other tool result keeps 10,240); one cut at that cap fails the assert evidence-unavailable (`fork_result_truncated`), as does a Skill call with no paired result (`fork_result_unpaired`), a fork launched in the BACKGROUND, whose result is only its launch line (`fork_result_background`), or a lane with no tool-call record (`fork_calls_unrecorded`) — never a grade over a partial answer or a launch line. Opt-in because it enlarges the judged document, which can re-grade an existing rubric",
         ),
     })
     .optional()
@@ -1044,7 +1044,7 @@ export type Assertion = z.infer<typeof Assertion>;
  *  convention is test-enforced (see the schema invariant test), so a new `allow_*` field can't be added
  *  without landing here. `verdict.ts` keeps its own three hand-written branches — they are genuinely
  *  asymmetric (different signal, list-vs-scalar, message) and must NOT be folded into this list. */
-/** Capture cap, in characters, for the result of a MAIN-AGENT `Skill` call — every other tool result keeps the
+/** Capture cap, in characters, for the result of a TOP-LEVEL `Skill` call (one the main agent makes itself, not one inside a fork) — every other tool result keeps the
  *  10,240-char assert cap. A foreground `context: fork` skill's whole answer comes back as that result, and
  *  `semantic_matches.include_fork_results` refuses rather than grade a cut one, so a 10,240 cap would refuse
  *  every fork answer longer than ~2.5 pages (the largest kept fork answer measured 9,657 chars). 32,768 is the
@@ -1433,7 +1433,7 @@ export interface JudgedDocFingerprint {
   sha256: string;
   sections: Array<{
     /** `final` = the agent's final answer; `transcript`; `subagent` = one opted-in sub-agent's text;
-     *  `skill_result` = one main-agent `Skill` call's result (opt-in `include_fork_results`);
+     *  `skill_result` = one top-level `Skill` call's result (opt-in `include_fork_results`);
      *  `authored` = one authored file (`path` set); `scratch_note` = the note qualifying scratch files;
      *  `health` = the evidence-health note. */
     kind: "final" | "transcript" | "subagent" | "skill_result" | "authored" | "scratch_note" | "health";
@@ -1790,7 +1790,7 @@ export interface RunResult {
         | "fork_result_unpaired"
         | "fork_result_background"
         | "fork_calls_unrecorded";
-      /** The offending authored paths — or, for the `fork_result_*` reasons, the offending `Skill` ids. */
+      /** The offending authored paths — or, for the `fork_result_*` reasons, the offending `Skill` calls' skill names. */
       paths?: string[];
     };
   }>;

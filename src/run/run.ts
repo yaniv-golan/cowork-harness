@@ -653,8 +653,8 @@ export class Run {
   // its parent is positively confirmed here, so an unrecognized parent stays dropped/sub-agent-attributed
   // exactly as before — fail-safe toward undercount, never toward overcount.
   private forkScopedIds = new Set<string>();
-  /** toolUseIds of main-agent `Skill` calls — their results are captured at SKILL_RESULT_ASSERT_CAP, not 10 KB. */
-  private mainSkillUseIds = new Set<string>();
+  /** toolUseIds of top-level `Skill` calls — their results are captured at SKILL_RESULT_ASSERT_CAP, not 10 KB. */
+  private topLevelSkillUseIds = new Set<string>();
   /** THE origin classifier — shared by `fileToolAttempts` and `toolCalls` so the two can never disagree.
    *  `main`: no parent, or a confirmed fork parent (a Skill call, an Agent(fork) dispatch) — the same
    *  predicate `toolsCalled` counts by. `subagent`: the parent is a dispatch THIS RUN RECORDED; every
@@ -874,7 +874,7 @@ export class Run {
             // TOP-LEVEL Skill calls only: a Skill inside a fork is `main`-origin too (fork children inherit the
             // main context), but its result is not the run's answer and keeps the generic 10 KB cap.
             if (!ev.synthetic && ev.name === "Skill" && origin === "main" && !ev.parentToolUseId && ev.toolUseId)
-              this.mainSkillUseIds.add(ev.toolUseId);
+              this.topLevelSkillUseIds.add(ev.toolUseId);
             if (!ev.synthetic)
               this.rec.toolCalls.push({
                 toolUseId: ev.toolUseId,
@@ -980,11 +980,11 @@ export class Run {
             break;
           }
           case "tool_result": {
-            // A main-agent Skill result (where a foreground fork's WHOLE answer arrives) is captured at the
+            // A top-level Skill result (where a foreground fork's WHOLE answer arrives) is captured at the
             // larger SKILL_RESULT_ASSERT_CAP, re-sliced from the 200K provenance flatten — same join, wider
             // slice. Every other result keeps the session's 10 KB assert cap, so no other tool's
             // tool_result_* semantics move.
-            const skillWide = ev.toolUseId !== undefined && this.mainSkillUseIds.has(ev.toolUseId) && ev.provenanceText !== undefined;
+            const skillWide = ev.toolUseId !== undefined && this.topLevelSkillUseIds.has(ev.toolUseId) && ev.provenanceText !== undefined;
             this.rec.toolResults.push({
               toolUseId: ev.toolUseId,
               isError: ev.isError,

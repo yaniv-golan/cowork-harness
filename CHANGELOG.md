@@ -20,14 +20,15 @@ All notable changes to this project are documented here. The format is based on
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
   nor a sub-agent dispatch, so until now the judge never saw it, and `include_subagent_text` could not
-  reach it. The new opt-in joins every main-agent `Skill` call to its result by `toolUseId` (never by
+  reach it. The new opt-in joins every top-level `Skill` call to its result by `toolUseId` (never by
   position: a fork's result arrives after all of its children's) and appends each result to the judged
   document. The heading is `## Fork skill result: <skill>` when the result carries the agent's
   `completed (forked execution)` marker, and `## Skill result: <skill>` otherwise (an inline skill's
   result is only its launch line). Such a section also lets a claim like "skill X ran" grade true. The
   judge sees the whole answer or the assert refuses before any grade is made, with a typed
-  `semanticEvidence.reason` (`paths` lists the Skill ids):
-  - `fork_result_truncated`: a result was cut at its capture cap, or by the aggregate document cap.
+  `semanticEvidence.reason` (`paths` lists the `Skill` calls' skill names):
+  - `fork_result_truncated`: a result was cut at its capture cap, by the aggregate document cap, or
+    at the per-section cap after secret scrubbing lengthened it.
   - `fork_result_unpaired`: a `Skill` call has no paired result.
   - `fork_result_background`: the fork ran in the background, so its result is only the launch line
     and carries no answer.
