@@ -77,6 +77,39 @@ describe("the skill's hillclimb reference", () => {
       expect(ref, f).toContain(`\`${f}`);
   });
 
+  // A decider with the default --concurrency 4 is refused (args.ts): the default never drops to 1 on its own.
+  it("says a decider needs an explicit --concurrency 1, in the usage text, docs/cli.md and the reference", () => {
+    for (const [where, text] of [
+      ["usage.ts", HILLCLIMB_RUN_USAGE],
+      [
+        "docs/cli.md",
+        doc("docs/cli.md")
+          .split("\n")
+          .find((l) => l.startsWith("- `hillclimb run`"))!,
+      ],
+      [REF, doc(REF)],
+    ] as const) {
+      expect(text, where).not.toMatch(/1 with a decider/);
+      expect(text, where).toContain("--concurrency 1");
+    }
+  });
+
+  // The snapshot copies git-tracked files only: a file the loop adds and never `git add`s is not measured.
+  it("tells the loop to git add a new plugin file, and names the no-tracked-files refusal", () => {
+    const ref = doc(REF);
+    expect(ref).toContain("`git add`");
+    expect(ref).toMatch(/no git-tracked files/);
+  });
+
+  it("quickstart: approval spends nothing, and baseline and v1 run at the same --reps", () => {
+    const block = doc(REF).match(/```bash\n([\s\S]*?)```/)![1];
+    const lines = block.split("\n").filter((l) => /hillclimb run\b/.test(l));
+    for (const l of lines.filter((x) => x.includes("--approve-harness"))) expect(l, l).toContain("--dry-run");
+    const reps = (re: RegExp) => lines.find((l) => re.test(l) && !l.includes("--dry-run"))?.match(/--reps (\d+)/)?.[1];
+    expect(reps(/--variant baseline\b/)).toBeDefined();
+    expect(reps(/--variant baseline\b/)).toBe(reps(/--variant v1\b/));
+  });
+
   it("covers run, check and state-template only", () => {
     expect(doc(REF)).not.toMatch(/hillclimb regrade/);
   });

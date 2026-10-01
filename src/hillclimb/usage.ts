@@ -28,7 +28,7 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --variant ID            'baseline' or 'v<N>' (default baseline)
   --model ID              concrete model id the agent must be served by; an alias is refused
   --reps N                reps per case (default 1)
-  --concurrency N         jobs in flight (default 4; 1 with a decider)
+  --concurrency N         jobs in flight (default 4; a decider needs --concurrency 1)
   --timeout-s N           per-case wall-clock ceiling in seconds (default 1800; 0 = none)
   --approve-harness       record the harness sha in _state.json (yours to pass, never the loop's)
   --case ID               run only this case (file stem or scenario name); repeatable
