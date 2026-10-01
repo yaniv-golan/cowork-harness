@@ -100,7 +100,7 @@ export function caseKeyDecls(assertions: readonly Assertion[], metrics: readonly
 /** The metrics a flow declares, given each case's assertion list and its scenario-declared metrics. Throws
  *  UsageError when two cases declare one metric id differently. */
 export function flowMetricDecls(
-  cases: ReadonlyArray<{ assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>,
+  cases: ReadonlyArray<{ name?: string; assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>,
 ): GradeKeyDecl[] {
   const union = metricUnion(cases);
   const anySemantic = cases.some((c) => hasSemantic(c.assertions));
@@ -120,26 +120,28 @@ export function flowMetricDecls(
 }
 
 /** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared differently in
- *  another case (any field: the file, the path, the direction, the bound, the floor) is refused: one column cannot
- *  mean two things. Ids are compared case-insensitively, as the scenario compares its own: two spellings of one id
- *  would be two keys on a row but one file on a case-folding disk. */
-export function metricUnion(cases: ReadonlyArray<{ metrics?: readonly MetricDecl[] }>): MetricDecl[] {
-  const seen = new Map<string, MetricDecl>();
+ *  another case (any field: the file, the path, the direction, the bound, the floor) is refused, naming both cases:
+ *  one column cannot mean two things. Ids are compared case-insensitively, as the scenario compares its own: two
+ *  spellings of one id would be two keys on a row but one file on a case-folding disk. */
+export function metricUnion(cases: ReadonlyArray<{ name?: string; metrics?: readonly MetricDecl[] }>): MetricDecl[] {
+  const seen = new Map<string, { m: MetricDecl; name: string }>();
   const sig = (m: MetricDecl) => JSON.stringify([m.id, m.artifact, m.path, m.better, m.scale, m.unbounded, m.min]);
-  for (const c of cases)
+  cases.forEach((c, i) => {
+    const name = c.name ?? `case ${i + 1}`;
     for (const m of c.metrics ?? []) {
       const prev = seen.get(m.id.toLowerCase());
-      if (prev === undefined) seen.set(m.id.toLowerCase(), m);
-      else if (prev.id !== m.id)
+      if (prev === undefined) seen.set(m.id.toLowerCase(), { m, name });
+      else if (prev.m.id !== m.id)
         throw new UsageError(
-          `metric "${prev.id}" and metric "${m.id}" differ only in case; ids are compared case-insensitively — spell them the same in every scenario`,
+          `metric "${prev.m.id}" (${prev.name}) and metric "${m.id}" (${name}) differ only in case; ids are compared case-insensitively — spell them the same in every scenario`,
         );
-      else if (sig(prev) !== sig(m))
+      else if (sig(prev.m) !== sig(m))
         throw new UsageError(
-          `metric "${m.id}" is declared differently in two scenarios (${JSON.stringify(prev)} vs ${JSON.stringify(m)}); one column cannot mean two things — make the declarations identical or rename one`,
+          `metric "${m.id}" is declared differently in ${prev.name} and ${name} (${JSON.stringify(prev.m)} vs ${JSON.stringify(m)}); one column cannot mean two things — make the declarations identical or rename one`,
         );
     }
-  return [...seen.values()];
+  });
+  return [...seen.values()].map((e) => e.m);
 }
 
 export { presentCompanionOf } from "./present.js";

@@ -433,8 +433,31 @@ describe("scenario metrics", () => {
     const r = await runHillclimb(args("--approve-harness", "--case", "alpha"), deps());
     expect(r.exitCode).toBe(2);
     expect(jobs).toEqual([]);
-    expect(err.join("\n")).toMatch(/metric "words" is declared differently/);
+    expect(err.join("\n")).toMatch(/metric "words" is declared differently in alpha and beta/);
     expect(existsSync(flowDir())).toBe(false);
+  });
+
+  it("one id spelled in a different case in two scenarios refuses before spend, naming both cases", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("lower", "Score"));
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO("Beta") + METRIC("lower", "score"));
+    const r = await runHillclimb(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(jobs).toEqual([]);
+    expect(err.join("\n")).toMatch(/metric "Score" \(alpha\) and metric "score" \(beta\) differ only in case/);
+  });
+
+  it("a case with `metrics: []` declares none: its rows carry the union's <id>_present 0", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("lower"));
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO("Beta") + "metrics: []\n");
+    await approved();
+    behave = (id) => (id === "alpha" ? { result: { ...excerpt, metrics: [{ id: "words", value: 3 }] } } : {});
+    expect((await runHillclimb(args("--approve-harness"), deps())).exitCode).toBe(0);
+    const beta = rows("baseline").filter((r) => r.prompt_id === "beta");
+    expect(beta.length).toBeGreaterThan(0);
+    for (const row of beta) {
+      expect(row.grade.words_present).toBe(0);
+      expect(row.grade).not.toHaveProperty("words");
+    }
   });
 
   it("a metric id that shadows a generated key is refused at load", async () => {

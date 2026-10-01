@@ -103,13 +103,30 @@ describe("flowMetricDecls — what the flow declares", () => {
       ).toThrow(/metric "words" is declared differently/);
   });
 
-  it("one id spelled in two cases (Words, words) is refused: the scenario compares ids case-insensitively, and a case-folding disk would merge them", () => {
+  it("one id spelled in two cases (Words, words) is refused, naming both cases: the scenario compares ids case-insensitively", () => {
     expect(() =>
       flowMetricDecls([
-        { assertions: [], metrics: [unboundedLower("Words")] },
-        { assertions: [], metrics: [unboundedLower("words")] },
+        { name: "alpha", assertions: [], metrics: [unboundedLower("Words")] },
+        { name: "beta", assertions: [], metrics: [unboundedLower("words")] },
       ]),
-    ).toThrow(/"Words".*"words"|"words".*"Words"/);
+    ).toThrow(/metric "Words" \(alpha\) and metric "words" \(beta\) differ only in case/);
+  });
+
+  it("a conflicting declaration names both cases", () => {
+    expect(() =>
+      flowMetricDecls([
+        { name: "alpha", assertions: [], metrics: [unboundedLower("words")] },
+        { name: "beta", assertions: [], metrics: [unboundedLower("words", { better: "higher" })] },
+      ]),
+    ).toThrow(/metric "words" is declared differently in alpha and beta/);
+  });
+
+  it("a case with `metrics: []` is a case that declares none: it adds no column", () => {
+    const ids = flowMetricDecls([
+      { assertions: [], metrics: [] },
+      { assertions: [], metrics: [unboundedLower("words")] },
+    ]).map((d) => d.id);
+    expect(ids).toEqual(["pass", "pass_present", "words_present", "words"]);
   });
 
   it("the same declaration in two cases is one column", () => {

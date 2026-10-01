@@ -146,7 +146,7 @@ async function run(
   const { cases: all, skipped } = loadCases(resolve(deps.cwd, args.target));
   if (skipped.length) say(`[${v}] skipped ${skipped.length} non-scenario file(s): ${skipped.join(", ")}`);
   // The flow's metric columns: the union over every case, refused here — before any write — when one id is declared two ways.
-  const metrics = metricUnion(all.map((c) => ({ metrics: c.scenario.metrics })));
+  const metrics = metricUnion(all.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
 
   // Writes only when this run may write: a pass, or the human's --approve-harness. A plain --dry-run
   // creates nothing.

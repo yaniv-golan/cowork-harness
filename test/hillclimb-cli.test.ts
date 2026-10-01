@@ -92,7 +92,7 @@ describe("stateTemplateFor", () => {
 
     it("one id declared two ways is a usage error", () => {
       writeFileSync(join(cwd, "evals", "c.yaml"), `name: c\n${head}${words("higher")}`);
-      expect(() => stateTemplateFor("evals", cwd, {})).toThrow(/metric "words" is declared differently/);
+      expect(() => stateTemplateFor("evals", cwd, {})).toThrow(/metric "words" is declared differently in a and c/);
     });
   });
 });

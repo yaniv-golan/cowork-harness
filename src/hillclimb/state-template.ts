@@ -31,7 +31,7 @@ const PERF: PerfField[] = [
 ];
 
 export function stateTemplate(opts: {
-  cases: ReadonlyArray<{ assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>;
+  cases: ReadonlyArray<{ name?: string; assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>;
   harnessPaths: readonly string[];
   decider: boolean;
 }): StateTemplate {

@@ -589,7 +589,7 @@ describe("runHillclimbCommand", () => {
     writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO.replace("name: Alpha", "name: Beta") + metric("higher"));
     const r = await runHillclimbCommand(args("--approve-harness"), deps());
     expect(r.exitCode).toBe(2);
-    expect(err.join("\n")).toMatch(/refusing to run: metric "words" is declared differently/);
+    expect(err.join("\n")).toMatch(/refusing to run: metric "words" is declared differently in alpha and beta/);
     expect(calls).toEqual([]);
     expect(readdirSync(snaps)).toEqual([]);
     expect(existsSync(join(cwd, "flow"))).toBe(false);

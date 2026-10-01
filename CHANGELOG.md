@@ -128,7 +128,7 @@ All notable changes to this project are documented here. The format is based on
   `hillclimb state-template` declares them (direction, plus `scale` and `min` when given) and defines each in
   `metrics.md` (the file and path it is read from, its direction and range); `hillclimb check`'s headroom uses a
   lower-is-better float's `min` as its good end. `hillclimb run` and `state-template` refuse one metric id
-  declared differently in two scenarios, or spelled in a different case, before spending.
+  declared differently in two scenarios, or spelled in a different case, before spending, naming both cases.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text

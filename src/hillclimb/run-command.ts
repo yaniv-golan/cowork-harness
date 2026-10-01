@@ -128,7 +128,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   const v = args.variant;
   const { cases } = loadCases(resolve(deps.cwd, args.target));
   // One metric id declared two ways is refused before the snapshot below is taken (the runner recomputes the union).
-  metricUnion(cases.map((c) => ({ metrics: c.scenario.metrics })));
+  metricUnion(cases.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
   const prep = prepareCases(cases, {
     ...(args.model !== undefined ? { modelFlag: args.model } : {}),
     ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
