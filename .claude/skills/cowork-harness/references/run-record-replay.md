@@ -211,14 +211,17 @@ Recognize these before "fixing" a non-bug:
   hard-fails rather than silently passing.) **On an open-ended `skill` run** (no `assert:` block to carry
   the modifier), pass **`--allow-missing-capability`** — the CLI equivalent of the assertion.
 - **`ended_with_question`** (`WARN`, live lane) — a heuristic: the agent's final answer contains a
-  question and the run wrote **no deliverable to `outputs/`** — it may have ended on a request for input
-  instead of finishing. Warn-only; the fix is scripting/steering the answer (`answer:` / `--answer` / a
-  decider, or `--decider-llm --intent`), not editing the skill's prose. The strict, fail-severity sibling
-  `stalled` already catches a *trailing*-`?` final turn that did no tool work after the last gate; this
-  covers the residual (a mid-message `?`, or tool work after the last gate that still ended asking). Read
-  the final message before acting — a legitimate question-posing answer that wrote a file never fires.
-  Assert `allow_stall: true` if ending on a question is the intended terminal state (on an open-ended
-  `skill` / `probe-dispatch` run, pass **`--allow-stall`** — the CLI equivalent).
+  question (or closes on a request for input — the same test `stalled` uses, see [gotchas.md](gotchas.md) item 13) and the run
+  wrote **no deliverable to `outputs/`** — it may have ended on a request for input instead of
+  finishing. Warn-only; the fix is scripting/steering the answer (`answer:` / `--answer` / a decider, or
+  `--decider-llm --intent`), not editing the skill's prose. The strict, fail-severity sibling `stalled`
+  already catches a final turn that ends on a question or a closing request for input ("Please share X
+  so I can…", "Once you upload it, I'll…" — counted only once a gate has fired) and did no tool work
+  after the last gate; this covers the residual (a mid-message `?`, or tool work after the last gate
+  that still ended asking). Read the final message before acting — a legitimate question-posing answer
+  that wrote a file never fires. Assert `allow_stall: true` if ending on a question is the intended
+  terminal state (on an open-ended `skill` / `probe-dispatch` run, pass **`--allow-stall`** — the CLI
+  equivalent).
 - **`undelivered_deliverables`** (`WARN`) — the skill produced file(s) **outside every user-visible root**
   and never delivered them. On a **remote** Cowork session the workspace is reclaimed at session end, so
   they are destroyed; on a **local** one they persist but stay invisible to the user. Either way the user

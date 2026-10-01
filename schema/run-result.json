@@ -237,7 +237,7 @@
     },
     "stalledOnQuestion": {
       "type": "boolean",
-      "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped \u2014 incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
+      "description": "H2/H3: the run ended on a question (or, after an AskUserQuestion gate, a closing request for input such as 'Please share X so I can...') having done no productive tool work after its last gate (the agent asked for input and stopped \u2014 incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
     },
     "capabilityProbe": {
       "type": "string",

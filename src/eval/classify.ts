@@ -125,6 +125,10 @@ function noModelAnswered(r: ClassifiableResult): boolean {
   return Array.isArray(r.models) && r.models.length > 0 && !r.models.some(isLiveModelId) && r.cost?.usd === 0;
 }
 
+/** The scenario asserted `allow_stall: true` — the `stalled` verdict's opt-out, read exactly as verdict.ts
+ *  reads it (any graded assertion carrying the modifier, alone or beside another key). */
+const stallAllowed = (r: ClassifiableResult): boolean => (r.assertions ?? []).some((a) => a.assertion.allow_stall === true);
+
 type ThrownKind = "decider_timeout" | "boundary" | "unanswered" | "other";
 function thrownKind(e: unknown): ThrownKind {
   // Subclass first: a DeciderTimeoutError IS an UnansweredError, and it is the answerer's failure, not the skill's.
@@ -137,26 +141,27 @@ function thrownKind(e: unknown): ThrownKind {
 /** The termination decision table: valid, the agent's error (counted as failing every row), or
  *  infrastructure (excluded). Evaluated in this order:
  *
- *  | evidence                                                           | bucket          |
- *  |--------------------------------------------------------------------|-----------------|
- *  | thrown DeciderTimeoutError                                         | errored_infra   |
- *  | thrown BoundaryError                                               | errored_infra   |
- *  | thrown UnansweredError                                             | errored_agent   |
- *  | thrown anything else / no result at all                            | unclassified    |
- *  | success, errorSource absent or `agent`, no kind, stalled           | errored_agent   |
- *  | success, errorSource absent or `agent`, no kind                    | valid           |
- *  | success, any other errorSource or any kind                         | unclassified    |
- *  | error, errorSource spawn / protocol / decider_timeout              | errored_infra   |
- *  | error, kind transport / usage_limit                                | errored_infra   |
- *  | error, `<synthetic>` in models, finalMessage an auth failure       | errored_infra (auth) |
- *  | error, `<synthetic>` in models, finalMessage a terminal limit      | errored_infra (usage_limit) |
- *  | error, models only `<synthetic>`, cost 0 (no model answered)       | errored_infra (no_model_answered) |
- *  | error, errorSource timeout / no_result                             | errored_agent   |
- *  | error, errorSource result, kind agent (any subtype)                | errored_agent   |
- *  | error, errorSource exit, kind agent                                | errored_agent, ambiguousExit |
- *  | error, errorSource agent, no kind (partial, or no terminal event)  | errored_agent   |
- *  | error, no errorSource, no kind, partial or unansweredGate          | errored_agent   |
- *  | anything else                                                      | unclassified    |
+ *  | evidence                                                              | bucket                            |
+ *  |-----------------------------------------------------------------------|-----------------------------------|
+ *  | thrown DeciderTimeoutError                                            | errored_infra                     |
+ *  | thrown BoundaryError                                                  | errored_infra                     |
+ *  | thrown UnansweredError                                                | errored_agent                     |
+ *  | thrown anything else / no result at all                               | unclassified                      |
+ *  | success, errorSource absent or `agent`, no kind, stalled, allow_stall | valid (stall_allowed)             |
+ *  | success, errorSource absent or `agent`, no kind, stalled              | errored_agent                     |
+ *  | success, errorSource absent or `agent`, no kind                       | valid                             |
+ *  | success, any other errorSource or any kind                            | unclassified                      |
+ *  | error, errorSource spawn / protocol / decider_timeout                 | errored_infra                     |
+ *  | error, kind transport / usage_limit                                   | errored_infra                     |
+ *  | error, `<synthetic>` in models, finalMessage an auth failure          | errored_infra (auth)              |
+ *  | error, `<synthetic>` in models, finalMessage a terminal limit         | errored_infra (usage_limit)       |
+ *  | error, models only `<synthetic>`, cost 0 (no model answered)          | errored_infra (no_model_answered) |
+ *  | error, errorSource timeout / no_result                                | errored_agent                     |
+ *  | error, errorSource result, kind agent (any subtype)                   | errored_agent                     |
+ *  | error, errorSource exit, kind agent                                   | errored_agent, ambiguousExit      |
+ *  | error, errorSource agent, no kind (partial, or no terminal event)     | errored_agent                     |
+ *  | error, no errorSource, no kind, partial or unansweredGate             | errored_agent                     |
+ *  | anything else                                                         | unclassified                      |
  */
 export function classifyTermination(ev: RepEvidence): TerminationClassification {
   const r = ev.result;
@@ -193,7 +198,12 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
 
   if (r.result === "success") {
     if ((source === undefined || source === "agent") && kind === undefined) {
-      return r.stalledOnQuestion === true ? out("errored_agent", "stalled_on_question") : out("valid", "success");
+      if (r.stalledOnQuestion !== true) return out("valid", "success");
+      // A stall is the agent's own failure unless the scenario opted out. The flag is run.ts's detector: a closing
+      // `?`, or (after a gate) a cued closing request for input such as "Please share X so I can…" — see
+      // input-request.ts. The opt-out is the same predicate the `stalled` verdict signal uses (verdict.ts), over the
+      // same graded assertions, so `eval` agrees with `run`/`replay`.
+      return stallAllowed(r) ? out("valid", "stall_allowed") : out("errored_agent", "stalled_on_question");
     }
     return unclassified("success_with_error_fields");
   }
