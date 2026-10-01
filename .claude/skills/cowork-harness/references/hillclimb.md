@@ -73,8 +73,8 @@ the whole attempt, the judge included), `--model ID` and `--judge-model ID` (con
 - **`--dry-run`** makes every refusal a pass makes except the harness gate, whose status it prints instead
   (`harness gate: approved|absent|mismatch`). It prints how many (case, rep) slots it would run, naming those
   re-run after a failed attempt, and a cost estimate (`plan.cost` under `--output-format json`, the object
-  `eval --dry-run` emits). The estimate prices each scenario from this machine's `run` and `eval` history;
-  `hillclimb` runs are excluded, so on a machine that has run only `hillclimb` every scenario is listed in
+  `eval --dry-run` emits). The estimate prices each scenario from this machine's run history with every
+  `hillclimb` run excluded, so on a machine that has run only `hillclimb` every scenario is listed in
   `plan.cost.unpriced`. A dry run writes nothing, unless `--approve-harness` is also given: then it records
   the harness sha.
 - One runner per variant: a `.lock` in the variant dir refuses a second live runner.
