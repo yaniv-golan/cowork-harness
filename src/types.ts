@@ -367,6 +367,12 @@ const toolCallObjectFields = {
     ),
 };
 
+/** A control character in a regex is almost always a YAML double-quoted escape (`"\b"` is a backspace, not a word
+ *  boundary), which would silently match nothing — refused at load. Tab, newline and carriage return are allowed. */
+const CONTROL_CHAR = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
+const CONTROL_CHAR_MESSAGE =
+  "contains a control character — in a double-quoted YAML string `\\b` is a backspace, not a word boundary; single-quote the regex";
+
 /** Why a `question_option_count` bound is unusable, or undefined when it is fine. Shared by the load-time refine
  *  and the evaluator, so a hand-built context gets the same answer as a parsed scenario. */
 export function questionOptionCountBoundError(v: { exactly?: number; min?: number; max?: number }): string | undefined {
@@ -915,17 +921,21 @@ export const Assertion = z.strictObject({
         .optional()
         .describe(
           "regex narrowing to sub-questions whose label matches (the same string question_asked matches); omit to check EVERY sub-question that was asked",
-        ),
+        )
+        .refine((v) => v === undefined || !CONTROL_CHAR.test(v), CONTROL_CHAR_MESSAGE),
       matches: z
         .string()
         .min(1)
         .describe(
-          "regex counted against each option LABEL of a sub-question (descriptions are not searched). Case-insensitive unless `case_sensitive: true`. NON-EMPTY: an empty pattern matches every label",
-        ),
+          "regex counted against each option LABEL of a sub-question (descriptions are not searched). Case-insensitive unless `case_sensitive: true`. NON-EMPTY: an empty pattern matches every label. Single-quote it in YAML: in a double-quoted string `\\b` becomes a backspace character, which is refused",
+        )
+        .refine((v) => !CONTROL_CHAR.test(v), CONTROL_CHAR_MESSAGE),
       case_sensitive: z
         .literal(true)
         .optional()
-        .describe("match `matches` case-sensitively (default: case-insensitive, like every other regex key)"),
+        .describe(
+          "match `matches` case-sensitively (default: case-insensitive, like every other regex key). It applies to the WHOLE pattern: on an `exactly: 0` rule it makes `add` miss `Add`, a false pass — keep such a rule case-insensitive, or spell both cases (`[Aa]dd`)",
+        ),
       exactly: z.number().int().nonnegative().optional().describe("every selected sub-question has exactly N matching options"),
       min: z.number().int().nonnegative().optional().describe("every selected sub-question has at least N matching options"),
       max: z.number().int().nonnegative().optional().describe("every selected sub-question has at most N matching options"),

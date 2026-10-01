@@ -84,6 +84,14 @@ describe("question_option_count: bounds over every sub-question", () => {
     expect(run({ when_question: "^(Keep|Ship)", matches: `^${PREFIX}`, exactly: 1 }, ctx({ gateOptions: g })).pass).toBe(true);
   });
 
+  it("a verb rule stays case-insensitive by default, so a capitalised verb is still caught", () => {
+    const g = [gate("Keep the list?", [`${PREFIX}Add Acme`, "Remove Beta"])];
+    const verb = `^${PREFIX}.*\\b(add|remove)\\b`;
+    expect(run({ matches: verb, exactly: 0 }, ctx({ gateOptions: g })).pass).toBe(false);
+    // case_sensitive applies to the whole pattern: here it would miss `Add` — the documented false pass.
+    expect(run({ matches: verb, exactly: 0, case_sensitive: true }, ctx({ gateOptions: g })).pass).toBe(true);
+  });
+
   it("is case-insensitive by default and case-sensitive on request", () => {
     const g = [gate("Pick", ["no changes — keep", "Change it"])];
     expect(run({ matches: `^${PREFIX}`, exactly: 1 }, ctx({ gateOptions: g })).pass).toBe(true);
@@ -199,6 +207,9 @@ describe("question_option_count: load time, buckets, cassette version", () => {
     [{ matches: "x", exactly: -1 }, /./],
     [{ matches: "x", exactly: 1, case_sensitive: false }, /./],
     [{ matches: "x", exactly: 1, extra: true }, /./],
+    // A double-quoted YAML "\b" arrives as a backspace: a regex that would silently match nothing.
+    [{ matches: "^No\b", exactly: 0 }, /control character/],
+    [{ matches: "x", when_question: "a\bb", exactly: 0 }, /control character/],
   ])("refuses %j before the spawn", (qoc, re) => {
     const r = parse(qoc);
     expect(r.success).toBe(false);

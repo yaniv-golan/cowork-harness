@@ -977,10 +977,10 @@
               "matches": {
                 "type": "string",
                 "minLength": 1,
-                "description": "regex counted against each option LABEL of a sub-question (descriptions are not searched). Case-insensitive unless `case_sensitive: true`. NON-EMPTY: an empty pattern matches every label"
+                "description": "regex counted against each option LABEL of a sub-question (descriptions are not searched). Case-insensitive unless `case_sensitive: true`. NON-EMPTY: an empty pattern matches every label. Single-quote it in YAML: in a double-quoted string `\\b` becomes a backspace character, which is refused"
               },
               "case_sensitive": {
-                "description": "match `matches` case-sensitively (default: case-insensitive, like every other regex key)",
+                "description": "match `matches` case-sensitively (default: case-insensitive, like every other regex key). It applies to the WHOLE pattern: on an `exactly: 0` rule it makes `add` miss `Add`, a false pass — keep such a rule case-insensitive, or spell both cases (`[Aa]dd`)",
                 "type": "boolean",
                 "const": true
               },

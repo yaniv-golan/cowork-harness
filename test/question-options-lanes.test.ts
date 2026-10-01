@@ -283,21 +283,36 @@ describe.skipIf(!can)("replay grades question_option_count from the cassette's o
     writeFileSync(join(root, "e2e/scenarios/smoke-multiselect.yaml"), `${src}assert:\n${assertYaml}`);
     const r = spawnSync(
       "node",
-      [CLI, "replay", join(root, "examples/replays/c.cassette.json"), "--assert-from", join(root, "e2e/scenarios/smoke-multiselect.yaml")],
+      [
+        CLI,
+        "replay",
+        join(root, "examples/replays/c.cassette.json"),
+        "--assert-from",
+        join(root, "e2e/scenarios/smoke-multiselect.yaml"),
+        "--output-format",
+        "json",
+      ],
       { encoding: "utf8", cwd: root },
     );
-    return { code: r.status, text: (r.stderr || "") + (r.stdout || "") };
+    // The JSON envelope says which assertions were GRADED: an exit code alone cannot tell a pass from a skipped key.
+    const env = JSON.parse(r.stdout) as {
+      results: Array<{ assertions: Array<{ assertion: Record<string, unknown>; pass: boolean; message?: string }> }>;
+    };
+    const grades = env.results[0]!.assertions.filter((a) => "question_option_count" in a.assertion);
+    return { code: r.status, text: (r.stderr || "") + grades.map((g) => g.message ?? "").join("\n"), grades };
   }
 
   it("passes on the recorded labels (Auth, Billing, Audit)", () => {
     const r = replayWith(`  - question_option_count:\n      matches: '^(Auth|Audit)$'\n      exactly: 2\n`);
     expect(r.code, r.text).toBe(0);
+    expect(r.grades).toMatchObject([{ pass: true }]);
   });
 
   it("a cassette without controlOut cannot grade it: excluded with a warning, never a pass", () => {
     const r = replayWith(`  - question_option_count:\n      matches: '^(Auth|Audit)$'\n      exactly: 2\n`, (c) => delete c.controlOut);
+    // Not graded at all: excluded (the replay warns), never a pass.
+    expect(r.grades).toEqual([]);
     expect(r.text).toMatch(/question_option_count/);
-    expect(r.text).not.toMatch(/✓ question_option_count/);
   });
 
   it("a gate label the cassette's redaction rewrote makes a count it could change evidence-unavailable", () => {

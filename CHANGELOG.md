@@ -42,7 +42,11 @@ All notable changes to this project are documented here. The format is based on
   per gate carries the reserved no-change prefix", no longer needs a script over `events.jsonl`. Zero
   sub-questions asked fails, never passes vacuously; unreadable gate evidence, or a count that a
   redaction-rewritten label could change, fails as evidence-unavailable. It grades live, on `verify-run`, and on
-  replay of a cassette with `controlOut`.
+  replay of a cassette with `controlOut`. Every sub-question a gate asks counts, one asked again after a denial
+  included. The two rules of that example:
+  `{matches: '^No changes — ', exactly: 1}` and `{matches: '^No changes — .*\b(add|remove)\b', exactly: 0}` — keep the
+  second case-insensitive (the default): `case_sensitive: true` applies to the whole pattern and would miss `Add`.
+  Single-quote the regexes; a control character (a double-quoted `\b` is a backspace) is refused at load.
 - **`eval --dry-run` plans an A/B before you spend, and `eval --max-budget-usd` caps it.** A dry run makes every
   check the real eval makes before its first run, then prints a plan from the runs dir's history and exits 0.
   It runs no agent, builds no `--decider-cmd` / `--decider-dir` channel, and creates no eval dir (its arm
