@@ -43,6 +43,10 @@ const SYNTHETIC_SHAPE_TESTS: Array<{ file: string; placeholder: string }> = [
     file: "test/hillclimb-subagent-system.test.ts",
     placeholder: 'const BUILTIN = ["BUILTIN-PART-0", "BUILTIN-PART-1", "BUILTIN-PART-2", "BUILTIN-PART-3"];',
   },
+  {
+    file: "test/hillclimb-e2e.test.ts",
+    placeholder: 'const BUILTIN = ["BUILTIN-PART-0", "BUILTIN-PART-1", "BUILTIN-PART-2", "BUILTIN-PART-3"];',
+  },
 ];
 
 describe("in-code synthetic transcript lines carry shapes, never agent-binary text", () => {
