@@ -121,6 +121,20 @@ All notable changes to this project are documented here. The format is based on
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
 
+- **`semantic_pairwise` inside a hillclimb flow, and `hillclimb freeze-ref`.** Under `hillclimb run` every pairwise
+  assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of
+  the scenario's `refs:`. A baseline pass is neutral against its own reference and freezes it after the pool from each
+  case's lowest-rep good row; any other variant is refused before spending while its case has none. Only the
+  baseline's reference decides `pass`; rows gain `win` / `win_present` / `both_bad`, a `win_<vN>` column per later
+  reference, and per-assert drill-down keys, which `state-template` declares and the metrics legend explains.
+  `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar;
+  `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
+  90% of its rows. A `semantic_pairwise` result now records `composedDoc` (the composed document's fingerprint, even
+  when no judge read it), `judgeAttempts`, and, for a metric-only reference, `pairwise[].gate: false` and the status
+  `invalid`; a caller's deadline stops the pairwise judging and ends the run as a timeout. `ref freeze`'s JSON gains
+  `status` (`frozen`, `added`, `exists`, `refused`), and a frozen entry records its run id and host-path-redacts its
+  run dir.
+
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
   nor a sub-agent dispatch, so until now the judge never saw it, and `include_subagent_text` could not
