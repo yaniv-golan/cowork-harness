@@ -95,7 +95,10 @@ GitHub-hosted runners, no token/Docker/agent:
                                                     # INFO as well. (`lint-skill --strict` never fails
                                                     # on INFO and has no floor to widen; to accept a
                                                     # reviewed lint-skill WARN, keep --strict and add
-                                                    # `--ignore-rule <rule>[=<skill-dir>/<path>]` or an
+                                                    # `--suppressions <file>` (one entry per accepted
+                                                    # site, kept outside the plugin; add --strict-ignores
+                                                    # to fail on a stale entry), `--ignore-rule
+                                                    # <rule>[=<skill-dir>/<path>]`, or an
                                                     # ignore-start/ignore-end marker in the SKILL.md.)
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity INFO --cassette-dir cassettes/
                                                     # committed *.cassette.json evidence suppresses only

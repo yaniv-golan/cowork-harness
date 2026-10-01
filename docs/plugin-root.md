@@ -147,8 +147,9 @@ python3 "$S/build_prompt.py" --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"
 
 The finding is still printed, marked as suppressed with your reason, and stops failing `--strict`. Every
 other `plugin-root-in-vm-bash` site in the skill keeps warning, so the next real `--data-dir` bug is not
-hidden. The full syntax, and `--ignore-rule` for run-wide decisions such as an accepted size cap, are in
-the [CLI guide](./cli.md#flags-worth-knowing).
+hidden. The full syntax, `--ignore-rule` for run-wide decisions such as an accepted size cap, and
+`--suppressions <file>` for reviewed sites listed outside the skill (no `SKILL.md` edit, so no cassette goes
+stale), are in the [CLI guide](./cli.md#flags-worth-knowing).
 
 **Plain `lint-skill` (no `--strict`) is advisory-only** — it prints these WARNs but exits 0. CI should
 run `lint-skill --strict path/to/skill/` to actually gate on them (this also gates on the provable

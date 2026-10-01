@@ -26,6 +26,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`lint-skill --suppressions <file>` accepts reviewed findings from a JSON file, one site per entry.** Each
+  entry (`{rule, file, match?, reason}`, `reason` required) suppresses at most one finding: of that rule, in
+  exactly that file, and with `match`, on the source line equal to it. A new copy of an accepted line therefore
+  still fails `--strict`, and no `SKILL.md` edit is needed, so no cassette goes stale (keep the file outside the
+  plugin). A malformed file or an unknown or provable rule is a usage error (exit 2). In `--json`, a finding a
+  file entry suppressed carries `"suppressed": {"by": "file", …, "source": "<file>#<entry index>"}`; `by` gains the
+  value `"file"`. When one line text has more findings than entries, the unsuppressed finding's message lists
+  every line with that text.
+- **`lint-skill --strict-ignores` reports a suppression that suppressed nothing as WARN instead of INFO**, so
+  `--strict --strict-ignores` fails on a stale marker, `--ignore-rule` or suppressions entry.
 - **`eval --dry-run` plans an A/B before you spend, and `eval --max-budget-usd` caps it.** A dry run makes every
   check the real eval makes before its first run, then prints a plan from the runs dir's history and exits 0.
   It runs no agent, builds no `--decider-cmd` / `--decider-dir` channel, and creates no eval dir (its arm
@@ -217,6 +227,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`lint-skill` lints a file once when two arguments reach it** (a relative and an absolute path to the same
+  skill, or a symlinked alias). It used to report each finding once per argument.
 - **`scaffold` no longer asserts on a file that existed before the run unchanged** (marked
   `artifacts[].preRun: true` — a `workspace_fixture` file, or one already in a connected folder): such a
   `file_exists` passes before the run does anything. The scaffold names the skipped files in a comment.
@@ -402,8 +414,8 @@ All notable changes to this project are documented here. The format is based on
   running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
   This was previously documented only in `docs/fidelity-gaps.md`.
 - The companion skill now says what a `lint-skill` ignore marker costs: it is an edit to `SKILL.md`, so it
-  changes the skill hash (staling that skill's cassettes) and adds text the agent reads. `--ignore-rule`
-  avoids both.
+  changes the skill hash (staling that skill's cassettes) and adds text the agent reads. `--suppressions <file>`
+  (one entry per accepted site) or `--ignore-rule` avoids both.
 
 ## [4.2.1] — 2026-10-01
 

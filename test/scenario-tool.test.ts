@@ -309,6 +309,67 @@ describe.skipIf(!can || !havePython)("cowork-harness lint-skill --ignore-rule (C
   });
 });
 
+// `--suppressions FILE` / `--strict-ignores` through the wrapper: the file path is forwarded as a value, a
+// relative path resolves against the caller's working directory, and the envelope counts file suppressions.
+describe.skipIf(!can || !havePython)("cowork-harness lint-skill --suppressions (CLI passthrough)", () => {
+  function setup(): { parent: string; sup: string } {
+    const parent = mkdtempSync(join(tmpdir(), "cwh-lint-skill-sup-"));
+    mkdirSync(join(parent, "big"));
+    writeFileSync(join(parent, "big", "SKILL.md"), "# Big\n\n" + "x".repeat(19_001));
+    const sup = join(parent, "suppressions.json");
+    writeFileSync(
+      sup,
+      JSON.stringify({
+        version: 1,
+        suppressions: [{ rule: "skill-body-over-reattach-cap", file: "big/SKILL.md", reason: "accepted size" }],
+      }),
+    );
+    return { parent, sup };
+  }
+
+  it("json: ok:true under --strict, suppressed.by=file with its source, suppressedCount:1", () => {
+    const { parent, sup } = setup();
+    const { code, stdout } = runCli(["lint-skill", join(parent, "big"), "--suppressions", sup, "--strict", "--output-format", "json"]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(true);
+    expect(payload.findings[0].suppressed).toMatchObject({ by: "file", reason: "accepted size", source: `${sup}#0` });
+    expect(payload.suppressedCount).toBe(1);
+  });
+
+  it("a relative path resolves against the caller's working directory", () => {
+    const { parent } = setup();
+    const r = spawnSync("node", [CLI, "lint-skill", "big", "--suppressions", "suppressions.json", "--strict"], {
+      encoding: "utf8",
+      cwd: parent,
+    });
+    expect(r.status, r.stderr).toBe(0);
+  });
+
+  it("--strict --strict-ignores fails on an entry that suppressed nothing", () => {
+    const { parent, sup } = setup();
+    writeFileSync(join(parent, "big", "SKILL.md"), "# Small\n");
+    const { code, stdout } = runCli(["lint-skill", join(parent, "big"), "--suppressions", sup, "--strict", "--strict-ignores"]);
+    expect(code).toBe(1);
+    expect(stdout).toMatch(/⚠ WARN \[lint-skill-ignore-unused\]/);
+  });
+
+  it("a linter crash never exits 0: a SKILL.md that is not UTF-8 → nonzero, ok:false", () => {
+    const { parent, sup } = setup();
+    writeFileSync(join(parent, "big", "SKILL.md"), Buffer.from([0x23, 0x20, 0xff, 0xfe, 0x0a]));
+    const { code, stdout } = runCli(["lint-skill", join(parent, "big"), "--suppressions", sup, "--output-format", "json"]);
+    expect(code).not.toBe(0);
+    expect(JSON.parse(stdout.trim()).ok).toBe(false);
+  });
+
+  it("`lint --suppressions` → exit 2 naming lint-skill as the owner", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-sup-owner-"));
+    const { code, stderr } = runCli(["lint", writeCleanScenario(d), "--suppressions", "x.json"]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--suppressions is a `lint-skill` flag; `lint` has no rule suppression/);
+  });
+});
+
 // `lint`/`lint-skill` previously accepted ANY `--output-format` value that wasn't literally "text" or
 // "json" (and a valueless trailing `--output-format`) by silently falling through isJsonOutput's strict
 // match into text mode — unlike every other command, which validates via parseOutputFormat and exits 2

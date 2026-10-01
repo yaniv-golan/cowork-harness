@@ -121,7 +121,7 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass:
     fail(subcommand, "usage", String((e as Error).message), undefined, isJsonOutput(args));
   }
   // --dotenv / --run-dir after the subcommand: applied here (python knows neither), then not forwarded.
-  args = stripCommandGlobals(subcommand, args, [...LINT_VALUE_FLAGS, "--ignore-rule"], isJsonOutput(args));
+  args = stripCommandGlobals(subcommand, args, [...LINT_VALUE_FLAGS, "--ignore-rule", "--suppressions"], isJsonOutput(args));
   resolveScenarioScript(); // fail on a missing script before the loader pre-pass does any work
   const json = isJsonOutput(args);
   const pyArgs = stripOutputFormatFlag(args);
