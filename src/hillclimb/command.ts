@@ -2,15 +2,16 @@
 // tunes, the model pins, and the tier the trace needs. It composes the existing pieces (the session loader,
 // eval's pin resolvers, the protocol tier's managed-config rule); nothing here is a second copy of them.
 
-import { realpathSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { readdirSync, realpathSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
-import { expandHome, type SessionConfig } from "../session.js";
+import { expandHome, resolveLaunchSources, type SessionConfig } from "../session.js";
+import type { MountTier } from "../staging/mount-naming.js";
 import { loadSessionFromFile } from "../run/execute.js";
 import { loadBaseline } from "../baseline.js";
 import { managedConfigMode } from "../runtime/protocol.js";
 import { resolveAgentPins, resolveJudgePins } from "../eval/pins.js";
-import type { PlatformBaseline } from "../types.js";
+import type { PlatformBaseline, Scenario } from "../types.js";
 import type { HillclimbCase } from "./cases.js";
 
 export interface PreparedCases {
@@ -21,7 +22,31 @@ export interface PreparedCases {
   baseline: (c: HillclimbCase) => PlatformBaseline;
   /** The concrete model the case's main loop must be served by. */
   pin: (c: HillclimbCase) => string;
+  /** Every file that defines the measurement — the harness gate's derived set. */
+  derivedPaths: (cases: readonly HillclimbCase[]) => string[];
+  /** Every host root the agent can read through a mount: folders, projects, uploads, plugins, local skills. */
+  mountRoots: (cases: readonly HillclimbCase[]) => string[];
 }
+
+/** The workspace fixture a scenario stages before its first turn, or null. The ONE hook point for hashing
+ *  fixture files into the harness gate: it returns null until the scenario key that declares a fixture
+ *  exists — no key is assumed here. */
+export function fixtureDirOf(_scenario: Scenario): string | null {
+  return null;
+}
+
+/** Every regular file under `dir`, recursively. */
+function filesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...filesUnder(p));
+    else if (e.isFile()) out.push(p);
+  }
+  return out;
+}
+
+const TIERS: readonly MountTier[] = ["hostloop", "container", "microvm", "protocol"];
 
 const realOr = (p: string): string => {
   try {
@@ -94,5 +119,30 @@ export function prepareCases(
     sessionFile: (c) => sessions.get(c.id)!.file,
     baseline: (c) => sessions.get(c.id)!.baseline,
     pin: (c) => pinOf.get(c.id)!,
+    derivedPaths: (cs) => [
+      ...new Set(
+        cs.flatMap((c) => {
+          const x = sessions.get(c.id)!;
+          const fixture = fixtureDirOf(c.scenario);
+          return [
+            resolve(c.file),
+            x.file,
+            ...x.session.uploads.map((u) => resolve(expandHome(u))),
+            ...(fixture ? filesUnder(fixture) : []),
+          ];
+        }),
+      ),
+    ],
+    mountRoots: (cs) => [
+      ...new Set(
+        cs.flatMap((c) => {
+          const x = sessions.get(c.id)!;
+          const tier = (TIERS as readonly string[]).includes(c.scenario.fidelity) ? (c.scenario.fidelity as MountTier) : "hostloop";
+          // The preview form: input checks only, no staging, no notices.
+          const src = resolveLaunchSources(x.session, x.baseline, tier, false, { stageFilters: false, quiet: true });
+          return [...src.mounts.map((m) => m.hostPath), ...src.hostOnlyFolders.map((m) => m.hostPath), ...src.skills.map((k) => k.src)];
+        }),
+      ),
+    ],
   };
 }

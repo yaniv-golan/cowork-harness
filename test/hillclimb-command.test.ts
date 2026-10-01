@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { prepareCases } from "../src/hillclimb/command.js";
+import { fixtureDirOf, prepareCases } from "../src/hillclimb/command.js";
 import { loadCases } from "../src/hillclimb/cases.js";
 import { UsageError } from "../src/errors.js";
 
@@ -93,5 +93,49 @@ describe("prepareCases", () => {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
     }
+  });
+});
+
+describe("prepareCases — what defines the measurement, and what the agent can read", () => {
+  it("derived paths: the scenario file, its session file and every uploaded input", () => {
+    const up = join(dir, "input.csv");
+    writeFileSync(up, "a,b\n");
+    session("_session.yaml", `model: claude-sonnet-5\nuploads:\n  - ./input.csv\nplugins:\n  local_plugins:\n    - ${SKILL}\n`);
+    scenario("a.yaml");
+    const { cases } = loadCases(dir);
+    const p = prepareCases(cases, { env: {} });
+    expect(
+      p
+        .derivedPaths(cases)
+        .map((x) => realpathSync(x))
+        .sort(),
+    ).toEqual([join(dir, "a.yaml"), join(dir, "_session.yaml"), up].map((x) => realpathSync(x)).sort());
+  });
+
+  it("mount roots: every folder the session connects, every upload, and the plugin itself", () => {
+    const folder = mkdtempSync(join(tmpdir(), "hc-folder-"));
+    try {
+      writeFileSync(join(dir, "input.csv"), "a,b\n");
+      session(
+        "_session.yaml",
+        `model: claude-sonnet-5\nfolders:\n  - from: ${folder}\nuploads:\n  - ./input.csv\nplugins:\n  local_plugins:\n    - ${SKILL}\n`,
+      );
+      scenario("a.yaml");
+      const { cases } = loadCases(dir);
+      const roots = prepareCases(cases, { env: {} })
+        .mountRoots(cases)
+        .map((x) => realpathSync(x));
+      expect(roots).toContain(realpathSync(folder));
+      expect(roots).toContain(realpathSync(join(dir, "input.csv")));
+      expect(roots).toContain(realpathSync(SKILL));
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("the fixture hook stays empty until the scenario key exists: no fixture dir is invented", () => {
+    scenario("a.yaml");
+    const { cases } = loadCases(dir);
+    expect(fixtureDirOf(cases[0].scenario)).toBeNull();
   });
 });
