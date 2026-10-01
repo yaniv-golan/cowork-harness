@@ -380,6 +380,11 @@ cat "${ENVELOPE}"
     expect(results("baseline")).toBe(before);
     const v1 = env.variants.find((v) => v.variant === "v1")!;
     expect(v1.rewritten).toBe(1);
-    expect(v1.listed).toMatchObject([{ rep: 1, why: expect.stringMatching(/judge_invalid.*re-runs it/) }]);
+    expect(v1.listed).toMatchObject([
+      { rep: 1, why: expect.stringMatching(/judge_invalid.*hillclimb run evals --flow flow --variant v1.*re-runs it/) },
+    ]);
+    expect(r.stderr).toMatch(
+      /\[v1\] 1 slot\(s\) hold a judge_invalid error row; the next `hillclimb run evals --flow flow --variant v1` re-runs them/,
+    );
   }, 120_000);
 });

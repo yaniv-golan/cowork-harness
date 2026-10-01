@@ -417,7 +417,7 @@ async function regradeFlowInner(
         vr.listed.push({
           prompt_id: id,
           rep: Number(e.rep),
-          why: "an errors.jsonl row (judge_invalid): its slot is open — the next `hillclimb run` of this variant re-runs it",
+          why: `an errors.jsonl row (judge_invalid): its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${v}\` re-runs it (one agent run)`,
         });
       }
     }
@@ -562,6 +562,13 @@ async function regradeFlowInner(
       );
     }
     for (const l of report) say(l);
+    for (const vr of outcome.variants) {
+      const open = vr.listed.filter((x) => x.why.startsWith("an errors.jsonl row (judge_invalid)")).length;
+      if (open)
+        say(
+          `  [${vr.variant}] ${open} slot(s) hold a judge_invalid error row; the next \`hillclimb run ${args.target} --flow ${flowArg} --variant ${vr.variant}\` re-runs them (about one agent run each)`,
+        );
+    }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
     say(
       `hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${v.rewritten} rewritten${v.listed.length ? `, ${v.listed.length} listed` : ""}`).join("; ")}`,
