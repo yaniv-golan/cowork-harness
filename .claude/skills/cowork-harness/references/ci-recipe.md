@@ -531,7 +531,7 @@ skipped live-only assertions is reported on each replay result as `skippedAssert
 A plain `replay` **warns** on a DRIFTED cassette (skill/baseline drift) but stays `ok:true` — a green
 replay does **not** imply the recording is still valid. **Two exceptions fail a bare `replay`:**
 `unverifiable-skill` (since 2.0.0) — staleness that could not be checked at all, most often a cassette that
-moved — and `unverifiable-fixture`, a `workspace_fixture` whose signature cannot be checked. Recover with `--session <file>` rather than re-recording. Each replay result carries `staleness[]`, an array of
+moved — and `unverifiable-fixture`, a `workspace_fixture` whose signature cannot be checked. Recover `unverifiable-skill` with `--session <file>` rather than re-recording; recover `unverifiable-fixture` by restoring the fixture directory where the cassette expects it (its stored path is relative to the cassette — `--session` does not change it), or by re-recording after moving it. Each replay result carries `staleness[]`, an array of
 `{class, message}`, so a token-free gate can act on it without `ok` being the whole story:
 
 | `class` | meaning | concern |

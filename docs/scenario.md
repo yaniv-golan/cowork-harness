@@ -552,8 +552,8 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 > ⚠️ **"This specific file must NOT exist" is `file_absent`, and it is LIVE-only.** Do not reach for
 > `no_unexpected_files` — that is an *allowlist over newly created files*, a different claim with two
 > traps: it is **new-files-only**, so a file that existed before the run is invisible to it however
-> tight the allowlist, and it needs a pre-run manifest, so a `--resume` run fails it
-> evidence-unavailable. `file_absent` has neither precondition. It does not run on `replay`: proving
+> tight the allowlist, and it needs a pre-run manifest (on a `--resume` turn it diffs against the FIRST
+> turn's, so "new" there means new since the session began). `file_absent` has neither precondition. It does not run on `replay`: proving
 > absence needs an exhaustive, healthy walk, and a cassette records no walk health — "not in the
 > manifest" and "the walk never saw it" are indistinguishable there, so the key would pass while
 > proving nothing. It also fails **evidence-unavailable** on `lane: remote` and on a pre-run origin of
@@ -1114,10 +1114,15 @@ fixture path — or names a directory the fixture provides, in any letter case �
 or rewritten the file; an untouched pre-run file fails, and so does a run with no pre-run manifest to tell) or
 `authored: false` (inheriting it is fine). `file_exists` and `user_visible_artifact` take an object form for
 it, `{path, authored}`; `artifact_text` / `artifact_json` take `authored` as a field. `authored: true` works on
-any scenario, fixture or not; it arms the pre-run manifest. It applies to a regular file: a directory fails
-(assert on a file the step writes inside it), and a symlink — or a path reached through a symlinked
+any scenario, fixture or not; it arms the pre-run manifest. Authorship is decided per invocation: on a
+`--resume` turn — which captures no manifest of its own and would otherwise diff against the first turn's —
+`authored: true` fails evidence-unavailable, so a turn never takes credit for what an earlier turn wrote. It
+applies to a regular file: a directory fails (assert on a file the step writes inside it), a hard-linked file is
+evidence-unavailable (the authored-file capture the judge grades excludes it too), and a symlink — or a path reached through a symlinked
 directory — is never authored evidence. The file is looked up by its on-disk name, so on a case-insensitive
-filesystem `outputs/REPORT.md` is the fixture's `report.md`.
+filesystem `outputs/REPORT.md` is the fixture's `report.md` (likewise an NFC/NFD spelling of a non-ASCII
+name). A copy or rename of a fixture file to a NEW name is new content at a new path and counts as authored,
+exactly as the judge's authored capture counts it.
 
 **Recording and replay.** A cassette stores the fixture path relative to itself and records every fixture file
 in its manifest like any other outputs file, so replay needs no fixture and knows which files were pre-run.

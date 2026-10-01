@@ -126,10 +126,12 @@ All notable changes to this project are documented here. The format is based on
   manifest to tell (evidence-unavailable); on replay the cassette's manifest hashes decide, and a hash that
   record-time scrubbing or redaction rewrote is evidence-unavailable, never authored. `file_exists` and
   `user_visible_artifact` take it through a new object form, `{path, authored}`; the string form is
-  unchanged. `authored: true` applies to a regular file: a directory fails, and a symlink is never authored
-  evidence. On a `workspace_fixture` scenario, one of these keys on a file (or directory) the fixture provides
-  is refused unless it states `authored:` — by `lint` (two new ERROR rules, `workspace-fixture-invalid` and
-  `workspace-fixture-vacuous-assert`), and before evaluating anything by `run`, `record`, `eval`, a `--resume`
+  unchanged. `authored: true` applies to a regular file: a directory fails, and a symlink or a hard-linked file is
+  never authored evidence. It is decided per invocation, so on a `--resume` turn it fails evidence-unavailable
+  rather than credit the turn with an earlier turn's writes. On a `workspace_fixture` scenario, one of these keys on a file (or directory) the fixture provides
+  (matched case- and Unicode-normalization-insensitively) is refused unless it states `authored:` — by `lint`
+  (two new ERROR rules, `workspace-fixture-invalid` and `workspace-fixture-vacuous-assert`, and a WARN
+  `workspace-fixture-not-relative` for an absolute or `~/` fixture path), and before evaluating anything by `run`, `record`, `eval`, a `--resume`
   turn, `verify-run` and `replay --assert-from`. `authored: false` says inheriting it is fine.
 - **`fixture export <run-dir> --out <dir>` copies a kept run's outputs tree into a directory** a later scenario
   can start from, byte-for-byte and keeping permission bits. It refuses, naming the files and writing nothing,
