@@ -530,6 +530,32 @@ describe("runHillclimbCommand", () => {
         expect(text).not.toContain("hillclimb freeze-ref");
       });
 
+      it("a damaged baseline document is refused with 'start a fresh flow dir', never a freeze-ref that cannot repair it", async () => {
+        pairwise();
+        const sc = loadCases(join(cwd, "evals")).cases[0]!.scenario;
+        const key = pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!);
+        const store = join(cwd, "flow", "baseline", "ref");
+        freezeRef(
+          store,
+          "alpha",
+          { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
+          { [key]: "THE ANSWER" },
+          {
+            harnessVersion: "t",
+            composerId: "c",
+            scenario: "alpha",
+            taskSha256: createHash("sha256").update(sc.prompt, "utf8").digest("hex"),
+          },
+        );
+        writeFileSync(join(store, "alpha", `doc-${key}.txt`), "TAMPERED");
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        const text = err.join("\n");
+        expect(text).toContain("start a fresh flow dir");
+        // The refusal's own text names `ref freeze` generically; the hillclimb repair hint must not offer a freeze.
+        expect(text).not.toContain("hillclimb freeze-ref evals");
+      });
+
       it("a baseline pass is neutral against its own missing reference, so it runs — with the flow's setup, not refs:", async () => {
         pairwise();
         const r = await runHillclimbCommand(args("--approve-harness"), deps());

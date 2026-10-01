@@ -15,6 +15,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **A hillclimb flow begun on an earlier release with `semantic_pairwise` cases: start a fresh flow dir.** Its
+  baseline rows were judged against the scenario's own `refs:` and carry no `win` columns, so they can freeze no
+  baseline reference, and continuing would give `pass` two meanings in one flow.
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
@@ -133,9 +136,9 @@ All notable changes to this project are documented here. The format is based on
   `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
   90% of its rows. A `semantic_pairwise` result now records `composedDoc` (the composed document's fingerprint, even
   when no judge read it), `judgeAttempts`, and, for a metric-only reference, `pairwise[].gate: false` and the status
-  `invalid`; a caller's deadline stops the pairwise judging and ends the run as a timeout. `ref freeze`'s JSON gains
-  `status` (`frozen`, `added`, `exists`, `refused`), and a frozen entry records its run id and host-path-redacts its
-  run dir.
+  `invalid`; a caller's deadline stops the gating comparisons and ends the run as a timeout (a metric-only comparison
+  it cuts off is recorded `invalid`). `ref freeze`'s success JSON gains `status` (`frozen` or `added`), and a frozen
+  entry records its run id and its run dir relative to the runs root, never as a host path.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
