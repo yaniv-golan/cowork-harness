@@ -513,3 +513,46 @@ describe("eval flags are documented where a consumer reads them", () => {
     expect(doc("docs/eval.md")).not.toMatch(/There is no budget flag/);
   });
 });
+
+// A signal during a dry run must not leave the temp snapshot behind. The handler can only be exercised in a
+// process that is allowed to die, so this runs a script against the REAL source (via tsx) in a child node,
+// the way test/termination-handler.test.ts does: the script raises SIGINT on itself the moment the snapshot
+// root exists, and the test checks the exit code and that the root is gone.
+describe.runIf(process.platform !== "win32")("eval --dry-run: a signal mid-plan", () => {
+  it("SIGINT removes the temp snapshot root and exits 130", async () => {
+    const { scen, a, b } = setup();
+    const marker = join(root, "snap-root.txt");
+    const script = join(root, "dry.mts");
+    const cmd = JSON.stringify(join(import.meta.dirname, "..", "src", "eval", "command.ts"));
+    writeFileSync(
+      script,
+      `import { writeFileSync } from "node:fs";
+       import { parseEvalArgs, planEvalDryRun } from ${cmd};
+       const args = parseEvalArgs([${JSON.stringify(scen)}, "--arm", ${JSON.stringify(`before=${a}`)}, "--arm", ${JSON.stringify(`after=${b}`)},
+         "--out", ${JSON.stringify(join(root, "eval"))}, "--quiet", "--dry-run"]);
+       await planEvalDryRun(args, {
+         runJob: async () => { throw new Error("never"); },
+         tokenCheck: () => ({ id: "token", title: "t", status: "ok", detail: "ok", required: true }),
+         log: () => {},
+         readIndex: () => [],
+         onSnapshotRoot: (d) => { writeFileSync(${JSON.stringify(marker)}, d); process.kill(process.pid, "SIGINT"); },
+       });
+       setTimeout(() => {}, 30_000);`,
+    );
+    const { spawn } = await import("node:child_process");
+    const proc = spawn(process.execPath, ["--import", "tsx", script], {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: join(root, "runs-unused") },
+    });
+    let stderr = "";
+    proc.stderr!.on("data", (d) => (stderr += d));
+    const killer = setTimeout(() => proc.kill("SIGKILL"), 30_000);
+    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((res) => proc.on("exit", (c, s) => res([c, s])));
+    clearTimeout(killer);
+    expect(signal, stderr).toBeNull();
+    expect(code, stderr).toBe(130);
+    const snapRoot = readFileSync(marker, "utf8");
+    expect(snapRoot).toMatch(/cwh-eval-plan-/);
+    expect(existsSync(snapRoot)).toBe(false);
+  }, 60_000);
+});
