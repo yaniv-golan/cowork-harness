@@ -647,7 +647,8 @@ in `meta.metrics_unavailable` when it is still unavailable; a re-measure never r
 row rebuilt with no judge call (a fill's neutral-only row, or a case with no judged assert) is not re-measured.
 
 **Removing a metric** is allowed too. `hillclimb run` warns that the older rows keep its values and new rows will not
-carry it.
+carry it. A row `hillclimb regrade` rebuilds drops it — its value, `<id>_present` and its signature — as a row written
+after the removal would.
 
 **Changing a metric's declaration** — the same id with a different artifact, path, direction, `scale`, `unbounded` or
 `min` — is refused before spending (exit 2) on `hillclimb run` and its `--dry-run`, and before any judge call on
