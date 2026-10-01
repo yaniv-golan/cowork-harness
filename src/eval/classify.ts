@@ -193,6 +193,9 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
 
   if (r.result === "success") {
     if ((source === undefined || source === "agent") && kind === undefined) {
+      // A stall is the agent's own failure, so it fails every row. The flag is run.ts's detector: a closing
+      // `?`, or (after a gate) a cued closing request for input such as "Please share X so I can…" — see
+      // input-request.ts. `allow_stall` is a verdict modifier and is not consulted here.
       return r.stalledOnQuestion === true ? out("errored_agent", "stalled_on_question") : out("valid", "success");
     }
     return unclassified("success_with_error_fields");

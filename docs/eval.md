@@ -134,6 +134,12 @@ An eval dir whose `runs.jsonl` was written before the refusal reason was kept in
 assertion that failed although its claims met `min_pass` (counted as `unrecorded`); a refusal whose
 claims also missed `min_pass` cannot be told from a graded fail and is scored as one.
 
+A **stalled** rep is one whose run the `stalled` verdict signal would flag: the agent ended asking for input
+(a closing `?`, or, after an `AskUserQuestion` gate, a closing request such as "Please share X so I can…")
+with no tool work after its last gate. It is classified `errored_agent` and fails every row; `allow_stall`
+does not change that here. The request test is English-only — see the `stalled` row in the companion
+skill's `references/assertion-catalog.md`.
+
 The `auth` and `usage_limit` rows need the reply to come from the agent itself, which writes it as a
 `<synthetic>` turn. A skill's own message that merely reads like one ("You've reached your daily limit
 of 5 files") is the skill's failure and is scored.

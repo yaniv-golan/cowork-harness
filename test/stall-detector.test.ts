@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Run } from "../src/run/run.js";
 import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
 import { ScriptedDecider } from "../src/decide/decider.js";
+import { endsOnRequestForInput } from "../src/run/input-request.js";
 
 // Minimal in-memory session that yields a scripted event sequence (mirrors classify-result-error.test.ts).
 class MockSession implements AgentSession {
@@ -152,4 +153,155 @@ describe("stall-on-question detector", () => {
     ]);
     expect(rec.stalledOnQuestion).toBeFalsy();
   });
+});
+
+// The question test is wider than a trailing `?`: a closing sentence that ASKS FOR INPUT without one is the
+// same stall. Modelled on two real runs of one scenario (paraphrased, no personal data): four answered gates,
+// no tool work after the last one, then a plain-text request. The `?` sibling always fired; the imperative
+// one passed as green. Everything goes through the real Run, so the run.ts wiring is under test, not just
+// the helper.
+describe("stall detector: a closing request for input without a `?`", () => {
+  const afterGate = (text: string) =>
+    drive([
+      { type: "tool_use", name: "Read", input: {} },
+      gateToolUse(),
+      gateDecision(),
+      { type: "assistant_text", text },
+      { type: "result", isError: false },
+    ]);
+  const noTools = (text: string) =>
+    drive([
+      { type: "assistant_text", text },
+      { type: "result", isError: false },
+    ]);
+
+  it("GREEN (unchanged): the `?` sibling — asks for the round terms as a question → stalled", async () => {
+    const rec = await afterGate("Your cap table is loaded. What pre-money valuation and raise amount should I model for the Series A?");
+    expect(rec.stalledOnQuestion).toBe(true);
+  });
+
+  it("RED before the fix: the imperative sibling — 'Please share … so I can run the numbers.' → stalled", async () => {
+    const rec = await afterGate(
+      "Your cap table is loaded.\n\nPlease share your pre-money valuation and the total amount you're raising so I can run the numbers.",
+    );
+    expect(rec.result).toBe("success");
+    expect(rec.stalledOnQuestion).toBe(true);
+  });
+
+  it.each([
+    [
+      "a question followed by a parenthetical aside",
+      "Before I start the math — what date was the SAFE signed? (Day and month matter for the holding period.)",
+    ],
+    ["a question followed by a 'For example:' trailer", "Which area should I dig into? For example: hooks, permissions, or plugins."],
+    [
+      "'upload it … Once I have the file, I'll …'",
+      "Please export the deck as a PDF and upload it here. Once I have the file, I'll run the full review.",
+    ],
+    ["'Once you share …, I'll …'", "Once you share the option pool size, I'll finish the dilution table."],
+    ["'Let me know which …'", "I found two candidate models. Let me know which one you want me to use."],
+    ["'I need … to proceed'", "I need the closing date of the round to proceed."],
+    ["a request wrapped in bold", "**Please provide the valuation cap so I can finish the model.**"],
+    ["a bold question (the raw `?` test misses the trailing `**`)", "**Which scenario should I model?**"],
+    ["'here' as the last word", "Please paste the cap table here."],
+    ["'with the <thing>' is not a recipient", "Please reply with the numbers so I can finish the model."],
+    ["a question followed by an emoji", "Which of the two models should I use? 🙂"],
+    ["'(A or B?)' at the very end", "I can model it either way (pre-money or post-money?)"],
+  ])("%s → stalled", async (_label, text) => {
+    expect((await afterGate(text)).stalledOnQuestion).toBe(true);
+  });
+
+  it.each([
+    "Here is the full breakdown. Let me know if you'd like any changes.",
+    "That's the whole answer. Feel free to ask if anything is unclear.",
+    "Done — the table is above. Let me know if you have questions.",
+    "Please share any feedback you have on the model.",
+    "Please let me know if you'd like a deeper pass.",
+    "If you can tell me what consistency guarantee you need, I can narrow that down.",
+    "Let me know what you think.",
+    "I'll need to check the docs before I can say more.",
+    "Summary written. Happy to adjust anything — just let me know.",
+    // completed-work closers and hand-offs: the input goes to someone else, or nowhere
+    "Please share this with your team.",
+    "Please send the memo to your investors before Friday.",
+    "Please upload the final PDF to your data room.",
+    "Please select Save to keep the file.",
+    "Please choose whichever format works best.",
+    "Please tell me how it goes!",
+    "Please give me a shout if anything looks off.",
+    "Please share thoughts on the draft.",
+    "Please confirm the numbers look right before sending to investors.",
+    "I'll need more data before I can make a firm call, but the base case is solid.",
+    "When I have the numbers, I'll update the table.",
+    // hand-offs to a third party: the cue ("here", "to proceed", "and I'll") binds to someone else's action
+    "Please pick the version you like; both are here in outputs/.",
+    "Please share the attached report with the team here.",
+    "Please confirm the assumptions with the CFO to continue the diligence.",
+    "Please provide this summary to the founders to proceed with the close.",
+    "Please send this to the team to get started on the rollout.",
+    "Please send the deck to the partners and I'll follow up with the numbers next week.",
+    // quoted or generated text is not the agent asking in its own voice
+    "Here is the snippet:\n\n```\nPlease share your valuation so I can run the numbers.\n```",
+    "The founder wrote:\n\n> Please share your valuation so I can run the numbers.",
+  ])("a polite closer is NOT a stall, even right after a gate: %s", async (text) => {
+    expect((await afterGate(text)).stalledOnQuestion).toBeFalsy();
+  });
+
+  it("only the CLOSING sentence counts — a request earlier in the answer is not a stall", async () => {
+    const rec = await afterGate("Please share the valuation next time. For now I assumed $10M and the full model is above.");
+    expect(rec.stalledOnQuestion).toBeFalsy();
+  });
+
+  // The deliverable is written, a final follow-up-offer gate is declined, and the agent signs off. No
+  // productive tool ran after that gate, so only the wording separates this from a stall. In `eval` a
+  // false stall here is `errored_agent`, which fails every row.
+  it("a declined follow-up gate after a written deliverable, then a sign-off → NOT stalled", async () => {
+    const rec = await drive([
+      { type: "tool_use", name: "Write", input: {} },
+      gateToolUse(),
+      gateDecision(),
+      { type: "assistant_text", text: "Sounds good — please confirm the numbers look right before sending to investors." },
+      { type: "result", isError: false },
+    ]);
+    expect(rec.result).toBe("success");
+    expect(rec.stalledOnQuestion).toBeFalsy();
+  });
+
+  // With no gate, toolLog has no AskUserQuestion, so productiveAfterGate counts every tool and a zero-tool
+  // knowledge answer has it at 0 by construction. Wording alone must not stall that run: only the `?` rule
+  // applies there, exactly as before the widening.
+  it.each([
+    "Please share your pre-money valuation and the total amount you're raising so I can run the numbers.",
+    "Which area should I dig into? For example: hooks, permissions, or plugins.",
+  ])("NO gate fired: a `?`-free request does not stall a zero-tool run: %s", async (text) => {
+    expect((await noTools(text)).stalledOnQuestion).toBeFalsy();
+  });
+
+  it("a closing request after productive post-gate work is not `stalled` (the precondition is unchanged)", async () => {
+    const rec = await drive([
+      gateToolUse(),
+      gateDecision(),
+      { type: "tool_use", name: "Write", input: {} },
+      { type: "assistant_text", text: "Please share the raise amount so I can finish the scenario." },
+      { type: "result", isError: false },
+    ]);
+    expect(rec.stalledOnQuestion).toBeFalsy();
+  });
+});
+
+// The helper runs on untrusted model output. An earlier draft trimmed with `/[\s*_`]+$/`, which is quadratic
+// on a long whitespace run (~48 s for 200k spaces on Node 25). Generous bound: this is a complexity guard,
+// not a benchmark (linear finishes in ~1 ms).
+it("the input-request test is linear on pathological whitespace/markup runs", () => {
+  for (const text of [
+    "I need x " + "before I can y ".repeat(20_000) + ", z",
+    "x. " + "please ".repeat(100_000) + ". Once I have the file, I'll go.",
+    "a" + " ".repeat(200_000) + "b",
+    "a" + "*_`".repeat(70_000) + "b",
+    "Once you share " + "x ".repeat(100_000),
+  ]) {
+    const t = performance.now();
+    endsOnRequestForInput(text);
+    expect(performance.now() - t).toBeLessThan(2000);
+  }
 });

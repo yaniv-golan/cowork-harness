@@ -941,7 +941,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
+      "(verdict modifier) suppress the default-fail when a run ends on a question or a closing request for input (e.g. 'Please share X so I can…') having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
     ),
   allow_undelivered_deliverables: z
     .literal(true)
@@ -1500,8 +1500,8 @@ export interface RunResult {
   /** Absolute path to the agent's full stderr log (`<outDir>/agent.stderr.log`), surfaced so an
    *  OOM/crash debugger knows where to look. Live path only — absent on replay (no live process). */
   stderrLogPath?: string;
-  // the run ended on a question having done no productive tool work after its last gate (the agent
-  // asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
+  // the run ended on a question or a closing request for input (src/run/input-request.ts) having done no
+  // productive tool work after its last gate (the agent asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
   // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
   // allow_stall. Scenario-lane only; re-derived by the detector in run.ts on both the live and replay
   // re-drive (NOT a persisted-then-read flag).
