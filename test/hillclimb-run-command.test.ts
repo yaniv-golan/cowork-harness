@@ -60,6 +60,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
     secrets: ["sk-test-SECRET-9"],
     stderr: (l) => err.push(l),
     flags: {},
+    isolationCheck: () => undefined,
     runScenario: async (a) => {
       calls.push({ scenario: a.scenario, extra: a.extra as Record<string, unknown> });
       const outDir = join(cwd, "runs", String(a.extra.runId));
@@ -448,6 +449,38 @@ describe("runHillclimbCommand", () => {
         expect(err.join("\n"), where).toMatch(/snapshot root .* inside/);
       }
       expect(calls).toEqual([]);
+    });
+  });
+
+  describe("the judge's isolation preflight", () => {
+    const refuse = () => "the host claude cannot run isolated (SYNTHETIC refusal)";
+
+    it("a flow with semantic_matches refuses up front when the host claude cannot run the judge isolated", async () => {
+      const r = await runHillclimbCommand(args("--approve-harness"), deps({ isolationCheck: refuse }));
+      expect(r.exitCode).toBe(2);
+      expect(calls).toEqual([]);
+      expect(err.join("\n")).toContain("SYNTHETIC refusal");
+    });
+
+    it("a flow with no judge and no LLM answering never asks", async () => {
+      writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace(/  - semantic_matches:[\s\S]*$/, ""));
+      let asked = false;
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ isolationCheck: () => ((asked = true), undefined) }));
+      expect(asked).toBe(false);
+    });
+
+    it("on_unanswered: llm asks, unless a decider channel replaces the LLM decider", async () => {
+      writeFileSync(
+        join(cwd, "evals", "alpha.yaml"),
+        SCENARIO.replace(/  - semantic_matches:[\s\S]*$/, "").replace("prompt:", "on_unanswered: llm\nprompt:"),
+      );
+      expect((await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ isolationCheck: refuse }))).exitCode).toBe(2);
+      err = [];
+      const viaDir = await runHillclimbCommand(
+        args("--approve-harness", "--dry-run", "--decider-dir", join(cwd, "d")),
+        deps({ isolationCheck: refuse }),
+      );
+      expect(viaDir.exitCode).toBe(0);
     });
   });
 });

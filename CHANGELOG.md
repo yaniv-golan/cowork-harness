@@ -81,7 +81,8 @@ All notable changes to this project are documented here. The format is based on
   refused before spending. Each variant runs from a snapshot of the plugin taken on its first run, so a resume or
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
   refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
-  inside the tuned plugin, and an unapproved harness change (`--approve-harness` records it). Rows carry the
+  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
+  harness change (`--approve-harness` records it). Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, the run's content signature and
   skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied and attached to its final turn. Traces inline each sub-agent's turns after its

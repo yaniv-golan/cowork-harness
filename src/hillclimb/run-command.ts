@@ -73,6 +73,9 @@ export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolea
   stderr: (line: string) => void;
   flags: F;
   runScenario: ScenarioRunner<F>;
+  /** The host-`claude` isolation preflight (`isolationRefusal`, src/decide/llm-transport.ts): the refusal message, or
+   *  undefined. Required, as on eval, so no caller skips it by omission. */
+  isolationCheck: () => string | undefined;
   harnessVersion?: string;
   /** Where a run with this id writes — `runOutDir` unless a test redirects it. */
   runDirFor?: (scenario: Scenario, runId: string) => string;
@@ -127,6 +130,19 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     env: deps.env,
   });
   const live = prep.lever;
+
+  // The judge and the LLM decider run the host `claude` isolated and tool-less (eval's rule): a CLI that cannot is
+  // refused here, once, instead of failing every rep after its agent spend. A decider channel replaces the LLM
+  // decider, so `on_unanswered: llm` then never calls it.
+  const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
+  if (
+    cases.some(
+      (c) => (llmDecider && c.scenario.on_unanswered === "llm") || (c.scenario.assert ?? []).some((a) => a.semantic_matches !== undefined),
+    )
+  ) {
+    const iso = deps.isolationCheck();
+    if (iso) throw new UsageError(iso);
+  }
   const flowArg = normalizeRootArg(args.flow);
   const flowHash = flowHashOf(resolve(deps.cwd, flowArg));
   const runsRoot = deps.runsRoot ?? runsWriteRoot();
