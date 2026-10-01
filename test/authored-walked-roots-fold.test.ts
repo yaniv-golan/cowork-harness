@@ -60,6 +60,17 @@ describe.runIf(caseInsensitiveFs())("walked roots are matched on the canonical, 
   });
 });
 
+describe.runIf(caseInsensitiveFs())("the replay link set is checked on the canonical name", () => {
+  it("OUTPUTS/lnk.json, recorded as the link outputs/lnk.json, gets the link message", () => {
+    const mnt = join(realpathSync(mkdtempSync(join(tmpdir(), "fold-lnk-"))), "mnt");
+    mkdirSync(join(mnt, "outputs"), { recursive: true });
+    writeFileSync(join(mnt, "outputs", "lnk.json"), ""); // replay's placeholder for a recorded link
+    const c = { ...ctx(mnt), linkPaths: new Set(["outputs/lnk.json"]), postRunHashes: {} };
+    const [r] = evaluate([{ file_exists: { path: "OUTPUTS/lnk.json", authored: true } } as Assertion], c);
+    expect(r.message).toMatch(/it is a symlink — a link is never authored evidence/);
+  });
+});
+
 describe("the walked-roots rule still refuses what was never walked, whatever the spelling", () => {
   it("the walked-roots rule runs before any manifest lookup: a path outside the declared roots is refused even with a manifest entry", () => {
     const mnt = join(realpathSync(mkdtempSync(join(tmpdir(), "fold-order-"))), "mnt");

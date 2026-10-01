@@ -1830,6 +1830,8 @@ export type AuthorshipContext = Pick<
   "workRoot" | "userVisiblePrefixes" | "preRunHashes" | "preRunPaths" | "preRunOrigin" | "postRunHashes" | "linkPaths" | "resume"
 >;
 
+const LINK_WHY = "it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)";
+
 export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash?: string } = {}): Authorship {
   const undecidable = (why: string, evidence = false): Authorship => ({ state: "undecidable", why, evidence });
   if (ctx.preRunOrigin === "remote-unavailable") return undecidable("the pre-run manifest is not locally observable (remote)", true);
@@ -1855,8 +1857,7 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
   } catch {
     return { state: "not_found" };
   }
-  if (st.isSymbolicLink() || ctx.linkPaths?.has(lexical))
-    return undecidable("it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)");
+  if (st.isSymbolicLink()) return undecidable(LINK_WHY);
   if (st.isDirectory()) return { state: "directory" };
   if (!st.isFile()) return { state: "not_regular" };
   // A second hard link is another name for an existing inode (it may be an untouched fixture file); the
@@ -1885,6 +1886,8 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
   } catch {
     return undecidable("its on-disk name could not be resolved");
   }
+  // A replay placeholder for an entry recorded as a link: looked up by the same canonical name as every other lookup.
+  if (ctx.linkPaths?.has(rel)) return undecidable(LINK_WHY);
   // FIRST: the path must lie under a folder the pre-run walk covered — the user-visible roots (outputs/ and the
   // connected folders) plus uploads/, exactly what `capturePreRunManifest` walks. Anything else under the work root
   // (a staged plugin or skill tree, say) is absent from the manifest because it was never walked, not because the
