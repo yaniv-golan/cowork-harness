@@ -2200,6 +2200,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         !!opts.nonDeterministicHint,
       nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
       gateProvenance: gateProvenance.total ? gateProvenance : undefined,
+      partlyScriptedGates: record.partlyScriptedGates.length ? record.partlyScriptedGates : undefined, // report-only (warn signal)
       permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
       // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails
       // when unasserted. `undefined` (NOT an all-false object) when events.jsonl was missing/corrupt, so
@@ -3193,6 +3194,8 @@ export function buildPartialResult(args: {
     // undefined: a gate-caused partial run still reports whether earlier gates were non-deterministic.
     nonDeterministic,
     nonDeterministicTerminal,
+    // A `fail` fallback ends the run ON the partly scripted batch — the finding explains why.
+    partlyScriptedGates: args.record.partlyScriptedGates?.length ? args.record.partlyScriptedGates : undefined,
     permissiveAutoAllow: undefined,
     scan: undefined,
     // Computed before the salvage branch; a filesystem-proven delete must survive into the partial result.

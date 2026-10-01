@@ -31,6 +31,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **A question batch your `answers:` script only partly matches is now reported, not just warned about.**
+  When one `AskUserQuestion` carries several sub-questions and the scripted rules match some but not all,
+  the whole batch goes to the `on_unanswered` fallback, so the matched answers are not delivered. That stays
+  the same. The run now also records each such batch in `RunResult.partlyScriptedGates`
+  (`{requestId, matched, unmatched}`, naming the sub-questions) and raises the warn-severity
+  `partly_scripted_gate` verdict signal, which names the matched and unmatched sub-questions and who answered
+  the batch instead. `replay` re-derives it from the cassette's frozen `answers:`, and `verify-run` from the
+  scenario you pass: `verify-run` clears once every sub-question is scripted, and a replay once the run is re-recorded
+  with them scripted (a replay reads the answers frozen at record). It never changes a verdict or exit
+  code, and a single-question gate that no rule matched does not raise it.
 - **Scenario `metrics:` — numbers a scenario measures, beside the verdict.** Each entry
   (`{id, artifact, path, better, scale | unbounded, min?}`; `scale` is the upper bound of the range, `min` the floor, default 0) reads one number from a JSON file the run wrote and is
   reported in `RunResult.metrics` as `{id, value}` or `{id, unavailable: <reason>}` — one per declared id, in order,

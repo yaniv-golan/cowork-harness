@@ -33,6 +33,7 @@ function minimalChatRecord(): RunRecord {
     gateOptions: [],
     decisions: [],
     permissiveAutoAllow: [],
+    partlyScriptedGates: [],
     unanswered: [],
     toolResults: [],
     gateAnswers: [],

@@ -2207,7 +2207,8 @@ export interface RunResult {
         | "scan_unavailable"
         | "ended_with_question"
         | "undelivered_deliverables"
-        | "delivery_unobservable";
+        | "delivery_unobservable"
+        | "partly_scripted_gate";
       severity: "fail" | "warn";
       message: string;
     }>;
@@ -2474,6 +2475,12 @@ export interface RunResult {
   nonDeterministicTerminal?: boolean;
   /** tools auto-allowed by cowork parity for unscripted, off-registry permission requests — real Cowork BLOCKS these for the user. A non-empty list means a green is NOT a faithful pass (pin with --answer or permission_parity: strict). */
   permissiveAutoAllow?: string[];
+  /** Question batches the scenario's scripted `answers:` matched only PART of. Answers are delivered
+   *  atomically, so each such batch went WHOLE to the `on_unanswered` fallback and the matched answers were
+   *  never delivered. `matched`/`unmatched` name the sub-questions. Report-only (the warn-severity
+   *  `partly_scripted_gate` verdict signal); never moves the verdict. Re-derived from the cassette's frozen
+   *  `answers:` on replay and from the current scenario on `verify-run`. Absent when none. */
+  partlyScriptedGates?: Array<{ requestId?: string; matched: string[]; unmatched: string[] }>;
   /** Post-run scan signals (live lane only). computeVerdict default-fails on `hostPathLeaked`, and on
    *  `outputsDeletes` as tiered by `outputsDeleteTier` (src/run/outputs-delete-tier.ts), when the scenario did
    *  NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */
