@@ -1,4 +1,4 @@
-// The served-model assertion of runner-scaffold.mjs (S l.476-494), applied to the main loop.
+// The served-model assertion of runner-scaffold.mjs (runner-scaffold.mjs l.476-494), applied to the main loop.
 //
 // The model under test is the one the MAIN loop ran on; sub-agents may legitimately run on another model
 // (`subagent_model:`), so they are excluded. RunResult.modelPinHonored is not used for this: it is
@@ -29,14 +29,14 @@ export function mainLoopModels(lines: readonly string[]): string[] {
   return seen;
 }
 
-// S's documented alias → snapshot shapes: 'foo-latest' / 'foo-0' / 'foo' served as 'foo-20250101',
+// the scaffold's documented alias → snapshot shapes: 'foo-latest' / 'foo-0' / 'foo' served as 'foo-20250101',
 // 'foo@20250101' or 'foo-2025-01-01'.
 const SNAPSHOT_SUFFIX = /^[-@](\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 /** The first main-loop model that the pin does not account for, or undefined when every one matches the
  *  pin exactly or by a documented alias → snapshot resolution. Anything else — another snapshot of the
  *  pin, a sibling model, or the bare base id served for an alias (an unversioned echo that can hide
- *  snapshot drift) — is a substitution. No pin ⇒ no check, as S skips it without --model. */
+ *  snapshot drift) — is a substitution. No pin ⇒ no check, as the scaffold skips it without --model. */
 export function servedModelMismatch(pin: string | undefined, models: readonly string[]): string | undefined {
   if (pin === undefined) return undefined;
   const want = normalizeModelId(pin);

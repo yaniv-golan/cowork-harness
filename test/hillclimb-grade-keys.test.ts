@@ -1,8 +1,8 @@
-// The grade keys a hillclimb row carries, and the metrics a flow DECLARES (user decision 2026-10-01).
+// The grade keys a hillclimb row carries, and the metrics a flow DECLARES.
 //
 // A flow's cases usually have different assertion lists, so a per-index key (`a0`) can mean a file check in
 // one case and a rubric in another. Declared, therefore, are only metrics that mean the same thing on every
-// row: `pass`, the `_present` companions, the pooled `claims` score, and the scenario-declared G9 floats
+// row: `pass`, the `_present` companions, the pooled `claims` score, and the scenario-declared floats
 // (their union). Per-index keys stay on every row as drill-down data and are declared only when every case
 // has the identical assertion list. One producer for the row writer and `state-template`.
 import { describe, it, expect } from "vitest";
@@ -70,7 +70,7 @@ describe("flowMetricDecls — what the flow declares", () => {
     expect(flowMetricDecls([{ assertions: other }, { assertions: [] }]).map((d) => d.id)).toEqual(["pass", "pass_present"]);
   });
 
-  it("G9 floats are the UNION over cases, each with its companion", () => {
+  it("scenario-declared floats are the UNION over cases, each with its companion", () => {
     const ids = flowMetricDecls([
       { assertions: other, metrics: [{ id: "words", better: "lower", unbounded: true }] },
       { assertions: [], metrics: [{ id: "ratio", better: "higher", scale: 1 }] },
@@ -87,7 +87,7 @@ describe("flowMetricDecls — what the flow declares", () => {
     ).toThrow(UsageError);
   });
 
-  it("a float declares better, and scale only when bounded (F1)", () => {
+  it("a float declares better, and scale only when bounded", () => {
     const decls = flowMetricDecls([
       {
         assertions: [],

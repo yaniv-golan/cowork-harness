@@ -1,8 +1,8 @@
-// The served-model assertion (runner-scaffold.mjs S l.476-494), applied to the MAIN loop only.
+// The served-model assertion (runner-scaffold.mjs runner-scaffold.mjs l.476-494), applied to the MAIN loop only.
 //
 // Why not RunResult.modelPinHonored: it is `observed.some(m => m === pin)` over every model on every
 // assistant event, sub-agents included (src/run/model-provenance.ts:123, src/run/run.ts:856-861). A main
-// loop that answered partly on the pin and partly on another model therefore reports "honored". The S
+// loop that answered partly on the pin and partly on another model therefore reports "honored". The scaffold's
 // rule fails the attempt when ANY response model differs beyond a documented alias→snapshot resolution.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -26,7 +26,7 @@ describe("mainLoopModels", () => {
   });
 });
 
-describe("servedModelMismatch (S l.485-494)", () => {
+describe("servedModelMismatch (runner-scaffold.mjs l.485-494)", () => {
   it("a fan-out stream whose sub-agents used another model is NOT a substitution", () => {
     expect(servedModelMismatch("claude-opus-5", mainLoopModels(fanout))).toBeUndefined();
   });
@@ -35,7 +35,7 @@ describe("servedModelMismatch (S l.485-494)", () => {
     // One extra main-loop event served by another model, appended to the stream.
     const lines = [...fanout, JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: "claude-sonnet-5" } })];
     const models = mainLoopModels(lines);
-    // The existing provenance check calls this run honored — the reason H4 carries its own rule.
+    // The existing provenance check calls this run honored — the reason the runner carries its own rule.
     expect(deriveModelProvenance("claude-opus-5", models, []).modelPinHonored).toBe(true);
     expect(servedModelMismatch("claude-opus-5", models)).toBe("claude-sonnet-5");
   });

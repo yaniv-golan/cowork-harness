@@ -1,6 +1,6 @@
-// `hillclimb run` argument parsing. The surface mirrors runner-scaffold.mjs (bundle 2.1.285, S l.180-214):
+// `hillclimb run` argument parsing. The surface mirrors runner-scaffold.mjs (bundle 2.1.285, runner-scaffold.mjs l.180-214):
 // same flags, same defaults, same refusals, all mapped to a UsageError (exit 2). Two deliberate differences,
-// both stricter and both still exit 2: a flag-looking value is refused (S's val() takes it as the value),
+// both stricter and both still exit 2: a flag-looking value is refused (the scaffold's val() takes it as the value),
 // and a decider with --concurrency > 1 is refused (eval's rule).
 import { describe, it, expect } from "vitest";
 import { parseHillclimbRunArgs, HILLCLIMB_RUN_DEFAULTS } from "../src/hillclimb/args.js";
@@ -12,7 +12,7 @@ const refuses = (argv: string[], msg: RegExp) => {
   expect(() => parseHillclimbRunArgs(argv)).toThrow(msg);
 };
 
-describe("hillclimb run args — scaffold defaults (S l.181-183)", () => {
+describe("hillclimb run args — scaffold defaults (runner-scaffold.mjs l.181-183)", () => {
   it("defaults equal the scaffold's: flow, variant, reps 1, concurrency 4, timeout 1800", () => {
     const a = run("evals/");
     expect(a.help).toBe(false);
@@ -83,20 +83,20 @@ describe("hillclimb run args — refusals (exit 2)", () => {
     refuses(["s.yaml", "--bogus"], /unknown flag: --bogus/);
   });
 
-  it("variant must be baseline or v<N>, N >= 1 without a leading zero (S l.199)", () => {
+  it("variant must be baseline or v<N>, N >= 1 without a leading zero (runner-scaffold.mjs l.199)", () => {
     for (const ok of ["baseline", "v1", "v12"]) expect(() => run("s.yaml", "--variant", ok)).not.toThrow();
     for (const bad of ["v0", "v01", "variant_a", "V1", "v1-better", "base"])
       refuses(["s.yaml", "--variant", bad], /--variant must be 'baseline' or 'v<N>'/);
   });
 
-  it("--timeout-s: 0 = no ceiling; negative, non-numeric and > 2^31-1 ms are refused (S l.206-207)", () => {
+  it("--timeout-s: 0 = no ceiling; negative, non-numeric and > 2^31-1 ms are refused (runner-scaffold.mjs l.206-207)", () => {
     expect(() => run("s.yaml", "--timeout-s", "2147483")).not.toThrow();
     refuses(["s.yaml", "--timeout-s", "2147484"], /--timeout-s/);
     refuses(["s.yaml", "--timeout-s", "-5"], /--timeout-s/);
     refuses(["s.yaml", "--timeout-s", "soon"], /--timeout-s/);
   });
 
-  it("--reps and --concurrency must be integers >= 1 (S l.208-209)", () => {
+  it("--reps and --concurrency must be integers >= 1 (runner-scaffold.mjs l.208-209)", () => {
     for (const f of ["--reps", "--concurrency"]) for (const bad of ["0", "1.5", "x"]) refuses(["s.yaml", f, bad], new RegExp(f));
   });
 

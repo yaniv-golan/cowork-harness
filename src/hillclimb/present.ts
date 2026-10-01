@@ -3,7 +3,7 @@
 
 /** The `_present` companion that licenses omitting `key` from a scored row, or undefined when `key` is
  *  always graded. Explicit, not "`K` exempt when `K_present` is 0": a claim key is covered by its
- *  ASSERTION's companion (`a1_c0` → `a1_present`). Pairwise win keys (H8) map to `a<i>_win_present`. */
+ *  ASSERTION's companion (`a1_c0` → `a1_present`). Pairwise win keys map to `a<i>_win_present`. */
 export function presentCompanionOf(key: string): string | undefined {
   if (key.endsWith("_present") || /^a\d+$/.test(key)) return undefined;
   const claim = /^(a\d+)_c\d+$/.exec(key);

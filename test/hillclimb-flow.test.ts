@@ -1,6 +1,6 @@
 // The flow-dir writer: every byte the runner writes into `.claude/hillclimb/<flow>/` goes through here, over
 // the shared no-follow root (src/hillclimb/fs.ts), redacted (secrets, then host paths) — the flow dir is
-// model-influenced AND committable (runner-scaffold.mjs S l.34-131, 343-455; build-eval.md B l.213-219).
+// model-influenced AND committable (runner-scaffold.mjs runner-scaffold.mjs l.34-131, 343-455; build-eval.md build-eval.md l.213-219).
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
-describe("FlowWriter.open — preflight before any spend (S l.343-385)", () => {
+describe("FlowWriter.open — preflight before any spend (runner-scaffold.mjs l.343-385)", () => {
   it("creates the variant's traces dir", () => {
     open("v2");
     expect(existsSync(join(flow(), "v2", "traces"))).toBe(true);
@@ -65,14 +65,14 @@ describe("FlowWriter — state, resume, rows", () => {
     expect([...w.resumeSet()].sort()).toEqual(["a\u00000", "a\u00001"]);
   });
 
-  it("errors never occupy a slot: an errors.jsonl line is not in the resume set (S l.549-551)", () => {
+  it("errors never occupy a slot: an errors.jsonl line is not in the resume set (runner-scaffold.mjs l.549-551)", () => {
     const w = open();
     w.appendError({ prompt_id: "b", rep: 0, failure_class: "error" });
     expect(w.resumeSet().size).toBe(0);
     expect(lines(join(flow(), "baseline", "errors.jsonl"))).toEqual([{ prompt_id: "b", rep: 0, failure_class: "error" }]);
   });
 
-  it("a torn final line is isolated before the next append (S l.452-455)", () => {
+  it("a torn final line is isolated before the next append (runner-scaffold.mjs l.452-455)", () => {
     const w = open();
     writeFileSync(join(flow(), "baseline", "results.jsonl"), '{"prompt_id":"a","rep":0}\n{"prompt_id":"a","re');
     w.appendResult({ prompt_id: "b", rep: 0 });
@@ -112,7 +112,7 @@ describe("FlowWriter — summary.json, approval, progress", () => {
     });
   });
 
-  it("--approve-harness writes harness_sha and keeps every loop-owned key (S l.262-266)", () => {
+  it("--approve-harness writes harness_sha and keeps every loop-owned key (runner-scaffold.mjs l.262-266)", () => {
     const w = open();
     writeFileSync(join(flow(), "_state.json"), JSON.stringify({ best: { round: 1 }, harness_sha: "old" }));
     w.approveHarness("new");

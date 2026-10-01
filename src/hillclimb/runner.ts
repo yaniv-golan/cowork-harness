@@ -1,12 +1,12 @@
 // `hillclimb run`: the runner-scaffold.mjs contract (bundle 2.1.285) over the harness's own job runner.
 //
-// The order of S's main() is kept: refuse everything refusable before any spend (flags, id space, flow-dir
+// The order of the scaffold's main() is kept: refuse everything refusable before any spend (flags, id space, flow-dir
 // hygiene, `_state.json`, the harness gate, split ids), then run every missing (case, rep) through a bounded
 // pool, appending each row as it completes, and exit 0 (every attempt scored) / 1 (any failed attempt, or a
 // mid-run stop) / 2 (refused before spending). stdout stays silent; every line goes to stderr, stripped of
 // terminal escapes (model-influenced text reaches it).
 //
-// The job runner is injected: this module never spawns an agent. H4b's real runner builds each JobReport
+// The job runner is injected: this module never spawns an agent. The CLI's real runner builds each JobReport
 // from a kept run dir; tests pass recorded excerpts.
 
 import { basename, dirname, join, resolve } from "node:path";
@@ -63,7 +63,7 @@ export interface RunnerDeps {
   mountRoots: (cases: readonly HillclimbCase[]) => string[];
   /** The variant snapshot's content signature, when the variant has one. */
   expectedContentSig?: string;
-  /** Progress interval; S uses 30 s. */
+  /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
 }
@@ -75,7 +75,7 @@ export interface RunOutcome {
   failed: number;
 }
 
-// S l.46-53: strip escape sequences and control characters from anything printed — case ids and error text
+// runner-scaffold.mjs l.46-53: strip escape sequences and control characters from anything printed — case ids and error text
 // can carry model output.
 const ESC_SEQ = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-_]/g;
 const CONTROL = /[\x00-\x1f\x7f-\x9f]/g;
@@ -92,7 +92,7 @@ export async function runHillclimb(args: HillclimbRunArgs, deps: RunnerDeps): Pr
       started = true;
     });
   } catch (e) {
-    // S l.591-602: before the workers start, anything thrown is a refusal (exit 2); after, a mid-run stop.
+    // runner-scaffold.mjs l.591-602: before the workers start, anything thrown is a refusal (exit 2); after, a mid-run stop.
     if (started) {
       say(`stopped mid-run (rows already written are kept; re-run to resume): ${message(e)}`);
       return { exitCode: 1, scheduled: 0, ok: 0, failed: 0 };
@@ -115,7 +115,7 @@ async function run(
 ): Promise<RunOutcome> {
   const v = args.variant;
   const flowArg = normalizeRootArg(args.flow);
-  // resolve, never join: an absolute --flow or target is supported (S l.365-371) and join would graft it onto cwd.
+  // resolve, never join: an absolute --flow or target is supported (runner-scaffold.mjs l.365-371) and join would graft it onto cwd.
   const flowAbs = resolve(deps.cwd, flowArg);
   const statePathShown = join(flowArg, "_state.json");
 
@@ -138,7 +138,7 @@ async function run(
   const cases = selectCases(all, args.cases);
 
   // Everything that can refuse runs before --approve-harness writes anything: a refused run records no approval.
-  // Ground truth must be unreachable from the agent (H l.215): no mount may expose the flow dir (prior grades,
+  // Ground truth must be unreachable from the agent (eval-hillclimb.md l.215): no mount may expose the flow dir (prior grades,
   // judge rationales) or a file that defines the answer.
   const listed = (Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : []).map((p) => resolve(deps.cwd, p));
   const exposed = pathsInsideMounts([flowAbs, ...deps.derivedPaths(cases), ...listed], deps.mountRoots(cases));
@@ -156,7 +156,7 @@ async function run(
       );
   }
 
-  // The harness gate (S l.238-277).
+  // The harness gate (runner-scaffold.mjs l.238-277).
   const digest = harnessDigest({
     cwd: deps.cwd,
     listed: Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [],
@@ -197,7 +197,7 @@ async function run(
     const tasks: Array<{ c: HillclimbCase; rep: number }> = [];
     for (const c of cases) for (let rep = 0; rep < args.reps; rep++) if (!done.has(`${c.id}\0${rep}`)) tasks.push({ c, rep });
     say(`[${v}] ${tasks.length} of ${cases.length * args.reps} (id,rep) to run`);
-    // Error slots re-run on every pass (S semantics); a permanent infra fault re-runs forever, so name them.
+    // Error slots re-run on every pass (the scaffold's semantics); a permanent infra fault re-runs forever, so name them.
     const failedBefore = slotsIn(errors);
     const rerun = tasks.filter((t) => failedBefore.has(`${t.c.id}\0${t.rep}`));
     if (rerun.length)
@@ -217,7 +217,7 @@ async function run(
       try {
         writer.writeProgress(line);
       } catch {
-        /* S l.581: progress is best-effort */
+        /* runner-scaffold.mjs l.581: progress is best-effort */
       }
     };
     const tick = setInterval(progress, deps.tickMs ?? 30_000);
@@ -225,7 +225,7 @@ async function run(
     const flowHash = createHash("sha256").update(realpathSync.native(flowAbs)).digest("hex").slice(0, 16);
     const models = new Set<string>();
     markStarted();
-    // A failure to WRITE (a row, an error row) stops the pass: S's process exits there (l.597-599). Here the
+    // A failure to WRITE (a row, an error row) stops the pass: the scaffold's process exits there (l.597-599). Here the
     // pool cannot be killed, so a stop flag keeps every later task from starting, and the pool is awaited —
     // in-flight jobs finish — before the lock is released. Nothing else escapes a task.
     let stopError: unknown;
@@ -310,7 +310,7 @@ async function run(
         return;
       }
       // The trace is built (pure) BEFORE the row, so the row can say how complete it is; only the writes
-      // come after the row (S l.529-547).
+      // come after the row (runner-scaffold.mjs l.529-547).
       const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
       let trace: ReturnType<typeof turnsFromEvents> | undefined;
       let traceError: unknown;
@@ -330,7 +330,7 @@ async function run(
       writer.appendResult(out.row);
       if (typeof out.row.model === "string") models.add(out.row.model);
       // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
-      // row, which would double-count its spend (S l.529, 541-548).
+      // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
       try {
         if (traceError !== undefined) throw traceError;
         for (const s of trace!.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);

@@ -1,4 +1,4 @@
-// A run as the report's Turn[] (SCHEMA.md M l.201-213; build-eval.md B l.119-131): one entry per user message,
+// A run as the report's Turn[] (SCHEMA.md SCHEMA.md l.201-213; build-eval.md build-eval.md l.119-131): one entry per user message,
 // assistant text, tool call and tool result, in stream order, with no nesting.
 //
 // Two sources, never mixed. Main-loop turns come from `events.jsonl` events with no `parent_tool_use_id`. A
@@ -8,7 +8,7 @@
 // Sub-agent turns are inlined right after the dispatch's tool_call, each prefixed `[sub-agent <type>#<n>] `
 // (the schema documents `name` for tool turns only, so the prefix is the carrier).
 //
-// Non-text payloads go to sidecar files with a markdown reference at the point they appeared (H l.217); a
+// Non-text payloads go to sidecar files with a markdown reference at the point they appeared (eval-hillclimb.md l.217); a
 // tool result over the cap is truncated in place with a pointer to a sidecar holding the full text. Nothing
 // here is scrubbed: the flow writer scrubs every byte it writes.
 

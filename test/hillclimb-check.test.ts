@@ -1,6 +1,6 @@
-// `hillclimb check`: our schema reading plus two loop-readiness reports. E5(a): baseline cases that sit at
+// `hillclimb check`: our schema reading plus two loop-readiness reports. Headroom: baseline cases that sit at
 // the ceiling or the floor of the headline metric on every rep cannot show a change, which the loop must know
-// before round 1 (H l.35). It is a WARNING, never an exit code — refusing is the loop's call, not ours (F4).
+// before round 1 (eval-hillclimb.md l.35). It is a WARNING, never an exit code — refusing is the loop's call, not ours.
 import { describe, it, expect } from "vitest";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,7 +69,7 @@ describe("headroom (E5a)", () => {
   });
 });
 
-describe("stateMetricFindings (F1)", () => {
+describe("stateMetricFindings (a float must say which way is better)", () => {
   it("a declared float without `better` is an error — a silent 'higher' on a cost-like metric climbs the wrong way", () => {
     const s = snap();
     setState(s, (st) => (st.metrics as Row[]).push({ id: "cost", kind: "float" }));

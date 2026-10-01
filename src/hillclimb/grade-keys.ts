@@ -1,13 +1,13 @@
-// The grade keys of a hillclimb row, and the metrics a flow declares (user decision 2026-10-01). ONE producer:
+// The grade keys of a hillclimb row, and the metrics a flow declares. ONE producer:
 // the row writer emits a case's keys in `caseKeyDecls` order, and `state-template` declares `flowMetricDecls`.
 //
 // A flow's cases usually have different assertion lists, so a per-index key means different things on
 // different rows. Declared are therefore only keys that mean the same on every row:
-//   pass              the run verdict, 0|1 — first, so it is the report's headline (L l.304; H l.148).
-//                     OMITTED when the verdict failed only because semantic grading was refused (user decision)
+//   pass              the run verdict, 0|1 — first, so it is the report's headline (build-report-lite.mjs l.304; eval-hillclimb.md l.148).
+//                     OMITTED when the verdict failed only because semantic grading was refused
 //   pass_present      0 exactly then; 1 otherwise
 //   claims_present    1 when at least one semantic_matches claim was graded on this row
-//   <metric>_present  1 when the scenario-declared float <metric> was measured (F2: the float is OMITTED
+//   <metric>_present  1 when the scenario-declared float <metric> was measured (the float is OMITTED
 //                     when unavailable, never 0); a case that does not declare <metric> carries 0
 //   claims            the pooled share of graded semantic_matches claims that passed (refused asserts
 //                     excluded); judge kind, scale 1
@@ -35,7 +35,7 @@ export interface MetricDecl {
 export interface GradeKeyDecl {
   id: string;
   kind: "binary" | "float" | "judge";
-  /** <= 14 characters (the full viewer's legend width, M l.73-75). */
+  /** <= 14 characters (the full viewer's legend width, SCHEMA.md l.73-75). */
   label: string;
   better?: "higher" | "lower";
   scale?: number;

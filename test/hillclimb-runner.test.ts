@@ -3,7 +3,7 @@
 // Each fake job returns the committed excerpt of a REAL kept run (test/fixtures/eval-classify/success-semantic.json)
 // with the real init/result frames (test/fixtures/hillclimb-runs/result-event-pair.jsonl) and one main-loop
 // assistant frame naming the excerpt's model. The scenario files hold the excerpt's own assertion list, so the
-// grades line up. The wiring through the real runOneScenario is H4b's stub-agent test, not this one.
+// grades line up. The wiring through the real runOneScenario is covered by the CLI wiring tests, not this one.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   existsSync,
@@ -105,7 +105,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
-describe("the harness gate (S l.238-277)", () => {
+describe("the harness gate (runner-scaffold.mjs l.238-277)", () => {
   it("no approved sha ⇒ exit 2 before any job, naming the files and the fix", async () => {
     const r = await runHillclimb(args(), deps());
     expect(r.exitCode).toBe(2);
@@ -172,7 +172,7 @@ describe("a pass", () => {
     expect(jobs.map((j) => j.id)).toEqual(["beta"]);
   });
 
-  it("a trace write that fails after the row: row kept, no error row, counted failed, exit 1 (S l.541-548, 588)", async () => {
+  it("a trace write that fails after the row: row kept, no error row, counted failed, exit 1 (runner-scaffold.mjs l.541-548, 588)", async () => {
     await approved();
     mkdirSync(join(flowDir(), "baseline", "traces"), { recursive: true });
     symlinkSync(join(cwd, "elsewhere"), vfile("baseline", "traces/alpha_rep0.json"));
@@ -188,7 +188,7 @@ describe("a pass", () => {
     expect(readFileSync(vfile("baseline", "progress.txt"), "utf8")).toMatch(/2\/2 done \(1 ok, 1 failed\)/);
   });
 
-  it("progress and the final line use the scaffold's exact wording, with no ::warning:: prefix (S l.574-587)", async () => {
+  it("progress and the final line use the scaffold's exact wording, with no ::warning:: prefix (runner-scaffold.mjs l.574-587)", async () => {
     await approved();
     await runHillclimb(args(), deps());
     expect(readFileSync(vfile("baseline", "progress.txt"), "utf8")).toMatch(
@@ -198,7 +198,7 @@ describe("a pass", () => {
     expect(err.some((l) => l.startsWith("::"))).toBe(false);
   });
 
-  it("a pass never writes _state.json (S l.12-13: loop-owned; only --approve-harness records harness_sha)", async () => {
+  it("a pass never writes _state.json (runner-scaffold.mjs l.12-13: loop-owned; only --approve-harness records harness_sha)", async () => {
     await approved();
     const before = readFileSync(join(flowDir(), "_state.json"));
     const mtime = statSync(join(flowDir(), "_state.json")).mtimeMs;
@@ -270,7 +270,7 @@ describe("a pass", () => {
     for (const f of readdirSync(blobs)) expect(readFileSync(join(blobs, f), "utf8")).not.toContain(secret.slice(0, 8));
   });
 
-  it("terminal escapes in model-influenced stderr text are stripped (S l.46-53)", async () => {
+  it("terminal escapes in model-influenced stderr text are stripped (runner-scaffold.mjs l.46-53)", async () => {
     await approved();
     behave = (id) => (id === "beta" ? { thrown: new Error("bad \x1b]0;pwned\x07title \x1b[31mred") } : {});
     await runHillclimb(args(), deps());

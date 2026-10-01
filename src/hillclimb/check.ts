@@ -2,8 +2,8 @@
 //
 // headroom (E5a): a baseline case whose every rep sits at the GOOD end of the headline metric (the ceiling)
 // cannot show a gain, and one at the BAD end on every rep (the floor) cannot show a loss — often a broken
-// case or grader. The guide asks for headroom before round 1 (H l.35) and leaves the call to the loop, so
-// this only ever warns: it never changes an exit code (F4).
+// case or grader. The guide asks for headroom before round 1 (eval-hillclimb.md l.35) and leaves the call to the loop, so
+// this only ever warns: it never changes an exit code.
 
 import type { FlowSnapshot, SchemaFinding } from "./schema-check.js";
 
@@ -54,7 +54,7 @@ export function headroom(snap: FlowSnapshot): Headroom {
   if (rows.length === 0)
     return { cases: 0, ceiling: [], floor: [], warnings: ["note: no baseline rows yet — run the baseline before round 1"] };
   const declared = declaredMetrics(snap);
-  // The report's headline: the first binary metric, else the first (L l.304). With nothing declared, `pass`.
+  // The report's headline: the first binary metric, else the first (build-report-lite.mjs l.304). With nothing declared, `pass`.
   const head = declared.find((m) => m.kind === "binary") ?? declared[0] ?? { id: "pass", kind: "binary" };
   const better = head.better === "lower" ? "lower" : "higher";
   let good: number | undefined;
@@ -101,7 +101,7 @@ export function headroom(snap: FlowSnapshot): Headroom {
   return { metric: head.id, better, cases: n, ceiling, floor, warnings };
 }
 
-/** Ours, on `_state.json`: a declared float needs `better` (F1). The upstream default is "higher", which on a
+/** Ours, on `_state.json`: a declared float needs `better`. The upstream default is "higher", which on a
  *  cost-like metric silently climbs the wrong way. */
 export function stateMetricFindings(snap: FlowSnapshot): SchemaFinding[] {
   return declaredMetrics(snap)

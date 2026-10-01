@@ -236,7 +236,7 @@ describe("schema-check: row fields", () => {
     expect(r.findings[0]!.message).toMatch(/a0 is missing/);
   });
 
-  describe("grade: a declared metric may be omitted only when its _present companion is 0 (F2 / addendum Q4)", () => {
+  describe("grade: a declared metric may be omitted only when its _present companion is 0 ", () => {
     const refused = (row: Row) => {
       const g = row.grade as Row;
       delete g.a1_c0;

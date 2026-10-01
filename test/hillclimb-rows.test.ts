@@ -1,4 +1,4 @@
-// One attempt → one results.jsonl row or one errors.jsonl row (runner-scaffold.mjs S l.509-564).
+// One attempt → one results.jsonl row or one errors.jsonl row (runner-scaffold.mjs runner-scaffold.mjs l.509-564).
 //
 // Inputs. Each RunResult is a committed excerpt of a real kept run (test/fixtures/eval-classify/, provenance
 // in test/eval-classify.test.ts). The event lines are real frames too: the init/result pair
@@ -91,7 +91,7 @@ describe("scored rows", () => {
     expect(row.status).toBe("ok");
   });
 
-  it("max_tokens on the result frame ⇒ status truncated (S l.522)", () => {
+  it("max_tokens on the result frame ⇒ status truncated (runner-scaffold.mjs l.522)", () => {
     const r = fixture("success-semantic");
     // SYNTHETIC: the real result frame with stop_reason edited to max_tokens (no kept run has one).
     const clipped = JSON.stringify({ ...JSON.parse(frames[1]), stop_reason: "max_tokens" });
@@ -221,7 +221,7 @@ describe("scored rows", () => {
     } as never; // ADDED: a refusal
     const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
     expect(row.grade).toMatchObject({ a3_present: 0, claims_present: 0, pass_present: 0 });
-    // the verdict failed ONLY because the grade was refused: the headline is not measured (user decision)
+    // the verdict failed ONLY because the grade was refused: the headline is not measured
     expect(row.grade).not.toHaveProperty("pass");
     for (let j = 0; j < 5; j++) expect(row.grade).not.toHaveProperty(`a3_c${j}`);
     expect(row.grade).not.toHaveProperty("claims");
@@ -321,7 +321,7 @@ describe("scored rows", () => {
   });
 });
 
-describe("error rows (S l.549-564)", () => {
+describe("error rows (runner-scaffold.mjs l.549-564)", () => {
   const errRow = (out: ReturnType<typeof attemptRow>) => {
     expect(out.dest).toBe("errors");
     return out.row as Record<string, any>;
@@ -367,7 +367,7 @@ describe("error rows (S l.549-564)", () => {
     expect(errRow(attemptRow({ result: r }, ctx(r, { pin: "claude-opus-5" }))).failure_class).toBe("serving_substitution");
   });
 
-  it("no model evidence on an otherwise-valid run ⇒ serving_substitution (N5); on an agent error it stays scored", () => {
+  it("no model evidence on an otherwise-valid run ⇒ serving_substitution; on an agent error it stays scored", () => {
     const aligned = fixture("public-scenario-aligned"); // success, no modelPinHonored
     expect(errRow(attemptRow({ result: aligned }, ctx(aligned, { events: [] }))).failure_class).toBe("serving_substitution");
     const crashed = fixture("exit-agent");

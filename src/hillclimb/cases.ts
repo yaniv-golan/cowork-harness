@@ -1,7 +1,7 @@
 // The cases of a hillclimb flow: one per scenario file, keyed by pathSafeId(<file stem>) — the name the user
-// typed and the one trace filenames carry (addendum Q1). The scenario's own `name:` rides along for --case
+// typed and the one trace filenames carry. The scenario's own `name:` rides along for --case
 // and for meta. Everything here runs before any spend: a bad id space would silently overwrite traces or
-// shrink the scored denominator (S l.411-438).
+// shrink the scored denominator (runner-scaffold.mjs l.411-438).
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -17,7 +17,7 @@ export interface HillclimbCase {
   /** pathSafeId(stem): the row's prompt_id and the trace file's id. */
   id: string;
   stem: string;
-  /** The stem, when pathSafeId changed it (S's meta.original_id). */
+  /** The stem, when pathSafeId changed it (the scaffold's meta.original_id). */
   originalId?: string;
   name: string;
   file: string;
@@ -51,7 +51,7 @@ export function loadCases(target: string): { cases: HillclimbCase[]; skipped: st
   const cases = files.map((file): HillclimbCase => {
     const stem = stemOf(file);
     const id = pathSafeId(stem);
-    // The lite report refuses an all-dot id (L l.342) and an empty one names no file — the shared rule.
+    // The lite report refuses an all-dot id (build-report-lite.mjs l.342) and an empty one names no file — the shared rule.
     if (unusableCaseIds([stem]).length)
       throw new UsageError(`hillclimb: ${basename(file)}: "${stem}" is not a usable case id (rename the file)`);
     const scenario = parseScenarioFile(file);
@@ -90,7 +90,7 @@ export function selectCases(cases: readonly HillclimbCase[], selectors: readonly
   return cases.filter((c) => chosen.has(c));
 }
 
-/** Validate `_state.json`'s split ids against every loaded case (not just the --case selection, as S
+/** Validate `_state.json`'s split ids against every loaded case (not just the --case selection, as the scaffold
  *  validates against loadCases()). Returns notes for well-formed ids that match no case; throws UsageError
  *  for an id that can never match a row (not path-safe) or a split that is not a list. */
 export function splitIdNotes(state: Record<string, unknown>, caseIds: readonly string[]): string[] {

@@ -1,4 +1,4 @@
-// Turn[] export (SCHEMA.md M l.201-213; build-eval.md B l.119-131). The fixture is a kept run of the repo's
+// Turn[] export (SCHEMA.md SCHEMA.md l.201-213; build-eval.md build-eval.md l.119-131). The fixture is a kept run of the repo's
 // public subagent-manifest-probe example (test/fixtures/hillclimb-runs/README.md): one Agent dispatch whose
 // sub-agent made seven tool calls.
 //
@@ -134,7 +134,7 @@ describe("turnsFromEvents — absence, caps, payloads", () => {
     expect(all).not.toContain(secret.slice(0, 12));
   });
 
-  it("an image block in a tool result becomes a sidecar with a markdown image reference (H l.217)", () => {
+  it("an image block in a tool result becomes a sidecar with a markdown image reference (eval-hillclimb.md l.217)", () => {
     // SYNTHETIC: one tool_use/tool_result pair carrying a base64 PNG (no kept public run has one).
     const png = Buffer.from("89504e470d0a1a0a", "hex").toString("base64");
     const ev = [

@@ -1,13 +1,13 @@
 // Every byte `hillclimb` writes into a flow dir goes through this writer.
 //
 // The flow dir is model-influenced (a round's analyzer reads and may write it) AND committable (the loop
-// offers to commit it, B l.213-219), so:
+// offers to commit it, build-eval.md l.213-219), so:
 //   - every read and write is confined to the flow root by the shared no-follow root (fs.ts): a planted
-//     `results.jsonl -> ~/.bashrc` is refused, not appended to (S l.34-131);
-//   - every output path is preflighted before any spend (S l.359-385, plus the files only we write);
+//     `results.jsonl -> ~/.bashrc` is refused, not appended to (runner-scaffold.mjs l.34-131);
+//   - every output path is preflighted before any spend (runner-scaffold.mjs l.359-385, plus the files only we write);
 //   - every string is redacted before it lands: the run's secrets first, then host paths (`~/…` under $HOME,
 //     `<host-path>` elsewhere).
-// One addition over S, named as a divergence: a per-variant lock. S lets two runners append to one variant;
+// One addition over the scaffold, named as a divergence: a per-variant lock. The scaffold lets two runners append to one variant;
 // with VM-length jobs a loop that re-launches while the old process lives would duplicate (case, rep) rows.
 
 import { unlinkSync } from "node:fs";
@@ -39,7 +39,7 @@ export class FlowWriter {
   static open(flowArg: string, variant: string, opts: { cwd?: string; secrets: readonly string[] }): FlowWriter {
     const cwd = opts.cwd ?? process.cwd();
     const v = (rel: string) => `${variant}/${rel}`;
-    // S's list (l.361-363) plus the files only the harness writes.
+    // the scaffold's list (l.361-363) plus the files only the harness writes.
     preflightRoot(
       flowArg,
       [
@@ -74,7 +74,7 @@ export class FlowWriter {
     return join(this.r.root, this.variant, rel);
   }
 
-  /** `_state.json`, read-only (S l.386-397). Absent ⇒ {}; present but unparsable ⇒ refuse before spend. */
+  /** `_state.json`, read-only (runner-scaffold.mjs l.386-397). Absent ⇒ {}; present but unparsable ⇒ refuse before spend. */
   state(): Record<string, unknown> {
     const text = this.r.readIfPresent(join(this.r.root, "_state.json"));
     if (text === null) return {};
@@ -82,7 +82,7 @@ export class FlowWriter {
     try {
       st = JSON.parse(text);
     } catch {
-      // the parse message is not echoed: it can quote the file's first bytes (S l.391-396)
+      // the parse message is not echoed: it can quote the file's first bytes (runner-scaffold.mjs l.391-396)
       throw new UsageError(`${join(this.r.root, "_state.json")} exists but is not valid JSON - fix it before spending a pass`);
     }
     if (st === null || typeof st !== "object" || Array.isArray(st))
@@ -90,7 +90,7 @@ export class FlowWriter {
     return st as Record<string, unknown>;
   }
 
-  /** The (prompt_id, rep) pairs already scored (S l.401-407). Error rows never occupy a slot. */
+  /** The (prompt_id, rep) pairs already scored (runner-scaffold.mjs l.401-407). Error rows never occupy a slot. */
   resumeSet(): Set<string> {
     return slotsIn(this.r.readIfPresent(this.vpath("results.jsonl")));
   }
@@ -124,7 +124,7 @@ export class FlowWriter {
   }
 
   /** Add the runner's keys to `summary.json` without overwriting any key already there — the loop writes
-   *  description/target/suspicious into the same file (H l.185-190, l.269). */
+   *  description/target/suspicious into the same file (eval-hillclimb.md l.185-190, l.269). */
   mergeSummary(keys: Record<string, unknown>): void {
     const p = this.vpath("summary.json");
     const text = this.r.readIfPresent(p);
@@ -142,7 +142,7 @@ export class FlowWriter {
     this.r.writeFile(p, JSON.stringify({ ...cur, ...redactDeep(missing, this.secrets) }, null, 2) + "\n");
   }
 
-  /** The one sanctioned `_state.json` write (S l.262-266): record the approved harness sha, keep everything else. */
+  /** The one sanctioned `_state.json` write (runner-scaffold.mjs l.262-266): record the approved harness sha, keep everything else. */
   approveHarness(sha: string): void {
     const st = this.state();
     this.r.writeFile(join(this.r.root, "_state.json"), JSON.stringify({ ...st, harness_sha: sha }, null, 2) + "\n");

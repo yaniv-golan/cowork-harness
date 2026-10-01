@@ -1,5 +1,5 @@
 // `hillclimb state-template` prints a `_state.json` skeleton and a `metrics.md` for the LOOP to save — the
-// runner never writes _state.json beyond harness_sha (S l.12-13). It declares the metrics every row carries,
+// runner never writes _state.json beyond harness_sha (runner-scaffold.mjs l.12-13). It declares the metrics every row carries,
 // the perf columns and the harness paths the gate digests, and never prints a loop-owned key.
 import { describe, it, expect } from "vitest";
 import { stateTemplate } from "../src/hillclimb/state-template.js";

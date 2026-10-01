@@ -1,10 +1,10 @@
 // `hillclimb state-template`: the `_state.json` skeleton and the `metrics.md` the LOOP saves. The runner never
-// writes either: `_state.json` is loop-owned except for `harness_sha` (S l.12-13), and `metrics.md` is the
-// loop's free-text rubric the full viewer renders (H l.131). This only prints what the rows will carry, so the
+// writes either: `_state.json` is loop-owned except for `harness_sha` (runner-scaffold.mjs l.12-13), and `metrics.md` is the
+// loop's free-text rubric the full viewer renders (eval-hillclimb.md l.131). This only prints what the rows will carry, so the
 // declarations come from the same producer the row writer uses.
 //
 // Never printed: goal, best, harness_sha, the split ids, approve_each_round, current_round — all loop-owned
-// (F4). After a metric is added mid-loop, the loop re-runs this and merges only the NEW `metrics` entries.
+//. After a metric is added mid-loop, the loop re-runs this and merges only the NEW `metrics` entries.
 
 import type { Assertion } from "../types.js";
 import { flowMetricDecls, metricUnion, type GradeKeyDecl, type MetricDecl } from "./grade-keys.js";

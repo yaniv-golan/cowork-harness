@@ -1,4 +1,4 @@
-// The harness-integrity gate (runner-scaffold.mjs S l.216-277): a sha256 over sorted (relpath\0bytes\0)
+// The harness-integrity gate (runner-scaffold.mjs runner-scaffold.mjs l.216-277): a sha256 over sorted (relpath\0bytes\0)
 // entries, compared with _state.json.harness_sha. It is a CHANGE DETECTOR over what defines the measurement
 // (scenario, session, answers, uploads, lockfiles, harness version, baseline) — never over the skill dir the
 // loop edits each round, or every round would stop for approval.
@@ -57,7 +57,7 @@ describe("harnessDigest", () => {
     expect(harnessDigest({ ...base(), virtual: { "cowork-harness-version": "4.3.0", baseline: "2.9940.0" } }).sha).not.toBe(before);
   });
 
-  it("picks up a lockfile in cwd, and notes when there is none (S l.241-243, 261)", () => {
+  it("picks up a lockfile in cwd, and notes when there is none (runner-scaffold.mjs l.241-243, 261)", () => {
     expect(harnessDigest(base()).lockfiles).toEqual([]);
     put("package-lock.json", "{}");
     const d = harnessDigest(base());
@@ -65,7 +65,7 @@ describe("harnessDigest", () => {
     expect(d.hashed).toContain("package-lock.json");
   });
 
-  it("an unreadable LISTED path is skipped with a warning (S l.249-253); a duplicate path is hashed once", () => {
+  it("an unreadable LISTED path is skipped with a warning (runner-scaffold.mjs l.249-253); a duplicate path is hashed once", () => {
     const d = harnessDigest({ ...base(), listed: ["missing.mjs", "evals/a.yaml"] });
     expect(d.skipped).toEqual([{ path: "missing.mjs", code: "ENOENT" }]);
     expect(d.hashed.filter((p) => p === "evals/a.yaml")).toHaveLength(1);
@@ -84,7 +84,7 @@ describe("listedInside — a harness path inside the skill dir would stop every 
   });
 });
 
-describe("gateDecision (S l.259-276)", () => {
+describe("gateDecision (runner-scaffold.mjs l.259-276)", () => {
   const sha = "a".repeat(64);
   it("matching sha runs", () => expect(gateDecision({ harness_sha: sha }, sha, false)).toEqual({ kind: "ok" }));
   it("--approve-harness records the new sha", () => expect(gateDecision({ harness_sha: "b" }, sha, true)).toEqual({ kind: "approve" }));

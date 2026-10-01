@@ -1,13 +1,13 @@
 // One attempt → one `results.jsonl` row or one `errors.jsonl` row, with the field names and failure classes
-// runner-scaffold.mjs writes (S l.509-564) and the row contract of build-eval.md l.118 / eval-hillclimb.md
+// runner-scaffold.mjs writes (l.509-564) and the row contract of build-eval.md l.118 / eval-hillclimb.md
 // l.170-183.
 //
 // Where an attempt goes, in order:
 //   1. the runner's own wall-clock ceiling fired           → errors, `timeout`
 //   2. infrastructure (classifyTermination errored_infra)   → errors, `error` (rule in meta)
-//   3. positive served-model mismatch (S l.476-494)         → errors, `serving_substitution`
+//   3. positive served-model mismatch (runner-scaffold.mjs l.476-494)         → errors, `serving_substitution`
 //   4. the agent's own failure (errored_agent)              → SCORED: every graded key 0, reason in meta
-//   5. no model evidence on an otherwise-valid run (N5)     → errors, `serving_substitution`
+//   5. no model evidence on an otherwise-valid run     → errors, `serving_substitution`
 //   6. a run built from another snapshot than the variant's → errors, `error` + meta.arm_source_drift
 //   7. an invalid judge grade                               → errors, `judge_invalid` (promotable by regrade)
 //   8. a grade that does not line up with the scenario      → errors, `error` (never a guessed value)
@@ -40,7 +40,7 @@ import { computeVerdict } from "../run/verdict.js";
 
 export interface AttemptContext {
   caseId: string;
-  /** The file stem when pathSafeId changed it (S's meta.original_id). */
+  /** The file stem when pathSafeId changed it (the scaffold's meta.original_id). */
   originalId?: string;
   scenarioName: string;
   /** The prompt as authored (the row's `prompt`; the report shows it). */
@@ -153,7 +153,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(usage !== undefined ? { usage } : {}),
       ...(judges.judge_model !== undefined ? { judge_model: judges.judge_model } : {}),
       ...(judges.judge_usage !== undefined ? { judge_usage: judges.judge_usage } : {}),
-      latency_s: ctx.attemptS, // the whole attempt, as S (l.563)
+      latency_s: ctx.attemptS, // the whole attempt, as the scaffold (l.563)
       meta: {
         ...(ctx.meta.runDir !== undefined ? { run_dir: ctx.meta.runDir, run_id: basename(ctx.meta.runDir) } : {}),
         ...(typeof r?.cost?.usd === "number" ? { cost_usd: r.cost.usd } : {}),
@@ -209,7 +209,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const values = repRowValues(rows, ctx.assertions, rep, r as ClassifiableResult | undefined);
   // `pass` is the run's verdict — the persisted one, else the one producer (computeVerdict), never a re-derivation.
   const passed = r === undefined ? false : (r.verdict?.pass ?? computeVerdict(r, "live").pass);
-  // A verdict that failed ONLY because semantic grading was refused is not measured (user decision): recompute
+  // A verdict that failed ONLY because semantic grading was refused is not measured: recompute
   // the verdict (the one producer) with the refused asserts counted as passing; if that passes, omit `pass`.
   const refusedOnly =
     !agentFailed &&

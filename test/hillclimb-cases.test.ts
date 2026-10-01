@@ -1,6 +1,6 @@
 // Case resolution for `hillclimb run`. A case id is pathSafeId(<scenario file stem>) — what the user typed
-// and what trace filenames carry (addendum Q1) — with the scenario's own name kept in meta. The id space is
-// validated before anything is spent (S l.411-438).
+// and what trace filenames carry — with the scenario's own name kept in meta. The id space is
+// validated before anything is spent (runner-scaffold.mjs l.411-438).
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,7 +38,7 @@ describe("loadCases", () => {
     expect(skipped).toEqual(["_session.yaml"]);
   });
 
-  it("case-insensitive twins are refused before spend (S l.415-423)", () => {
+  it("case-insensitive twins are refused before spend (runner-scaffold.mjs l.415-423)", () => {
     scenario("Case.yaml", "x");
     scenario("case.yml", "y");
     expect(() => loadCases(dir)).toThrow(UsageError);
@@ -92,7 +92,7 @@ describe("selectCases (--case)", () => {
   });
 });
 
-describe("splitIdNotes (_state.json train/val/test ids, S l.424-438)", () => {
+describe("splitIdNotes (_state.json train/val/test ids, runner-scaffold.mjs l.424-438)", () => {
   const ids = ["alpha", "beta"];
   it("a matching id is silent; a well-formed absent id is a note (trimmed subset run)", () => {
     expect(splitIdNotes({ train_ids: ["alpha"], test_ids: ["gamma"] }, ids)).toEqual([

@@ -1,8 +1,8 @@
-// `hillclimb run` argument parsing. The surface is runner-scaffold.mjs's (bundle 2.1.285, S l.180-214) —
+// `hillclimb run` argument parsing. The surface is runner-scaffold.mjs's (bundle 2.1.285, l.180-214) —
 // same flags, same defaults, same refusals — because /claude-api hillclimb drives this command exactly as
-// it would drive the scaffold. Every refusal is a UsageError (exit 2, S's code for a refusal before spend).
+// it would drive the scaffold. Every refusal is a UsageError (exit 2, the scaffold's code for a refusal before spend).
 //
-// Two refusals are stricter than S, both still exit 2: a flag-looking value is refused (S's val() would take
+// Two refusals are stricter than the scaffold, both still exit 2: a flag-looking value is refused (the scaffold's val() would take
 // `--flow --variant` as a flow named "--variant"), and any decider with --concurrency > 1 is refused (the
 // decider channel is shared across jobs — eval's rule, src/eval/command.ts:192).
 
@@ -12,7 +12,7 @@ import { envOutputFormat, parseOutputFormat } from "../run/envelope.js";
 import { VARIANT_DIR_RE } from "./schema-check.js";
 import { HILLCLIMB_RUN_BOOLEAN_FLAGS, HILLCLIMB_RUN_REPEATED_FLAGS, HILLCLIMB_RUN_VALUE_FLAGS } from "./usage.js";
 
-/** S's defaults (S l.181-183). `--reps 1` is a covered default from 4.3.0. */
+/** The scaffold's defaults (runner-scaffold.mjs l.181-183). `--reps 1` is a covered default from 4.3.0. */
 export const HILLCLIMB_RUN_DEFAULTS = {
   flow: ".claude/hillclimb/flow",
   variant: "baseline",
@@ -48,7 +48,7 @@ const VALUE = new Set<string>(HILLCLIMB_RUN_VALUE_FLAGS);
 const REPEATED = new Set<string>(HILLCLIMB_RUN_REPEATED_FLAGS);
 const BOOLEAN = new Set<string>(HILLCLIMB_RUN_BOOLEAN_FLAGS);
 
-// setTimeout clamps a delay above 2^31-1 ms to 1 ms, so a larger ceiling would fire at once (S l.207).
+// setTimeout clamps a delay above 2^31-1 ms to 1 ms, so a larger ceiling would fire at once (runner-scaffold.mjs l.207).
 const MAX_TIMEOUT_MS = 2147483647;
 
 const int1 = (flag: string, v: string): number => {
@@ -105,7 +105,7 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
   const variant = values["--variant"] ?? HILLCLIMB_RUN_DEFAULTS.variant;
   if (!VARIANT_DIR_RE.test(variant))
     // The report only reads `baseline` / `v<N>` directories: any other name would spend a whole pass into a
-    // directory the summary, trajectory and budget arithmetic never see (S l.199-204).
+    // directory the summary, trajectory and budget arithmetic never see (runner-scaffold.mjs l.199-204).
     throw new UsageError(`--variant must be 'baseline' or 'v<N>' (N >= 1, no leading zero), got '${variant}'`);
 
   let timeoutS: number = HILLCLIMB_RUN_DEFAULTS.timeoutS;
