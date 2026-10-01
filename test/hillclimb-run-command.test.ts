@@ -855,7 +855,11 @@ describe("--case: per-case checks cover the selected cases only", () => {
       /case beta: .*no-such-upload/,
     ],
     ["an unparseable session file", { session: "model: [unclosed\n  - {\n" }, /case beta: /],
-    ["a missing workspace_fixture", { scenario: "workspace_fixture: ../no-such-fixture\n" }, /case beta|beta\.yaml|no-such-fixture/],
+    [
+      "a missing workspace_fixture",
+      { scenario: "workspace_fixture: ../no-such-fixture\n" },
+      /case beta: workspace_fixture \S*no-such-fixture: no such directory/,
+    ],
   ] as const)
     it(`an unselected case with ${what} does not block --case on a good one; the full pass refuses it`, async () => {
       if ("scenario" in opts) beta({ scenario: BETA_SCENARIO() + opts.scenario });
