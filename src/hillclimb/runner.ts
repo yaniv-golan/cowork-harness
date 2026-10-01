@@ -298,6 +298,8 @@ async function run(
           env: deps.virtual,
           ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
           ...(sigOf(c) !== undefined ? { contentSig: sigOf(c)! } : {}),
+          // The skill hash the run itself staged (evidence), not one recomputed here.
+          ...(typeof report.result?.fingerprint?.skillHash === "string" ? { skillHash: report.result.fingerprint.skillHash } : {}),
           ...(args.ablate ? { ablated: true } : {}),
           ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
         },

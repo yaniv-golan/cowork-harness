@@ -75,7 +75,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
         outDir,
         assertions,
         ...(skillActivity ? { skillActivity, prompt: a.scenario.prompt, context: { availableSkills: [{ id: "my-plugin:x" }] } } : {}),
-        fingerprint: { ...excerpt.fingerprint, contentSig: fp.contentSig },
+        fingerprint: { ...excerpt.fingerprint, contentSig: fp.contentSig, skillHash: fp.skillHash },
       } as RunResult;
     },
     ...over,
@@ -214,5 +214,13 @@ describe("runHillclimbCommand", () => {
     await runHillclimbCommand(args(), deps());
     const r = await runHillclimbCommand(args("--dry-run", "--reps", "3"), deps({ indexRows: () => [] }));
     expect(r.cost?.jobs).toBe(2);
+  });
+
+  it("rows record the skill hash the run itself staged (meta.skill_hash), beside its content signature", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    await runHillclimbCommand(args(), deps());
+    const meta = rows()[0].meta as Record<string, unknown>;
+    expect(meta.skill_hash).toMatch(/^[0-9a-f]{8,}/);
+    expect(meta.content_sig).toBeDefined();
   });
 });
