@@ -261,6 +261,19 @@ All notable changes to this project are documented here. The format is based on
 - **`regrade` re-reads declared metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade
   file carry `metrics` (the `RunResult.metrics` shape), re-read from the kept work dir. A file is read only while
   its bytes still equal the run's own recorded post-run hash; a file edited since the run is `pruned`.
+- **Scenario `metrics:` — numbers a scenario measures, beside the verdict.** Each entry
+  (`{id, artifact, path, better, scale | unbounded, min?}`) reads one number from a JSON file the run wrote and is
+  reported in `RunResult.metrics` as `{id, value}` or `{id, unavailable: <reason>}` — one per declared id, in order,
+  never a `0` for a missing value and never a converted string. Reasons: `missing_artifact`, `missing_path`,
+  `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`. A file the run did not write is
+  `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a file the run
+  rewrote unchanged is treated as untouched. `replay` re-measures from the cassette manifest and warns once about
+  metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration. The
+  published scenario schema mirrors every load rule but the duplicate-id check. Declaring a metric arms the pre-run
+  manifest, which a scenario with no other baseline-reading key did not capture before: such runs now persist
+  `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back the files the run authored
+  (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
+  connected folder before each run (time on a large connected folder).
 
 ### Changed
 

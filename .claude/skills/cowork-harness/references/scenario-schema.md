@@ -122,6 +122,13 @@ workspace_fixture: fixtures/step1   # OPTIONAL — a directory (relative to this
                                     # untracked files are refused at load, as is a presence/body assertion
                                     # on a fixture file that does not state `authored: true|false`.
                                     # 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Stamps v14.
+
+metrics:                            # OPTIONAL — numbers read from JSON files the run wrote, reported in
+  - { id: words, artifact: outputs/stats.json, path: totals.words, better: higher, scale: 5000 }
+                                    # RunResult.metrics as {id, value} or {id, unavailable}; never in the
+                                    # verdict. `better` required; exactly one of scale / unbounded: true.
+                                    # A file the run did not write (incl. one rewritten with identical
+                                    # bytes) is unavailable: pre_run. Arms the pre-run manifest.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
