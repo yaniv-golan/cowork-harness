@@ -47,6 +47,8 @@ export interface JobSpec {
   variant: string;
   runLabel: string;
   timeoutS: number;
+  /** The null run: the skill removed. */
+  ablate: boolean;
 }
 
 export interface RunnerDeps {
@@ -250,7 +252,7 @@ async function run(
       const tStart = now();
       let report: JobReport;
       try {
-        report = await deps.runJob({ c, rep, variant: v, runLabel, timeoutS: args.timeoutS });
+        report = await deps.runJob({ c, rep, variant: v, runLabel, timeoutS: args.timeoutS, ablate: args.ablate });
       } catch (e) {
         report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
       }
