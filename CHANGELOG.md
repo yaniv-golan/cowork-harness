@@ -15,9 +15,6 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
-- **A hillclimb flow begun on an earlier release with `semantic_pairwise` cases: start a fresh flow dir.** Its
-  baseline rows were judged against the scenario's own `refs:` and carry no `win` columns, so they can freeze no
-  baseline reference, and continuing would give `pass` two meanings in one flow.
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
