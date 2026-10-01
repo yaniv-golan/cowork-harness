@@ -64,17 +64,75 @@ describe("stateTemplateFor --skill", () => {
     writeFileSync(join(cwd, "evals", "a.yaml"), "name: a\nbaseline: latest\nsession: ./_session.yaml\nfidelity: container\nprompt: p\n");
   };
 
-  it("a known skill is accepted and changes nothing in the skeleton: harness_skill is the runner's to write", () => {
+  const perfIds = (t: ReturnType<typeof stateTemplateFor>) => t.state.perf_fields.map((f) => f.id);
+
+  it("a known skill keeps skill_invoked in perf_fields and adds nothing else: harness_skill is the runner's to write", () => {
     multi();
-    const t = stateTemplateFor("evals", cwd, {}, "b");
-    expect(t).toEqual(stateTemplateFor("evals", cwd, {}));
+    const t = stateTemplateFor("evals", cwd, {}, { skill: "b" });
+    expect(perfIds(t)).toContain("skill_invoked");
+    expect(t.note).toBeUndefined();
     expect(t.state).not.toHaveProperty("harness_skill");
+  });
+
+  it("several skills and no --skill: skill_invoked is left out of perf_fields, and the note says to pass --skill, listing them", () => {
+    multi();
+    const t = stateTemplateFor("evals", cwd, {});
+    expect(perfIds(t)).not.toContain("skill_invoked");
+    expect(perfIds(t)).toContain("cost_usd");
+    expect(t.note).toMatch(/several skills \(a, b\).*pass --skill <name>/);
+    expect({ ...t.state, perf_fields: [] }).toEqual({ ...stateTemplateFor("evals", cwd, {}, { skill: "b" }).state, perf_fields: [] });
+  });
+
+  it("hillclimb check then notes no absent skill_invoked per row; declared, it would", () => {
+    multi();
+    const t = stateTemplateFor("evals", cwd, {});
+    cpSync(CLEAN_FLOW, join(cwd, "flow"), { recursive: true });
+    for (const v of ["baseline", "v1"]) {
+      const f = join(cwd, "flow", v, "results.jsonl");
+      const lines = readFileSync(f, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+      writeFileSync(f, lines.map(({ skill_invoked: _drop, ...r }) => JSON.stringify(r)).join("\n") + "\n");
+    }
+    const st = JSON.parse(readFileSync(join(cwd, "flow", "_state.json"), "utf8")) as Record<string, unknown>;
+    const notesWith = (perf: unknown) => {
+      writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify({ ...st, perf_fields: perf }));
+      return checkReport("flow", cwd).report.findings.filter((f) => /skill_invoked/.test(f.message));
+    };
+    expect(notesWith(t.state.perf_fields)).toEqual([]);
+    expect(notesWith(stateTemplateFor("evals", cwd, {}, { skill: "a" }).state.perf_fields).length).toBeGreaterThan(0);
+  });
+
+  it("a single-skill plugin keeps skill_invoked with no note", () => {
+    multi();
+    rmSync(join(cwd, "plug", "skills", "b"), { recursive: true });
+    const t = stateTemplateFor("evals", cwd, {});
+    expect(perfIds(t)).toContain("skill_invoked");
+    expect(t.note).toBeUndefined();
   });
 
   it("an unknown skill is a usage error naming the plugin's skills", () => {
     multi();
-    expect(() => stateTemplateFor("evals", cwd, {}, "nope")).toThrow(UsageError);
-    expect(() => stateTemplateFor("evals", cwd, {}, "nope")).toThrow(/--skill nope: .* registers no skill nope — its skills: a, b/);
+    expect(() => stateTemplateFor("evals", cwd, {}, { skill: "nope" })).toThrow(UsageError);
+    expect(() => stateTemplateFor("evals", cwd, {}, { skill: "nope" })).toThrow(
+      /--skill nope: .* registers no skill nope — its skills: a, b/,
+    );
+  });
+
+  it("resolves against the plugin's git-tracked files, as a snapshot copies them: an untracked skill is refused", () => {
+    multi();
+    const git = (...a: string[]) => spawnSync("git", a, { cwd: join(cwd, "plug"), encoding: "utf8" });
+    git("init", "-q");
+    git("add", "skills/a");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    delete process.env.COWORK_HARNESS_GITSET;
+    try {
+      expect(() => stateTemplateFor("evals", cwd, {}, { skill: "b" })).toThrow(/--skill b: .*untracked.*git add/);
+      expect(stateTemplateFor("evals", cwd, {}).note).toBeUndefined(); // one tracked skill: a
+    } finally {
+      if (saved !== undefined) process.env.COWORK_HARNESS_GITSET = saved;
+    }
   });
 });
 

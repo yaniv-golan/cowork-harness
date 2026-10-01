@@ -47,23 +47,32 @@ export function checkReport(flowArg: string, cwd: string): { report: SchemaCheck
   return { report, warnings: headroom(snap).warnings, exitCode: report.errors ? 1 : 0 };
 }
 
-/** `hillclimb state-template`: the skeleton for the flow's cases, with the gate's files relative to cwd. A `skill`
- *  (`--skill`) is checked against the live plugin with run's resolution — there is no snapshot yet — and refused
- *  as run would refuse it; it adds nothing to the skeleton (`harness_skill` is the runner's to write). */
-export function stateTemplateFor(target: string, cwd: string, env: NodeJS.ProcessEnv, skill?: string): StateTemplate {
+/** `hillclimb state-template`: the skeleton for the flow's cases, with the gate's files relative to cwd. The tracked
+ *  skill is resolved against the live plugin's git-tracked files with run's resolution — the files a pass would
+ *  snapshot — and an unknown `skill` (`--skill`) is refused as run would refuse it. When run would omit the
+ *  skill_invoked column (several skills and no --skill, or none), `perf_fields` leaves it out too, and `note` says why;
+ *  `harness_skill` is the runner's to write. */
+export function stateTemplateFor(
+  target: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  opts: { skill?: string } = {},
+): StateTemplate & { note?: string } {
   const { cases } = loadCases(resolve(cwd, target));
   const prep = prepareCases(cases, { env });
-  if (skill !== undefined)
-    try {
-      trackedSkill(prep.lever, skill);
-    } catch (e) {
-      throw new UsageError((e as Error).message);
-    }
-  return stateTemplate({
+  let tracked: ReturnType<typeof trackedSkill>;
+  try {
+    tracked = trackedSkill(prep.lever, opts.skill);
+  } catch (e) {
+    throw new UsageError((e as Error).message);
+  }
+  const t = stateTemplate({
     cases: cases.map((c) => ({ assertions: c.scenario.assert ?? [] })),
     harnessPaths: prep.derivedPaths(cases).map((p) => relative(cwd, p)),
     decider: false,
+    skillInvoked: tracked.name !== undefined,
   });
+  return tracked.name === undefined ? { ...t, note: tracked.note } : t;
 }
 
 /** `state-template --flow`: the metrics legend into `<flow>/metrics.md`, through the no-follow root. The loop
@@ -202,7 +211,9 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       }
       if (p.positionals.length !== 1)
         return usage(`hillclimb state-template takes exactly one scenario file or directory`, HILLCLIMB_STATE_TEMPLATE_USAGE);
-      const t = stateTemplateFor(p.positionals[0], process.cwd(), process.env, p.options["--skill"]);
+      const skillOpt = p.options["--skill"];
+      const t = stateTemplateFor(p.positionals[0], process.cwd(), process.env, skillOpt !== undefined ? { skill: skillOpt } : {});
+      if (t.note !== undefined) err(t.note, secrets);
       const md = flowGiven !== undefined ? writeMetricsMd(flowGiven, process.cwd(), t.metricsMd, secrets) : undefined;
       if (md && !json)
         err(

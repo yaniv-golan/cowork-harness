@@ -987,6 +987,25 @@ describe("skill_invoked: what each row tracked, and keeping a variant's column o
     expect(err.join("\n")).toMatch(/\(baseline: my-plugin:x; v1: my-plugin:x2\)/);
   });
 
+  it("the dry run resolves against the plugin's git-tracked files, as the pass's snapshot does: an untracked skill is refused", async () => {
+    addSkill("b");
+    const git = (...a: string[]) => spawnSync("git", a, { cwd: plugin, encoding: "utf8" });
+    git("init", "-q");
+    git("add", "skills/x");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    delete process.env.COWORK_HARNESS_GITSET;
+    try {
+      const r = await runHillclimbCommand(args("--skill", "b", "--dry-run"), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toMatch(/--skill b: skills\/b\/SKILL\.md is untracked .* 'git add' it/);
+      err = [];
+      expect((await runHillclimbCommand(args("--dry-run"), deps())).exitCode).toBe(0);
+      expect(err.join("\n")).toMatch(/\[baseline\] skill_invoked tracks my-plugin:x/);
+    } finally {
+      if (saved !== undefined) process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
   it("the dry run names the tracked skill, or why there is none", async () => {
     await runHillclimbCommand(args("--dry-run"), deps());
     expect(err.join("\n")).toMatch(/\[baseline\] skill_invoked tracks my-plugin:x/);
