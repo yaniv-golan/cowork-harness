@@ -1,7 +1,8 @@
 # `semantic_matches` — the full semantics
 
-The one-line summary is in [assertion-catalog.md](assertion-catalog.md); this is the whole contract, split out so the
-catalog stays within the agent's single-read size.
+Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). The one-line summary is in
+[assertion-catalog.md](assertion-catalog.md); this is the whole contract, split out so the catalog stays within the
+agent's single-read size.
 
 `semantic_matches: {rubric: [...], min_pass?, judge_model?, include_subagent_text?, include_fork_results?, evidence_files?}`
 
