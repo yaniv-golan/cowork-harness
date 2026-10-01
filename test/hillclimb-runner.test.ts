@@ -201,6 +201,46 @@ describe("a pass", () => {
   });
 });
 
+describe("failures inside the pool", () => {
+  it("a row that cannot be built is that attempt's error row; the pass goes on", async () => {
+    await approved();
+    // SYNTHETIC: a result whose assertions field is not a list, so the row builder throws on it.
+    behave = (id) => (id === "alpha" ? { result: { ...excerpt, assertions: 5 as never } } : {});
+    const r = await runHillclimb(args(), deps());
+    expect(r).toMatchObject({ exitCode: 1, ok: 1, failed: 1 });
+    expect(rows("baseline", "errors.jsonl")).toMatchObject([
+      { prompt_id: "alpha", failure_class: "error", meta: { failure_rule: "row_build" } },
+    ]);
+    expect(rows("baseline").map((x) => x.prompt_id)).toEqual(["beta"]);
+  });
+
+  it("a write that fails stops the pass: no further job is started, in-flight ones finish before the lock is released", async () => {
+    await approved();
+    writeFileSync(join(cwd, "evals", "gamma.yaml"), SCENARIO("Gamma"));
+    await runHillclimb(args("--approve-harness", "--dry-run"), deps());
+    // alpha plants a link where its error row must go, then fails: appending the error row is refused.
+    let betaDone = false;
+    const slowBeta = deps({
+      runJob: async (j) => {
+        jobs.push({ id: j.c.id, rep: j.rep, runLabel: j.runLabel });
+        if (j.c.id === "alpha") {
+          symlinkSync(join(cwd, "elsewhere"), vfile("baseline", "errors.jsonl"));
+          throw new Error("boom");
+        }
+        await new Promise((res) => setTimeout(res, 50));
+        if (j.c.id === "beta") betaDone = true;
+        return { result: excerpt, events, children: [], attemptS: 1, runnerTimeout: false };
+      },
+    });
+    const r = await runHillclimb(args(), slowBeta); // concurrency 2: alpha and beta start together
+    expect(r.exitCode).toBe(1);
+    expect(jobs.map((j) => j.id).sort()).toEqual(["alpha", "beta"]); // gamma never started
+    expect(betaDone).toBe(true); // the in-flight job finished before runHillclimb returned
+    expect(err.join("\n")).toMatch(/stopped mid-run/);
+    expect(existsSync(vfile("baseline", ".lock"))).toBe(false);
+  });
+});
+
 describe("refusals before spend (exit 2, no job)", () => {
   const refused = async (a: HillclimbRunArgs, d = deps(), msg?: RegExp) => {
     const r = await runHillclimb(a, d);
@@ -232,6 +272,13 @@ describe("refusals before spend (exit 2, no job)", () => {
     await refused(args(), deps({ mountRoots: () => [cwd] }), /mount/);
   });
 
+  it("an ABSOLUTE --flow inside a mounted folder is refused too (S supports an absolute --flow)", async () => {
+    const abs = join(cwd, "mnt", "flow");
+    const a = parseHillclimbRunArgs([join(cwd, "evals"), "--flow", abs, "--concurrency", "2", "--approve-harness"]);
+    if (a.help) throw new Error("help");
+    await refused(a, deps({ mountRoots: () => [join(cwd, "mnt")] }), /mount/);
+  });
+
   it("--ablate into a flow that already holds non-ablated rows", async () => {
     await approved();
     await runHillclimb(args(), deps());
@@ -244,6 +291,20 @@ describe("refusals before spend (exit 2, no job)", () => {
     mkdirSync(join(flowDir(), "baseline"), { recursive: true });
     writeFileSync(vfile("baseline", ".lock"), JSON.stringify({ pid: process.pid }));
     await refused(args(), deps(), /holds/);
+  });
+});
+
+describe("absolute paths", () => {
+  it("an absolute --flow and an absolute scenario target run exactly like relative ones", async () => {
+    const a = (...x: string[]) => {
+      const p = parseHillclimbRunArgs([join(cwd, "evals"), "--flow", flowDir(), "--concurrency", "2", ...x]);
+      if (p.help) throw new Error("help");
+      return p;
+    };
+    expect((await runHillclimb(a("--approve-harness", "--dry-run"), deps())).exitCode).toBe(0);
+    const r = await runHillclimb(a(), deps());
+    expect(r.exitCode).toBe(0);
+    expect(rows("baseline")).toHaveLength(2);
   });
 });
 

@@ -9,7 +9,7 @@
 // The job runner is injected: this module never spawns an agent. H4b's real runner builds each JobReport
 // from a kept run dir; tests pass recorded excerpts.
 
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { UsageError } from "../errors.js";
 import { pMapBounded } from "../async-pool.js";
@@ -114,11 +114,12 @@ async function run(
 ): Promise<RunOutcome> {
   const v = args.variant;
   const flowArg = normalizeRootArg(args.flow);
-  const flowAbs = join(deps.cwd, flowArg);
+  // resolve, never join: an absolute --flow or target is supported (S l.365-371) and join would graft it onto cwd.
+  const flowAbs = resolve(deps.cwd, flowArg);
   const statePathShown = join(flowArg, "_state.json");
 
   // The whole case set: the id space, the split ids and the gate are judged on it, whatever --case selects.
-  const { cases: all, skipped } = loadCases(join(deps.cwd, args.target));
+  const { cases: all, skipped } = loadCases(resolve(deps.cwd, args.target));
   if (skipped.length) say(`[${v}] skipped ${skipped.length} non-scenario file(s): ${skipped.join(", ")}`);
 
   // Writes only when this run may write: a pass, or the human's --approve-harness. A plain --dry-run
@@ -212,71 +213,110 @@ async function run(
     const flowHash = createHash("sha256").update(flowAbs).digest("hex").slice(0, 16);
     const models = new Set<string>();
     markStarted();
+    // A failure to WRITE (a row, an error row) stops the pass: S's process exits there (l.597-599). Here the
+    // pool cannot be killed, so a stop flag keeps every later task from starting, and the pool is awaited —
+    // in-flight jobs finish — before the lock is released. Nothing else escapes a task.
+    let stopError: unknown;
     try {
       await pMapBounded(tasks, args.concurrency, async ({ c, rep }) => {
-        const tStart = now();
-        let report: JobReport;
+        if (stopError !== undefined) return;
         try {
-          report = await deps.runJob({ c, rep, variant: v, runLabel, timeoutS: args.timeoutS });
+          await oneTask(c, rep);
         } catch (e) {
-          report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
-        }
-        const ctx: AttemptContext = {
-          caseId: c.id,
-          ...(c.originalId !== undefined ? { originalId: c.originalId } : {}),
-          scenarioName: c.name,
-          prompt: c.scenario.prompt,
-          assertions: c.scenario.assert,
-          rep,
-          pin: deps.pin(c),
-          ...(deps.expectedContentSig !== undefined ? { expectedContentSig: deps.expectedContentSig } : {}),
-          events: report.events,
-          attemptS: report.attemptS,
-          runnerTimeout: report.runnerTimeout,
-          tags: [basename(dirname(c.file))],
-          ...(report.skillInvoked !== undefined ? { skillInvoked: report.skillInvoked } : {}),
-          meta: {
-            flowHash,
-            env: deps.virtual,
-            ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
-            ...(deps.expectedContentSig !== undefined ? { contentSig: deps.expectedContentSig } : {}),
-            ...(args.ablate ? { ablated: true } : {}),
-            ...(args.deciderLlm ? { nonDeterministic: true } : {}),
-          },
-        };
-        const out = attemptRow(
-          { ...(report.result ? { result: report.result } : {}), ...(report.thrown !== undefined ? { thrown: report.thrown } : {}) },
-          ctx,
-        );
-        if (out.dest === "errors") {
-          fail++;
-          writer.appendError(out.row);
-          say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
-          return;
-        }
-        writer.appendResult(out.row);
-        if (typeof out.row.model === "string") models.add(out.row.model);
-        // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
-        // row, which would double-count its spend (S l.529, 541-548).
-        try {
-          const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
-          const trace = turnsFromEvents({
-            events: report.events,
-            prompt: c.scenario.prompt,
-            system: report.system,
-            children: report.children,
-            sidecarPrefix: prefix,
-          });
-          for (const s of trace.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
-          writer.writeTrace(c.id, rep, trace.turns);
-          ok++;
-        } catch (e) {
-          fail++;
-          say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(e)}`);
+          stopError ??= e;
         }
       });
     } finally {
       clearInterval(tick);
+    }
+    if (stopError !== undefined) {
+      progress();
+      say(`stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`);
+      return { exitCode: 1, scheduled: tasks.length, ok, failed: fail };
+    }
+    async function oneTask(c: HillclimbCase, rep: number): Promise<void> {
+      const tStart = now();
+      let report: JobReport;
+      try {
+        report = await deps.runJob({ c, rep, variant: v, runLabel, timeoutS: args.timeoutS });
+      } catch (e) {
+        report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
+      }
+      const ctx: AttemptContext = {
+        caseId: c.id,
+        ...(c.originalId !== undefined ? { originalId: c.originalId } : {}),
+        scenarioName: c.name,
+        prompt: c.scenario.prompt,
+        assertions: c.scenario.assert,
+        rep,
+        pin: deps.pin(c),
+        ...(deps.expectedContentSig !== undefined ? { expectedContentSig: deps.expectedContentSig } : {}),
+        events: report.events,
+        attemptS: report.attemptS,
+        runnerTimeout: report.runnerTimeout,
+        tags: [basename(dirname(c.file))],
+        ...(report.skillInvoked !== undefined ? { skillInvoked: report.skillInvoked } : {}),
+        meta: {
+          flowHash,
+          env: deps.virtual,
+          ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
+          ...(deps.expectedContentSig !== undefined ? { contentSig: deps.expectedContentSig } : {}),
+          ...(args.ablate ? { ablated: true } : {}),
+          ...(args.deciderLlm ? { nonDeterministic: true } : {}),
+        },
+      };
+      let out: ReturnType<typeof attemptRow>;
+      try {
+        out = attemptRow(
+          { ...(report.result ? { result: report.result } : {}), ...(report.thrown !== undefined ? { thrown: report.thrown } : {}) },
+          ctx,
+        );
+      } catch (e) {
+        // A row that cannot be built is this attempt's failure, not the pass's.
+        out = {
+          dest: "errors",
+          row: {
+            prompt_id: c.id,
+            rep,
+            ...(c.originalId !== undefined ? { original_id: c.originalId } : {}),
+            failure_class: "error",
+            error: `could not build the row: ${message(e)}`,
+            retries: 0,
+            judge_retries: 0,
+            latency_s: report.attemptS,
+            meta: {
+              failure_rule: "row_build",
+              ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
+            },
+          },
+        };
+      }
+      if (out.dest === "errors") {
+        fail++;
+        writer.appendError(out.row);
+        say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
+        return;
+      }
+      writer.appendResult(out.row);
+      if (typeof out.row.model === "string") models.add(out.row.model);
+      // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
+      // row, which would double-count its spend (S l.529, 541-548).
+      try {
+        const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
+        const trace = turnsFromEvents({
+          events: report.events,
+          prompt: c.scenario.prompt,
+          system: report.system,
+          children: report.children,
+          sidecarPrefix: prefix,
+        });
+        for (const s of trace.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
+        writer.writeTrace(c.id, rep, trace.turns);
+        ok++;
+      } catch (e) {
+        fail++;
+        say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(e)}`);
+      }
     }
     progress();
     writer.mergeSummary({
@@ -292,7 +332,7 @@ async function run(
 }
 
 function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknown> {
-  if (!lexists(join(cwd, flowArg))) return {};
+  if (!lexists(resolve(cwd, flowArg))) return {};
   const r = NoFollowRoot.existing(flowArg, { cwd });
   const text = r.readIfPresent(join(r.root, "_state.json"));
   if (text === null) return {};
