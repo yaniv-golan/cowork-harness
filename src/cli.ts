@@ -266,12 +266,13 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
                                each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
   eval report <eval-dir>       rebuild an eval's report from its directory ($0)
-  hillclimb run <scenario.yaml | dir/>   the runner for /claude-api hillclimb: every scenario --reps times into
-                               <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
+  hillclimb run <scenario.yaml | dir/> [--flow DIR]   the runner for /claude-api hillclimb: every scenario
+                               --reps times into <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
   hillclimb check [--flow DIR]   check a flow dir against our reading of the hillclimb schema
-  hillclimb state-template <scenario.yaml | dir/>   print a _state.json skeleton for the loop to save
-  hillclimb freeze-ref <scenario.yaml | dir/> --variant ID   freeze a variant's pairwise references (win_<vN>)
-  hillclimb regrade <scenario.yaml | dir/>   re-grade a flow's rows from their kept runs (--fill-refs: add win_<vN>)
+  hillclimb state-template <scenario.yaml | dir/> [--flow DIR]   print a _state.json skeleton for the loop to save;
+                               with --flow, also write <flow>/metrics.md. Pass the same --flow to every hillclimb command
+  hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR]   freeze a variant's pairwise references (win_<vN>)
+  hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--fill-refs: add win_<vN>)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
@@ -4734,7 +4735,7 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
     },
     { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
     { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
-    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") || k.startsWith("hook_event_") },
+    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") || k.startsWith("hook_event_") || k.startsWith("hook_output_") },
     {
       title: "Path denial / VM paths",
       match: (k) => k.includes("path_denied") || k === "no_vm_path_file_op" || k === "transcript_no_host_path",

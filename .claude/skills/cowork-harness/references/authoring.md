@@ -235,6 +235,7 @@ cowork-harness lint scenarios/*.yaml
 | `fidelity-missing` | ERROR | no `fidelity:` (required since 4.0.0) |
 | `file-absent-contradiction` | ERROR | one path under both `file_exists` and `file_absent` |
 | `gate-needs-controlout` | INFO | gate assertions, which evaluate on replay only when the cassette has `controlOut` |
+| `hook-output-control-char` | ERROR | a `hook_output_contains` / `hook_output_not_contains` `text` or `matches` holding a control character (a double-quoted YAML `\b` is a backspace) — the harness refuses it at load |
 | `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
 | `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
 | `lane-remote-incompatible-key` | ERROR | `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` on `lane: remote` (the runtime rejects them at load, so the tier rules are suppressed there) |

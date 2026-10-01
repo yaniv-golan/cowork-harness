@@ -18,3 +18,5 @@ assert:
   - hook_event_fired: Stop
   - hook_event_blocked: Stop
   - transcript_matches: "PINEAPPLE"
+  # what the blocking hook printed (its stderr is the reason the agent resends)
+  - hook_output_contains: { event: Stop, stream: stderr, text: "PINEAPPLE" }
