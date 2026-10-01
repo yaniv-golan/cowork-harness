@@ -458,12 +458,17 @@ async function run(
         ...(models.size === 1 ? { model: [...models][0] } : {}),
         ...(variantSig !== undefined ? { source_sig: variantSig } : {}),
       });
-      const snap = loadFlowSnapshot(flowAbs);
-      if (v === "baseline") for (const line of headroom(snap).warnings) say(line);
-      for (const line of pairwiseHints(snap, flowArg, args.target)) say(line);
+      if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
     } catch (e) {
       fail++;
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);
+    }
+    // The second-reference hint is advice: a flow read it cannot make (a concurrent freeze's temp dir vanishing
+    // mid-walk) is never a failed pass.
+    try {
+      for (const line of pairwiseHints(loadFlowSnapshot(flowAbs), flowArg, args.target)) say(line);
+    } catch {
+      /* warn-only */
     }
     say(`[${v}] done - ${ok} ok, ${fail} failed -> ${join(flowArg, v, "results.jsonl")}`);
     return { exitCode: fail ? 1 : 0, scheduled: tasks.length, ok, failed: fail, scored };

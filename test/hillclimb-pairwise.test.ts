@@ -133,6 +133,10 @@ describe("declarations", () => {
     expect(differ).not.toContain("a1_win");
   });
 
+  it("both_bad is declared lower-is-better, so a variant raising it never reads as a gain", () => {
+    expect(flowMetricDecls([{ assertions: [PW] }]).find((d) => d.id === "both_bad")).toMatchObject({ kind: "binary", better: "lower" });
+  });
+
   it("a flow with no pairwise assert declares no win column", () => {
     expect(flowMetricDecls([{ assertions: [OTHER] }]).map((d) => d.id)).not.toContain("win_present");
   });

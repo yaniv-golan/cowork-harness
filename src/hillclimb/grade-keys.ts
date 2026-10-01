@@ -56,7 +56,8 @@ const PASS: GradeKeyDecl = { id: "pass", kind: "binary", label: "Pass" };
 const PASS_PRESENT: GradeKeyDecl = { id: "pass_present", kind: "binary", label: "pass measured" };
 const CLAIMS_PRESENT: GradeKeyDecl = { id: "claims_present", kind: "binary", label: "claims graded" };
 const CLAIMS: GradeKeyDecl = { id: "claims", kind: "judge", label: "Claims passed", scale: 1, better: "higher" };
-const BOTH_BAD: GradeKeyDecl = { id: "both_bad", kind: "binary", label: "Both bad" };
+// Lower is better: a variant that raises both-bad is a regression, not a gain (a binary defaults to "higher").
+const BOTH_BAD: GradeKeyDecl = { id: "both_bad", kind: "binary", label: "Both bad", better: "lower" };
 const winId = (ref?: string) => (ref === undefined ? "win" : `win_${ref}`);
 const winDecl = (ref?: string): GradeKeyDecl => ({
   id: winId(ref),

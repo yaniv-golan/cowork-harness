@@ -19,8 +19,6 @@ import { freezeCaseRef } from "./freeze-ref.js";
 import { readRefDoc, readRefEntry } from "../refs/store.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { createHash } from "node:crypto";
-
-const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 import { flowHasPairwise } from "./grade-keys.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
@@ -126,6 +124,8 @@ interface Prepared {
   /** The dry run's estimate for the remaining slots (case id → count). */
   price: (remaining: Record<string, number>) => ReturnType<typeof estimateScheduleCost>;
 }
+
+const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
 function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   args: HillclimbRunArgs,
