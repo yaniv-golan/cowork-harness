@@ -400,6 +400,26 @@ async function regradeFlowInner(
         groups.set(key, b);
       }
       batches.push(...groups.values());
+      // An error row a judge outage wrote (judge_invalid) is not promoted into results.jsonl here: its slot is still
+      // open, so the next `hillclimb run` pass of this variant re-runs it. Listed so the slot is not forgotten.
+      const scored = new Set(lines.flatMap((l) => (l.row ? [`${String(l.row.prompt_id)}\0${String(l.row.rep)}`] : [])));
+      for (const raw of (writers.get(v)!.readVariantFile("errors.jsonl") ?? "").split("\n")) {
+        let e: Row | undefined;
+        try {
+          e = raw.trim() ? (JSON.parse(raw) as Row) : undefined;
+        } catch {
+          e = undefined;
+        }
+        if (!e || (e as { failure_class?: unknown }).failure_class !== "judge_invalid") continue;
+        const id = String(e.prompt_id);
+        if (args.cases.length && !byId.has(id)) continue;
+        if (scored.has(`${id}\0${String(e.rep)}`)) continue;
+        vr.listed.push({
+          prompt_id: id,
+          rep: Number(e.rep),
+          why: "an errors.jsonl row (judge_invalid): its slot is open — the next `hillclimb run` of this variant re-runs it",
+        });
+      }
     }
 
     const optsFor = (b: Batch, checkOnly: boolean) => ({

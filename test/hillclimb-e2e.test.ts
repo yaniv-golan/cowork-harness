@@ -271,3 +271,115 @@ cat "${ENVELOPE}"
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
   }, 180_000);
 });
+
+describe.runIf(POSIX)("hillclimb regrade refusals and listings (CLI)", () => {
+  const ENVELOPE = join(import.meta.dirname, "fixtures", "pairwise-judge", "claude-p-json-schema-envelope.json");
+  const JUDGE = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
+if [ "$1" = "--help" ]; then
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do echo "  $f   x"; done
+  exit 0
+fi
+echo x >> "$JUDGE_CALLS"
+cat >/dev/null
+cat "${ENVELOPE}"
+`;
+  function setup() {
+    const plugin = join(work, "plugin", "my-plugin");
+    mkdirSync(join(plugin, "skills", "x"), { recursive: true });
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n");
+    const evals = join(f.cwd, "evals");
+    mkdirSync(evals);
+    writeFileSync(join(evals, "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+    writeFileSync(
+      join(evals, "alpha.yaml"),
+      "name: alpha\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n" +
+        "  - semantic_pairwise:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n",
+    );
+    const judge = join(work, "judge.sh");
+    writeFileSync(judge, JUDGE, { mode: 0o755 });
+    const calls = join(work, "judge-calls");
+    writeFileSync(calls, "");
+    const env = {
+      ...f.env,
+      COWORK_MANAGED_CONFIG: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
+      STUB_ARGV: join(work, "argv"),
+      COWORK_HARNESS_CLAUDE_BIN: judge,
+      JUDGE_CALLS: calls,
+    };
+    const cli = (...a: string[]) =>
+      spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
+    expect(cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1").status).toBe(0);
+    expect(cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1").status).toBe(0);
+    const flow = join(f.cwd, "flow");
+    const results = (v: string) => readFileSync(join(flow, v, "results.jsonl"), "utf8");
+    const runDir = (v: string) => join(f.runsDir, "alpha", (JSON.parse(results(v).trim()) as { meta: { run_id: string } }).meta.run_id);
+    return { cli, flow, results, runDir, calls, evals };
+  }
+
+  it("refuses a bad variant, a held lock and an unapproved harness change before any judge call", () => {
+    const { cli, flow, calls, evals } = setup();
+    expect(cli("regrade", "evals", "--flow", "flow", "--variant", "v0").status).toBe(2);
+    writeFileSync(join(flow, "v1", ".lock"), JSON.stringify({ pid: process.pid }));
+    expect(cli("regrade", "evals", "--flow", "flow").status).toBe(2);
+    rmSync(join(flow, "v1", ".lock"));
+    writeFileSync(
+      join(evals, "alpha.yaml"),
+      readFileSync(join(evals, "alpha.yaml"), "utf8").replace("rubric: ['answers']", "rubric: ['answers well']"),
+    );
+    const r = cli("regrade", "evals", "--flow", "flow", "--output-format", "json");
+    expect(r.status).toBe(2);
+    const env = JSON.parse(r.stdout) as { ok: boolean; error: { message: string } };
+    expect(env.ok).toBe(false);
+    expect(env.error.message).toMatch(/harness changed since last approved run/);
+    expect(readFileSync(calls, "utf8")).toBe("x\n"); // only v1's live comparison
+  }, 120_000);
+
+  it("a changed kept run is refused before any spend, everywhere; nothing is written", () => {
+    const { cli, flow, results, runDir, calls } = setup();
+    const before = { baseline: results("baseline"), v1: results("v1") };
+    // The judged document's final answer is the run's recorded one: edit it after the run.
+    const turns = join(runDir("v1"), "turns");
+    const rj = join(turns, readdirSync(turns).sort().pop()!, "result.json");
+    const res = JSON.parse(readFileSync(rj, "utf8")) as { finalMessage?: string };
+    expect(res.finalMessage).toBeTruthy();
+    writeFileSync(rj, JSON.stringify({ ...res, finalMessage: `${res.finalMessage} (edited)` }));
+    const r = cli("regrade", "evals", "--flow", "flow");
+    expect(r.status, r.stderr).toBe(2);
+    expect(r.stderr).toMatch(/nothing was re-graded or written[\s\S]*v1 alpha rep0: doc_drift/);
+    expect({ baseline: results("baseline"), v1: results("v1") }).toEqual(before);
+    expect(readdirSync(join(flow, "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(false);
+    expect(readFileSync(calls, "utf8")).toBe("x\n");
+  }, 120_000);
+
+  it("a pruned run dir and an open judge_invalid slot are listed (exit 1); the rest is rewritten", () => {
+    const { cli, flow, results, runDir } = setup();
+    rmSync(runDir("baseline"), { recursive: true, force: true });
+    writeFileSync(
+      join(flow, "v1", "errors.jsonl"),
+      JSON.stringify({
+        prompt_id: "alpha",
+        rep: 1,
+        failure_class: "judge_invalid",
+        error: "x",
+        retries: 0,
+        judge_retries: 1,
+        latency_s: 1,
+        meta: {},
+      }) + "\n",
+    );
+    const before = results("baseline");
+    const r = cli("regrade", "evals", "--flow", "flow", "--output-format", "json");
+    expect(r.status, r.stderr).toBe(1);
+    const env = JSON.parse(r.stdout) as {
+      variants: Array<{ variant: string; rewritten: number; listed: Array<{ rep: number; why: string }> }>;
+    };
+    const base = env.variants.find((v) => v.variant === "baseline")!;
+    expect(base.listed).toMatchObject([{ rep: 0, why: expect.stringMatching(/run dir is gone/) }]);
+    expect(results("baseline")).toBe(before);
+    const v1 = env.variants.find((v) => v.variant === "v1")!;
+    expect(v1.rewritten).toBe(1);
+    expect(v1.listed).toMatchObject([{ rep: 1, why: expect.stringMatching(/judge_invalid.*re-runs it/) }]);
+  }, 120_000);
+});
