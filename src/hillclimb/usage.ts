@@ -56,8 +56,8 @@ export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <
        the files the harness gate digests. With --flow, also writes the metrics legend to <flow>/metrics.md
        (an existing copy that differs is kept; the new legend goes to metrics.md.new). json: the envelope
        also carries it as metrics_md. --skill NAME is checked against the plugin as run's is (an unknown
-       skill exits 2, naming the plugin's skills); with several skills and no --skill, skill_invoked is left
-       out of perf_fields.`;
+       skill exits 2, naming the plugin's skills); with several skills and no --skill, or no skill at all,
+       skill_invoked is left out of perf_fields.`;
 
 export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR] [--case ID]... [--output-format text|json]
        Freezes each selected semantic_pairwise case's reference into <flow>/<variant>/ref from the variant's

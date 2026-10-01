@@ -162,7 +162,7 @@ All notable changes to this project are documented here. The format is based on
   `./`-prefixed), and a root `SKILL.md` when there is no `skills/` and no `skills` field (an empty one counts); a `SKILL.md` that is not a regular file or is over 1 MiB is skipped. A plugin with one
   skill is tracked; with several, `--skill <name>` (on `run` and `state-template`; a directory name or a registered name)
   picks one, and without it the rows omit the column, the run lists the skills, and `state-template` leaves
-  `skill_invoked` out of `perf_fields`. Every scored row records the tracked id in `meta.skill_tracked`. A pass whose
+  `skill_invoked` out of `perf_fields` (as it does for a plugin with no skill). Every scored row records the tracked id in `meta.skill_tracked`. A pass whose
   tracked skill differs from the one the rows already in its variant record is refused (a row with no
   `meta.skill_tracked` records none, so a pass tracking a skill over it only warns); another variant may track a different skill,
   with a warning. A `--skill` selection is part of the harness sha: `--approve-harness` records it in `_state.json` as
