@@ -1726,6 +1726,7 @@ describe("regrade checkOnly: every pre-spend step, then stop", () => {
       uncheckedSections: [],
       uncheckedCount: 0,
       liveDocDrift: [],
+      blind: [],
       authoredCapture: expect.objectContaining({ source: "persisted" }),
     });
     expect(regradeFiles(k)).toEqual([]);
@@ -1824,5 +1825,57 @@ describe("regrade checkOnly: every pre-spend step, then stop", () => {
     expect(out.runs[0].uncheckedSections).toEqual([{ assertionIndex: 0, kind: "authored", path: "outputs/appendix.md" }]);
     expect(out.runs[0].uncheckedCount).toBe(1);
     expect(regradeFiles(k)).toEqual([]);
+  });
+
+  /** The real path's blind-assert warning for the same run, and the preflight's `blind` for it. */
+  async function blindBoth(k: Kept, assertYaml?: string) {
+    const scenarioFile = assertYaml ? scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scnbl-")), assertYaml) : k.scenarioFile;
+    const stderr = captureStderr();
+    let check;
+    try {
+      check = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: noJudge, checkOnly: true });
+    } finally {
+      stderr.restore();
+    }
+    expect(stderr.text()).toBe("");
+    if (!check.ok || !("checkOnly" in check)) throw new Error("expected a passed preflight");
+    const real = captureStderr();
+    try {
+      const out = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: judgeFactory(() => true).make });
+      if (!out.ok) throw new Error(out.message);
+    } finally {
+      real.restore();
+    }
+    const warned = /(\d+) assert\(s\) have no live document to compare with \(([^)]*)\)/.exec(real.text());
+    return { blind: check.runs[0].blind, warned: warned ? { count: Number(warned[1]), list: warned[2] } : undefined };
+  }
+
+  it("blind: a run with no live fingerprint lists exactly the asserts a real re-grade warns about", async () => {
+    // Two scopes, so each assert is judged against its own live counterpart: 0 graded live but unfingerprinted
+    // (unknown), 1 refused live with no fingerprint (live_refused).
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+      assertYaml: `${SCOPED}  - semantic_matches:\n      rubric: ["the appendix exists"]\n      evidence_files: ["outputs/appendix.md"]\n`,
+    });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    for (const a of r.assertions) delete a.judgedDoc;
+    r.assertions[1].semanticEvidence = { reason: "in_scope_omitted", paths: ["outputs/report.md"] };
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const { blind, warned } = await blindBoth(k);
+    expect(blind).toEqual([
+      { assertionIndex: 0, docMatch: "unknown" },
+      { assertionIndex: 1, docMatch: "live_refused" },
+    ]);
+    expect(warned).toEqual({ count: 2, list: "assert 0: unknown, assert 1: live_refused" });
+  });
+
+  it("blind: a clean fingerprinted run → [] and no real warning", async () => {
+    const k = await keptRun({ author: writeReport });
+    const { blind, warned } = await blindBoth(k);
+    expect(blind).toEqual([]);
+    expect(warned).toBeUndefined();
   });
 });

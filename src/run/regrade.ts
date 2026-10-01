@@ -139,7 +139,19 @@ export type RegradeOutcome =
 export type RegradeCheckRun = Pick<
   RegradeRunReport,
   "runDir" | "turn" | "scenarioSha256" | "uncheckedSections" | "uncheckedCount" | "liveDocDrift" | "authoredCapture"
->;
+> & {
+  /** The asserts that will be graded with nothing live to compare their document with — exactly those a real
+   *  re-grade warns about before its spend. `docMatch` is the `docMatchesLive` value each would be graded with.
+   *  Never refused: the grade goes ahead, but those documents are neither drift- nor secret-checked. */
+  blind: BlindAssert[];
+};
+
+/** An assert with no live fingerprint to compare its rebuilt document with (see `RegradeCheckRun.blind`). */
+export interface BlindAssert {
+  /** Index of the assert in the new scenario's `assert:` list. */
+  assertionIndex: number;
+  docMatch: Extract<DocMatch, "unknown" | "live_refused">;
+}
 
 /** A `checkOnly` preflight that a real re-grade with the same options would NOT refuse: every run dir passed every
  *  pre-spend step. A refusal is the ordinary `{ ok: false }` arm of `RegradeOutcome`, identical to the real one. */
@@ -177,7 +189,8 @@ export interface RegradeCheckOptions extends RegradeOptions {
   /** Evidence preflight: run every pre-spend step a real re-grade runs — the builder's refusals, the judge-model
    *  check, the live-inputs drift rebuild, the unchecked-content measurement — over EVERY run dir, honouring
    *  `allowDocDrift` / `allowUnchecked` exactly as a real re-grade would, then stop. No judge is constructed or
-   *  called, no regrade file is written and no warning is printed. Returns the refusal a real re-grade with these
+   *  called, no regrade file is written and no warning is printed (what a real re-grade would warn about is
+   *  returned instead: `blind`, accepted `liveDocDrift`, accepted `uncheckedSections`). Returns the refusal a real re-grade with these
    *  options would return (same `code` and `refusals[]`), else `RegradeCheckPassed`. API-only (no CLI flag). */
   checkOnly: true;
 }
@@ -516,8 +529,8 @@ interface Prepared {
   unchecked: UncheckedSection[];
   /** The live drift accepted with `--allow-doc-drift` (empty without the flag: a drift is then refused). */
   drift: LiveDocDrift[];
-  /** `assert <i>: unknown|live_refused` for each assert with no live fingerprint to compare with. */
-  blind: string[];
+  /** Each assert with no live fingerprint to compare with (`unknown` | `live_refused`). */
+  blind: BlindAssert[];
   /** The asserts whose evidence will be refused, so no judge is called for them (left out of both warnings). */
   willRefuse: Set<Assertion>;
   turn: number;
@@ -675,7 +688,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     const blind = newSemantic.flatMap((a, ordinal) => {
       if (willRefuse.has(a)) return [];
       const { match } = compareWithLive(a, ordinal, sc.assert.indexOf(a), newDocs.get(a), live, false);
-      return match === "unknown" || match === "live_refused" ? [`assert ${sc.assert.indexOf(a)}: ${match}`] : [];
+      return match === "unknown" || match === "live_refused" ? [{ assertionIndex: sc.assert.indexOf(a), docMatch: match }] : [];
     });
     const unchecked = uncheckedSections(
       newDocs,
@@ -728,6 +741,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
         uncheckedSections: p.unchecked,
         uncheckedCount: p.unchecked.length,
         liveDocDrift: p.drift,
+        blind: p.blind,
         authoredCapture: p.budget,
       })),
     };
@@ -762,7 +776,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     if (blind.length)
       warn(
         scrub(
-          `::warning:: ${CMD}: ${p.dirAsGiven}: ${blind.length} assert(s) have no live document to compare with (${blind.join(", ")}) — ` +
+          `::warning:: ${CMD}: ${p.dirAsGiven}: ${blind.length} assert(s) have no live document to compare with (${blind.map((b) => `assert ${b.assertionIndex}: ${b.docMatch}`).join(", ")}) — ` +
             `unknown: this assert's scope has no live fingerprint; live_refused: the live assert refused its evidence and no fingerprint was recorded. ` +
             `Their rebuilt documents could not be checked for drift or for a secret the live run scrubbed; this process's scrub set ` +
             `is all that protects them.`,
