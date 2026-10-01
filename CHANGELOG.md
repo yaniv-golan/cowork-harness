@@ -525,8 +525,9 @@ All notable changes to this project are documented here. The format is based on
 ### Documentation
 
 - The companion skill has a `hillclimb` reference (`references/hillclimb.md`, indexed in `SKILL.md` and
-  `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check` and `state-template`: the
-  flags, the snapshot and harness gate, refusals, exit codes, and how to read the rows.
+  `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check`, `state-template`,
+  `freeze-ref` and `regrade`: the flags, the snapshot and harness gate, refusals, exit codes, pairwise references,
+  re-grading a flow, and how to read the rows, the `semantic_pairwise` keys included.
 - The companion skill now says that a green run says nothing about a skill edited while a session is
   running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
   This was previously documented only in `docs/fidelity-gaps.md`.
