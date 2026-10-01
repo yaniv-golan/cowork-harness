@@ -682,7 +682,7 @@ export function resolveRunsFromIndex(rows: RunIndexRow[], arg: string): RunIndex
  *  excludes nothing and needs no hashlessRuns-style honesty channel. If the fallback ever yields the
  *  literal "cowork", grouping it separately is CORRECT: we genuinely do not know which tier it resolved
  *  to, so it is unlike everything else. */
-const tierOf = (r: RunIndexRow): string => r.effectiveFidelity ?? r.fidelity;
+export const tierOf = (r: RunIndexRow): string => r.effectiveFidelity ?? r.fidelity;
 
 /** How `buildStats` buckets rows. `scenario` is the historical (and default) behaviour; `skill-hash` /
  *  `label` split a scenario by run IDENTITY (the iterate-across-fixes A/B); `fidelity` splits by the
@@ -811,7 +811,10 @@ interface StatsGroup {
   spend: RunIndexRow[];
 }
 
-function percentile(sorted: number[], p: number): number {
+/** Floor-index percentile over an ASCENDING array: `sorted[min(len-1, floor(p*len))]`. One function for
+ *  `stats` and the eval planner, so the two cannot report different p50/p95 for the same rows. Note what
+ *  floor-index means for small samples: p95 is the max for 20 or fewer values. */
+export function percentile(sorted: readonly number[], p: number): number {
   const idx = Math.min(sorted.length - 1, Math.floor(p * sorted.length));
   return sorted[idx];
 }
@@ -831,7 +834,7 @@ function percentile(sorted: number[], p: number): number {
  *  questions, and the collapse was a bug: "is this a run?" is correctly no for a roll-up, but "does this
  *  carry spend?" is emphatically yes, and the single gate answered no to both. Every count, rate and
  *  PERCENTILE uses this one; only the total uses the other. */
-function isRun(r: RunIndexRow): boolean {
+export function isRun(r: RunIndexRow): boolean {
   return r.critiqueRole !== "rollup";
 }
 
