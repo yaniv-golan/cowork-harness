@@ -3011,7 +3011,7 @@ function check(
       } else if (uncheckable.length)
         results.push(
           fail(
-            `evidence unavailable: pre-run hash missing (over size cap) for: ${uncheckable.slice(0, 5).join(", ")} — raise COWORK_HARNESS_PRERUN_HASH_CAP or narrow the glob`,
+            `evidence unavailable: pre-run hash missing (over size cap, or nulled because the recorded body was scrubbed or redacted) for: ${uncheckable.slice(0, 5).join(", ")} — raise COWORK_HARNESS_PRERUN_HASH_CAP or narrow the glob (a scrubbed/redacted body cannot be compared on replay)`,
           ),
         );
       else if (modified.length || removed.length) {

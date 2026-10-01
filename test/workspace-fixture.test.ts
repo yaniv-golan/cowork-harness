@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -37,12 +38,15 @@ import {
 import { stageWorkspace } from "../src/runtime/stage.js";
 import { stageHostLoopWorkspace } from "../src/runtime/hostloop-stage.js";
 import { spawnProtocol } from "../src/runtime/protocol.js";
-import { readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
-import { captureAuthoredFiles, deliverableArtifacts } from "../src/run/artifacts.js";
+import { readOutputsBaseline, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
+import { captureAuthoredFiles, collectArtifactPathsWithHealth, deliverableArtifacts } from "../src/run/artifacts.js";
+import { outputsDeleteTier } from "../src/run/outputs-delete-tier.js";
 import { captureInputHostPathCorpus, isInputBorneHostPath, readInputHostPathCorpus } from "../src/run/input-host-paths.js";
 import {
   clearForFreshPinnedRun,
   launchSourcesPreflight,
+  outputsFsDiff,
+  outputsPathHasher,
   loadScenarioPure,
   scenarioArmsPreRunManifest,
   sessionOriginSources,
@@ -613,5 +617,20 @@ describe("microvm: a fresh pinned re-run starts with empty outputs", () => {
       expect(existsSync(outDir)).toBe(false);
       expect(existsSync(join(vmWork, "sess-x", "mnt", "outputs", "stale.md"))).toBe(tier !== "microvm");
     }
+  });
+});
+
+describe("deleting a fixture file is an outputs delete (harness policy, not production's)", () => {
+  it("the turn-start outputs baseline holds the fixture, so a removed fixture file is a filesystem-proven delete", () => {
+    const dir = makeFixture();
+    const outDir = join(tmp("wsfx-del-"), "run");
+    spawnProtocol({ name: "fx" } as unknown as Scenario, {} as unknown as PlatformBaseline, planFor(dir), outDir);
+    const work = join(outDir, "work");
+    rmSync(join(work, "outputs", "report.md"));
+    const d = outputsFsDiff(readOutputsBaseline(outDir), collectArtifactPathsWithHealth(work, ["outputs"]), outputsPathHasher(work));
+    expect(d.status).toBe("findings");
+    expect(d.findings.join(" ")).toMatch(/outputs\/report\.md/);
+    // and that is a verdict failure by default (outputsDeleteTier "fail")
+    expect(outputsDeleteTier({ outputsDeletes: d.findings, outputsDeleteBasis: d.findings.map(() => "fs-diff") }, d)).toBe("fail");
   });
 });

@@ -212,3 +212,35 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes", () => {
     expect(r.stdout).toMatch(/workspace_fixture fixtures\/gone/);
   });
 });
+
+describe.skipIf(!existsSync(CLI))("replay --assert-from on a fixture cassette", () => {
+  /** A cassette dir with its fixture beside it, recorded against `fixtures/step1/report.md`. */
+  function setup(onDiskAssert: string): { dir: string } {
+    const dir = join(tmp("wsfx-af-"), "nested");
+    mkdirSync(join(dir, "fixtures", "step1"), { recursive: true });
+    writeFileSync(join(dir, "fixtures", "step1", "report.md"), "# step 1\n");
+    const c = fixtureCassette([{ result: "success" }], [], {});
+    (c.scenario as Scenario).name = "c";
+    (c.scenario as Scenario).workspace_fixture = "fixtures/step1";
+    c.fingerprint = { baseline: LIVE, hashFormat: "jcs1", workspaceFixtureSig: "x", workspaceFixtureFileSigs: [["report.md", "x"]] };
+    writeFileSync(join(dir, "c.cassette.json"), JSON.stringify(c));
+    writeFileSync(
+      join(dir, "c.yaml"),
+      `fidelity: container\nprompt: do step 2\nworkspace_fixture: fixtures/step1\nassert:\n${onDiskAssert}`,
+    );
+    return { dir };
+  }
+  const run = (dir: string) =>
+    spawnSync("node", [CLI, "replay", "c.cassette.json", "--assert-from", "c.yaml"], { encoding: "utf8", cwd: dir });
+
+  it("refuses an on-disk presence assertion on a file the recording's fixture provided, with no `authored:`", () => {
+    const r = run(setup("  - file_exists: outputs/report.md\n").dir);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr + r.stdout).toMatch(/pass on the fixture alone/);
+  });
+
+  it("accepts it once `authored:` is stated", () => {
+    const r = run(setup("  - file_exists: {path: outputs/report.md, authored: false}\n").dir);
+    expect(r.stderr + r.stdout).not.toMatch(/pass on the fixture alone/);
+  });
+});
