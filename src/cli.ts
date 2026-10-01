@@ -2148,6 +2148,9 @@ async function cmdEval(rawArgs: string[]) {
         onPlan: (p) => (plan = p),
       }));
     } catch (e) {
+      // A Ctrl-C also reaches a git the dry run was waiting on, which then fails the step it was running. Yield
+      // once so a signal already queued is handled (exit 130) before that failure is reported as a refusal.
+      await new Promise((r) => setImmediate(r));
       return failFor(e);
     }
     if (json) out(jsonPayloadEnvelope("eval", true, { dryRun: true, plan }));

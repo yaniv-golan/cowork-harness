@@ -6,7 +6,8 @@
 // model reach executeScenario (the in-process tests use a fake runner and never cross that seam), and the
 // model pin is checked by deriveModelProvenance over what the agent reported, not by a flag a test set.
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { CLI, POSIX, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
 import { jobRunId } from "../src/eval/schedule.js";
@@ -436,6 +437,27 @@ describe.runIf(can)("eval --dry-run through the real CLI (stub agent never start
       const r = await exited(cli, 120_000);
       expect(r.code, cli.stderrText()).toBe(0);
       expect(existsSync(join(f.env.HOME!, ".cowork-harness", "evals"))).toBe(false);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("a Ctrl-C that also kills a git the dry run is waiting on exits 130, not a misleading staging error", async () => {
+    const f = fixture();
+    try {
+      // A git shim ahead of the real one on PATH: when asked about the dry run's temp dir, it does what a
+      // terminal Ctrl-C does to the whole foreground group — signal the harness — and dies itself. Every other
+      // call goes to the real git.
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(
+        join(f.root, "bin", "git"),
+        `#!/bin/sh\ncase "$*" in *cwh-eval-plan-*) kill -INT $PPID; exit 130;; esac\nexec ${realGit} "$@"\n`,
+      );
+      chmodSync(join(f.root, "bin", "git"), 0o755);
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.signal, r.stderr).toBeNull();
+      expect(r.code, r.stderr + r.stdout).toBe(130);
       neverStarted(f);
     } finally {
       f.cleanup();

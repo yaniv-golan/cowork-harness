@@ -40,7 +40,8 @@ runs, as on `record --dry-run`; it may run the `security` Keychain probe or a co
 `--version`.) A refusal is the real eval's refusal, with the same message and exit code, so a clean dry run
 is never refused for real on anything it could have checked. One refusal is the dry run's own: its temp dir
 must be outside any git work tree, for the same reason the eval dir must (the snapshots would hash as empty),
-so a TMPDIR inside one exits 3 — set TMPDIR to a directory outside any git work tree. The plan is the dry run's
+so a TMPDIR inside one, or one git cannot answer for, exits 3 — set TMPDIR to a directory outside any git
+work tree. The plan is the dry run's
 output: `--quiet` does not mute the plan, only the per-arm progress lines before it.
 
 ```
@@ -284,7 +285,8 @@ A refused eval leaves nothing in its eval dir.
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
 
 Under `--dry-run`: `0` the plan was printed; `2` any refusal the real eval would make before its first run;
-`3` as above, or the dry run's temp dir is inside a git work tree (set TMPDIR). Every dry-run refusal's JSON
+`3` as above, or the dry run's temp dir is inside a git work tree, or git cannot tell whether it is (set
+TMPDIR). Every dry-run refusal's JSON
 error envelope carries `dryRun: true`, and `plan` when the refusal came after the plan was computed.
 
 ### When every rep errored

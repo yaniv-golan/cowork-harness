@@ -83,4 +83,4 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
        every row insufficient, or the judge model differed across reps · 2 usage, or a refusal before any
        run (including the --max-budget-usd refusal) · 3 an arm snapshot could not be copied, or failed its staging
        preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
-       temp dir is inside a git work tree (set TMPDIR)`;
+       temp dir is inside a git work tree, or git cannot tell whether it is (set TMPDIR)`;

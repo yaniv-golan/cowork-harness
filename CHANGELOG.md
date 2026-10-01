@@ -45,7 +45,8 @@ All notable changes to this project are documented here. The format is based on
 - **`eval --dry-run` plans an A/B before you spend, and `eval --max-budget-usd` caps it.** A dry run makes every
   check the real eval makes before its first run, then prints a plan from the runs dir's history and exits 0.
   It runs no agent, builds no `--decider-cmd` / `--decider-dir` channel, and creates no eval dir (its arm
-  snapshots go to a temp dir that is removed). A refusal is the real eval's refusal, with its exit code.
+  snapshots go to a temp dir that is removed). A refusal is the real eval's refusal, with its exit code, except the dry run's own
+  temp-dir check: a TMPDIR inside a git work tree (or one git cannot answer for) exits 3.
   - **Cost at `--reps`:** p50, mean, p95 and worst observed for the 2 × `--reps` runs of every scenario, from
     each scenario's runs on its effective tier and baseline (first turns only, `hillclimb:` runs left out), the
     judge's spend beside it, and a LOWER BOUND label wherever a scenario has no priced run.

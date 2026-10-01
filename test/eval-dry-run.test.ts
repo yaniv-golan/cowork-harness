@@ -582,7 +582,9 @@ describe("eval flags are documented where a consumer reads them", () => {
     expect(evalDoc).toMatch(/reads the run index only/); // a capped real eval, cost-only
     expect(evalDoc).toMatch(/any tier, baseline or turn of the scenario's name, hillclimb runs included/);
     const spec = flat("SPEC.md");
-    expect(spec).toMatch(/inside a git work tree \(set TMPDIR\)/);
+    expect(spec).toMatch(/inside a git work tree or git cannot tell whether it is \(set TMPDIR\)/);
+    expect(evalDoc).toMatch(/or git cannot tell whether it is \(set TMPDIR\)/);
+    expect(flat("CHANGELOG.md")).toMatch(/except the dry run's own temp-dir check: .* exits 3/);
     expect(spec).toMatch(/carries the `plan` when one was computed before it/);
     const cliTableRow = doc("docs/cli.md")
       .split("\n")

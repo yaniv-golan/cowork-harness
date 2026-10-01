@@ -23,7 +23,7 @@ import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
-import { installTerminationHandler, registerTerminationStep } from "../termination.js";
+import { installTerminationHandler } from "../termination.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsRoot } from "../run/trace-view.js";
 import { checkBatchBudget, noHistoryCauseText, runsDirInfo } from "../run/budget.js";
@@ -757,12 +757,12 @@ function buildPlan(
  *  no eval dir, and the arm snapshots in a temp dir that is removed whatever happens. */
 export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ plan: EvalPlan }> {
   const ctx = resolveEvalContext(args, deps);
-  // A signal must not leave the snapshot behind: with the handler installed a Ctrl-C is handled once this
-  // (synchronous) preparation returns — after the `finally` below — and the step covers any later window.
+  // A signal must not leave the snapshot behind. Without a handler the default action kills the process at
+  // once; with it installed, a Ctrl-C is handled only after this preparation — synchronous throughout —
+  // returns, by which time the `finally` below has removed the snapshot. (No cleanup step is registered:
+  // there is no window in which the handler could run before the `finally`.)
   installTerminationHandler();
   const snapRoot = mkdtempSync(join(tmpdir(), "cwh-eval-plan-"));
-  const removeSnapshots = () => rmSync(snapRoot, { recursive: true, force: true });
-  const unregister = registerTerminationStep("helpers", removeSnapshots);
   deps.onSnapshotRoot?.(snapRoot);
   try {
     // The snapshots must sit outside any work tree for the same reason the eval dir must (the signatures
@@ -784,8 +784,7 @@ export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ 
     const prep = prepareArms(args, deps, ctx, snapRoot, "plan");
     return { plan: prep.plan! };
   } finally {
-    removeSnapshots();
-    unregister();
+    rmSync(snapRoot, { recursive: true, force: true });
   }
 }
 
