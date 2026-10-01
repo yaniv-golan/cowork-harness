@@ -26,9 +26,8 @@ All notable changes to this project are documented here. The format is based on
   then retried once without it, before any model call.
   **This needs Claude Code 2.1.197 or later on the host.** An older CLI is refused before any model call, saying
   why and what to do. `run`, `record`, `skill` and `eval` make that check before the agent spends (`eval` before its
-  manifest) when a scenario
-  has a `semantic_matches` assert graded by the host `claude`, or `on_unanswered: llm` / `--decider-llm` with no
-  external decider channel;
+  manifest) when a scenario has a `semantic_matches` or `semantic_pairwise` assert graded by the host `claude`, or
+  `on_unanswered: llm` / `--decider-llm` with no external decider channel;
   `critique` makes it before its task turn, `decide --decider-llm` before its model call and `regrade` before its
   first grade — all exit 2. Runs that use none of them are unaffected.
 
@@ -43,7 +42,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
-- **A graded `semantic_matches` assert records how its judge was called:** `assertions[].judgeTransport`
+- **A graded `semantic_matches` or `semantic_pairwise` assert records how its judge was called:** `assertions[].judgeTransport`
   (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
   `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config), so grades made
   under different conditions can be told apart. `regrade` output and `eval`'s per-run lines carry it too, and a

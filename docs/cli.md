@@ -116,7 +116,7 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
    - **Which file supplied your credential:** loading is silent, with one exception. When `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` comes from `<install>/.env` and you are running from another directory, stderr gets one line naming the variables and the file (never the values): `[env] using CLAUDE_CODE_OAUTH_TOKEN from ~/code/cowork-harness/.env (the install's .env, not this directory's)`. A run started with `node <clone>/dist/cli.js` from elsewhere is billed to that clone's credential; to use another, export it, put it in `./.env` or pass `--dotenv`. A `--dotenv` given after the subcommand is read later, so when it replaces that credential a second line names it: `[env] CLAUDE_CODE_OAUTH_TOKEN from ~/work/my.env (replacing the install's .env)`. `COWORK_HARNESS_DEBUG=1` lists every loaded key.
    - **Placement:** keep `.env` at a working-dir or install root, never inside a mounted skill/project folder.
    - **Global install:** find the package root with `` `$(npm root -g)/cowork-harness` `` (e.g. `$(npm root -g)/cowork-harness/.env`) — or simpler, just use `--dotenv <path>` / `./.env` in your working directory, which take priority over the package root anyway.
-4. **Claude Code 2.1.197 or later on the host, for the judge, the LLM decider and `critique`.** A `semantic_matches` assert, `on_unanswered: llm` / `--decider-llm` and `critique` call the host `claude`, isolated from your own setup (see `COWORK_HARNESS_CLAUDE_BIN` under [Advanced / internal escape hatches](#advanced--internal-escape-hatches)); an older CLI is refused before the run spends anything. Runs that use none of them do not need it.
+4. **Claude Code 2.1.197 or later on the host, for the judge, the LLM decider and `critique`.** A `semantic_matches` or `semantic_pairwise` assert, `on_unanswered: llm` / `--decider-llm` and `critique` call the host `claude`, isolated from your own setup (see `COWORK_HARNESS_CLAUDE_BIN` under [Advanced / internal escape hatches](#advanced--internal-escape-hatches)); an older CLI is refused before the run spends anything. Runs that use none of them do not need it.
 
 > `sync` (below) is **optional for a first run** — the repo ships `baselines/desktop-*.json`, so `baseline: latest` already resolves. Run `sync` only to refresh the platform baseline after Claude Desktop updates. (`sync` is **macOS-only** today; on Linux/Windows use the committed baselines — they work cross-platform.)
 
@@ -893,7 +893,8 @@ Rarely needed.
 - `PYTHON` — overrides the interpreter for `lint` / scenario tooling (default `python3`).
 - `COWORK_HARNESS_DEBUG=1` — surfaces which `.env` files were loaded.
 - `COWORK_HARNESS_CLAUDE_BIN=<path>` — points the host `claude` calls at a specific binary. Every model call the
-  harness makes through it — the `semantic_matches` judge, the LLM decider and the `critique` evaluator — runs
+  harness makes through it — the `semantic_matches` and `semantic_pairwise` judges, the LLM decider and the `critique`
+  evaluator — runs
   **isolated from your own Claude Code setup**: no tools (`--tools ""`), no CLAUDE.md, skills, plugins, hooks or MCP
   servers (`--safe-mode`, `--strict-mcp-config`), no project or local settings from the directory the harness runs
   in (`--setting-sources user`), and no session saved (`--no-session-persistence`). Your user settings still apply
