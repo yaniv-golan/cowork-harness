@@ -784,9 +784,7 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
       const bin = stageBuild(home, found);
       const r = realProbe.hostAgentBinary();
       expect(r).toMatchObject({ ok: true, path: bin });
-      expect(r.ok && r.note).toMatch(
-        new RegExp(`patch-tolerated: pinned ${pinned().replace(/\./g, "\\.")}, using ${found.replace(/\./g, "\\.")}`),
-      );
+      expect(r.ok && r.note).toContain(`patch-tolerated: pinned ${pinned()}, using ${found}`);
       const cs = runDoctorChecks("hostloop", probe({ hostAgentBinary: realProbe.hostAgentBinary }));
       expect(get(cs, "hostAgent").status).toBe("ok");
       expect(blocking(cs)).not.toContain("hostAgent");
