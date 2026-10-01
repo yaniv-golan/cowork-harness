@@ -1153,7 +1153,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   every re-graded assert passes (`ok: true` iff exit `0`) · `1` any fails or is judge-invalid · `2` a usage
   error, a refusal before any judge call (the evidence refusals carry `error.code`), or a failure writing a
   regrade file after earlier run dirs were graded (§11). The regrade output FILE is not part of this (below).
-- **The planned-schedule cost summary** — `plan.cost` in the `eval --dry-run` JSON envelope, validated by
+- **The planned-schedule cost summary** — `plan.cost` in the `eval --dry-run` and `hillclimb run --dry-run` JSON envelopes, validated by
   `schema/schedule-cost.json` (one serializer, `scheduleCostJson`). Covered: `jobs` (agent runs scheduled),
   `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced[]`, `pricedRuns` and `thinnest` (null
   when nothing is priced). **Their one basis:** each scenario's prior runs in the runs dir's index on the

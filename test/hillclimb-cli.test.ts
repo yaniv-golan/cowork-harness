@@ -6,6 +6,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import Ajv from "ajv";
 import { checkReport, stateTemplateFor, writeMetricsMd } from "../src/hillclimb/cli.js";
 import { UsageError } from "../src/errors.js";
 
@@ -132,5 +133,10 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     // eval's dry-run shape: the estimate under plan.cost, so a top-level cost can only ever mean spend.
     expect(env).toMatchObject({ dryRun: true, scheduled: 1, scored: 0, failed: 0, plan: { cost: { jobs: 1, lowerBound: true } } });
     expect(env).not.toHaveProperty("cost");
+    // The covered summary, validated against its published schema (which must exist: no skip when absent).
+    const schemaPath = resolve(import.meta.dirname, "..", "schema", "schedule-cost.json");
+    expect(existsSync(schemaPath)).toBe(true);
+    const validate = new Ajv({ strict: true }).compile(JSON.parse(readFileSync(schemaPath, "utf8")));
+    expect(validate(env.plan.cost), JSON.stringify(validate.errors)).toBe(true);
   });
 });
