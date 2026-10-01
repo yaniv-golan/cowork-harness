@@ -5,7 +5,7 @@
 // assistant frame naming the excerpt's model. The scenario files hold the excerpt's own assertion list, so the
 // grades line up. The wiring through the real runOneScenario is H4b's stub-agent test, not this one.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
@@ -189,6 +189,39 @@ describe("a pass", () => {
     writeFileSync(vfile("baseline", "summary.json"), JSON.stringify({ description: "loop" }));
     await runHillclimb(args(), deps());
     expect(JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"))).toEqual({ description: "loop", model: MODEL });
+  });
+
+  it("rows record whether the trace has the sub-agents' turns (meta.subagent_turns)", async () => {
+    await approved();
+    await runHillclimb(args(), deps());
+    expect(rows("baseline").map((x) => x.meta.subagent_turns)).toEqual(["none", "none"]);
+  });
+
+  it("a secret straddling the trace cap does not leak a prefix into the trace or its sidecar", async () => {
+    await approved();
+    const secret = "sk-ant-runner-straddle-0123456789abcdef";
+    // SYNTHETIC: a tool result just over the 64 KiB cap with the secret across the cut.
+    const big = "x".repeat(64 * 1024 - 10) + secret + "y".repeat(100);
+    const ev = [
+      ...events,
+      JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "tool_use", id: "t9", name: "Read", input: {} }] },
+      }),
+      JSON.stringify({
+        type: "user",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "tool_result", tool_use_id: "t9", content: big }] },
+      }),
+    ];
+    behave = () => ({ events: ev });
+    await runHillclimb(args("--case", "alpha"), deps({ secrets: [secret] }));
+    const trace = readFileSync(vfile("baseline", "traces/alpha_rep0.json"), "utf8");
+    expect(trace).toContain("[truncated:");
+    expect(trace).not.toContain(secret.slice(0, 8)); // only the first 10 bytes of the secret sit before the cut
+    const blobs = join(flowDir(), "baseline", "out", "alpha_rep0", "blobs");
+    for (const f of readdirSync(blobs)) expect(readFileSync(join(blobs, f), "utf8")).not.toContain(secret.slice(0, 8));
   });
 
   it("terminal escapes in model-influenced stderr text are stripped (S l.46-53)", async () => {

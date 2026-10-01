@@ -16,7 +16,7 @@ import { pMapBounded } from "../async-pool.js";
 import type { RunResult } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./cases.js";
-import { FlowWriter } from "./flow.js";
+import { FlowWriter, redactDeep } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
@@ -297,21 +297,32 @@ async function run(
         say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
         return;
       }
-      writer.appendResult(out.row);
-      if (typeof out.row.model === "string") models.add(out.row.model);
-      // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
-      // row, which would double-count its spend (S l.529, 541-548).
+      // The trace is built (pure) BEFORE the row, so the row can say how complete it is; only the writes
+      // come after the row (S l.529-547).
+      const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
+      let trace: ReturnType<typeof turnsFromEvents> | undefined;
+      let traceError: unknown;
       try {
-        const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
-        const trace = turnsFromEvents({
+        trace = turnsFromEvents({
           events: report.events,
           prompt: c.scenario.prompt,
           system: report.system,
           children: report.children,
           sidecarPrefix: prefix,
+          redact: (t) => redactDeep(t, deps.secrets),
         });
-        for (const s of trace.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
-        writer.writeTrace(c.id, rep, trace.turns);
+        (out.row.meta as Record<string, unknown>).subagent_turns = trace.subagentTurns;
+      } catch (e) {
+        traceError = e;
+      }
+      writer.appendResult(out.row);
+      if (typeof out.row.model === "string") models.add(out.row.model);
+      // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
+      // row, which would double-count its spend (S l.529, 541-548).
+      try {
+        if (traceError !== undefined) throw traceError;
+        for (const s of trace!.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
+        writer.writeTrace(c.id, rep, trace!.turns);
         ok++;
       } catch (e) {
         fail++;

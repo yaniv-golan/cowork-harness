@@ -42,6 +42,9 @@ export interface TraceInput {
   sidecarPrefix: string;
   /** A tool result above this many UTF-8 bytes is truncated in place. Default 64 KiB. */
   resultCapBytes?: number;
+  /** Applied to every text BEFORE any cap slices it — a secret straddling the cut would otherwise leave a
+   *  prefix no later scrub can match (src/io.ts makes the same rule for display slices). */
+  redact?: (text: string) => string;
 }
 
 export interface TraceOutput {
@@ -125,7 +128,9 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
     return parts.join("\n");
   };
 
-  const capped = (text: string): string => {
+  const clean = input.redact ?? ((t: string) => t);
+  const capped = (raw: string): string => {
+    const text = clean(raw);
     const bytes = Buffer.byteLength(text);
     if (bytes <= cap) return text;
     const ref = sidecar("txt", text);

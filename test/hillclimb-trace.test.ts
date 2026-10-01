@@ -108,6 +108,28 @@ describe("turnsFromEvents — absence, caps, payloads", () => {
     expect(sidecars[0].name).toMatch(/\.txt$/);
   });
 
+  it("text is redacted BEFORE the cap slices it: a secret straddling the cut leaves no prefix behind", () => {
+    const secret = "sk-ant-straddle-0123456789abcdefghij";
+    // SYNTHETIC: one tool result whose text puts the secret across the 200-byte cut.
+    const text = "x".repeat(190) + secret + "y".repeat(50);
+    const ev = [
+      JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] },
+      }),
+      JSON.stringify({
+        type: "user",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "tool_result", tool_use_id: "t1", content: text }] },
+      }),
+    ];
+    const redact = (s: string) => s.split(secret).join("[REDACTED]");
+    const { turns, sidecars } = trace({ events: ev, children: [], resultCapBytes: 200, redact });
+    const all = JSON.stringify(turns) + sidecars.map((x) => String(x.data)).join("");
+    expect(all).not.toContain(secret.slice(0, 12));
+  });
+
   it("an image block in a tool result becomes a sidecar with a markdown image reference (H l.217)", () => {
     // SYNTHETIC: one tool_use/tool_result pair carrying a base64 PNG (no kept public run has one).
     const png = Buffer.from("89504e470d0a1a0a", "hex").toString("base64");
