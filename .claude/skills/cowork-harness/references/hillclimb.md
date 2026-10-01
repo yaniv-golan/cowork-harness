@@ -1,7 +1,7 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). `hillclimb` is new after 4.2.0: on an older CLI
-`cowork-harness hillclimb --help` is an unknown command. The command reference is
+Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). It needs a `cowork-harness` whose `--help`
+lists `hillclimb`. The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check` and `state-template`.
 
