@@ -423,7 +423,7 @@ re-running every step before it.
   `written`, `skipped` (`{file, why, reason?}`; `why` is `symlink`, `hard link`, `not a regular file` or
   `unreadable`), `refused` (always `[]`), `notes` (`{file, kind, cls?, sample?}`; `kind` is `binary` or `pii`),
   `bytes`, `outputsDir`, `partial` (the source run stopped at a gate) and `result` (the source run's `success` or
-  `error`). A refusal is the error envelope, its message in `error.message`; once the outputs tree was read it carries `written` (`[]`),
+  `error`; a `result.json` with no `result` reads as `error`). A refusal is the error envelope, its message in `error.message`; once the outputs tree was read it carries `written` (`[]`),
   `skipped`, `notes`, `bytes`, `outputsDir`, `partial`, `result` and `refused[]` (`{file, kind}`; `kind` is
   `secret`, `host_path` or `run_path`). The payload keys are experimental and may change in a minor release.
 
