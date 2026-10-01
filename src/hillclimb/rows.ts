@@ -21,7 +21,7 @@
 
 import { basename } from "node:path";
 import type { Assertion, RunResult, TokenUsage } from "../types.js";
-import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult } from "../eval/classify.js";
+import { authoredGrades, classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
 import { caseKeyDecls, type MetricDecl } from "./grade-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
@@ -103,7 +103,7 @@ function mainModelUsage(mu: Record<string, unknown> | undefined, model: string):
   return sum;
 }
 
-const authored = (r: RunResult | undefined) => (r?.assertions ?? []).filter((a) => a.source === undefined);
+const authored = (r: RunResult | undefined) => authoredGrades(r as ClassifiableResult | undefined) as RunResult["assertions"];
 
 function judgeRetries(r: RunResult | undefined): { judge_retries: number; unrecorded: boolean } {
   let n = 0;
@@ -129,6 +129,12 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const jr = judgeRetries(r);
   const retries = r?.apiRetries?.count ?? 0;
 
+  const models: Record<string, unknown> = {};
+  for (const [m, e] of Object.entries(r?.modelUsage ?? {})) {
+    const cost = (e as { costUSD?: unknown }).costUSD;
+    models[m] = { ...snake(e as Record<string, unknown>), ...(typeof cost === "number" ? { cost_usd: cost } : {}) };
+  }
+  const retriesUnrecorded = r?.apiRetries === undefined;
   const errorRow = (failure_class: string, error: string, metaExtra: Record<string, unknown>): RowOut => ({
     dest: "errors",
     row: {
@@ -145,8 +151,10 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(judges.judge_usage !== undefined ? { judge_usage: judges.judge_usage } : {}),
       latency_s: ctx.attemptS, // the whole attempt, as S (l.563)
       meta: {
-        ...(ctx.meta.runDir !== undefined ? { run_dir: ctx.meta.runDir } : {}),
+        ...(ctx.meta.runDir !== undefined ? { run_dir: ctx.meta.runDir, run_id: basename(ctx.meta.runDir) } : {}),
         ...(typeof r?.cost?.usd === "number" ? { cost_usd: r.cost.usd } : {}),
+        ...(Object.keys(models).length ? { models } : {}),
+        ...(retriesUnrecorded ? { retries_unrecorded: true } : {}),
         ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
         ...metaExtra,
       },
@@ -251,11 +259,6 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const toolCalls = r?.toolCalls;
   const latencyBasisWall = ev.durationMs === undefined;
   const latency_s = latencyBasisWall ? ctx.attemptS : Math.max(0, (ev.durationMs! - (r?.apiRetries?.delayMs ?? 0)) / 1000);
-  const models: Record<string, unknown> = {};
-  for (const [m, e] of Object.entries(r?.modelUsage ?? {})) {
-    const cost = (e as { costUSD?: unknown }).costUSD;
-    models[m] = { ...snake(e as Record<string, unknown>), ...(typeof cost === "number" ? { cost_usd: cost } : {}) };
-  }
   const hasExplanation = Object.keys(explanation).length > 0;
   const explanationOrdered: Record<string, string> = {};
   if ("claims" in explanation) explanationOrdered.claims = explanation.claims;
@@ -296,9 +299,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       flow_hash: ctx.meta.flowHash,
       ...(ctx.meta.contentSig !== undefined ? { content_sig: ctx.meta.contentSig } : {}),
       ...(ctx.meta.skillHash !== undefined ? { skill_hash: ctx.meta.skillHash } : {}),
-      retries,
-      retry_delay_s: (r?.apiRetries?.delayMs ?? 0) / 1000,
-      ...(r?.apiRetries ? { subagent_retries: r.apiRetries.subagentCount } : {}),
+      ...(r?.apiRetries
+        ? { retries, retry_delay_s: r.apiRetries.delayMs / 1000, subagent_retries: r.apiRetries.subagentCount }
+        : { retries_unrecorded: true }),
       wall_s: ctx.attemptS,
       ...(latencyBasisWall ? { latency_basis: "wall" } : {}),
       judge_retries: jr.judge_retries,

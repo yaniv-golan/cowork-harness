@@ -6,11 +6,14 @@
 // grades line up. The wiring through the real runOneScenario is H4b's stub-agent test, not this one.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
 import { parseHillclimbRunArgs, type HillclimbRunArgs } from "../src/hillclimb/args.js";
 import type { RunResult } from "../src/types.js";
+import { stateTemplate } from "../src/hillclimb/state-template.js";
+import { checkFlowDir } from "../src/hillclimb/schema-check.js";
+import { parseScenarioFile } from "../src/run/execute.js";
 
 const FX = join(import.meta.dirname, "fixtures");
 const excerpt = JSON.parse(readFileSync(join(FX, "eval-classify", "success-semantic.json"), "utf8")) as RunResult;
@@ -234,6 +237,44 @@ describe("a pass", () => {
   });
 });
 
+describe("the written flow, end to end", () => {
+  it("passes our schema reading (harness profile) with the state-template's declarations, and no byte names the host", async () => {
+    await approved();
+    const secret = "sk-ant-e2e-0123456789abcdefghij";
+    // ADDED to the excerpt's events: a tool call whose result names the home dir, a secret and the run dir.
+    const leaky = [
+      ...events,
+      JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { file: `${homedir()}/x` } }] },
+      }),
+      JSON.stringify({
+        type: "user",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "tool_result", tool_use_id: "t1", content: `${secret} at ${homedir()}/proj and ${cwd}/run` }] },
+      }),
+    ];
+    behave = () => ({ events: leaky, runDir: join(homedir(), ".cowork-harness", "runs", "s", "local_1") });
+    const st = JSON.parse(readFileSync(join(flowDir(), "_state.json"), "utf8"));
+    const t = stateTemplate({
+      cases: [{ assertions: parseScenarioFile(join(cwd, "evals", "alpha.yaml")).assert }],
+      harnessPaths: [],
+      decider: false,
+    });
+    writeFileSync(join(flowDir(), "_state.json"), JSON.stringify({ ...st, ...t.state }));
+    expect((await runHillclimb(args("--approve-harness"), deps({ secrets: [secret] }))).exitCode).toBe(0);
+    const report = checkFlowDir(flowDir(), { profile: "harness" });
+    expect(report.findings.filter((f) => f.level === "error")).toEqual([]);
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
+    for (const f of walk(flowDir())) {
+      const text = readFileSync(f, "utf8");
+      for (const bad of [secret, homedir(), cwd, "/Users/"]) expect(text, `${f} contains ${bad}`).not.toContain(bad);
+    }
+  });
+});
+
 describe("failures inside the pool", () => {
   it("a row that cannot be built is that attempt's error row; the pass goes on", async () => {
     await approved();
@@ -312,6 +353,22 @@ describe("refusals before spend (exit 2, no job)", () => {
     await refused(a, deps({ mountRoots: () => [join(cwd, "mnt")] }), /mount/);
   });
 
+  it("a refused run records no approval: --approve-harness is honoured only once nothing refuses", async () => {
+    const r = await runHillclimb(args("--approve-harness"), deps({ mountRoots: () => [cwd] }));
+    expect(r.exitCode).toBe(2);
+    const st = existsSync(join(flowDir(), "_state.json")) ? JSON.parse(readFileSync(join(flowDir(), "_state.json"), "utf8")) : {};
+    expect(st.harness_sha).toBeUndefined();
+  });
+
+  it("a harness_paths entry inside a mounted folder is exposed too (a rubric the agent could read)", async () => {
+    await approved();
+    mkdirSync(join(cwd, "shared"));
+    writeFileSync(join(cwd, "shared", "rubric.md"), "answers");
+    const st = JSON.parse(readFileSync(join(flowDir(), "_state.json"), "utf8"));
+    writeFileSync(join(flowDir(), "_state.json"), JSON.stringify({ ...st, harness_paths: ["shared/rubric.md"] }));
+    await refused(args("--approve-harness"), deps({ mountRoots: () => [join(cwd, "shared")] }), /rubric\.md/);
+  });
+
   it("--ablate into a flow that already holds non-ablated rows", async () => {
     await approved();
     await runHillclimb(args(), deps());
@@ -342,6 +399,12 @@ describe("absolute paths", () => {
 });
 
 describe("--dry-run", () => {
+  it("refuses a _state.json that is not an object, as the real run does", async () => {
+    mkdirSync(flowDir(), { recursive: true });
+    writeFileSync(join(flowDir(), "_state.json"), "[1,2]");
+    expect((await runHillclimb(args("--dry-run"), deps())).exitCode).toBe(2);
+  });
+
   it("prints the resolved scope and the gate status, runs nothing, writes nothing, exits 0", async () => {
     const r = await runHillclimb(args("--dry-run", "--reps", "3"), deps());
     expect(r.exitCode).toBe(0);

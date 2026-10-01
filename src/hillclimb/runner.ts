@@ -11,6 +11,7 @@
 
 import { basename, dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { UsageError } from "../errors.js";
 import { pMapBounded } from "../async-pool.js";
 import type { RunResult } from "../types.js";
@@ -134,6 +135,27 @@ async function run(
   ))
     say(note);
 
+  const cases = selectCases(all, args.cases);
+
+  // Everything that can refuse runs before --approve-harness writes anything: a refused run records no approval.
+  // Ground truth must be unreachable from the agent (H l.215): no mount may expose the flow dir (prior grades,
+  // judge rationales) or a file that defines the answer.
+  const listed = (Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : []).map((p) => resolve(deps.cwd, p));
+  const exposed = pathsInsideMounts([flowAbs, ...deps.derivedPaths(cases), ...listed], deps.mountRoots(cases));
+  if (exposed.length)
+    throw new UsageError(
+      `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,
+    );
+
+  // A null (--ablate) run belongs in its own flow: mixed into a scored flow it would enter the trajectory.
+  if (lexists(flowAbs)) {
+    const mixed = ablationMix(flowAbs, args.ablate);
+    if (mixed)
+      throw new UsageError(
+        `--ablate ${args.ablate ? "into a flow that holds scored rows" : "rows are in this flow"}: ${mixed} — run the null baseline into a sibling flow (e.g. <flow>-null)`,
+      );
+  }
+
   // The harness gate (S l.238-277).
   const digest = harnessDigest({
     cwd: deps.cwd,
@@ -165,34 +187,16 @@ async function run(
     }
   }
 
-  const cases = selectCases(all, args.cases);
-
-  // Ground truth must be unreachable from the agent (H l.215): no mount may expose the flow dir (prior grades,
-  // judge rationales) or a file that defines the answer.
-  const exposed = pathsInsideMounts([flowAbs, ...deps.derivedPaths(cases)], deps.mountRoots(cases));
-  if (exposed.length)
-    throw new UsageError(
-      `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,
-    );
-
-  // A null (--ablate) run belongs in its own flow: mixed into a scored flow it would enter the trajectory.
-  if (lexists(flowAbs)) {
-    const mixed = ablationMix(flowAbs, args.ablate);
-    if (mixed)
-      throw new UsageError(
-        `--ablate ${args.ablate ? "into a flow that holds scored rows" : "rows are in this flow"}: ${mixed} — run the null baseline into a sibling flow (e.g. <flow>-null)`,
-      );
-  }
-
-  const done = w ? w.resumeSet() : new Set<string>();
-  const tasks: Array<{ c: HillclimbCase; rep: number }> = [];
-  for (const c of cases) for (let rep = 0; rep < args.reps; rep++) if (!done.has(`${c.id}\0${rep}`)) tasks.push({ c, rep });
-  say(`[${v}] ${tasks.length} of ${cases.length * args.reps} (id,rep) to run`);
-  if (args.dryRun) return { exitCode: 0, scheduled: tasks.length, ok: 0, failed: 0 };
-
-  const release = w!.lock();
-  const writer = w!;
+  // The lock is taken BEFORE the resume set is read: two runners must not both see a slot as free.
+  const release = args.dryRun ? () => {} : w!.lock();
   try {
+    const done = w ? w.resumeSet() : new Set<string>();
+    const tasks: Array<{ c: HillclimbCase; rep: number }> = [];
+    for (const c of cases) for (let rep = 0; rep < args.reps; rep++) if (!done.has(`${c.id}\0${rep}`)) tasks.push({ c, rep });
+    say(`[${v}] ${tasks.length} of ${cases.length * args.reps} (id,rep) to run`);
+    if (args.dryRun) return { exitCode: 0, scheduled: tasks.length, ok: 0, failed: 0 };
+
+    const writer = w!;
     let ok = 0;
     let fail = 0;
     const t0 = now();
@@ -210,7 +214,7 @@ async function run(
     };
     const tick = setInterval(progress, deps.tickMs ?? 30_000);
     const runLabel = `hillclimb:${basename(flowArg)}:${v}`;
-    const flowHash = createHash("sha256").update(flowAbs).digest("hex").slice(0, 16);
+    const flowHash = createHash("sha256").update(realpathSync.native(flowAbs)).digest("hex").slice(0, 16);
     const models = new Set<string>();
     markStarted();
     // A failure to WRITE (a row, an error row) stops the pass: S's process exits there (l.597-599). Here the
@@ -349,8 +353,11 @@ function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknow
   if (text === null) return {};
   try {
     const st = JSON.parse(text);
-    return st && typeof st === "object" && !Array.isArray(st) ? st : {};
-  } catch {
+    if (st === null || typeof st !== "object" || Array.isArray(st))
+      throw new UsageError(`${join(flowArg, "_state.json")} must hold a JSON object`);
+    return st;
+  } catch (e) {
+    if (e instanceof UsageError) throw e;
     throw new UsageError(`${join(flowArg, "_state.json")} exists but is not valid JSON - fix it before spending a pass`);
   }
 }

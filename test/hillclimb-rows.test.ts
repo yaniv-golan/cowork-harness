@@ -78,6 +78,7 @@ describe("scored rows", () => {
     const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
     expect(row.latency_s).toBeCloseTo((16134 - 3156) / 1000);
     expect(row.meta).toMatchObject({ retries: 2, retry_delay_s: 3.156, wall_s: 41.5 });
+    expect(row.meta).not.toHaveProperty("retries_unrecorded");
   });
 
   it("with no result frame, latency falls back to the attempt's wall clock and says so", () => {
@@ -339,6 +340,20 @@ describe("error rows (S l.549-564)", () => {
     const r = fixture("success-semantic");
     const row = errRow(attemptRow({ result: r }, ctx(r, { assertions: [{ file_exists: "x" }] as unknown as Assertion[] })));
     expect(row.meta.failure_rule).toBe("grade_alignment");
+  });
+
+  it("error rows keep what the spend analysis needs: run_id and the per-model breakdown", () => {
+    const slash = fixture("slash-success-synthetic");
+    const r = { ...fixture("timeout"), modelUsage: slash.modelUsage }; // ADDED: modelUsage
+    const row = errRow(attemptRow({ result: r }, ctx(r, { runnerTimeout: true })));
+    expect(row.meta).toMatchObject({ run_id: "local_1", models: { "claude-sonnet-5": { output_tokens: 1306 } } });
+  });
+
+  it("retries: no retry evidence (apiRetries absent) is said, not written as 0 on a scored row", () => {
+    const r = fixture("success-semantic"); // the excerpt has no apiRetries
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.meta).not.toHaveProperty("retries");
+    expect(row.meta.retries_unrecorded).toBe(true);
   });
 
   it("judge_retries: unrecorded attempts say so rather than claim 0", () => {
