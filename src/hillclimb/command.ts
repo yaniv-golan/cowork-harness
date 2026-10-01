@@ -49,7 +49,9 @@ const realOr = (p: string): string => {
 /** Throws UsageError (exit 2) on anything an unattended loop cannot run or measure. */
 export function prepareCases(
   cases: readonly HillclimbCase[],
-  opts: { modelFlag?: string; judgeModelFlag?: string; env: NodeJS.ProcessEnv },
+  /** `noAgentRun`: a caller that never runs the agent (`hillclimb regrade`) resolves no agent model and skips the
+   *  checks that only protect a new run (a protocol run's sub-agent transcripts). */
+  opts: { modelFlag?: string; judgeModelFlag?: string; env: NodeJS.ProcessEnv; noAgentRun?: boolean },
 ): PreparedCases {
   const sessions = new Map<string, { session: SessionConfig; file: string; baseline: PlatformBaseline }>();
   for (const c of cases) {
@@ -69,7 +71,7 @@ export function prepareCases(
         `case ${c.id}: the session must declare exactly one plugins.local_plugins entry — the plugin the loop tunes (found ${session.plugins.local_plugins.length})`,
       );
     // A trace without its sub-agents' turns is incomplete: unmanaged protocol keeps no child transcripts.
-    if (s.fidelity === "protocol" && !managedConfigMode(opts.env))
+    if (!opts.noAgentRun && s.fidelity === "protocol" && !managedConfigMode(opts.env))
       throw new UsageError(
         `case ${c.id}: fidelity protocol without a managed config dir keeps no sub-agent transcripts, so its traces would be incomplete — set COWORK_MANAGED_CONFIG=1 or use another tier`,
       );
@@ -91,10 +93,11 @@ export function prepareCases(
   };
   let pins: ReturnType<typeof resolveAgentPins> = [];
   try {
-    pins = resolveAgentPins(
-      cases.map((c) => ({ scenario: c.scenario, sessionModel: sessions.get(c.id)!.session.model })),
-      opts.modelFlag,
-    );
+    if (!opts.noAgentRun)
+      pins = resolveAgentPins(
+        cases.map((c) => ({ scenario: c.scenario, sessionModel: sessions.get(c.id)!.session.model })),
+        opts.modelFlag,
+      );
     resolveJudgePins(
       cases.map((c) => c.scenario),
       opts.judgeModelFlag,
@@ -102,7 +105,7 @@ export function prepareCases(
   } catch (e) {
     reword(e);
   }
-  const pinOf = new Map(cases.map((c, i) => [c.id, pins[i].model]));
+  const pinOf = new Map(cases.map((c, i) => [c.id, pins[i]?.model]));
   return {
     lever: expandHome(sessions.get(cases[0].id)!.session.plugins.local_plugins[0]),
     session: (c) => sessions.get(c.id)!.session,

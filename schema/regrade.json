@@ -69,7 +69,7 @@
             "code": {
               "type": "string",
               "enum": ["doc_drift", "unchecked_content", "no_semantic_asserts"],
-              "description": "On an evidence refusal: `doc_drift` when any run dir's kept evidence differs from what the live judge read, else `unchecked_content`. `no_semantic_asserts` (category usage): the scenario has no semantic_matches assert, so there is nothing to re-grade."
+              "description": "On an evidence refusal: `doc_drift` when any run dir's kept evidence differs from what the live judge read, else `unchecked_content`. `no_semantic_asserts` (category usage): the scenario has no semantic_matches or semantic_pairwise assert, so there is nothing to re-grade."
             }
           }
         }

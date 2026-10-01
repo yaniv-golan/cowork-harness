@@ -2062,6 +2062,8 @@ export interface RunResult {
       ref: string;
       status: "graded" | "neutral" | "missing" | "integrity" | "invalid";
       gate?: false;
+      /** A re-grade that only added comparisons kept this outcome from the live run rather than judging it again. */
+      copied?: true;
       outcome?: "win" | "tie" | "loss" | "both_bad";
       value?: number;
       order?: "candidate_first" | "ref_first" | "both";
