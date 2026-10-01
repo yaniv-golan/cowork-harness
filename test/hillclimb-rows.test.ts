@@ -183,6 +183,7 @@ describe("scored rows", () => {
       session_id: "a9997992-62b9-4795-9b94-b7fc106bce6f",
       env: { harnessVersion: "4.3.0", baselineId: "2.9939.4", agentVersion: "2.1.280" },
       flow_hash: "f00d",
+      run_id: "local_1",
     });
   });
 });

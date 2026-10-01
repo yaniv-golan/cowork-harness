@@ -19,6 +19,7 @@
 // Grade values come from eval's `repRowValues` — one producer for both commands. Strings are NOT scrubbed
 // here; the flow writer scrubs every byte it writes.
 
+import { basename } from "node:path";
 import type { Assertion, RunResult, TokenUsage } from "../types.js";
 import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
@@ -245,7 +246,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     meta: {
       scenario_name: ctx.scenarioName,
       ...(ctx.originalId !== undefined ? { original_id: ctx.originalId } : {}),
-      ...(ctx.meta.runDir !== undefined ? { run_dir: ctx.meta.runDir } : {}),
+      ...(ctx.meta.runDir !== undefined ? { run_dir: ctx.meta.runDir, run_id: basename(ctx.meta.runDir) } : {}),
       ...(ev.sessionId !== undefined ? { session_id: ev.sessionId } : {}),
       env: { ...ctx.meta.env, ...(ev.agentVersion !== undefined ? { agentVersion: ev.agentVersion } : {}) },
       flow_hash: ctx.meta.flowHash,
