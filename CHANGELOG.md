@@ -105,8 +105,8 @@ All notable changes to this project are documented here. The format is based on
   every case: the plugin the loop tunes. Each variant runs from a snapshot of that plugin taken on its first run, so a resume or
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
   refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
-  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
-  harness change (`--approve-harness` records it). Rows carry the
+  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), an unknown `--skill`
+  (naming the plugin's skills), and an unapproved harness change (`--approve-harness` records it). Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
@@ -120,6 +120,13 @@ All notable changes to this project are documented here. The format is based on
   and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy).
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
+  `skill_invoked` tracks the skill a plugin's only `skills/<name>/` or a `SKILL.md` at its root registers, matched
+  by the id the agent registers for it (a root skill's frontmatter `name`, else the plugin directory's name).
+  `--skill <name>` (on `run` and `state-template`) picks one skill of a multi-skill plugin, with `critique --skill`'s
+  rules, resolved in the variant's snapshot; without it a multi-skill plugin's rows omit the column and the run says
+  so, naming `--skill` and the skills. A `--skill` selection is part of the harness sha: `--approve-harness` records
+  it in `_state.json` as `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or
+  dropped since is refused with a message naming the change. Without `--skill` the sha is what it was before.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
