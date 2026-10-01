@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkRefsBeforeSpend } from "../src/refs/preflight.js";
+import { checkRefsBeforeSpend, pairwiseRefsRefusal, scenarioPairwiseSetup } from "../src/refs/preflight.js";
+import { COMPOSER_ID } from "../src/assert.js";
+import type { Scenario } from "../src/types.js";
 import { composeKey, freezeRef } from "../src/refs/store.js";
 
 let tmp: string;
@@ -34,5 +36,45 @@ describe("checkRefsBeforeSpend", () => {
       ["case_1", 0, "gone", "missing"],
     ]);
     for (const p of problems) expect(p.message).toMatch(/ref freeze|freeze-ref/);
+  });
+});
+
+describe("pairwiseRefsRefusal (the pre-spend gate)", () => {
+  const K = composeKey(COMPOSER_ID, { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+  const SRC2 = { command: "ref freeze", runDir: "~/r", resultSha256: "a".repeat(64) };
+  const sc = (refs: string[] | undefined, name = "case_1"): Scenario =>
+    ({ name, assert: [{ semantic_pairwise: { rubric: ["x"], ...(refs ? { refs } : {}) } }] }) as unknown as Scenario;
+
+  it("passes when every reference resolves", () => {
+    freezeRef(join(tmp, "refs"), "case_1", SRC2, { [K]: "D" }, { harnessVersion: "t", composerId: COMPOSER_ID });
+    const s = sc([join(tmp, "refs")]);
+    expect(pairwiseRefsRefusal(s, scenarioPairwiseSetup(s), [])).toBeUndefined();
+  });
+  it("refuses an assert with no reference at all", () => {
+    const s = sc(undefined);
+    expect(pairwiseRefsRefusal(s, scenarioPairwiseSetup(s), [])).toMatch(/has no reference/);
+  });
+  it("refuses a store that sits inside a mounted source (the answer key), and one that CONTAINS a mount", () => {
+    mkdirSync(join(tmp, "mount"));
+    freezeRef(join(tmp, "mount", "refs"), "case_1", SRC2, { [K]: "D" }, { harnessVersion: "t", composerId: COMPOSER_ID });
+    const s = sc([join(tmp, "mount", "refs")]);
+    expect(pairwiseRefsRefusal(s, scenarioPairwiseSetup(s), [join(tmp, "mount")])).toMatch(/could read the reference/);
+    freezeRef(join(tmp, "outer"), "case_1", SRC2, { [K]: "D" }, { harnessVersion: "t", composerId: COMPOSER_ID });
+    mkdirSync(join(tmp, "outer", "upload"));
+    const s2 = sc([join(tmp, "outer")]);
+    expect(pairwiseRefsRefusal(s2, scenarioPairwiseSetup(s2), [join(tmp, "outer", "upload")])).toMatch(/overlaps the mounted source/);
+  });
+  it("a neutral reference (this variant's own, about to be frozen) is exempt from the existence check", () => {
+    const s = sc([join(tmp, "absent")]);
+    const setup = { ...scenarioPairwiseSetup(s), neutralRefs: new Set(["absent"]) };
+    expect(pairwiseRefsRefusal(s, setup, [])).toBeUndefined();
+  });
+  it("refuses an empty or all-dot case id", () => {
+    const s = sc([join(tmp, "refs")], "..");
+    expect(pairwiseRefsRefusal(s, scenarioPairwiseSetup(s), [])).toMatch(/all dots/);
+  });
+  it("a scenario without semantic_pairwise is untouched", () => {
+    const s = { name: "x", assert: [{ result: "success" }] } as unknown as Scenario;
+    expect(pairwiseRefsRefusal(s, scenarioPairwiseSetup(s), [])).toBeUndefined();
   });
 });
