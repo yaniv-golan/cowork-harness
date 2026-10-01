@@ -232,9 +232,14 @@ async function run(
         `warning: variant ${v}'s earlier rows don't record which skill they tracked, and this pass tracks ${mine} — its skill_invoked column may mix measurements; compare it only knowingly`,
       );
     tracked.set(v, new Set([...(own ?? []), mine]));
-    // Unrecorded and none read alike here: neither names a skill a recorded one could disagree with.
-    const kinds = new Set([...tracked.values()].flatMap((s) => [...s].map((t) => (t === UNRECORDED ? NONE : t))));
-    if (kinds.size > 1)
+    // Per variant, what its column measured: the skills its rows (and this pass) name, else none. Unrecorded rows
+    // name no skill a recorded one could disagree with, so they add nothing to a variant that names one.
+    const measured = (s: ReadonlySet<Tracked>): string =>
+      [...s]
+        .filter((t) => t !== NONE && t !== UNRECORDED)
+        .sort()
+        .join("\0");
+    if (new Set([...tracked.values()].map(measured)).size > 1)
       say(
         `warning: the flow's variants track different skills in skill_invoked (${[...tracked]
           .sort(([a], [b]) => variantOrder(a) - variantOrder(b))

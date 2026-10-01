@@ -1063,6 +1063,8 @@ describe("skill_invoked: what each row tracked, and keeping a variant's column o
     expect(err.join("\n")).toMatch(
       /warning: variant baseline's earlier rows don't record which skill they tracked, and this pass tracks my-plugin:y/,
     );
+    // One variant: nothing to compare across.
+    expect(err.join("\n")).not.toMatch(/the flow's variants track different/);
   });
 
   it("rows that recorded a skill refuse a pass that would track none, in that variant", async () => {
@@ -1100,6 +1102,8 @@ describe("skill_invoked: what each row tracked, and keeping a variant's column o
     expect(err.join("\n")).toMatch(
       /warning: variant baseline's earlier rows don't record which skill they tracked, and this pass tracks my-plugin:x/,
     );
+    // baseline (unrecorded + x) and v1 (x) both measured x: no cross-variant difference to warn about.
+    expect(err.join("\n")).not.toMatch(/the flow's variants track different/);
   });
 
   it("rows that record no tracked skill and a pass that tracks none: no warning", async () => {
