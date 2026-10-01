@@ -91,6 +91,33 @@ describe.runIf(can)("metrics over a recorded cassette (record → replay, stub a
     }
   }, 180_000);
 
+  it("replay notices a metrics: drift; --assert-from --write persists a metrics-only change", async () => {
+    const f = makeStubFixture(STUB, DUMMY);
+    try {
+      const sc = scenario(f, "mr.yaml", [metric("words", "outputs/m.json", "words")]);
+      const cass = join(f.cwd, "mr.cassette.json");
+      const rec = await cli(f, ["record", sc, "--out", cass, "--output-format", "json"]);
+      expect(rec.code, rec.stdout).toBe(0);
+      // Edit ONLY metrics on disk (the asserts are unchanged).
+      const edited = scenario(f, "mr.yaml", [metric("words", "outputs/m.json", "words"), metric("again", "outputs/m.json", "words")]);
+      const plain = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(plain.stderr).toMatch(/has a different `metrics:` block; replay measured the metrics frozen in the cassette/);
+      expect(JSON.parse(plain.stdout).results[0].metrics).toEqual([{ id: "words", value: 1200 }]);
+      const w = await cli(f, ["replay", cass, "--assert-from", edited, "--write", "--output-format", "json"]);
+      expect(w.code, w.stderr).toBe(0);
+      expect(w.stderr).not.toMatch(/already matches/);
+      expect(JSON.parse(readFileSync(cass, "utf8")).scenario.metrics.map((m: { id: string }) => m.id)).toEqual(["words", "again"]);
+      const after = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(JSON.parse(after.stdout).results[0].metrics).toEqual([
+        { id: "words", value: 1200 },
+        { id: "again", value: 1200 },
+      ]);
+      expect(after.stderr).not.toMatch(/different `metrics:`/);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
   it("a nulled pre-run hash (a connected-folder file over the pre-run hash cap) is a cassette-caused pre_run: warned, naming it", async () => {
     const f = makeStubFixture(STUB, { ...DUMMY, COWORK_HARNESS_PRERUN_HASH_CAP: "16" });
     try {

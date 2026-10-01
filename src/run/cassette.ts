@@ -6234,6 +6234,9 @@ async function writeReassertedAssertBlock(
   const policy = loadRedactionPolicy([process.cwd(), dirname(srcPath), dirname(cassetteFile)]);
   let nextAssert: unknown[] = onDisk.assert ?? [];
   let nextExpectDenied: unknown[] = onDisk.expect_denied ?? [];
+  // `metrics` is grading-time like `assert` (replay --assert-from measures the on-disk declaration), so --write
+  // freezes it too; absent on disk ⇒ absent in the cassette.
+  let nextMetrics: unknown[] | undefined = onDisk.metrics;
   if (policy.patterns.length || policy.keyNames.length) {
     const redactedAssert = redactStructural(onDisk.assert ?? [], policy) as unknown[];
     const redactedExpectDenied = redactStructural(onDisk.expect_denied ?? [], policy) as unknown[];
@@ -6250,13 +6253,15 @@ async function writeReassertedAssertBlock(
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassetteFile));
     nextAssert = redactedAssert;
     nextExpectDenied = redactedExpectDenied;
+    if (nextMetrics !== undefined) nextMetrics = redactStructural(nextMetrics, policy) as unknown[];
   }
   // Write only if the (post-redaction) block differs from the frozen copy. Idempotent because we always
   // redact from the PLAINTEXT on-disk source (deterministic) — a second --write yields the same block.
-  const scn = rawCassette.scenario as { assert?: unknown[]; expect_denied?: unknown[] };
+  const scn = rawCassette.scenario as { assert?: unknown[]; expect_denied?: unknown[]; metrics?: unknown[] };
   const assertSame = JSON.stringify(scn.assert ?? []) === JSON.stringify(nextAssert);
   const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
-  if (assertSame && expectSame) {
+  const metricsSame = JSON.stringify(scn.metrics ?? null) === JSON.stringify(nextMetrics ?? null);
+  if (assertSame && expectSame && metricsSame) {
     warn(`::notice:: [replay --write] ${cassetteFile}: assert block already matches the on-disk block — no write\n`);
     return;
   }
@@ -6264,6 +6269,8 @@ async function writeReassertedAssertBlock(
   // Only manage expect_denied when it's meaningful — avoid gratuitously adding an empty field to a cassette
   // that never had one (keep the diff to what actually changed).
   if (nextExpectDenied.length || scn.expect_denied !== undefined) scn.expect_denied = nextExpectDenied;
+  if (nextMetrics !== undefined) scn.metrics = nextMetrics;
+  else delete scn.metrics;
   // A new assert block can need a newer READER (the object form of tool_called → v13): restamp exactly as
   // record does, or an older CLI meets a v12-stamped cassette carrying v13 semantics and says "re-record"
   // instead of "too new". Never LOWER the stamp: the rest of the cassette was written for the old one.
@@ -6677,6 +6684,11 @@ export async function cmdReplay(args: string[]) {
                 warn(
                   `::notice:: [replay] ${src.path} has a different \`assert:\` block; replay used the assertions frozen in the cassette. ` +
                     `Re-record, or \`replay --assert-from ${src.path}\` to re-check against the on-disk block.\n`,
+                );
+              if (norm(onDisk.metrics) !== norm(rc.cassette.scenario.metrics))
+                warn(
+                  `::notice:: [replay] ${src.path} has a different \`metrics:\` block; replay measured the metrics frozen in the cassette. ` +
+                    `\`replay --assert-from ${src.path}\` measures the on-disk block (add --write to freeze it).\n`,
                 );
               // Prompt drift is invisible to the fingerprint (see scenarioContentDrift). Surface it as a
               // non-failing notice here too — the default lane never changes the verdict.
