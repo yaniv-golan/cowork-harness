@@ -45,6 +45,10 @@ interface EntryManifest {
   harnessVersion: string;
   composerId: string;
   frozenAt: string;
+  /** The scenario name the reference was frozen for, and sha256 of its prompt — what the output answered. A run with
+   *  a different task is refused rather than compared with an answer to another question. */
+  scenario?: string;
+  taskSha256?: string;
 }
 
 interface DocSidecar {
@@ -59,7 +63,16 @@ interface DocSidecar {
 }
 
 export type ReadRefResult =
-  | { status: "ok"; text: string; sha256: string; composerId: string; source: RefSource; unchecked?: true }
+  | {
+      status: "ok";
+      text: string;
+      sha256: string;
+      composerId: string;
+      source: RefSource;
+      unchecked?: true;
+      scenario?: string;
+      taskSha256?: string;
+    }
   | { status: "missing"; why: string }
   | { status: "integrity"; why: string };
 
@@ -107,8 +120,9 @@ export function freezeRef(
   storeDir: string,
   caseId: string,
   source: RefSource,
-  docs: Record<string, string>,
-  meta: { harnessVersion: string; composerId: string; unchecked?: boolean },
+  /** By compose key: the document text, or `{text, unchecked}` for one frozen without a live fingerprint. */
+  docs: Record<string, string | { text: string; unchecked?: boolean }>,
+  meta: { harnessVersion: string; composerId: string; unchecked?: boolean; scenario?: string; taskSha256?: string },
 ): { status: "frozen" | "exists"; entryDir: string } {
   assertCaseId(caseId);
   if (Object.keys(docs).length === 0) throw new Error("freezeRef: no documents to freeze");
@@ -127,9 +141,19 @@ export function freezeRef(
       harnessVersion: meta.harnessVersion,
       composerId: meta.composerId,
       frozenAt: now(),
+      ...(meta.scenario !== undefined ? { scenario: meta.scenario } : {}),
+      ...(meta.taskSha256 !== undefined ? { taskSha256: meta.taskSha256 } : {}),
     };
     root.createFile(join(tmp, "ref.json"), json(manifest));
-    for (const [key, text] of Object.entries(docs)) writeDoc(root, tmp, key, text, meta.composerId, meta.unchecked === true);
+    for (const [key, d] of Object.entries(docs))
+      writeDoc(
+        root,
+        tmp,
+        key,
+        typeof d === "string" ? d : d.text,
+        meta.composerId,
+        meta.unchecked === true || (typeof d !== "string" && d.unchecked === true),
+      );
     // Re-probe every spelling right before the rename (the rename itself checks only `<case-id>`). What remains is the
     // directory-rename window renameNoFollow documents.
     if (present() || root.renameNoFollow(tmp, entryDir, { replace: false }) === "exists") {
@@ -237,6 +261,25 @@ export function readRefDoc(storeDir: string, caseId: string, key: string): ReadR
     composerId: d.sidecar.composerId,
     source: result.manifest.source,
     ...(d.sidecar.unchecked ? { unchecked: true as const } : {}),
+    ...(result.manifest.scenario !== undefined ? { scenario: result.manifest.scenario } : {}),
+    ...(result.manifest.taskSha256 !== undefined ? { taskSha256: result.manifest.taskSha256 } : {}),
+  };
+}
+
+/** The entry's identity (what it was frozen from and for), independent of any compose key. */
+export function readRefEntry(
+  storeDir: string,
+  caseId: string,
+): { status: "ok"; source: RefSource; scenario?: string; taskSha256?: string } | { status: "missing" | "integrity"; why: string } {
+  assertCaseId(caseId);
+  const { result } = inspectEntry(storeDir, caseId);
+  if (result.status !== "ok") return result;
+  const m = result.manifest;
+  return {
+    status: "ok",
+    source: m.source,
+    ...(m.scenario !== undefined ? { scenario: m.scenario } : {}),
+    ...(m.taskSha256 !== undefined ? { taskSha256: m.taskSha256 } : {}),
   };
 }
 
@@ -258,7 +301,13 @@ export function addRefDoc(
         `${result.manifest.source.resultSha256.slice(0, 12)}…); every document in one entry must come from one run`,
     );
   if (result.keys.has(key)) return { status: "exists" };
-  writeDoc(root!, entryDir, key, text, from.composerId, from.unchecked === true);
+  try {
+    writeDoc(root!, entryDir, key, text, from.composerId, from.unchecked === true);
+  } catch (e) {
+    // A concurrent add of the same key won the exclusive create: the key now exists, written by that add.
+    if ((e as NodeJS.ErrnoException)?.code === "EEXIST") return { status: "exists" };
+    throw e;
+  }
   return { status: "added" };
 }
 

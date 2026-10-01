@@ -1734,6 +1734,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // One judge per resolved model; the caller's run-level pin (a paired comparison) wins over a per-assert one.
         judgeFor: (model) => makePairwiseJudge({ model, complete: opts.pairwiseComplete ?? claudeCliCompleteStructured }),
         modelFor: (a) => opts.judgeModelOverride ?? a.semantic_pairwise?.judge_model ?? defaultJudgeModel(),
+        mainModels: record.models ?? [],
       }),
     });
     const assertions = evaluate(scenario.assert, assertCtx);

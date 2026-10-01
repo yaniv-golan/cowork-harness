@@ -50,6 +50,14 @@ export function composeFromRunDir(runDir: string, scenarioFile: string, secrets:
   } catch (e) {
     return { refused: (e as Error).message };
   }
+  // The run must be OF this scenario: a reference is the answer to one task, and freezing another scenario's run under
+  // this name would make every later comparison grade against an answer to a different question.
+  if (result.scenario !== scenarioRef.name)
+    return { refused: `${runDir} is a run of scenario "${result.scenario}", not "${scenarioRef.name}" (--scenario)` };
+  if (typeof result.prompt === "string" && result.prompt !== scenarioRef.prompt)
+    return {
+      refused: `${runDir} ran a different prompt than ${scenarioFile} declares — re-run the scenario, or freeze with the scenario that run used`,
+    };
   const pairwise = scenarioRef.assert.filter((a) => a.semantic_pairwise !== undefined);
   const evidenceGlobs = (asserts: Assertion[]): string[] => [...new Set(asserts.flatMap((a) => judgedOpts(a)?.evidenceFiles ?? []))];
   const built = assertContextFromRunDir(runDir, scenarioRef, {
@@ -91,6 +99,8 @@ export function composeFromRunDir(runDir: string, scenarioFile: string, secrets:
     },
     harnessVersion: pkgVersion(),
     composerId: COMPOSER_ID,
+    scenario: scenarioRef.name ?? "",
+    taskSha256: createHash("sha256").update(scenarioRef.prompt, "utf8").digest("hex"),
     docs,
   };
 }

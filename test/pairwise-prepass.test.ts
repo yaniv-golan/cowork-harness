@@ -259,3 +259,102 @@ describe("semantic_pairwise — pre-pass and check", () => {
     expect(JSON.stringify(evaluate([a], c)[0])).not.toContain("S3CR3T");
   });
 });
+
+describe("semantic_pairwise — review fixes", () => {
+  it("scrubs the rubric before it reaches the judge, naming the redacted claim indexes", async () => {
+    const a = assertOf({ rubric: ["must not leak S3CR3TVALUE123", "is short"] });
+    freezeFrom(join(tmp, "baseline"), a, "R");
+    const c = ctx({ finalMessage: "C", secrets: ["S3CR3TVALUE123"] });
+    const seen: PairwiseInput[] = [];
+    await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge("tie", seen) }));
+    expect(JSON.stringify(seen[0]!.rubric)).not.toContain("S3CR3TVALUE123");
+    expect(seen[0]!.rubric![1]).toBe("is short");
+  });
+
+  it("warns once when the judge model is the model under test", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "R");
+    const c = ctx({ finalMessage: "C" });
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => (writes.push(String(chunk)), true)) as typeof process.stderr.write;
+    try {
+      await runPairwiseJudges([a], c, opts(a, { modelFor: () => "claude-sonnet-5", mainModels: ["claude-sonnet-5"] }));
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(writes.filter((w) => /judge model .* is also the model under test/.test(w))).toHaveLength(1);
+  });
+
+  it("an unchecked reference is visible on its outcome", async () => {
+    const a = assertOf();
+    const doc = candidateDocument(ctx({ finalMessage: "R" }), a).candidate;
+    freezeRef(
+      join(tmp, "baseline"),
+      "case_1",
+      SRC,
+      { [pairwiseComposeKey(a)]: doc },
+      { harnessVersion: "t", composerId: "c", unchecked: true },
+    );
+    const c = ctx({ finalMessage: "C" });
+    await runPairwiseJudges([a], c, opts(a));
+    expect(evaluate([a], c)[0]!.pairwise![0]).toMatchObject({ status: "graded", unchecked: true });
+  });
+
+  it.each(["win", "not_worse", "any"] as const)("missing AND integrity both fail under pass_if %s", async (passIf) => {
+    const a = assertOf({ pass_if: passIf });
+    freezeFrom(join(tmp, "baseline"), a, "R");
+    const dir = join(tmp, "baseline", "case_1");
+    writeFileSync(
+      join(
+        dir,
+        readdirSync(dir).find((n) => n.endsWith(".txt"))!,
+      ),
+      "edited",
+    );
+    const refsFor = () => [
+      { name: "baseline", store: join(tmp, "baseline") },
+      { name: "gone", store: join(tmp, "gone") },
+    ];
+    const c = ctx({ finalMessage: "C" });
+    await runPairwiseJudges([a], c, opts(a, { refsFor }));
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(false);
+    expect(r!.pairwise!.map((o) => o.status)).toEqual(["integrity", "missing"]);
+  });
+
+  it.each(["win", "any"] as const)("win and tie under pass_if %s", async (passIf) => {
+    for (const [outcome, want] of [
+      ["win", true],
+      ["tie", passIf === "any"],
+    ] as const) {
+      const a = assertOf({ pass_if: passIf });
+      rmSync(join(tmp, "baseline"), { recursive: true, force: true });
+      freezeFrom(join(tmp, "baseline"), a, "R");
+      const c = ctx({ finalMessage: "C" });
+      await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge(outcome) }));
+      expect(evaluate([a], c)[0]!.pass).toBe(want);
+    }
+  });
+});
+
+describe("semantic_pairwise — task identity", () => {
+  it("a reference frozen for a different task is never compared (missing, with the reason)", async () => {
+    const a = assertOf();
+    const doc = candidateDocument(ctx({ finalMessage: "R" }), a).candidate;
+    freezeRef(
+      join(tmp, "baseline"),
+      "case_1",
+      SRC,
+      { [pairwiseComposeKey(a)]: doc },
+      { harnessVersion: "t", composerId: "c", taskSha256: "9".repeat(64) },
+    );
+    const c = ctx({ finalMessage: "C" });
+    const seen: PairwiseInput[] = [];
+    await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge("win", seen) }));
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(false);
+    expect(r!.pairwise![0]).toMatchObject({ status: "missing", why: expect.stringMatching(/different task/) });
+    expect(seen).toHaveLength(0);
+  });
+});

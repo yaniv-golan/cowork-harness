@@ -13,7 +13,7 @@ import { composeFromRunDir } from "./compose.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "./cli-usage.js";
 import { join } from "node:path";
 import { FsRefusal, lexists } from "../hillclimb/fs.js";
-import { REF_EXTS, addRefDoc, freezeRef, verifyStore, type RefSource } from "./store.js";
+import { REF_EXTS, addRefDoc, freezeRef, readRefEntry, verifyStore, type RefSource } from "./store.js";
 
 /** One kept run, composed for freezing. `live` compares the recomposed document with the fingerprint the live
  *  judge recorded: `match`, `differs`, or `unknown` (no fingerprint: a run recorded before the assert existed). */
@@ -22,6 +22,10 @@ export interface ComposedForFreeze {
   source: RefSource;
   harnessVersion: string;
   composerId: string;
+  /** The scenario the run answered, and sha256 of its prompt: recorded in the entry so a later run of a different task
+   *  is refused instead of compared with an answer to another question. */
+  scenario: string;
+  taskSha256: string;
   docs: Array<{ key: string; text: string; live: "match" | "differs" | "unknown" }>;
 }
 
@@ -74,28 +78,29 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
   const unchecked = new Set(unknown);
   try {
     if (!REF_EXTS.some((ext) => lexists(join(opts.out, caseId + ext)))) {
-      // A fresh entry: everything checked goes in one atomic freeze; unchecked documents are added after, marked.
-      const checked = c.docs.filter((d) => !unchecked.has(d.key));
-      const first = checked.length ? checked : c.docs.slice(0, 1);
-      const r = freezeRef(opts.out, caseId, c.source, Object.fromEntries(first.map((d) => [d.key, d.text])), {
-        harnessVersion: c.harnessVersion,
-        composerId: c.composerId,
-        unchecked: checked.length === 0,
-      });
+      // A fresh entry: every document — checked and unchecked — in ONE atomic freeze, so a refusal never follows a write.
+      const r = freezeRef(
+        opts.out,
+        caseId,
+        c.source,
+        Object.fromEntries(c.docs.map((d) => [d.key, { text: d.text, unchecked: unchecked.has(d.key) }])),
+        { harnessVersion: c.harnessVersion, composerId: c.composerId, scenario: c.scenario, taskSha256: c.taskSha256 },
+      );
       if (r.status === "exists")
         return refuse(`ref freeze: a reference for case ${caseId} appeared in ${opts.out} concurrently; nothing written`, caseId);
-      const added: string[] = [];
-      for (const d of c.docs.filter((d) => !first.includes(d)))
-        if (
-          addRefDoc(opts.out, caseId, d.key, d.text, {
-            resultSha256: c.source.resultSha256,
-            composerId: c.composerId,
-            unchecked: unchecked.has(d.key),
-          }).status === "added"
-        )
-          added.push(d.key);
-      return { exitCode: 0, message: `ref freeze: froze case ${caseId} into ${opts.out}`, caseId, frozen: first.map((d) => d.key), added };
+      return {
+        exitCode: 0,
+        message: `ref freeze: froze case ${caseId} into ${opts.out}`,
+        caseId,
+        frozen: c.docs.map((d) => d.key),
+        added: [],
+      };
     }
+    // An existing entry gains only compose keys it lacks, and only for the same task it was frozen for.
+    const existing = readRefEntry(opts.out, caseId);
+    const entryTask = existing.status === "ok" ? existing.taskSha256 : undefined;
+    if (entryTask !== undefined && entryTask !== c.taskSha256)
+      return refuse(`ref freeze: case ${caseId} in ${opts.out} was frozen for a different task (prompt); nothing written`, caseId);
     const added: string[] = [];
     for (const d of c.docs)
       if (

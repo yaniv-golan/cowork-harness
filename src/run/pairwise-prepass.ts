@@ -3,6 +3,7 @@
 // `runSemanticJudges`). The candidate document is the one `semantic_matches` would grade — one composer — and an
 // assert whose evidence is unavailable refuses before any judge call, with the same typed reasons.
 
+import { createHash } from "node:crypto";
 import { COMPOSER_ID, composeJudgedDocument, judgedOpts, semanticRefusal, type AssertContext } from "../assert.js";
 import { finalizeRationale } from "../decide/semantic-judge.js";
 import { PAIRWISE_PROMPT_HASH, PairwiseJudgeInvalid, type PairwiseJudge } from "../decide/pairwise-judge.js";
@@ -33,6 +34,9 @@ export interface PairwisePrepassOpts {
   /** A judge for a resolved model id. Called lazily, only when a comparison actually runs. */
   judgeFor: (model: string) => PairwiseJudge;
   modelFor: (a: Assertion) => string;
+  /** The run's observed main-agent model(s): a judge that IS the model under test grades its own kind of output
+   *  (build-eval.md: avoid using the exact model-under-test as its own judge) — warned, not refused. */
+  mainModels?: readonly string[];
 }
 
 type Outcome = NonNullable<RunResult["assertions"][number]["pairwise"]>[number];
@@ -67,6 +71,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
   ctx.semanticRefused ??= new Map();
   const secrets = ctx.secrets ?? [];
   const task = secrets.length ? scrub(opts.task, secrets) : opts.task;
+  const taskSha256 = createHash("sha256").update(opts.task, "utf8").digest("hex");
   for (let i = 0; i < assertions.length; i++) {
     const a = assertions[i]!;
     const p = a.semantic_pairwise;
@@ -87,8 +92,18 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
       warn(
         `::warning:: [semantic_pairwise] assert ${i} has no rubric — the judge weighs overall quality for the task; concrete criteria grade more reliably\n`,
       );
+    // The rubric leaves for the judge exactly as the documents do, so it is scrubbed with the same set — and a claim
+    // that NAMED a secret is said to be redacted, by index only (the semantic_matches contract).
+    const rubric = p.rubric && secrets.length ? p.rubric.map((c) => scrub(c, secrets)) : p.rubric;
+    const redacted = (p.rubric ?? []).flatMap((c, k) => (rubric && c !== rubric[k] ? [k] : []));
+    if (redacted.length)
+      warn(
+        `::warning:: [semantic_pairwise] rubric criterion ${redacted.length === 1 ? "index" : "indexes"} ${redacted.join(",")} contained a ` +
+          `scrubbed secret value and ${redacted.length === 1 ? "was" : "were"} sent to the judge redacted.\n`,
+      );
     const key = pairwiseComposeKey(a);
     const outcomes: Outcome[] = [];
+    let warnedSelfJudge = false;
     let cost: number | undefined;
     let usage: TokenUsage | undefined;
     let model: string | undefined;
@@ -103,11 +118,22 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         outcomes.push({ ref: ref.name, status: got.status, why: got.why });
         continue;
       }
+      if (got.taskSha256 !== undefined && got.taskSha256 !== taskSha256) {
+        outcomes.push({ ref: ref.name, status: "missing", why: "frozen for a different task (the scenario's prompt changed)" });
+        continue;
+      }
       const resolved = opts.modelFor(a);
+      if (!warnedSelfJudge && opts.mainModels?.includes(resolved)) {
+        warnedSelfJudge = true;
+        warn(
+          `::warning:: [semantic_pairwise] assert ${i}: the judge model ${resolved} is also the model under test — a model judging its own ` +
+            `kind of output is a known bias; pin a different judge_model.\n`,
+        );
+      }
       try {
         const r = await opts.judgeFor(resolved)({
           task,
-          rubric: p.rubric,
+          rubric,
           candidate: built.candidate,
           reference: got.text,
           sessionId: opts.sessionId,
@@ -129,6 +155,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
           ...(r.positionFlip ? { positionFlip: true } : {}),
           ...(rationale !== undefined ? { rationale } : {}),
           refDocSha256: got.sha256,
+          ...(got.unchecked ? { unchecked: true } : {}),
         });
       } catch (e) {
         if (!(e instanceof PairwiseJudgeInvalid)) throw e;

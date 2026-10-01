@@ -18,6 +18,8 @@ const composed = (over: Partial<ComposedForFreeze> = {}): ComposedForFreeze => (
   source: { command: "ref freeze", runDir: "~/runs/r1", resultSha256: "a".repeat(64), sessionId: "s1" },
   harnessVersion: "4.3.0",
   composerId: "c1",
+  scenario: "case_1",
+  taskSha256: "1".repeat(64),
   docs: [{ key: K1, text: "DOC", live: "match" }],
   ...over,
 });
@@ -92,5 +94,31 @@ describe("verifyStores", () => {
     const r = verifyStores([join(tmp, "a")]);
     expect(r.exitCode).toBe(1);
     expect(r.stores[0]!.problems).toHaveLength(1);
+  });
+});
+
+describe("freezeFromRun — task identity and atomicity", () => {
+  it("a fresh freeze with checked and unchecked documents writes them in ONE step", () => {
+    const r = freezeFromRun(
+      { ...base(), allowUnchecked: true },
+      deps(
+        composed({
+          docs: [
+            { key: K1, text: "A", live: "match" },
+            { key: K2, text: "B", live: "unknown" },
+          ],
+        }),
+      ),
+    );
+    expect(r).toMatchObject({ exitCode: 0, frozen: [K1, K2], added: [] });
+    expect(readRefDoc(join(tmp, "refs"), "case_1", K2)).toMatchObject({ text: "B", unchecked: true });
+    expect(readRefDoc(join(tmp, "refs"), "case_1", K1)).toMatchObject({ text: "A", taskSha256: "1".repeat(64), scenario: "case_1" });
+  });
+  it("adding to an entry frozen for a different task is refused", () => {
+    freezeFromRun(base(), deps(composed()));
+    const other = composed({ taskSha256: "2".repeat(64), docs: [{ key: K2, text: "X", live: "match" }] });
+    const r = freezeFromRun(base(), deps(other));
+    expect(r.exitCode).toBe(2);
+    expect(r.message).toMatch(/different task/);
   });
 });

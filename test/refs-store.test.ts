@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addRefDoc, composeKey, freezeRef, readRefDoc, verifyStore, type RefSource } from "../src/refs/store.js";
+import { FsRefusal } from "../src/hillclimb/fs.js";
 
 let tmp: string;
 let store: string;
@@ -183,5 +184,31 @@ describe("relative store paths", () => {
     } finally {
       process.chdir(prev);
     }
+  });
+});
+
+describe("review fixes — identity, atomic multi-doc freeze, concurrent add", () => {
+  it("records the scenario name and task hash, and returns them on read", () => {
+    freezeRef(
+      store,
+      "case_1",
+      SRC,
+      { [K1]: "D" },
+      { harnessVersion: "t", composerId: "c1", scenario: "case 1", taskSha256: "f".repeat(64) },
+    );
+    expect(readRefDoc(store, "case_1", K1)).toMatchObject({ status: "ok", scenario: "case 1", taskSha256: "f".repeat(64) });
+  });
+  it("freezes several documents at once, each with its own unchecked flag", () => {
+    freezeRef(store, "case_1", SRC, { [K1]: "A", [K2]: { text: "B", unchecked: true } }, { harnessVersion: "t", composerId: "c1" });
+    expect(readRefDoc(store, "case_1", K1)).not.toHaveProperty("unchecked");
+    expect(readRefDoc(store, "case_1", K2)).toMatchObject({ text: "B", unchecked: true });
+  });
+  it("a half-written document beside an add is a typed refusal (FsRefusal), never a raw errno", () => {
+    // The exact race (two adds both pass inspection, one wins the exclusive create) cannot be produced
+    // synchronously; addRefDoc maps that EEXIST to "exists". What IS observable: the debris such a race or crash
+    // leaves is an integrity refusal the CLI reports as exit 2.
+    freezeRef(store, "case_1", SRC, { [K1]: "A" }, { harnessVersion: "t", composerId: "c1" });
+    writeFileSync(join(store, "case_1", `doc-${K2}.txt`), "raced");
+    expect(() => addRefDoc(store, "case_1", K2, "B", { resultSha256: SRC.resultSha256, composerId: "c1" })).toThrow(FsRefusal);
   });
 });

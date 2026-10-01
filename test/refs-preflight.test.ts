@@ -78,3 +78,22 @@ describe("pairwiseRefsRefusal (the pre-spend gate)", () => {
     expect(pairwiseRefsRefusal(s, scenarioPairwiseSetup(s), [])).toBeUndefined();
   });
 });
+
+describe("pairwiseRefsRefusal — task identity", () => {
+  it("refuses a reference frozen for a different prompt", () => {
+    const K = composeKey(COMPOSER_ID, { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+    freezeRef(
+      join(tmp, "refs"),
+      "case_1",
+      { command: "x", runDir: "~/r", resultSha256: "a".repeat(64) },
+      { [K]: "D" },
+      { harnessVersion: "t", composerId: COMPOSER_ID, taskSha256: "0".repeat(64) },
+    );
+    const s = {
+      name: "case_1",
+      prompt: "the current prompt",
+      assert: [{ semantic_pairwise: { refs: [join(tmp, "refs")] } }],
+    } as unknown as Scenario;
+    expect(pairwiseRefsRefusal(s, scenarioPairwiseSetup(s), [])).toMatch(/frozen for a different task/);
+  });
+});

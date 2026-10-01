@@ -1854,6 +1854,8 @@ export interface RunResult {
       positionFlip?: boolean;
       rationale?: string;
       refDocSha256?: string;
+      /** The reference was frozen without a live fingerprint to check it against (`ref freeze --allow-unchecked`). */
+      unchecked?: boolean;
       why?: string;
     }>;
     semanticEvidence?: {

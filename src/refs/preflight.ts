@@ -3,6 +3,7 @@
 
 // The answer-key check (a reference store a mount exposes) is the shared `pathsInsideMounts`
 // (src/hillclimb/answer-key.ts); callers pass every store a run will read.
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { pathsInsideMounts } from "../hillclimb/answer-key.js";
 import { pathSafeId, unusableCaseIds } from "../hillclimb/ids.js";
@@ -16,6 +17,8 @@ export interface RefRequirement {
   refName: string;
   store: string;
   composeKey: string;
+  /** sha256 of the task (scenario prompt) the run will answer; a reference frozen for another task is refused. */
+  taskSha256?: string;
 }
 
 /** Every (case, assert, reference) a run will judge against must already resolve, with integrity, to a document
@@ -26,7 +29,17 @@ export function checkRefsBeforeSpend(
   const out: Array<RefRequirement & { status: "missing" | "integrity"; message: string }> = [];
   for (const r of reqs) {
     const got = readRefDoc(r.store, r.caseId, r.composeKey);
-    if (got.status === "ok") continue;
+    if (got.status === "ok") {
+      if (r.taskSha256 === undefined || got.taskSha256 === undefined || got.taskSha256 === r.taskSha256) continue;
+      out.push({
+        ...r,
+        status: "missing",
+        message:
+          `case ${r.caseId}, assert ${r.assertIndex}, reference "${r.refName}": it was frozen for a different task (the scenario's prompt changed) — ` +
+          `freeze a new reference from a run of this prompt with \`ref freeze\``,
+      });
+      continue;
+    }
     const remedy =
       got.status === "missing"
         ? "freeze one from a kept run with `ref freeze` (or, in a hillclimb flow, `hillclimb freeze-ref`)"
@@ -71,13 +84,16 @@ export function pairwiseRefsRefusal(scenario: Scenario, setup: PairwiseSetup, mo
   if (unusable.length) return `semantic_pairwise: case id ${JSON.stringify(setup.caseId)} is empty or all dots — set a scenario \`name:\``;
   const stores = new Set<string>();
   const reqs: RefRequirement[] = [];
+  const taskSha256 = createHash("sha256")
+    .update(scenario.prompt ?? "", "utf8")
+    .digest("hex");
   for (const { a, i } of pairwise) {
     const refs = setup.refsFor(a);
     if (!refs.length) problems.push(`assert ${i}: semantic_pairwise has no reference — add \`refs:\` (a store written by \`ref freeze\`)`);
     for (const r of refs) {
       stores.add(r.store);
       if (!setup.neutralRefs.has(r.name))
-        reqs.push({ caseId: setup.caseId, assertIndex: i, refName: r.name, store: r.store, composeKey: pairwiseComposeKey(a) });
+        reqs.push({ caseId: setup.caseId, assertIndex: i, refName: r.name, store: r.store, composeKey: pairwiseComposeKey(a), taskSha256 });
     }
   }
   problems.push(...checkRefsBeforeSpend(reqs).map((p) => p.message));
