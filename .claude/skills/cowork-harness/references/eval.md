@@ -21,7 +21,14 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
   locates its own files at runtime sees a different path under each, so the comparison holds for the
   `local_plugins` layout only.
 - scenarios × 2 × `--reps` live runs (10 per scenario at the default `--reps 5`), interleaved, plus one judge
-  call per `semantic_matches` assert per run. The start-up line prints the job count. No budget flag.
+  call per `semantic_matches` assert per run. The start-up line prints the job count.
+- Before an A/B, plan it: `eval … --dry-run --target-effect 30pp` runs nothing and prints, from the runs
+  dir's history, the cost at `--reps` (p50/mean/p95/worst observed; a LOWER BOUND where a scenario has no
+  priced run) and per row its rate, the change `--reps` can detect, and the `--reps` that detects 30pp, with
+  its power and cost. "Detectable" is not 80% power: read `power` / `nForPower80`. Covered JSON: `plan.cost`'s
+  summary keys only.
+- `--max-budget-usd <x>` refuses before any run (exit 2, `error.code: "budget_exceeded"`) when the scenarios'
+  worst observed runs × 2 × `--reps` exceed x — pre-flight only, agent cost only, never a mid-run stop.
 - In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
 - Run an A/A first (`--allow-identical-arms`, the same source twice) to see your scenarios' noise.
 

@@ -7,8 +7,8 @@
 // function `eval report` calls.
 import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { basename, join, relative, resolve } from "node:path";
 import type { FidelityTier, RunResult, Scenario } from "../types.js";
@@ -17,12 +17,17 @@ import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
 import { loadBaseline } from "../baseline.js";
-import { parseScenarioFile, loadSessionFromFile, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
+import { parseScenarioFile, loadSessionFromFile, scenarioInputFindings, sessionOriginSources, effectiveTier } from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
+import { installTerminationHandler } from "../termination.js";
+import { readIndex, type RunIndexRow } from "../run/run-index.js";
+import { runsRoot } from "../run/trace-view.js";
+import { checkBatchBudget, noHistoryCauseText, runsDirInfo } from "../run/budget.js";
+import { recordBudgetStatus, type BudgetStatus } from "../run/budget-status.js";
 import { resolveCritiquedSkillDir, gradedSkillNameFor } from "../critique/command.js";
 import { scenarioRows } from "./classify.js";
 import { attainableFloor, minRowsToConfirm, type Correction } from "./stats.js";
@@ -44,6 +49,9 @@ import { evalJobRunDir, salvagedResult, type EvalJobSpec } from "./job-runner.js
 import { MANIFEST_FILE, type EvalManifest, type ManifestArm, type ManifestScenario } from "./manifest.js";
 import { writeEvalReport, REPORT_MD, type EvalReport } from "./report.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_VALUE_FLAGS } from "./usage.js";
+import { loadCostHistory, loadRowHistory, type RowHistoryLoad } from "./plan-history.js";
+import { scheduleCostLine } from "./planner.js";
+import { planEval, type EvalPlan, type PlanScenarioInput } from "./plan.js";
 
 /** BH's false-discovery rate for `confirmed`. Fixed; `--alpha` sets the per-row level and Holm's. */
 export const BH_Q = 0.1;
@@ -82,6 +90,12 @@ export interface EvalArgs {
   onUnanswered?: "fail" | "first";
   deciderCmd?: string;
   deciderDir?: string;
+  /** `--dry-run`: plan only — print the cost and power plan, run nothing, create no eval dir. */
+  dryRun: boolean;
+  /** `--target-effect`, in percentage points (30 = a 30-point change). Only with `--dry-run`. */
+  targetEffectPp?: number;
+  /** `--max-budget-usd`: a pre-flight refusal from cost history, before any run (never a mid-run stop). */
+  maxBudgetUsd?: number;
   /** `--dotenv` / `--run-dir` after the subcommand, for the caller to apply. */
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
 }
@@ -95,6 +109,20 @@ const num = (flag: string, v: string, ok: (n: number) => boolean, what: string):
   if (v.trim() === "" || !Number.isFinite(n) || !ok(n)) throw new UsageError(`${flag} requires ${what} (got "${v}")`);
   return n;
 };
+
+/** `--target-effect`: `<number>pp` or a bare `<number>`, both in percentage points, in [1, 100]. A value
+ *  below 1 is refused rather than read as a fraction, so `0.3` can never silently mean 0.3pp. */
+function parseTargetEffect(v: string): number {
+  const m = /^(\d+(?:\.\d+)?)(pp)?$/.exec(v.trim());
+  const n = m ? Number(m[1]) : NaN;
+  if (m && n > 0 && n < 1)
+    throw new UsageError(
+      `--target-effect ${v}: did you mean ${Math.round(n * 1000) / 10}pp? --target-effect is in percentage points (30pp = a 30-point change in a row's pass rate)`,
+    );
+  if (!m || !Number.isFinite(n) || n < 1 || n > 100)
+    throw new UsageError(`--target-effect requires percentage points in [1, 100], as 30pp or 30 (got "${v}")`);
+  return n;
+}
 
 /** Parse `eval` arguments. Throws UsageError; never exits. */
 export function parseEvalArgs(argv: readonly string[]): EvalArgs {
@@ -184,6 +212,14 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
   const onUnanswered = values["--on-unanswered"];
   if (onUnanswered !== undefined && onUnanswered !== "fail" && onUnanswered !== "first")
     throw new UsageError(`eval --on-unanswered must be fail or first (got "${onUnanswered}"; prompt would break the comparison)`);
+  const dryRun = booleans.has("--dry-run");
+  const targetEffectPp = values["--target-effect"] !== undefined ? parseTargetEffect(values["--target-effect"]) : undefined;
+  if (targetEffectPp !== undefined && !dryRun)
+    throw new UsageError("--target-effect requires --dry-run: it sizes a planned eval, and a real eval has nothing to do with it");
+  const maxBudgetUsd =
+    values["--max-budget-usd"] !== undefined
+      ? num("--max-budget-usd", values["--max-budget-usd"], (n) => n > 0, "a positive number of USD")
+      : undefined;
   const deciderCmd = values["--decider-cmd"];
   const deciderDir = values["--decider-dir"];
   if (deciderCmd !== undefined && deciderDir !== undefined)
@@ -215,6 +251,9 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
     ...(onUnanswered !== undefined ? { onUnanswered } : {}),
     ...(deciderCmd !== undefined ? { deciderCmd } : {}),
     ...(deciderDir !== undefined ? { deciderDir } : {}),
+    dryRun,
+    ...(targetEffectPp !== undefined ? { targetEffectPp } : {}),
+    ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     globals,
   };
 }
@@ -234,6 +273,14 @@ export interface EvalDeps {
   evalId?: string;
   now?: () => Date;
   cwd?: string;
+  /** The run index the plan and the budget gate read (default: the runs root's `index.jsonl`, read once). */
+  readIndex?: () => RunIndexRow[];
+  /** Where that index lives, and whether `--run-dir` / COWORK_HARNESS_RUNS_DIR moved it (default: `runsDirInfo()`). */
+  runsDirInfo?: () => { runsDir: string; runsDirRedirected: boolean };
+  /** Called with a dry run's temp snapshot root, before anything is written into it. */
+  onSnapshotRoot?: (dir: string) => void;
+  /** Called with the plan as soon as it is computed — before any later check can refuse. */
+  onPlan?: (plan: EvalPlan) => void;
 }
 
 export interface EvalOutcome {
@@ -334,8 +381,35 @@ function loadScenarios(args: EvalArgs, say: (s: string) => void): LoadedScenario
   return out;
 }
 
-/** Everything before the first run, then the schedule, then the report. */
-export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutcome> {
+/** A `--max-budget-usd` refusal before any run. Thrown, never exited on: a dry run removes its temp snapshots in
+ *  a `finally`, and a real eval removes the eval dir it made, so the caller maps this to the error envelope
+ *  (`error.code: "budget_exceeded"`, `error.budget`). The marker is recorded before it is thrown. */
+export class EvalBudgetRefusal extends Error {
+  constructor(
+    message: string,
+    readonly hint: string,
+    readonly status: BudgetStatus,
+    readonly plan?: EvalPlan,
+  ) {
+    super(message);
+    this.name = "EvalBudgetRefusal";
+  }
+}
+
+/** Everything resolved before the eval dir: scenarios, pins, arms, and where the eval would live. */
+interface EvalContext {
+  now: Date;
+  cwd: string;
+  say: (s: string) => void;
+  scenarios: LoadedScenario[];
+  agentPins: ReturnType<typeof resolveAgentPins>;
+  judgePins: ReturnType<typeof resolveJudgePins>;
+  specs: ArmSpec[];
+  evalId: string;
+  evalDir: string;
+}
+
+function resolveEvalContext(args: EvalArgs, deps: EvalDeps): EvalContext {
   const now = deps.now?.() ?? new Date();
   const cwd = deps.cwd ?? process.cwd();
   const say = (s: string) => {
@@ -370,7 +444,8 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   if (args.includeUntracked && specs.some((s) => s.source.kind === "git"))
     throw new UsageError("--include-untracked has no meaning for a git: arm (its content is a commit); drop one");
 
-  // Where the eval lives: outside every git work tree, or the stager would mount the snapshots empty.
+  // Where the eval lives: outside every git work tree, or the stager would mount the snapshots empty. A dry
+  // run checks the same two things and creates nothing, so it refuses exactly where the real eval would.
   const evalId = deps.evalId ?? newEvalId(now);
   const evalDir = resolve(args.out ?? join(homedir(), ".cowork-harness", "evals", evalId));
   if (isInsideGitWorkTree(evalDir))
@@ -379,6 +454,360 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     );
   if (existsSync(evalDir) && (!statSync(evalDir).isDirectory() || readdirSync(evalDir).length > 0))
     throw new UsageError(`eval dir ${tildeify(evalDir)} already exists and is not empty`);
+  return { now, cwd, say, scenarios, agentPins, judgePins, specs, evalId, evalDir };
+}
+
+/** What the checks after the eval dir produced: the snapshots, the substituted sessions and their
+ *  signatures, the skill whose invocation reps record, and — on a dry run or under `--max-budget-usd` — the
+ *  plan. */
+interface PreparedArms {
+  snaps: Array<SnapshotInfo & { spec: ArmSpec }>;
+  sessions: Map<string, SessionConfig>;
+  sigs: Array<Record<string, string>>;
+  skill: string | null;
+  evalFiles: string[];
+  plan?: EvalPlan;
+}
+
+/** Everything that can refuse before the first run, with the arm snapshots under `armsRoot`. Never exits and
+ *  never creates the eval dir: the caller owns where the snapshots live and what is removed on a refusal. */
+function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot: string, mode: "run" | "plan"): PreparedArms {
+  const { scenarios, specs, agentPins, judgePins, cwd, say } = ctx;
+  // Snapshots.
+  // Every scenario declares the same plugin dir (checked by realpath); each is substituted by its OWN
+  // spelling. The snapshot takes the declared final directory name, which is the mount name the
+  // scenarios' assertions see — so every spelling must end in the same name.
+  const bases = [...new Set(scenarios.map((s) => basename(expandHome(s.session.plugins.local_plugins[0]))))];
+  if (bases.length > 1)
+    throw new UsageError(
+      `the scenarios declare the plugin under different final directory names (${bases.join(", ")}); the mount name comes from that name, so declare it the same way in every session`,
+    );
+  const base = bases[0];
+  const snaps: Array<SnapshotInfo & { spec: ArmSpec }> = specs.map((spec) => {
+    const dest = join(armsRoot, "arms", spec.label, base);
+    try {
+      if (spec.source.kind === "dir") {
+        const info = snapshotDirArm(resolve(cwd, spec.source.path), dest, args.includeUntracked, spec.raw);
+        return { ...info, spec };
+      }
+      const info = snapshotGitArm(spec.source, dest, cwd, spec.raw);
+      return { ...info, spec };
+    } catch (e) {
+      // A refusal about the source is usage; anything else (an unreadable file, a full disk, a git that
+      // failed mid-extraction, a tracked set that cannot be listed) is the eval's own staging failing.
+      if (e instanceof UsageError) throw e;
+      throw new EvalStagingError(`arm ${spec.label}: snapshot failed: ${(e as Error).message}`);
+    }
+  });
+  for (const s of snaps)
+    say(
+      `[eval] arm ${s.spec.label}: ${s.source} → ${s.fileCount} file(s)${s.untrackedExcluded ? `, ${s.untrackedExcluded} untracked excluded` : ""}`,
+    );
+
+  // Which skill's invocation the reps record: one derivation per arm, and the arms must agree.
+  // Not a refusal: a plugin with several skills (and no --skill), or a skill the arms name differently,
+  // only makes the per-rep invocation fact unobservable. It never affects a row.
+  const skillNames = snaps.map((s) => {
+    try {
+      return gradedSkillNameFor(args.skill, resolveCritiquedSkillDir(s.dir, args.skill));
+    } catch {
+      return undefined;
+    }
+  });
+  const skill = skillNames[0] !== undefined && skillNames[0] === skillNames[1] ? skillNames[0] : null;
+  if (skill === null)
+    say(
+      `[eval] no single skill to record invocation for (${args.skill ? `--skill ${args.skill} is not in both arms` : "pass --skill <name> to pick one"}): the per-rep invocation fact is unobservable`,
+    );
+
+  // Answer-key guard — before the signatures, whose walk would otherwise warn about the very links it refuses.
+  const evalFiles = [...new Set(scenarios.flatMap((s) => [resolve(s.file), s.sessionFile]))];
+  const findings = answerKeyFindings(
+    evalFiles,
+    snaps.map((s) => ({ label: s.spec.label, snapshotDir: s.dir, ...(s.sourceDir ? { sourceDir: s.sourceDir } : {}) })),
+  );
+  if (findings.length)
+    throw new UsageError(
+      `answer-key guard: an arm could let the agent read this eval's own scenarios or evals — ` +
+        findings.map((f) => `arm ${f.arm}: ${tildeify(f.file)} (${f.reason.replace(/_/g, " ")})`).join("; ") +
+        `. To fix: ${[...new Set(findings.map((f) => ANSWER_KEY_ADVICE[f.reason]))].join("; ")}.`,
+    );
+
+  // Per arm x scenario: the substituted session, its signature from the SAME fingerprint call a rep makes,
+  // and the staging preflight over the substituted session.
+  const sessions = new Map<string, SessionConfig>();
+  const sigs: Array<Record<string, string>> = [{}, {}];
+  for (const [ai, snap] of snaps.entries()) {
+    for (const [si, s] of scenarios.entries()) {
+      const baseline = loadBaseline(s.scenario.baseline);
+      let sub: SessionConfig;
+      try {
+        sub = applySessionOverrides(s.session, {
+          model: agentPins[si].model,
+          skillDirSubstitution: [s.session.plugins.local_plugins[0], snap.dir],
+        });
+      } catch (e) {
+        throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
+      }
+      sessions.set(`${snap.spec.label}\0${s.scenario.name}`, sub);
+      const sig = buildFingerprint(s.scenario.session, baseline.appVersion, undefined, s.scenario.skills, baseline, sub).contentSig;
+      if (sig === undefined)
+        throw new UsageError(
+          `arm ${snap.spec.label}, scenario "${s.scenario.name}": the snapshot hashes to nothing (no files the fingerprint covers)`,
+        );
+      sigs[ai][s.scenario.name] = sig;
+      try {
+        // The same input checks a run makes before its run dir exists — the tier-vacuous refusal and every
+        // input path — over the SUBSTITUTED session, so a bad input refuses the eval instead of failing
+        // every job.
+        const f = scenarioInputFindings(s.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
+        const refusal = f.session ?? f.vacuity ?? f.inputs;
+        if (refusal) throw refusal;
+        // semantic_pairwise references: the same gate executeScenario applies before a run dir exists, run here
+        // once per arm × scenario so a missing or damaged reference refuses the eval (exit 2) instead of failing
+        // every job. Mount roots come from the SUBSTITUTED session the jobs will run.
+        const pw = pairwiseRefsRefusal(s.scenario, scenarioPairwiseSetup(s.scenario), sessionOriginSources(sub, "(inline)"));
+        if (pw) throw new UsageError(pw);
+      } catch (e) {
+        if (e instanceof BoundaryError)
+          throw new EvalStagingError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
+        if (e instanceof UsageError) throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${e.message}`);
+        throw e;
+      }
+    }
+  }
+  const identical = scenarios.every((s) => sigs[0][s.scenario.name] === sigs[1][s.scenario.name]);
+  if (identical && !args.allowIdenticalArms)
+    throw new UsageError(
+      `the two arms are identical (same content signature) — nothing to compare. Pass --allow-identical-arms for an A/A noise run.`,
+    );
+
+  // The plan: computed here — it needs arm A's signatures and the pins — and BEFORE every later refusal, so
+  // a refusal below still carries the numbers. One index read feeds both the plan and the budget gate, so
+  // the plan's gate figure and the gate's own estimate come from the same rows.
+  const wantPlan = mode === "plan" || args.maxBudgetUsd !== undefined;
+  const indexRows = wantPlan ? (deps.readIndex?.() ?? readIndex(runsRoot())) : [];
+  const runsDir = deps.runsDirInfo?.() ?? runsDirInfo();
+  // A real eval needs only the cost (for its budget gate): it never reads the kept result.json files.
+  const plan = wantPlan ? buildPlan(args, ctx, sigs[0], indexRows, runsDir, mode === "run") : undefined;
+  if (plan) {
+    deps.onPlan?.(plan);
+    if (mode === "run") {
+      say(`[eval] cost at --reps ${args.reps}: ${scheduleCostLine(plan.cost)}${plan.cost.lowerBound ? noHistoryCauseText(runsDir) : ""}`);
+      say(
+        `[eval] judge: p50 $${plan.cost.judgeP50Usd.toFixed(4)} for this schedule — NOT covered by --max-budget-usd, which counts the agent's cost only`,
+      );
+    }
+  }
+
+  // `--fail-on confirmed` must be able to fire.
+  const floor = attainableFloor(args.reps, args.reps);
+  const opts = { correction: args.correction, q: BH_Q, alpha: args.alpha };
+  const familySize = (held: boolean) =>
+    scenarios
+      .filter((s) => s.heldOut === held)
+      .reduce((n, s) => n + scenarioRows(s.scenario.name, s.scenario.assert ?? []).filter((r) => r.kind !== "semantic_rollup").length, 0);
+  const sectionReach = [false, true]
+    .map((held) => ({ held, m: familySize(held) }))
+    .filter((x) => x.m > 0)
+    .map((x) => ({ ...x, j: minRowsToConfirm(floor, x.m, opts) }));
+  // A dry run's plan prints the same line beside its sequential preview; the real eval prints it here.
+  if (mode === "run")
+    for (const x of sectionReach)
+      say(
+        `[eval] ${x.held ? "held-out" : "tuned"} section: ${x.m} row(s) in the family; at --reps ${args.reps} ` +
+          (x.j === null
+            ? "`confirmed` is unreachable"
+            : x.j === 1
+              ? "one collapsed row can reach `confirmed`"
+              : `\`confirmed\` needs >= ${x.j} collapsed rows — a single regression cannot reach it (it can still be 'possible')`),
+      );
+  if (args.failOn === "confirmed" && sectionReach.every((x) => x.j === null))
+    throw new UsageError(
+      `--fail-on confirmed can never fire at --reps ${args.reps} with ${sectionReach.map((x) => x.m).join("/")} row(s) under ${args.correction}: raise --reps, or use --fail-on possible`,
+    );
+
+  // Credentials: doctor's own token check for every tier the scenarios run at, before the manifest (so a
+  // refusal leaves no eval dir) and before any spend. Without it an eval with no usable credential runs
+  // every rep to "Not logged in" — each one a zero-cost error the agent reports like any other.
+  const byTier = new Map<FidelityTier, string[]>();
+  for (const s of scenarios) byTier.set(s.scenario.fidelity, [...(byTier.get(s.scenario.fidelity) ?? []), s.scenario.name]);
+  for (const [tier, names] of byTier) {
+    const c = deps.tokenCheck(tier);
+    if (c.status === "fail")
+      throw new UsageError(
+        `no usable agent credential for fidelity ${tier} (scenario${names.length > 1 ? "s" : ""} ${names.join(", ")}): ${c.detail}` +
+          (c.remedy ? `. Fix: ${c.remedy}` : "") +
+          ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
+        c.remedy,
+      );
+  }
+
+  // The judge and the LLM decider run the host `claude` isolated and tool-less, which needs a CLI that accepts the
+  // isolation flags: an older one refuses the eval here, once, instead of failing every rep after its agent spend.
+  // A decider channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
+  const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
+  if (
+    scenarios.some(
+      (s) =>
+        (llmDecider && s.scenario.on_unanswered === "llm") ||
+        s.scenario.assert.some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined),
+    )
+  ) {
+    const iso = deps.isolationCheck();
+    if (iso) throw new UsageError(iso);
+  }
+
+  // `--max-budget-usd`: the batch gate `record` uses, over this schedule (2 x reps runs of every scenario).
+  if (args.maxBudgetUsd !== undefined) budgetGate(args, deps, indexRows, runsDir, plan!);
+
+  return { snaps, sessions, sigs, skill, evalFiles, ...(plan ? { plan } : {}) };
+}
+
+/** The eval's `--max-budget-usd` pre-flight. Same decision as `record`'s batch gate (`checkBatchBudget`: the
+ *  sum of each scenario's worst observed run times its jobs, strict `>`), same marker and `error.code`, but
+ *  it throws instead of exiting, and its wording names the eval's own basis. */
+function budgetGate(
+  args: EvalArgs,
+  deps: EvalDeps,
+  indexRows: readonly RunIndexRow[],
+  runsDir: { runsDir: string; runsDirRedirected: boolean },
+  plan: EvalPlan,
+): void {
+  const cap = args.maxBudgetUsd!;
+  // The schedule's jobs come from the plan, the one place they are computed, so the gate's estimate and
+  // `plan.cost` can never count a different schedule.
+  const items = plan.cost.items.map((i) => ({ scenario: i.scenario, jobs: i.jobs }));
+  const c = checkBatchBudget(items, cap, { rows: indexRows, runsDir });
+  // Recorded BEFORE any refusal, so the `budget` key is on the refusal's envelope too.
+  recordBudgetStatus(c.status);
+  if (c.noHistoryWarning !== undefined) deps.log(c.noHistoryWarning + noHistoryCauseText(runsDir));
+  const basis =
+    `${plan.cost.jobs} run(s) (2 arms × ${args.reps} reps × ${items.length} scenario(s)), each scenario at its worst observed run on ` +
+    `a wider basis than the plan's worstObservedUsd (any tier, baseline or turn, hillclimb runs included), so it can be larger — `;
+  const usd = (x: number) => `$${x.toFixed(4)}`;
+  if (c.refuse)
+    throw new EvalBudgetRefusal(
+      `--max-budget-usd ${usd(cap)} refused before any run: this eval schedules ${basis}up to ${usd(c.estimate.known)} ` +
+        `(plan.cost.budgetGateWorstUsd in the JSON envelope)${c.status.enforced === "lower_bound" ? `, and that is a LOWER BOUND: ${c.status.unpriced.length} scenario(s) have no priced run` : ""}.`,
+      `Raise the cap, lower --reps, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history: the eval is never stopped mid-way, and judge spend is not counted.`,
+      c.status,
+      plan,
+    );
+  deps.log(
+    `::notice:: --max-budget-usd ${usd(cap)}: the gate's estimate is ${basis}${usd(c.estimate.known)}` +
+      (c.status.enforced === "lower_bound" ? ` — a LOWER BOUND (${c.status.unpriced.length} scenario(s) contribute $0)` : ""),
+  );
+}
+
+/** The rate history of a cost-only plan: nothing read, every row unknown. */
+function noRates(): RowHistoryLoad {
+  const zero = { notRun: 0, command: 0, tier: 0, baseline: 0, turn: 0, hillclimb: 0, ablated: 0, model: 0, pruned: 0, unreadable: 0 };
+  return {
+    rows: [],
+    basis: "relaxed",
+    reps: 0,
+    validReps: 0,
+    exactContentReps: 0,
+    evalReps: 0,
+    excludedByKey: zero,
+    modelsExcluded: {},
+    judgeModelDiffers: 0,
+    verdictRate: { pass: 0, runs: 0, basis: "index" },
+    reads: 0,
+    readCapHit: false,
+  };
+}
+
+/** The plan over the history the loaders select, for every scenario at its effective tier and baseline. */
+function buildPlan(
+  args: EvalArgs,
+  ctx: EvalContext,
+  armASigs: Record<string, string>,
+  indexRows: readonly RunIndexRow[],
+  runsDir: { runsDir: string; runsDirRedirected: boolean },
+  costOnly: boolean,
+): EvalPlan {
+  const scenarios: PlanScenarioInput[] = ctx.scenarios.map((s, si) => {
+    const name = s.scenario.name;
+    const baseline = loadBaseline(s.scenario.baseline);
+    // The tier history recorded: `cowork` resolves to a concrete tier, which is what `effectiveFidelity` holds.
+    const filters = { scenario: name, baseline: baseline.appVersion, tier: effectiveTier(s.scenario.fidelity, baseline) };
+    const assertions = s.scenario.assert ?? [];
+    const judgeModelPins = new Map(ctx.judgePins.resolved.filter((p) => p.scenario === name).map((p) => [p.assertionIndex, p.model]));
+    return {
+      name,
+      heldOut: s.heldOut,
+      tier: filters.tier,
+      baseline: filters.baseline,
+      agentPin: ctx.agentPins[si].model,
+      rows: scenarioRows(name, assertions),
+      cost: loadCostHistory(indexRows, filters),
+      rates: costOnly
+        ? noRates()
+        : loadRowHistory(indexRows, {
+            ...filters,
+            assertions,
+            agentPin: ctx.agentPins[si].model,
+            armASig: armASigs[name],
+            judgePromptHash: ctx.judgePins.promptHash,
+            judgeModelPins,
+          }),
+    };
+  });
+  return planEval({
+    reps: args.reps,
+    alpha: args.alpha,
+    correction: args.correction,
+    q: BH_Q,
+    ...(args.targetEffectPp !== undefined ? { targetEffectPp: args.targetEffectPp } : {}),
+    allowUnderpowered: args.allowUnderpowered,
+    costOnly,
+    history: { ...runsDir, indexRows: indexRows.length },
+    scenarios,
+  });
+}
+
+/** `eval --dry-run`: every check the real eval makes before its first run, then the plan — with no agent run,
+ *  no eval dir, and the arm snapshots in a temp dir that is removed whatever happens. */
+export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ plan: EvalPlan }> {
+  const ctx = resolveEvalContext(args, deps);
+  // A signal must not leave the snapshot behind. Without a handler the default action kills the process at
+  // once; with it installed, a Ctrl-C is handled only after this preparation — synchronous throughout —
+  // returns, by which time the `finally` below has removed the snapshot. (No cleanup step is registered:
+  // there is no window in which the handler could run before the `finally`.)
+  installTerminationHandler();
+  const snapRoot = mkdtempSync(join(tmpdir(), "cwh-eval-plan-"));
+  deps.onSnapshotRoot?.(snapRoot);
+  try {
+    // The snapshots must sit outside any work tree for the same reason the eval dir must (the signatures
+    // hash what a run would stage).
+    // The real eval snapshots into its eval dir, which `--out` places; the dry run's temp dir is placed by TMPDIR,
+    // so that is the remedy both refusals name.
+    let inside: boolean;
+    try {
+      inside = isInsideGitWorkTree(snapRoot);
+    } catch (e) {
+      throw new EvalStagingError(
+        `could not tell whether the temp dir ${tildeify(snapRoot)} is inside a git work tree (${(e as Error).message.replace(/^could not tell whether .*? is inside a git work tree \((.*?)\);.*$/s, "$1")}): set TMPDIR to a directory git can answer for, outside any work tree`,
+      );
+    }
+    if (inside)
+      throw new EvalStagingError(
+        `the temp dir ${tildeify(snapRoot)} is inside a git work tree, where the arm snapshots would hash as empty: set TMPDIR to a directory outside any git work tree`,
+      );
+    const prep = prepareArms(args, deps, ctx, snapRoot, "plan");
+    return { plan: prep.plan! };
+  } finally {
+    rmSync(snapRoot, { recursive: true, force: true });
+  }
+}
+
+/** Everything before the first run, then the schedule, then the report. */
+export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutcome> {
+  if (args.dryRun) throw new Error("runEval does not take a dry run: call planEvalDryRun");
+  const ctx = resolveEvalContext(args, deps);
+  const { now, scenarios, agentPins, judgePins, evalId, evalDir, say } = ctx;
   // Created now, or an existing EMPTY dir: either way, a refusal before the manifest removes what we made.
   const createdDir = !existsSync(evalDir);
   mkdirSync(evalDir, { recursive: true });
@@ -395,170 +824,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   }
 
   async function afterEvalDir(): Promise<EvalOutcome> {
-    // Snapshots.
-    // Every scenario declares the same plugin dir (checked by realpath); each is substituted by its OWN
-    // spelling. The snapshot takes the declared final directory name, which is the mount name the
-    // scenarios' assertions see — so every spelling must end in the same name.
-    const bases = [...new Set(scenarios.map((s) => basename(expandHome(s.session.plugins.local_plugins[0]))))];
-    if (bases.length > 1)
-      throw new UsageError(
-        `the scenarios declare the plugin under different final directory names (${bases.join(", ")}); the mount name comes from that name, so declare it the same way in every session`,
-      );
-    const base = bases[0];
-    const snaps: Array<SnapshotInfo & { spec: ArmSpec }> = specs.map((spec) => {
-      const dest = join(evalDir, "arms", spec.label, base);
-      try {
-        if (spec.source.kind === "dir") {
-          const info = snapshotDirArm(resolve(cwd, spec.source.path), dest, args.includeUntracked, spec.raw);
-          return { ...info, spec };
-        }
-        const info = snapshotGitArm(spec.source, dest, cwd, spec.raw);
-        return { ...info, spec };
-      } catch (e) {
-        // A refusal about the source is usage; anything else (an unreadable file, a full disk, a git that
-        // failed mid-extraction, a tracked set that cannot be listed) is the eval's own staging failing.
-        if (e instanceof UsageError) throw e;
-        throw new EvalStagingError(`arm ${spec.label}: snapshot failed: ${(e as Error).message}`);
-      }
-    });
-    for (const s of snaps)
-      say(
-        `[eval] arm ${s.spec.label}: ${s.source} → ${s.fileCount} file(s)${s.untrackedExcluded ? `, ${s.untrackedExcluded} untracked excluded` : ""}`,
-      );
-
-    // Which skill's invocation the reps record: one derivation per arm, and the arms must agree.
-    // Not a refusal: a plugin with several skills (and no --skill), or a skill the arms name differently,
-    // only makes the per-rep invocation fact unobservable. It never affects a row.
-    const skillNames = snaps.map((s) => {
-      try {
-        return gradedSkillNameFor(args.skill, resolveCritiquedSkillDir(s.dir, args.skill));
-      } catch {
-        return undefined;
-      }
-    });
-    const skill = skillNames[0] !== undefined && skillNames[0] === skillNames[1] ? skillNames[0] : null;
-    if (skill === null)
-      say(
-        `[eval] no single skill to record invocation for (${args.skill ? `--skill ${args.skill} is not in both arms` : "pass --skill <name> to pick one"}): the per-rep invocation fact is unobservable`,
-      );
-
-    // Answer-key guard — before the signatures, whose walk would otherwise warn about the very links it refuses.
-    const evalFiles = [...new Set(scenarios.flatMap((s) => [resolve(s.file), s.sessionFile]))];
-    const findings = answerKeyFindings(
-      evalFiles,
-      snaps.map((s) => ({ label: s.spec.label, snapshotDir: s.dir, ...(s.sourceDir ? { sourceDir: s.sourceDir } : {}) })),
-    );
-    if (findings.length)
-      throw new UsageError(
-        `answer-key guard: an arm could let the agent read this eval's own scenarios or evals — ` +
-          findings.map((f) => `arm ${f.arm}: ${tildeify(f.file)} (${f.reason.replace(/_/g, " ")})`).join("; ") +
-          `. To fix: ${[...new Set(findings.map((f) => ANSWER_KEY_ADVICE[f.reason]))].join("; ")}.`,
-      );
-
-    // Per arm x scenario: the substituted session, its signature from the SAME fingerprint call a rep makes,
-    // and the staging preflight over the substituted session.
-    const sessions = new Map<string, SessionConfig>();
-    const sigs: Array<Record<string, string>> = [{}, {}];
-    for (const [ai, snap] of snaps.entries()) {
-      for (const [si, s] of scenarios.entries()) {
-        const baseline = loadBaseline(s.scenario.baseline);
-        let sub: SessionConfig;
-        try {
-          sub = applySessionOverrides(s.session, {
-            model: agentPins[si].model,
-            skillDirSubstitution: [s.session.plugins.local_plugins[0], snap.dir],
-          });
-        } catch (e) {
-          throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
-        }
-        sessions.set(`${snap.spec.label}\0${s.scenario.name}`, sub);
-        const sig = buildFingerprint(s.scenario.session, baseline.appVersion, undefined, s.scenario.skills, baseline, sub).contentSig;
-        if (sig === undefined)
-          throw new UsageError(
-            `arm ${snap.spec.label}, scenario "${s.scenario.name}": the snapshot hashes to nothing (no files the fingerprint covers)`,
-          );
-        sigs[ai][s.scenario.name] = sig;
-        try {
-          // The same input checks a run makes before its run dir exists — the tier-vacuous refusal and every
-          // input path — over the SUBSTITUTED session, so a bad input refuses the eval instead of failing
-          // every job.
-          const f = scenarioInputFindings(s.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
-          const refusal = f.session ?? f.vacuity ?? f.inputs;
-          if (refusal) throw refusal;
-          // semantic_pairwise references: the same gate executeScenario applies before a run dir exists, run here
-          // once per arm × scenario so a missing or damaged reference refuses the eval (exit 2) instead of failing
-          // every job. Mount roots come from the SUBSTITUTED session the jobs will run.
-          const pw = pairwiseRefsRefusal(s.scenario, scenarioPairwiseSetup(s.scenario), sessionOriginSources(sub, "(inline)"));
-          if (pw) throw new UsageError(pw);
-        } catch (e) {
-          if (e instanceof BoundaryError)
-            throw new EvalStagingError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
-          if (e instanceof UsageError) throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${e.message}`);
-          throw e;
-        }
-      }
-    }
-    const identical = scenarios.every((s) => sigs[0][s.scenario.name] === sigs[1][s.scenario.name]);
-    if (identical && !args.allowIdenticalArms)
-      throw new UsageError(
-        `the two arms are identical (same content signature) — nothing to compare. Pass --allow-identical-arms for an A/A noise run.`,
-      );
-
-    // `--fail-on confirmed` must be able to fire.
-    const floor = attainableFloor(args.reps, args.reps);
-    const opts = { correction: args.correction, q: BH_Q, alpha: args.alpha };
-    const familySize = (held: boolean) =>
-      scenarios
-        .filter((s) => s.heldOut === held)
-        .reduce((n, s) => n + scenarioRows(s.scenario.name, s.scenario.assert ?? []).filter((r) => r.kind !== "semantic_rollup").length, 0);
-    const sectionReach = [false, true]
-      .map((held) => ({ held, m: familySize(held) }))
-      .filter((x) => x.m > 0)
-      .map((x) => ({ ...x, j: minRowsToConfirm(floor, x.m, opts) }));
-    for (const x of sectionReach)
-      say(
-        `[eval] ${x.held ? "held-out" : "tuned"} section: ${x.m} row(s) in the family; at --reps ${args.reps} ` +
-          (x.j === null
-            ? "`confirmed` is unreachable"
-            : x.j === 1
-              ? "one collapsed row can reach `confirmed`"
-              : `\`confirmed\` needs >= ${x.j} collapsed rows — a single regression cannot reach it (it can still be 'possible')`),
-      );
-    if (args.failOn === "confirmed" && sectionReach.every((x) => x.j === null))
-      throw new UsageError(
-        `--fail-on confirmed can never fire at --reps ${args.reps} with ${sectionReach.map((x) => x.m).join("/")} row(s) under ${args.correction}: raise --reps, or use --fail-on possible`,
-      );
-
-    // Credentials: doctor's own token check for every tier the scenarios run at, before the manifest (so a
-    // refusal leaves no eval dir) and before any spend. Without it an eval with no usable credential runs
-    // every rep to "Not logged in" — each one a zero-cost error the agent reports like any other.
-    const byTier = new Map<FidelityTier, string[]>();
-    for (const s of scenarios) byTier.set(s.scenario.fidelity, [...(byTier.get(s.scenario.fidelity) ?? []), s.scenario.name]);
-    for (const [tier, names] of byTier) {
-      const c = deps.tokenCheck(tier);
-      if (c.status === "fail")
-        throw new UsageError(
-          `no usable agent credential for fidelity ${tier} (scenario${names.length > 1 ? "s" : ""} ${names.join(", ")}): ${c.detail}` +
-            (c.remedy ? `. Fix: ${c.remedy}` : "") +
-            ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
-          c.remedy,
-        );
-    }
-
-    // The judge and the LLM decider run the host `claude` isolated and tool-less, which needs a CLI that accepts the
-    // isolation flags: an older one refuses the eval here, once, instead of failing every rep after its agent spend.
-    // A decider channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
-    const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
-    if (
-      scenarios.some(
-        (s) =>
-          (llmDecider && s.scenario.on_unanswered === "llm") ||
-          s.scenario.assert.some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined),
-      )
-    ) {
-      const iso = deps.isolationCheck();
-      if (iso) throw new UsageError(iso);
-    }
+    const { snaps, sessions, sigs, skill, evalFiles } = prepareArms(args, deps, ctx, evalDir, "run");
 
     // Manifest.
     const manifestScenarios: ManifestScenario[] = scenarios.map((s) => ({

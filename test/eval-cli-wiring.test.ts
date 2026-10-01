@@ -6,10 +6,13 @@
 // model reach executeScenario (the in-process tests use a fake runner and never cross that seam), and the
 // model pin is checked by deriveModelProvenance over what the agent reported, not by a flag a test set.
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { CLI, POSIX, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
 import { jobRunId } from "../src/eval/schedule.js";
+import { appendIndexRow, type RunIndexRow } from "../src/run/run-index.js";
+import { loadBaseline } from "../src/baseline.js";
 
 const can = POSIX && existsSync(CLI);
 
@@ -192,6 +195,319 @@ describe.runIf(can)("eval through the real job wiring (stub agent)", () => {
       expect(env.error.message).toMatch(/doctor --tier hostloop/);
       expect(existsSync(r.out)).toBe(false);
       expect(existsSync(f.stubPidFile)).toBe(false); // the agent was never started
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+});
+
+// `eval --dry-run` and `--max-budget-usd` through the real CLI: the stub agent is on PATH, and the tests assert
+// it was never started (no pid file, no argv log) — the dry run spawns no agent and no decider channel.
+async function dryRun(f: StubFixture, extra: string[]) {
+  const out = join(f.root, "eval");
+  const cli = spawnCli(f, ["eval", "q.yaml", "--arm", "a=./a/demo", "--arm", "b=./b/demo", "--reps", "4", "--out", out, ...extra]);
+  const r = await exited(cli, 120_000);
+  return { ...r, out, stdout: cli.stdoutText(), stderr: cli.stderrText() };
+}
+
+/** A priced history run of scenario q, on its tier and baseline, in the fixture's runs root (index only). */
+function pricedHistory(f: StubFixture, costUsd: number, i: number): void {
+  const row: RunIndexRow = {
+    v: 1,
+    ts: `2026-09-${String(10 + i).padStart(2, "0")}T00:00:00.000Z`,
+    command: "run",
+    scenario: "q",
+    slug: "q",
+    runId: `local_hist${i}`,
+    fidelity: "protocol",
+    effectiveFidelity: "protocol",
+    baseline: loadBaseline("latest").appVersion,
+    result: "success",
+    pass: true,
+    signals: [],
+    costUsd,
+    turn: 1,
+    partial: false,
+    nonDeterministic: false,
+    outDir: join(f.runsDir, "q", `local_hist${i}`),
+    git: { branch: null, sha: null },
+  };
+  appendIndexRow(f.runsDir, row);
+}
+
+const COVERED_COST_KEYS = ["jobs", "meanUsd", "p50Usd", "p95Usd", "worstObservedUsd", "lowerBound", "unpriced", "pricedRuns", "thinnest"];
+
+describe.runIf(can)("eval --dry-run through the real CLI (stub agent never started)", () => {
+  const fixture = () => {
+    const f = makeStubFixture(STUB, { STUB_ARGV_LOG: "" });
+    f.env.STUB_ARGV_LOG = join(f.root, "argv.log");
+    f.env.CLAUDE_CODE_OAUTH_TOKEN = FAKE_TOKEN;
+    setup(f);
+    return f;
+  };
+  const neverStarted = (f: StubFixture) => {
+    expect(existsSync(f.stubPidFile)).toBe(false);
+    expect(existsSync(f.env.STUB_ARGV_LOG!)).toBe(false);
+  };
+
+  it("exit 0 with the plan payload; no agent, no eval dir", async () => {
+    const f = fixture();
+    try {
+      pricedHistory(f, 0.5, 1);
+      pricedHistory(f, 1, 2);
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.code, r.stderr).toBe(0);
+      const env = JSON.parse(r.stdout);
+      expect(env).toMatchObject({ command: "eval", ok: true, dryRun: true, error: null });
+      expect(env.evalDir).toBeUndefined();
+      expect(env.budget).toBeUndefined(); // no cap given
+      for (const k of COVERED_COST_KEYS) expect(env.plan.cost, k).toHaveProperty(k);
+      expect(env.plan.cost).toMatchObject({ jobs: 8, p50Usd: 8, worstObservedUsd: 8, pricedRuns: 2, lowerBound: false });
+      expect(existsSync(r.out)).toBe(false);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("text mode prints the plan and the caveat on stderr, and nothing on stdout", async () => {
+    const f = fixture();
+    try {
+      const r = await dryRun(f, ["--dry-run", "--target-effect", "30pp"]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toMatch(/DRY RUN/);
+      expect(r.stderr).toMatch(/LOWER BOUND/);
+      expect(r.stderr).toMatch(/Detectable = an observed difference this large reaches p ≤ alpha/);
+      // No history in this runs root: every row is unknown, so the plan shows the rate-free best case only.
+      expect(r.stderr).toMatch(/rate unknown · best case at --reps 4/);
+      expect(r.stderr).toMatch(/sequential, tuned section/);
+      expect(r.stderr).toMatch(/fixed design \(what eval runs today\), tuned section/);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("--decider-cmd is never spawned and --decider-dir never created under --dry-run", async () => {
+    const f = fixture();
+    try {
+      const marker = join(f.root, "decider-ran");
+      const a = await dryRun(f, ["--dry-run", "--concurrency", "1", "--decider-cmd", `touch ${marker}`]);
+      expect(a.code, a.stderr).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      const dir = join(f.root, "decider-dir");
+      const b = await dryRun(f, ["--dry-run", "--concurrency", "1", "--decider-dir", dir]);
+      expect(b.code, b.stderr).toBe(0);
+      expect(existsSync(dir)).toBe(false);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("a fresh run dir: the budget marker says lower_bound / no_history / redirected, and stderr names the cause", async () => {
+    const f = fixture();
+    try {
+      const fresh = join(f.root, "fresh-runs");
+      const r = await dryRun(f, ["--dry-run", "--max-budget-usd", "5", "--output-format", "json", "--run-dir", fresh]);
+      expect(r.code, r.stderr).toBe(0);
+      const env = JSON.parse(r.stdout);
+      expect(env.budget).toMatchObject({ enforced: "lower_bound", reason: "no_history", runsDirRedirected: true, basis: "batch" });
+      expect(env.plan.cost.lowerBound).toBe(true);
+      expect(env.plan.scenarios[0].rows.every((x: { rate: unknown }) => x.rate === "unknown")).toBe(true);
+      expect(r.stderr).toMatch(/--run-dir \/ COWORK_HARNESS_RUNS_DIR/);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("over the cap: exit 2, budget_exceeded, the marker and the plan on the error envelope — dry run and real run alike", async () => {
+    const f = fixture();
+    try {
+      pricedHistory(f, 1, 1); // worst $1 x 8 jobs = $8
+      const d = await dryRun(f, ["--dry-run", "--max-budget-usd", "7", "--output-format", "json"]);
+      expect(d.code, d.stderr).toBe(2);
+      const env = JSON.parse(d.stdout);
+      expect(env).toMatchObject({ ok: false, dryRun: true });
+      expect(env.error).toMatchObject({
+        category: "runtime",
+        code: "budget_exceeded",
+        budget: { basis: "batch", estimateUsd: 8, capUsd: 7 },
+      });
+      expect(env.budget).toMatchObject({ estimateUsd: 8, enforced: true });
+      expect(env.plan.cost.budgetGateWorstUsd).toBe(8);
+      // A cap equal to the estimate proceeds.
+      const eq = await dryRun(f, ["--dry-run", "--max-budget-usd", "8", "--output-format", "json"]);
+      expect(eq.code, eq.stderr).toBe(0);
+      // The real eval refuses identically, before any run, and leaves no eval dir.
+      const real = await dryRun(f, ["--max-budget-usd", "7", "--output-format", "json"]);
+      expect(real.code, real.stderr).toBe(2);
+      const renv = JSON.parse(real.stdout);
+      expect(renv.error).toMatchObject({ code: "budget_exceeded", budget: { estimateUsd: 8 } });
+      expect(renv.dryRun).toBeUndefined();
+      expect(existsSync(real.out)).toBe(false);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("every dry-run refusal says dryRun: true, with or without a plan (identical arms: before any plan)", async () => {
+    const f = fixture();
+    try {
+      const cli = spawnCli(f, [
+        "eval",
+        "q.yaml",
+        "--arm",
+        "a=./a/demo",
+        "--arm",
+        "b=./a/demo",
+        "--out",
+        join(f.root, "eval"),
+        "--dry-run",
+        "--output-format",
+        "json",
+      ]);
+      const r = await exited(cli, 120_000);
+      expect(r.code, cli.stderrText()).toBe(2);
+      const env = JSON.parse(cli.stdoutText());
+      expect(env).toMatchObject({ ok: false, dryRun: true, error: { category: "usage" } });
+      expect(env.error.message).toMatch(/the two arms are identical/);
+      expect(env.plan).toBeUndefined();
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("a refusal after the plan carries plan + dryRun in JSON, and in text prints the plan before the refusal", async () => {
+    const f = fixture();
+    try {
+      // q has 2 rows in the family; at --reps 4 holm cannot confirm (floor 0.0286 > 0.05/2).
+      const unreachable = ["--dry-run", "--correction", "holm", "--fail-on", "confirmed"];
+      const j = await dryRun(f, [...unreachable, "--output-format", "json"]);
+      expect(j.code, j.stderr).toBe(2);
+      const env = JSON.parse(j.stdout);
+      expect(env).toMatchObject({ ok: false, dryRun: true, error: { category: "usage" } });
+      expect(env.error.message).toMatch(/can never fire/);
+      expect(env.plan.cost).toHaveProperty("jobs", 8);
+      const t = await dryRun(f, unreachable);
+      expect(t.code).toBe(2);
+      const planAt = t.stderr.indexOf("[eval] DRY RUN");
+      expect(planAt).toBeGreaterThanOrEqual(0);
+      expect(t.stderr.indexOf("can never fire")).toBeGreaterThan(planAt);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("an argument error carries no plan", async () => {
+    const f = fixture();
+    try {
+      const r = await dryRun(f, ["--dry-run", "--reps", "1", "--output-format", "json"]);
+      expect(r.code).toBe(2);
+      const env = JSON.parse(r.stdout);
+      expect(env.error.category).toBe("usage");
+      expect(env.plan).toBeUndefined();
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("without --out, the default eval dir is never created", async () => {
+    const f = fixture();
+    try {
+      const cli = spawnCli(f, [
+        "eval",
+        "q.yaml",
+        "--arm",
+        "a=./a/demo",
+        "--arm",
+        "b=./b/demo",
+        "--reps",
+        "4",
+        "--dry-run",
+        "--output-format",
+        "json",
+      ]);
+      const r = await exited(cli, 120_000);
+      expect(r.code, cli.stderrText()).toBe(0);
+      expect(existsSync(join(f.env.HOME!, ".cowork-harness", "evals"))).toBe(false);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("a Ctrl-C that also kills a git the dry run is waiting on exits 130, not a misleading staging error", async () => {
+    const f = fixture();
+    try {
+      // A git shim ahead of the real one on PATH: when asked about the dry run's temp dir, it does what a
+      // terminal Ctrl-C does to the whole foreground group — signal the harness — and dies itself. Every other
+      // call goes to the real git.
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(
+        join(f.root, "bin", "git"),
+        `#!/bin/sh\ncase "$*" in *cwh-eval-plan-*) kill -INT $PPID; exit 130;; esac\nexec ${realGit} "$@"\n`,
+      );
+      chmodSync(join(f.root, "bin", "git"), 0o755);
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.signal, r.stderr).toBeNull();
+      expect(r.code, r.stderr + r.stdout).toBe(130);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("a host claude too old to run the judge isolated refuses the dry run (exit 2, dryRun + plan), as it refuses the eval", async () => {
+    const f = fixture();
+    try {
+      // The judge's transport probes `claude --help` for its isolation flags: this one lists none.
+      writeFileSync(
+        join(f.root, "bin", "claude"),
+        `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.1.100 (Claude Code)"; exit 0; fi\nif [ "$1" = "--help" ]; then exit 0; fi\necho $$ > "$STUB_PID"\nexit 1\n`,
+      );
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.code, r.stderr).toBe(2);
+      const env = JSON.parse(r.stdout);
+      expect(env).toMatchObject({ ok: false, dryRun: true, error: { category: "usage" } });
+      expect(env.plan.cost).toHaveProperty("jobs", 8);
+      expect(existsSync(f.stubPidFile)).toBe(false);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("a Ctrl-C queued during a dry run that otherwise succeeds exits 130, not 0", async () => {
+    const f = fixture();
+    try {
+      // The shim signals the harness when asked about the temp dir, then answers like the real git: the dry
+      // run succeeds, with a Ctrl-C waiting.
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(join(f.root, "bin", "git"), `#!/bin/sh\ncase "$*" in *cwh-eval-plan-*) kill -INT $PPID;; esac\nexec ${realGit} "$@"\n`);
+      chmodSync(join(f.root, "bin", "git"), 0o755);
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.signal, r.stderr).toBeNull();
+      expect(r.code, r.stderr + r.stdout).toBe(130);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("--target-effect without --dry-run is a usage error (exit 2)", async () => {
+    const f = fixture();
+    try {
+      const r = await dryRun(f, ["--target-effect", "30pp", "--output-format", "json"]);
+      expect(r.code).toBe(2);
+      expect(JSON.parse(r.stdout).error).toMatchObject({ category: "usage" });
+      expect(JSON.parse(r.stdout).error.message).toMatch(/requires --dry-run/);
+      neverStarted(f);
     } finally {
       f.cleanup();
     }

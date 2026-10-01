@@ -19,7 +19,8 @@ export interface BudgetStatus {
   capUsd: number;
   /** `single`: the cap was compared against each scenario's OWN worst observed cost (`run`, `skill`, a
    *  single-file `record`, and each scenario of `run <dir/>`). `batch`: against the SUM over a `record`
-   *  batch (`record <dir/>`, `record --rerecord-stale`). */
+   *  batch (`record <dir/>`, `record --rerecord-stale`), or over an eval's schedule (each scenario's worst
+   *  observed cost times its 2 x reps runs; `eval` and `eval --dry-run`). */
   basis: "single" | "batch";
   /** `true`: every scenario had priced history, so the pre-flight compared a real estimate to the cap.
    *  `false` (`single` basis only): at least one scenario had none and ran with NO cap — `unpriced[]` names

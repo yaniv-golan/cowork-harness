@@ -12,7 +12,7 @@ import type { Assertion } from "../types.js";
 import { isLiveModelId } from "../types.js";
 import { isRun, scenarioCostHistory, tierOf, type RunIndexRow } from "../run/run-index.js";
 import { turnArtifactPath } from "../run/turn-layout.js";
-import { deriveModelProvenance } from "../run/model-provenance.js";
+import { deriveModelProvenance, normalizeModelId } from "../run/model-provenance.js";
 import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult, type RowKey } from "./classify.js";
 import { EXACT_CONTENT_MIN, HISTORY_WINDOW, type CostHistory, type RowHistory } from "./planner.js";
 
@@ -87,6 +87,10 @@ export interface RowHistoryOptions extends HistoryFilters {
   /** The eval's judge model pin, when one is set. A run whose semantic grade names a different `judgeModel`
    *  keeps its structural rows; only that assertion's claim and roll-up rows lose the run. */
   judgeModelPin?: string;
+  /** Per-assertion judge pins (assertion index → model), as the eval resolves them (`resolveJudgePins`): each
+   *  semantic assertion is checked against its own pin. An index present here wins over `judgeModelPin`.
+   *  Both are compared the way the eval compares judge models (`normalizeModelId`). */
+  judgeModelPins?: ReadonlyMap<number, string>;
   window?: number;
   maxReads?: number;
   maxResultBytes?: number;
@@ -192,7 +196,12 @@ function readResult(row: RunIndexRow, maxBytes: number): Loaded | "pruned" | "un
   }
 }
 
-const isSemanticRow = (row: RowKey) => row.kind === "semantic_rollup" || row.kind === "claim";
+/** A row the judge graded: every row of a `semantic_matches` assertion (its roll-up and claims) and the one row of
+ *  a `semantic_pairwise` assertion — the same set the eval's classifier holds to a judge prompt and model. */
+const judgedRow = (assertions: readonly Assertion[]) => (row: RowKey) => {
+  const a = assertions[row.assertionIndex];
+  return a?.semantic_matches !== undefined || a?.semantic_pairwise !== undefined;
+};
 
 /** One rep's value on one row; `excluded` adds the planner's own reasons to the eval's row exclusions. */
 type RowValueLike = { row: RowKey; value?: 0 | 1; excluded?: string };
@@ -291,19 +300,21 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
     let promptMismatch = false;
     if (c.bucket === "judge_prompt_mismatch") {
       // A different grading prompt cannot have affected a structural assertion: keep those rows, drop only
-      // the semantic rows of this rep. (The eval itself drops the whole rep; this is the planner's refinement.)
+      // the judged rows of this rep. (The eval itself drops the whole rep; this is the planner's refinement.)
       promptMismatch = true;
       c = classifyRep({ result: asScored }, {});
     }
+    const isSemanticRow = judgedRow(o.assertions);
     let values: RowValueLike[] = repRowValues(sRows, o.assertions, c, asScored);
     if (promptMismatch) values = values.map((v) => (isSemanticRow(v.row) ? { row: v.row, excluded: "judge_prompt_mismatch" } : v));
     // A different judge model graded this run's semantic assertion(s): those rows lose the run, the
     // structural rows keep it. An agent error is 0 on every row regardless (no grade was the judge's).
-    if (o.judgeModelPin !== undefined && c.bucket !== "errored_agent") {
+    if ((o.judgeModelPin !== undefined || o.judgeModelPins !== undefined) && c.bucket !== "errored_agent") {
       const grades = (asScored.assertions ?? []).filter((a) => a.source === undefined);
       const other = (i: number) => {
+        const pin = o.judgeModelPins?.get(i) ?? o.judgeModelPin;
         const m = (grades[i] as { judgeModel?: unknown } | undefined)?.judgeModel;
-        return typeof m === "string" && m !== o.judgeModelPin;
+        return pin !== undefined && typeof m === "string" && normalizeModelId(m) !== normalizeModelId(pin);
       };
       if (sRows.some((row) => isSemanticRow(row) && other(row.assertionIndex))) judgeModelDiffers++;
       values = values.map((v) =>

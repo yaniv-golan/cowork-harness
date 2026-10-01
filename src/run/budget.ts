@@ -8,7 +8,7 @@
 import { resolve } from "node:path";
 import { tildeify, writeAllSync } from "../io.js";
 import { fail, type JsonErrorExtras } from "./envelope.js";
-import { readIndex, scenarioCostHistory } from "./run-index.js";
+import { readIndex, scenarioCostHistory, type RunIndexRow } from "./run-index.js";
 import { defaultRunsHome, runsRoot } from "./trace-view.js";
 import { claimRunsDirCauseNote, recordBudgetStatus, type BudgetStatus } from "./budget-status.js";
 
@@ -38,9 +38,11 @@ export function runsDirInfo(): { runsDir: string; runsDirRedirected: boolean } {
  *
  *  This is the TEXT only, readable any number of times — a plan payload or a non-exiting check can carry
  *  it without consuming the once-per-process claim `noHistoryCause` uses for stderr. Empty when the runs
- *  root is not redirected. */
-export function noHistoryCauseText(): string {
-  const { runsDir, runsDirRedirected } = runsDirInfo();
+ *  root is not redirected.
+ *
+ *  `info` defaults to this process's runs root; a caller that read its history through a seam passes that. */
+export function noHistoryCauseText(info: { runsDir: string; runsDirRedirected: boolean } = runsDirInfo()): string {
+  const { runsDir, runsDirRedirected } = info;
   if (!runsDirRedirected) return "";
   return (
     ` The runs root is redirected to ${tildeify(runsDir)} (--run-dir / COWORK_HARNESS_RUNS_DIR), and priced history is read ` +
@@ -200,6 +202,14 @@ export function batchBudgetTracker(
  *  of that scenario the batch schedules (an eval runs every scenario 2 x reps times). */
 export type BatchItem = string | { scenario: string; jobs: number };
 
+/** Where a batch estimate reads its history from. Omitted (every `record` call): the runs root's index, read
+ *  per scenario, and `runsDirInfo()`. A caller that already holds the index rows (an eval, which prices the
+ *  same rows for its plan) passes them, so the two figures come from one read and cannot disagree. */
+export interface BatchHistorySource {
+  rows?: readonly RunIndexRow[];
+  runsDir?: { runsDir: string; runsDirRedirected: boolean };
+}
+
 const itemScenario = (i: BatchItem): string => (typeof i === "string" ? i : i.scenario);
 const itemJobs = (i: BatchItem): number => (typeof i === "string" ? 1 : i.jobs);
 
@@ -214,7 +224,10 @@ const itemJobs = (i: BatchItem): number => (typeof i === "string" ? 1 : i.jobs);
  *  previously computed and discarded unless it happened to exceed a cap, so the only way to learn what a
  *  batch would cost was to bisect `--max-budget-usd` — reported by a consumer who had to do exactly
  *  that to size a 24-scenario re-record. */
-export function estimateBatchCost(items: readonly BatchItem[]): {
+export function estimateBatchCost(
+  items: readonly BatchItem[],
+  src: BatchHistorySource = {},
+): {
   known: number;
   unpriced: string[];
   /** Total priced runs behind the estimate, and the count for the THINNEST priced scenario. Reported
@@ -229,13 +242,14 @@ export function estimateBatchCost(items: readonly BatchItem[]): {
   const unpriced: string[] = [];
   for (const item of items) {
     const s = itemScenario(item);
-    const worst = worstObservedCost(s);
+    const history = src.rows ? scenarioCostHistory([...src.rows], s) : undefined;
+    const worst = history ? (history.length ? Math.max(...history) : undefined) : worstObservedCost(s);
     if (worst === undefined) {
       unpriced.push(s);
       continue;
     }
     known += worst * itemJobs(item);
-    const n = pricedRunCount(s);
+    const n = history ? history.length : pricedRunCount(s);
     pricedRuns += n;
     thinnest = thinnest === undefined ? n : Math.min(thinnest, n);
   }
@@ -285,8 +299,8 @@ export interface BatchBudgetCheck {
 
 /** The batch gate's decision, with no side effect: it neither records the budget marker, nor logs, nor
  *  exits. `preflightBatchBudget` is this plus those three, so the two cannot drift apart. */
-export function checkBatchBudget(items: readonly BatchItem[], maxBudgetUsd: number): BatchBudgetCheck {
-  const estimate = estimateBatchCost(items);
+export function checkBatchBudget(items: readonly BatchItem[], maxBudgetUsd: number, src: BatchHistorySource = {}): BatchBudgetCheck {
+  const estimate = estimateBatchCost(items, src);
   const { known, unpriced } = estimate;
   const status: BudgetStatus = {
     capUsd: maxBudgetUsd,
@@ -295,7 +309,7 @@ export function checkBatchBudget(items: readonly BatchItem[], maxBudgetUsd: numb
     ...(unpriced.length ? { reason: "no_history" as const } : {}),
     ...(unpriced.length < items.length ? { estimateUsd: known } : {}),
     unpriced,
-    ...runsDirInfo(),
+    ...(src.runsDir ?? runsDirInfo()),
   };
   const refuse = known > maxBudgetUsd;
   return {
