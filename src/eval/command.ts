@@ -49,7 +49,7 @@ import { evalJobRunDir, salvagedResult, type EvalJobSpec } from "./job-runner.js
 import { MANIFEST_FILE, type EvalManifest, type ManifestArm, type ManifestScenario } from "./manifest.js";
 import { writeEvalReport, REPORT_MD, type EvalReport } from "./report.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_VALUE_FLAGS } from "./usage.js";
-import { loadCostHistory, loadRowHistory } from "./plan-history.js";
+import { loadCostHistory, loadRowHistory, type RowHistoryLoad } from "./plan-history.js";
 import { scheduleCostLine } from "./planner.js";
 import { planEval, type EvalPlan, type PlanScenarioInput } from "./plan.js";
 
@@ -588,7 +588,8 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   const wantPlan = mode === "plan" || args.maxBudgetUsd !== undefined;
   const indexRows = wantPlan ? (deps.readIndex?.() ?? readIndex(runsRoot())) : [];
   const runsDir = deps.runsDirInfo?.() ?? runsDirInfo();
-  const plan = wantPlan ? buildPlan(args, ctx, sigs[0], indexRows, runsDir) : undefined;
+  // A real eval needs only the cost (for its budget gate): it never reads the kept result.json files.
+  const plan = wantPlan ? buildPlan(args, ctx, sigs[0], indexRows, runsDir, mode === "run") : undefined;
   if (plan) {
     deps.onPlan?.(plan);
     if (mode === "run") {
@@ -685,6 +686,25 @@ function budgetGate(
   );
 }
 
+/** The rate history of a cost-only plan: nothing read, every row unknown. */
+function noRates(): RowHistoryLoad {
+  const zero = { notRun: 0, command: 0, tier: 0, baseline: 0, turn: 0, hillclimb: 0, ablated: 0, model: 0, pruned: 0, unreadable: 0 };
+  return {
+    rows: [],
+    basis: "relaxed",
+    reps: 0,
+    validReps: 0,
+    exactContentReps: 0,
+    evalReps: 0,
+    excludedByKey: zero,
+    modelsExcluded: {},
+    judgeModelDiffers: 0,
+    verdictRate: { pass: 0, runs: 0, basis: "index" },
+    reads: 0,
+    readCapHit: false,
+  };
+}
+
 /** The plan over the history the loaders select, for every scenario at its effective tier and baseline. */
 function buildPlan(
   args: EvalArgs,
@@ -692,6 +712,7 @@ function buildPlan(
   armASigs: Record<string, string>,
   indexRows: readonly RunIndexRow[],
   runsDir: { runsDir: string; runsDirRedirected: boolean },
+  costOnly: boolean,
 ): EvalPlan {
   const scenarios: PlanScenarioInput[] = ctx.scenarios.map((s, si) => {
     const name = s.scenario.name;
@@ -708,14 +729,16 @@ function buildPlan(
       agentPin: ctx.agentPins[si].model,
       rows: scenarioRows(name, assertions),
       cost: loadCostHistory(indexRows, filters),
-      rates: loadRowHistory(indexRows, {
-        ...filters,
-        assertions,
-        agentPin: ctx.agentPins[si].model,
-        armASig: armASigs[name],
-        judgePromptHash: ctx.judgePins.promptHash,
-        judgeModelPins,
-      }),
+      rates: costOnly
+        ? noRates()
+        : loadRowHistory(indexRows, {
+            ...filters,
+            assertions,
+            agentPin: ctx.agentPins[si].model,
+            armASig: armASigs[name],
+            judgePromptHash: ctx.judgePins.promptHash,
+            judgeModelPins,
+          }),
     };
   });
   return planEval({
@@ -725,6 +748,7 @@ function buildPlan(
     q: BH_Q,
     ...(args.targetEffectPp !== undefined ? { targetEffectPp: args.targetEffectPp } : {}),
     allowUnderpowered: args.allowUnderpowered,
+    costOnly,
     history: { ...runsDir, indexRows: indexRows.length },
     scenarios,
   });

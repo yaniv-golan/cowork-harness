@@ -52,6 +52,9 @@ export interface PlanInput {
   /** Percentage points (30 = 30pp). The source of truth for every `…Pp` key; the estimator gets pp / 100. */
   targetEffectPp?: number;
   allowUnderpowered: boolean;
+  /** Cost only: no result.json was read, so every row is `unknown` (a capped real eval, which needs the cost
+   *  for its budget gate and nothing else). */
+  costOnly?: boolean;
   history: { runsDir: string; runsDirRedirected: boolean; indexRows: number };
   scenarios: readonly PlanScenarioInput[];
 }
@@ -132,6 +135,8 @@ export interface EvalPlan {
   correction: Correction;
   q: number;
   targetEffectPp: number | null;
+  /** True when the rates were not loaded (every row `unknown`): only the cost half was computed. */
+  costOnly: boolean;
   minReps: number;
   maxReps: number;
   history: { runsDir: string; runsDirRedirected: boolean; indexRows: number; rateWindow: number };
@@ -290,6 +295,7 @@ export function planEval(input: PlanInput): EvalPlan {
     correction,
     q,
     targetEffectPp: input.targetEffectPp ?? null,
+    costOnly: input.costOnly === true,
     minReps,
     maxReps: PLAN_MAX_REPS,
     history: { ...input.history, rateWindow: HISTORY_WINDOW },
@@ -387,7 +393,8 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
     );
 
     const h = s.rateHistory;
-    if (h.reps === 0) L.push(`  rates: no qualifying run with a readable result — every row is unknown`);
+    if (plan.costOnly) L.push("  rates: not read (a cost-only plan) — every row is unknown");
+    else if (h.reps === 0) L.push(`  rates: no qualifying run with a readable result — every row is unknown`);
     else
       L.push(
         `  rates: ${h.validReps} valid of ${h.reps} rep(s)` +

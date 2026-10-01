@@ -487,6 +487,32 @@ describe("eval --max-budget-usd: a pre-flight refusal, on the dry run and the re
     expect(log.join("\n")).toMatch(/\[eval\] judge: .*NOT covered by --max-budget-usd/);
   });
 
+  it("a capped real eval prices from the index only: no result.json is read, and its plan is cost-only", async () => {
+    const { scen, a, b } = setup();
+    const p = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval"),
+      "--quiet",
+      "--max-budget-usd",
+      "9",
+    ]);
+    const err = (await runEval(p, planDeps(priced())).catch((e: unknown) => e)) as EvalBudgetRefusal;
+    expect(err).toBeInstanceOf(EvalBudgetRefusal);
+    expect(err.plan!.costOnly).toBe(true);
+    expect(err.plan!.scenarios[0].rateHistory.reads).toBe(0);
+    expect(err.plan!.scenarios[0].rows.every((r) => r.rate === "unknown")).toBe(true);
+    expect(err.plan!.cost.budgetGateWorstUsd).toBe(10);
+    // The same history on a dry run is read.
+    const { plan } = await planEvalDryRun(dry(scen, a, b), planDeps(priced()));
+    expect(plan.costOnly).toBe(false);
+    expect(plan.scenarios[0].rateHistory.reads).toBe(2);
+  });
+
   it("a usage error is not a budget refusal", async () => {
     const { scen, a } = setup();
     const err = await planEvalDryRun(dry(scen, a, a, ["--max-budget-usd", "9"]), planDeps(priced())).catch((e: unknown) => e);
