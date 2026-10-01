@@ -265,10 +265,11 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
                                each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
   eval report <eval-dir>       rebuild an eval's report from its directory ($0)
-  hillclimb run <scenario.yaml | dir/>   the runner for /claude-api hillclimb: every scenario --reps times into
-                               <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
+  hillclimb run <scenario.yaml | dir/> [--flow DIR]   the runner for /claude-api hillclimb: every scenario
+                               --reps times into <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
   hillclimb check [--flow DIR]   check a flow dir against our reading of the hillclimb schema
-  hillclimb state-template <scenario.yaml | dir/>   print a _state.json skeleton for the loop to save
+  hillclimb state-template <scenario.yaml | dir/> [--flow DIR]   print a _state.json skeleton for the loop to save;
+                               with --flow, also write <flow>/metrics.md. Pass the same --flow to all three
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
