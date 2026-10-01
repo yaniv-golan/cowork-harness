@@ -22,6 +22,19 @@ export interface RunContext {
   transcript(): string;
   toolLog(): { name: string; input: unknown }[];
   runId: string;
+  /** Sink for a question batch the scripted rules answered only PART of. `ScriptedDecider` calls it on the
+   *  exact branch where it abstains the whole batch to the fallback; the run persists it as
+   *  `partlyScriptedGates`. Report-only: it never changes what is answered or delivered. */
+  notePartlyScripted?(finding: PartlyScriptedGate): void;
+}
+
+/** One question batch whose scripted rules matched some sub-questions but not all — so the whole batch went
+ *  to the fallback (answers are delivered atomically) and the matched answers were never delivered.
+ *  Sub-questions are named by the same text the rules match against. */
+export interface PartlyScriptedGate {
+  requestId?: string;
+  matched: string[];
+  unmatched: string[];
 }
 
 export interface Decision {
@@ -108,19 +121,40 @@ export class ScriptedDecider implements Decider {
     }
   }
 
-  async decide(req: DecisionRequest, _ctx: RunContext): Promise<Decision | Abstain> {
+  /** The rule that answers one sub-question, or undefined when none does (no `when_question` match, or the
+   *  first match sets neither `choose` nor `answer`). The ONE lookup both `decide` and `partlyScripted` use. */
+  private ruleFor(text: string): AnswerRule | undefined {
+    const rule = this.rules.find((r) => {
+      if (!r.when_question) return false;
+      // Use the pre-compiled regex (compiled at construction time — never compileUserRegex() here).
+      const re = this.compiledPatterns.get(r.when_question)!;
+      return re.test(text);
+    });
+    if (!rule || (rule.choose === undefined && rule.answer === undefined)) return undefined;
+    return rule;
+  }
+
+  /** Classify a question batch the way `decide` would, without answering, warning or validating labels:
+   *  `{matched, unmatched}` when the rules cover SOME but not all sub-questions, else null. For lanes where
+   *  this decider is not the one answering (replay re-drives recorded answers). */
+  partlyScripted(questions: ReadonlyArray<{ question?: string; header?: string }>): Omit<PartlyScriptedGate, "requestId"> | null {
+    const matched: string[] = [];
+    const unmatched: string[] = [];
+    for (const q of questions) {
+      const text = q.question ?? q.header ?? "";
+      (this.ruleFor(text) ? matched : unmatched).push(text);
+    }
+    return matched.length > 0 && unmatched.length > 0 ? { matched, unmatched } : null;
+  }
+
+  async decide(req: DecisionRequest, ctx: RunContext): Promise<Decision | Abstain> {
     if (req.kind === "question") {
       const answers: Record<string, string> = {};
       const unmatched: string[] = []; // sub-questions no rule answered (named in the fallthrough warning)
       for (const q of req.questions) {
         const text = q.question ?? q.header ?? "";
-        const rule = this.rules.find((r) => {
-          if (!r.when_question) return false;
-          // Use the pre-compiled regex (compiled at construction time — never compileUserRegex() here).
-          const re = this.compiledPatterns.get(r.when_question)!;
-          return re.test(text);
-        });
-        if (!rule || (rule.choose === undefined && rule.answer === undefined)) {
+        const rule = this.ruleFor(text);
+        if (!rule) {
           unmatched.push(text);
           continue;
         }
@@ -186,12 +220,16 @@ export class ScriptedDecider implements Decider {
         // A gate's answers are delivered atomically — a partial scripted match cannot answer just one
         // sub-question, so the WHOLE gate falls through to the fallback. Name the UNMATCHED
         // sub-questions (not just a count) so the author knows exactly which rule to add.
-        if (Object.keys(answers).length > 0)
+        if (Object.keys(answers).length > 0) {
           warn(
             `::warning:: scripted rules answered ${Object.keys(answers).length}/${req.questions.length} sub-questions of this gate; UNMATCHED: ${unmatched
               .map((u) => JSON.stringify(u))
               .join(", ")} — the whole gate falls through to the fallback decider (answers are delivered atomically)\n`,
           );
+          // Durable record of the same finding (the warning above is stderr-only). Report-only.
+          const matched = req.questions.map((q) => q.question ?? q.header ?? "").filter((t) => !unmatched.includes(t));
+          ctx?.notePartlyScripted?.({ requestId: req.id, matched, unmatched });
+        }
         return ABSTAIN;
       }
       return { response: { kind: "question", answers }, by: "scripted" };

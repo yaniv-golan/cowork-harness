@@ -375,8 +375,11 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 
 > **Batched gates are answered atomically.** A gate with several sub-questions is answered (and delivered)
 > as one unit. If your scripted rules match only *some* sub-questions, the **whole gate** falls through to
-> the `on_unanswered` policy (the warning names which sub-questions were unmatched, so you know which rule to
-> add). *Current* behavior — don't build on "a partial match always sends the whole gate to the fallback":
+> the `on_unanswered` policy, and the matched answers are not delivered. The run says so durably: the
+> stderr warning names the unmatched sub-questions, `result.partlyScriptedGates` lists the matched and
+> unmatched ones per batch, and the warn-severity `partly_scripted_gate` verdict signal (shown by `run`,
+> `replay` and `verify-run`) reports it without changing the verdict or exit code. Fix it by scripting every
+> sub-question of the batch. *Current* behavior — don't build on "a partial match always sends the whole gate to the fallback":
 > it may later become **opt-in composable** (script some sub-questions, let the fallback fill the rest in one
 > envelope), which would be introduced behind an explicit flag so this default is preserved.
 
@@ -691,10 +694,10 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 #### Verdict signals
 
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
-are twenty-two codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
+are twenty-three codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
 `result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
 `result.verdict.signals[].severity` or the run's exit code instead.
-Only eleven codes are **warn**-severity (informational, never flip pass/fail):
+Only twelve codes are **warn**-severity (informational, never flip pass/fail):
 
 - `outputs_delete_unconfirmed` (**warn**, live lane) — a delete-shaped command near `mnt/outputs` that
   nothing confirms: no output present at turn start was deleted, and no flagged delete has an outputs path as
@@ -753,6 +756,13 @@ Only eleven codes are **warn**-severity (informational, never flip pass/fail):
   under `outputs/` does NOT clear this signal** — nothing is delivered by location there, so only an
   explicit delivery counts. Opt out with `allow_undelivered_deliverables: true` when the leftovers are
   intentional.
+- `partly_scripted_gate` (**warn**) — a question batch your `answers:` matched only part of (see "Batched
+  gates are answered atomically" above). The whole batch went to the `on_unanswered` fallback, so the
+  matched answers were not delivered and the fallback may have contradicted them. The message names the
+  matched and unmatched sub-questions and who answered the batch; `result.partlyScriptedGates` carries
+  `{requestId, matched, unmatched}` per batch. Never fires on a single-question gate no rule matched (that
+  is the ordinary unanswered case). `replay` re-derives it from the cassette's frozen `answers:`, and
+  `verify-run` from the scenario you pass, so it clears once every sub-question is scripted.
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion

@@ -645,7 +645,8 @@
                   "undelivered_deliverables",
                   "delivery_unobservable",
                   "outputs_delete_unconfirmed",
-                  "outputs_diff_unavailable"
+                  "outputs_diff_unavailable",
+                  "partly_scripted_gate"
                 ]
               },
               "severity": {
@@ -1176,6 +1177,19 @@
         "type": "string"
       },
       "description": "#6: off-registry auto-allows (real Cowork blocks these); non-empty means NOT a faithful pass"
+    },
+    "partlyScriptedGates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["matched", "unmatched"],
+        "properties": {
+          "requestId": { "type": "string" },
+          "matched": { "type": "array", "items": { "type": "string" } },
+          "unmatched": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "description": "question batches the scripted answers: matched only part of; answers are delivered atomically, so each went whole to the on_unanswered fallback and the matched answers were not delivered. Report-only (warn signal partly_scripted_gate); absent when none"
     },
     "scan": {
       "type": "object",

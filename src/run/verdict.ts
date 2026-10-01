@@ -28,7 +28,8 @@ export interface VerdictSignal {
     | "scan_unavailable"
     | "ended_with_question"
     | "undelivered_deliverables"
-    | "delivery_unobservable";
+    | "delivery_unobservable"
+    | "partly_scripted_gate";
   severity: "fail" | "warn";
   message: string;
 }
@@ -74,6 +75,11 @@ export interface Verdict {
  *  `--fail-on-skill-drift`; `cassette-format` = a cassette too new to interpret; `coverage` = a
  *  verify-run answer-coverage miss. */
 export type FailureKind = "assertion" | "guard" | "staleness" | "cassette-format" | "coverage";
+
+/** Quote sub-question texts for a signal message, each capped (the full text stays in the result field). */
+function quoteList(texts: string[]): string {
+  return texts.map((t) => JSON.stringify(t.length > 60 ? `${t.slice(0, 60)}…` : t)).join(", ");
+}
 
 /** build the "guards active this run" roster from the guards' INPUT PRECONDITIONS (lane + probe
  *  outcome), not from the signal list — a guard that ran clean pushes no signal, so absence is ambiguous. */
@@ -627,6 +633,22 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       severity: "warn",
       message: "non-deterministic (LLM/external/human-decided) — a green run is NOT reproducible",
     });
+
+  // A question batch the scripted `answers:` matched only part of went WHOLE to the fallback (answers are
+  // delivered atomically), so the matched answers were never delivered and the fallback may contradict them.
+  // Report-only: warn severity, never moves the verdict.
+  for (const g of result.partlyScriptedGates ?? []) {
+    const answeredBy = g.requestId ? result.decisions.find((d) => d.requestId === g.requestId && d.kind === "question")?.by : undefined;
+    signals.push({
+      code: "partly_scripted_gate",
+      severity: "warn",
+      message:
+        `this question batch is only partly scripted — answers: matched ${quoteList(g.matched)} but not ` +
+        `${quoteList(g.unmatched)}; answers are delivered atomically, so the WHOLE batch went to the fallback ` +
+        `(${answeredBy ? `answered by: ${answeredBy}` : "no recorded answer"}) and the scripted answer(s) were not delivered. ` +
+        `Script every sub-question of the batch to pin it.`,
+    });
+  }
 
   if (result.fidelityWarnings?.some((w) => w.includes("referenced asset not found")))
     signals.push({
