@@ -242,6 +242,16 @@ describe("a pass", () => {
     expect(summary).not.toHaveProperty("model");
   });
 
+  it("each case is held to ITS OWN snapshot signature; summary.json records one signature over all of them", async () => {
+    await approved();
+    const sigs: Record<string, string> = { alpha: "sig-a", beta: "sig-b" };
+    // The excerpt's fingerprint is neither, so both reps are another snapshot's runs → error rows.
+    await runHillclimb(args(), deps({ expectedContentSig: (c) => sigs[c.id] }));
+    expect(rows("baseline", "errors.jsonl").map((x) => x.meta.failure_rule)).toEqual(["arm_source_drift", "arm_source_drift"]);
+    const summary = JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"));
+    expect(summary.source_sig).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("--ablate rows carry meta.ablated", async () => {
     await approved();
     const a = parseHillclimbRunArgs(["evals", "--flow", ".claude/hillclimb/f", "--concurrency", "2", "--ablate", "--approve-harness"]);

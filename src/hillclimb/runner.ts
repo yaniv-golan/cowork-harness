@@ -64,7 +64,8 @@ export interface RunnerDeps {
   /** Host roots the agent can read through a mount (folders, projects, uploads, plugins, skills). */
   mountRoots: (cases: readonly HillclimbCase[]) => string[];
   /** The variant snapshot's content signature, when the variant has one. */
-  expectedContentSig?: string;
+  /** The variant snapshot's content signature for a case (each scenario's session fingerprints apart). */
+  expectedContentSig?: (c: HillclimbCase) => string | undefined;
   /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
@@ -138,6 +139,10 @@ async function run(
     say(note);
 
   const cases = selectCases(all, args.cases);
+  const sigOf = (c: HillclimbCase) => deps.expectedContentSig?.(c);
+  // One signature for the variant: over every case's (all cases, so a --case subset records the same one).
+  const caseSigs = all.map((c) => `${c.id}\0${sigOf(c) ?? ""}`).sort();
+  const variantSig = all.some((c) => sigOf(c) !== undefined) ? createHash("sha256").update(caseSigs.join("\n")).digest("hex") : undefined;
 
   // Everything that can refuse runs before --approve-harness writes anything: a refused run records no approval.
   // Ground truth must be unreachable from the agent (eval-hillclimb.md l.215): no mount may expose the flow dir (prior grades,
@@ -264,7 +269,7 @@ async function run(
         assertions: c.scenario.assert,
         rep,
         pin: deps.pin(c),
-        ...(deps.expectedContentSig !== undefined ? { expectedContentSig: deps.expectedContentSig } : {}),
+        ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
         events: report.events,
         attemptS: report.attemptS,
         runnerTimeout: report.runnerTimeout,
@@ -274,7 +279,7 @@ async function run(
           flowHash,
           env: deps.virtual,
           ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
-          ...(deps.expectedContentSig !== undefined ? { contentSig: deps.expectedContentSig } : {}),
+          ...(sigOf(c) !== undefined ? { contentSig: sigOf(c)! } : {}),
           ...(args.ablate ? { ablated: true } : {}),
           ...(args.deciderLlm ? { nonDeterministic: true } : {}),
         },
@@ -352,7 +357,7 @@ async function run(
     try {
       writer.mergeSummary({
         ...(models.size === 1 ? { model: [...models][0] } : {}),
-        ...(deps.expectedContentSig !== undefined ? { source_sig: deps.expectedContentSig } : {}),
+        ...(variantSig !== undefined ? { source_sig: variantSig } : {}),
       });
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
     } catch (e) {
