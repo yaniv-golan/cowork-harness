@@ -255,6 +255,12 @@ All notable changes to this project are documented here. The format is based on
   category stays `runtime` and exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`), so a
   consumer no longer has to match message prose to tell "refused on cost" from "did not load";
   `error.code` is absent on every other error.
+- **`regrade` names a scenario with nothing to re-grade.** Its refusal of a scenario with no `semantic_matches`
+  assert now carries `error.code: "no_semantic_asserts"` in the JSON error envelope (category `usage`, exit 2 as
+  before), so a caller can tell "nothing to re-grade" from a failure without reading the message.
+- **`regrade` re-reads declared metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade
+  file carry `metrics` (the `RunResult.metrics` shape), re-read from the kept work dir. A file is read only while
+  its bytes still equal the run's own recorded post-run hash; a file edited since the run is `pruned`.
 
 ### Changed
 

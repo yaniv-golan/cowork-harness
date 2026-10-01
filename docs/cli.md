@@ -379,8 +379,14 @@ not run again; the judge call is the only spend.
   error}`) on stdout. `runs[]` holds only graded run dirs: a refusal refuses the whole batch and prints the error
   envelope instead. On a drift or unchecked-content refusal that envelope carries `error.code` (`doc_drift` when
   any dir drifted, else `unchecked_content`) and `refusals[]` — one `{runDir, code, uncheckedCount?,
-  uncheckedSections?, liveDocDrift?}` per refused run dir and code — so a batch caller can list what to fix. After a
+  uncheckedSections?, liveDocDrift?}` per refused run dir and code — so a batch caller can list what to fix. A
+  scenario with no `semantic_matches` assert is refused with `error.code: "no_semantic_asserts"` (category
+  `usage`): nothing to re-grade, which a caller can treat as "nothing to do" rather than a failure. After a
   write failure it carries the run dirs already graded in `runs[]`.
+- **Metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade file carry `metrics`, in the
+  `RunResult.metrics` shape, re-read from the kept work dir as it is now. A file is read only while its bytes still
+  equal the run's own recorded post-run hash (`RunResult.workspaceFiles`); a file edited since the run, or one the
+  run recorded no hash for, is `unavailable: "pruned"` — even under `--allow-doc-drift`.
 
 **What is covered.** The JSON envelope — its frame, every `runs[]` key, the named assertion-entry keys, the
 enums, `error.code` and `refusals[]` — is a covered surface ([SPEC.md](../SPEC.md) §12), described by

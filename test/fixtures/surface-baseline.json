@@ -2428,7 +2428,7 @@
       },
       "<oneOf:1>.error.code": {
         "type": "string",
-        "enum": ["doc_drift", "unchecked_content"]
+        "enum": ["doc_drift", "unchecked_content", "no_semantic_asserts"]
       },
       "<oneOf:1>.error.hint": {
         "type": "string"
@@ -2611,6 +2611,30 @@
       },
       "definitions.Run.liveDocDrift[]": {
         "ref": "#/definitions/LiveDocDrift"
+      },
+      "definitions.Run.metrics": {
+        "type": "array"
+      },
+      "definitions.Run.metrics[]": {
+        "type": "object",
+        "closed": true
+      },
+      "definitions.Run.metrics[].id": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.metrics[].unavailable": {
+        "type": "string",
+        "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"]
+      },
+      "definitions.Run.metrics[].value": {
+        "type": "number"
+      },
+      "definitions.Run.metrics[]<oneOf:0>.value": {
+        "required": true
+      },
+      "definitions.Run.metrics[]<oneOf:1>.unavailable": {
+        "required": true
       },
       "definitions.Run.notRegraded": {
         "type": "array",
