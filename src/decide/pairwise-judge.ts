@@ -170,6 +170,8 @@ export interface PairwiseResult {
   model: string;
   costUsd?: number;
   usage?: TokenUsage;
+  /** How many of the calls were retries (an invalid reply, or a transport failure, retried once per order). */
+  retries?: number;
 }
 
 /** A grade that stayed invalid after its one retry. Carries what the attempts spent, so it is still counted. */
@@ -179,6 +181,8 @@ export class PairwiseJudgeInvalid extends Error {
     readonly costUsd: number | undefined,
     readonly usage: TokenUsage | undefined,
     readonly model: string | undefined,
+    /** How many of the calls were retries. */
+    readonly retries: number = 0,
   ) {
     super(message);
     this.name = "PairwiseJudgeInvalid";
@@ -193,6 +197,7 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
     let cost: number | undefined;
     let tokens: TokenUsage | undefined;
     let model: string | undefined;
+    let retries = 0;
 
     // One judged comparison in one order, with one retry on an invalid reply.
     const once = async (candidateIsA: boolean): Promise<{ outcome: PairwiseOutcome; rationale: string }> => {
@@ -204,6 +209,7 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
       });
       let lastError: Error | undefined;
       for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) retries++;
         // A transport failure (timeout, usage limit, a non-zero exit after its own retries) is a grade that did not
         // happen: retried once, then invalid — never a throw that takes down a run the agent already paid for.
         let r: StructuredResult;
@@ -224,7 +230,13 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
           lastError = e as Error;
         }
       }
-      throw new PairwiseJudgeInvalid(`${lastError?.message ?? "pairwise judge: invalid reply"} (after one retry)`, cost, tokens, model);
+      throw new PairwiseJudgeInvalid(
+        `${lastError?.message ?? "pairwise judge: invalid reply"} (after one retry)`,
+        cost,
+        tokens,
+        model,
+        retries,
+      );
     };
 
     const seeded = candidateFirst(input.sessionId, input.assertIndex, input.refName);
@@ -241,6 +253,7 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
         positionFlip,
         rationale,
         model: model!,
+        retries,
         ...(cost !== undefined ? { costUsd: cost } : {}),
         ...(tokens !== undefined ? { usage: tokens } : {}),
       };
@@ -252,6 +265,7 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
       order: seeded ? "candidate_first" : "ref_first",
       rationale: r.rationale,
       model: model!,
+      retries,
       ...(cost !== undefined ? { costUsd: cost } : {}),
       ...(tokens !== undefined ? { usage: tokens } : {}),
     };

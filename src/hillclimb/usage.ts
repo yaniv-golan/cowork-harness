@@ -50,11 +50,20 @@ export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <
        (an existing copy that differs is kept; the new legend goes to metrics.md.new). json: the envelope
        also carries it as metrics_md.`;
 
+export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR] [--case ID]... [--output-format text|json]
+       Freezes each selected semantic_pairwise case's reference into <flow>/<variant>/ref from the variant's
+       lowest-rep good row (status ok, not an agent failure, verdict and pairwise evidence measured), under the
+       variant's lock. A baseline pass freezes the baseline's itself; freeze a later variant's to compare the next
+       ones with it (win_<vN>). An entry already complete is reported, never rewritten. Exit 0 nothing refused,
+       1 a case refused, 2 usage.`;
+
 /** The whole family: `hillclimb --help`, and the usage guard's text (every flag of every subcommand). */
-export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template> ...
+export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template | freeze-ref> ...
 
 ${HILLCLIMB_RUN_USAGE}
 
 ${HILLCLIMB_CHECK_USAGE}
 
-${HILLCLIMB_STATE_TEMPLATE_USAGE}`;
+${HILLCLIMB_STATE_TEMPLATE_USAGE}
+
+${HILLCLIMB_FREEZE_REF_USAGE}`;

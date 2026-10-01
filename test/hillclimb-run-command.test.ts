@@ -26,6 +26,9 @@ import { stateTemplateFor } from "../src/hillclimb/cli.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
+import { loadCases } from "../src/hillclimb/cases.js";
+import { freezeRef } from "../src/refs/store.js";
+import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import type { SessionConfig } from "../src/session.js";
 import type { RunResult, Scenario } from "../src/types.js";
 
@@ -593,18 +596,113 @@ describe("runHillclimbCommand", () => {
       expect(err.join("\n")).toContain("SYNTHETIC refusal");
     });
 
-    it("a pairwise reference that is missing refuses before spend, not as an error on every rep", async () => {
-      writeFileSync(
-        join(cwd, "evals", "alpha.yaml"),
-        SCENARIO.replace(
-          /  - semantic_matches:[\s\S]*$/,
-          `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
-        ),
-      );
-      const r = await runHillclimbCommand(args("--approve-harness"), deps());
-      expect(r.exitCode).toBe(2);
-      expect(calls).toEqual([]);
-      expect(err.join("\n")).toMatch(/case alpha: .*refstore/);
+    // The flow's own references replace the scenario's `refs:`: the baseline's is the gate. A baseline pass is neutral
+    // against it (it freezes it), so only a later variant is refused while it is missing — before spend, naming the repair.
+    describe("pairwise references come from the flow", () => {
+      const pairwise = () =>
+        writeFileSync(
+          join(cwd, "evals", "alpha.yaml"),
+          SCENARIO.replace(
+            /  - semantic_matches:[\s\S]*$/,
+            `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
+          ),
+        );
+
+      it("a later variant with no baseline reference refuses before spend, naming freeze-ref", async () => {
+        pairwise();
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        expect(calls).toEqual([]);
+        const text = err.join("\n");
+        expect(text).toMatch(/case alpha: .*reference "baseline"/);
+        expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
+        // The scenario's own store is never consulted.
+        expect(text).not.toContain("refstore");
+      });
+
+      it("a baseline reference frozen for another prompt is refused with 'start a fresh flow dir', not a freeze-ref circle", async () => {
+        pairwise();
+        const sc = loadCases(join(cwd, "evals")).cases[0]!.scenario;
+        freezeRef(
+          join(cwd, "flow", "baseline", "ref"),
+          "alpha",
+          { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
+          { [pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!)]: "OLD ANSWER" },
+          { harnessVersion: "t", composerId: "c", scenario: "alpha", taskSha256: "0".repeat(64) },
+        );
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        expect(calls).toEqual([]);
+        const text = err.join("\n");
+        expect(text).toMatch(/frozen for a different task/);
+        expect(text).toContain("start a fresh flow dir");
+        expect(text).not.toContain("hillclimb freeze-ref");
+      });
+
+      it("a damaged baseline document is refused with 'start a fresh flow dir', never a freeze-ref that cannot repair it", async () => {
+        pairwise();
+        const sc = loadCases(join(cwd, "evals")).cases[0]!.scenario;
+        const key = pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!);
+        const store = join(cwd, "flow", "baseline", "ref");
+        freezeRef(
+          store,
+          "alpha",
+          { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
+          { [key]: "THE ANSWER" },
+          {
+            harnessVersion: "t",
+            composerId: "c",
+            scenario: "alpha",
+            taskSha256: createHash("sha256").update(sc.prompt, "utf8").digest("hex"),
+          },
+        );
+        writeFileSync(join(store, "alpha", `doc-${key}.txt`), "TAMPERED");
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        const text = err.join("\n");
+        expect(text).toContain("start a fresh flow dir");
+        // The refusal's own text names `ref freeze` generically; the hillclimb repair hint must not offer a freeze.
+        expect(text).not.toContain("hillclimb freeze-ref evals");
+      });
+
+      it("a baseline pass is neutral against its own missing reference, so it runs — with the flow's setup, not refs:", async () => {
+        pairwise();
+        const r = await runHillclimbCommand(args("--approve-harness"), deps());
+        expect(calls.length).toBeGreaterThan(0);
+        expect(r.exitCode).not.toBe(2);
+        const pw = calls[0]!.extra.pairwise;
+        expect(pw).toEqual({
+          caseId: "alpha",
+          refs: [{ name: "baseline", store: join(cwd, "flow", "baseline", "ref") }],
+          neutralRefs: ["baseline"],
+          gateRefs: ["baseline"],
+        });
+        expect(err.join("\n")).toMatch(/pairwise refs: baseline .*the scenario `refs:` of alpha is ignored under hillclimb/);
+      });
+
+      it("after the pool, a baseline pass freezes each pairwise case's reference — a case with no good row is a counted failure, not an error row", async () => {
+        pairwise();
+        // The fake run records no pairwise outcome, so its evidence reads as refused: win_present 0, no good row.
+        const r = await runHillclimbCommand(args("--approve-harness"), deps());
+        expect(r.exitCode).toBe(1);
+        expect(r.scored).toBe(1);
+        const text = err.join("\n");
+        expect(text).toMatch(/alpha: the baseline reference was not frozen — case alpha: no good row/);
+        expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
+        expect(
+          existsSync(join(cwd, "flow", "baseline", "errors.jsonl"))
+            ? readFileSync(join(cwd, "flow", "baseline", "errors.jsonl"), "utf8").trim()
+            : "",
+        ).toBe("");
+        // The row carries the pairwise columns, measured as not compared.
+        expect(rows()[0]!.grade).toMatchObject({ win_present: 0 });
+      });
+
+      it("a dry run says how many judge calls a rep makes, outside the agent-spend estimate", async () => {
+        pairwise();
+        await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+        expect(err.join("\n")).toMatch(/pairwise judging \(experimental; not in the estimate.*\): up to 0 judge call\(s\) per rep/);
+      });
     });
 
     it("a flow with no judge and no LLM answering never asks", async () => {

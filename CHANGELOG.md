@@ -154,6 +154,22 @@ All notable changes to this project are documented here. The format is based on
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
 
+- **`semantic_pairwise` inside a hillclimb flow, and `hillclimb freeze-ref`.** Under `hillclimb run` every pairwise
+  assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of
+  the scenario's `refs:`. A baseline pass is neutral against its own reference and freezes it after the pool from each
+  case's lowest-rep good row; any other variant is refused before spending while its case has none. Only the
+  baseline's reference decides `pass`; rows gain `win` / `win_present` / `both_bad` (which `state-template` declares
+  and the metrics legend explains), a `win_<vN>` column per later reference, and per-assert drill-down keys. A
+  `win_<vN>` column is declared only when every scored row carries it; rows written before that reference was
+  frozen never do, so it stays drill-down data on them.
+  `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar;
+  `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
+  90% of its rows. A `semantic_pairwise` result now records `composedDoc` (the composed document's fingerprint, even
+  when no judge read it), `judgeAttempts`, and, for a metric-only reference, `pairwise[].gate: false` and the status
+  `invalid`; a caller's deadline stops the gating comparisons and ends the run as a timeout (a metric-only comparison
+  it cuts off is recorded `invalid`). `ref freeze`'s success JSON gains `status` (`frozen` or `added`), and a frozen
+  entry records its run id and its run dir relative to the runs root, never as a host path.
+
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
   nor a sub-agent dispatch, so until now the judge never saw it, and `include_subagent_text` could not
