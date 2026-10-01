@@ -483,6 +483,23 @@ describe.runIf(can)("eval --dry-run through the real CLI (stub agent never start
     }
   }, 180_000);
 
+  it("a Ctrl-C queued during a dry run that otherwise succeeds exits 130, not 0", async () => {
+    const f = fixture();
+    try {
+      // The shim signals the harness when asked about the temp dir, then answers like the real git: the dry
+      // run succeeds, with a Ctrl-C waiting.
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(join(f.root, "bin", "git"), `#!/bin/sh\ncase "$*" in *cwh-eval-plan-*) kill -INT $PPID;; esac\nexec ${realGit} "$@"\n`);
+      chmodSync(join(f.root, "bin", "git"), 0o755);
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.signal, r.stderr).toBeNull();
+      expect(r.code, r.stderr + r.stdout).toBe(130);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
   it("--target-effect without --dry-run is a usage error (exit 2)", async () => {
     const f = fixture();
     try {

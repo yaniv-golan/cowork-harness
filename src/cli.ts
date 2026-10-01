@@ -2154,6 +2154,9 @@ async function cmdEval(rawArgs: string[]) {
       await new Promise((r) => setImmediate(r));
       return failFor(e);
     }
+    // A Ctrl-C that arrived during the (synchronous) preparation is handled now, exiting 130, rather than
+    // being swallowed by a clean exit 0.
+    await new Promise((r) => setImmediate(r));
     if (json) out(jsonPayloadEnvelope("eval", true, { dryRun: true, plan }));
     else printPlan(plan!);
     process.exit(0);
