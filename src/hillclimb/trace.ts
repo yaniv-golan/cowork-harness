@@ -13,7 +13,8 @@
 // here is scrubbed: the flow writer scrubs every byte it writes.
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { FsRefusal, NoFollowRoot } from "./fs.js";
 import { join } from "node:path";
 
 export interface Turn {
@@ -59,28 +60,44 @@ export interface TraceOutput {
 const DISPATCH_TOOLS = new Set(["Agent", "Task"]);
 const DEFAULT_CAP = 64 * 1024;
 
-/** Every `agent-<id>.meta.json` + `.jsonl` pair under a sub-agents directory. A missing dir is no transcripts. */
+/** Every `agent-<id>.meta.json` + `.jsonl` pair under a sub-agents directory. A missing dir is no transcripts.
+ *  The dir is agent-writable on the container and microvm tiers (it sits in the session mnt), so every read
+ *  goes through the shared no-follow root: a planted symlink or FIFO is skipped, never followed or opened. */
 export function readChildTranscripts(dir: string): ChildTranscript[] {
   if (!existsSync(dir)) return [];
+  let root: NoFollowRoot;
+  try {
+    root = NoFollowRoot.existing(dir);
+  } catch (e) {
+    if (e instanceof FsRefusal) return [];
+    throw e;
+  }
+  const read = (name: string): string | undefined => {
+    try {
+      return root.readFile(join(root.root, name));
+    } catch (e) {
+      if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+      throw e;
+    }
+  };
   const out: ChildTranscript[] = [];
-  for (const f of readdirSync(dir).sort()) {
-    if (!f.endsWith(".meta.json")) continue;
+  for (const ent of root.readdirNoFollow(root.root).sort((a, b) => a.name.localeCompare(b.name))) {
+    const f = ent.name;
+    if (!f.endsWith(".meta.json") || !ent.isFile()) continue;
     let meta: { toolUseId?: unknown; agentType?: unknown; description?: unknown; spawnDepth?: unknown };
     try {
-      meta = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      meta = JSON.parse(read(f) ?? "");
     } catch {
       continue;
     }
-    const jsonl = join(dir, f.replace(/\.meta\.json$/, ".jsonl"));
-    if (!existsSync(jsonl)) continue;
+    const text = read(f.replace(/\.meta\.json$/, ".jsonl"));
+    if (text === undefined) continue;
     out.push({
       ...(typeof meta.toolUseId === "string" ? { toolUseId: meta.toolUseId } : {}),
       ...(typeof meta.agentType === "string" ? { agentType: meta.agentType } : {}),
       ...(typeof meta.description === "string" ? { description: meta.description } : {}),
       ...(typeof meta.spawnDepth === "number" ? { spawnDepth: meta.spawnDepth } : {}),
-      lines: readFileSync(jsonl, "utf8")
-        .split("\n")
-        .filter((l) => l.trim()),
+      lines: text.split("\n").filter((l) => l.trim()),
     });
   }
   return out;

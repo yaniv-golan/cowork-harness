@@ -6,7 +6,8 @@
 // sub-agent's turns come only from its own transcript. The parent stream ALSO carries every sub-agent tool
 // call and result (parented events) — reading both would emit each sub-agent tool turn twice.
 import { describe, it, expect } from "vitest";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { turnsFromEvents, readChildTranscripts, keptChildTranscripts, type ChildTranscript } from "../src/hillclimb/trace.js";
@@ -225,4 +226,21 @@ describe("a forked skill (context: fork) — its work is the skill's own and mus
     expect(turns.filter((t) => t.role === "tool_call" && t.content.startsWith("[forked skill example-fork-skill] "))).toHaveLength(17);
     expect(subagentTurns).toBe("absent");
   });
+});
+
+describe("readChildTranscripts over an agent-writable dir", () => {
+  it("a planted FIFO or symlink is skipped, never read — the runner must not hang or pull in a host file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hc-fifo-"));
+    try {
+      writeFileSync(join(dir, "agent-f.meta.json"), JSON.stringify({ toolUseId: "tf" }));
+      execFileSync("mkfifo", [join(dir, "agent-f.jsonl")]);
+      writeFileSync(join(dir, "agent-s.meta.json"), JSON.stringify({ toolUseId: "ts" }));
+      writeFileSync(join(dir, "host.txt"), '{"type":"assistant","message":{"content":[{"type":"text","text":"HOST"}]}}\n');
+      symlinkSync(join(dir, "host.txt"), join(dir, "agent-s.jsonl"));
+      cpSync(join(DIR, "subagents"), dir, { recursive: true });
+      expect(readChildTranscripts(dir).map((c) => c.toolUseId)).toEqual(["toolu_01XB9SXzRHWjKtHwT5nWZn3x"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
 });
