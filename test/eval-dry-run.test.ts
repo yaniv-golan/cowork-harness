@@ -478,6 +478,15 @@ describe("eval --max-budget-usd: a pre-flight refusal, on the dry run and the re
     expect(existsSync(join(root, "eval"))).toBe(false);
   });
 
+  it("the real eval prints the cost and the uncovered judge spend beside the gate", async () => {
+    const { scen, a, b } = setup();
+    const log: string[] = [];
+    const p = parseEvalArgs([scen, "--arm", `before=${a}`, "--arm", `after=${b}`, "--out", join(root, "eval"), "--max-budget-usd", "9"]);
+    await runEval(p, planDeps(priced(), { log })).catch(() => undefined);
+    expect(log.join("\n")).toMatch(/\[eval\] cost at --reps 5: estimated cost of 10 run\(s\)/);
+    expect(log.join("\n")).toMatch(/\[eval\] judge: .*NOT covered by --max-budget-usd/);
+  });
+
   it("a usage error is not a budget refusal", async () => {
     const { scen, a } = setup();
     const err = await planEvalDryRun(dry(scen, a, a, ["--max-budget-usd", "9"]), planDeps(priced())).catch((e: unknown) => e);

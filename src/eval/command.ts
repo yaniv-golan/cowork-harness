@@ -590,8 +590,12 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   const plan = wantPlan ? buildPlan(args, ctx, sigs[0], indexRows, runsDir) : undefined;
   if (plan) {
     deps.onPlan?.(plan);
-    if (mode === "run")
+    if (mode === "run") {
       say(`[eval] cost at --reps ${args.reps}: ${scheduleCostLine(plan.cost)}${plan.cost.lowerBound ? noHistoryCauseText(runsDir) : ""}`);
+      say(
+        `[eval] judge: p50 $${plan.cost.judgeP50Usd.toFixed(4)} for this schedule — NOT covered by --max-budget-usd, which counts the agent's cost only`,
+      );
+    }
   }
 
   // `--fail-on confirmed` must be able to fire.
@@ -747,7 +751,7 @@ export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ 
 
 /** Everything before the first run, then the schedule, then the report. */
 export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutcome> {
-  if (args.dryRun) throw new UsageError("runEval does not take a dry run: call planEvalDryRun");
+  if (args.dryRun) throw new Error("runEval does not take a dry run: call planEvalDryRun");
   const ctx = resolveEvalContext(args, deps);
   const { now, scenarios, agentPins, judgePins, evalId, evalDir, say } = ctx;
   // Created now, or an existing EMPTY dir: either way, a refusal before the manifest removes what we made.
