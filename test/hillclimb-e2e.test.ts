@@ -147,3 +147,89 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
     expect(cli("check", "--flow", "flow").status).toBe(0);
   }, 90_000);
 });
+
+// semantic_pairwise through the real CLI: a baseline pass is neutral and freezes its reference after the pool; a v1
+// pass is judged against it by a FAKE host `claude` judge replaying a real captured envelope; freeze-ref then freezes
+// v1's own; `check` is clean over rows the runner really wrote; `state-template --flow` declares what every row carries.
+describe.runIf(POSIX)("hillclimb + semantic_pairwise through the CLI", () => {
+  const ENVELOPE = join(import.meta.dirname, "fixtures", "pairwise-judge", "claude-p-json-schema-envelope.json");
+  const JUDGE = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
+if [ "$1" = "--help" ]; then
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do echo "  $f   x"; done
+  exit 0
+fi
+echo x >> "$JUDGE_CALLS"
+cat >/dev/null
+cat "${ENVELOPE}"
+`;
+
+  it("baseline freezes after the pool, v1 is judged, freeze-ref, check and state-template agree", () => {
+    const plugin = join(work, "plugin", "my-plugin");
+    mkdirSync(join(plugin, "skills", "x"), { recursive: true });
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n");
+    const evals = join(f.cwd, "evals");
+    mkdirSync(evals);
+    writeFileSync(join(evals, "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+    writeFileSync(
+      join(evals, "alpha.yaml"),
+      "name: alpha\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n" +
+        "  - semantic_pairwise:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n",
+    );
+    const judge = join(work, "judge.sh");
+    writeFileSync(judge, JUDGE, { mode: 0o755 });
+    const calls = join(work, "judge-calls");
+    const env = {
+      ...f.env,
+      COWORK_MANAGED_CONFIG: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
+      STUB_ARGV: join(work, "argv"),
+      COWORK_HARNESS_CLAUDE_BIN: judge,
+      JUDGE_CALLS: calls,
+    };
+    const cli = (...a: string[]) =>
+      spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
+    const flow = join(f.cwd, "flow");
+    const rowsOf = (v: string) =>
+      readFileSync(join(flow, v, "results.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { grade: Record<string, number>; meta: Record<string, unknown> });
+
+    // v1 before any baseline reference: refused before spending, naming the repair.
+    const early = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--approve-harness", "--concurrency", "1");
+    expect(early.status).toBe(2);
+    expect(early.stderr).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
+
+    const base = cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1");
+    expect(base.status, base.stderr).toBe(0);
+    expect(base.stderr).toMatch(/alpha: froze the baseline reference from rep 0/);
+    expect(rowsOf("baseline")[0]!.grade).toMatchObject({ pass: 1, win_present: 1, win: 0.5, both_bad: 0 });
+    expect(readdirSync(join(flow, "baseline", "ref", "alpha")).length).toBeGreaterThan(0);
+
+    const v1 = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1");
+    expect(v1.status, v1.stderr).toBe(0);
+    expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
+    const r1 = rowsOf("v1")[0]!;
+    expect(r1.grade.win_present).toBe(1);
+    expect([0, 0.5, 1]).toContain(r1.grade.win);
+    expect(Object.keys(r1.meta.pairwise_ref_sha256 as object)).toHaveLength(1);
+
+    const fr = cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1", "--output-format", "json");
+    expect(fr.status, fr.stderr).toBe(0);
+    expect(JSON.parse(fr.stdout)).toMatchObject({ ok: true, frozen: [{ case: "alpha", rep: 0 }], refused: [] });
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v9").status).toBe(2);
+    expect(cli("freeze-ref", "--help").status).toBe(0);
+
+    expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
+    expect(cli("check", "--flow", "flow").status).toBe(0);
+
+    // win_v1 exists for later variants only: the baseline's and v1's rows predate it, so it stays undeclared.
+    const st = cli("state-template", "evals", "--flow", "flow", "--output-format", "json");
+    expect(st.status, st.stderr).toBe(0);
+    const t = JSON.parse(st.stdout) as { state: { metrics: Array<{ id: string }> }; notes: string[] };
+    expect(t.state.metrics.map((m) => m.id)).toEqual(expect.arrayContaining(["win", "win_present", "both_bad"]));
+    expect(t.state.metrics.map((m) => m.id)).not.toContain("win_v1");
+    expect(t.notes.join("\n")).toMatch(/win_v1 is not declared: 2 scored row/);
+  }, 180_000);
+});

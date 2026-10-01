@@ -269,7 +269,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                --reps times into <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
   hillclimb check [--flow DIR]   check a flow dir against our reading of the hillclimb schema
   hillclimb state-template <scenario.yaml | dir/> [--flow DIR]   print a _state.json skeleton for the loop to save;
-                               with --flow, also write <flow>/metrics.md. Pass the same --flow to all three
+                               with --flow, also write <flow>/metrics.md. Pass the same --flow to every hillclimb command
+  hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR]   freeze a variant's pairwise references (win_<vN>)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
