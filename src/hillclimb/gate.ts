@@ -25,11 +25,15 @@ export interface DigestInput {
   derived: readonly string[];
   /** Name → value entries standing in for the runner's own source. */
   virtual: Readonly<Record<string, string>>;
+  /** Selections that define the measurement without being files (`skill:<name>` under `--skill`), hashed after
+   *  the virtual entries as `tag\0`, in order. None ⇒ nothing is hashed, so the sha is the one recorded before
+   *  tags existed. */
+  tags?: readonly string[];
 }
 
 export interface Digest {
   sha: string;
-  /** What was hashed, in order: cwd-relative paths, then `<name>` virtual entries. */
+  /** What was hashed, in order: cwd-relative paths, then `<name>` virtual entries, then the tags as written. */
   hashed: string[];
   skipped: Array<{ path: string; code: string }>;
   lockfiles: string[];
@@ -60,6 +64,10 @@ export function harnessDigest(input: DigestInput): Digest {
     const name = `<${k}>`;
     h.update(name).update("\0").update(input.virtual[k]).update("\0");
     hashed.push(name);
+  }
+  for (const t of input.tags ?? []) {
+    h.update(t).update("\0");
+    hashed.push(t);
   }
   return { sha: h.digest("hex"), hashed, skipped, lockfiles };
 }
