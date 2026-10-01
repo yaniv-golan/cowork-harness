@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { defaultSnapshotRoot, runHillclimbCommand, snapshotRootFrom, type RunCommandDeps } from "../src/hillclimb/run-command.js";
 import { parseHillclimbRunArgs } from "../src/hillclimb/args.js";
@@ -579,5 +580,14 @@ describe("runHillclimbCommand", () => {
     err = [];
     await runHillclimbCommand(args("--dry-run", "--timeout-s", "1800"), deps({ indexRows: () => [row(600_000)] }));
     expect(err.join("\n")).not.toMatch(/--timeout-s 1800/);
+  });
+
+  it("a lock left by a runner that was killed (its pid gone) does not block the next pass", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid; // a real process that has exited
+    writeFileSync(join(cwd, "flow", "baseline", ".lock"), JSON.stringify({ pid: dead }));
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(0);
+    expect(rows()).toHaveLength(1);
+    expect(existsSync(join(cwd, "flow", "baseline", ".lock"))).toBe(false); // released after the pass
   });
 });
