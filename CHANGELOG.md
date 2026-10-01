@@ -28,14 +28,19 @@ All notable changes to this project are documented here. The format is based on
   prove one (counted as `unrecorded`). A refusal whose claims also missed `min_pass` cannot be told from
   a graded fail there, and is still scored as a fail. The roll-up row of an assertion with keys besides
   `semantic_matches` keeps a refused rep as a fail, because the grade's one `pass` covers every key.
-- **`eval` no longer passes (exit 0) when the candidate's evidence refusals hide a drop.** Excluding
-  refusals has a blind spot: if the edit makes the deliverable outgrow the evidence budget, the candidate
-  refuses more, its rows fall below the rep threshold, and they were plain `insufficient` — exit 0, where
-  the same runs had previously shown a roll-up drop. Such a row is now `insufficient_refusals`, and the eval
-  exits 1 on it with or without `--fail-on`, as it already does when every row is insufficient. The
-  header warns per assertion when the arms' refusals differ by 2 or more reps, or either arm refused at
-  least 20% of its scored reps (`summary.refusalImbalances`). A baseline that refuses more warns but does
-  not gate.
+- **`eval --fail-on possible` no longer passes when the candidate's evidence refusals hide a drop.**
+  Excluding refusals has a blind spot: if the edit makes the deliverable outgrow the evidence budget, the
+  candidate refuses more, its rows fall below the rep threshold, and they would read plain `insufficient`
+  — where the same runs used to show a roll-up drop that `--fail-on possible` gated on. Such a row is now
+  `insufficient_refusals`: the candidate refused at least 2 more grades than the baseline, and that excess
+  alone took the row below the threshold. It is a drop signal at the `possible` level — `--fail-on
+  possible` exits 1 on it, `--fail-on confirmed` does not, and without `--fail-on` the exit code is
+  unchanged. It is not counted toward "every row insufficient", and `summary.labels` counts it under its
+  own key (no longer within `insufficient`). The header warns per assertion when the arms' refusals differ
+  by 2 or more reps, or either arm refused at least 20% of its scored reps (`summary.refusalImbalances`);
+  a baseline that refuses more warns but never labels a row. Re-reporting an eval dir written before this
+  change (`eval report <dir>`) can change its row labels — refusals provable from the kept fields now
+  leave the rows — and, with `--fail-on`, its exit code.
 
 ## [4.2.0] — 2026-09-30
 

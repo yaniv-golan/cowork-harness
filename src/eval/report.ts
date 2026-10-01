@@ -34,10 +34,12 @@ export const REPORT_MD = "report.md";
 
 type RowKind = "assertion" | "claim" | "semantic_rollup" | "errored_agent_rate" | "invocation_rate";
 
-/** `insufficient_refusals`: the row is `insufficient` only because the CANDIDATE arm refused more
- *  `semantic_matches` grades for unavailable evidence than the baseline did — without those refusals it would
- *  have had enough reps. Gating (exit 1): a refusal is excluded from the rows, so an edit that makes the
- *  deliverable outgrow the evidence budget would otherwise hide its own regression behind `insufficient`. */
+/** `insufficient_refusals`: the row is `insufficient`, the CANDIDATE arm refused at least 2 more
+ *  `semantic_matches` grades for unavailable evidence than the baseline, and that excess alone is what took it
+ *  below the threshold. A DROP signal at the `possible` level: `--fail-on possible` gates on it (never
+ *  `confirmed`, which needs a tested row), and without `--fail-on` nothing gates — a refusal is excluded from
+ *  the rows, so an edit that makes the deliverable outgrow the evidence budget would otherwise hide its own
+ *  regression behind `insufficient`. */
 export type ReportRowLabel = FamilyRowOutput["label"] | "insufficient_refusals";
 
 export interface ReportRow extends Omit<FamilyRowOutput, "label"> {
@@ -79,8 +81,9 @@ export interface RefusalImbalance {
   /** Refused grades of this assertion over the arm's scored reps (valid, judge_invalid, errored_agent). */
   a: { refused: number; scored: number };
   b: { refused: number; scored: number };
-  /** The candidate's refusals pushed this assertion's rows below the threshold (`insufficient_refusals`). */
-  gates: boolean;
+  /** The candidate's excess refusals left at least one of this assertion's rows `insufficient_refusals` — a
+   *  drop signal that `--fail-on possible` gates on. */
+  insufficientRefusals: boolean;
 }
 
 export interface ReportArm {
@@ -143,8 +146,6 @@ export interface EvalReport {
     allInsufficient: boolean;
     /** Every section's `refusalImbalances`, tuned first. */
     refusalImbalances: RefusalImbalance[];
-    /** A row is `insufficient_refusals` — exits 1 with or without `--fail-on`. */
-    refusalsGated: boolean;
     failOnHit: boolean;
     judgeDisagreement: boolean;
     missingJobs: number;
@@ -275,7 +276,9 @@ function sectionOf(
             assertionIndex: acc.key.assertionIndex,
             a: { refused: rA, scored: sA },
             b: { refused: rB, scored: sB },
-            gates: [...perRow.values()].some((r) => r.key.assertionIndex === acc.key.assertionIndex && refusalsGate(r, threshold)),
+            insufficientRefusals: [...perRow.values()].some(
+              (r) => r.key.assertionIndex === acc.key.assertionIndex && refusalsGate(r, threshold),
+            ),
           });
       }
     }
@@ -398,11 +401,14 @@ function sectionOf(
 const REFUSAL_GAP = 2;
 const REFUSAL_SHARE = 0.2;
 
-/** Did the CANDIDATE's refusals for unavailable evidence push this row below the threshold? The baseline had
- *  enough reps, the candidate refused more than it, and with its refused reps scored it would have had enough
- *  too. A baseline that refuses more is warned about but never gates: that is not the edit hiding a drop. */
+/** Did the CANDIDATE's EXCESS refusals for unavailable evidence push this row below the threshold? The baseline
+ *  had enough reps, the candidate refused at least REFUSAL_GAP more grades than it, and with only that excess
+ *  credited back it would have had enough too — so one stray refusal, or a refusal beside some other lost rep,
+ *  never labels a row. A baseline that refuses more is warned about but never labels: that is not the edit
+ *  hiding a drop. */
 function refusalsGate(x: { n1: number; n2: number; rA: number; rB: number }, threshold: number): boolean {
-  return x.rB > x.rA && x.n1 >= threshold && x.n2 < threshold && x.n2 + x.rB >= threshold;
+  const excess = x.rB - x.rA;
+  return excess >= REFUSAL_GAP && x.n1 >= threshold && x.n2 < threshold && x.n2 + excess >= threshold;
 }
 
 /** Build the report model from the eval dir's manifest and runs. */
@@ -511,12 +517,13 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const failOnHit =
     m.settings.failOn !== null &&
     gatingRows.some((r) =>
-      m.settings.failOn === "confirmed" ? r.label === "confirmed drop" : r.label === "possible drop" || r.label === "confirmed drop",
+      m.settings.failOn === "confirmed"
+        ? r.label === "confirmed drop"
+        : r.label === "possible drop" || r.label === "confirmed drop" || r.label === "insufficient_refusals",
     );
-  const allInsufficient =
-    familyRows.length > 0 && familyRows.every((r) => r.label === "insufficient" || r.label === "insufficient_refusals");
+  // Plain `insufficient` only: an `insufficient_refusals` row is a drop signal, gated by --fail-on alone.
+  const allInsufficient = familyRows.length > 0 && familyRows.every((r) => r.label === "insufficient");
   const refusalImbalances = [...(tuned?.refusalImbalances ?? []), ...(heldOut?.refusalImbalances ?? [])];
-  const refusalsGated = gatingRows.some((r) => r.label === "insufficient_refusals");
   const judgeDisagreement = judgeDisagreements.length > 0;
   const recordedIdx = new Set(lines.map((l) => l.index));
   const missingJobs = m.settings.reps * m.scenarios.length * 2 - recordedIdx.size;
@@ -551,8 +558,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       missingJobs,
       tornFinalLine,
       refusalImbalances,
-      refusalsGated,
-      exitCode: failOnHit || allInsufficient || judgeDisagreement || refusalsGated || comparedNothing.size > 0 ? 1 : 0,
+      exitCode: failOnHit || allInsufficient || judgeDisagreement || comparedNothing.size > 0 ? 1 : 0,
     },
     cost: {
       agentUsd: sumFinite(lines.map((l) => l.result?.cost?.usd)),
@@ -731,8 +737,8 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
     L.push(
       `**⚠ ${r.scenario} #${r.assertionIndex} (semantic_matches) refused for unavailable evidence: A ${r.a.refused}/${r.a.scored}, B ${r.b.refused}/${r.b.scored} scored reps** — ` +
         `a refused grade leaves the rows, so the rates are over the reps that were graded. ` +
-        (r.gates
-          ? `The candidate's refusals left its rows \`insufficient_refusals\` (exit 1): the edit may have made the deliverable outgrow the evidence the judge can see — a drop hidden by the refusals, not an absence of one.`
+        (r.insufficientRefusals
+          ? `The candidate's excess refusals left its rows \`insufficient_refusals\` — a drop signal (\`--fail-on possible\` gates on it): the edit may have made the deliverable outgrow the evidence the judge can see, hiding a drop rather than showing none.`
           : r.b.refused > r.a.refused
             ? "Read the candidate's run dirs: a deliverable that outgrew the evidence budget can hide a drop."
             : "Read those run dirs before trusting this assertion's rows."),
@@ -754,10 +760,17 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
         .join(", ") || "none"
     }.`,
   );
-  if (rep.summary.allInsufficient) L.push("Every row is insufficient — see the errorSource histogram above for why reps were lost.");
+  if (rep.summary.allInsufficient)
+    L.push(
+      `Every row is insufficient — see the errorSource histogram above for why reps were lost${
+        rep.arms.some((a) => Object.keys(a.evidenceUnavailable).length > 0)
+          ? ", and the evidence-refusal counts per arm: a refused semantic_matches grade also leaves its rows"
+          : ""
+      }.`,
+    );
   L.push(`Cost: agent ${fmtUsd(rep.cost.agentUsd)}, judge ${fmtUsd(rep.cost.judgeUsd)}.`);
   L.push(
-    `Exit: ${rep.summary.exitCode}${rep.summary.failOnHit ? ` (a drop at the --fail-on ${rep.settings.failOn} level)` : ""}${rep.summary.refusalsGated ? " (a row is insufficient_refusals: the candidate's evidence refusals left it untestable)" : ""}.`,
+    `Exit: ${rep.summary.exitCode}${rep.summary.failOnHit ? ` (a drop at the --fail-on ${rep.settings.failOn} level)` : ""}${rep.summary.failOnHit && [...(rep.sections.tuned?.rows ?? []), ...(rep.sections.tuned?.derivedRows ?? []), ...(rep.sections.heldOut?.rows ?? []), ...(rep.sections.heldOut?.derivedRows ?? [])].some((r) => r.label === "insufficient_refusals") ? " — including an insufficient_refusals row" : ""}.`,
     "",
   );
   const { text, redacted } = redactHostPaths(L.join("\n"));

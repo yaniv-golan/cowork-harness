@@ -292,49 +292,125 @@ describe("eval: end to end over a fake runner", () => {
         return { ...rest, pass: false, semanticEvidence: { reason: "in_scope_truncated" } };
       }),
     });
-    const refusing = (arm: string, reps: number[]) =>
-      fakeRunner((s, r) => (s.scenario.name === SEM && s.job.arm === arm && reps.includes(s.job.rep) ? refuse(r) : r));
+    const judgeInvalid = (r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) => (x.assertion.semantic_matches ? { ...x, pass: false, judgeInvalid: true } : x)),
+    });
+    /** Per arm, the reps whose semantic grade refuses (and, optionally, is judge-invalid). */
+    const shaped = (plan: { before?: number[]; after?: number[]; invalidAfter?: number[] }) =>
+      fakeRunner((s, r) => {
+        if (s.scenario.name !== SEM) return r;
+        const arm = s.job.arm as "before" | "after";
+        if ((plan[arm] ?? []).includes(s.job.rep)) return refuse(r);
+        if (arm === "after" && (plan.invalidAfter ?? []).includes(s.job.rep)) return judgeInvalid(r);
+        return r;
+      });
     const semRows = (rep: Awaited<ReturnType<typeof runEval>>["report"]) =>
       [...rep.sections.tuned!.rows, ...rep.sections.tuned!.derivedRows].filter((r) => r.scenario === SEM && r.assertionIndex === 3);
+    const outDir = (name: string) => ["--out", join(root, name)];
+    const argv = (scen: string, a: string, b: string, extra: string[]) =>
+      parseEvalArgs([scen, "--arm", `before=${a}`, "--arm", `after=${b}`, "--quiet", ...extra]);
 
-    it("the CANDIDATE refusing more pushes the rows below threshold: insufficient_refusals, a warning, exit 1 without --fail-on", async () => {
+    it("the CANDIDATE refusing 2 more labels the rows insufficient_refusals and warns — but no gate without --fail-on", async () => {
       const { scen, a, b } = setup({ semantic: true });
-      const out = await runEval(args(scen, a, b), deps(refusing("after", [1, 2])));
-      // On the previous build these rows were plain `insufficient` and the eval exited 0 — the drop hidden.
+      const out = await runEval(args(scen, a, b), deps(shaped({ after: [1, 2] })));
       expect(semRows(out.report).map((r) => r.label)).toEqual(Array(3).fill("insufficient_refusals"));
       expect(out.report.summary.refusalImbalances).toEqual([
-        { scenario: SEM, assertionIndex: 3, a: { refused: 0, scored: 5 }, b: { refused: 2, scored: 5 }, gates: true },
+        { scenario: SEM, assertionIndex: 3, a: { refused: 0, scored: 5 }, b: { refused: 2, scored: 5 }, insufficientRefusals: true },
       ]);
-      expect(out.report.summary.refusalsGated).toBe(true);
-      expect(out.report.summary.failOnHit).toBe(false); // not a drop: its own exit-1 reason
-      expect(out.report.summary.exitCode).toBe(1);
+      expect(out.report.summary.labels.insufficient_refusals).toBe(2); // the claim rows (the roll-up is derived)
+      expect(out.report.summary.labels.insufficient).toBeUndefined();
+      expect(out.report.summary.allInsufficient).toBe(false);
+      expect(out.report.summary.exitCode).toBe(0); // --fail-on absent: nothing gates (SPEC §12)
       const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
       expect(md).toContain(`⚠ ${SEM} #3 (semantic_matches) refused for unavailable evidence: A 0/5, B 2/5 scored reps`);
-      expect(md).toContain("insufficient_refusals");
     });
 
-    it("the BASELINE refusing more warns but does not gate", async () => {
+    it("--fail-on possible gates on it (exit 1); --fail-on confirmed does not", async () => {
       const { scen, a, b } = setup({ semantic: true });
-      const out = await runEval(args(scen, a, b), deps(refusing("before", [1, 2])));
+      const possible = await runEval(argv(scen, a, b, [...outDir("e-p"), "--fail-on", "possible"]), deps(shaped({ after: [1, 2] })));
+      expect(possible.report.summary.failOnHit).toBe(true);
+      expect(possible.report.summary.exitCode).toBe(1);
+      expect(readFileSync(join(possible.evalDir, "report.md"), "utf8")).toContain("including an insufficient_refusals row");
+      // `confirmed` needs a tested row; an insufficient one confirms nothing.
+      const confirmed = await runEval(argv(scen, a, b, [...outDir("e-c"), "--fail-on", "confirmed"]), deps(shaped({ after: [1, 2] })));
+      expect(semRows(confirmed.report).map((r) => r.label)).toEqual(Array(3).fill("insufficient_refusals"));
+      expect(confirmed.report.summary.failOnHit).toBe(false);
+      expect(confirmed.report.summary.exitCode).toBe(0);
+    });
+
+    it("the BASELINE refusing more warns but never labels a row", async () => {
+      const { scen, a, b } = setup({ semantic: true });
+      const out = await runEval(argv(scen, a, b, [...outDir("e-a"), "--fail-on", "possible"]), deps(shaped({ before: [1, 2] })));
       expect(semRows(out.report).map((r) => r.label)).toEqual(Array(3).fill("insufficient"));
       expect(out.report.summary.refusalImbalances).toEqual([
-        { scenario: SEM, assertionIndex: 3, a: { refused: 2, scored: 5 }, b: { refused: 0, scored: 5 }, gates: false },
+        { scenario: SEM, assertionIndex: 3, a: { refused: 2, scored: 5 }, b: { refused: 0, scored: 5 }, insufficientRefusals: false },
       ]);
-      expect(out.report.summary.refusalsGated).toBe(false);
       expect(out.report.summary.exitCode).toBe(0);
     });
 
-    it("balanced, infrequent refusals raise no warning and no gate", async () => {
+    describe("only the candidate's EXCESS refusals are credited (reps 5, threshold 4)", () => {
+      it("1 vs 2: an excess of one does not label (it still warns: 2 of 5 is ≥ 20%)", async () => {
+        const { scen, a, b } = setup({ semantic: true });
+        const out = await runEval(args(scen, a, b), deps(shaped({ before: [1], after: [1, 2] })));
+        expect(semRows(out.report).map((r) => r.label)).toEqual(Array(3).fill("insufficient"));
+        expect(out.report.summary.refusalImbalances.map((r) => r.insufficientRefusals)).toEqual([false]);
+      });
+      it("0 vs 2 with n2 = 3: labels (3 + 2 ≥ 4)", async () => {
+        const { scen, a, b } = setup({ semantic: true });
+        const out = await runEval(args(scen, a, b), deps(shaped({ after: [3, 4] })));
+        expect(semRows(out.report).every((r) => r.n2 === 3 && r.label === "insufficient_refusals")).toBe(true);
+      });
+      it("another candidate-side exclusion plus a one-rep excess does not label", async () => {
+        // after: rep 1 refused, rep 2 judge-invalid ⇒ n2 = 3. The old rule credited the refusal back (3 + 1 ≥ 4).
+        const { scen, a, b } = setup({ semantic: true });
+        const out = await runEval(args(scen, a, b), deps(shaped({ after: [1], invalidAfter: [2] })));
+        const rows = semRows(out.report);
+        expect(rows.every((r) => r.n2 === 3)).toBe(true);
+        expect(rows.map((r) => r.label)).toEqual(Array(3).fill("insufficient"));
+      });
+    });
+
+    it("balanced, infrequent refusals raise no warning and label nothing", async () => {
       const { scen, a, b } = setup({ semantic: true });
       // One refusal per arm in 10 reps: a gap of 0 and a 10% share.
-      const both = await runEval(
-        args(scen, a, b, ["--reps", "10"]),
-        deps(fakeRunner((s, r) => (s.scenario.name === SEM && s.job.rep === 1 ? refuse(r) : r))),
-      );
+      const both = await runEval(args(scen, a, b, ["--reps", "10"]), deps(shaped({ before: [1], after: [1] })));
       expect(semRows(both.report).every((r) => r.n1 === 9 && r.n2 === 9)).toBe(true);
       expect(both.report.summary.refusalImbalances).toEqual([]);
-      expect(both.report.summary.refusalsGated).toBe(false);
       expect(both.report.summary.exitCode).toBe(0);
+    });
+
+    it("a MULTI-key assertion labels through its claim rows; its roll-up keeps the refused reps as fails", async () => {
+      const { scen, a, b } = setup({ semantic: true });
+      const file = join(scen, `${SEM}.yaml`);
+      writeFileSync(file, readFileSync(file, "utf8").replace("  - semantic_matches:", "  - result: success\n    semantic_matches:"));
+      // The grade must carry the frozen scenario's own (two-key) assertion object, or it is grade_misaligned.
+      const multi = fakeRunner((s, r) => {
+        if (s.scenario.name !== SEM) return r;
+        const frozen = s.scenario.assert![3];
+        const x = { ...r, assertions: r.assertions.map((g, i) => (i === 3 ? { ...g, assertion: frozen } : g)) };
+        return s.job.arm === "after" && s.job.rep <= 2 ? refuse(x) : x;
+      });
+      const out = await runEval(argv(scen, a, b, [...outDir("e-m"), "--fail-on", "possible"]), deps(multi));
+      const rows = semRows(out.report);
+      expect(rows.filter((r) => r.kind === "claim").map((r) => r.label)).toEqual(["insufficient_refusals", "insufficient_refusals"]);
+      const rollup = rows.find((r) => r.kind === "semantic_rollup")!;
+      expect([rollup.n2, rollup.k2]).toEqual([5, 3]); // the refusals stay in as fails
+      expect(rollup.label).not.toBe("insufficient_refusals");
+      expect(out.report.summary.exitCode).toBe(1);
+    });
+
+    it("a legacy eval dir (no persisted reason) re-reported through `eval report` infers the provable refusals", async () => {
+      const { scen, a, b } = setup({ semantic: true });
+      // The pre-reason shape: the single-key semantic grade failed while its claims met min_pass (all here).
+      const legacy = fakeRunner((s, r) => (s.scenario.name === SEM && s.job.arm === "after" && s.job.rep <= 2 ? failAssertion(r, 3) : r));
+      const out = await runEval(argv(scen, a, b, [...outDir("e-l"), "--fail-on", "possible"]), deps(legacy));
+      const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
+      expect(lines.flatMap((l) => l.grades[0]?.assertions ?? []).some((g) => g.semanticEvidence !== undefined)).toBe(false);
+      const rep = writeEvalReport(out.evalDir);
+      expect(rep.arms.map((x) => x.evidenceUnavailable)).toEqual([{}, { unrecorded: 2 }]);
+      expect(semRows(rep).map((r) => r.label)).toEqual(Array(3).fill("insufficient_refusals"));
+      expect(rep.summary.exitCode).toBe(1);
     });
   });
 

@@ -85,7 +85,7 @@ Each row leads with B − A and a 95% Newcombe interval, then a two-sided Fisher
 | `no detectable change` | anything else; the row shows the smallest change this n could have detected (MDD), or `none at this n` |
 | `underpowered` | no outcome at this row's sizes could reach `--alpha`; never read this as "no change" |
 | `insufficient` | an arm has too few valid reps (4 at the default `--reps 5`, so one lost rep per arm is tolerated) |
-| `insufficient_refusals` | `insufficient` only because the candidate refused more `semantic_matches` grades for unavailable evidence than the baseline; exits 1 ([below](#when-the-candidate-refuses-more)) |
+| `insufficient_refusals` | `insufficient`, where the candidate refused at least 2 more `semantic_matches` grades for unavailable evidence than the baseline and that excess took the row below the threshold; a drop signal that `--fail-on possible` gates on ([below](#when-the-candidate-refuses-more)) |
 
 When the interval excludes 0 but the exact test cannot flag the row, the row says so rather than
 printing two verdicts.
@@ -184,13 +184,12 @@ A refused eval leaves nothing in its eval dir.
 ## Exit codes
 
 - `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
-  result, a scenario that compared nothing, an `insufficient_refusals` row, or a judge disagreement still
-  exits 1 — see below.)
+  result, a scenario that compared nothing, or a judge disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
-  classification rows do not); with `--fail-on confirmed`, a `confirmed` drop. Also, with or without it:
-  every row `insufficient`, a scenario that compared nothing (below), a row `insufficient_refusals`
-  ([below](#when-the-candidate-refuses-more)), or the judge model differed across reps. An A/A run under
-  `--fail-on possible` can exit 1 on noise alone.
+  classification rows do not) or an `insufficient_refusals` row ([below](#when-the-candidate-refuses-more));
+  with `--fail-on confirmed`, a `confirmed` drop only. Also, with or without it: every row `insufficient`
+  (`insufficient_refusals` rows do not count toward this), a scenario that compared nothing (below), or the
+  judge model differed across reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
 - `2` — usage, or any refusal before the first run.
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
 
@@ -211,10 +210,17 @@ Judged per scenario, for each arm:
 A `semantic_matches` grade refused for unavailable evidence leaves its assertion's rows, so a rate is over
 the reps that were graded. That has a blind spot: an edit that makes the deliverable outgrow the evidence
 budget makes the candidate refuse more, its rows lose reps, and a row that falls below the threshold would
-be plain `insufficient` — no drop, exit 0, while the edit broke exactly what the rows measure. Such a row is
-labelled `insufficient_refusals` instead: the baseline had enough reps, the candidate refused more often,
-and with its refused reps it would have had enough. The eval exits 1 on it, with or without `--fail-on`, as
-it does when every row is insufficient. A baseline that refuses more does not gate.
+be plain `insufficient` — no drop, while the edit broke exactly what the rows measure. Such a row is
+labelled `insufficient_refusals` instead when the baseline had enough reps, the candidate refused at least 2
+more grades than the baseline, and crediting back only that excess would have given it enough. (One extra
+refusal, or a refusal beside a rep lost some other way, does not label a row.) It is a drop signal at the
+`possible` level: `--fail-on possible` gates on it, `--fail-on confirmed` does not (nothing was tested, so
+nothing is confirmed), and without `--fail-on` it does not change the exit code — the same as a `possible
+drop`. A baseline that refuses more never labels a row.
+
+Re-reporting an eval dir written before this label existed (`eval report <dir>`) can change its row labels,
+and with `--fail-on` its exit code: refusals it can prove from the kept fields (the `unrecorded` case above)
+now leave the rows, and may label one `insufficient_refusals`.
 
 The header also warns, per assertion, whenever the two arms' refusals differ by 2 reps or more, or either
 arm refused at least 20% of its scored reps, naming both counts (`summary.refusalImbalances` in
