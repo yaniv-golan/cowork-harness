@@ -134,13 +134,20 @@ All notable changes to this project are documented here. The format is based on
   and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy).
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
-  `skill_invoked` tracks the skill a plugin's only `skills/<name>/` or a `SKILL.md` at its root registers, matched
-  by the id the agent registers for it (a root skill's frontmatter `name`, else the plugin directory's name).
-  `--skill <name>` (on `run` and `state-template`) picks one skill of a multi-skill plugin, with `critique --skill`'s
-  rules, resolved in the variant's snapshot; without it a multi-skill plugin's rows omit the column and the run says
-  so, naming `--skill` and the skills. A `--skill` selection is part of the harness sha: `--approve-harness` records
-  it in `_state.json` as `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or
-  dropped since is refused with a message naming the change. Without `--skill` the sha is what it was before.
+  `skill_invoked` is `1` or `0` for whether the run invoked the tracked skill; a blank cell means not measured (no
+  tracked skill, or a record that could not tell), never "not invoked". The tracked skill is matched by the id the agent
+  registers: `<plugin>:<name>`, the name being a skill directory's name or a root `SKILL.md`'s frontmatter `name` (else
+  the plugin directory's name), with every character outside `[a-zA-Z0-9_-]` replaced by `-`. The candidates are the
+  skills the agent loads: `skills/*/`, the paths in the manifest's `skills` field (a string or an array), and a root
+  `SKILL.md` when neither applies; a `SKILL.md` that is not a regular file or is over 1 MiB is skipped. A plugin with one
+  skill is tracked; with several, `--skill <name>` (on `run` and `state-template`; a directory name or a registered name)
+  picks one, and without it the rows omit the column, the run lists the skills, and `state-template` leaves
+  `skill_invoked` out of `perf_fields`. Every scored row records the tracked id in `meta.skill_tracked`. A pass whose
+  tracked skill differs from the rows already in its variant is refused; another variant may track a different skill,
+  with a warning. A `--skill` selection is part of the harness sha: `--approve-harness` records it in `_state.json` as
+  `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or dropped since is refused with a
+  message naming the change, which the dry run's gate line names too. `--skill` is not remembered between passes, so the
+  runner command the loop repeats must carry it every time. Without `--skill` the sha is what it was before.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text

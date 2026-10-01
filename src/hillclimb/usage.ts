@@ -36,9 +36,10 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --ablate                run with the skill removed (the null run); use a sibling flow dir
   --dry-run               print the resolved scope, gate status and estimate; spend nothing
   --judge-model ID        concrete judge model for every semantic assertion
-  --skill NAME            the plugin skill whose invocation the rows record (skill_invoked): skills/NAME/
-                          of the variant's snapshot; needed for a multi-skill plugin. It joins the harness
-                          sha, so changing it needs --approve-harness
+  --skill NAME            the plugin skill whose invocation the rows record (skill_invoked): a skill
+                          directory's name or its registered name; needed when the plugin registers
+                          several skills. It joins the harness sha, so changing it needs
+                          --approve-harness; pass the same --skill on every pass
   --no-copy-inputs        do not copy session uploads into <flow>/inputs/
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
   --output-format text|json   json: one envelope on stdout at exit
@@ -53,7 +54,8 @@ export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <
        the files the harness gate digests. With --flow, also writes the metrics legend to <flow>/metrics.md
        (an existing copy that differs is kept; the new legend goes to metrics.md.new). json: the envelope
        also carries it as metrics_md. --skill NAME is checked against the plugin as run's is (an unknown
-       skill exits 2, naming the plugin's skills).`;
+       skill exits 2, naming the plugin's skills); with several skills and no --skill, skill_invoked is left
+       out of perf_fields.`;
 
 /** The whole family: `hillclimb --help`, and the usage guard's text (every flag of every subcommand). */
 export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template> ...
