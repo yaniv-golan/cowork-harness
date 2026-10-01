@@ -34,10 +34,12 @@ export interface RefSource {
   command: string;
   variant?: string;
   rep?: number;
-  /** `~`-relative path of the kept run dir the documents were composed from. */
+  /** The kept run dir the documents were composed from, never a host path: relative to the runs root (`<runs>/…`),
+   *  else `~`-relative or redacted. */
   runDir: string;
   /** sha256 of that run's `result.json`: the identity every later added document must share. */
   resultSha256: string;
+  /** The run's id (its run dir's name), which finds it under the current runs root. */
   sessionId?: string;
 }
 

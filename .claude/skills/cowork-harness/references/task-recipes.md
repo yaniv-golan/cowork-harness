@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -17,7 +17,7 @@ a paid live re-record? Walk this tree — the answer is usually no:
    `cowork-harness replay <cassette> --assert-from <scenario.yaml>`. Token-free, no re-record.
    If the recording genuinely lacks the telemetry a key needs (very old cassettes), the key fails
    **loud** as `evidence-unavailable` — that is correct behavior, not a bug; only then re-record.
-2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `questions_count_max`, `gate_answers_delivered`) on a cassette
+2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`) on a cassette
    **with `controlOut`** (any modern recording) → same token-free `--assert-from` path.
 3. **Gate keys** on a **pre-`controlOut`** cassette → one re-record unlocks gate asserts for that
    cassette permanently.

@@ -157,6 +157,7 @@ GATE_KEYS = {
     "question_asked",
     "question_options",
     "question_context",
+    "question_option_count",
     "questions_count_max",
     "gate_answers_delivered",
     "gate_answer_count_min",
@@ -1436,6 +1437,13 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             _f = _enum_finding(_field, _value, path)
             if _f is not None:
                 findings.append(_f)
+    _metrics = doc.get("metrics")
+    if isinstance(_metrics, list):
+        for _m in _metrics:
+            if isinstance(_m, dict) and "better" in _m:
+                _f = _enum_finding("metrics.better", _m["better"], path)
+                if _f is not None:
+                    findings.append(_f)
     _answers = doc.get("answers")
     if isinstance(_answers, list):
         for _rule in _answers:
@@ -1543,6 +1551,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             "question_asked" in assert_keys
             or "question_options" in assert_keys
             or "question_context" in assert_keys
+            or "question_option_count" in assert_keys
         ) or any(
             (n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")
         )
@@ -1642,6 +1651,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 ("question_asked", "question_asked" in assert_keys),
                 ("question_options", "question_options" in assert_keys),
                 ("question_context", "question_context" in assert_keys),
+                ("question_option_count", "question_option_count" in assert_keys),
                 ("gate_answers_delivered: false", any(v is False for v in _assert_values(items, "gate_answers_delivered"))),
             ],
             "a delivered gate records at least one question, so requiring a gate to be present contradicts requiring zero questions",

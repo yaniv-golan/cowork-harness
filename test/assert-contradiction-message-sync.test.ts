@@ -60,6 +60,12 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
       'assert:\n  - questions_count_max: 0\n  - question_context:\n      matches: "x"\n',
     ],
     [
+      // `exactly: 0` included: zero sub-questions asked fails the count, so any value requires a gate.
+      "questions_count_max: 0 + question_option_count",
+      [{ questions_count_max: 0 }, { question_option_count: { matches: "x", exactly: 0 } }],
+      'assert:\n  - questions_count_max: 0\n  - question_option_count:\n      matches: "x"\n      exactly: 0\n',
+    ],
+    [
       "questions_count_max: 0 + gate_answers_delivered: false",
       [{ questions_count_max: 0 }, { gate_answers_delivered: false }],
       "assert:\n  - questions_count_max: 0\n  - gate_answers_delivered: false\n",

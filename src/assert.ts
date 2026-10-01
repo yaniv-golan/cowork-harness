@@ -15,7 +15,8 @@ import type {
 import { addTokenUsage } from "./decide/usage.js";
 import { checkToolCallObject, routedToolGlobs } from "./tool-call-assert.js";
 import { outputsDeleteTier, outputsDeleteEntries } from "./run/outputs-delete-tier.js";
-import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS } from "./types.js";
+import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS, questionOptionCountBoundError } from "./types.js";
+import { REDACTION_TOKEN_RE, hasRedactionToken } from "./redactable-literal.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
@@ -27,7 +28,6 @@ import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
-import { foldsMatch } from "./fixture/workspace.js";
 
 /** Bytes cap for re-hashing a matched input file on the live / verify-run lane (`input_unmodified`).
  *  Mirrors the pre-run manifest's 50 MiB default and the same env override so the post-run re-hash is
@@ -228,6 +228,9 @@ export type ArtifactBodyGate =
   | { kind: "link"; rel: string }
   | { kind: "escape"; rel: string }
   | { kind: "not_found"; rel: string }
+  /** Neither a regular file nor a directory (a FIFO, socket or device). Decided by `stat` BEFORE anything opens it:
+   *  opening a FIFO for reading blocks until a writer appears, and evaluate() is synchronous. */
+  | { kind: "not_regular"; rel: string }
   | {
       kind: "body_less";
       rel: string;
@@ -254,8 +257,21 @@ export function artifactBodyGate(
   if (ctx.linkPaths?.has(rel) === true) return { kind: "link", rel };
   if (!realFile) return { kind: "escape", rel };
   if (!existsSync(realFile)) return { kind: "not_found", rel };
+  if (isSpecialFile(realFile)) return { kind: "not_regular", rel };
   if (truncated.has(rel) || liveReadonly) return { kind: "body_less", rel, replayReason: truncated.get(rel), liveReadonly };
   return { kind: "ok", rel, realFile };
+}
+
+/** True for a path that exists and is neither a regular file nor a directory (a FIFO, socket or device) — never
+ *  opened by a body-reading key. `stat` does not open the file, so it cannot block. A stat failure is left to the
+ *  caller's read, which reports it. */
+function isSpecialFile(realFile: string): boolean {
+  try {
+    const st = statSync(realFile);
+    return !st.isFile() && !st.isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** The body cap of the JSON-reading keys (10 MiB). */
@@ -417,6 +433,11 @@ export interface AssertContext {
   judgeTransports?: Map<Assertion, import("./decide/llm-transport.js").TransportIdentity>;
   /** How many calls the semantic_matches judge took per assert (1, or 2 after its one retry). */
   judgeAttempts?: Map<Assertion, number>;
+  /** `semantic_pairwise`: the composed candidate document's fingerprint, for every assert whose evidence was not
+   *  refused (judged or all-neutral). Surfaced as `RunResult.assertions[].composedDoc`. */
+  composedDocs?: Map<Assertion, JudgedDocFingerprint>;
+  /** Set by the pairwise pre-pass when the caller's deadline passed before a comparison could start. */
+  deadlinePassed?: boolean;
   /** `semantic_matches` asserts whose judge grade was INVALID (malformed/ambiguous after a retry) —
    *  populated by runSemanticJudges. Distinct from "not graded": the check surfaces `judgeInvalid:true` so
    *  a consumer counts the rep as invalid, never silently drops it (which would inflate the score). */
@@ -1782,9 +1803,10 @@ function slashMatches(re: RegExp, ids: string[] | undefined): boolean {
  *   - a symlink at the path, or a path reached through a symlinked directory, is never authored evidence (the
  *     pre-run manifest never hashes a link; replacing a fixture file with a link to other content is not
  *     "writing" it).
- *   - the lookup uses the file's CANONICAL on-disk name: on a case-insensitive filesystem (macOS APFS)
- *     `outputs/REPORT.md` is the fixture's `report.md`, and must read as that pre-run file, as it fails "not
- *     found" on a case-sensitive one. With no exact key, a case-folded match is taken as that pre-run file.
+ *   - the lookup uses the file's CANONICAL on-disk name (realpath.native), matched EXACTLY: on a case-insensitive
+ *     filesystem (macOS APFS) `outputs/REPORT.md` resolves to the fixture's stored `report.md` and reads as that
+ *     pre-run file; on a case-sensitive one it is a different name (not found, or a different file). Never folded:
+ *     a fold could only match a different file.
  *  Post-run hash: the cassette manifest on replay (`postRunHashes`), a bounded re-hash of the real file on live
  *  / verify-run. */
 export type Authorship =
@@ -1807,6 +1829,8 @@ export type AuthorshipContext = Pick<
   AssertContext,
   "workRoot" | "userVisiblePrefixes" | "preRunHashes" | "preRunPaths" | "preRunOrigin" | "postRunHashes" | "linkPaths" | "resume"
 >;
+
+const LINK_WHY = "it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)";
 
 export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash?: string } = {}): Authorship {
   const undecidable = (why: string, evidence = false): Authorship => ({ state: "undecidable", why, evidence });
@@ -1833,36 +1857,54 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
   } catch {
     return { state: "not_found" };
   }
-  if (st.isSymbolicLink() || ctx.linkPaths?.has(lexical))
-    return undecidable("it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)");
+  if (st.isSymbolicLink()) return undecidable(LINK_WHY);
   if (st.isDirectory()) return { state: "directory" };
   if (!st.isFile()) return { state: "not_regular" };
   // A second hard link is another name for an existing inode (it may be an untouched fixture file); the
   // authored-file capture the judge grades excludes such a file, so authorship cannot claim it either.
   if (st.nlink > 1)
     return undecidable("it has a second hard link (another name for the same file) — the authored-file capture excludes it too");
-  // The canonical on-disk name, relative to the canonical work root. A difference other than case or Unicode
-  // normalization form (macOS resolves NFC and NFD spellings to one name) means the path went through a symlinked
-  // directory. Lookups use the same NFC + lower-case key.
+  // A path reached through a symlinked directory is never authored evidence. Decided by lstat on each directory
+  // between the work root and the file — not by comparing spellings, which would have to fold case on macOS and so
+  // would let a case-variant link through on a case-sensitive filesystem.
+  const parts = lexical.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    try {
+      if (lstatSync(join(ctx.workRoot, ...parts.slice(0, i))).isSymbolicLink())
+        return undecidable("it is reached through a symlinked directory — a link is never authored evidence");
+    } catch {
+      return undecidable("its on-disk name could not be resolved");
+    }
+  }
+  // The canonical on-disk name (realpath.native: the name as stored, e.g. `outputs/report.md` when asked as
+  // `OUTPUTS/REPORT.md` on a case-insensitive filesystem). Every lookup below matches it EXACTLY — no case and no
+  // Unicode fold. The pre-run walk records names as stored too, so an exact match is right on every filesystem, and
+  // a fold could only match a DIFFERENT file (on a case-sensitive one `Outputs/x.json` is not `outputs/x.json`).
   let rel: string;
   try {
     rel = relative(realpathSync.native(ctx.workRoot), realpathSync.native(abs)).split(sep).join("/");
   } catch {
     return undecidable("its on-disk name could not be resolved");
   }
-  const fold = foldsMatch;
-  if (rel !== lexical && !fold(rel, lexical))
-    return undecidable("it is reached through a symlinked directory — a link is never authored evidence");
+  // A replay placeholder for an entry recorded as a link: looked up by the same canonical name as every other lookup.
+  if (ctx.linkPaths?.has(rel)) return undecidable(LINK_WHY);
+  // FIRST: the path must lie under a folder the pre-run walk covered — the user-visible roots (outputs/ and the
+  // connected folders) plus uploads/, exactly what `capturePreRunManifest` walks. Anything else under the work root
+  // (a staged plugin or skill tree, say) is absent from the manifest because it was never walked, not because the
+  // run created it — and it must never be matched onto a manifest entry.
+  const walked = [...ctx.userVisiblePrefixes, "uploads"];
+  const segs = rel.split("/");
+  const under = (root: string) => {
+    const r = root.split("/");
+    return segs.length > r.length && r.every((part, i) => part === segs[i]);
+  };
+  if (!walked.some(under))
+    return undecidable(
+      `it is outside the folders the pre-run manifest covers (${walked.join(", ")}), so whether this run wrote it cannot be decided`,
+    );
   const hashes = ctx.preRunHashes;
-  if (!Object.hasOwn(hashes, rel)) {
-    const folded = Object.keys(hashes).find((k) => fold(k, rel));
-    if (folded !== undefined) rel = folded;
-  }
   const postHash = (): string | undefined | "too-large" => {
-    if (ctx.postRunHashes !== undefined) {
-      const post = ctx.postRunHashes;
-      return post[rel] ?? post[lexical] ?? post[Object.keys(post).find((k) => fold(k, rel)) ?? ""];
-    }
+    if (ctx.postRunHashes !== undefined) return ctx.postRunHashes[rel];
     if (opts.postHash !== undefined) return opts.postHash;
     try {
       if (st.size > postRunHashCap()) return "too-large";
@@ -1872,17 +1914,7 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
     }
   };
   if (!Object.hasOwn(hashes, rel)) {
-    if (ctx.preRunPaths?.some((q) => fold(q, rel)))
-      return undecidable("it existed before the run as a link, whose content was never hashed");
-    // Absent from the manifest reads as NEW only where the pre-run walk looked: the user-visible roots (outputs/
-    // and the connected folders) plus uploads/ — exactly what `capturePreRunManifest` walks. Anything else under
-    // the work root (a staged plugin or skill tree, say) is absent because it was never walked, not because the
-    // run created it.
-    const walked = [...ctx.userVisiblePrefixes, "uploads"];
-    if (!walked.some((r) => lexical === r || lexical.startsWith(r + "/")))
-      return undecidable(
-        `it is outside the folders the pre-run manifest covers (${walked.join(", ")}), so whether this run wrote it cannot be decided`,
-      );
+    if (ctx.preRunPaths?.includes(rel)) return undecidable("it existed before the run as a link, whose content was never hashed");
     if (ctx.preRunOrigin === "local-unreadable")
       return undecidable(
         "the pre-run baseline is incomplete (a connected-folder source was unreadable), so a new path cannot be proven new",
@@ -2090,7 +2122,10 @@ function check(
     const outcomes = ctx.pairwiseResults?.get(a);
     const docInfo = ctx.semanticDocInfo?.get(a);
     const refusal = ctx.semanticRefused?.get(a) ?? (outcomes ? semanticRefusal(a, ctx, docInfo) : forkRecordRefusal(a, ctx));
-    const unreadable = (outcomes ?? []).filter((o) => o.status === "missing" || o.status === "integrity");
+    // Only GATE references decide: a metric-only one (`gate: false`, a hillclimb flow's later variants) is recorded
+    // beside the verdict and never changes it, readable or not.
+    const gated = (outcomes ?? []).filter((o) => o.gate !== false);
+    const unreadable = gated.filter((o) => o.status === "missing" || o.status === "integrity" || o.status === "invalid");
     if (ctx.judgeInvalid?.has(a)) {
       results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
     } else if (refusal) {
@@ -2098,7 +2133,7 @@ function check(
       results.push(fail(refusal.message));
     } else if (!outcomes) {
       results.push(fail("evidence unavailable: pairwise judge not run (semantic_pairwise is live-only; skipped on replay)"));
-    } else if (!outcomes.length) {
+    } else if (!gated.length) {
       results.push(fail("evidence unavailable: semantic_pairwise has no reference to compare with"));
     } else if (unreadable.length) {
       // Whatever pass_if says, `any` included: a comparison that did not happen is never a pass.
@@ -2114,11 +2149,17 @@ function check(
       const summary = outcomes
         .map(
           (o) =>
-            `vs ${o.ref}: ${o.status === "neutral" ? "neutral (reference variant)" : `${o.outcome}${o.positionFlip ? " (orders disagreed)" : ""}`}`,
+            `vs ${o.ref}${o.gate === false ? " (metric only)" : ""}: ${
+              o.status === "neutral"
+                ? "neutral (reference variant)"
+                : o.status === "graded"
+                  ? `${o.outcome}${o.positionFlip ? " (orders disagreed)" : ""}`
+                  : `${o.status}${o.why ? ` (${o.why})` : ""}`
+            }`,
         )
         .join("; ");
       semanticEvidence = { reason: "graded", paths: scopeAuthoredEvidence(ctx, p.evidence_files).files.map((f) => f.path) };
-      results.push(outcomes.every(passes) ? ok(`pairwise (${passIf}): ${summary}`) : fail(`pairwise (${passIf}): ${summary}`));
+      results.push(gated.every(passes) ? ok(`pairwise (${passIf}): ${summary}`) : fail(`pairwise (${passIf}): ${summary}`));
     }
   }
   if (a.tool_result_contains !== undefined) {
@@ -3403,6 +3444,128 @@ function check(
       }
     }
   }
+  if (a.question_option_count !== undefined) {
+    const qc = a.question_option_count;
+    const boundError = questionOptionCountBoundError(qc);
+    // Fail CLOSED on every "we cannot see the gates" path, as question_options does: a count over a list the
+    // lane never populated would pass `exactly: 0` / `max` on no evidence.
+    if (boundError !== undefined) {
+      results.push(fail(boundError));
+    } else if (ctx.gateOptionsMissing || ctx.gateOptions === undefined) {
+      results.push(fail("evidence unavailable: gate-option evidence absent for this run — cannot evaluate question_option_count"));
+    } else if (!qc.matches) {
+      results.push(fail("question_option_count: `matches` is empty, so it would match every label"));
+    } else if (hasRedactionToken(qc.matches) || (qc.when_question !== undefined && hasRedactionToken(qc.when_question))) {
+      // A frozen regex that record-time redaction rewrote no longer says what the author wrote.
+      results.push(
+        fail(
+          "evidence unavailable: question_option_count's regex was rewritten by the cassette's redaction policy — it cannot be evaluated on replay. Match a literal the policy does not rewrite, or check it on a live run",
+        ),
+      );
+    } else {
+      let re: RegExp | undefined;
+      if (qc.case_sensitive) {
+        try {
+          re = new RegExp(qc.matches);
+        } catch (e) {
+          results.push(fail(`question_option_count: bad regex "${qc.matches}": ${(e as Error).message}`));
+        }
+      } else {
+        const c = compileUserRegex(qc.matches);
+        if ("error" in c) results.push(fail(`question_option_count: bad regex "${qc.matches}": ${c.error}`));
+        else re = c.re;
+      }
+      let pool = ctx.gateOptions;
+      let selector = "";
+      // A sub-question whose text a redaction policy rewrote cannot be said to match `when_question` or not: it is
+      // left out of the pool, and its being uncertain blocks a pass (a universal rule cannot skip a sub-question it
+      // might cover), never a fail the selected ones already earned.
+      let unsureSelected = 0;
+      if (re !== undefined && qc.when_question !== undefined) {
+        const w = compileUserRegex(qc.when_question);
+        if ("error" in w) {
+          results.push(fail(`question_option_count: bad regex "${qc.when_question}": ${w.error}`));
+          re = undefined;
+        } else {
+          unsureSelected = pool.filter((g) => hasRedactionToken(g.question)).length;
+          pool = pool.filter((g) => !hasRedactionToken(g.question) && w.re.test(g.question));
+          selector = ` matching /${qc.when_question}/i`;
+        }
+      }
+      const bound =
+        qc.exactly !== undefined
+          ? `exactly ${qc.exactly}`
+          : [qc.min !== undefined ? `≥ ${qc.min}` : "", qc.max !== undefined ? `≤ ${qc.max}` : ""].filter(Boolean).join(" and ");
+      const flags = qc.case_sensitive ? "" : "i";
+      if (re === undefined) {
+        /* already reported */
+      } else if (pool.length === 0 && unsureSelected > 0) {
+        results.push(
+          fail(
+            `evidence unavailable: question_option_count: no sub-question${selector} can be identified — ${unsureSelected} carry question text rewritten by a redaction policy`,
+          ),
+        );
+      } else if (pool.length === 0) {
+        // Never vacuous: a rule over every gate proves nothing on a run where no gate fired.
+        results.push(fail(`question_option_count: no question${selector} was asked (${ctx.gateOptions.length} gate(s) recorded)`));
+      } else {
+        // A label a redaction policy rewrote (a replayed cassette, a scrubbed verify-run) hides its bytes, so whether
+        // it matches is UNKNOWN either way — a regex like `.` or `[^/]` can match the token's own text, so no
+        // substitution makes a hit trustworthy. Each count is a range [n, n + unknown], and only a range wholly inside
+        // (pass) or wholly outside (fail) the bound is a verdict.
+        const counted = pool.map((g) => {
+          let n = 0;
+          let unknown = 0;
+          for (const o of g.options) {
+            if (hasRedactionToken(o.label)) unknown++;
+            else if (re!.test(o.label)) n++;
+          }
+          return { g, n, unknown };
+        });
+        const inBound = (n: number) =>
+          qc.exactly !== undefined ? n === qc.exactly : (qc.min === undefined || n >= qc.min) && (qc.max === undefined || n <= qc.max);
+        const verdict = (c: { n: number; unknown: number }): "yes" | "no" | "unknown" => {
+          let any = false;
+          let every = true;
+          for (let k = c.n; k <= c.n + c.unknown; k++) {
+            if (inBound(k)) any = true;
+            else every = false;
+          }
+          return every ? "yes" : any ? "unknown" : "no";
+        };
+        const shown = (c: { g: { question: string; options: { label: string }[] }; n: number; unknown: number }) =>
+          `${JSON.stringify(c.g.question)} has ${c.n}${c.unknown ? ` (+${c.unknown} redacted)` : ""} of [${c.g.options
+            .map((o) => o.label.replace(REDACTION_TOKEN_RE, "(redacted)"))
+            .join(", ")}]`;
+        const bad = counted.filter((c) => verdict(c) === "no");
+        const unsure = counted.filter((c) => verdict(c) === "unknown");
+        results.push(
+          bad.length > 0
+            ? fail(
+                `question_option_count: expected ${bound} option(s) matching /${qc.matches}/${flags} on every sub-question${selector}; ${bad.length} of ${pool.length} did not: ${bad
+                  .map(shown)
+                  .join("; ")}`,
+              )
+            : unsure.length > 0 || unsureSelected > 0
+              ? fail(
+                  `evidence unavailable: question_option_count: ${[
+                    unsure.length
+                      ? `${unsure.length} sub-question(s) carry option labels rewritten by a redaction policy, so the count cannot be decided: ${unsure.map(shown).join("; ")}`
+                      : "",
+                    unsureSelected
+                      ? `${unsureSelected} sub-question(s) carry question text rewritten by a redaction policy, so whether \`when_question\` selects them cannot be decided`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join("; ")}`,
+                )
+              : ok(
+                  `question_option_count: all ${pool.length} sub-question(s)${selector} have ${bound} option(s) matching /${qc.matches}/${flags}`,
+                ),
+        );
+      }
+    }
+  }
   if (a.questions_count_max !== undefined)
     results.push(
       ctx.questionsMissing
@@ -3504,6 +3667,8 @@ function check(
         results.push(fail(`unsafe artifact_text path "${at.artifact}" — symlink target escapes the work root`));
       } else if (!existsSync(realFile)) {
         results.push(fail(`artifact_text: file not found: ${at.artifact} (under ${ctx.workRoot})`));
+      } else if (isSpecialFile(realFile)) {
+        results.push(fail(`artifact_text: ${at.artifact} is not a regular file`));
       } else if (bodyLess) {
         const cause =
           replayReason === "fixture"
@@ -3589,6 +3754,8 @@ function check(
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
       } else if (gate.kind === "not_found") {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+      } else if (gate.kind === "not_regular") {
+        results.push(fail(`artifact_json: ${aj.artifact} is not a regular file`));
       } else if (gate.kind === "body_less") {
         // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
         // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
@@ -3903,6 +4070,7 @@ function check(
   const judgePromptHash = isJudged ? ctx.judgePromptHashes?.get(a) : undefined;
   const judgeTransport = isJudged ? ctx.judgeTransports?.get(a) : undefined;
   const judgeAttempts = isJudged ? ctx.judgeAttempts?.get(a) : undefined;
+  const composedDoc = a.semantic_pairwise !== undefined ? ctx.composedDocs?.get(a) : undefined;
   const pairwise = a.semantic_pairwise !== undefined ? ctx.pairwiseResults?.get(a) : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
@@ -3912,6 +4080,7 @@ function check(
     ...(judgeCostUsd !== undefined ? { judgeCostUsd } : {}),
     ...(judgeUsage ? { judgeUsage } : {}),
     ...(judgedDoc ? { judgedDoc } : {}),
+    ...(composedDoc ? { composedDoc } : {}),
     ...(judgePromptHash ? { judgePromptHash } : {}),
     ...(judgeTransport ? { judgeTransport } : {}),
     ...(judgeAttempts !== undefined ? { judgeAttempts } : {}),

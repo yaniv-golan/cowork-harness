@@ -1,6 +1,6 @@
 # Debugging a run
 
-Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
 
 ## Part III — Debug
 
@@ -34,7 +34,7 @@ agent stderr) — read those before re-running; a re-record rarely tells you mor
 already does.
 <!-- END triage-canonical -->
 
-**`verify-run` never calls the semantic judge**, so it cannot re-grade a `semantic_matches` assert. When the
+**`verify-run` never calls the semantic judge**, so it cannot re-grade a `semantic_matches` or `semantic_pairwise` assert. When the
 rubric changed (or you want another judge model) on a run you already paid for, use
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` instead: it re-grades those asserts against the
 kept run without re-running the agent — unlike the tools above it is not token-free (the judge call is its

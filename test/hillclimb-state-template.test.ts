@@ -78,6 +78,27 @@ describe("stateTemplate", () => {
     expect(t2.metricsMd).not.toMatch(/`a11y_score` — (claim|assertion|1 when)/);
   });
 
+  it("the anchored per-index filter admits the per-index pairwise keys and still keeps a11y_score a float", () => {
+    const PW = { semantic_pairwise: { rubric: ["r"] } } as unknown as Assertion;
+    const metric: ScenarioMetric = { id: "a11y_score", artifact: "outputs/a.json", path: "score", better: "higher", scale: 1 };
+    const t3 = stateTemplate({
+      cases: [
+        { assertions: [PW], metrics: [metric] },
+        { assertions: [PW], metrics: [metric] },
+      ],
+      harnessPaths: [],
+      decider: false,
+      pairwiseRefs: [{ ref: "v1", rowsMissing: 0 }],
+    });
+    const ids = t3.state.metrics.map((m) => m.id);
+    for (const id of ["a0_win", "a0_win_present", "a0_win_v1", "a0_win_v1_present"]) expect(ids).toContain(id);
+    expect(t3.state.metrics.find((m) => m.id === "a11y_score")).toMatchObject({ kind: "float" });
+    expect(t3.metricsMd).toMatch(/`a0_win` — `win` of assertion 0 alone\./);
+    expect(t3.metricsMd).toMatch(/`a0_win_v1_present` — 1 when assertion 0's `win_v1` was measured\./);
+    expect(t3.metricsMd).toMatch(/`a11y_score` — a scenario-declared number/);
+    expect(t3.metricsMd).not.toMatch(/`a11y_score` — (claim|assertion|1 when|`win)/);
+  });
+
   it("identical assertion lists: metrics.md carries the per-assertion legend", () => {
     const same = stateTemplate({ cases: [{ assertions: real.assert }, { assertions: real.assert }], harnessPaths: [], decider: false });
     expect(same.metricsMd).toMatch(/`a0_c0`.*claim 0 of assertion 0/s);

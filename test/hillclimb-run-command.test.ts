@@ -3,16 +3,32 @@
 // records what it was asked to run and returns a committed real excerpt (test/fixtures/eval-classify/
 // success-semantic.json) with the public csv-metrics run's init/result frames. Nothing spawns.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  chmodSync,
+  renameSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { defaultSnapshotRoot, runHillclimbCommand, snapshotRootFrom, type RunCommandDeps } from "../src/hillclimb/run-command.js";
 import { parseHillclimbRunArgs } from "../src/hillclimb/args.js";
+import { stateTemplateFor } from "../src/hillclimb/cli.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
+import { loadCases } from "../src/hillclimb/cases.js";
+import { freezeRef } from "../src/refs/store.js";
+import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import type { SessionConfig } from "../src/session.js";
 import type { RunResult, Scenario } from "../src/types.js";
 
@@ -145,6 +161,102 @@ describe("runHillclimbCommand", () => {
     const s = calls[1].extra.session as { plugins: { local_plugins: string[] } };
     expect(readFileSync(join(s.plugins.local_plugins[0], "skills", "x", "SKILL.md"), "utf8")).toMatch(/round 1/);
     expect(err.join("\n")).toMatch(/live plugin .* differs from variant baseline's snapshot/);
+  });
+
+  it("an edited workspace_fixture file is a harness change: the next pass refuses until re-approved", async () => {
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "report.md"), "# draft 1\n");
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: ../fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      expect((await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps())).exitCode).toBe(0);
+      writeFileSync(join(cwd, "fx", "report.md"), "# draft 2\n");
+      const r = await runHillclimbCommand(args(), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toMatch(/harness changed since last approved run \(files: .*fx\/report\.md/);
+      expect(calls).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
+  it("a fixture file's exec bit is part of the harness: flipping it refuses until re-approved, as staging carries it", async () => {
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "run.sh"), "echo hi\n");
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: ../fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      expect((await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps())).exitCode).toBe(0);
+      chmodSync(join(cwd, "fx", "run.sh"), 0o755);
+      const r = await runHillclimbCommand(args(), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toMatch(/harness changed since last approved run/);
+      expect(calls).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
+  it("state-template's harness_paths, saved as _state.json, approve and run with a fixture and an upload — and after a fixture file is renamed", async () => {
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "report.md"), "# draft\n");
+    writeFileSync(join(cwd, "evals", "input.csv"), "a,b\n");
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nuploads:\n  - ./input.csv\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: ../fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      const t = stateTemplateFor("evals", cwd, {});
+      expect(t.state.harness_paths).toEqual(expect.arrayContaining(["fx/report.md", "evals/input.csv"]));
+      mkdirSync(join(cwd, "flow"));
+      writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify(t.state));
+      const first = await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      expect(first.error?.message).toBeUndefined();
+      expect(first.exitCode).toBe(0);
+      renameSync(join(cwd, "fx", "report.md"), join(cwd, "fx", "final.md")); // the listed entry no longer exists
+      const second = await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      expect(second.error?.message).toBeUndefined();
+      expect(second.exitCode).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
+  it("a listed harness file inside a connected folder is still refused: only the agent's own inputs are exempt", async () => {
+    mkdirSync(join(cwd, "shared"));
+    writeFileSync(join(cwd, "shared", "grade.mjs"), "export default 1\n");
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nfolders:\n  - from: ${join(cwd, "shared")}\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    mkdirSync(join(cwd, "flow"));
+    writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify({ harness_paths: ["shared/grade.mjs"] }));
+    const r = await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/could read .*shared\/grade\.mjs/);
+  });
+
+  it("a workspace_fixture that holds a scenario is refused: the fixture is copied where the agent reads", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: .\n"); // the evals dir itself
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      const r = await runHillclimbCommand(args("--approve-harness"), deps());
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toMatch(/could read .*alpha\.yaml/);
+      expect(calls).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
   });
 
   it("a variant with rows whose snapshot is gone is refused before spend", async () => {
@@ -484,18 +596,113 @@ describe("runHillclimbCommand", () => {
       expect(err.join("\n")).toContain("SYNTHETIC refusal");
     });
 
-    it("a pairwise reference that is missing refuses before spend, not as an error on every rep", async () => {
-      writeFileSync(
-        join(cwd, "evals", "alpha.yaml"),
-        SCENARIO.replace(
-          /  - semantic_matches:[\s\S]*$/,
-          `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
-        ),
-      );
-      const r = await runHillclimbCommand(args("--approve-harness"), deps());
-      expect(r.exitCode).toBe(2);
-      expect(calls).toEqual([]);
-      expect(err.join("\n")).toMatch(/case alpha: .*refstore/);
+    // The flow's own references replace the scenario's `refs:`: the baseline's is the gate. A baseline pass is neutral
+    // against it (it freezes it), so only a later variant is refused while it is missing — before spend, naming the repair.
+    describe("pairwise references come from the flow", () => {
+      const pairwise = () =>
+        writeFileSync(
+          join(cwd, "evals", "alpha.yaml"),
+          SCENARIO.replace(
+            /  - semantic_matches:[\s\S]*$/,
+            `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
+          ),
+        );
+
+      it("a later variant with no baseline reference refuses before spend, naming freeze-ref", async () => {
+        pairwise();
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        expect(calls).toEqual([]);
+        const text = err.join("\n");
+        expect(text).toMatch(/case alpha: .*reference "baseline"/);
+        expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
+        // The scenario's own store is never consulted.
+        expect(text).not.toContain("refstore");
+      });
+
+      it("a baseline reference frozen for another prompt is refused with 'start a fresh flow dir', not a freeze-ref circle", async () => {
+        pairwise();
+        const sc = loadCases(join(cwd, "evals")).cases[0]!.scenario;
+        freezeRef(
+          join(cwd, "flow", "baseline", "ref"),
+          "alpha",
+          { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
+          { [pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!)]: "OLD ANSWER" },
+          { harnessVersion: "t", composerId: "c", scenario: "alpha", taskSha256: "0".repeat(64) },
+        );
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        expect(calls).toEqual([]);
+        const text = err.join("\n");
+        expect(text).toMatch(/frozen for a different task/);
+        expect(text).toContain("start a fresh flow dir");
+        expect(text).not.toContain("hillclimb freeze-ref");
+      });
+
+      it("a damaged baseline document is refused with 'start a fresh flow dir', never a freeze-ref that cannot repair it", async () => {
+        pairwise();
+        const sc = loadCases(join(cwd, "evals")).cases[0]!.scenario;
+        const key = pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!);
+        const store = join(cwd, "flow", "baseline", "ref");
+        freezeRef(
+          store,
+          "alpha",
+          { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
+          { [key]: "THE ANSWER" },
+          {
+            harnessVersion: "t",
+            composerId: "c",
+            scenario: "alpha",
+            taskSha256: createHash("sha256").update(sc.prompt, "utf8").digest("hex"),
+          },
+        );
+        writeFileSync(join(store, "alpha", `doc-${key}.txt`), "TAMPERED");
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        const text = err.join("\n");
+        expect(text).toContain("start a fresh flow dir");
+        // The refusal's own text names `ref freeze` generically; the hillclimb repair hint must not offer a freeze.
+        expect(text).not.toContain("hillclimb freeze-ref evals");
+      });
+
+      it("a baseline pass is neutral against its own missing reference, so it runs — with the flow's setup, not refs:", async () => {
+        pairwise();
+        const r = await runHillclimbCommand(args("--approve-harness"), deps());
+        expect(calls.length).toBeGreaterThan(0);
+        expect(r.exitCode).not.toBe(2);
+        const pw = calls[0]!.extra.pairwise;
+        expect(pw).toEqual({
+          caseId: "alpha",
+          refs: [{ name: "baseline", store: join(cwd, "flow", "baseline", "ref") }],
+          neutralRefs: ["baseline"],
+          gateRefs: ["baseline"],
+        });
+        expect(err.join("\n")).toMatch(/pairwise refs: baseline .*the scenario `refs:` of alpha is ignored under hillclimb/);
+      });
+
+      it("after the pool, a baseline pass freezes each pairwise case's reference — a case with no good row is a counted failure, not an error row", async () => {
+        pairwise();
+        // The fake run records no pairwise outcome, so its evidence reads as refused: win_present 0, no good row.
+        const r = await runHillclimbCommand(args("--approve-harness"), deps());
+        expect(r.exitCode).toBe(1);
+        expect(r.scored).toBe(1);
+        const text = err.join("\n");
+        expect(text).toMatch(/alpha: the baseline reference was not frozen — case alpha: no good row/);
+        expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
+        expect(
+          existsSync(join(cwd, "flow", "baseline", "errors.jsonl"))
+            ? readFileSync(join(cwd, "flow", "baseline", "errors.jsonl"), "utf8").trim()
+            : "",
+        ).toBe("");
+        // The row carries the pairwise columns, measured as not compared.
+        expect(rows()[0]!.grade).toMatchObject({ win_present: 0 });
+      });
+
+      it("a dry run says how many judge calls a rep makes, outside the agent-spend estimate", async () => {
+        pairwise();
+        await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+        expect(err.join("\n")).toMatch(/pairwise judging \(experimental; not in the estimate.*\): up to 0 judge call\(s\) per rep/);
+      });
     });
 
     it("a flow with no judge and no LLM answering never asks", async () => {

@@ -48,6 +48,8 @@ const MATRIX: Array<[string, string[]]> = [
   ["hillclimb run", ["hillclimb", "run", "x.yaml"]],
   ["hillclimb check", ["hillclimb", "check"]],
   ["hillclimb state-template", ["hillclimb", "state-template", "x.yaml"]],
+  ["hillclimb freeze-ref", ["hillclimb", "freeze-ref", "x.yaml", "--variant", "baseline"]],
+  ["hillclimb regrade", ["hillclimb", "regrade", "x.yaml"]],
   ["assertions", ["assertions", "--list"]],
   ["scaffold (run-id form)", ["scaffold", "some-run"]],
   ["scaffold (flag-built form)", ["scaffold", "--name", "x", "--prompt", "p"]],

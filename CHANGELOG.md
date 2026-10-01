@@ -22,9 +22,29 @@ All notable changes to this project are documented here. The format is based on
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
   schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
   assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
-  `artifact_text` / `artifact_json`, also stamps v14.
+  `artifact_text` / `artifact_json`, or a `question_option_count` assertion, also stamps v14.
+- **`authored: true` on a path outside `outputs/`, `uploads/` and the connected folders now fails
+  evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
+  the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
+  unaffected: such a path is not in the cassette's manifest.
 
 ### Added
+
+- **Scenario `metrics:` — numbers a scenario measures, beside the verdict.** Each entry
+  (`{id, artifact, path, better, scale | unbounded, min?}`; `scale` is the upper bound of the range, `min` the floor, default 0) reads one number from a JSON file the run wrote and is
+  reported in `RunResult.metrics` as `{id, value}` or `{id, unavailable: <reason>}` — one per declared id, in order,
+  never a `0` for a missing value and never a converted string. Reasons: `missing_artifact`, `missing_path`,
+  `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`. A file the run did not write is
+  `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a file the run
+  rewrote unchanged is treated as untouched. `replay` re-measures from the cassette manifest and warns once about
+  metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration and `--write`
+  freezes it; a plain replay notices an on-disk `metrics:` drift. `verify-run` re-measures the current declaration
+  from the kept work dir — no judge, no spend. The published scenario schema mirrors every other load rule.
+  Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`.
+  Declaring a metric arms the pre-run manifest, which a scenario with no other baseline-reading key did not capture
+  before: such runs now persist `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back
+  the files the run authored (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
+  connected folder before each run (time on a large connected folder).
 
 - **`lint-skill --suppressions <file>` accepts reviewed findings from a JSON file, one site per entry.** Each
   entry (`{rule, file, match?, reason}`, `reason` required) suppresses at most one finding: of that rule, in
@@ -36,6 +56,17 @@ All notable changes to this project are documented here. The format is based on
   every line with that text.
 - **`lint-skill --strict-ignores` reports a suppression that suppressed nothing as WARN instead of INFO**, so
   `--strict --strict-ignores` fails on a stale marker, `--ignore-rule` or suppressions entry.
+- **`question_option_count` counts the options a gate offered whose label matches a regex, on every sub-question.**
+  `{matches, exactly | min/max, when_question?, case_sensitive?}` passes only when the count satisfies the
+  bound on every selected sub-question, so a rule over gates the model composes, such as "exactly one option
+  per gate carries the reserved no-change prefix", no longer needs a script over `events.jsonl`. Zero
+  sub-questions asked fails, never passes vacuously; unreadable gate evidence, or a count that a
+  redaction-rewritten label could change, fails as evidence-unavailable. It grades live, on `verify-run`, and on
+  replay of a cassette with `controlOut`. Every sub-question a gate asks counts, one asked again after a denial
+  included. The two rules of that example:
+  `{matches: '^No changes — ', exactly: 1}` and `{matches: '^No changes — .*\b(add|remove)\b', exactly: 0}` — keep the
+  second case-insensitive (the default): `case_sensitive: true` applies to the whole pattern and would miss `Add`.
+  Single-quote the regexes; a control character (a double-quoted `\b` is a backspace) is refused at load.
 - **`eval --dry-run` plans an A/B before you spend, and `eval --max-budget-usd` caps it.** A dry run makes every
   check the real eval makes before its first run, then prints a plan from the runs dir's history and exits 0.
   It runs no agent, builds no `--decider-cmd` / `--decider-dir` channel, and creates no eval dir (its arm
@@ -106,7 +137,9 @@ All notable changes to this project are documented here. The format is based on
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
   refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
   inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
-  harness change (`--approve-harness` records it). Rows carry the
+  harness change (`--approve-harness` records it; the harness sha covers each scenario, its session file, its uploads
+  and its `workspace_fixture` files, exec bits included; a fixture is also a read root, so a scenario or session
+  file inside one is refused like one inside a mounted folder). Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
@@ -135,6 +168,35 @@ All notable changes to this project are documented here. The format is based on
   that predate a declared metric instead of failing them, warns about a float outside `[min, scale]`, refuses a
   non-numeric `min`, and its headroom reads a lower-is-better float's good end from `min`, 0 when absent. See
   docs/cli.md → Numeric metrics in hillclimb.
+
+- **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
+  `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
+  run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric
+  change) and `pass` is recomputed; `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot
+  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, refuses up
+  front (exit 2) when the host `claude` cannot run the judge isolated, takes every selected variant's lock, and
+  preflights every batch's evidence before any judge call (a refusal writes nothing).
+  `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
+  `<variant>/regrade.md`, and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
+  now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
+  spend, and drift-checks an all-neutral run against its `composedDoc`; `no_semantic_asserts` now means the scenario has
+  neither judged key. A re-grade that only adds comparisons records the outcomes it kept as `pairwise[].copied: true`.
+
+- **`semantic_pairwise` inside a hillclimb flow, and `hillclimb freeze-ref`.** Under `hillclimb run` every pairwise
+  assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of
+  the scenario's `refs:`. A baseline pass is neutral against its own reference and freezes it after the pool from each
+  case's lowest-rep good row; any other variant is refused before spending while its case has none. Only the
+  baseline's reference decides `pass`; rows gain `win` / `win_present` / `both_bad` (which `state-template` declares
+  and the metrics legend explains), a `win_<vN>` column per later reference, and per-assert drill-down keys. A
+  `win_<vN>` column is declared only when every scored row carries it; `hillclimb regrade --fill-refs` adds it to
+  the rows written before that reference was frozen.
+  `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar;
+  `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
+  90% of its rows. A `semantic_pairwise` result now records `composedDoc` (the composed document's fingerprint, even
+  when no judge read it), `judgeAttempts`, and, for a metric-only reference, `pairwise[].gate: false` and the status
+  `invalid`; a caller's deadline stops the gating comparisons and ends the run as a timeout (a metric-only comparison
+  it cuts off is recorded `invalid`). `ref freeze`'s success JSON gains `status` (`frozen` or `added`), and a frozen
+  entry records its run id and its run dir relative to the runs root, never as a host path.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
@@ -271,24 +333,11 @@ All notable changes to this project are documented here. The format is based on
   consumer no longer has to match message prose to tell "refused on cost" from "did not load";
   `error.code` is absent on every other error.
 - **`regrade` names a scenario with nothing to re-grade.** Its refusal of a scenario with no `semantic_matches`
-  assert now carries `error.code: "no_semantic_asserts"` in the JSON error envelope (category `usage`, exit 2 as
+  or `semantic_pairwise` assert now carries `error.code: "no_semantic_asserts"` in the JSON error envelope (category `usage`, exit 2 as
   before), so a caller can tell "nothing to re-grade" from a failure without reading the message.
 - **`regrade` re-reads declared metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade
   file carry `metrics` (the `RunResult.metrics` shape), re-read from the kept work dir. A file is read only while
   its bytes still equal the run's own recorded post-run hash; a file edited since the run is `pruned`.
-- **Scenario `metrics:` — numbers a scenario measures, beside the verdict.** Each entry
-  (`{id, artifact, path, better, scale | unbounded, min?}`) reads one number from a JSON file the run wrote and is
-  reported in `RunResult.metrics` as `{id, value}` or `{id, unavailable: <reason>}` — one per declared id, in order,
-  never a `0` for a missing value and never a converted string. Reasons: `missing_artifact`, `missing_path`,
-  `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`. A file the run did not write is
-  `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a file the run
-  rewrote unchanged is treated as untouched. `replay` re-measures from the cassette manifest and warns once about
-  metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration. The
-  published scenario schema mirrors every load rule but the duplicate-id check. Declaring a metric arms the pre-run
-  manifest, which a scenario with no other baseline-reading key did not capture before: such runs now persist
-  `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back the files the run authored
-  (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
-  connected folder before each run (time on a large connected folder).
 
 ### Changed
 
@@ -476,7 +525,15 @@ All notable changes to this project are documented here. The format is based on
   `outputs/`, `uploads/` and the connected folders only, so a file staged elsewhere under the work root before
   the run (a plugin's or skill's own files under `.local-plugins/`, say) was missing from it and read as "new this
   run". On `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json`, `authored: true` on such a
-  path now fails evidence-unavailable, naming the folders the manifest covers.
+  path now fails evidence-unavailable, naming the folders the manifest covers. The check and every lookup (the
+  manifest, the pre-run link paths, a replay's link entries and post-run hashes) use the file's stored on-disk name,
+  matched exactly: on a case-sensitive filesystem `Outputs/` is not `outputs/`, and a case- or normalization-twin of a
+  manifest file is never read as that file. The symlinked-directory check runs `lstat` on each directory of the path
+  as written.
+- **`artifact_json` and `artifact_text` no longer hang on a FIFO.** A FIFO at the artifact path was opened for
+  reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
+  check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
+  directory (a FIFO, a socket or a device).
 
 ### Documentation
 

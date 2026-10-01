@@ -20,7 +20,7 @@
 // here; the flow writer scrubs every byte it writes.
 
 import { basename } from "node:path";
-import type { Assertion, RunResult, TokenUsage } from "../types.js";
+import type { Assertion, MetricUnavailable, RunResult, TokenUsage } from "../types.js";
 import {
   authoredGrades,
   classifyRep,
@@ -31,8 +31,10 @@ import {
   type ClassifiableResult,
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
-import { caseKeyDecls, refusableAssertion, type MetricDecl } from "./grade-keys.js";
+import { caseKeyDecls, refusableAssertion, type MetricDecl, type PairwiseDecls } from "./grade-keys.js";
 import { metricEntries, metricSigs } from "./metric-keys.js";
+import { pairwiseRowValues } from "./pairwise.js";
+import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
@@ -49,6 +51,9 @@ export interface AttemptContext {
   /** The scenario's authored assertions — the frozen list every grade lines up against. */
   assertions: readonly Assertion[];
   metrics?: readonly MetricDecl[];
+  /** Set when any case of the flow has `semantic_pairwise`: every row then carries the win columns, one per
+   *  reference the pass judged against. */
+  pairwise?: PairwiseDecls;
   rep: number;
   /** The concrete model the main loop must be served by. */
   pin?: string;
@@ -130,15 +135,123 @@ function judgeRetries(r: RunResult | undefined): { judge_retries: number; unreco
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
-  const r = a.result;
-  const ev = resultEventFields(ctx.events);
-  const mains = mainLoopModels(ctx.events);
-  const model = mains[0];
-  const usage = model ? mainModelUsage(r?.modelUsage, model) : undefined;
+/** A scored row's grade keys (unordered), explanations, claim texts and the reference documents its pairwise
+ *  comparisons read — from the run's result and its rep classification. ONE producer: `attemptRow` writes a row with
+ *  it, and `hillclimb regrade` rewrites a row's grade with it over the re-graded result. `misaligned` when a grade
+ *  does not line up with the scenario (the row is then an error, never a guessed value). */
+export function gradeFor(
+  r: RunResult | undefined,
+  ctx: Pick<AttemptContext, "assertions" | "metrics" | "pairwise">,
+  rep: ReturnType<typeof classifyRep>,
+  agentFailed: boolean,
+): GradeBlock | { misaligned: number; excluded: string } {
+  // Grades, from the shared row extractor.
+  const rows = scenarioRows("", ctx.assertions);
+  const values = repRowValues(rows, ctx.assertions, rep, r as ClassifiableResult | undefined);
+  // `pass` is the run's verdict — the persisted one, else the one producer (computeVerdict), never a re-derivation.
+  const passed = r === undefined ? false : (r.verdict?.pass ?? computeVerdict(r, "live").pass);
+  // A verdict that failed ONLY because semantic grading was refused is not measured: recompute
+  // the verdict (the one producer) with the refused asserts counted as passing; if that passes, omit `pass`.
+  const refusedOnly =
+    !agentFailed &&
+    !passed &&
+    r !== undefined &&
+    authored(r).some(singleKeyRefusal) &&
+    computeVerdict(
+      {
+        ...r,
+        assertions: r.assertions.map((g) => (g.source === undefined && singleKeyRefusal(g) ? { ...g, pass: true } : g)),
+      },
+      "live",
+    ).pass;
+  const grade: Record<string, number> = refusedOnly ? { pass_present: 0 } : { pass: !agentFailed && passed ? 1 : 0, pass_present: 1 };
+  const claims: Record<string, string> = {};
+  const explanation: Record<string, string> = {};
+  const authoredGrades = authored(r);
+  for (const v of values) {
+    const i = v.row.assertionIndex;
+    if (v.excluded !== undefined && v.excluded !== "evidence_unavailable")
+      // 8. Never guess a value that does not line up.
+      return { misaligned: i, excluded: v.excluded };
+    // Graded = at least one of ITS claims was graded. Not the roll-up's own exclusion: a multi-key assertion
+    // keeps its roll-up value (classify.ts) while every claim row is excluded.
+    if (v.row.kind === "semantic_rollup")
+      grade[`a${i}_present`] = values.some((x) => x.row.kind === "claim" && x.row.assertionIndex === i && x.excluded === undefined) ? 1 : 0;
+    else if (v.row.kind === "assertion") {
+      // A refused pairwise assert is not measured: its companion says so and the key is omitted, never undefined.
+      if (refusableAssertion(ctx.assertions[i])) grade[`a${i}_present`] = v.excluded === undefined ? 1 : 0;
+      if (v.excluded === undefined) grade[`a${i}`] = v.value!;
+    } else if (v.excluded === undefined) {
+      const key = `a${i}_c${v.row.claimIndex}`;
+      grade[key] = v.value!;
+      const sc = authoredGrades[i]?.semanticClaims?.find((c) => c.index === v.row.claimIndex);
+      if (sc) claims[key] = sc.claim;
+      if (!agentFailed && sc?.rationale) explanation[key] = UNTRUSTED_JUDGE_PREFIX + sc.rationale;
+    }
+  }
+  // claims: the pooled share of graded claims that passed (refused asserts are excluded — they have no claim
+  // values). The explanation lists every graded claim, failed first, so a reader sees what cost the score.
+  const gradedClaims = values.filter((v) => v.row.kind === "claim" && v.excluded === undefined);
+  grade.claims_present = gradedClaims.length > 0 ? 1 : 0;
+  if (gradedClaims.length > 0) {
+    const passedN = gradedClaims.filter((v) => v.value === 1).length;
+    grade.claims = passedN / gradedClaims.length;
+    if (!agentFailed && Object.keys(explanation).length > 0) {
+      const line = (v: (typeof gradedClaims)[number]) => {
+        const key = `a${v.row.assertionIndex}_c${v.row.claimIndex}`;
+        const why = explanation[key]?.slice(UNTRUSTED_JUDGE_PREFIX.length);
+        return `${v.value === 1 ? "passed" : "FAILED"} ${key}: ${claims[key] ?? ""}${why ? ` — ${why}` : ""}`;
+      };
+      const ordered = [...gradedClaims.filter((v) => v.value !== 1), ...gradedClaims.filter((v) => v.value === 1)];
+      explanation.claims = `${UNTRUSTED_JUDGE_PREFIX}${gradedClaims.length - passedN}/${gradedClaims.length} claims failed. ${ordered.map(line).join(" | ")}`;
+    }
+  }
+  // The flow's metrics (metric-keys.ts). An agent-caused failure scores no float: every metric reads unmeasured.
+  const metrics = metricEntries(agentFailed ? {} : (r ?? {}), ctx.metrics ?? []);
+  Object.assign(grade, metrics.grade);
+  if (ctx.pairwise) {
+    const pw = pairwiseRowValues({ assertions: ctx.assertions, entries: authoredGrades, metricRefs: ctx.pairwise.metricRefs, agentFailed });
+    Object.assign(grade, pw.grade);
+    if (!agentFailed && pw.explanation !== undefined) explanation.win = pw.explanation;
+  }
+  // The frozen document each pairwise comparison read, so `check` can tell when a reference changed under the flow.
+  const refShas: Record<string, string> = {};
+  ctx.assertions.forEach((a, i) => {
+    if (a.semantic_pairwise === undefined) return;
+    // Keyed by compose key, not assert index: a re-scoped assert reads another document of the same reference.
+    for (const o of authoredGrades[i]?.pairwise ?? [])
+      if (o.refDocSha256 !== undefined) refShas[`${pairwiseComposeKey(a)}/${o.ref}`] = o.refDocSha256;
+  });
+  return { grade, explanation, claims, refShas, metricsUnavailable: metrics.unavailable };
+}
+
+/** The grade keys in declared order, so every row reads the same way. */
+export function orderedGrade(
+  grade: Record<string, number>,
+  ctx: Pick<AttemptContext, "assertions" | "metrics" | "pairwise">,
+): Record<string, number> {
+  const ordered: Record<string, number> = {};
+  for (const d of caseKeyDecls(ctx.assertions, ctx.metrics ?? [], ctx.pairwise)) if (d.id in grade) ordered[d.id] = grade[d.id];
+  return ordered;
+}
+
+export interface GradeBlock {
+  grade: Record<string, number>;
+  explanation: Record<string, string>;
+  claims: Record<string, string>;
+  refShas: Record<string, string>;
+  /** Why each unmeasured flow metric was not measured, keyed by id (the row's `meta.metrics_unavailable`). */
+  metricsUnavailable: Record<string, MetricUnavailable>;
+}
+
+/** The judge fields of a row: which judge models graded it and what they used, how each host judge ran (one shape,
+ *  or every distinct one when the asserts differ; absent when no judge recorded one — never null), and the retries. */
+export function judgeFieldsOf(r: RunResult | undefined): {
+  judges: ReturnType<typeof combineJudges>;
+  transports: Array<NonNullable<RunResult["assertions"][number]["judgeTransport"]>>;
+  jr: { judge_retries: number; unrecorded: boolean };
+} {
   const judges = combineJudges(authored(r));
-  // How each graded semantic assert's host judge ran: one shape for the row, or every distinct one when the asserts
-  // differ. Absent when no judge recorded one (an injected judge, or none ran) — never null.
   const transports = [
     ...new Map(
       authored(r)
@@ -147,7 +260,16 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
         .map((t) => [JSON.stringify(t), t] as const),
     ).values(),
   ];
-  const jr = judgeRetries(r);
+  return { judges, transports, jr: judgeRetries(r) };
+}
+
+export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
+  const r = a.result;
+  const ev = resultEventFields(ctx.events);
+  const mains = mainLoopModels(ctx.events);
+  const model = mains[0];
+  const usage = model ? mainModelUsage(r?.modelUsage, model) : undefined;
+  const { judges, transports, jr } = judgeFieldsOf(r);
   const retries = r?.apiRetries?.count ?? 0;
 
   const models: Record<string, unknown> = {};
@@ -221,75 +343,14 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       });
   }
 
-  // Grades, from the shared row extractor.
-  const rows = scenarioRows("", ctx.assertions);
-  const values = repRowValues(rows, ctx.assertions, rep, r as ClassifiableResult | undefined);
-  // `pass` is the run's verdict — the persisted one, else the one producer (computeVerdict), never a re-derivation.
-  const passed = r === undefined ? false : (r.verdict?.pass ?? computeVerdict(r, "live").pass);
-  // A verdict that failed ONLY because semantic grading was refused is not measured: recompute
-  // the verdict (the one producer) with the refused asserts counted as passing; if that passes, omit `pass`.
-  const refusedOnly =
-    !agentFailed &&
-    !passed &&
-    r !== undefined &&
-    authored(r).some(singleKeyRefusal) &&
-    computeVerdict(
-      {
-        ...r,
-        assertions: r.assertions.map((g) => (g.source === undefined && singleKeyRefusal(g) ? { ...g, pass: true } : g)),
-      },
-      "live",
-    ).pass;
-  const grade: Record<string, number> = refusedOnly ? { pass_present: 0 } : { pass: !agentFailed && passed ? 1 : 0, pass_present: 1 };
-  const claims: Record<string, string> = {};
-  const explanation: Record<string, string> = {};
-  const authoredGrades = authored(r);
-  for (const v of values) {
-    const i = v.row.assertionIndex;
-    if (v.excluded !== undefined && v.excluded !== "evidence_unavailable")
-      // 8. Never guess a value that does not line up.
-      return errorRow("error", `grade for assertion ${i} could not be aligned with the scenario (${v.excluded})`, {
-        failure_rule: "grade_alignment",
-      });
-    // Graded = at least one of ITS claims was graded. Not the roll-up's own exclusion: a multi-key assertion
-    // keeps its roll-up value (classify.ts) while every claim row is excluded.
-    if (v.row.kind === "semantic_rollup")
-      grade[`a${i}_present`] = values.some((x) => x.row.kind === "claim" && x.row.assertionIndex === i && x.excluded === undefined) ? 1 : 0;
-    else if (v.row.kind === "assertion") {
-      // A refused pairwise assert is not measured: its companion says so and the key is omitted, never undefined.
-      if (refusableAssertion(ctx.assertions[i])) grade[`a${i}_present`] = v.excluded === undefined ? 1 : 0;
-      if (v.excluded === undefined) grade[`a${i}`] = v.value!;
-    } else if (v.excluded === undefined) {
-      const key = `a${i}_c${v.row.claimIndex}`;
-      grade[key] = v.value!;
-      const sc = authoredGrades[i]?.semanticClaims?.find((c) => c.index === v.row.claimIndex);
-      if (sc) claims[key] = sc.claim;
-      if (!agentFailed && sc?.rationale) explanation[key] = UNTRUSTED_JUDGE_PREFIX + sc.rationale;
-    }
-  }
-  // claims: the pooled share of graded claims that passed (refused asserts are excluded — they have no claim
-  // values). The explanation lists every graded claim, failed first, so a reader sees what cost the score.
-  const gradedClaims = values.filter((v) => v.row.kind === "claim" && v.excluded === undefined);
-  grade.claims_present = gradedClaims.length > 0 ? 1 : 0;
-  if (gradedClaims.length > 0) {
-    const passedN = gradedClaims.filter((v) => v.value === 1).length;
-    grade.claims = passedN / gradedClaims.length;
-    if (!agentFailed && Object.keys(explanation).length > 0) {
-      const line = (v: (typeof gradedClaims)[number]) => {
-        const key = `a${v.row.assertionIndex}_c${v.row.claimIndex}`;
-        const why = explanation[key]?.slice(UNTRUSTED_JUDGE_PREFIX.length);
-        return `${v.value === 1 ? "passed" : "FAILED"} ${key}: ${claims[key] ?? ""}${why ? ` — ${why}` : ""}`;
-      };
-      const ordered = [...gradedClaims.filter((v) => v.value !== 1), ...gradedClaims.filter((v) => v.value === 1)];
-      explanation.claims = `${UNTRUSTED_JUDGE_PREFIX}${gradedClaims.length - passedN}/${gradedClaims.length} claims failed. ${ordered.map(line).join(" | ")}`;
-    }
-  }
-  // The flow's metrics (metric-keys.ts). An agent-caused failure scores no float: every metric reads unmeasured.
-  const metrics = metricEntries(agentFailed ? {} : (r ?? {}), ctx.metrics ?? []);
-  Object.assign(grade, metrics.grade);
-  // Order the keys as declared, so every row reads the same way.
-  const ordered: Record<string, number> = {};
-  for (const d of caseKeyDecls(ctx.assertions, ctx.metrics ?? [])) if (d.id in grade) ordered[d.id] = grade[d.id];
+  const g = gradeFor(r, ctx, rep, agentFailed);
+  if ("misaligned" in g)
+    // 8. Never guess a value that does not line up.
+    return errorRow("error", `grade for assertion ${g.misaligned} could not be aligned with the scenario (${g.excluded})`, {
+      failure_rule: "grade_alignment",
+    });
+  const { explanation, claims, refShas, metricsUnavailable } = g;
+  const ordered = orderedGrade(g.grade, ctx);
 
   const toolCalls = r?.toolCalls;
   const latencyBasisWall = ev.durationMs === undefined;
@@ -344,9 +405,10 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       judge_retries: jr.judge_retries,
       ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
       ...(Object.keys(claims).length ? { claims } : {}),
-      ...(Object.keys(metrics.unavailable).length ? { metrics_unavailable: metrics.unavailable } : {}),
+      ...(Object.keys(metricsUnavailable).length ? { metrics_unavailable: metricsUnavailable } : {}),
       // Each flow metric's declaration as this row was graded under it: a later pass refuses a changed one.
       ...(ctx.metrics?.length ? { metric_sigs: metricSigs(ctx.metrics) } : {}),
+      ...(Object.keys(refShas).length ? { pairwise_ref_sha256: refShas } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),

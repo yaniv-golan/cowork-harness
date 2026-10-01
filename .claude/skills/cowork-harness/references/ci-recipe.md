@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`).
+Self-contained reference. Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -17,7 +17,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 CLI major reaches your workflow the moment it is promoted even though your `uses:` ref never changed — so a
 copy-pasted recipe that omits the input takes a major bump with no say in it. `^4` holds the major, needs no
 patch number to remember, and only wants a human decision at the next major. Pin an exact version
-(e.g. `version: "4.2.0"`) instead when you want byte-reproducible CI.
+(e.g. `version: "4.2.1"`) instead when you want byte-reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -82,7 +82,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@^4.2.0"
+- run: npm i -g "cowork-harness@^4.2.1"
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
                                                     # no silent false-greens. WITHOUT --strict this
                                                     # step cannot fail on a WARN-class rule (e.g.
@@ -178,7 +178,7 @@ The split is not just about tokens — it decides **where each lane can run**:
   `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
   `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
-  `question_context` / `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
+  `question_context` / `question_option_count` / `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
   (`file_exists` / `user_visible_artifact` / `artifact_json` / `artifact_text`) **if** it carries an artifact
   manifest. `file_absent` is in neither class — it is live/verify-run only.
   **That list is illustrative, not the authoritative set** — more keys are replay-checkable than fit a
@@ -398,7 +398,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@^4.2.0"
+      - run: npm i -g "cowork-harness@^4.2.1"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -427,7 +427,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@^4.2.0"
+        run: npm i -g "cowork-harness@^4.2.1"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

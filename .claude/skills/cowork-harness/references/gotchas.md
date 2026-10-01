@@ -1,6 +1,6 @@
 # Gotchas
 
-Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). The full "✓ passed ≠ correct" landmine catalog.
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`). The full "✓ passed ≠ correct" landmine catalog.
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
@@ -28,7 +28,7 @@ authorable). Reach for this list when debugging a run's behavior, that one while
    channel: scripted `choose:` list, in-band `--decider-dir` via a repeated `--choose` / a JSON-array
    reply, and `--decider-cmd` via a JSON-array reply — all deliver the same `", "`-joined wire shape.
    Free-text "Other" via `answer:`. Do NOT hand-write a multiSelect reply as a bare comma-joined
-   string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` / `question_context` /
+   string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` / `question_context` / `question_option_count` /
    `questions_count_max` / `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
    old cassette or they're excluded (loudly), not vacuously passed. `gate_answers_delivered` *fails*
    on unobserved delivery (absence of evidence is failure, not neutral).

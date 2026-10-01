@@ -9,7 +9,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
-import { ScenarioObject, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import {
+  ScenarioObject,
+  Assertion,
+  VERDICT_MODIFIER_KEYS,
+  RESERVED_METRIC_ID_PATTERNS,
+  METRIC_ARTIFACT_REFUSED_PATTERNS,
+} from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
 import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_PLUGIN_HOOK_EVENTS } from "../src/agent/session.js";
 
@@ -228,26 +234,12 @@ function addMetricRules(json: Record<string, unknown>): void {
   ];
   const itemProps = items.properties as Record<string, Record<string, unknown>>;
   // The artifact path stays under the work root: not blank, not absolute (POSIX, drive letter, UNC), no `..`.
-  itemProps.artifact.not = {
-    anyOf: [
-      { pattern: "^\\s*$" },
-      { pattern: "^/" },
-      { pattern: "^[A-Za-z]:[\\\\/]" },
-      { pattern: "^\\\\" },
-      { pattern: "(^|[\\\\/])\\.\\.([\\\\/]|$)" },
-      { pattern: "\\u0000" },
-    ],
-  };
+  itemProps.artifact.not = { anyOf: METRIC_ARTIFACT_REFUSED_PATTERNS.map((pattern) => ({ pattern })) };
   const id = itemProps.id;
-  id.not = {
-    anyOf: [
-      { pattern: "^\\.+$" },
-      { pattern: "^(pass|claims|win|both_bad)$" },
-      { pattern: "^a\\d+(_|$)" },
-      { pattern: "_present$" },
-      { pattern: "(^|_)(win|both_bad)(_|$)" },
-    ],
-  };
+  // JSON Schema patterns carry no flags, so each letter of the case-insensitive reserved patterns is spelled as a
+  // two-case class (`pass` → `[pP][aA][sS][sS]`). One source: RESERVED_METRIC_ID_PATTERNS.
+  const anyCase = (p: string) => p.replace(/\\.|[a-z]/g, (c) => (c.length === 1 ? `[${c}${c.toUpperCase()}]` : c));
+  id.not = { anyOf: [{ pattern: "^\\.+$" }, ...RESERVED_METRIC_ID_PATTERNS.map((p) => ({ pattern: anyCase(p) }))] };
 }
 
 /** Build { filename: pretty-printed-JSON } for every schema. Pure; no I/O. */

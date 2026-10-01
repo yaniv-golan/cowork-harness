@@ -1,6 +1,6 @@
 # Run, record and lock
 
-Tracks `cowork-harness 4.2.0` (baseline `desktop-2.16120.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
 
 ## Part II — RUN, RECORD & LOCK
 
@@ -17,7 +17,7 @@ run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-c
 a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
 When the scenario declares `answers:`, verify-run **also** checks they still match the run's actual gates (a
 reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). `verify-run`
-never calls the semantic judge, so a `semantic_matches` assert is not re-graded by it; after a rubric change,
+never calls the semantic judge, so a `semantic_matches` or `semantic_pairwise` assert is not re-graded by it; after a rubric change,
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` re-grades those against the kept run (the judge call
 is the only spend) and reports whether the judge read the same document the live judge did (widening the evidence
 scope needs `--allow-unchecked`: content the live judge never read is refused otherwise). Or skip
