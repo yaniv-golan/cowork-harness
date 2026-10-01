@@ -30,6 +30,8 @@ const PERF: PerfField[] = [
   { id: "skill_invoked", label: "Skill invoked" },
 ];
 
+const PER_INDEX_ID = /^a(\d+)(?:_c(\d+)|(_present))?$/;
+
 export function stateTemplate(opts: {
   cases: ReadonlyArray<{ name?: string; assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>;
   harnessPaths: readonly string[];
@@ -65,12 +67,13 @@ function metricsMd(declared: readonly GradeKeyDecl[], floats: readonly MetricDec
         `\`${m.id}_present\` is 1 when it was measured; when 0 the value is absent (not 0), so its mean is over measured rows only, ` +
         "and the row's `meta.metrics_unavailable` says why.",
     );
-  const perIndex = declared.filter((d) => /^a\d+/.test(d.id));
+  // Anchored: a scenario metric may start like one (`a11y_score`) and is a float, defined above.
+  const perIndex = declared.filter((d) => PER_INDEX_ID.test(d.id));
   L.push("");
   if (perIndex.length) {
     L.push("Per-assertion keys (every case has the same assertion list):", "");
     for (const d of perIndex) {
-      const m = /^a(\d+)(?:_c(\d+)|(_present))?$/.exec(d.id)!;
+      const m = PER_INDEX_ID.exec(d.id)!;
       const what =
         m[2] !== undefined
           ? `claim ${m[2]} of assertion ${m[1]}`

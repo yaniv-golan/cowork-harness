@@ -63,6 +63,20 @@ describe("stateTemplate", () => {
     expect(withFloat.metricsMd).toMatch(/measured rows only/);
   });
 
+  it("a metric id that merely starts like a per-assertion key (a11y_score) is a float, not a legend entry", () => {
+    const t2 = stateTemplate({
+      cases: [
+        { assertions: real.assert, metrics: [{ id: "a11y_score", artifact: "outputs/a.json", path: "score", better: "higher", scale: 1 }] },
+        { assertions: real.assert, metrics: [{ id: "a11y_score", artifact: "outputs/a.json", path: "score", better: "higher", scale: 1 }] },
+      ],
+      harnessPaths: [],
+      decider: false,
+    });
+    expect(t2.state.metrics.find((m) => m.id === "a11y_score")).toMatchObject({ kind: "float", better: "higher" });
+    expect(t2.metricsMd).toMatch(/`a11y_score` — a scenario-declared number/);
+    expect(t2.metricsMd).not.toMatch(/`a11y_score` — (claim|assertion|1 when)/);
+  });
+
   it("identical assertion lists: metrics.md carries the per-assertion legend", () => {
     const same = stateTemplate({ cases: [{ assertions: real.assert }, { assertions: real.assert }], harnessPaths: [], decider: false });
     expect(same.metricsMd).toMatch(/`a0_c0`.*claim 0 of assertion 0/s);
