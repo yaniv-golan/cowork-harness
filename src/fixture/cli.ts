@@ -12,10 +12,14 @@ const CMD = "fixture";
 
 function textReport(o: ExportOutcome): string[] {
   const lines = [o.message];
-  for (const s of o.skipped) lines.push(`  skipped ${s.file} (${s.why})`);
+  if (o.exitCode === 0 && (o.partial || o.result === "error"))
+    lines.push("  exported from an incomplete/failed run — files may be truncated");
+  for (const s of o.skipped) lines.push(`  skipped ${s.file} (${s.why}${s.reason ? `: ${s.reason}` : ""})`);
   for (const n of o.notes)
     lines.push(
-      n.kind === "binary" ? `  note: ${n.file} is binary — copied unscanned` : `  note: ${n.file}: ${n.cls} ${JSON.stringify(n.sample)}`,
+      n.kind === "binary"
+        ? `  note: ${n.file} is binary — secret-checked byte-for-byte, but not scanned for paths; a compressed format (xlsx, docx, pdf, images) is copied without inspection`
+        : `  note: ${n.file}: ${n.cls} ${JSON.stringify(n.sample)}`,
     );
   return lines;
 }
@@ -42,6 +46,8 @@ export async function cmdFixture(args: string[]): Promise<never> {
   const out = p.options["--out"];
   if (sub !== "export" || !runDir || extra.length || !out) return fail(CMD, "usage", FIXTURE_USAGE, undefined, json);
   const o = exportFixture({ runDir, out, allowHostPaths: p.flags["--allow-host-paths"] === true, secrets });
+  // A secret can sit in a file NAME, which `refused[]` carries. Every stdout/stderr write goes through
+  // writeAllSync, which scrubs it with the secret set's raw and JSON-escaped forms, so it never reaches the terminal.
   const { exitCode, message, ...payload } = o;
   // A refusal is the shared error envelope (category runtime, exit 2) carrying the same payload, so a consumer reads
   // `refused[]`/`skipped[]`/`notes[]` from one place whichever way it went.

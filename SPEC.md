@@ -596,8 +596,9 @@ there are three families:
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload, `eval` and `eval report` (`evalDir`, `arms`, `pins`,
   `sections`, `summary`, `cost`, `stoppedEarly`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
-  `answer` (`gate`, `answers`), `fixture export` (`written`, `skipped`, `notes`, `bytes`, `outputsDir`; a refusal is
-  the error envelope carrying the same fields plus `refused[]`), and `regrade` (below).
+  `answer` (`gate`, `answers`), `fixture export` (experimental, §12: `message`,
+  `written`, `skipped`, `refused` (`[]`), `notes`, `bytes`, `outputsDir`, `partial`, `result`; a refusal is the error
+  envelope, its message in `error.message`, carrying the other fields with `refused[]` filled), and `regrade` (below).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
@@ -1243,6 +1244,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   layout and contents are EXPERIMENTAL and may change in any minor release. The command — its name, flags and
   exit codes — and its JSON envelope (`schema/regrade.json`, including the `regradeFile` key that holds the file's
   path) are covered above.
+- **`fixture export`'s JSON payload** — the command, its flags and exit codes are covered; the payload keys are
+  experimental and may change in a minor release.
 - **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
   the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
   (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your
