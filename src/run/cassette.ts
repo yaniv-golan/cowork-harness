@@ -5200,7 +5200,7 @@ export function preSpendVerdicts(
   if (scenario.assert.some((a) => a.semantic_pairwise !== undefined)) {
     let mounts: string[] = [];
     try {
-      mounts = sessionOriginSources(loadSessionFromFile(scenario.session), "(inline)");
+      mounts = sessionOriginSources(loadSessionFromFile(scenario.session), "(inline)", scenario.workspace_fixture);
     } catch {
       /* the session's own load error is reported by the real path */
     }

@@ -108,9 +108,10 @@ All notable changes to this project are documented here. The format is based on
   fresh modification times, nothing added to the prompt; never re-staged on a `--resume` turn. Refused at load
   (exit 2, before anything is spawned), each problem named: a symlink, a hard-linked file, an agent or
   configuration path (`.claude/`, `.git/`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`), a file git does not
-  track (in git mode), a fixture that overlaps a mounted folder, upload, plugin or skill dir, an empty one, and
+  track (in git mode), a fixture that overlaps a mounted folder, upload, plugin or skill dir or a
+  `semantic_pairwise` reference store, an empty one, and
   more than 64 MiB (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`), or one file over the pre-run hash cap. An untouched fixture file is pre-run, not
-  authored: `semantic_matches` grades only what the step created or rewrote, and `RunResult.artifacts[]`
+  authored: `semantic_matches` and `semantic_pairwise` judge only what the step created or rewrote, and `RunResult.artifacts[]`
   marks an untouched one `preRun: true`. Deleting a fixture file fails the run by default (the harness's
   outputs-delete policy; `allow_outputs_delete` opts out). `RunResult.workspaceFixture` is the ref as the
   scenario file wrote it, and `scaffold` re-emits it verbatim, asserting only what the step produced. The fixture's content signature is part of

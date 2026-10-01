@@ -1082,7 +1082,9 @@ fixture, more than 64 MiB in total (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`
 file over the pre-run hash cap (50 MiB, `COWORK_HARNESS_PRERUN_HASH_CAP`), whose authorship could never be decided. In git
 mode (the default; `COWORK_HARNESS_GITSET=0` turns it off) a file git does not track is refused too, so what a
 cassette's signature covers is what is committed. OS metadata files (`.DS_Store`, `Thumbs.db`) are skipped.
-Keep fixtures outside the plugin tree, and inside the repository that holds the cassette: `record` refuses a
+A `semantic_pairwise` reference store must not sit inside the fixture (or hold it): the fixture is copied into
+`outputs/`, where the agent would read the reference it is judged against, so that is refused too. Keep fixtures
+outside the plugin tree, and inside the repository that holds the cassette: `record` refuses a
 fixture its cassette could only reference by climbing out of that repository (the stored path would carry this
 machine's directory names). `cowork-harness fixture export <run-dir> --out <dir>` turns a kept
 run's outputs into one ([cli.md](./cli.md)).
@@ -1095,7 +1097,8 @@ refused (a pinned `--session-id` re-run at `microvm` clears the previous run's o
 
 **Authorship — what the step produced.** Because the fixture lands before the pre-run manifest is taken, an
 untouched fixture file is **pre-run**, not authored: `semantic_matches` grades only the files this run created
-or rewrote (a fixture file the step rewrote is graded; one it never touched is not), and
+or rewrote (a fixture file the step rewrote is graded; one it never touched is not) — and so does a
+`semantic_pairwise` judge, which compares the same authored document — and
 `RunResult.artifacts[]` marks an untouched one `preRun: true` (`scaffold` skips those). `no_unexpected_files`
 never trips on fixture files; `input_unmodified` can guard them ("the step must not rewrite the scored deck").
 Deleting a fixture file is an outputs delete, and the run fails on it by default — that is the harness's

@@ -699,7 +699,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     };
   })();
   {
-    const refusal = pairwiseRefsRefusal(scenario, pairwiseSetup, sessionOriginSources(session, "(inline)"));
+    // The workspace_fixture is copied into outputs/, so a store inside it (or holding it) is readable by the agent too.
+    const refusal = pairwiseRefsRefusal(scenario, pairwiseSetup, sessionOriginSources(session, "(inline)", scenario.workspace_fixture));
     if (refusal) throw new UsageError(refusal);
   }
 
