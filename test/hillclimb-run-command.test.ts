@@ -166,6 +166,21 @@ describe("runHillclimbCommand", () => {
     }
   });
 
+  it("a workspace_fixture that holds a scenario is refused: the fixture is copied where the agent reads", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: .\n"); // the evals dir itself
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      const r = await runHillclimbCommand(args("--approve-harness"), deps());
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toMatch(/could read .*alpha\.yaml/);
+      expect(calls).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
   it("a variant with rows whose snapshot is gone is refused before spend", async () => {
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
     await runHillclimbCommand(args(), deps());

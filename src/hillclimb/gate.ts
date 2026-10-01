@@ -4,8 +4,8 @@
 // The scaffold hashes its own source, any lockfile beside it or in cwd, and `_state.json.harness_paths`. Our runner has
 // no source file in the user's tree, so the harness itself enters as two virtual entries (harness version
 // and platform baseline), and the files that define the measurement — every scenario the positional resolves
-// to (independent of --case, so a canary and the full pass agree), its session, answers, decider config and
-// uploads — enter as the DERIVED set. The skill dir never does: the loop edits it every round.
+// to (independent of --case, so a canary and the full pass agree), its session file, its uploads and its
+// workspace_fixture files — enter as the DERIVED set. The skill dir never does: the loop edits it every round.
 //
 // Like the scaffold's, this is a change detector, not a security boundary: the sha and the list live where the loop
 // agent can write. What bounds an unattended run is the permission allowlist on the runner command.

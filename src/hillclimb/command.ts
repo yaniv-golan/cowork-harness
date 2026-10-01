@@ -28,7 +28,8 @@ export interface PreparedCases {
   /** The files that define the answer and must stay unreadable: each scenario and its session file. Uploads and
    *  fixtures are in the gate's set but are the agent's inputs, meant to be read. */
   hiddenPaths: (cases: readonly HillclimbCase[]) => string[];
-  /** Every host root the agent can read through a mount: folders, projects, uploads, plugins, local skills. */
+  /** Every host root the agent can read: mounted folders, projects, uploads, plugins, local skills, and the
+   *  workspace fixture copied into outputs/. */
   mountRoots: (cases: readonly HillclimbCase[]) => string[];
 }
 
@@ -110,7 +111,8 @@ export function prepareCases(
         cs.flatMap((c) => {
           const x = sessions.get(c.id)!;
           // The fixture's files exactly as staging scans them (regular, tracked in git mode, OS metadata skipped);
-          // a fixture staging would refuse is refused here, before spend.
+          // a fixture staging would refuse is refused here, before spend. Like staging, the scan reads its git-mode
+          // switch from process.env, not opts.env, so the two always agree.
           const fixture = scenarioWorkspaceFixture(c.scenario);
           return [
             resolve(c.file),
@@ -129,7 +131,13 @@ export function prepareCases(
           const tier = (TIERS as readonly string[]).includes(c.scenario.fidelity) ? (c.scenario.fidelity as MountTier) : "hostloop";
           // The preview form: input checks only, no staging, no notices.
           const src = resolveLaunchSources(x.session, x.baseline, tier, false, { stageFilters: false, quiet: true });
-          return [...src.mounts.map((m) => m.hostPath), ...src.hostOnlyFolders.map((m) => m.hostPath), ...src.skills.map((k) => k.src)];
+          return [
+            ...src.mounts.map((m) => m.hostPath),
+            ...src.hostOnlyFolders.map((m) => m.hostPath),
+            ...src.skills.map((k) => k.src),
+            // A workspace_fixture is copied into outputs/, where the agent reads: a root like a connected folder.
+            ...(c.scenario.workspace_fixture !== undefined ? [c.scenario.workspace_fixture] : []),
+          ];
         }),
       ),
     ],
