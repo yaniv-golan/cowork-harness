@@ -280,9 +280,10 @@ judgement-call finding, list it in a `--suppressions <file>` JSON file (one entr
 <rule>[=<glob>]` (repeatable; the glob matches the finding's file) or fence the text in `SKILL.md` with `<!-- lint-skill: ignore-start <rule>[,<rule>…]: <reason> -->`
 … `<!-- lint-skill: ignore-end -->` (outside any code fence). A suppressed finding is still printed; it
 stops gating. A provable rule (an ERROR, a misplaced `hooks.json`, a missing pinned agent) cannot be
-suppressed: naming it, or an unknown rule, in `--ignore-rule` is a usage error (exit 2); in a marker it is
+suppressed: naming it, or an unknown rule, in `--ignore-rule` or a `--suppressions` entry is a usage error (exit 2); in a marker it is
 WARN `lint-skill-ignore-invalid`, as is any other malformed marker. An unclosed marker is WARN
-`lint-skill-ignore-unclosed`, and one that suppresses nothing is INFO `lint-skill-ignore-unused`.
+`lint-skill-ignore-unclosed`, and a marker, `--ignore-rule` or entry that suppresses nothing is INFO
+`lint-skill-ignore-unused` (WARN under `--strict-ignores`).
 
 **A marker is an edit to `SKILL.md`, and it costs what any edit costs.** The skill hash covers the file's
 content (unless the session's `staleness.hash_ignore` excludes it), so adding or moving a marker stales every cassette of that skill (a paid re-record to clear), and

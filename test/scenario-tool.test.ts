@@ -354,6 +354,14 @@ describe.skipIf(!can || !havePython)("cowork-harness lint-skill --suppressions (
     expect(stdout).toMatch(/⚠ WARN \[lint-skill-ignore-unused\]/);
   });
 
+  it("a linter crash never exits 0: a SKILL.md that is not UTF-8 → nonzero, ok:false", () => {
+    const { parent, sup } = setup();
+    writeFileSync(join(parent, "big", "SKILL.md"), Buffer.from([0x23, 0x20, 0xff, 0xfe, 0x0a]));
+    const { code, stdout } = runCli(["lint-skill", join(parent, "big"), "--suppressions", sup, "--output-format", "json"]);
+    expect(code).not.toBe(0);
+    expect(JSON.parse(stdout.trim()).ok).toBe(false);
+  });
+
   it("`lint --suppressions` → exit 2 naming lint-skill as the owner", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-lint-sup-owner-"));
     const { code, stderr } = runCli(["lint", writeCleanScenario(d), "--suppressions", "x.json"]);

@@ -445,7 +445,7 @@ describe.skipIf(!havePython)("lint-skill — hook commands are not a plugin-root
 });
 
 // A finding's JSON shape when no suppression is in play. The `suppressed` record is opt-in: an invocation
-// that uses neither `--ignore-rule` nor a marker must print exactly these six keys, so an existing consumer
+// that uses neither `--ignore-rule`, a suppressions file nor a marker must print exactly these six keys, so an existing consumer
 // that parses the array (a jq recipe, an allowlist gate) sees no change.
 describe.skipIf(!havePython)("lint-skill --json — finding shape without suppression", () => {
   it("every finding carries exactly severity/rule/message/fix/file/line", () => {
@@ -558,7 +558,7 @@ describe.skipIf(!havePython)("lint-skill — corpus vs the critique evidence cei
 // computation. Provable rules (ERROR, and the two WARNs that are facts rather than judgement calls) cannot
 // be suppressed by either form.
 describe.skipIf(!havePython)("lint-skill — per-rule suppression", () => {
-  type Sup = { by: string; marker_line: number | null; reason: string | null };
+  type Sup = { by: "flag" | "marker" | "file"; marker_line: number | null; reason: string | null; source?: string };
   type SFinding = Finding & { suppressed?: Sup };
   function run(args: string[]) {
     const r = spawnSync(py, [SCRIPT, "lint-skill", ...args], { encoding: "utf8" });
@@ -928,7 +928,7 @@ describe.skipIf(!havePython)("lint-skill — per-rule suppression", () => {
       expect(fl).toHaveLength(4);
       for (const x of fl) expect(x.suppressed).toMatchObject({ by: "file", marker_line: null });
       // Byte-identical duplicate entries are allowed and each consumes one finding.
-      expect(fl.map((x) => (x.suppressed as Sup & { source: string }).source).sort()).toEqual([0, 1, 2, 3].map((i) => `${f}#${i}`));
+      expect(fl.map((x) => x.suppressed!.source).sort()).toEqual([0, 1, 2, 3].map((i) => `${f}#${i}`));
       expect(fl.find((x) => x.line === 16)?.suppressed).toMatchObject({ reason: "r3", source: `${f}#3` });
       expect(unused(r)).toEqual([]);
     });
