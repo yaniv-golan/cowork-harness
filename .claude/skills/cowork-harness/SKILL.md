@@ -158,4 +158,5 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/ci-recipe.md`](references/ci-recipe.md) | the GitHub Action, replay-vs-live lanes, the four-stage pipeline |
 | [`references/critique.md`](references/critique.md) | `critique` report and evidence-package shapes |
 | [`references/eval.md`](references/eval.md) | `eval`: paired before/after of two plugin versions — labels, refusals, exit codes, files |
+| [`references/hillclimb.md`](references/hillclimb.md) | `hillclimb run` / `check` / `state-template` for a `/claude-api hillclimb` loop — pass `--flow` to each, the harness gate, resume, refusals, exit codes |
 | `scripts/scenario.py` | `scaffold`, `lint`, `lint-skill`, `resolve-agent-types <plugin-dir>` (validates a pinned `subagent_type` against `plugin.json` + `agents/*.md`) |
