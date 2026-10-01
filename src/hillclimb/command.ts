@@ -2,7 +2,7 @@
 // tunes, the model pins, and the tier the trace needs. It composes the existing pieces (the session loader,
 // eval's pin resolvers, the protocol tier's managed-config rule); nothing here is a second copy of them.
 
-import { readdirSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
 import { expandHome, resolveLaunchSources, type SessionConfig } from "../session.js";
@@ -10,8 +10,9 @@ import type { MountTier } from "../staging/mount-naming.js";
 import { loadSessionFromFile } from "../run/execute.js";
 import { loadBaseline } from "../baseline.js";
 import { managedConfigMode } from "../runtime/protocol.js";
+import { scenarioWorkspaceFixture } from "../fixture/workspace.js";
 import { resolveAgentPins, resolveJudgePins } from "../eval/pins.js";
-import type { PlatformBaseline, Scenario } from "../types.js";
+import type { PlatformBaseline } from "../types.js";
 import type { HillclimbCase } from "./cases.js";
 
 export interface PreparedCases {
@@ -29,24 +30,6 @@ export interface PreparedCases {
   hiddenPaths: (cases: readonly HillclimbCase[]) => string[];
   /** Every host root the agent can read through a mount: folders, projects, uploads, plugins, local skills. */
   mountRoots: (cases: readonly HillclimbCase[]) => string[];
-}
-
-/** The workspace fixture a scenario stages before its first turn, or null. The ONE hook point for hashing
- *  fixture files into the harness gate: it returns null until the scenario key that declares a fixture
- *  exists — no key is assumed here. */
-export function fixtureDirOf(_scenario: Scenario): string | null {
-  return null;
-}
-
-/** Every regular file under `dir`, recursively. */
-function filesUnder(dir: string): string[] {
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...filesUnder(p));
-    else if (e.isFile()) out.push(p);
-  }
-  return out;
 }
 
 const TIERS: readonly MountTier[] = ["hostloop", "container", "microvm", "protocol"];
@@ -126,12 +109,14 @@ export function prepareCases(
       ...new Set(
         cs.flatMap((c) => {
           const x = sessions.get(c.id)!;
-          const fixture = fixtureDirOf(c.scenario);
+          // The fixture's files exactly as staging scans them (regular, tracked in git mode, OS metadata skipped);
+          // a fixture staging would refuse is refused here, before spend.
+          const fixture = scenarioWorkspaceFixture(c.scenario);
           return [
             resolve(c.file),
             x.file,
             ...x.session.uploads.map((u) => resolve(expandHome(u))),
-            ...(fixture ? filesUnder(fixture) : []),
+            ...(fixture ? fixture.files.map((f) => join(fixture.dir, ...f.path.split("/"))) : []),
           ];
         }),
       ),

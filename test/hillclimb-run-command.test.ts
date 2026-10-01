@@ -147,6 +147,25 @@ describe("runHillclimbCommand", () => {
     expect(err.join("\n")).toMatch(/live plugin .* differs from variant baseline's snapshot/);
   });
 
+  it("an edited workspace_fixture file is a harness change: the next pass refuses until re-approved", async () => {
+    mkdirSync(join(cwd, "fx"));
+    writeFileSync(join(cwd, "fx", "report.md"), "# draft 1\n");
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + "workspace_fixture: ../fx\n");
+    const saved = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0"; // the temp dir is no git repo
+    try {
+      expect((await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps())).exitCode).toBe(0);
+      writeFileSync(join(cwd, "fx", "report.md"), "# draft 2\n");
+      const r = await runHillclimbCommand(args(), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toMatch(/harness changed since last approved run \(files: .*fx\/report\.md/);
+      expect(calls).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = saved;
+    }
+  });
+
   it("a variant with rows whose snapshot is gone is refused before spend", async () => {
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
     await runHillclimbCommand(args(), deps());
