@@ -47,6 +47,8 @@ export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolea
   runDirFor?: (scenario: Scenario, runId: string) => string;
   now?: () => number;
   tickMs?: number;
+  /** Where kept runs live (their result.json holds grades and the rubric): hidden from every mount. */
+  runsRoot?: string;
   /** The run index the dry run prices from (this machine's `runs/index.jsonl`). */
   indexRows?: () => RunIndexRow[];
 }
@@ -215,7 +217,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     pin: prep.pin,
     inputs: (c) => prep.session(c).uploads.map((u) => resolve(expandHome(u))),
     derivedPaths: prep.derivedPaths,
-    hiddenPaths: prep.hiddenPaths,
+    hiddenPaths: (cs) => [...prep.hiddenPaths(cs), deps.runsRoot ?? runsWriteRoot()],
     // The declared mounts (the live plugin among them) and the snapshot the runs actually mount.
     mountRoots: (cs) => [...new Set([...prep.mountRoots(cs), pluginDir])],
     lever: live,

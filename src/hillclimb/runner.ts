@@ -84,6 +84,8 @@ export interface RunOutcome {
   scheduled: number;
   ok: number;
   failed: number;
+  /** Rows appended to results.jsonl this pass — an attempt whose later writes failed is still scored. */
+  scored?: number;
   /** A dry run's remaining (case, rep) slots per case id — what the pass would run. */
   remaining?: Record<string, number>;
 }
@@ -168,7 +170,9 @@ async function run(
       `${statePathShown} harness_paths lists ${inLever.join(", ")}, inside the plugin the loop edits (${deps.lever}) — every round would change the harness sha; list only files that define the measurement`,
     );
   const listed = listedRaw.map((p) => resolve(deps.cwd, p));
-  const exposed = pathsInsideMounts([flowAbs, ...(deps.hiddenPaths ?? deps.derivedPaths)(cases), ...listed], deps.mountRoots(cases));
+  // Over EVERY case, whatever --case selects: a sibling scenario reachable through a selected case's mount is
+  // still the flow's answer key.
+  const exposed = pathsInsideMounts([flowAbs, ...(deps.hiddenPaths ?? deps.derivedPaths)(all), ...listed], deps.mountRoots(all));
   if (exposed.length)
     throw new UsageError(
       `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,
@@ -237,6 +241,7 @@ async function run(
 
     const writer = w!;
     let ok = 0;
+    let scored = 0;
     let fail = 0;
     const t0 = now();
     const progress = () => {
@@ -275,7 +280,7 @@ async function run(
     if (stopError !== undefined) {
       progress();
       say(`stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`);
-      return { exitCode: 1, scheduled: tasks.length, ok, failed: fail };
+      return { exitCode: 1, scheduled: tasks.length, ok, failed: fail, scored };
     }
     async function oneTask(c: HillclimbCase, rep: number): Promise<void> {
       const tStart = now();
@@ -385,6 +390,7 @@ async function run(
         traceError = e;
       }
       writer.appendResult(out.row);
+      scored++;
       if (typeof out.row.model === "string") models.add(out.row.model);
       // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
       // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
@@ -414,7 +420,7 @@ async function run(
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);
     }
     say(`[${v}] done - ${ok} ok, ${fail} failed -> ${join(flowArg, v, "results.jsonl")}`);
-    return { exitCode: fail ? 1 : 0, scheduled: tasks.length, ok, failed: fail };
+    return { exitCode: fail ? 1 : 0, scheduled: tasks.length, ok, failed: fail, scored };
   } finally {
     release();
   }

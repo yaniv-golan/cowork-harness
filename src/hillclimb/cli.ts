@@ -13,7 +13,7 @@ import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
 import { headroom, stateMetricFindings } from "./check.js";
 import { prepareCases } from "./command.js";
-import { NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
+import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
 import { defaultSnapshotRoot, runHillclimbCommand } from "./run-command.js";
 import { termSafe } from "./runner.js";
@@ -131,7 +131,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
             flow: a.flow,
             variant: a.variant,
             scheduled: outcome.scheduled,
-            scored: outcome.ok,
+            scored: outcome.scored ?? 0,
             failed: outcome.failed,
             exitCode: outcome.exitCode,
             // eval's dry-run shape: the estimate under plan.cost; a top-level cost would read as spend.
@@ -215,6 +215,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       return process.exit(0);
     } catch (e) {
       if (e instanceof UsageError) return usage(e.message, e.hint);
+      if (e instanceof FsRefusal) return usage(e.message);
       throw e;
     }
   }

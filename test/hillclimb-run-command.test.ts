@@ -3,7 +3,7 @@
 // records what it was asked to run and returns a committed real excerpt (test/fixtures/eval-classify/
 // success-semantic.json) with the public csv-metrics run's init/result frames. Nothing spawns.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -298,6 +298,17 @@ describe("runHillclimbCommand", () => {
       expect(readFileSync(join(cwd, "flow", ref), "utf8")).not.toContain("sk-test-SECRET-9");
     });
 
+    it("an upload declared through a symlink is attached (the run mounts it too)", async () => {
+      writeFileSync(join(cwd, "real.csv"), "a,b\n");
+      symlinkSync(join(cwd, "real.csv"), join(cwd, "evals", "input.csv"));
+      writeFileSync(
+        join(cwd, "evals", "_session.yaml"),
+        `model: ${MODEL}\nuploads:\n  - ./input.csv\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+      );
+      expect((await pass()).exitCode).toBe(0);
+      expect(rows()[0].attachments).toHaveLength(1);
+    });
+
     it("a case with no uploads carries no attachments and no flag", async () => {
       expect((await pass()).exitCode).toBe(0);
       expect(rows()[0]).not.toHaveProperty("attachments");
@@ -342,5 +353,47 @@ describe("runHillclimbCommand", () => {
     expect(err.join("\n")).toMatch(/another hillclimb process/);
     expect(readFileSync(join(snapDir, "skills", "x", "SKILL.md"), "utf8")).toMatch(/round 1/);
     expect(calls).toEqual([]);
+    // the refused run recorded no approval
+    expect(
+      existsSync(join(cwd, "flow", "_state.json")) ? JSON.parse(readFileSync(join(cwd, "flow", "_state.json"), "utf8")) : {},
+    ).not.toHaveProperty("harness_sha");
+  });
+
+  it("the envelope's scored counts rows written, even when a later write of that attempt failed", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    mkdirSync(join(cwd, "flow", "baseline", "traces", "alpha_rep0.json"), { recursive: true }); // the trace write will fail
+    const r = await runHillclimbCommand(args(), deps());
+    expect(r.exitCode).toBe(1);
+    expect(rows()).toHaveLength(1);
+    expect(r.scored).toBe(1);
+  });
+
+  it("with --case, the exposure check still covers every case's files", async () => {
+    const sub = join(cwd, "mounted");
+    mkdirSync(sub);
+    writeFileSync(join(sub, "_beta_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+    writeFileSync(
+      join(cwd, "evals", "beta.yaml"),
+      SCENARIO.replace("name: Alpha", "name: Beta").replace("./_session.yaml", join(sub, "_beta_session.yaml")),
+    );
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nfolders:\n  - from: ${sub}\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    const r = await runHillclimbCommand(args("--approve-harness", "--case", "alpha"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/could read .*_beta_session\.yaml/);
+  });
+
+  it("a session that mounts the runs root is refused: kept runs hold the grades and rubric", async () => {
+    const runsRoot = join(cwd, "runs");
+    mkdirSync(runsRoot);
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nfolders:\n  - from: ${runsRoot}\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    const r = await runHillclimbCommand(args("--approve-harness"), deps({ runsRoot }));
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/could read .*runs/);
   });
 });

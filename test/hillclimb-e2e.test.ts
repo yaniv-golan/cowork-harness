@@ -109,7 +109,8 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
     }>;
     const sys = turns.filter((t) => t.role === "system").map((t) => t.content);
     expect(sys).toHaveLength(1);
-    // The child's snapshot was read through the kept run (its last part is not the session's append): none received.
+    // The child's snapshot was read through the kept run. The protocol tier sends no sub-agent append, so the state
+    // is "none received"; the "as received" branch is covered with SYNTHETIC lines in hillclimb-subagent-system.
     expect(sys[0]).toBe("[sub-agent general-purpose#1 system — harness append: none received]");
     expect(turns.some((t) => t.content === "[sub-agent general-purpose#1] child finding")).toBe(true);
 

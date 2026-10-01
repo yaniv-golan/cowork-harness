@@ -5,6 +5,7 @@
 // path that is absolute or climbs out is refused before anything is read.
 
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import type { RunResult } from "../types.js";
 import { FsRefusal, lstatOrNull, NoFollowRoot } from "./fs.js";
@@ -133,7 +134,16 @@ export function planInputCopy(paths: readonly string[], caps: { perFileBytes: nu
   const plan: InputCopyPlan = { copy: [], skipped: [] };
   let total = 0;
   for (const path of paths) {
-    const st = lstatOrNull(path);
+    // The declared path, followed as the run follows it (a symlinked upload is mounted too); then read without
+    // following anything further.
+    let real: string;
+    try {
+      real = realpathSync(path);
+    } catch {
+      plan.skipped.push({ path, reason: "not found" });
+      continue;
+    }
+    const st = lstatOrNull(real);
     if (!st || !st.isFile()) {
       plan.skipped.push({ path, reason: st?.isDirectory() ? "a directory upload is not attached" : "not a plain file" });
       continue;
@@ -147,7 +157,7 @@ export function planInputCopy(paths: readonly string[], caps: { perFileBytes: nu
       continue;
     }
     try {
-      const data = NoFollowRoot.existing(dirname(path)).readBytes(path);
+      const data = NoFollowRoot.existing(dirname(real)).readBytes(real);
       total += data.length;
       const sha16 = createHash("sha256").update(data).digest("hex").slice(0, 16);
       plan.copy.push({ path, name: `${sha16}-${basename(path)}`, data });
