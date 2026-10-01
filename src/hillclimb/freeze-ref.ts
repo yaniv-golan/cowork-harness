@@ -103,7 +103,9 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
           `case ${i.caseId}: its reference lacks compose key(s) ${lacking.join(", ")} and the run it was frozen from (${existing.source.runDir}) is gone — ` +
           `a reference never mixes runs, so start a fresh flow dir for the changed assertions`,
       };
-    return run(i, runDir, rep, store);
+    // The run never composed the new key, so no live fingerprint can check it: it is added marked `unchecked`, which
+    // every later comparison against it shows (`pairwise[].unchecked`).
+    return run(i, runDir, rep, store, true);
   }
   const rows = goodRefRows(i.results, i.caseId);
   if (!rows.length)
@@ -123,9 +125,9 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
   return run(i, runDir, Number(row.rep), store);
 }
 
-function run(i: FreezeCaseInput, runDir: string, rep: number, store: string): FreezeCaseOutcome {
+function run(i: FreezeCaseInput, runDir: string, rep: number, store: string, allowUnchecked = false): FreezeCaseOutcome {
   const o: FreezeOutcome = freezeFromRun(
-    { runDir, scenarioFile: i.scenarioFile, out: store, caseId: i.caseId, allowUnchecked: false },
+    { runDir, scenarioFile: i.scenarioFile, out: store, caseId: i.caseId, allowUnchecked },
     { compose: (d, f) => composeFromRunDir(d, f, i.secrets, { command: i.command, variant: i.variant, rep }) },
   );
   // freezeFromRun prefixes its own command name; this is not `ref freeze`.

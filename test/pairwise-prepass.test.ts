@@ -406,3 +406,120 @@ describe("semantic_pairwise — a reference without a task identity", () => {
     expect(seen).toHaveLength(0);
   });
 });
+
+// A hillclimb flow gates on its baseline reference only: a later variant's reference is a metric (`gate: false`),
+// so it never decides pass_if and an unreadable or invalid comparison against it never refuses the verdict.
+describe("semantic_pairwise — gate references", () => {
+  const refs = () => [
+    { name: "baseline", store: join(tmp, "baseline") },
+    { name: "v3", store: join(tmp, "v3") },
+  ];
+  const gate = { refsFor: refs, gateRefs: new Set(["baseline"]) };
+
+  it("only the gate decides pass_if: a loss against a metric-only reference still passes", async () => {
+    const a = assertOf({ pass_if: "win" });
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    freezeFrom(join(tmp, "v3"), a, "V3");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    const judge: (m: string) => PairwiseJudge = (model) => async (input) => {
+      const outcome: PairwiseOutcome = input.refName === "baseline" ? "win" : "loss";
+      return { outcome, value: outcomeValue(outcome), order: "candidate_first", model, rationale: "r" };
+    };
+    await runPairwiseJudges([a], c, opts(a, { ...gate, judgeFor: judge }));
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(true);
+    expect(r!.pairwise).toMatchObject([
+      { ref: "baseline", status: "graded", outcome: "win" },
+      { ref: "v3", gate: false, status: "graded", outcome: "loss" },
+    ]);
+    expect(r!.pairwise![0]).not.toHaveProperty("gate");
+  });
+
+  it("a missing metric-only reference is recorded, never evidence-unavailable", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    await runPairwiseJudges([a], c, opts(a, gate));
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(true);
+    expect(r!.pairwise![1]).toMatchObject({ ref: "v3", gate: false, status: "missing" });
+  });
+
+  it("without gateRefs every reference gates (a scenario run, an eval): the missing one refuses", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    await runPairwiseJudges([a], c, opts(a, { refsFor: refs }));
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(false);
+    expect(r!.message).toMatch(/^evidence unavailable: reference\(s\) could not be read — v3: missing/);
+  });
+
+  it("an invalid grade against a metric-only reference is that outcome alone; the rep stays valid", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    freezeFrom(join(tmp, "v3"), a, "V3");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    const judge: (m: string) => PairwiseJudge = (model) => async (input) => {
+      if (input.refName === "v3") throw new PairwiseJudgeInvalid("garbled", 0.02, undefined, model, 1);
+      return { outcome: "tie", value: 0.5, order: "candidate_first", model, retries: 1 };
+    };
+    await runPairwiseJudges([a], c, opts(a, { ...gate, judgeFor: judge }));
+    const [r] = evaluate([a], c);
+    expect(r!.judgeInvalid).toBeUndefined();
+    expect(r!.pass).toBe(true);
+    expect(r!.pairwise![1]).toMatchObject({ ref: "v3", gate: false, status: "invalid", why: "garbled" });
+    // One retry per comparison, both counted: 1 + 2.
+    expect(r!.judgeAttempts).toBe(3);
+  });
+
+  it("an invalid grade against the gate still marks the rep invalid", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    await runPairwiseJudges([a], c, opts(a, { ...gate, judgeFor: fakeJudge("invalid") }));
+    const [r] = evaluate([a], c);
+    expect(r!.judgeInvalid).toBe(true);
+    expect(r!.pass).toBe(false);
+  });
+});
+
+describe("semantic_pairwise — composedDoc, attempts, deadline", () => {
+  it("an all-neutral assert (a run of the reference's own variant) records composedDoc, though no judge read it", async () => {
+    const a = assertOf();
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    await runPairwiseJudges([a], c, opts(a, { neutralRefs: new Set(["baseline"]) }));
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(true);
+    expect(r!.judgedDoc).toBeUndefined();
+    expect(r!.composedDoc?.sha256).toBe(candidateDocument(c, a).fingerprint.sha256);
+  });
+
+  it("a refused assert records no composedDoc", async () => {
+    const a = assertOf({ evidence_files: ["outputs/none-*.md"] });
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    await runPairwiseJudges([a], c, opts(a, { neutralRefs: new Set(["baseline"]) }));
+    expect(evaluate([a], c)[0]!.composedDoc).toBeUndefined();
+  });
+
+  it("judgeAttempts is 1 with no retry", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    await runPairwiseJudges([a], c, opts(a));
+    expect(evaluate([a], c)[0]!.judgeAttempts).toBe(1);
+  });
+
+  it("a deadline already past starts no comparison: the assert has no result and the context says why", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    const seen: PairwiseInput[] = [];
+    await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge("win", seen), deadline: Date.now() - 1 }));
+    expect(seen).toEqual([]);
+    expect(c.deadlinePassed).toBe(true);
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(false);
+    expect(r!.message).toMatch(/pairwise judge not run/);
+  });
+});
