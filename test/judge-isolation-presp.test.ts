@@ -6,6 +6,9 @@ import { spawnSync } from "node:child_process";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
 import { resetIsolationPreflight } from "../src/decide/llm-transport.js";
 import { makeSemanticJudge } from "../src/decide/semantic-judge.js";
+import { createHash } from "node:crypto";
+import { COMPOSER_ID } from "../src/assert.js";
+import { composeKey, freezeRef } from "../src/refs/store.js";
 import { POSIX, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
 
 // A run that will call the host `claude` after the agent (the judge, the LLM decider) refuses an older CLI before the
@@ -77,6 +80,33 @@ describe.runIf(POSIX)("an older host claude is refused before the agent spends a
       /2\.1\.197 or later/,
     );
     expect(existsSync(f.stubPidFile)).toBe(false);
+  });
+  /** A valid frozen reference for the scenario below, so the reference check passes and the isolation one decides. */
+  function pairwiseScenario(): ReturnType<typeof parseScenarioFile> {
+    const key = composeKey(COMPOSER_ID, { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+    freezeRef(
+      join(dir, "refs"),
+      "iso",
+      { command: "ref freeze", runDir: "~/r", resultSha256: "a".repeat(64) },
+      { [key]: "a reference answer" },
+      {
+        harnessVersion: "t",
+        composerId: COMPOSER_ID,
+        scenario: "iso",
+        taskSha256: createHash("sha256").update("hi", "utf8").digest("hex"),
+      },
+    );
+    return scenario(["assert:", "  - semantic_pairwise:", "      judge_model: claude-opus-4-8", "      refs: [refs]"]);
+  }
+  it("with a semantic_pairwise assert", async () => {
+    await expect(executeScenario(pairwiseScenario())).rejects.toThrow(/2\.1\.197 or later/);
+    expect(existsSync(f.stubPidFile)).toBe(false);
+  });
+  it("not with a semantic_pairwise assert graded through an injected transport", async () => {
+    await executeScenario(pairwiseScenario(), { pairwiseComplete: async () => ({ structured: undefined, model: "m" }) }).catch(
+      () => undefined,
+    );
+    expect(existsSync(f.stubPidFile)).toBe(true);
   });
   it("with the LLM decider armed", async () => {
     await expect(executeScenario(scenario(["on_unanswered: llm", "assert:", "  - result: success"]))).rejects.toThrow(/2\.1\.197 or later/);

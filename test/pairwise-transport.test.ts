@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeCliCompleteStructured } from "../src/decide/llm-transport.js";
+import { claudeCliCompleteStructured, resetIsolationPreflight } from "../src/decide/llm-transport.js";
 import { PAIRWISE_JSON_SCHEMA, candidateFirst, makePairwiseJudge } from "../src/decide/pairwise-judge.js";
 
 // The pairwise judge's transport, driven through a FAKE `claude` that replays a REAL envelope captured once from
@@ -12,6 +12,14 @@ const FIXTURE = resolve(dirname(fileURLToPath(import.meta.url)), "fixtures", "pa
 const REAL = JSON.parse(readFileSync(FIXTURE, "utf8"));
 
 const FAKE = `#!/bin/sh
+# The isolation preflight probes --help / --version first: answer as a current CLI.
+if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
+if [ "$1" = "--help" ]; then
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do
+    echo "  $f   x"
+  done
+  exit 0
+fi
 printf '%s\\n' "$@" > "$FAKE_ARGV_FILE"
 cat > "$FAKE_STDIN_FILE"
 cat "$FAKE_ENVELOPE"
@@ -29,6 +37,8 @@ beforeAll(() => {
   process.env.FAKE_ARGV_FILE = join(dir, "argv");
   process.env.FAKE_STDIN_FILE = join(dir, "stdin");
   process.env.FAKE_ENVELOPE = FIXTURE;
+  // The enterprise-MCP check looks at a path that never exists, so the argv below does not depend on this machine.
+  resetIsolationPreflight(join(dir, "no-managed-mcp.json"));
 });
 afterEach(() => {
   process.env.FAKE_ENVELOPE = FIXTURE;
@@ -37,6 +47,7 @@ afterAll(() => {
   if (prevForbid === undefined) delete process.env.COWORK_HARNESS_FORBID_SPAWN;
   else process.env.COWORK_HARNESS_FORBID_SPAWN = prevForbid;
   for (const k of ["COWORK_HARNESS_CLAUDE_BIN", "FAKE_ARGV_FILE", "FAKE_STDIN_FILE", "FAKE_ENVELOPE"]) delete process.env[k];
+  resetIsolationPreflight();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -60,14 +71,28 @@ describe("claudeCliCompleteStructured (real envelope shape)", () => {
     expect((r.usage as Record<string, { costUSD: number }>)["claude-haiku-4-5"].costUSD).toBeCloseTo(REAL.total_cost_usd);
   });
 
-  it("sends the schema, the system prompt and NO tools in argv; the documents travel on stdin only", async () => {
+  it("sends the schema and the system prompt, runs isolated with NO tools; the documents travel on stdin only", async () => {
     await claudeCliCompleteStructured({ system: "SYS PROMPT", user: "SECRET-ISH DOCUMENT", schema: PAIRWISE_JSON_SCHEMA, model: "m" });
-    const argv = readFileSync(join(dir, "argv"), "utf8").split("\n");
-    const at = (flag: string): string | undefined => argv[argv.indexOf(flag) + 1];
-    expect(at("--json-schema")).toBe(JSON.stringify(PAIRWISE_JSON_SCHEMA));
-    expect(at("--system-prompt")).toBe("SYS PROMPT");
-    expect(argv.indexOf("--tools")).toBeGreaterThan(-1);
-    expect(at("--tools")).toBe("");
+    const argv = readFileSync(join(dir, "argv"), "utf8").split("\n").slice(0, -1);
+    // The whole argv: the structured flags first, then the isolation flags, with the variadic --tools "" last.
+    expect(argv).toEqual([
+      "-p",
+      "--model",
+      "m",
+      "--output-format",
+      "json",
+      "--json-schema",
+      JSON.stringify(PAIRWISE_JSON_SCHEMA),
+      "--system-prompt",
+      "SYS PROMPT",
+      "--safe-mode",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--setting-sources",
+      "user",
+      "--tools",
+      "",
+    ]);
     expect(argv.join("\n")).not.toContain("SECRET-ISH DOCUMENT");
     expect(readFileSync(join(dir, "stdin"), "utf8")).toBe("SECRET-ISH DOCUMENT");
   });

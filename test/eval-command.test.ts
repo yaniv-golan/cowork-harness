@@ -42,6 +42,9 @@ import { isConcreteModelId } from "../src/run/model-provenance.js";
 import { tildeify } from "../src/io.js";
 import { tokenCheck, type DoctorCheck, type DoctorProbe } from "../src/run/doctor.js";
 import { hostPathTokens } from "../src/run/host-path-tokens.js";
+import { createHash } from "node:crypto";
+import { COMPOSER_ID } from "../src/assert.js";
+import { composeKey, freezeRef } from "../src/refs/store.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
 // report.md's row table: row | assertion / claim | A | B | B − A [95% CI] | p | adj. p | label | note.
@@ -904,6 +907,32 @@ describe("eval: snapshots and their signatures", () => {
     ]);
     await runEval(channel, { ...deps(fakeRunner()), isolationCheck });
     expect(asked).toBe(0);
+  });
+
+  it("a semantic_pairwise scenario consults the isolation check too: the pairwise judge calls the host claude", async () => {
+    const { scen, a, b } = setup();
+    const key = composeKey(COMPOSER_ID, { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined });
+    freezeRef(
+      join(root, "refs"),
+      "pairwise",
+      { command: "ref freeze", runDir: "~/r", resultSha256: "a".repeat(64) },
+      { [key]: "a reference answer" },
+      {
+        harnessVersion: "t",
+        composerId: COMPOSER_ID,
+        scenario: "pairwise",
+        taskSha256: createHash("sha256").update("write", "utf8").digest("hex"),
+      },
+    );
+    writeFileSync(
+      join(scen, "pairwise.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: write\nassert:\n  - semantic_pairwise:\n      judge_model: claude-opus-4-8\n      refs: [../refs]\n`,
+    );
+    const calls: EvalJobSpec[] = [];
+    await expect(
+      runEval(args(scen, a, b), { ...deps(fakeRunner(undefined, calls)), isolationCheck: () => "OLD-CLI-REFUSAL" }),
+    ).rejects.toThrow(/OLD-CLI-REFUSAL/);
+    expect(calls).toHaveLength(0);
   });
 
   it("a semantic_pairwise reference that does not exist refuses the eval up front (exit 2), running no job", async () => {

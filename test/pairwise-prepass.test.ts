@@ -109,6 +109,21 @@ describe("semantic_pairwise — pre-pass and check", () => {
     expect(seen[0]!.task).toBe("Summarise X");
   });
 
+  it("records how the judge was called when the real transport is used, and nothing for an injected one", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "REFERENCE ANSWER");
+    const real = ctx({ finalMessage: "CANDIDATE ANSWER" });
+    await runPairwiseJudges(
+      [a],
+      real,
+      opts(a, { judgeFor: fakeJudge("win"), transport: () => ({ isolation: "1", cliVersion: "2.1.286" }) }),
+    );
+    expect(evaluate([a], real)[0]!.judgeTransport).toEqual({ isolation: "1", cliVersion: "2.1.286" });
+    const injected = ctx({ finalMessage: "CANDIDATE ANSWER" });
+    await runPairwiseJudges([a], injected, opts(a, { judgeFor: fakeJudge("win") }));
+    expect(evaluate([a], injected)[0]!.judgeTransport).toBeUndefined();
+  });
+
   const table: Array<[PairwiseOutcome, "win" | "not_worse" | "any", boolean]> = [
     ["win", "win", true],
     ["tie", "win", false],

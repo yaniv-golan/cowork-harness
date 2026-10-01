@@ -96,7 +96,7 @@ import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "
 import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
-import { claudeCliComplete, isolationRefusal } from "../decide/llm-transport.js";
+import { claudeCliComplete, isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
 import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks, unionReferenceAccesses } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
@@ -976,6 +976,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // An external channel replaces the LLM decider as the terminal, so `on_unanswered: llm` then never calls it.
   if (
     (scenario.assert.some((a) => a.semantic_matches !== undefined) && !opts.semanticJudge) ||
+    (scenario.assert.some((a) => a.semantic_pairwise !== undefined) && !opts.pairwiseComplete) ||
     (onUnanswered === "llm" && !opts.externalChannel)
   ) {
     const iso = isolationRefusal();
@@ -1733,6 +1734,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         task: scenario.prompt,
         // One judge per resolved model; the caller's run-level pin (a paired comparison) wins over a per-assert one.
         judgeFor: (model) => makePairwiseJudge({ model, complete: opts.pairwiseComplete ?? claudeCliCompleteStructured }),
+        // How the judge was called — only over the real host-`claude` transport, as for semantic_matches.
+        ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity() }),
         modelFor: (a) => opts.judgeModelOverride ?? a.semantic_pairwise?.judge_model ?? defaultJudgeModel(),
         mainModels: record.models ?? [],
       }),

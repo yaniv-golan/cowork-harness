@@ -551,7 +551,9 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
     if (
       scenarios.some(
-        (s) => (llmDecider && s.scenario.on_unanswered === "llm") || s.scenario.assert.some((a) => a.semantic_matches !== undefined),
+        (s) =>
+          (llmDecider && s.scenario.on_unanswered === "llm") ||
+          s.scenario.assert.some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined),
       )
     ) {
       const iso = deps.isolationCheck();

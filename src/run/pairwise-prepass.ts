@@ -13,6 +13,7 @@ import { scrub } from "../secrets.js";
 import { composeKey, readRefDoc } from "../refs/store.js";
 import { redactHostPaths } from "./host-path-tokens.js";
 import type { Assertion, RunResult, TokenUsage } from "../types.js";
+import type { TransportIdentity } from "../decide/llm-transport.js";
 
 export interface PairwiseRef {
   /** Identifies the reference in results (`baseline`, `v2`, or a store dir's name). */
@@ -37,6 +38,8 @@ export interface PairwisePrepassOpts {
   /** The run's observed main-agent model(s): a judge that IS the model under test grades its own kind of output
    *  (build-eval.md: avoid using the exact model-under-test as its own judge) — warned, not refused. */
   mainModels?: readonly string[];
+  /** How the judge's host `claude` was called (`transportIdentity`); absent for an injected transport. */
+  transport?: () => TransportIdentity;
 }
 
 type Outcome = NonNullable<RunResult["assertions"][number]["pairwise"]>[number];
@@ -183,6 +186,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
     ctx.judgedDocs.set(a, built.fingerprint);
     ctx.judgePromptHashes.set(a, PAIRWISE_PROMPT_HASH);
     ctx.judgeModels.set(a, model ?? "unknown");
+    if (opts.transport) (ctx.judgeTransports ??= new Map()).set(a, opts.transport());
     if (cost !== undefined) ctx.judgeCosts.set(a, cost);
     if (usage !== undefined) ctx.judgeUsages.set(a, usage);
   }
