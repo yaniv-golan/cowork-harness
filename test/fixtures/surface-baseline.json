@@ -4753,6 +4753,50 @@
         "type": "integer"
       }
     },
+    "schedule-cost.json": {
+      "": {
+        "type": "object"
+      },
+      ".jobs": {
+        "type": "integer",
+        "required": true
+      },
+      ".lowerBound": {
+        "type": "boolean",
+        "required": true
+      },
+      ".meanUsd": {
+        "type": "number",
+        "required": true
+      },
+      ".p50Usd": {
+        "type": "number",
+        "required": true
+      },
+      ".p95Usd": {
+        "type": "number",
+        "required": true
+      },
+      ".pricedRuns": {
+        "type": "integer",
+        "required": true
+      },
+      ".thinnest": {
+        "type": ["integer", "null"],
+        "required": true
+      },
+      ".unpriced": {
+        "type": "array",
+        "required": true
+      },
+      ".unpriced[]": {
+        "type": "string"
+      },
+      ".worstObservedUsd": {
+        "type": "number",
+        "required": true
+      }
+    },
     "session.schema.json": {
       "": {
         "type": "object",
