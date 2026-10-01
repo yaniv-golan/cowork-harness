@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 /** A flow: `alpha` (pairwise), and with `withBeta` a deterministic-only `beta`; baseline + v1 passes (`reps` each). */
-function buildFlow(opts: { withBeta?: boolean; reps?: number } = {}) {
+function buildFlow(opts: { withBeta?: boolean; reps?: number; noPairwise?: boolean } = {}) {
   const plugin = join(work, "plugin", "my-plugin");
   mkdirSync(join(plugin, "skills", "x"), { recursive: true });
   writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n");
@@ -71,7 +71,9 @@ function buildFlow(opts: { withBeta?: boolean; reps?: number } = {}) {
   const head = "baseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n";
   writeFileSync(
     join(evals, "alpha.yaml"),
-    `name: alpha\n${head}  - semantic_pairwise:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n`,
+    opts.noPairwise
+      ? `name: alpha\n${head}`
+      : `name: alpha\n${head}  - semantic_pairwise:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n`,
   );
   if (opts.withBeta) writeFileSync(join(evals, "beta.yaml"), `name: beta\n${head}`);
   const judge = join(work, "judge.sh");
@@ -215,5 +217,54 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     expect(out.error?.message ?? "").not.toMatch(/--model/);
     expect(readdirSync(join(f.cwd, "flow", "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(true);
+  }, 180_000);
+});
+
+describe.runIf(POSIX)("hillclimb regrade leaves what it should not touch", () => {
+  it("a flow without semantic_pairwise: a fill rewrites nothing (exit 0, results.jsonl byte for byte, no win keys)", async () => {
+    const { flow } = buildFlow({ noPairwise: true });
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const out = await regradeFlow(ARGS({ fillRefs: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+    expect(before).not.toContain("win_present");
+  }, 180_000);
+
+  it("a full re-grade after a fill leaves no fill keys behind", async () => {
+    const { cli, rows } = buildFlow();
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    expect((await regradeFlow(ARGS({ fillRefs: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }))).exitCode).toBe(0);
+    expect(rows("baseline")[0]!.meta).toHaveProperty("regrade_fill");
+    expect((await regradeFlow(ARGS(), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }))).exitCode).toBe(0);
+    for (const v of ["baseline", "v1"]) {
+      const meta = rows(v)[0]!.meta;
+      expect(meta).not.toHaveProperty("regrade_fill");
+      expect(meta).toHaveProperty("regrade_doc_matches_live");
+    }
+  }, 240_000);
+
+  it("a row whose scenario gained an assertion since its run is listed before any judge call", async () => {
+    const { flow, evals } = buildFlow();
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("assert:\n", "assert:\n  - transcript_contains: done\n"));
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    let calls = 0;
+    const out = await regradeFlow(
+      ARGS({ approveHarness: true }),
+      DEPS({
+        regradeOptions: {
+          pairwiseComplete: async () => {
+            calls++;
+            return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
+          },
+        },
+      }),
+    );
+    expect(out.exitCode).toBe(1);
+    expect(calls).toBe(0);
+    expect(out.variants.find((v) => v.variant === "v1")!.listed).toMatchObject([
+      { why: expect.stringMatching(/now has 3 assertion\(s\), its run graded 2/) },
+    ]);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
   }, 180_000);
 });
