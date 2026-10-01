@@ -16,6 +16,7 @@
 import type { AssertContext } from "./assert.js";
 import type { ToolCalledObject, ToolNotCalledObject, ToolCallRecord } from "./types.js";
 import { compileUserRegex } from "./regex.js";
+import { scrubForTerminal } from "./io.js";
 import { REDACTION_TOKEN_RE, hasRedactionToken, regexNamesRedactableLiteral } from "./redactable-literal.js";
 
 type KeyResult = { pass: true; evidence?: string } | { pass: false; message: string };
@@ -102,7 +103,7 @@ export function checkToolCallObject(
   const redactedSrc = sources.find((s) => hasRedactionToken(s.source));
   if (redactedSrc)
     return fail(
-      `evidence unavailable: ${key}.${redactedSrc.where} was rewritten by the cassette's redaction policy ("${redactedSrc.source.slice(0, 120)}") — ` +
+      `evidence unavailable: ${key}.${redactedSrc.where} was rewritten by the cassette's redaction policy ("${scrubForTerminal(redactedSrc.source).slice(0, 120)}") — ` +
         `it cannot be evaluated on replay. Assert on a literal the policy does not rewrite, or check it on a live run`,
     );
   const compiled = new Map<string, RegExp>();
@@ -181,7 +182,9 @@ export function checkToolCallObject(
   const shownFields = Object.keys(o.input ?? {});
   const describe = (c: ToolCallRecord, note: string): string => {
     const names = shownFields.length ? shownFields : Object.keys(c.input).slice(0, 1);
-    const fields = names.map((f) => `${f}=${c.input[f] ? JSON.stringify(c.input[f].text.slice(0, 120)) : "(absent)"}`).join(" ");
+    const fields = names
+      .map((f) => `${f}=${c.input[f] ? JSON.stringify(scrubForTerminal(c.input[f].text).slice(0, 120)) : "(absent)"}`)
+      .join(" ");
     return `${c.name}[${c.origin}]${fields ? " " + fields : ""}${note ? ` (${note})` : ""}`;
   };
 

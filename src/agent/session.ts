@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { warn } from "../io.js";
+import { scrubForTerminal, warn } from "../io.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import readline from "node:readline";
@@ -708,7 +708,8 @@ export class LiveAgentSession implements AgentSession {
     // keep a bounded stderr tail and capture the exit code/signal so a child that dies nonzero
     // (with no structured {type:"result"} error) is surfaced as a typed error event, not a silent stop.
     this.proc.stderr.on("data", (d) => {
-      this.stderrTail = (this.stderrTail + d.toString()).slice(-2000);
+      // Scrubbed before the cut, so the kept tail can't start with a secret's suffix no later scrub matches.
+      this.stderrTail = scrubForTerminal(this.stderrTail + d.toString()).slice(-2000);
     });
     // attach stdin error listener once at construction so dead-child writes don't produce
     // unhandled process errors. Routes to the same error path as spawn errors when possible.
