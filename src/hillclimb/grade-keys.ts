@@ -82,6 +82,23 @@ const floatDecl = (m: MetricDecl): GradeKeyDecl => ({
 });
 const presentDecl = (id: string): GradeKeyDecl => ({ id: `${id}_present`, kind: "binary", label: label(`${id} measured`) });
 
+/** Labels made unique across one declaration list, each still <= LABEL_MAX: a label already taken is cut short and
+ *  given a `~<n>` suffix. A graded key keeps its plain label before a `_present` companion does, so the number a
+ *  reader climbs on reads as its id. Order is unchanged. */
+function uniqueLabels(decls: GradeKeyDecl[]): GradeKeyDecl[] {
+  const taken = new Set<string>();
+  const out = new Map<GradeKeyDecl, string>();
+  const claim = (d: GradeKeyDecl) => {
+    let l = d.label;
+    for (let n = 2; taken.has(l); n++) l = d.label.slice(0, LABEL_MAX - `~${n}`.length) + `~${n}`;
+    taken.add(l);
+    out.set(d, l);
+  };
+  for (const d of decls) if (!d.id.endsWith("_present")) claim(d);
+  for (const d of decls) if (d.id.endsWith("_present")) claim(d);
+  return decls.map((d) => (out.get(d) === d.label ? d : { ...d, label: out.get(d)! }));
+}
+
 /** Every key one case's scored rows carry, in row order. `metrics` is the FLOW's union, so a case that does
  *  not declare a metric still carries its `_present` (as 0). `claims_present` is on every row. */
 export function caseKeyDecls(assertions: readonly Assertion[], metrics: readonly MetricDecl[] = []): GradeKeyDecl[] {
@@ -108,7 +125,7 @@ export function flowMetricDecls(
   const first = cases[0]?.assertions ?? [];
   const identical = cases.every((c) => JSON.stringify(c.assertions) === JSON.stringify(first));
   const idx = identical ? perIndex(first) : { companions: [], graded: [] };
-  return [
+  return uniqueLabels([
     PASS,
     PASS_PRESENT,
     ...(anySemantic ? [CLAIMS_PRESENT] : []),
@@ -117,7 +134,7 @@ export function flowMetricDecls(
     ...(anySemantic ? [CLAIMS] : []),
     ...idx.graded,
     ...union.map(floatDecl),
-  ];
+  ]);
 }
 
 /** The canonical declaration tuple: every field that changes what a metric's column means. The id is folded to

@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { stateTemplate } from "../src/hillclimb/state-template.js";
 import { flowMetricDecls } from "../src/hillclimb/grade-keys.js";
 import { parseScenarioFile } from "../src/run/execute.js";
-import type { Assertion } from "../src/types.js";
+import type { Assertion, ScenarioMetric } from "../src/types.js";
 
 const real = parseScenarioFile("test/evals/scenarios/eval-14-subagent-dispatch-and-declared-unused.yaml");
 const other = [{ file_exists: "outputs/other.md" }] as unknown as Assertion[];
@@ -80,5 +80,32 @@ describe("stateTemplate", () => {
   it("identical assertion lists: metrics.md carries the per-assertion legend", () => {
     const same = stateTemplate({ cases: [{ assertions: real.assert }, { assertions: real.assert }], harnessPaths: [], decider: false });
     expect(same.metricsMd).toMatch(/`a0_c0`.*claim 0 of assertion 0/s);
+  });
+});
+
+describe("labels (the full viewer's legend truncates at 14 chars)", () => {
+  const m = (id: string): ScenarioMetric => ({ id, artifact: "outputs/stats.json", path: id, better: "lower", unbounded: true });
+  const labels = (ms: ScenarioMetric[]) => {
+    const t = stateTemplate({ cases: [{ assertions: other, metrics: ms }], harnessPaths: [], decider: false });
+    return Object.fromEntries(t.state.metrics.map((d) => [d.id, d.label]));
+  };
+
+  it("response_length and response_length_present get distinct labels of at most 14 chars; the number keeps the plain one", () => {
+    const l = labels([m("response_length")]);
+    expect(l.response_length).toBe("response_lengt");
+    expect(l.response_length_present).not.toBe(l.response_length);
+    const all = Object.values(l);
+    expect(new Set(all).size).toBe(all.length);
+    for (const x of all) expect(x.length).toBeLessThanOrEqual(14);
+  });
+
+  it("two long ids that truncate alike are told apart too, and a short id's label is unchanged", () => {
+    const l = labels([m("response_length_a"), m("response_length_b"), m("words")]);
+    const all = Object.values(l);
+    expect(new Set(all).size).toBe(all.length);
+    for (const x of all) expect(x.length).toBeLessThanOrEqual(14);
+    expect(l.words).toBe("words");
+    expect(l.words_present).toBe("words measured");
+    expect(l.pass).toBe("Pass");
   });
 });
