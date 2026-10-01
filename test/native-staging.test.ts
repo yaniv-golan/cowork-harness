@@ -482,11 +482,66 @@ describe("resolveHostAgentBinary — review fixes", () => {
     expect(classifyNativeStagingDrift(pin(upper))).toMatchObject({ kind: "exact", pinned: "2.1.286", path: nested(root, "2.1.286", A) });
   });
 
-  it("a symlinked VERSION dir is ignored, like a symlinked build dir", () => {
+  // A harness rule for the FALLBACK search over other versions only (Desktop never enumerates versions):
+  // without it, 2.1.299 -> 2.1.286 would report the 2.1.286 binary as version 2.1.299.
+  it("a symlinked OTHER-version dir is skipped in the fallback search", () => {
     const root = stage([{ ver: "2.1.286", build: B }]);
     symlinkSync(join(root, "2.1.286"), join(root, "2.1.299"));
     expect(classifyNativeStagingDrift(pin(flat(root, "2.1.284")))).toMatchObject({ kind: "patch", found: "2.1.286" });
-    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.299")))).toMatchObject({ kind: "patch", found: "2.1.286" });
+  });
+
+  // The PINNED version dir is followed through a symlink, as Desktop follows it (it joins storageDir and the
+  // version, and applies isDirectory only to build dirs).
+  it("a symlinked PINNED version dir resolves exact — flat pin", () => {
+    const real = stage([{ ver: "2.1.284" }]);
+    const root = stage([]);
+    symlinkSync(join(real, "2.1.284"), join(root, "2.1.284"));
+    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.284")))).toMatchObject({ kind: "exact", path: flat(root, "2.1.284") });
+  });
+
+  it("a symlinked PINNED version dir resolves exact — nested pin", () => {
+    const real = stage([{ ver: "2.1.286", build: A }]);
+    const root = stage([]);
+    symlinkSync(join(real, "2.1.286"), join(root, "2.1.286"));
+    expect(classifyNativeStagingDrift(pin(nested(root, "2.1.286", A)))).toMatchObject({ kind: "exact", path: nested(root, "2.1.286", A) });
+  });
+
+  it("a .verified that is not a 64-hex checksum does not name a build, even when it starts with the dir name", () => {
+    for (const marker of [`${B} junk`, B, full(B).slice(0, 63), full(B) + "0"]) {
+      const root = stage([{ ver: "2.1.286", build: B, marker }]);
+      expect(classifyNativeStagingDrift(pin(flat(root, "2.1.286"))), marker).toMatchObject({ kind: "missing", cause: "unfinished" });
+    }
+  });
+
+  it("mixed unusable dirs (one unmarked, one naming another build) → unusable-build, not unfinished", () => {
+    const root = stage([
+      { ver: "2.1.286", build: B, marker: false },
+      { ver: "2.1.286", build: C, marker: full(A) },
+    ]);
+    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.286")))).toMatchObject({ kind: "missing", cause: "unusable-build" });
+  });
+
+  it("COWORK_HARNESS_ALLOW_AGENT_FALLBACK enables the fallback only when it is exactly '1'", () => {
+    const mm = stage([{ ver: "2.2.0", build: B }]);
+    const bd = stage([{ ver: "2.1.286", build: B }]);
+    for (const v of ["0", "true", "yes", ""]) {
+      process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK = v;
+      expect(
+        kindOf(() => resolveHostAgentBinary(pin(nested(mm, "2.1.284", A)))),
+        v,
+      ).toBe("major-minor");
+      expect(
+        kindOf(() => resolveHostAgentBinary(pin(nested(bd, "2.1.286", A)))),
+        v,
+      ).toBe("build");
+    }
+  });
+
+  it("the pinned flat file still present beside the chosen build is recorded on the drift (doctor's note reads it)", () => {
+    const root = stage([{ ver: "2.1.286" }, { ver: "2.1.286", build: B }]);
+    expect(classifyNativeStagingDrift(pin(flat(root, "2.1.286")))).toMatchObject({ relocated: true, pinnedFilePresent: true });
+    const gone = stage([{ ver: "2.1.286", build: B }]);
+    expect(classifyNativeStagingDrift(pin(flat(gone, "2.1.286")))).not.toHaveProperty("pinnedFilePresent");
   });
 
   it("nested pin vs an unmarked flat install of the same version → refused, saying the build cannot be confirmed", () => {
@@ -518,6 +573,31 @@ describe("resolveHostAgentBinary — review fixes", () => {
 });
 
 describe("deriveNativeStagedPath (sync) — notes", () => {
+  it("nothing runnable but an unfinished build staged → the WARNING names that dir and why", () => {
+    const h = mkdtempSync(join(tmpdir(), "cowork-home-"));
+    stage([{ ver: "2.1.286", build: B, marker: false }], join(h, "Library/Application Support/Claude/claude-code"));
+    const r = deriveNativeStagedPath({
+      nativeRoot: join(h, "Library/Application Support/Claude/claude-code"),
+      homeDir: h,
+      oldNativeStagedPath: "",
+      agentVersion: "2.1.286",
+    });
+    expect(r.warnings.join("\n")).toContain(`2.1.286/${B} has no .verified marker`);
+  });
+
+  it("a marked flat install that is not the manifest's build → 'pinning the flat install'", () => {
+    const h = mkdtempSync(join(tmpdir(), "cowork-home-"));
+    stage([{ ver: "2.1.286", marker: full(B) }], join(h, "Library/Application Support/Claude/claude-code"));
+    const r = deriveNativeStagedPath({
+      nativeRoot: join(h, "Library/Application Support/Claude/claude-code"),
+      homeDir: h,
+      oldNativeStagedPath: "",
+      agentVersion: "2.1.286",
+      manifestBuild: { version: "2.1.286", build: A },
+    });
+    expect(r.warnings.join("\n")).toContain("pinning the flat install");
+  });
+
   const home = () => mkdtempSync(join(tmpdir(), "cowork-home-"));
   const rootIn = (h: string) => join(h, "Library/Application Support/Claude/claude-code");
 

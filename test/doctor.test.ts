@@ -715,9 +715,9 @@ describe("doctor — native agent remedy per cause", () => {
   // replay/protocol only. A Mach-O override cannot run off macOS, so it is not offered there.
   it("off macOS the remedy is the exact platform text, for every cause but override", () => {
     const LINUX =
-      "hostloop and cowork run the native macOS agent binary, which does not exist on linux — use --tier container (docs/cli.md#prerequisites-for-anything-above-protocol-fidelity)";
+      "hostloop, and cowork when it resolves to host-loop, run the native macOS agent binary, which does not exist on linux — use --tier container (docs/cli.md#prerequisites-for-anything-above-protocol-fidelity)";
     const WIN =
-      "hostloop and cowork run the native macOS agent binary, which does not exist on win32 — use --tier protocol or replay (docs/cli.md#prerequisites-for-anything-above-protocol-fidelity)";
+      "hostloop, and cowork when it resolves to host-loop, run the native macOS agent binary, which does not exist on win32 — use --tier protocol or replay (docs/cli.md#prerequisites-for-anything-above-protocol-fidelity)";
     for (const k of ["major-minor", "build", "missing-root", "missing", "unfinished", "unusable-build", "unknown-layout"] as const) {
       expect(nativeAgentRemedy(k, "linux"), k).toBe(LINUX);
       expect(nativeAgentRemedy(k, "win32"), k).toBe(WIN);
@@ -859,6 +859,13 @@ describe("doctor — nativeDriftNote", () => {
   it("relocated from a flat pin into a build dir", () => {
     expect(nativeDriftNote({ ...base, kind: "exact", relocated: true, layout: "nested", foundBuild: "aaaaaaaaaaaa" })).toBe(
       "pinned path uses the flat layout; the same version is staged at 2.1.286/aaaaaaaaaaaa/",
+    );
+  });
+  it("relocated, with the pinned flat file still present", () => {
+    expect(
+      nativeDriftNote({ ...base, kind: "exact", relocated: true, pinnedFilePresent: true, layout: "nested", foundBuild: "aaaaaaaaaaaa" }),
+    ).toBe(
+      "pinned path uses the flat layout; the same version is staged at 2.1.286/aaaaaaaaaaaa/, which runs; the pinned flat file is also still present",
     );
   });
   it("relocated from a build pin to a flat install carrying that build's marker", () => {

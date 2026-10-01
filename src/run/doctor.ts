@@ -195,7 +195,8 @@ export function nativeDriftNote(d: NativeStagingDrift): string | undefined {
   else if (d.kind === "exact" && d.relocated)
     parts.push(
       d.layout === "nested"
-        ? `pinned path uses the flat layout; the same version is staged at ${d.found}/${d.foundBuild}/`
+        ? `pinned path uses the flat layout; the same version is staged at ${d.found}/${d.foundBuild}/` +
+            (d.pinnedFilePresent ? ", which runs; the pinned flat file is also still present" : "")
         : `pinned build ${d.pinnedBuild} found as a flat install`,
     );
   if (d.others?.length)
@@ -217,7 +218,7 @@ export function nativeAgentRemedy(kind: NativeAgentFailure | undefined, platform
   if (kind === "override") return "fix or unset COWORK_HOST_AGENT_BINARY — it names a path that does not exist";
   // Off macOS there is no native agent and a Mach-O override cannot run, so the only remedy is another tier.
   if (platform !== "darwin")
-    return `hostloop and cowork run the native macOS agent binary, which does not exist on ${platform} — use --tier ${platform === "linux" ? "container" : "protocol or replay"} (${PLATFORM_TABLE})`;
+    return `hostloop, and cowork when it resolves to host-loop, run the native macOS agent binary, which does not exist on ${platform} — use --tier ${platform === "linux" ? "container" : "protocol or replay"} (${PLATFORM_TABLE})`;
   switch (kind) {
     case "major-minor":
       return "set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to run the staged version, set COWORK_HOST_AGENT_BINARY=<path> to a saved copy of the pinned version's binary, or use a baseline that pins the staged version";

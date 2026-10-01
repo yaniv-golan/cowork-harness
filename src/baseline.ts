@@ -301,7 +301,7 @@ function markerBuild(dir: string): { build: string; publishedMs: number } | unde
   return NATIVE_CHECKSUM_RE.test(text) ? { build: text.slice(0, 12).toLowerCase(), publishedMs: mtimeMs } : undefined;
 }
 
-/** A real directory, not a symlink to one (Desktop enumerates with `Dirent.isDirectory()`). */
+/** A real directory, not a symlink to one. */
 function isRealDir(p: string): boolean {
   try {
     return lstatSync(p).isDirectory();
@@ -345,12 +345,12 @@ interface NativeVersionScan {
  *  2. a flat install with no marker, only when nothing in (1) exists. That is the pre-2.19675.0 shape the
  *     harness always accepted, kept so an older Desktop resolves exactly as before. Desktop 2.19675.0 itself
  *     would not run it (no `.verified`, so neither its primary path nor `publishedInstallDirs` lists it).
- * A symlinked version dir is skipped the same way.
+ * The version dir itself is followed through a symlink, as Desktop follows it (it joins storageDir and the
+ * version; only build dirs are filtered with `isDirectory()`).
  */
 function scanNativeVersion(root: string, version: string): NativeVersionScan {
   const vdir = join(root, version);
   const out: NativeVersionScan = { candidates: [], unusable: [], unknown: [] };
-  if (!isRealDir(vdir)) return out;
   let entries: import("node:fs").Dirent[] = [];
   try {
     entries = readdirSync(vdir, { withFileTypes: true });
@@ -410,7 +410,9 @@ export function compareNativeCandidates(
   );
 }
 
-/** Every real version dir under `root`, newest version first. */
+/** Every version dir under `root` for the FALLBACK search, newest version first. A symlinked version dir is
+ *  skipped: a harness rule, not Desktop's (Desktop never enumerates versions this way), so a link such as
+ *  2.1.299 -> 2.1.286 cannot report one version's binary under another's name. */
 function stagedNativeVersions(root: string): { version: string; scan: NativeVersionScan }[] {
   let names: string[] = [];
   try {
@@ -419,12 +421,12 @@ function stagedNativeVersions(root: string): { version: string; scan: NativeVers
     return [];
   }
   return names
-    .filter((n) => !n.startsWith("."))
+    .filter((n) => !n.startsWith(".") && isRealDir(join(root, n)))
     .map((version) => ({ version, scan: scanNativeVersion(root, version) }))
     .sort((a, b) => cmpVersionStrings(b.version, a.version));
 }
 
-const buildLabel = (c: NativeCandidate) => (c.layout === "nested" ? c.build! : "flat install");
+const buildLabel = (c: NativeCandidate) => (c.layout === "nested" ? c.build! : "the flat install");
 
 /**
  * Classification of the NATIVE agent binary's staging state against its baseline pin — the single
@@ -461,6 +463,8 @@ export interface NativeStagingDrift {
   layout?: "nested" | "flat";
   /** The chosen candidate's layout differs from the pin's (Desktop migrated it). */
   relocated?: boolean;
+  /** A flat pin was relocated to a build, and the pinned flat file is still on disk (the two can differ). */
+  pinnedFilePresent?: boolean;
   /** Other builds of the chosen version that were NOT chosen (only for a choice the pin did not decide). */
   others?: string[];
   /** Descriptions of the pinned version's 12-hex dirs that are not runnable (kinds `patch`/`major-minor`). */
@@ -508,7 +512,8 @@ export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeSt
       return { kind: "build", ...base, ...describe(c, own.candidates.slice(1)), fallbackPath: c.path };
     }
     const [c, ...rest] = own.candidates;
-    return { kind: "exact", ...base, ...describe(c, rest) };
+    const stillThere = c.layout === "nested" && pinLayout === "flat" && existsSync(staged);
+    return { kind: "exact", ...base, ...describe(c, rest), ...(stillThere ? { pinnedFilePresent: true } : {}) };
   }
 
   if (!existsSync(root)) return { kind: "missing", cause: "missing-root", ...base };
@@ -581,7 +586,7 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
   if (d.kind === "exact") {
     // The pinned flat file is still on disk, but a verified build of the same version wins (as it does for
     // Desktop, which does not run an unmarked flat install). The two files can differ, so say which one runs.
-    if (d.relocated && d.layout === "nested" && existsSync(d.stagedPath))
+    if (d.pinnedFilePresent)
       process.stderr.write(
         `cowork-harness: the pinned native agent "${d.stagedPath}" is present, but a verified build of ${d.found} is staged; ` +
           `running that build, "${d.path}".\n`,
@@ -666,7 +671,8 @@ export function deriveNativeStagedPath(a: {
 }): { path: string; warnings: string[] } {
   const warnings: string[] = [];
   const tilde = (p: string) => (p.startsWith(a.homeDir) ? `~${p.slice(a.homeDir.length)}` : p);
-  const newest = stagedNativeVersions(a.nativeRoot).find((v) => v.scan.candidates.length);
+  const versions = stagedNativeVersions(a.nativeRoot);
+  const newest = versions.find((v) => v.scan.candidates.length);
   if (newest) {
     const cands = newest.scan.candidates;
     let chosen = cands[0];
@@ -703,10 +709,11 @@ export function deriveNativeStagedPath(a: {
         `WARNING: agentBinary.nativeStagedPath layout was unexpected ("${a.oldNativeStagedPath}") — rewrote to the canonical path for ${a.agentVersion}.`,
       );
   }
+  const unusable = versions.flatMap((v) => v.scan.unusable).map(describeUnusable);
   warnings.push(
     `WARNING: derived agentBinary.nativeStagedPath does not exist on this machine: ${path}`,
-    `  (No native .app is staged under claude-code/ in either layout, <ver>/claude.app or <ver>/<build>/claude.app. ` +
-      `Set COWORK_HOST_AGENT_BINARY=<path> to a staged binary or a saved copy of the .app.)`,
+    `  (No runnable native .app is staged under claude-code/ in either layout, <ver>/claude.app or <ver>/<build>/claude.app` +
+      `${unusable.length ? `; ${unusable.join("; ")}` : ""}. Set COWORK_HOST_AGENT_BINARY=<path> to a staged binary or a saved copy of the .app.)`,
     `  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`,
   );
   return { path, warnings };

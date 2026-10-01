@@ -592,7 +592,8 @@ All notable changes to this project are documented here. The format is based on
     but not runnable, why.
   - A build counts only when it is a real directory whose `.verified` marker names it. A build dir with no marker
     (one Desktop has not finished staging), a marker naming another build, no `claude.app` or a bare `claude`
-    binary is skipped, and the message names the reason. Symlinked build and version dirs are skipped.
+    binary is skipped, and the message names the reason. A symlinked build dir is skipped, as Desktop skips it.
+    The fallback search over other versions also skips a symlinked version dir, which is a harness rule.
   - When several builds of one version are staged, a pin that names a build selects it. Otherwise the newest
     `.verified` mtime wins, then build name, with a stderr note naming the builds passed over. When a flat pin's
     file is still present but a verified build of that version wins, a stderr line names both paths.
