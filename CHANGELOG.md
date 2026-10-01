@@ -167,7 +167,9 @@ All notable changes to this project are documented here. The format is based on
   `plan.cost` summary as `eval --dry-run`, on its basis exactly (hillclimb runs excluded), and its nine keys are covered
   the same way (`schema/schedule-cost.json`). `hillclimb check` checks a flow dir against our reading of the published
   schema and warns on a baseline case with no headroom; `hillclimb state-template` prints a `_state.json` skeleton
-  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy).
+  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy). Every `hillclimb`
+  subcommand takes `--flow <dir>` (default `.claude/hillclimb/flow`), and `--help` and `docs/cli.md` show it on each: a loop whose
+  flow dir is not the default passes the same dir to every one.
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
 
@@ -543,6 +545,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- The companion skill has a `hillclimb` reference (`references/hillclimb.md`, indexed in `SKILL.md` and
+  `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check`, `state-template`,
+  `freeze-ref` and `regrade`: the flags, the snapshot and harness gate, refusals, exit codes, pairwise references,
+  re-grading a flow, and how to read the rows, the `semantic_pairwise` keys included.
 - The companion skill now says that a green run says nothing about a skill edited while a session is
   running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
   This was previously documented only in `docs/fidelity-gaps.md`.
