@@ -74,6 +74,24 @@ All notable changes to this project are documented here. The format is based on
   before writing any.
   Exit `0` / `2` (freeze), `0` / `1` / `2` (verify).
 
+- **`hillclimb run | check | state-template` — the runner for `/claude-api hillclimb`.** `hillclimb run
+  <scenario.yaml | dir/>` runs every scenario `--reps` times into `<flow>/<variant>/` under the published
+  runner-scaffold contract (`results.jsonl`, `errors.jsonl`, `traces/`, `progress.txt`, `summary.json`), with the
+  scaffold's flags, defaults and exit codes: `0` every attempt scored, `1` a failed attempt or a mid-run stop, `2`
+  refused before spending. Each variant runs from a snapshot of the plugin taken on its first run, so a resume or
+  appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
+  refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
+  inside the tuned plugin, and an unapproved harness change (`--approve-harness` records it). Rows carry the
+  per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, the run's content signature and
+  skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
+  files a run authored are copied and attached to its final turn. Traces inline each sub-agent's turns after its
+  dispatch, opened by a `system` turn saying what that child received: the harness's sub-agent append (Anthropic's
+  built-in sub-agent prompt withheld), "none received", or "not recorded in its transcript". `--dry-run` prices the
+  remaining runs from this machine's history at `plan.cost`, counting the flow's own prior runs (flows sharing a
+  directory basename share cost history). `hillclimb check` checks a flow dir against our reading of the published
+  schema and warns on a baseline case with no headroom; `hillclimb state-template` prints a `_state.json` skeleton
+  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy). See SPEC §11/§12.
+
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
   nor a sub-agent dispatch, so until now the judge never saw it, and `include_subagent_text` could not
