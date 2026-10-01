@@ -67,6 +67,8 @@ function measure(ctx: MetricsContext, m: ScenarioMetric): MetricMeasurement {
       return off("missing_artifact", "a symlink resolves outside the work root");
     case "not_found":
       return off("missing_artifact", "no file there");
+    case "not_regular":
+      return off("missing_artifact", "not a regular file (a FIFO, socket or device)");
     case "body_less": {
       if (gate.liveReadonly || gate.replayReason === "readonly") return off("readonly", "a read-only connected-folder input");
       if (gate.replayReason === "fixture" || gate.replayReason === "input")

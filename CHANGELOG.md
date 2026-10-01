@@ -477,6 +477,9 @@ All notable changes to this project are documented here. The format is based on
   the run (a plugin's or skill's own files under `.local-plugins/`, say) was missing from it and read as "new this
   run". On `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json`, `authored: true` on such a
   path now fails evidence-unavailable, naming the folders the manifest covers.
+- **`artifact_json` and `artifact_text` no longer hang on a FIFO.** A FIFO (or socket or device) at the artifact
+  path was opened for reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's
+  evaluation. Both keys now check the file type first and fail with "is not a regular file".
 
 ### Documentation
 

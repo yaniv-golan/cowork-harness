@@ -229,6 +229,9 @@ export type ArtifactBodyGate =
   | { kind: "link"; rel: string }
   | { kind: "escape"; rel: string }
   | { kind: "not_found"; rel: string }
+  /** Neither a regular file nor a directory (a FIFO, socket or device). Decided by `stat` BEFORE anything opens it:
+   *  opening a FIFO for reading blocks until a writer appears, and evaluate() is synchronous. */
+  | { kind: "not_regular"; rel: string }
   | {
       kind: "body_less";
       rel: string;
@@ -255,8 +258,21 @@ export function artifactBodyGate(
   if (ctx.linkPaths?.has(rel) === true) return { kind: "link", rel };
   if (!realFile) return { kind: "escape", rel };
   if (!existsSync(realFile)) return { kind: "not_found", rel };
+  if (isSpecialFile(realFile)) return { kind: "not_regular", rel };
   if (truncated.has(rel) || liveReadonly) return { kind: "body_less", rel, replayReason: truncated.get(rel), liveReadonly };
   return { kind: "ok", rel, realFile };
+}
+
+/** True for a path that exists and is neither a regular file nor a directory (a FIFO, socket or device) — never
+ *  opened by a body-reading key. `stat` does not open the file, so it cannot block. A stat failure is left to the
+ *  caller's read, which reports it. */
+function isSpecialFile(realFile: string): boolean {
+  try {
+    const st = statSync(realFile);
+    return !st.isFile() && !st.isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** The body cap of the JSON-reading keys (10 MiB). */
@@ -3634,6 +3650,8 @@ function check(
         results.push(fail(`unsafe artifact_text path "${at.artifact}" — symlink target escapes the work root`));
       } else if (!existsSync(realFile)) {
         results.push(fail(`artifact_text: file not found: ${at.artifact} (under ${ctx.workRoot})`));
+      } else if (isSpecialFile(realFile)) {
+        results.push(fail(`artifact_text: ${at.artifact} is not a regular file`));
       } else if (bodyLess) {
         const cause =
           replayReason === "fixture"
@@ -3719,6 +3737,8 @@ function check(
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
       } else if (gate.kind === "not_found") {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+      } else if (gate.kind === "not_regular") {
+        results.push(fail(`artifact_json: ${aj.artifact} is not a regular file`));
       } else if (gate.kind === "body_less") {
         // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
         // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
