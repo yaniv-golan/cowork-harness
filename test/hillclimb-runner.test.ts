@@ -23,6 +23,7 @@ import { runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/
 import { parseHillclimbRunArgs, type HillclimbRunArgs } from "../src/hillclimb/args.js";
 import type { RunResult } from "../src/types.js";
 import { stateTemplate } from "../src/hillclimb/state-template.js";
+import { metricSig } from "../src/hillclimb/grade-keys.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 import { hostPathTokens } from "../src/run/host-path-tokens.js";
 import { parseScenarioFile } from "../src/run/execute.js";
@@ -471,7 +472,7 @@ describe("scenario metrics", () => {
       err = [];
     };
 
-    it("a metric re-declared differently is refused before spend in every later pass, naming the metric and the variant", async () => {
+    it("(b) CHANGING a metric's declaration is refused before spend in every later pass, naming the metric and the variant", async () => {
       await baselineWithWords();
       writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("higher"));
       const shaBefore = JSON.parse(readFileSync(join(flowDir(), "_state.json"), "utf8")).harness_sha;
@@ -497,19 +498,47 @@ describe("scenario metrics", () => {
       expect(r.error?.message).toMatch(/baseline, v1/);
     });
 
-    it("the same declaration passes, and a metric the earlier rows predate is not a conflict", async () => {
+    it("(a) ADDING a metric mid-flow is allowed: rows with no metric_sigs predate it, and the new rows carry its sig", async () => {
       await approved();
       expect((await runHillclimb(args("--approve-harness"), deps())).exitCode).toBe(0); // rows with no metric_sigs
+      expect(rows("baseline").some((r) => "metric_sigs" in r.meta)).toBe(false);
       writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("lower"));
+      behave = (id) => (id === "alpha" ? { result: { ...excerpt, metrics: [{ id: "words", value: 7 }] } } : {});
       expect((await runHillclimb(args("--variant", "v1", "--approve-harness"), deps())).exitCode).toBe(0);
+      expect(rows("v1").map((r) => r.meta.metric_sigs)).toEqual([
+        { words: metricSig(parseScenarioFile(join(cwd, "evals", "alpha.yaml")).metrics![0]) },
+        expect.anything(),
+      ]);
+      // The same declaration again is no conflict.
       expect((await runHillclimb(args("--variant", "v2", "--approve-harness"), deps())).exitCode).toBe(0);
-      expect(rows("v2").every((r) => typeof r.meta.metric_sigs?.words === "string")).toBe(true);
     });
 
-    it("a row with metric_sigs that lacks the current metric's id is not a conflict", async () => {
+    it("(a) ADDING a metric beside one the rows already carry is allowed: a row whose metric_sigs lacks the id predates it", async () => {
       await baselineWithWords();
       writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO("Beta") + METRIC("higher", "ratio").replace("unbounded: true", "scale: 1"));
       expect((await runHillclimb(args("--variant", "v1", "--approve-harness"), deps())).exitCode).toBe(0);
+      expect(rows("v1").every((r) => Object.keys(r.meta.metric_sigs).sort().join() === "ratio,words")).toBe(true);
+    });
+
+    it("(c) REMOVING a metric is allowed, with a warning that older rows keep its values and new rows will not", async () => {
+      await baselineWithWords();
+      writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha"));
+      const r = await runHillclimb(args("--variant", "v1", "--approve-harness"), deps());
+      expect(r.exitCode).toBe(0);
+      expect(err.join("\n")).toMatch(
+        /warning: metric words is no longer declared by any scenario: the rows in baseline keep its values, but new rows will not carry it/,
+      );
+      expect(rows("v1").some((x) => "words_present" in x.grade || "metric_sigs" in x.meta)).toBe(false);
+    });
+
+    it("(c) then re-ADDING the removed id with a different declaration is a change, refused: the old rows still carry the old sig", async () => {
+      await baselineWithWords();
+      writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha"));
+      expect((await runHillclimb(args("--variant", "v1", "--approve-harness"), deps())).exitCode).toBe(0);
+      writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO("Alpha") + METRIC("higher"));
+      const r = await runHillclimb(args("--variant", "v2", "--approve-harness"), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toMatch(/metric "words" is declared differently from the rows already in baseline:/);
     });
 
     it("warns, without refusing, when the rows carry a metric _state.json's metrics does not declare", async () => {

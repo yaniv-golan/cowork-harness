@@ -3,7 +3,8 @@
 // (a 0 would be a fabricated failure, or a win for a lower-is-better metric). Why it was not measured is returned
 // apart, for the row's meta.
 import { describe, it, expect } from "vitest";
-import { metricEntries } from "../src/hillclimb/metric-keys.js";
+import { metricEntries, metricSigs } from "../src/hillclimb/metric-keys.js";
+import { metricSig } from "../src/hillclimb/grade-keys.js";
 import type { RunResult, ScenarioMetric } from "../src/types.js";
 
 const decl = (id: string): ScenarioMetric => ({ id, artifact: "outputs/stats.json", path: id, better: "higher", scale: 1 });
@@ -64,5 +65,12 @@ describe("metricEntries", () => {
 
   it("an entry the flow does not declare is ignored", () => {
     expect(metricEntries({ metrics: [{ id: "other", value: 5 }] }, [decl("words")]).grade).toEqual({ words_present: 0 });
+  });
+});
+
+describe("metricSigs — the meta.metric_sigs a row graded under these declarations carries", () => {
+  it("one sig per declared id (metricSig of its declaration); none for an empty union", () => {
+    expect(metricSigs(union)).toEqual({ words: metricSig(union[0]), ratio: metricSig(union[1]) });
+    expect(metricSigs([])).toEqual({});
   });
 });

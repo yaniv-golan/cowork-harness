@@ -21,7 +21,7 @@ import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { metricUnion } from "./grade-keys.js";
-import { refuseChangedMetrics, undeclaredRowMetrics } from "./metric-keys.js";
+import { refuseChangedMetrics, removedMetrics, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
@@ -164,6 +164,11 @@ async function run(
   ))
     say(note);
 
+  if (existing)
+    for (const [id, vs] of removedMetrics(existing, metrics))
+      say(
+        `warning: metric ${id} is no longer declared by any scenario: the rows in ${vs.join(", ")} keep its values, but new rows will not carry it (declaring it again later with a different declaration is refused)`,
+      );
   if (existing)
     for (const [id, vs] of undeclaredRowMetrics(existing, state.metrics))
       say(

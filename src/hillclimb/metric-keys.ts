@@ -26,6 +26,13 @@ export function metricEntries(
   return { grade, unavailable };
 }
 
+/** The `meta.metric_sigs` of a row graded under these declarations: id → metricSig. The one producer, for the
+ *  row writer and for any later pass that re-measures an old row's metrics (it sets `<id>`, `<id>_present` and
+ *  this id's sig together). */
+export function metricSigs(decls: readonly ScenarioMetric[]): Record<string, string> {
+  return Object.fromEntries(decls.map((m) => [m.id, metricSig(m)]));
+}
+
 /** Each variant's scored rows' `meta.metric_sigs` (id → sig), in variant order (baseline, then v1, v2, ...). */
 function rowSigs(snap: FlowSnapshot): Array<{ variant: string; sigs: Record<string, unknown> }> {
   const order = (v: string) => (v === "baseline" ? -1 : Number(v.slice(1)));
@@ -59,6 +66,21 @@ export function refuseChangedMetrics(snap: FlowSnapshot, union: readonly Scenari
         `metric "${m.id}" is declared differently from the rows already in ${[...variants].join(", ")}: the declaration changed since those rows were written, so one column would hold two quantities — start a new flow or give the changed metric a new id`,
       );
   }
+}
+
+/** The metric ids the flow's rows carry that no scenario declares any longer, each with the variants holding them.
+ *  Removing a metric is allowed: the old rows keep their values, new rows do not carry it. */
+export function removedMetrics(snap: FlowSnapshot, union: readonly ScenarioMetric[]): Map<string, string[]> {
+  const current = new Set(union.map((m) => m.id.toLowerCase()));
+  const out = new Map<string, string[]>();
+  for (const r of rowSigs(snap))
+    for (const id of Object.keys(r.sigs)) {
+      if (current.has(id.toLowerCase())) continue;
+      const vs = out.get(id) ?? [];
+      if (!vs.includes(r.variant)) vs.push(r.variant);
+      out.set(id, vs);
+    }
+  return out;
 }
 
 /** The metric ids the flow's rows carry that `_state.json`'s `metrics` does not declare, each with the variants
