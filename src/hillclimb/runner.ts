@@ -77,6 +77,8 @@ export interface RunOutcome {
   scheduled: number;
   ok: number;
   failed: number;
+  /** A dry run's remaining (case, rep) slots per case id — what the pass would run. */
+  remaining?: Record<string, number>;
 }
 
 // runner-scaffold.mjs l.46-53: strip escape sequences and control characters from anything printed — case ids and error text
@@ -221,7 +223,11 @@ async function run(
     const rerun = tasks.filter((t) => failedBefore.has(`${t.c.id}\0${t.rep}`));
     if (rerun.length)
       say(`[${v}] ${rerun.length} slot(s) re-run after a failed attempt: ${rerun.map((t) => `${t.c.id} rep${t.rep}`).join(", ")}`);
-    if (args.dryRun) return { exitCode: 0, scheduled: tasks.length, ok: 0, failed: 0 };
+    if (args.dryRun) {
+      const remaining: Record<string, number> = {};
+      for (const t of tasks) remaining[t.c.id] = (remaining[t.c.id] ?? 0) + 1;
+      return { exitCode: 0, scheduled: tasks.length, ok: 0, failed: 0, remaining };
+    }
 
     const writer = w!;
     let ok = 0;

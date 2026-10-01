@@ -5,13 +5,17 @@
 // Everything refusable here runs before any spend and exits 2, the runner's code for a refusal. A plain
 // --dry-run takes no snapshot: it checks the live plugin the pass would snapshot.
 
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
 import { applySessionOverrides, type SessionConfig } from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
-import { runOutDir, scenarioInputFindings } from "../run/execute.js";
+import { effectiveTier, runOutDir, scenarioInputFindings } from "../run/execute.js";
+import { readIndex, type RunIndexRow } from "../run/run-index.js";
+import { runsWriteRoot } from "../run/trace-view.js";
+import { HILLCLIMB_LABEL_PREFIX, loadCostHistory } from "../eval/plan-history.js";
+import { estimateScheduleCost, scheduleCostJson, scheduleCostLine, type ScheduleCostJson } from "../eval/planner.js";
 import { pkgVersion } from "../run/envelope.js";
 import { ANSWER_KEY_ADVICE, answerKeyFindings } from "../eval/snapshot.js";
 import { evidenceFacts } from "../eval/invocation.js";
@@ -43,6 +47,8 @@ export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolea
   runDirFor?: (scenario: Scenario, runId: string) => string;
   now?: () => number;
   tickMs?: number;
+  /** The run index the dry run prices from (this machine's `runs/index.jsonl`). */
+  indexRows?: () => RunIndexRow[];
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -50,25 +56,36 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 export async function runHillclimbCommand<F extends { label?: string; ablateSkill?: boolean }>(
   args: HillclimbRunArgs,
   deps: RunCommandDeps<F>,
-): Promise<RunOutcome> {
+): Promise<RunOutcome & { cost?: ScheduleCostJson }> {
   const say = (line: string) => deps.stderr(termSafe(line));
   let runner: Parameters<typeof runHillclimb>[1];
+  let price: Prepared["price"];
   try {
-    runner = prepare(args, deps, say);
+    ({ runner, price } = prepare(args, deps, say));
   } catch (e) {
     if (!(e instanceof Error)) throw e;
     const m = message(e);
     say(m.startsWith("refusing") ? m : `refusing to run: ${m}`);
     return { exitCode: 2, scheduled: 0, ok: 0, failed: 0 };
   }
-  return runHillclimb(args, runner);
+  const outcome = await runHillclimb(args, runner);
+  if (!args.dryRun || outcome.remaining === undefined) return outcome;
+  const cost = price(outcome.remaining);
+  say(`[${args.variant}] ${scheduleCostLine(cost)}`);
+  return { ...outcome, cost: scheduleCostJson(cost) };
+}
+
+interface Prepared {
+  runner: Parameters<typeof runHillclimb>[1];
+  /** The dry run's estimate for the remaining slots (case id → count). */
+  price: (remaining: Record<string, number>) => ReturnType<typeof estimateScheduleCost>;
 }
 
 function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   args: HillclimbRunArgs,
   deps: RunCommandDeps<F>,
   say: (l: string) => void,
-): Parameters<typeof runHillclimb>[1] {
+): Prepared {
   const v = args.variant;
   const { cases } = loadCases(resolve(deps.cwd, args.target));
   const prep = prepareCases(cases, {
@@ -143,7 +160,35 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     ...(deps.now ? { now: deps.now } : {}),
   });
   const baselineIds = [...new Set(cases.map((c) => prep.baseline(c).appVersion))].sort();
-  return {
+
+  // The dry run's estimate: E1a's one cost function. A flow's own prior passes are the closest predictor of its
+  // next one, so this flow's hillclimb runs count; another flow's never do — the index cannot tell an ablated
+  // run apart, and a null run always lives in its own (sibling) flow.
+  const ownLabel = `${HILLCLIMB_LABEL_PREFIX}${basename(flowArg)}:`;
+  const price: Prepared["price"] = (remaining) => {
+    const rows = (deps.indexRows ?? (() => readIndex(runsWriteRoot())))().filter(
+      (r) => !r.runLabel?.startsWith(HILLCLIMB_LABEL_PREFIX) || r.runLabel.startsWith(ownLabel),
+    );
+    return estimateScheduleCost(
+      cases
+        .filter((c) => (remaining[c.id] ?? 0) > 0)
+        .map((c) => {
+          const baseline = prep.baseline(c);
+          return {
+            scenario: c.scenario.name,
+            jobs: remaining[c.id],
+            history: loadCostHistory(rows, {
+              scenario: c.scenario.name,
+              baseline: baseline.appVersion,
+              tier: effectiveTier(c.scenario.fidelity, baseline),
+              includeHillclimb: true,
+            }),
+          };
+        }),
+    );
+  };
+
+  const runner: Parameters<typeof runHillclimb>[1] = {
     cwd: deps.cwd,
     secrets: deps.secrets,
     stderr: deps.stderr,
@@ -165,4 +210,5 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),
   };
+  return { runner, price };
 }

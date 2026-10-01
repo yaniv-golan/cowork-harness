@@ -118,4 +118,17 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     expect(readFileSync(join(cwd, "flow", "metrics.md"), "utf8")).toMatch(/^# Metrics/);
     expect(r.stderr).toMatch(/wrote flow\/metrics\.md/);
   });
+
+  it("run --dry-run --output-format json: the envelope's ok is the verdict, and the cost object is present", () => {
+    setup();
+    const r = spawnSync("node", [CLI, "hillclimb", "run", "evals", "--flow", "flow", "--dry-run", "--output-format", "json"], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: join(cwd, "runs") },
+    });
+    expect(r.status).toBe(0);
+    const env = JSON.parse(r.stdout);
+    expect(env.ok).toBe(true);
+    expect(env).toMatchObject({ scheduled: 1, scored: 0, failed: 0, cost: { jobs: 1, lowerBound: true } });
+  });
 });
