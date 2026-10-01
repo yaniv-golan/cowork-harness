@@ -511,6 +511,22 @@ describe("scenario metrics", () => {
       ]);
       // The same declaration again is no conflict.
       expect((await runHillclimb(args("--variant", "v2", "--approve-harness"), deps())).exitCode).toBe(0);
+      // With the state-template re-merged, check reads the baseline rows as predating the metric, not as errors.
+      const st = JSON.parse(readFileSync(join(flowDir(), "_state.json"), "utf8"));
+      const t = stateTemplate({
+        cases: ["alpha", "beta"].map((n) => {
+          const sc = parseScenarioFile(join(cwd, "evals", `${n}.yaml`));
+          return { assertions: sc.assert, ...(sc.metrics ? { metrics: sc.metrics } : {}) };
+        }),
+        harnessPaths: [],
+        decider: false,
+      });
+      writeFileSync(join(flowDir(), "_state.json"), JSON.stringify({ ...st, ...t.state }));
+      const report = checkFlowDir(flowDir(), { profile: "harness" });
+      expect(report.findings.filter((f) => f.level === "error")).toEqual([]);
+      expect(report.findings.filter((f) => /predate/.test(f.message)).map((f) => f.message)).toEqual([
+        "2 rows predate metric words (baseline 2); its mean covers later rows only",
+      ]);
     });
 
     it("(a) ADDING a metric beside one the rows already carry is allowed: a row whose metric_sigs lacks the id predates it", async () => {
