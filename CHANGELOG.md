@@ -441,6 +441,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- The companion skill gains a `hillclimb` reference (`references/hillclimb.md`, indexed in `SKILL.md` and
+  `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check` and `state-template`. It,
+  `--help` and `docs/cli.md` now show `--flow <dir>` on every one of the three: `state-template` writes
+  `<flow>/metrics.md` only when `--flow` is given, and a loop whose flow dir is not the default must pass the same
+  dir to each.
 - The companion skill now says that a green run says nothing about a skill edited while a session is
   running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
   This was previously documented only in `docs/fidelity-gaps.md`.
