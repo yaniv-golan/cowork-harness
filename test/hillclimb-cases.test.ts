@@ -45,6 +45,15 @@ describe("loadCases", () => {
     expect(() => loadCases(dir)).toThrow(/duplicate case id/);
   });
 
+  it("two rubric claims that normalize alike are refused before spend (they would share a row key)", () => {
+    writeFileSync(
+      join(dir, "dup.yaml"),
+      'name: dup\nfidelity: protocol\nprompt: p\nassert:\n  - semantic_matches:\n      rubric: ["Claim one", "claim  one"]\n',
+    );
+    expect(() => loadCases(dir)).toThrow(UsageError);
+    expect(() => loadCases(dir)).toThrow(/duplicate rubric claim/);
+  });
+
   it("an all-dot stem is refused (the lite report refuses ^\\.+$ ids)", () => {
     scenario("...yaml", "dots");
     expect(() => loadCases(dir)).toThrow(/not a usable case id/);

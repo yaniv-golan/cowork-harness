@@ -25,6 +25,7 @@ import { classifyRep, classifyTermination, repRowValues, scenarioRows, type Clas
 import { combineJudges } from "./judge-rollup.js";
 import { caseKeyDecls, type MetricDecl } from "./grade-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
+import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "./schema-check.js";
 import { computeVerdict } from "../run/verdict.js";
@@ -82,6 +83,26 @@ const snake = (e: Record<string, unknown> | undefined): TokenUsage | undefined =
   };
 };
 
+/** Every modelUsage entry that IS the main model, summed: the agent keys usage by the PICKED id, so a `[1m]`
+ *  context-window pick of the same model is `claude-x[1m]` there while its responses say `claude-x`. */
+function mainModelUsage(mu: Record<string, unknown> | undefined, model: string): TokenUsage | undefined {
+  const want = normalizeModelId(model);
+  let sum: TokenUsage | undefined;
+  for (const [k, e] of Object.entries(mu ?? {})) {
+    if (normalizeModelId(k) !== want) continue;
+    const u = snake(e as Record<string, unknown>)!;
+    sum = sum
+      ? {
+          input_tokens: sum.input_tokens + u.input_tokens,
+          output_tokens: sum.output_tokens + u.output_tokens,
+          cache_read_input_tokens: sum.cache_read_input_tokens + u.cache_read_input_tokens,
+          cache_creation_input_tokens: sum.cache_creation_input_tokens + u.cache_creation_input_tokens,
+        }
+      : u;
+  }
+  return sum;
+}
+
 const authored = (r: RunResult | undefined) => (r?.assertions ?? []).filter((a) => a.source === undefined);
 
 function judgeRetries(r: RunResult | undefined): { judge_retries: number; unrecorded: boolean } {
@@ -103,7 +124,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const ev = resultEventFields(ctx.events);
   const mains = mainLoopModels(ctx.events);
   const model = mains[0];
-  const usage = model ? snake(r?.modelUsage?.[model] as Record<string, unknown> | undefined) : undefined;
+  const usage = model ? mainModelUsage(r?.modelUsage, model) : undefined;
   const judges = combineJudges(authored(r));
   const jr = judgeRetries(r);
   const retries = r?.apiRetries?.count ?? 0;
@@ -187,7 +208,10 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       return errorRow("error", `grade for assertion ${i} could not be aligned with the scenario (${v.excluded})`, {
         failure_rule: "grade_alignment",
       });
-    if (v.row.kind === "semantic_rollup") grade[`a${i}_present`] = v.excluded === "evidence_unavailable" ? 0 : 1;
+    // Graded = at least one of ITS claims was graded. Not the roll-up's own exclusion: a multi-key assertion
+    // keeps its roll-up value (classify.ts) while every claim row is excluded.
+    if (v.row.kind === "semantic_rollup")
+      grade[`a${i}_present`] = values.some((x) => x.row.kind === "claim" && x.row.assertionIndex === i && x.excluded === undefined) ? 1 : 0;
     else if (v.row.kind === "assertion") grade[`a${i}`] = v.value!;
     else if (v.excluded === undefined) {
       const key = `a${i}_c${v.row.claimIndex}`;

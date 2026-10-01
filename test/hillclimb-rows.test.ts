@@ -116,6 +116,27 @@ describe("scored rows", () => {
     expect(row.meta.models["claude-sonnet-5"]).toMatchObject({ output_tokens: 1306, cost_usd: 0.09333870000000001 });
   });
 
+  it("a [1m] context-window key in modelUsage is the same model: usage is found, not dropped", () => {
+    // From a real kept run (numbers only): the main loop reported claude-opus-5; modelUsage keyed claude-opus-5[1m].
+    const r = {
+      ...fixture("success-semantic"),
+      models: ["claude-opus-5"],
+      modelUsage: {
+        "claude-opus-5[1m]": {
+          inputTokens: 2,
+          outputTokens: 4,
+          cacheReadInputTokens: 17216,
+          cacheCreationInputTokens: 33648,
+          costUSD: 0.345198,
+        },
+      },
+      cost: { usd: 0.345198 },
+    } as unknown as RunResult;
+    const row = attemptRow({ result: r }, ctx(r, { pin: "claude-opus-5" })).row as Record<string, any>;
+    expect(row.usage).toEqual({ input_tokens: 2, output_tokens: 4, cache_read_input_tokens: 17216, cache_creation_input_tokens: 33648 });
+    expect(row.in_tokens).toBe(2 + 17216 + 33648);
+  });
+
   it("no cost recorded ⇒ cost_usd absent, never 0 (unpriced is not free)", () => {
     const r = fixture("success-semantic");
     expect(attemptRow({ result: r }, ctx(r)).row).not.toHaveProperty("cost_usd");
@@ -166,6 +187,23 @@ describe("scored rows", () => {
     expect(row.grade).toMatchObject({ a3_present: 0, claims_present: 0 });
     for (let j = 0; j < 5; j++) expect(row.grade).not.toHaveProperty(`a3_c${j}`);
     expect(row.grade).not.toHaveProperty("claims");
+  });
+
+  it("a MULTI-key semantic assertion whose evidence was refused: a<i>_present is 0, as for a single key", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    // ADDED: a second key on the semantic assertion, and a refusal of its evidence
+    const both = { ...r.assertions[3].assertion, max_tool_errors: 0 } as Assertion;
+    r.assertions[3] = {
+      ...r.assertions[3],
+      assertion: both,
+      pass: false,
+      semanticClaims: undefined,
+      semanticEvidence: { reason: "in_scope_truncated" },
+    } as never;
+    const assertions = r.assertions.map((a) => a.assertion) as Assertion[];
+    const row = attemptRow({ result: r }, ctx(r, { assertions })).row as Record<string, any>;
+    expect(row.grade.a3_present).toBe(0);
+    for (let j = 0; j < 5; j++) expect(row.grade).not.toHaveProperty(`a3_c${j}`);
   });
 
   it("claims pools graded claims: 3 of 5 passed ⇒ 0.6; explanation.claims names the failed claims first", () => {

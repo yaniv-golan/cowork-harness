@@ -10,6 +10,7 @@ import { UsageError } from "../errors.js";
 import { resolveInputs } from "../run/inputs.js";
 import { parseScenarioFile } from "../run/execute.js";
 import type { Scenario } from "../types.js";
+import { scenarioRows } from "../eval/classify.js";
 import { findDuplicateCaseIds, pathSafeId, unusableCaseIds } from "./ids.js";
 
 export interface HillclimbCase {
@@ -54,6 +55,13 @@ export function loadCases(target: string): { cases: HillclimbCase[]; skipped: st
     if (unusableCaseIds([stem]).length)
       throw new UsageError(`hillclimb: ${basename(file)}: "${stem}" is not a usable case id (rename the file)`);
     const scenario = parseScenarioFile(file);
+    // The row keys are built from the scenario; a scenario they cannot be built from (two claims that
+    // normalize alike) would fail every attempt AFTER its spend — refuse it now, as eval does.
+    try {
+      scenarioRows(stem, scenario.assert);
+    } catch (e) {
+      throw new UsageError(`hillclimb: ${basename(file)}: ${(e as Error).message}`);
+    }
     return { id, stem, ...(id !== stem ? { originalId: stem } : {}), name: scenario.name, file, scenario };
   });
   const dups = findDuplicateCaseIds(cases.map((c) => c.stem));
