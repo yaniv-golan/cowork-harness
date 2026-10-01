@@ -451,3 +451,20 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     expect(row).toMatchObject({ judge_retries: 0, meta: { judge_retries_unrecorded: true } });
   });
 });
+
+describe("attemptRow — meta.judge_transport", () => {
+  it("asserts judged on different transports list every distinct one, never folding them into one", () => {
+    const base = fixture("success-semantic");
+    const sem = base.assertions.find((a) => a.assertion.semantic_matches)!;
+    const r = {
+      ...base,
+      assertions: [
+        ...base.assertions.map((a) => (a === sem ? { ...a, judgeTransport: { isolation: "strict" } } : a)),
+        { ...sem, judgeTransport: { isolation: "strict", strictMcp: false as const } },
+      ],
+    } as RunResult;
+    const meta = (attemptRow({ result: r }, ctx(r)).row as Record<string, any>).meta;
+    expect(meta).not.toHaveProperty("judge_transport");
+    expect(meta.judge_transports).toEqual([{ isolation: "strict" }, { isolation: "strict", strictMcp: false }]);
+  });
+});

@@ -83,8 +83,8 @@ All notable changes to this project are documented here. The format is based on
   refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
   inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
   harness change (`--approve-harness` records it). Rows carry the
-  per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, the run's content signature and
-  skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
+  per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
+  (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied and attached to its final turn. Traces inline each sub-agent's turns after its
   dispatch, opened by a `system` turn saying what that child received: the harness's sub-agent append (Anthropic's
   built-in sub-agent prompt withheld), "none received", or "not recorded in its transcript". `--dry-run` prices the

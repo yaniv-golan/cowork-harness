@@ -136,6 +136,16 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const model = mains[0];
   const usage = model ? mainModelUsage(r?.modelUsage, model) : undefined;
   const judges = combineJudges(authored(r));
+  // How each graded semantic assert's host judge ran: one shape for the row, or every distinct one when the asserts
+  // differ. Absent when no judge recorded one (an injected judge, or none ran) — never null.
+  const transports = [
+    ...new Map(
+      authored(r)
+        .map((g) => g.judgeTransport)
+        .filter((t): t is NonNullable<typeof t> => t !== undefined)
+        .map((t) => [JSON.stringify(t), t] as const),
+    ).values(),
+  ];
   const jr = judgeRetries(r);
   const retries = r?.apiRetries?.count ?? 0;
 
@@ -337,6 +347,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),
       ...(judges.judge_models !== undefined ? { judge_models: judges.judge_models } : {}),
+      ...(transports.length === 1 ? { judge_transport: transports[0] } : transports.length > 1 ? { judge_transports: transports } : {}),
       ...(toolCalls !== undefined ? { web_fetches: toolCalls.filter((t) => t.name === "WebFetch").length } : {}),
       ...(ctx.meta.ablated ? { ablated: true } : {}),
       ...(ctx.meta.nonDeterministic ? { non_deterministic: true } : {}),

@@ -46,6 +46,7 @@ assert:
 
 let skillActivity: Array<{ skillId: string }> | undefined;
 let authored: Record<string, string> | undefined;
+let judgeTransport: object | undefined;
 const rows = () =>
   readFileSync(join(cwd, "flow", "baseline", "results.jsonl"), "utf8")
     .trim()
@@ -73,7 +74,12 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
       const b = loadBaseline(a.scenario.baseline);
       const fp = buildFingerprint(a.scenario.session, b.appVersion, undefined, a.scenario.skills, b, a.extra.session as SessionConfig);
       // A real run echoes the scenario's own assertions on its grades (the excerpt's judge_model is redacted).
-      const assertions = excerpt.assertions.map((g, i) => ({ ...g, assertion: a.scenario.assert[i] }));
+      const assertions = excerpt.assertions.map((g, i) => ({
+        ...g,
+        assertion: a.scenario.assert[i],
+        // a real run records how a semantic grade's judge ran on that grade
+        ...(judgeTransport && a.scenario.assert[i]?.semantic_matches ? { judgeTransport } : {}),
+      }));
       // Files the run authored, in its work dir, as a real run records them.
       const work = join(outDir, "work");
       for (const [rel, body] of Object.entries(authored ?? {})) {
@@ -114,6 +120,7 @@ beforeEach(() => {
   calls = [];
   skillActivity = undefined;
   authored = undefined;
+  judgeTransport = undefined;
 });
 afterEach(() => {
   for (const d of [cwd, join(plugin, ".."), snaps]) rmSync(d, { recursive: true, force: true });
@@ -482,5 +489,15 @@ describe("runHillclimbCommand", () => {
       );
       expect(viaDir.exitCode).toBe(0);
     });
+  });
+
+  it("meta.judge_transport records how the run's judge ran; absent when no judge recorded one", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    await runHillclimbCommand(args(), deps());
+    judgeTransport = { isolation: "strict", cliVersion: "9.9.9" };
+    await runHillclimbCommand(args("--reps", "2"), deps());
+    const metas = rows().map((r) => r.meta as Record<string, unknown>);
+    expect(metas[0]).not.toHaveProperty("judge_transport");
+    expect(metas[1].judge_transport).toEqual({ isolation: "strict", cliVersion: "9.9.9" });
   });
 });
