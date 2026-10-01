@@ -2,7 +2,7 @@
 // tunes, the model pins, and the tier the trace needs. It composes the existing pieces (the session loader,
 // eval's pin resolvers, the protocol tier's managed-config rule); nothing here is a second copy of them.
 
-import { existsSync, realpathSync } from "node:fs";
+import { closeSync, openSync, realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
 import { expandHome, resolveLaunchSources, type SessionConfig } from "../session.js";
@@ -44,6 +44,18 @@ export interface PreparedCases {
 
 const TIERS: readonly MountTier[] = ["hostloop", "container", "microvm", "protocol"];
 
+/** A regular file this process can open for reading: what the harness digest can hash. A missing path, a directory
+ *  or an unreadable file is not one. */
+const readableFile = (p: string): boolean => {
+  try {
+    if (!statSync(p).isFile()) return false;
+    closeSync(openSync(p, "r"));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const realOr = (p: string): string => {
   try {
     return realpathSync(p);
@@ -83,6 +95,9 @@ export function prepareCases(
         throw new UsageError(
           `case ${c.id}: the scenario has no session file; the loop tunes the session's one plugins.local_plugins entry`,
         );
+      notes.push(
+        `note: case ${c.id}: its session is inline, and it is not selected — skipped for the one-plugin rule (a pass that selects it refuses)`,
+      );
     } else {
       try {
         sessions.set(c.id, loadSessionFromFile(s.session));
@@ -169,9 +184,10 @@ export function prepareCases(
             ...(x?.uploads ?? []).map((u) => resolve(expandHome(u))),
             ...(fixture ? fixture.files.map((f) => join(fixture.dir, ...f.path.split("/"))) : []),
           ];
-          // An unselected case's input that does not exist is left out (a pass that selects the case refuses it); the
-          // gate would refuse an unreadable derived file. Once it exists, it is hashed: the sha moves.
-          return [resolve(c.file), ...(chosen.has(c.id) ? inputs : inputs.filter((p) => existsSync(p)))];
+          // An unselected case's input the digest cannot read (missing, a directory, unreadable) is left out: a pass that
+          // selects the case refuses it, and the gate would refuse an unreadable derived file. The digest hashes each
+          // path's name with its bytes, so leaving one out moves the sha, and so does its return.
+          return [resolve(c.file), ...(chosen.has(c.id) ? inputs : inputs.filter(readableFile))];
         }),
       ),
     ],

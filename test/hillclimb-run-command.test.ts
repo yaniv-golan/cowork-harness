@@ -15,6 +15,7 @@ import {
   writeFileSync,
   chmodSync,
   renameSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -867,6 +868,53 @@ describe("--case: per-case checks cover the selected cases only", () => {
       expect(full.exitCode).toBe(2);
       expect(full.error?.message).toMatch(refusal);
     });
+
+  const UPLOAD_SESSION = () => BETA_SESSION().replace("plugins:", "uploads:\n  - ./in.txt\nplugins:");
+  const uploadPath = () => join(cwd, "sessions", "in.txt");
+  for (const [what, make, refusal] of [
+    ["a directory", () => mkdirSync(uploadPath()), /case beta: .*in\.txt.*directory/],
+    [
+      "an unreadable file",
+      () => (writeFileSync(uploadPath(), "input\n"), chmodSync(uploadPath(), 0o000)),
+      /cannot read sessions\/in\.txt \(EACCES\)/,
+    ],
+  ] as const)
+    it(`an unselected case's upload that exists but is ${what} does not block --case; it leaves the gate's set, so the sha moves`, async (ctx) => {
+      if (what === "an unreadable file" && process.getuid?.() === 0) ctx.skip(); // root reads a 0o000 file
+      beta({ session: UPLOAD_SESSION() });
+      writeFileSync(uploadPath(), "input\n");
+      await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+      const readable = gateLine();
+      expect(readable).toMatch(/sessions\/in\.txt/);
+      rmSync(uploadPath());
+      make();
+      try {
+        err = [];
+        const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+        expect(dry.error?.message).toBeUndefined();
+        expect(dry.exitCode).toBe(0);
+        const dropped = gateLine();
+        expect(dropped).not.toMatch(/sessions\/in\.txt/);
+        expect(dropped).not.toBe(readable);
+        err = [];
+        const full = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+        expect(full.exitCode).toBe(2);
+        expect(full.error?.message).toMatch(refusal);
+      } finally {
+        if (existsSync(uploadPath()) && !statSync(uploadPath()).isDirectory()) chmodSync(uploadPath(), 0o644);
+      }
+    });
+
+  it("an unselected inline session is named on stderr, as skipped for the one-plugin rule", async () => {
+    beta({ scenario: BETA_SCENARIO().replace(/^session: .*\n/m, "") });
+    const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+    expect(dry.exitCode).toBe(0);
+    expect(err.join("\n")).toMatch(/note: case beta: .*inline.*not selected.*one-plugin/);
+    err = [];
+    const full = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+    expect(full.exitCode).toBe(2);
+    expect(full.error?.message).toMatch(/case beta: the scenario has no session file/);
+  });
 
   it("an unparseable unselected session is named on stderr, as skipped for the one-plugin rule", async () => {
     beta({ session: "model: [unclosed\n  - {\n" });
