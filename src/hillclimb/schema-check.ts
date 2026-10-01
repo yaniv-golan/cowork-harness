@@ -282,6 +282,8 @@ function readDeclared(c: Collector, text: string | undefined): Declared {
           c.note("state.metrics", F, `${at}.label is ${m.label.length} chars; the full viewer truncates past ${METRIC_LABEL_MAX}`);
       }
       if (m.scale !== undefined && !isFiniteNum(m.scale)) c.error("state.metrics", F, `${at}.scale must be a number`);
+      // Ours: a float's floor (state-template writes it from the scenario's `min`); headroom and the range check read it.
+      if (m.min !== undefined && !isFiniteNum(m.min)) c.error("state.metrics", F, `${at}.min must be a number`);
       if (m.better !== undefined && m.better !== "higher" && m.better !== "lower")
         c.error("state.metrics", F, `${at}.better must be higher|lower`);
       d.metrics.push({ id: m.id, kind: typeof m.kind === "string" ? m.kind : undefined });

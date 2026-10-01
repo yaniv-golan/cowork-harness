@@ -715,7 +715,7 @@ describe("schema-check: _state.json", () => {
     expect(rulesAt(r, "note")).toContain("state.absent");
   });
 
-  it("metrics: list shape, id, kind, duplicate, label length, better, scale", () => {
+  it("metrics: list shape, id, kind, duplicate, label length, better, scale, min", () => {
     // A non-list metrics is ignored by the report, so the judge-flip note follows (12 rows carry explanations).
     const notList = check(withState((st) => (st.metrics = { pass: "binary" })));
     expect(rulesAt(notList, "error")).toEqual(["state.metrics"]);
@@ -728,6 +728,9 @@ describe("schema-check: _state.json", () => {
     expectOnly(check(m({ kind: "percent" })), "error", "state.metrics");
     expectOnly(check(m({ better: "up" })), "error", "state.metrics");
     expectOnly(check(m({ scale: "10" })), "error", "state.metrics");
+    // `min`, a float's floor: a string would silently disable headroom's lower-is-better end.
+    expectOnly(check(m({ min: "0" })), "error", "state.metrics");
+    expect(check(m({ min: 0.5 })).findings).toEqual([]);
     expectOnly(check(m({ label: "a very long label indeed" })), "note", "state.metrics");
     expectOnly(check(m({ kind: undefined })), "note", "state.metrics");
     expectOnly(

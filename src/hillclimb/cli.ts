@@ -12,7 +12,7 @@ import { isolationRefusal } from "../decide/llm-transport.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
-import { headroom, stateMetricFindings } from "./check.js";
+import { headroom, metricRangeWarnings, stateMetricFindings } from "./check.js";
 import { prepareCases } from "./command.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
@@ -35,7 +35,8 @@ export interface HillclimbCliDeps<F extends JobFlags> {
   };
 }
 
-/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom only warns. */
+/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom and a float
+ *  outside its declared range only warn. */
 export function checkReport(flowArg: string, cwd: string): { report: SchemaCheckReport; warnings: string[]; exitCode: 0 | 1 } {
   const flowAbs = resolve(cwd, normalizeRootArg(flowArg));
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
@@ -43,7 +44,7 @@ export function checkReport(flowArg: string, cwd: string): { report: SchemaCheck
   const snap = loadFlowSnapshot(flowAbs);
   const extra = stateMetricFindings(snap);
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
-  return { report, warnings: headroom(snap).warnings, exitCode: report.errors ? 1 : 0 };
+  return { report, warnings: [...headroom(snap).warnings, ...metricRangeWarnings(snap)], exitCode: report.errors ? 1 : 0 };
 }
 
 /** `hillclimb state-template`: the skeleton for the flow's cases, with the gate's files relative to cwd. */

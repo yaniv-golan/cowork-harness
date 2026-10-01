@@ -36,6 +36,27 @@ describe("checkReport", () => {
     expect(r.report.findings.map((f) => f.rule)).toContain("state.metrics");
   });
 
+  it("an out-of-range float is a warning, never an error: exit 0", () => {
+    cpSync(CLEAN_FLOW, join(cwd, "flow"), { recursive: true });
+    const st = JSON.parse(readFileSync(join(cwd, "flow", "_state.json"), "utf8"));
+    writeFileSync(
+      join(cwd, "flow", "_state.json"),
+      JSON.stringify({ ...st, metrics: [...st.metrics, { id: "score", kind: "float", better: "higher", scale: 1 }] }),
+    );
+    const res = join(cwd, "flow", "baseline", "results.jsonl");
+    const rows = readFileSync(res, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    rows.forEach((r, i) => Object.assign(r.grade, { score_present: 1, score: i === 0 ? 12.5 : 0.5 }));
+    writeFileSync(res, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    const r = checkReport("flow", cwd);
+    expect(r.exitCode).toBe(0);
+    expect(r.warnings).toContainEqual(
+      expect.stringMatching(/^warning: grade\.score = 12\.5 is outside its declared range \[0, 1\] \(variant baseline/),
+    );
+  });
+
   it("a missing flow dir is a usage error", () => {
     expect(() => checkReport("nope", cwd)).toThrow(UsageError);
   });
