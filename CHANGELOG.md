@@ -509,9 +509,11 @@ All notable changes to this project are documented here. The format is based on
   `outputs/`, `uploads/` and the connected folders only, so a file staged elsewhere under the work root before
   the run (a plugin's or skill's own files under `.local-plugins/`, say) was missing from it and read as "new this
   run". On `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json`, `authored: true` on such a
-  path now fails evidence-unavailable, naming the folders the manifest covers. The check, the manifest lookup and the
-  symlinked-directory check all use the file's stored on-disk name, matched exactly: on a case-sensitive filesystem
-  `Outputs/` is not `outputs/`, and a case- or normalization-twin of a manifest file is never read as that file.
+  path now fails evidence-unavailable, naming the folders the manifest covers. The check and every lookup (the
+  manifest, the pre-run link paths, a replay's link entries and post-run hashes) use the file's stored on-disk name,
+  matched exactly: on a case-sensitive filesystem `Outputs/` is not `outputs/`, and a case- or normalization-twin of a
+  manifest file is never read as that file. The symlinked-directory check runs `lstat` on each directory of the path
+  as written.
 - **`artifact_json` and `artifact_text` no longer hang on a FIFO.** A FIFO at the artifact path was opened for
   reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
   check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
