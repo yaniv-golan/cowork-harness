@@ -6,7 +6,33 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`--output-format json` now says whether `--max-budget-usd` was actually enforced.** Every envelope
+  from `run`, `skill` and `record` (every `record` arm, including `record`'s `--dry-run` arms; `skill
+  --dry-run` runs no pre-flight) carries a top-level `budget` object when a cap was passed: `{capUsd,
+  basis, enforced, reason?, estimateUsd?, unpriced[], runsDir, runsDirRedirected}`. `enforced: false` means at least one scenario had no priced history and ran with
+  no cap at all; `"lower_bound"` means a `record` batch was checked against an estimate that counted its
+  unpriced scenarios as $0. Previously an uncapped run was visible only as a stderr warning. Absent
+  without `--max-budget-usd`, and on `--repeat`, whose running-total cap is reported in `rollups[]`
+  ([SPEC.md](./SPEC.md) §11).
+- **A `--max-budget-usd` refusal is machine-distinguishable.** Its error envelope now carries
+  `error.code: "budget_exceeded"` and `error.budget` (the same shape, with the refused estimate). The
+  category stays `runtime` and exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`), so a
+  consumer no longer has to match message prose to tell "refused on cost" from "did not load";
+  `error.code` is absent on every other error.
+
 ### Fixed
+
+- **A budget refusal on `record <dir/> --dry-run` no longer drops the corpus findings from the JSON.**
+  The refusal's error envelope replaces the dry-run payload, and `broken[]`, `refusals[]` and
+  `inputErrors[]` went to stderr only; they now stay on the error envelope as the same top-level keys
+  (and `inputErrors[]` on a single-file dry-run, `broken[]` on a real `record <dir/>`).
+- **The "no priced run history … proceeding UNCAPPED" warning names the likely cause when the runs dir
+  was redirected.** With `--run-dir` / `COWORK_HARNESS_RUNS_DIR` pointing off the default, the warning
+  now says history is read from that dir's index only and suggests reusing one runs dir across
+  invocations — a fresh dir per invocation leaves every scenario unpriced every time. Stated once per
+  invocation, not once per scenario. The wording is unchanged at the default runs dir.
 
 - **`critique`'s own files are secret-scrubbed.** `critique-report.json`, `critique-evidence-package.txt`,
   `critique-salvage.json` and the `--out` file (including `--corpus-only --out`) were written without the

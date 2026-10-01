@@ -6,6 +6,16 @@ import { rollupPasses, type RepeatRollup } from "./repeat.js";
 import type { MatrixRollup, MatrixRepeatRollup } from "./matrix.js";
 import { deriveOutcome } from "./outcome.js";
 import { writeAllSync } from "../io.js";
+import { budgetStatus, type BudgetStatus } from "./budget-status.js";
+
+/** The `--max-budget-usd` marker as a frame fragment: `{budget}` when a pre-flight recorded a status, `{}`
+ *  otherwise — so a command payload that ever carries its own `budget` key is not overwritten with
+ *  `undefined` on an invocation that passed no cap. Spread AFTER a payload: when a status exists it is a
+ *  frame key, like `ok`, and wins. */
+function budgetFrame(): { budget?: BudgetStatus } {
+  const b = budgetStatus();
+  return b === undefined ? {} : { budget: b };
+}
 
 // Synchronous fd writes (match cli.ts / doctor.ts). writeAllSync retries EAGAIN and loops on short
 // writes so the whole payload lands before process.exit on a pipe (see src/io.ts).
@@ -124,6 +134,7 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
     matrix,
     matrixRepeat,
     ...extra,
+    ...budgetFrame(),
     error: null,
   };
 }
@@ -134,7 +145,7 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
  *  (there is no `RunResult` to judge — `ok` is the caller's own success criterion, e.g. rehash `ok` =
  *  zero migration errors). Keeps a single machine-readable envelope shape across every command. */
 export function jsonPayloadEnvelope(command: string, ok: boolean, payload: Record<string, unknown>): string {
-  return JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command, ok, ...payload, error: null });
+  return JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command, ok, ...payload, ...budgetFrame(), error: null });
 }
 
 /** The standardized machine envelope emitted by every `--output-format json` command. COMPACT
@@ -146,6 +157,21 @@ export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEn
   return JSON.stringify(jsonEnvelopeObj(command, results, opts));
 }
 
+/** Stable machine codes on `error.code`. A code NARROWS a category, it never replaces one: `category` stays
+ *  the covered coarse class (§11), and `code` is present only on the errors a consumer needs to tell apart
+ *  within it. `budget_exceeded` is a `--max-budget-usd` pre-flight refusal — a `runtime` error whose exit
+ *  code is shared with other refusals, so without it the only discriminator was the message prose. */
+export type ErrCode = "budget_exceeded";
+
+/** Additive extras for the error envelope. `error` fields merge into the `error` object beside the
+ *  covered `category`/`message`/`hint` (typed so they cannot collide with them); `payload` keys sit at the top level
+ *  beside `results`, so a refusal that REPLACES a payload envelope can keep the findings that payload would
+ *  have carried (a directory `record --dry-run`'s `broken[]` / `inputErrors[]` / `refusals[]`). */
+export interface JsonErrorExtras {
+  error?: { code?: ErrCode; budget?: BudgetStatus };
+  payload?: Record<string, unknown>;
+}
+
 /** The error envelope (compact, single line). `results` is `[]` unless a run completed before the refusal —
  *  `record` refusing to freeze a failing run passes that run, already projected by `publishedResult`, so the
  *  consumer still reads its verdict and cost. */
@@ -155,14 +181,18 @@ export function jsonError(
   message: string,
   hint?: string,
   results: ReturnType<typeof publishedResult>[] = [],
+  extras: JsonErrorExtras = {},
 ): string {
   return JSON.stringify({
+    // Payload findings FIRST, so none of them can overwrite a frame key below.
+    ...extras.payload,
     tool: "cowork-harness",
     version: pkgVersion(),
     command,
     ok: false,
     results,
-    error: { category, message, ...(hint ? { hint } : {}) },
+    ...budgetFrame(),
+    error: { category, message, ...(hint ? { hint } : {}), ...extras.error },
   });
 }
 
@@ -203,8 +233,9 @@ export function fail(
   json: boolean,
   exitCode?: 1 | 2 | 3,
   results?: ReturnType<typeof publishedResult>[],
+  extras?: JsonErrorExtras,
 ): never {
-  if (json) out(jsonError(command, category, message, hint, results));
+  if (json) out(jsonError(command, category, message, hint, results, extras));
   else {
     log(message);
     if (hint) log(hint);

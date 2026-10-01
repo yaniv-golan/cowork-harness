@@ -4305,11 +4305,20 @@ export async function cmdRecord(args: string[]) {
       // "tell me what this would do before I spend" must not report clean and then be refused for real —
       // that is a false preview, and it is free to check (history lookup, no spend).
       if (maxBudgetUsd !== undefined) {
-        // A budget refusal REPLACES the JSON payload (its error envelope is the one document on stdout),
-        // so under JSON the payload's broken[]/refusals[] would vanish with it. Put them on stderr first —
-        // where text mode already printed them above — so a refusal never hides what the corpus is.
+        // A budget refusal REPLACES the JSON payload (its error envelope is the one document on stdout).
+        // The findings that payload would have carried ride on the error envelope instead, as the same
+        // top-level keys, so a refusal never hides what the corpus is; they also go to stderr, where text
+        // mode already printed them above.
         if (asJson) logFindings();
-        preflightBatchBudget("record", parsedNames, maxBudgetUsd, asJson);
+        preflightBatchBudget("record", parsedNames, maxBudgetUsd, asJson, {
+          dryRun: true,
+          target,
+          scenarios: disc.scenarios,
+          skipped: disc.skipped,
+          broken: disc.broken,
+          refusals,
+          inputErrors,
+        });
         // Part of the preview: the cap is weaker than it looks above --concurrency 1, and the reader
         // deserves to learn that here rather than after spending.
         if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
@@ -4398,7 +4407,7 @@ export async function cmdRecord(args: string[]) {
     if (maxBudgetUsd !== undefined) {
       // The budget refusal's error envelope replaces the payload below; keep the input errors on stderr.
       if (asJson) logSingleInputErrors();
-      preflightBudget("record", scenario.name, maxBudgetUsd, asJson);
+      preflightBudget("record", scenario.name, maxBudgetUsd, asJson, { dryRun: true, target, inputErrors: singleInputErrors });
     }
     if (asJson) {
       out(
@@ -4721,7 +4730,9 @@ export async function cmdRecord(args: string[]) {
           /* unparseable → classified `broken`; the record path reports it */
         }
       }
-      preflightBatchBudget("record", names, maxBudgetUsd, asJson);
+      // A refusal replaces the batch payload; keep the files that did not load on the error envelope, in
+      // the `broken[]` shape the dry-run payload uses.
+      preflightBatchBudget("record", names, maxBudgetUsd, asJson, { target, broken: disc.broken, skipped: disc.skipped });
       if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
     }
     const batchBudget = batchBudgetTracker(maxBudgetUsd, concurrency === 1);
