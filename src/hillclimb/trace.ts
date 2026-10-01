@@ -32,6 +32,10 @@ export interface ChildTranscript {
   agentType?: string;
   description?: string;
   spawnDepth?: number;
+  /** The child's prompt snapshot, reduced to its LAST part (where the harness append lands) and how many parts
+   *  came before it. The earlier parts are Anthropic's built-in sub-agent prompt: the reader drops them and the
+   *  snapshot line itself, so they never reach a trace. Absent ⇒ the transcript recorded no snapshot. */
+  promptSnapshot?: { last: string; builtinParts: number };
   lines: string[];
 }
 
@@ -40,6 +44,8 @@ export interface TraceInput {
   prompt: string;
   /** The system turn's content; omitted ⇒ no system turn (never an invented one). */
   system?: string;
+  /** The sub-agent append the session sent (initialize.appendSubagentSystemPrompt); absent ⇒ none was sent. */
+  subagentAppend?: string;
   children: readonly ChildTranscript[];
   /** Flow-root-relative prefix for sidecar references, e.g. `baseline/out/<id>_rep<k>/blobs/`. */
   sidecarPrefix: string;
@@ -92,15 +98,84 @@ export function readChildTranscripts(dir: string): ChildTranscript[] {
     }
     const text = read(f.replace(/\.meta\.json$/, ".jsonl"));
     if (text === undefined) continue;
+    let promptSnapshot: ChildTranscript["promptSnapshot"];
+    const lines: string[] = [];
+    for (const l of text.split("\n")) {
+      if (!l.trim()) continue;
+      const snap = snapshotOf(l);
+      if (snap === undefined) lines.push(l);
+      else if (snap !== null) promptSnapshot ??= snap;
+    }
     out.push({
       ...(typeof meta.toolUseId === "string" ? { toolUseId: meta.toolUseId } : {}),
       ...(typeof meta.agentType === "string" ? { agentType: meta.agentType } : {}),
       ...(typeof meta.description === "string" ? { description: meta.description } : {}),
       ...(typeof meta.spawnDepth === "number" ? { spawnDepth: meta.spawnDepth } : {}),
-      lines: text.split("\n").filter((l) => l.trim()),
+      ...(promptSnapshot ? { promptSnapshot } : {}),
+      lines,
     });
   }
   return out;
+}
+
+/** A `prompt_snapshot` attachment line, reduced to its last part; `null` for a snapshot line with no usable last
+ *  part (dropped all the same); `undefined` for any other line. */
+function snapshotOf(line: string): ChildTranscript["promptSnapshot"] | null | undefined {
+  if (!line.includes('"prompt_snapshot"')) return undefined;
+  let o: { type?: unknown; attachment?: { type?: unknown; systemPrompt?: unknown } };
+  try {
+    o = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (o.type !== "attachment" || o.attachment?.type !== "prompt_snapshot") return undefined;
+  const parts = o.attachment.systemPrompt;
+  if (!Array.isArray(parts) || !parts.length || typeof parts[parts.length - 1] !== "string") return null;
+  return { last: parts[parts.length - 1] as string, builtinParts: parts.length - 1 };
+}
+
+/** The file a run dir records the main agent's `--append-system-prompt` in, as the spawn passed it with secrets
+ *  scrubbed (`""` when none was passed). Written by executeScenario; absent for a replay or an older run. */
+export const SYSTEM_APPEND_FILE = "system-prompt-append.txt";
+
+/** The trace's leading system turn, from the run dir's own record of what was sent — never an invented one.
+ *  Anthropic's built-in system prompt is withheld, as for a sub-agent. */
+export function mainSystemTurn(outDir: string): string {
+  let text: string | null = null;
+  try {
+    const r = NoFollowRoot.existing(outDir);
+    text = r.readIfPresent(join(r.root, SYSTEM_APPEND_FILE));
+  } catch (e) {
+    if (!(e instanceof FsRefusal) && (e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e;
+  }
+  const withheld = "Anthropic's built-in system prompt withheld";
+  if (text === null) return `[system — harness append not recorded for this run; ${withheld}]`;
+  if (text === "") return `[system — harness append: none sent; ${withheld}]`;
+  return `[system — harness append as sent; ${withheld}]\n\n${text}`;
+}
+
+/** The sub-agent append a run's session sent: `initialize.appendSubagentSystemPrompt` in the harness-written
+ *  `control-out.jsonl`. Undefined when the file or the field is absent (nothing was sent). */
+export function sentSubagentAppend(outDir: string): string | undefined {
+  let text: string | null;
+  try {
+    const r = NoFollowRoot.existing(outDir);
+    text = r.readIfPresent(join(r.root, "control-out.jsonl"));
+  } catch (e) {
+    if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+    throw e;
+  }
+  for (const l of (text ?? "").split("\n")) {
+    if (!l.includes("appendSubagentSystemPrompt")) continue;
+    try {
+      const o = JSON.parse(l) as { request?: { subtype?: unknown; appendSubagentSystemPrompt?: unknown } };
+      if (o.request?.subtype === "initialize" && typeof o.request.appendSubagentSystemPrompt === "string")
+        return o.request.appendSubagentSystemPrompt;
+    } catch {
+      /* a torn line */
+    }
+  }
+  return undefined;
 }
 
 interface Block {
@@ -188,6 +263,14 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
   };
 
   const clean = input.redact;
+  // What the child received, said only from its own snapshot: the session's append is never stamped onto a
+  // child whose snapshot does not end with exactly it (a fork, the protocol tier).
+  const childSystem = (head: string, c: ChildTranscript): string => {
+    const s = c.promptSnapshot;
+    if (s === undefined) return `${head} — not recorded in its transcript]`;
+    if (input.subagentAppend === undefined || s.last !== input.subagentAppend) return `${head} — harness append: none received]`;
+    return `${head} — harness append as received; Anthropic's built-in sub-agent prompt (${s.builtinParts} parts) withheld]\n\n${clean(s.last)}`;
+  };
   const capped = (raw: string): string => {
     const text = clean(raw);
     const bytes = Buffer.byteLength(text);
@@ -244,6 +327,7 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
               found++;
               const n = (ordinals.get(kind) ?? 0) + 1;
               ordinals.set(kind, n);
+              turns.push({ role: "system", content: childSystem(`${prefix}[${kind}#${n} system`, child) });
               walk(child.lines, `${prefix}[${kind}#${n}] `, false);
             } else if (parented.has(b.id)) {
               // No transcript: the parent stream still carries its tool traffic (not its text) — keep that.

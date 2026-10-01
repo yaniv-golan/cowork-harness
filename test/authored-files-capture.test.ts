@@ -102,6 +102,7 @@ describe("runSemanticJudges — never-drop + authored-file grading", () => {
     const c = ctx({ authoredFiles: [{ path: "outputs/x.yaml", content: "on_unanswered: fail" }] });
     await runSemanticJudges([a], c, judge);
     expect(evaluate([a], c)[0].pass).toBe(true);
+    expect((evaluate([a], c)[0] as { judgeAttempts?: number }).judgeAttempts).toBe(1);
   });
 
   it("marks a rep INVALID (not a silent drop) when the judge throws after a retry", async () => {
@@ -115,6 +116,7 @@ describe("runSemanticJudges — never-drop + authored-file grading", () => {
     const r = evaluate([a], c)[0];
     expect(r.pass).toBe(false);
     expect((r as { judgeInvalid?: boolean }).judgeInvalid).toBe(true);
+    expect((r as { judgeAttempts?: number }).judgeAttempts).toBe(2);
     expect(r.message).toMatch(/INVALID/);
   });
 
@@ -131,6 +133,7 @@ describe("runSemanticJudges — never-drop + authored-file grading", () => {
     expect(calls).toBe(2);
     expect(c.judgeInvalid?.has(a)).toBe(false);
     expect(evaluate([a], c)[0].pass).toBe(true);
+    expect((evaluate([a], c)[0] as { judgeAttempts?: number }).judgeAttempts).toBe(2);
   });
 
   it("scrubs secrets from the judge's per-claim rationale before storing it", async () => {

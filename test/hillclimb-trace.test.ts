@@ -78,7 +78,12 @@ describe("turnsFromEvents over a real fan-out run", () => {
     const resultIdx = turns.findIndex((t, i) => i > callIdx && t.role === "tool_result" && t.name === "Agent");
     expect(callIdx).toBeGreaterThan(0);
     expect(resultIdx).toBeGreaterThan(callIdx + 1);
-    for (const t of turns.slice(callIdx + 1, resultIdx)) expect(t.content).toMatch(/^\[sub-agent general-purpose#1\] /);
+    // first the child's own system turn, then its turns, each prefixed
+    expect(turns[callIdx + 1]).toMatchObject({
+      role: "system",
+      content: expect.stringMatching(/^\[sub-agent general-purpose#1 system — /),
+    });
+    for (const t of turns.slice(callIdx + 2, resultIdx)) expect(t.content).toMatch(/^\[sub-agent general-purpose#1\] /);
     expect(subagentTurns).toBe("complete");
   });
 

@@ -1562,6 +1562,7 @@ describe("regrade: JSON envelope", () => {
       "assertionIndex",
       "docMatchesLive",
       "evidence",
+      "judgeAttempts",
       "judgeCostUsd",
       "judgeModel",
       "judgePromptHash",
@@ -1575,6 +1576,7 @@ describe("regrade: JSON envelope", () => {
       "assertion",
       "assertionIndex",
       "docMatchesLive",
+      "judgeAttempts",
       "judgeInvalid",
       "judgeModel",
       "judgePromptHash",
@@ -1585,6 +1587,7 @@ describe("regrade: JSON envelope", () => {
     expect(Object.keys(r1.assertions[0]).sort()).toEqual(ASSERTION_KEYS_GRADED);
     expect(Object.keys(r2.assertions[0]).sort()).toEqual(ASSERTION_KEYS_INVALID);
     expect(r2.assertions[0].judgeInvalid).toBe(true);
+    expect(r2.assertions[0].judgeAttempts).toBe(2); // an invalid grade took both calls
   });
 
   it("with no grade priced, the top-level judgeCostUsd is absent and the document still validates", async () => {

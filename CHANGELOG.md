@@ -90,6 +90,37 @@ All notable changes to this project are documented here. The format is based on
   before writing any.
   Exit `0` / `2` (freeze), `0` / `1` / `2` (verify).
 
+- **A graded `semantic_matches` assert records `assertions[].judgeAttempts`:** `1`, or `2` when the judge's
+  one retry after a malformed grade ran — so a grade that needed a retry can be told apart.
+
+- **Every scenario run's directory records `system-prompt-append.txt`** (a `chat` session writes none): the `--append-system-prompt` the agent was
+  spawned with, as passed with secrets scrubbed (empty when none). It holds the harness's append only, never
+  Anthropic's built-in system prompt. A replay writes none.
+
+- **`hillclimb run | check | state-template` — the runner for `/claude-api hillclimb`.** `hillclimb run
+  <scenario.yaml | dir/>` runs every scenario `--reps` times into `<flow>/<variant>/` under the published
+  runner-scaffold contract (`results.jsonl`, `errors.jsonl`, `traces/`, `progress.txt`, `summary.json`), with the
+  scaffold's flags, defaults and exit codes: `0` every attempt scored, `1` a failed attempt or a mid-run stop, `2`
+  refused before spending; `--timeout-s` bounds the whole attempt, the judge phase included. Every case's session declares exactly one `plugins.local_plugins` entry, the same in
+  every case: the plugin the loop tunes. Each variant runs from a snapshot of that plugin taken on its first run, so a resume or
+  appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
+  refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
+  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
+  harness change (`--approve-harness` records it). Rows carry the
+  per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
+  (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
+  files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
+  was spawned with (Anthropic's built-in system prompt withheld), and inlines each sub-agent's turns after its
+  dispatch, opened by a `system` turn saying what that child received: the harness's sub-agent append (Anthropic's
+  built-in sub-agent prompt withheld), "none received", or "not recorded in its transcript". `--dry-run` prices the
+  remaining runs from this machine's history: `hillclimb run --dry-run` (`--output-format json`) carries the same
+  `plan.cost` summary as `eval --dry-run`, on its basis exactly (hillclimb runs excluded), and its nine keys are covered
+  the same way (`schema/schedule-cost.json`). `hillclimb check` checks a flow dir against our reading of the published
+  schema and warns on a baseline case with no headroom; `hillclimb state-template` prints a `_state.json` skeleton
+  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy).
+  `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
+  home directory that is itself a git work tree. See SPEC §11/§12.
+
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
   nor a sub-agent dispatch, so until now the judge never saw it, and `include_subagent_text` could not

@@ -112,6 +112,8 @@ describe("the harness gate (runner-scaffold.mjs l.238-277)", () => {
     expect(jobs).toEqual([]);
     expect(err.join("\n")).toMatch(/no approved harness sha in .*_state\.json \(computed [0-9a-f]{12} over: .*evals\/alpha\.yaml/);
     expect(err.join("\n")).toMatch(/run once with --approve-harness/);
+    // The reason the JSON envelope carries as error.message is the line stderr got.
+    expect(r.error).toEqual({ category: "usage", message: expect.stringMatching(/no approved harness sha/) });
   });
 
   it("--approve-harness records the sha; a later edit to a scenario refuses until re-approved", async () => {
@@ -124,6 +126,7 @@ describe("the harness gate (runner-scaffold.mjs l.238-277)", () => {
     expect(r.exitCode).toBe(2);
     expect(jobs).toEqual([]);
     expect(err.join("\n")).toMatch(/harness changed since last approved run/);
+    expect(r.error?.message).toMatch(/harness changed since last approved run/);
   });
 
   it("a --case subset computes the same sha as the full pass (a canary must not need its own approval)", async () => {
@@ -240,6 +243,50 @@ describe("a pass", () => {
       ? JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"))
       : {};
     expect(summary).not.toHaveProperty("model");
+  });
+
+  it("each case is held to ITS OWN snapshot signature; summary.json records one signature over all of them", async () => {
+    await approved();
+    const sigs: Record<string, string> = { alpha: "sig-a", beta: "sig-b" };
+    // The excerpt's fingerprint is neither, so both reps are another snapshot's runs → error rows.
+    await runHillclimb(args(), deps({ expectedContentSig: (c) => sigs[c.id] }));
+    expect(rows("baseline", "errors.jsonl").map((x) => x.meta.failure_rule)).toEqual(["arm_source_drift", "arm_source_drift"]);
+    const summary = JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"));
+    expect(summary.source_sig).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("files the run authored are copied into the flow and attached to the final assistant turn", async () => {
+    await approved();
+    const work = mkdtempSync(join(tmpdir(), "hc-run-work-"));
+    try {
+      mkdirSync(join(work, "outputs"), { recursive: true });
+      writeFileSync(join(work, "outputs", "report.md"), `# report from ${homedir()}/x`);
+      writeFileSync(join(work, "outputs", "huge.bin"), Buffer.alloc(3 * 1024 * 1024));
+      // ADDED to the excerpt: a work dir and the artifacts the run recorded under it
+      behave = () => ({
+        result: {
+          ...excerpt,
+          workDir: work,
+          artifacts: [
+            { path: "outputs/report.md", bytes: 20 },
+            { path: "outputs/huge.bin", bytes: 3 * 1024 * 1024 },
+          ],
+        } as RunResult,
+        events: [
+          ...events,
+          JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "done" }] } }),
+        ],
+      });
+      await runHillclimb(args("--case", "alpha"), deps());
+      const copied = readFileSync(vfile("baseline", "out/alpha_rep0/files/outputs/report.md"), "utf8");
+      expect(copied).toBe("# report from ~/x"); // redacted like every other byte in the flow
+      const trace = JSON.parse(readFileSync(vfile("baseline", "traces/alpha_rep0.json"), "utf8"));
+      const last = trace.filter((t: { role: string }) => t.role === "assistant").at(-1);
+      expect(last.attachments).toEqual([{ kind: "text", ref: "baseline/out/alpha_rep0/files/outputs/report.md" }]);
+      expect(rows("baseline")[0].meta.outputs_skipped).toEqual([{ rel: "outputs/huge.bin", reason: "over the per-file cap" }]);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 
   it("--ablate rows carry meta.ablated", async () => {
@@ -380,6 +427,7 @@ describe("failures inside the pool", () => {
     expect(jobs.map((j) => j.id).sort()).toEqual(["alpha", "beta"]); // gamma never started
     expect(betaDone).toBe(true); // the in-flight job finished before runHillclimb returned
     expect(err.join("\n")).toMatch(/stopped mid-run/);
+    expect(r.error).toEqual({ category: "runtime", message: expect.stringMatching(/^stopped mid-run/) });
     expect(existsSync(vfile("baseline", ".lock"))).toBe(false);
   });
 });

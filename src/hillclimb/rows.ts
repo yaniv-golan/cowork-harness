@@ -31,7 +31,7 @@ import {
   type ClassifiableResult,
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
-import { caseKeyDecls, type MetricDecl } from "./grade-keys.js";
+import { caseKeyDecls, refusableAssertion, type MetricDecl } from "./grade-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
@@ -120,7 +120,7 @@ function judgeRetries(r: RunResult | undefined): { judge_retries: number; unreco
   let unrecorded = false;
   for (const a of authored(r)) {
     if (a.judgeModel === undefined) continue;
-    const attempts = (a as { judgeAttempts?: number }).judgeAttempts;
+    const attempts = a.judgeAttempts;
     if (typeof attempts === "number") n += Math.max(0, attempts - 1);
     else unrecorded = true;
   }
@@ -136,6 +136,16 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const model = mains[0];
   const usage = model ? mainModelUsage(r?.modelUsage, model) : undefined;
   const judges = combineJudges(authored(r));
+  // How each graded semantic assert's host judge ran: one shape for the row, or every distinct one when the asserts
+  // differ. Absent when no judge recorded one (an injected judge, or none ran) — never null.
+  const transports = [
+    ...new Map(
+      authored(r)
+        .map((g) => g.judgeTransport)
+        .filter((t): t is NonNullable<typeof t> => t !== undefined)
+        .map((t) => [JSON.stringify(t), t] as const),
+    ).values(),
+  ];
   const jr = judgeRetries(r);
   const retries = r?.apiRetries?.count ?? 0;
 
@@ -244,8 +254,11 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     // keeps its roll-up value (classify.ts) while every claim row is excluded.
     if (v.row.kind === "semantic_rollup")
       grade[`a${i}_present`] = values.some((x) => x.row.kind === "claim" && x.row.assertionIndex === i && x.excluded === undefined) ? 1 : 0;
-    else if (v.row.kind === "assertion") grade[`a${i}`] = v.value!;
-    else if (v.excluded === undefined) {
+    else if (v.row.kind === "assertion") {
+      // A refused pairwise assert is not measured: its companion says so and the key is omitted, never undefined.
+      if (refusableAssertion(ctx.assertions[i])) grade[`a${i}_present`] = v.excluded === undefined ? 1 : 0;
+      if (v.excluded === undefined) grade[`a${i}`] = v.value!;
+    } else if (v.excluded === undefined) {
       const key = `a${i}_c${v.row.claimIndex}`;
       grade[key] = v.value!;
       const sc = authoredGrades[i]?.semanticClaims?.find((c) => c.index === v.row.claimIndex);
@@ -337,6 +350,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),
       ...(judges.judge_models !== undefined ? { judge_models: judges.judge_models } : {}),
+      ...(transports.length === 1 ? { judge_transport: transports[0] } : transports.length > 1 ? { judge_transports: transports } : {}),
       ...(toolCalls !== undefined ? { web_fetches: toolCalls.filter((t) => t.name === "WebFetch").length } : {}),
       ...(ctx.meta.ablated ? { ablated: true } : {}),
       ...(ctx.meta.nonDeterministic ? { non_deterministic: true } : {}),

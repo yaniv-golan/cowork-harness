@@ -74,6 +74,8 @@ import { cmdRunsGc } from "./run/runs-gc.js";
 import { assertContextFromRunDir, parseGatesFromEvents, readTranscriptSidecar } from "./run/verify-context.js";
 import { cmdRegrade, REGRADE_USAGE } from "./run/regrade.js";
 import { cmdFixture } from "./fixture/cli.js";
+import { cmdHillclimb } from "./hillclimb/cli.js";
+import { HILLCLIMB_USAGE } from "./hillclimb/usage.js";
 import { FIXTURE_USAGE } from "./fixture/usage.js";
 import { cmdRef } from "./refs/cli.js";
 import { REF_USAGE } from "./refs/cli-usage.js";
@@ -183,7 +185,7 @@ import {
   EvalBudgetRefusal,
 } from "./eval/command.js";
 import { planText, type EvalPlan } from "./eval/plan.js";
-import { makeEvalJobRunner } from "./eval/job-runner.js";
+import { makeEvalJobRunner, type ScenarioRunner } from "./eval/job-runner.js";
 import { writeEvalReport, REPORT_MD } from "./eval/report.js";
 import {
   MatrixFile,
@@ -263,6 +265,10 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
                                each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
   eval report <eval-dir>       rebuild an eval's report from its directory ($0)
+  hillclimb run <scenario.yaml | dir/>   the runner for /claude-api hillclimb: every scenario --reps times into
+                               <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
+  hillclimb check [--flow DIR]   check a flow dir against our reading of the hillclimb schema
+  hillclimb state-template <scenario.yaml | dir/>   print a _state.json skeleton for the loop to save
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
@@ -733,6 +739,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       exit: 0 nothing refused · 1 one or more directories refused (unfinished work) · 2 usage (or unknown --scenario)",
 
   eval: EVAL_USAGE,
+  hillclimb: HILLCLIMB_USAGE,
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":
@@ -770,6 +777,7 @@ const COMMANDS = [
   "diff",
   "critique",
   "eval",
+  "hillclimb",
   "assertions",
   "scaffold",
   "status",
@@ -1012,6 +1020,8 @@ async function main() {
       return void (await cmdCritique(rest));
     case "eval":
       return cmdEval(rest);
+    case "hillclimb":
+      return cmdHillclimb(rest, { runnerFor: hillclimbRunner });
     case "assertions":
       return cmdAssert(rest);
     case "scaffold":
@@ -2194,6 +2204,26 @@ async function cmdEval(rawArgs: string[]) {
   }
   externalChannel?.close?.();
   emit(outcome.evalDir, outcome.report, readFileSync(join(outcome.evalDir, REPORT_MD), "utf8"));
+}
+
+/** `hillclimb run`'s scenario runner: eval's (runs render nothing; one line per finished job), with the
+ *  run's decider channel. */
+function hillclimbRunner(opts: { deciderCmd?: string; deciderDir?: string; json: boolean }) {
+  const flags: CommonFlags = {
+    output: "json",
+    quiet: true,
+    verbose: false,
+    ...(opts.deciderCmd !== undefined ? { deciderCmd: opts.deciderCmd } : {}),
+    ...(opts.deciderDir !== undefined ? { deciderDir: opts.deciderDir } : {}),
+  };
+  const externalChannel = resolveExternal("hillclimb", { ...flags, output: opts.json ? "json" : "text" });
+  const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
+  const o = resolveOutput("run", flags);
+  return {
+    flags,
+    runScenario: (a: Parameters<ScenarioRunner<CommonFlags>>[0]) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }),
+    close: () => externalChannel?.close?.(),
+  };
 }
 
 async function cmdSkill(rawArgs: string[]) {

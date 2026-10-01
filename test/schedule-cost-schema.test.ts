@@ -1,4 +1,4 @@
-// The covered cost summary `eval --dry-run` emits as `plan.cost`, pinned against its published schema: every covered key is required and typed, the schema names exactly those keys,
+// The covered cost summary `eval --dry-run` and `hillclimb run --dry-run` emit as `plan.cost`, pinned against its published schema: every covered key is required and typed, the schema names exactly those keys,
 // and the experimental keys beside them are allowed (the schema is permissive, like every covered envelope).
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -60,15 +60,14 @@ describe("schema/schedule-cost.json", () => {
 });
 
 describe("where the covered summary is promised", () => {
-  const read = (p: string) => readFileSync(resolve(p), "utf8");
-  it("only on `eval --dry-run`, at `plan.cost`, validated by this schema — no other command is promised", () => {
+  const read = (p: string) => readFileSync(resolve(p), "utf8").replace(/\s+/g, " ");
+  it("on `eval --dry-run` and `hillclimb run --dry-run`, both at `plan.cost`, validated by this schema", () => {
     const desc = (schema as unknown as { description: string }).description;
-    expect(desc).not.toMatch(/hillclimb run --dry-run/);
     expect(desc).toMatch(/`plan\.cost`/);
-    for (const f of ["SPEC.md", "CHANGELOG.md", "src/eval/plan.ts", "src/eval/planner.ts", "test/schedule-cost-schema.test.ts"])
-      expect(read(f).replace(/expect\([^\n]*hillclimb run --dry-run[^\n]*\n/g, ""), f).not.toMatch(/hillclimb run --dry-run/);
-    expect(read("SPEC.md").replace(/\s+/g, " ")).toMatch(
-      /`plan\.cost` in the `eval --dry-run` JSON envelope, validated by `schema\/schedule-cost\.json`/,
+    expect(desc).toMatch(/hillclimb run --dry-run/);
+    expect(read("SPEC.md")).toMatch(
+      /`plan\.cost` in the `eval --dry-run` and `hillclimb run --dry-run` JSON envelopes, validated by `schema\/schedule-cost\.json`/,
     );
+    expect(read("CHANGELOG.md")).toMatch(/`hillclimb run --dry-run`[^.]*`plan\.cost`[^.]*covered/);
   });
 });

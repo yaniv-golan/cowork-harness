@@ -39,7 +39,6 @@ export interface HillclimbRunArgs {
   judgeModel?: string;
   deciderCmd?: string;
   deciderDir?: string;
-  deciderLlm: boolean;
   outputFormat: "text" | "json";
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
 }
@@ -137,10 +136,9 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
 
   const deciderCmd = values["--decider-cmd"];
   const deciderDir = values["--decider-dir"];
-  const deciderLlm = booleans.has("--decider-llm");
   if (deciderCmd !== undefined && deciderDir !== undefined)
     throw new UsageError("--decider-cmd and --decider-dir are mutually exclusive (one answer channel).");
-  if ((deciderCmd !== undefined || deciderDir !== undefined || deciderLlm) && concurrency > 1)
+  if ((deciderCmd !== undefined || deciderDir !== undefined) && concurrency > 1)
     throw new UsageError(
       `--concurrency ${concurrency}${explicitConcurrency ? "" : " (the default)"} cannot be combined with a decider: the answer channel is shared across jobs and is not safe for concurrent gate answers; pass --concurrency 1.`,
     );
@@ -162,7 +160,6 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
     ...(values["--judge-model"] !== undefined ? { judgeModel: values["--judge-model"] } : {}),
     ...(deciderCmd !== undefined ? { deciderCmd } : {}),
     ...(deciderDir !== undefined ? { deciderDir } : {}),
-    deciderLlm,
     outputFormat,
     globals,
   };

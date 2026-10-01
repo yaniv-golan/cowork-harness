@@ -56,15 +56,22 @@ export function reservedMetricId(id: string): boolean {
 
 const hasSemantic = (assertions: readonly Assertion[]) => assertions.some((a) => a.semantic_matches !== undefined);
 
+/** A whole-assertion row the pairwise judge can refuse: a semantic_pairwise assert with no other key (a multi-key
+ *  one keeps one pass for all its keys — classify.ts repRowValues). */
+export const refusableAssertion = (a: Assertion): boolean => a.semantic_pairwise !== undefined && Object.keys(a).length === 1;
+
 function perIndex(assertions: readonly Assertion[]): { companions: GradeKeyDecl[]; graded: GradeKeyDecl[] } {
   const companions: GradeKeyDecl[] = [];
   const graded: GradeKeyDecl[] = [];
   for (const r of scenarioRows("", assertions)) {
     const i = r.assertionIndex;
     if (r.kind === "semantic_rollup") companions.push({ id: `a${i}_present`, kind: "binary", label: label(`a${i} graded`) });
-    else if (r.kind === "assertion")
+    else if (r.kind === "assertion") {
+      // A single-key semantic_pairwise assert can be refused (its reference or evidence unavailable): not
+      // measured, so it carries a companion like a semantic_matches roll-up.
+      if (refusableAssertion(assertions[i])) companions.push({ id: `a${i}_present`, kind: "binary", label: label(`a${i} graded`) });
       graded.push({ id: `a${i}`, kind: "binary", label: label(`a${i} ${firstAssertionKey(assertions[i])}`) });
-    else graded.push({ id: `a${i}_c${r.claimIndex}`, kind: "binary", label: label(`a${i} claim ${r.claimIndex}`) });
+    } else graded.push({ id: `a${i}_c${r.claimIndex}`, kind: "binary", label: label(`a${i} claim ${r.claimIndex}`) });
   }
   return { companions, graded };
 }

@@ -116,7 +116,9 @@ describe("hillclimb run args — refusals (exit 2)", () => {
 
   it("any decider with --concurrency > 1 is refused, including the default 4, and says how to fix it", () => {
     refuses(["s.yaml", "--decider-dir", "d"], /pass --concurrency 1/);
-    refuses(["s.yaml", "--decider-llm", "--concurrency", "2"], /pass --concurrency 1/);
+    refuses(["s.yaml", "--decider-cmd", "x", "--concurrency", "2"], /pass --concurrency 1/);
+    // --decider-llm is not a hillclimb flag (as on eval): a scenario that wants it sets on_unanswered: llm
+    refuses(["s.yaml", "--decider-llm"], /unknown flag: --decider-llm/);
     expect(() => run("s.yaml", "--decider-dir", "d", "--concurrency", "1")).not.toThrow();
   });
 
@@ -130,7 +132,7 @@ describe("hillclimb run args — harness additions", () => {
     const a = run("d/", "--case", "a", "--case", "b");
     if (a.help) throw new Error("unexpected help");
     expect(a.cases).toEqual(["a", "b"]);
-    expect(a).toMatchObject({ ablate: false, dryRun: false, noCopyInputs: false, deciderLlm: false, outputFormat: "text" });
+    expect(a).toMatchObject({ ablate: false, dryRun: false, noCopyInputs: false, outputFormat: "text" });
   });
 
   it("reads the harness booleans and globals", () => {

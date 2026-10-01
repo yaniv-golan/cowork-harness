@@ -182,6 +182,9 @@ export interface ExecuteOptions {
   /** Grade EVERY `semantic_matches` assert with this judge model, a per-assert `judge_model` included — for
    *  a caller that must hold the judge constant across runs (a paired comparison). Not a CLI flag. */
   judgeModelOverride?: string;
+  /** Epoch ms after which no judge may start (a caller's whole-run ceiling, e.g. `hillclimb run --timeout-s`; the
+   *  agent phase is bounded by `timeout_ms`). Past it, the judges are skipped and the run ends as a timeout. */
+  deadline?: number;
   /** `semantic_pairwise` in a caller-owned flow (a hillclimb runner): the case's entry name, the references every
    *  pairwise assert is judged against (replacing the scenario's `refs:`), and the names of references frozen from
    *  this very variant (neutral 0.5, no judge call). Omitted = the scenario's own setup (`scenarioPairwiseSetup`). */
@@ -386,6 +389,8 @@ export async function captureSubagentReasoningThenJudge(args: {
   judges: () => { judge: SemanticJudge; judgeFor?: (model: string) => SemanticJudge };
   /** Built only when a `semantic_pairwise` assert exists, so a scenario without one never spends a model call. */
   pairwise?: () => PairwisePrepassOpts;
+  /** Capture the sub-agent reasoning but call no judge (the caller's deadline passed). */
+  skipJudges?: boolean;
 }): Promise<void> {
   // AssertContext declares a narrower view of each dispatch than RunResult's (no webSearches/…Elided), but
   // every live construction site passes the run's own dispatch objects, which the capture fills in place.
@@ -405,6 +410,7 @@ export async function captureSubagentReasoningThenJudge(args: {
         `no sub-agent reasoning was captured: ${why}. The grade covers the main agent's text only.\n`,
     );
   }
+  if (args.skipJudges) return;
   if (args.asserts.some((a) => a.semantic_matches !== undefined)) {
     const { judge, judgeFor } = args.judges();
     await runSemanticJudges(args.asserts, args.ctx, judge, judgeFor);
@@ -1190,6 +1196,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       let spawnedSessionRoot: string | undefined;
       let spawnedAgentCwd: string | undefined; // set only when the agent runs deliberately outside the session tree
       const agentSpawnedAtMs = Date.now(); // the orphan sweep ignores anything that started before this
+      // What the agent was handed as --append-system-prompt ("" = none), recorded in the run dir (hillclimb's
+      // trace shows it; a replay has no such record). Every tier passes the session's append except hostloop,
+      // which adds its shell section and reports what it passed.
+      let sentSystemAppend = prompts.systemPromptAppend ?? "";
       if (effectiveFidelity === "hostloop") {
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -1203,6 +1213,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           proactiveSkillSuggestEnabled,
         });
         child = hl.child;
+        sentSystemAppend = hl.systemPromptAppend;
         // No work dir: hostloop's Bash runs in the sidecar (ended by `rm -f`) and its host agent sits outside
         // the session tree; its host children are hooks and MCP servers, which the group kill and walk reach.
         signalAgent = treeAgent = agentTreeAgent(hl.child, {
@@ -1272,6 +1283,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               `on the real host cwd with no sealed filesystem, so this assertion will FAIL by design at this fidelity.\n`,
           );
       }
+      writeFileSync(join(outDir, "system-prompt-append.txt"), scrub(sentSystemAppend, secrets));
 
       if (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") {
         // Sample the agent sandbox on an interval. Async probes only (shares the agent's event loop).
@@ -1799,7 +1811,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       sessionId,
       protocolConfigRoot: protocolSubagentConfigRoot,
     });
+    // A caller's deadline that passed before the judges start skips them: the run ends as a timeout, and no
+    // judge spends on a run the caller has already given up on.
+    const pastDeadline =
+      opts.deadline !== undefined && Date.now() >= opts.deadline && scenario.assert.some((a) => judgedOpts(a) !== undefined);
+    if (pastDeadline) {
+      record.result = "error";
+      record.errorSource = "timeout";
+      warn(
+        `::warning:: ${scenario.name}: the run's deadline passed before its judges started — no grade was made; the run ends as a timeout.\n`,
+      );
+    }
     await captureSubagentReasoningThenJudge({
+      skipJudges: pastDeadline,
       subagentConfigRoot,
       effectiveFidelity,
       asserts: scenario.assert,

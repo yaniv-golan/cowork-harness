@@ -359,6 +359,8 @@ export interface AssertContext {
   /** The grading-prompt template hash of the judge that graded each assert. Populated by runSemanticJudges. */
   judgePromptHashes?: Map<Assertion, string>;
   judgeTransports?: Map<Assertion, import("./decide/llm-transport.js").TransportIdentity>;
+  /** How many calls the semantic_matches judge took per assert (1, or 2 after its one retry). */
+  judgeAttempts?: Map<Assertion, number>;
   /** `semantic_matches` asserts whose judge grade was INVALID (malformed/ambiguous after a retry) —
    *  populated by runSemanticJudges. Distinct from "not graded": the check surfaces `judgeInvalid:true` so
    *  a consumer counts the rep as invalid, never silently drops it (which would inflate the score). */
@@ -1098,7 +1100,9 @@ export async function runSemanticJudges(
     let graded: SemanticClaimResult[] | undefined;
     let cost: number | undefined; // summed over BOTH attempts — a retried grade is paid twice
     let tokens: TokenUsage | undefined; // same basis as `cost`
+    let attempts = 0;
     for (let attempt = 0; attempt < 2 && graded === undefined; attempt++) {
+      attempts = attempt + 1;
       try {
         graded = await j(sentRubric, answer);
       } catch (e) {
@@ -1119,6 +1123,7 @@ export async function runSemanticJudges(
     if (tokens !== undefined) ctx.judgeUsages.set(a, tokens);
     if (j.promptHash) ctx.judgePromptHashes.set(a, j.promptHash);
     if (j.transport) ctx.judgeTransports.set(a, j.transport);
+    (ctx.judgeAttempts ??= new Map()).set(a, attempts);
     // Record provenance AFTER the call, not before: `j.model` may be a factory-time alias (e.g. "opus")
     // until the transport resolves it per-call to a concrete id (`makeSemanticJudge` mutates `.model` onto
     // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
@@ -3818,6 +3823,7 @@ function check(
   const judgedDoc = isJudged ? ctx.judgedDocs?.get(a) : undefined;
   const judgePromptHash = isJudged ? ctx.judgePromptHashes?.get(a) : undefined;
   const judgeTransport = isJudged ? ctx.judgeTransports?.get(a) : undefined;
+  const judgeAttempts = isJudged ? ctx.judgeAttempts?.get(a) : undefined;
   const pairwise = a.semantic_pairwise !== undefined ? ctx.pairwiseResults?.get(a) : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
@@ -3829,6 +3835,7 @@ function check(
     ...(judgedDoc ? { judgedDoc } : {}),
     ...(judgePromptHash ? { judgePromptHash } : {}),
     ...(judgeTransport ? { judgeTransport } : {}),
+    ...(judgeAttempts !== undefined ? { judgeAttempts } : {}),
     ...(judgeInvalid ? { judgeInvalid } : {}),
     ...(semanticEvidence ? { semanticEvidence } : {}),
   });
