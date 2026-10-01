@@ -218,15 +218,23 @@ async function run(
       );
     // skill_invoked means "invoked the tracked skill": within a variant, every row must mean the same skill. Across
     // variants a switch is allowed (re-approved through the gate) but said, as the report puts them in one column.
+    // A row with no `meta.skill_tracked` does not say what it tracked (none, or a row written before the field
+    // existed, whose skill_invoked was measured): only a recorded skill is held against this pass.
     const tracked = skillTrackedByVariant(snap);
-    const mine = deps.skillTracked ?? "";
+    const mine: Tracked = deps.skillTracked ?? NONE;
     const own = tracked.get(v);
-    if (own !== undefined && [...own].some((t) => t !== mine))
+    if (own !== undefined && [...own].some((t) => t !== UNRECORDED && t !== mine))
       throw new UsageError(
-        `variant ${v}'s rows track ${trackedText(own)}, and this pass would track ${trackedText(new Set([mine]))}: one column would mix two skills — run the switch as a new variant, or keep the --skill the rows were run with (rows from before skill tracking was recorded track no skill: continue them in a fresh flow)`,
+        `variant ${v}'s rows track ${trackedText(new Set([...own].filter((t) => t !== UNRECORDED)))}, and this pass would track ${trackedText(new Set([mine]))}: one column would mix two skills — run the switch as a new variant, or keep the --skill the rows were run with`,
       );
-    tracked.set(v, new Set([mine]));
-    if (new Set([...tracked.values()].flatMap((s) => [...s])).size > 1)
+    if (own?.has(UNRECORDED) && mine !== NONE)
+      say(
+        `warning: variant ${v}'s earlier rows don't record which skill they tracked, and this pass tracks ${mine} — its skill_invoked column may mix measurements; compare it only knowingly`,
+      );
+    tracked.set(v, new Set([...(own ?? []), mine]));
+    // Unrecorded and none read alike here: neither names a skill a recorded one could disagree with.
+    const kinds = new Set([...tracked.values()].flatMap((s) => [...s].map((t) => (t === UNRECORDED ? NONE : t))));
+    if (kinds.size > 1)
       say(
         `warning: the flow's variants track different skills in skill_invoked (${[...tracked]
           .sort(([a], [b]) => variantOrder(a) - variantOrder(b))
@@ -541,16 +549,22 @@ export function readStateIfPresent(flowArg: string, cwd: string): Record<string,
   }
 }
 
-/** Per variant with scored rows: the `meta.skill_tracked` values its rows carry ("" = a row that tracked none). */
-function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<string, Set<string>> {
-  const out = new Map<string, Set<string>>();
+/** What a variant's rows say they tracked: a registered id, NONE (this pass tracks no skill), or UNRECORDED (a row with
+ *  no `meta.skill_tracked`: one that tracked none, or one written before the field existed). */
+type Tracked = string;
+const NONE: Tracked = "";
+const UNRECORDED: Tracked = "\0unrecorded";
+
+/** Per variant with scored rows: what its rows' `meta.skill_tracked` says. */
+function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<string, Set<Tracked>> {
+  const out = new Map<string, Set<Tracked>>();
   for (const [variant, vs] of Object.entries(snap.variants))
     for (const line of (vs.results ?? "").split("\n")) {
       if (!line.trim()) continue;
       try {
         const t = (JSON.parse(line) as { meta?: { skill_tracked?: unknown } }).meta?.skill_tracked;
-        const set = out.get(variant) ?? new Set<string>();
-        set.add(typeof t === "string" ? t : "");
+        const set = out.get(variant) ?? new Set<Tracked>();
+        set.add(typeof t === "string" && t !== NONE ? t : UNRECORDED);
         out.set(variant, set);
       } catch {
         /* schema-check reports malformed lines */
@@ -559,10 +573,10 @@ function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<s
   return out;
 }
 
-const trackedText = (s: ReadonlySet<string>): string =>
+const trackedText = (s: ReadonlySet<Tracked>): string =>
   [...s]
     .sort()
-    .map((t) => t || "no skill")
+    .map((t) => (t === NONE ? "no skill" : t === UNRECORDED ? "unrecorded" : t))
     .join(" and ");
 
 /** baseline first, then v1, v2, … */

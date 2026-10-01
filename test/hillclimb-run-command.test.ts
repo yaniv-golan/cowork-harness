@@ -1053,13 +1053,63 @@ describe("skill_invoked: what each row tracked, and keeping a variant's column o
     expect(state().harness_skill).toBe("x");
   });
 
-  it("rows that tracked nothing refuse a pass that would track a skill, in that variant", async () => {
+  it("rows that record no tracked skill do not refuse a pass that tracks one, in that variant: it warns", async () => {
     addSkill("y");
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
     await runHillclimbCommand(args(), deps());
+    err = [];
     const r = await runHillclimbCommand(args("--skill", "y", "--approve-harness", "--reps", "2"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect(err.join("\n")).toMatch(
+      /warning: variant baseline's earlier rows don't record which skill they tracked, and this pass tracks my-plugin:y/,
+    );
+  });
+
+  it("rows that recorded a skill refuse a pass that would track none, in that variant", async () => {
+    addSkill("y");
+    await runHillclimbCommand(args("--skill", "x", "--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args("--skill", "x"), deps());
+    calls = [];
+    const r = await runHillclimbCommand(args("--approve-harness", "--reps", "2"), deps());
     expect(r.exitCode).toBe(2);
-    expect(r.error?.message).toMatch(/variant baseline's rows track no skill, and this pass would track my-plugin:y/);
+    expect(r.error?.message).toMatch(/variant baseline's rows track my-plugin:x, and this pass would track no skill/);
+    expect(calls).toEqual([]);
+  });
+
+  it("rows written before meta.skill_tracked existed read as unrecorded: a pass in their variant warns, never refuses", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    skillActivity = [{ skillId: "my-plugin:x" }];
+    await runHillclimbCommand(args(), deps());
+    // Such a row carries skill_invoked, measured against the plugin's one skill, but no meta.skill_tracked.
+    const file = join(cwd, "flow", "baseline", "results.jsonl");
+    const old = rowsOf("baseline").map((r) => {
+      const { skill_tracked: _gone, ...meta } = r.meta;
+      return JSON.stringify({ ...r, meta });
+    });
+    writeFileSync(file, old.join("\n") + "\n");
+    expect(rowsOf("baseline")[0]).toHaveProperty("skill_invoked");
+    err = [];
+    expect((await runHillclimbCommand(args("--variant", "v1"), deps())).exitCode).toBe(0);
+    expect(err.join("\n")).toMatch(
+      /warning: the flow's variants track different skills in skill_invoked \(baseline: unrecorded; v1: my-plugin:x\)/,
+    );
+    expect(err.join("\n")).not.toMatch(/no skill/);
+    err = [];
+    const r = await runHillclimbCommand(args("--reps", "2"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect(err.join("\n")).toMatch(
+      /warning: variant baseline's earlier rows don't record which skill they tracked, and this pass tracks my-plugin:x/,
+    );
+  });
+
+  it("rows that record no tracked skill and a pass that tracks none: no warning", async () => {
+    addSkill("y");
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args(), deps());
+    err = [];
+    expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
+    expect((await runHillclimbCommand(args("--variant", "v1"), deps())).exitCode).toBe(0);
+    expect(err.join("\n")).not.toMatch(/warning: (variant|the flow's variants)/);
   });
 
   it("a different tracked skill in ANOTHER variant runs, with a warning naming each variant's skill", async () => {

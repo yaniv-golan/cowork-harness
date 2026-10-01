@@ -163,7 +163,8 @@ All notable changes to this project are documented here. The format is based on
   skill is tracked; with several, `--skill <name>` (on `run` and `state-template`; a directory name or a registered name)
   picks one, and without it the rows omit the column, the run lists the skills, and `state-template` leaves
   `skill_invoked` out of `perf_fields`. Every scored row records the tracked id in `meta.skill_tracked`. A pass whose
-  tracked skill differs from the rows already in its variant is refused; another variant may track a different skill,
+  tracked skill differs from the one the rows already in its variant record is refused (a row with no
+  `meta.skill_tracked` records none, so a pass tracking a skill over it only warns); another variant may track a different skill,
   with a warning. A `--skill` selection is part of the harness sha: `--approve-harness` records it in `_state.json` as
   `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or dropped since is refused with a
   message naming the change, which the dry run's gate line names too. `--skill` is not remembered between passes, so the
