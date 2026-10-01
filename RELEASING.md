@@ -118,7 +118,8 @@ job reports **never resolves** — every PR stays `BLOCKED` no matter how green 
 
 As of `1.0.0`, semver is enforced against the **covered surfaces enumerated in
 [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)** (CLI + exit codes, the
-scenario/session/baseline/run-result/cassette/protocol schemas, the documented env vars, and the
+scenario/session/baseline/run-result/cassette/protocol schemas, the `verify-cassettes`/`doctor`/`regrade`
+JSON envelopes, the documented env vars, and the
 packaged Action's inputs/outputs): a backwards-incompatible change to a covered surface is a
 **major**; a new command/flag or other additive change is a **minor**; a backwards-compatible bug
 fix is a **patch**. Human-readable text output is explicitly NOT covered.

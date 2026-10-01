@@ -22,18 +22,24 @@ All notable changes to this project are documented here. The format is based on
     (the live assert refused its evidence and no fingerprint was recorded; one that recorded a `judgedDoc` is
     compared like a graded one), or `not_graded` (the re-grade's own assert refused its evidence and no document
     was handed to a judge; one that refused after its judge read a document is compared like any other). The
-    run-level value ranks `false`, then the unchecked `live_refused` and `unknown`, above `scope_changed`.
-    `unknown` and `live_refused` are warned about before the judge call; none of them changes the exit code.
+    per-assert value describes that assert's own document. The run-level value — the one to consume — is `false`
+    whenever a drift was detected and accepted (below), and otherwise ranks `false`, then the unchecked
+    `live_refused` and `unknown`, above `scope_changed`. `unknown` and `live_refused` are warned about before the
+    judge call; none of them changes the exit code.
   - Before any judge call, each live assert's document is rebuilt from the live run's own inputs (its scope,
     the live `evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture`
     existed, the `--authored-total-bytes` value you pass) and compared with its `judgedDoc`; any difference is
     refused, whatever the new scenario's scope — it can mean a value the live run scrubbed and this process does
     not. So a changed scope or an `--authored-total-bytes` override does not skip the check of what the live
-    judge read. `--allow-doc-drift` grades anyway, with a warning.
-  - Not checked: a live assert that recorded no `judgedDoc` (`unknown`) or refused its evidence
-    and recorded no fingerprint (`live_refused`), neither for drift nor for an unscrubbed secret; and content only a widened scope or a larger `--authored-total-bytes` brings in. That content is
-    graded, named in a warning before the judge call, and listed in `uncheckedSections`; this process's scrub set
-    is all that protects it.
+    judge read. `--allow-doc-drift` grades anyway, with a warning; the accepted drift is listed in `liveDocDrift`
+    (by live assert and file) and makes the run's `docMatchesLive` `false`.
+  - Content the live judge never read — brought in by a widened scope (`evidence_files`, `include_subagent_text`)
+    or a larger `--authored-total-bytes`, measured against the live documents rebuilt from the live inputs — is
+    refused before any judge call too. `--allow-unchecked` grades it anyway, with a warning, listing it in
+    `uncheckedSections` with `uncheckedCount`; this process's scrub set is then all that protects it. The two
+    flags are independent: a file changed in place is drift, not unchecked content.
+  - Not checked: a run in which no live assert recorded a `judgedDoc` — its asserts are `unknown` or
+    `live_refused`, neither drift- nor secret-checked, and are warned about, not refused.
   - The grade is written to `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json` (layout
     experimental), scrubbed as a whole document and stamped with `harnessVersion` and `scenarioSha256`.
     `result.json` is never modified and no run-index row is added. The same run dir named twice, or through a
@@ -44,11 +50,16 @@ All notable changes to this project are documented here. The format is based on
   - `--judge-model` grades every assert with one model; an alias such as `opus` is refused.
   - Exit `0` when every re-graded assert passes, `1` when any fails or is judge-invalid, `2` on usage or a
     refusal: a multi-turn, partial, replay or chat run dir, a pruned work dir, a missing transcript sidecar, a
-    rebuilt document that differs from the live one (without `--allow-doc-drift`), or
+    rebuilt document that differs from the live one (without `--allow-doc-drift`), content the live judge never
+    read (without `--allow-unchecked`), or
     a run recorded before `authoredCapture` existed (accepted with `--authored-total-bytes <N>`). Refusals are
     decided for every run dir before any judge call. A failure writing a regrade file after earlier run dirs
     were graded also exits `2`.
-  - `--output-format json` prints one payload document with a `runs[]` array.
+  - `--output-format json` prints one payload document with a `runs[]` array. **The envelope is a covered
+    surface** ([SPEC.md](./SPEC.md) §12), described by `schema/regrade.json`; the regrade file's layout stays
+    experimental. A drift or unchecked-content refusal carries `error.code` (`doc_drift` /
+    `unchecked_content`) and `refusals[]`, listing every refused run dir; a write failure carries the run dirs
+    already graded in `runs[]`.
 - **`--output-format json` now says whether `--max-budget-usd` was actually enforced.** Every envelope
   from `run`, `skill` and `record` (every `record` arm, including `record`'s `--dry-run` arms; `skill
   --dry-run` runs no pre-flight) carries a top-level `budget` object when a cap was passed: `{capUsd,

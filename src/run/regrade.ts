@@ -27,7 +27,7 @@ import { collectSecrets, scrub } from "../secrets.js";
 import type { Assertion, JudgedDocFingerprint, RunResult, Scenario } from "../types.js";
 import { DEFAULT_AUTHORED_TOTAL_BYTES, parseAuthoredTotalBytes } from "./artifacts.js";
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
-import { fail, isJsonOutput, jsonPayloadEnvelope, pkgVersion } from "./envelope.js";
+import { fail, isJsonOutput, jsonError, jsonPayloadEnvelope, pkgVersion } from "./envelope.js";
 import { parseScenarioFile } from "./execute.js";
 import { turnArtifactPath, turnWriteDir } from "./turn-layout.js";
 import { assertContextFromRunDir } from "./verify-context.js";
@@ -77,6 +77,23 @@ export interface JudgeSpend {
   unpricedGrades: number;
 }
 
+/** A drift the drift check found in one LIVE assert's document, rebuilt from the live inputs: indexed by that assert's
+ *  position in the live `result.assertions` (a live assert need not exist in the new scenario). An empty `sections`
+ *  means only the whole-document hash differs. */
+export interface LiveDocDrift {
+  liveAssertionIndex: number;
+  sections: Array<Omit<DifferingSection, "assertionIndex">>;
+}
+
+/** One run dir's evidence refusal, decided before any judge call. A dir with both gets two entries. */
+export interface RegradeRefusal {
+  runDir: string;
+  code: "doc_drift" | "unchecked_content";
+  uncheckedCount?: number;
+  uncheckedSections?: UncheckedSection[];
+  liveDocDrift?: LiveDocDrift[];
+}
+
 export interface RegradeRunReport extends JudgeSpend {
   runDir: string;
   turn: number;
@@ -87,6 +104,11 @@ export interface RegradeRunReport extends JudgeSpend {
   /** Sections of the graded documents no live `judgedDoc` carried, so the drift check could not vouch for them
    *  (see `uncheckedSections`). Warned before the judge call, never refused. */
   uncheckedSections: UncheckedSection[];
+  /** `uncheckedSections.length`. Non-zero only under `--allow-unchecked`: without it such content is refused. */
+  uncheckedCount: number;
+  /** The drift found in the live documents and accepted with `--allow-doc-drift`; `[]` when none was found. Any
+   *  entry makes the run's `docMatchesLive` false, whatever its asserts' own values. */
+  liveDocDrift: LiveDocDrift[];
   /** Asserts whose grade is INVALID (the judge failed twice, e.g. an outage or a malformed grade) — counted
    *  apart from failures: an invalid grade says nothing about the run. It still makes `pass` false. */
   invalidGrades: number;
@@ -98,7 +120,18 @@ export interface RegradeRunReport extends JudgeSpend {
 }
 
 export type RegradeOutcome =
-  { ok: true; exitCode: 0 | 1; runs: RegradeRunReport[] } | { ok: false; kind: "usage" | "runtime"; message: string };
+  | { ok: true; exitCode: 0 | 1; runs: RegradeRunReport[] }
+  | {
+      ok: false;
+      kind: "usage" | "runtime";
+      message: string;
+      /** Set on an evidence refusal (`refusals` lists every refused run dir): `doc_drift` when any dir drifted,
+       *  else `unchecked_content`. */
+      code?: "doc_drift" | "unchecked_content";
+      refusals?: RegradeRefusal[];
+      /** A failure writing a regrade file after earlier run dirs were graded and written: their reports. */
+      completed?: RegradeRunReport[];
+    };
 
 export interface RegradeOptions {
   runDirs: string[];
@@ -110,6 +143,9 @@ export interface RegradeOptions {
   /** Grade even when the rebuilt document differs from the live one (`docMatchesLive: false`), which is
    *  otherwise refused before any judge call. */
   allowDocDrift?: boolean;
+  /** Grade even when a graded document carries content the live judge never read (`uncheckedSections`), which is
+   *  otherwise refused before any judge call. Independent of `allowDocDrift`. */
+  allowUnchecked?: boolean;
   /** The secret set the judged document, the regrade file and every message are scrubbed with. Default:
    *  `collectSecrets()`. The CLI passes the one set it also scrubs its own output with. */
   secrets?: string[];
@@ -262,7 +298,9 @@ export function compareWithLive(
  * recorded. Independent of the new scenario, so a changed scope or budget (`scope_changed` on the graded
  * document) cannot hide a drift: in particular a value the live run scrubbed and this process does not, which
  * would otherwise reach the judge unredacted. A live assert that recorded no `judgedDoc` cannot be checked.
- * Returns the differing sections, indexed by the assert's position in `result.assertions`.
+ * Returns the differing sections, indexed by the assert's position in `result.assertions`, and the rebuilt
+ * documents themselves: what the live judge's inputs produce from the current bytes, which `uncheckedSections`
+ * measures the new documents against.
  */
 function liveDocDrift(
   runDir: string,
@@ -271,7 +309,9 @@ function liveDocDrift(
   secrets: string[],
   budget: { totalBytes: number; perFileBytes?: number },
   sameInputs: AssertContext | undefined,
-): { drift: Array<{ liveIndex: number; sections: DifferingSection[] }> } | { refusal: { kind: "usage" | "runtime"; message: string } } {
+):
+  | { drift: Array<{ liveIndex: number; sections: DifferingSection[] }>; rebuilt: JudgedDocFingerprint[] }
+  | { refusal: { kind: "usage" | "runtime"; message: string } } {
   // The capture is built from EVERY live semantic assert (its priority globs are their union, as execute.ts
   // builds it), but only those that recorded a `judgedDoc` have anything to be compared with.
   const allLive = (result.assertions ?? [])
@@ -279,7 +319,7 @@ function liveDocDrift(
     .filter(({ r }) => r.assertion?.semantic_matches !== undefined);
   // Only an assert with a recorded document can be checked (see `comparable`).
   const live = allLive.filter(({ r }) => comparable(r));
-  if (live.length === 0) return { drift: [] };
+  if (live.length === 0) return { drift: [], rebuilt: [] };
   let ctx = sameInputs;
   if (!ctx) {
     // The live asserts stand in for the scenario: the builder reads only `assert` to decide what to capture.
@@ -314,7 +354,7 @@ function liveDocDrift(
     const sections = diffSections(r.judgedDoc!, fp, liveIndex);
     if (sections.length || r.judgedDoc!.sha256 !== fp.sha256) drift.push({ liveIndex, sections });
   }
-  return { drift };
+  return { drift, rebuilt: [...cache.values()] };
 }
 
 /** A section of a graded document that no live `judgedDoc` vouches for. */
@@ -326,19 +366,23 @@ export interface UncheckedSection {
 }
 
 /**
- * The sections of the NEW documents that the drift check cannot vouch for: content that no live `judgedDoc`
- * carried. A section is covered when some live document has one of the same kind and path with the same
+ * The sections of the NEW documents that the drift check cannot vouch for: content the live judge's inputs do not
+ * produce. Measured against the live documents REBUILT from the live inputs over the current bytes
+ * (`liveDocDrift`), not the persisted `judgedDoc`s: a section the rebuild has is either the bytes the live judge
+ * read or a drift the check already reported (refused, or accepted with `--allow-doc-drift`), so the two flags stay
+ * independent. A section is covered when some rebuilt document has one of the same kind and path with the same
  * bytes; a non-authored section (final answer, transcript, health note…) is also covered when it is no longer
- * than a live one of its kind, since those carry no file content a scope could newly bring in. What is left is
- * content a widened `evidence_files` scope or a larger budget pulled in — never compared with anything, so
- * neither a drift nor a value the live run scrubbed and this process does not can be detected in it.
- * Empty when the run recorded no comparable `judgedDoc` at all: its asserts are then `unknown` or
- * `live_refused`, unchecked as a whole, and warned about as such.
+ * than a rebuilt one of its kind, since those carry no file content a scope could newly bring in. What is left is
+ * content a widened scope (`evidence_files`, `include_subagent_text`) or a larger budget pulled in — never
+ * compared with anything, so neither a drift nor a value the live run scrubbed and this process does not can be
+ * detected in it. Empty when no live assert recorded a comparable `judgedDoc` at all: its asserts are then
+ * `unknown` or `live_refused`, unchecked as a whole, and warned about as such rather than refused.
  */
-function uncheckedSections(docs: Map<Assertion, JudgedDocFingerprint>, sc: Scenario, result: RunResult): UncheckedSection[] {
-  const liveSections = (result.assertions ?? []).flatMap((r) =>
-    r.assertion?.semantic_matches !== undefined && comparable(r) ? r.judgedDoc!.sections : [],
-  );
+function uncheckedSections(
+  docs: Map<Assertion, JudgedDocFingerprint>,
+  sc: Scenario,
+  liveSections: JudgedDocFingerprint["sections"],
+): UncheckedSection[] {
   if (liveSections.length === 0) return [];
   const exact = new Set(liveSections.map((s) => `${s.kind}\0${s.path ?? ""}\0${s.sha256}`));
   const longest = new Map<string, number>();
@@ -359,7 +403,25 @@ function uncheckedSections(docs: Map<Assertion, JudgedDocFingerprint>, sc: Scena
   return out;
 }
 
-const sectionLabel = (d: DifferingSection): string => `${d.change} ${d.kind}${d.path !== undefined ? ` ${d.path}` : ""}`;
+const sectionLabel = (d: Omit<DifferingSection, "assertionIndex">): string =>
+  `${d.change} ${d.kind}${d.path !== undefined ? ` ${d.path}` : ""}`;
+
+/** `live assert <i>: <sections>` per drifted live assert — the files a drift is in. */
+const liveDriftLabel = (drift: LiveDocDrift[]): string =>
+  drift
+    .map(
+      ({ liveAssertionIndex, sections }) =>
+        `live assert ${liveAssertionIndex}: ${sections.map(sectionLabel).join(", ") || "whole-document hash"}`,
+    )
+    .join("; ");
+
+const UNCHECKED_LIST_CAP = 20;
+/** `assert <i>: <kind> <path>` per unchecked section, the first 20 and a count of the rest. */
+const uncheckedLabel = (u: UncheckedSection[]): string =>
+  u
+    .slice(0, UNCHECKED_LIST_CAP)
+    .map((x) => `assert ${x.assertionIndex}: ${x.kind}${x.path !== undefined ? ` ${x.path}` : ""}`)
+    .join(", ") + (u.length > UNCHECKED_LIST_CAP ? `, … and ${u.length - UNCHECKED_LIST_CAP} more` : "");
 
 /** The run's value: the worst over the asserts that were graded. An assert this re-grade refused says nothing
  *  about the document, so it only decides the run's value when every assert was refused. */
@@ -406,6 +468,8 @@ interface Prepared {
   runDir: string;
   dirAsGiven: string;
   unchecked: UncheckedSection[];
+  /** The live drift accepted with `--allow-doc-drift` (empty without the flag: a drift is then refused). */
+  drift: LiveDocDrift[];
   /** `assert <i>: unknown|live_refused` for each assert with no live fingerprint to compare with. */
   blind: string[];
   /** The asserts whose evidence will be refused, so no judge is called for them (left out of both warnings). */
@@ -436,6 +500,10 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
   const loadScenario = (): Scenario => (scenario ??= parseScenarioFile(opts.scenarioFile));
   let scenarioSha256: string | undefined;
   const prepared: Prepared[] = [];
+  // The evidence refusals (drift, unchecked content) are collected over EVERY run dir, so one refusal lists them
+  // all; the batch is still refused before any judge call. Other refusals stop at the first.
+  const refusals: RegradeRefusal[] = [];
+  const refusalLines: string[] = [];
   const seen = new Set<string>();
   for (const dir of opts.runDirs) {
     const runDir = resolve(dir);
@@ -516,25 +584,26 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     // Drift check, before any judge call, over the LIVE asserts rebuilt from the LIVE inputs (see liveDocDrift).
     // When the new scenario's capture inputs equal the live ones, the context just built is those inputs.
     // A drift means the judge would be handed different bytes than the live judge read — possibly a value the
-    // live run scrubbed and this process does not know — so nothing is sent unless the caller accepts that.
-    if (!opts.allowDocDrift) {
-      const liveBudget = { totalBytes: persisted?.totalBytes ?? totalBytes, perFileBytes: persisted?.perFileBytes };
-      const checked = liveDocDrift(dir, second.result, sc, secrets, liveBudget, live.captureMoved ? undefined : second.ctx);
-      if ("refusal" in checked) return refuse(checked.refusal.kind, checked.refusal.message);
-      if (checked.drift.length)
-        return refuse(
-          "runtime",
-          `${CMD}: ${dir}: rebuilt from the live run's own inputs, the judged document differs from the one the live judge read ` +
-            `(${checked.drift
-              .map(
-                ({ liveIndex, sections }) => `live assert ${liveIndex}: ${sections.map(sectionLabel).join(", ") || "whole-document hash"}`,
-              )
-              .join("; ")}). ` +
-            `An authored file changed in the kept work dir since the run, a different secret-scrub set in this process ` +
-            `(which can mean a value the live run scrubbed is NOT scrubbed here — compare COWORK_HARNESS_SCRUB_VALUES / ` +
-            `COWORK_HARNESS_SCRUB_KEYS with the live run's), or a sub-agent section can each cause it. Nothing was sent ` +
-            `to the judge; pass --allow-doc-drift to grade anyway. (can't verify ⇒ not green)`,
-        );
+    // live run scrubbed and this process does not know — so nothing is sent unless the caller accepts that. It runs
+    // under --allow-doc-drift too: an accepted drift is reported, and the rebuilt documents are what the unchecked
+    // content is measured against.
+    const liveBudget = { totalBytes: persisted?.totalBytes ?? totalBytes, perFileBytes: persisted?.perFileBytes };
+    const checked = liveDocDrift(dir, second.result, sc, secrets, liveBudget, live.captureMoved ? undefined : second.ctx);
+    if ("refusal" in checked) return refuse(checked.refusal.kind, checked.refusal.message);
+    const drift: LiveDocDrift[] = checked.drift.map(({ liveIndex, sections }) => ({
+      liveAssertionIndex: liveIndex,
+      sections: sections.map(({ kind, path, change }) => ({ kind, ...(path !== undefined ? { path } : {}), change })),
+    }));
+    if (drift.length && !opts.allowDocDrift) {
+      refusals.push({ runDir, code: "doc_drift", liveDocDrift: drift });
+      refusalLines.push(
+        `${CMD}: ${dir}: rebuilt from the live run's own inputs, the judged document differs from the one the live judge read ` +
+          `(${liveDriftLabel(drift)}). ` +
+          `An authored file changed in the kept work dir since the run, a different secret-scrub set in this process ` +
+          `(which can mean a value the live run scrubbed is NOT scrubbed here — compare COWORK_HARNESS_SCRUB_VALUES / ` +
+          `COWORK_HARNESS_SCRUB_KEYS with the live run's), or a sub-agent section can each cause it. Nothing was sent ` +
+          `to the judge; pass --allow-doc-drift to grade anyway. (can't verify ⇒ not green)`,
+      );
     }
 
     // The documents the judge will be handed (composed exactly as `runSemanticJudges` will), for what can be
@@ -559,12 +628,27 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       const { match } = compareWithLive(a, ordinal, sc.assert.indexOf(a), newDocs.get(a), live, false);
       return match === "unknown" || match === "live_refused" ? [`assert ${sc.assert.indexOf(a)}: ${match}`] : [];
     });
+    const unchecked = uncheckedSections(
+      newDocs,
+      sc,
+      checked.rebuilt.flatMap((fp) => fp.sections),
+    );
+    if (unchecked.length && !opts.allowUnchecked) {
+      refusals.push({ runDir, code: "unchecked_content", uncheckedCount: unchecked.length, uncheckedSections: unchecked });
+      refusalLines.push(
+        `${CMD}: ${dir}: ${unchecked.length} section(s) of the graded document were never read by the live judge ` +
+          `(${uncheckedLabel(unchecked)}) — brought in by a widened scope (evidence_files / include_subagent_text) or a larger ` +
+          `--authored-total-bytes. They cannot be checked for drift or for a secret the live run scrubbed and this process does not. ` +
+          `Nothing was sent to the judge; pass --allow-unchecked to grade anyway. (can't verify ⇒ not green)`,
+      );
+    }
     prepared.push({
       runDir,
       dirAsGiven: dir,
       turn: second.turn,
       ctx: second.ctx,
-      unchecked: uncheckedSections(newDocs, sc, second.result),
+      unchecked,
+      drift: opts.allowDocDrift ? drift : [],
       blind,
       willRefuse,
       resultSha256: sha256Hex(readFileSync(turnArtifactPath(runDir, second.turn, "result.json"))),
@@ -573,18 +657,36 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     });
   }
 
+  if (refusals.length)
+    return {
+      ok: false,
+      kind: "runtime",
+      message: scrub(refusalLines.join("\n"), secrets),
+      code: refusals.some((r) => r.code === "doc_drift") ? "doc_drift" : "unchecked_content",
+      refusals: JSON.parse(scrub(JSON.stringify(refusals), secrets)) as RegradeRefusal[],
+    };
+
   const sc = loadScenario();
   const semantic = sc.assert.filter((a) => a.semantic_matches !== undefined);
   const runs: RegradeRunReport[] = [];
   for (const p of prepared) {
-    // Not refused — a widened scope or a larger budget is a legitimate re-grade — but said before the spend.
+    // Accepted with --allow-unchecked (refused above otherwise), and said before the spend.
     if (p.unchecked.length)
       warn(
         scrub(
           `::warning:: ${CMD}: ${p.dirAsGiven}: ${p.unchecked.length} section(s) of the graded document were never read by the live judge ` +
-            `(${p.unchecked.map((u) => `assert ${u.assertionIndex}: ${u.kind}${u.path !== undefined ? ` ${u.path}` : ""}`).join(", ")}) — ` +
-            `brought in by a widened evidence_files scope or a larger --authored-total-bytes. They were never checked for drift or for a ` +
-            `secret the live run scrubbed; this process's scrub set is all that protects them.`,
+            `(${uncheckedLabel(p.unchecked)}) — brought in by a widened scope (evidence_files / include_subagent_text) or a larger ` +
+            `--authored-total-bytes. They were never checked for drift or for a secret the live run scrubbed; this process's scrub set ` +
+            `is all that protects them (--allow-unchecked).`,
+          secrets,
+        ),
+      );
+    // Accepted with --allow-doc-drift (refused above otherwise), and said before the spend.
+    if (p.drift.length)
+      warn(
+        scrub(
+          `::warning:: ${CMD}: ${p.dirAsGiven}: the kept evidence differs from what the live judge read (${liveDriftLabel(p.drift)}) — ` +
+            `grading anyway (--allow-doc-drift); the run is reported docMatchesLive: false.`,
           secrets,
         ),
       );
@@ -614,6 +716,8 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     const graded = evaluate(semantic, p.ctx);
 
     const differing: DifferingSection[] = [];
+    // A section the accepted drift touched (kind and path): an assert whose document carries one read drifted bytes.
+    const drifted = new Set(p.drift.flatMap((d) => d.sections.map((x) => `${x.kind}\0${x.path ?? ""}`)));
     const assertions: RegradedAssertion[] = graded.map((g, ordinal) => {
       const a = semantic[ordinal];
       const assertionIndex = sc.assert.indexOf(a);
@@ -621,13 +725,17 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       const refusedNow = g.semanticEvidence !== undefined && g.semanticEvidence.reason !== "graded";
       const c = compareWithLive(a, ordinal, assertionIndex, p.ctx.judgedDocs?.get(a), p.live, refusedNow);
       differing.push(...c.differing);
+      const now = p.ctx.judgedDocs?.get(a);
+      const readDrift = c.match !== "not_graded" && now?.sections.some((x) => drifted.has(`${x.kind}\0${x.path ?? ""}`)) === true;
       return {
         assertionIndex,
         ...g,
-        docMatchesLive: c.match,
+        docMatchesLive: readDrift ? false : c.match,
       } as RegradedAssertion;
     });
-    const docMatchesLive = aggregate(assertions.map((a) => a.docMatchesLive));
+    // Per assert, the value describes that assert's own document; the run's value never reads true (or not_graded)
+    // over a drift that was detected and accepted.
+    const docMatchesLive = p.drift.length ? false : aggregate(assertions.map((a) => a.docMatchesLive));
     const notRegraded = sc.assert.flatMap((a, i) =>
       a.semantic_matches !== undefined ? [] : [{ assertionIndex: i, keys: Object.keys(a) }],
     );
@@ -638,7 +746,6 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     const at = (opts.now ?? (() => new Date()))().toISOString();
     const stem = regradeFileStem(assertions, opts.judgeModel, at);
     const dir = join(turnWriteDir(p.runDir, p.turn), "regrade");
-    mkdirSync(dir, { recursive: true });
     const body = {
       command: CMD,
       harnessVersion: pkgVersion(),
@@ -648,10 +755,12 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       authoredCapture: p.budget,
       docMatchesLive,
       differingSections: differing,
+      liveDocDrift: p.drift,
       // An all-invalid round (a judge outage) is still written, and these counts are what tell it apart from
       // a failing grade without walking `assertions[]`.
       regraded: assertions.length,
       uncheckedSections: p.unchecked,
+      uncheckedCount: p.unchecked.length,
       invalidGrades,
       ...spend,
       assertions,
@@ -660,7 +769,23 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
     };
     // Scrubbed as a whole document, as result.json is: the rationales are scrubbed at grade time, but the
     // rubric and messages echo scenario text, and one pass over the serialized body leaves no field out.
-    const regradeFile = writeNew(dir, stem, scrub(JSON.stringify(body, null, 2), secrets) + "\n");
+    let regradeFile: string;
+    try {
+      mkdirSync(dir, { recursive: true });
+      regradeFile = writeNew(dir, stem, scrub(JSON.stringify(body, null, 2), secrets) + "\n");
+    } catch (e) {
+      // This dir's judge calls were spent; the earlier dirs' files are written, and their reports are returned.
+      return {
+        ok: false,
+        kind: "runtime",
+        message: scrub(
+          `${CMD}: ${p.dirAsGiven}: could not write the regrade file (${(e as Error).message}) — its judge calls were spent and ` +
+            `its grade is lost. ${runs.length} earlier run dir(s) were graded and written.`,
+          secrets,
+        ),
+        completed: runs,
+      };
+    }
     runs.push({
       runDir: p.runDir,
       turn: p.turn,
@@ -670,8 +795,10 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       invalidGrades,
       ...spend,
       uncheckedSections: p.unchecked,
+      uncheckedCount: p.unchecked.length,
       docMatchesLive,
       differingSections: differing,
+      liveDocDrift: p.drift,
       assertions,
       notRegraded,
       authoredCapture: p.budget,
@@ -685,6 +812,22 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
 export function regradeEnvelope(outcome: Extract<RegradeOutcome, { ok: true }>, secrets: string[] = collectSecrets()): string {
   return scrub(
     jsonPayloadEnvelope(CMD, outcome.exitCode === 0, { ...judgeSpend(outcome.runs.flatMap((r) => r.assertions)), runs: outcome.runs }),
+    secrets,
+  );
+}
+
+/** The `--output-format json` error document for a re-grade that did not complete: the shared error envelope, plus
+ *  `error.code` and `refusals[]` on an evidence refusal, or the completed runs' reports (`runs`) after a failure
+ *  writing a regrade file. Scrubbed as a whole with `secrets`. */
+export function regradeErrorEnvelope(outcome: Extract<RegradeOutcome, { ok: false }>, secrets: string[] = collectSecrets()): string {
+  return scrub(
+    jsonError(CMD, outcome.kind, outcome.message, undefined, [], {
+      ...(outcome.code ? { error: { code: outcome.code } } : {}),
+      payload: {
+        ...(outcome.refusals ? { refusals: outcome.refusals } : {}),
+        ...(outcome.completed ? { runs: outcome.completed } : {}),
+      },
+    }),
     secrets,
   );
 }
@@ -709,10 +852,15 @@ function docMatchLine(r: RegradeRunReport): string {
       return `· judged document: evidence scope or capture budget changed since the live run, so it differs by design${
         r.differingSections.length ? ` (${r.differingSections.map(where).join(", ")})` : ""
       }`;
-    case false:
+    case false: {
       // Neutral about the cause on purpose: an authored file changed in the kept work dir, a secret this process
       // scrubs differently, and a sub-agent section all surface here, and the section list is what tells them apart.
-      return `::warning:: judged document DIFFERS from the one the live judge read — this grade is not comparable with the live one. Differing: ${r.differingSections.map(where).join(", ") || "whole-document hash"}`;
+      const parts = [
+        ...(r.differingSections.length ? [`Differing: ${r.differingSections.map(where).join(", ")}`] : []),
+        ...(r.liveDocDrift.length ? [`accepted live drift (--allow-doc-drift): ${liveDriftLabel(r.liveDocDrift)}`] : []),
+      ];
+      return `::warning:: judged document DIFFERS from the one the live judge read — this grade is not comparable with the live one. ${parts.join("; ") || "Differing: whole-document hash"}`;
+    }
   }
 }
 
@@ -793,8 +941,18 @@ export async function cmdRegrade(args: string[]): Promise<never> {
     judgeModel: p.options["--judge-model"],
     authoredTotalBytes,
     allowDocDrift: p.flags["--allow-doc-drift"] === true,
+    allowUnchecked: p.flags["--allow-unchecked"] === true,
   });
-  if (!outcome.ok) return fail(CMD, outcome.kind, outcome.message, undefined, json);
+  if (!outcome.ok) {
+    if (json) {
+      writeAllSync(1, regradeErrorEnvelope(outcome, secrets) + "\n");
+      return process.exit(2);
+    }
+    // After a failed write, what was graded is still reported before the error.
+    if (outcome.completed?.length)
+      for (const line of regradeTextReport({ ok: true, exitCode: 1, runs: outcome.completed }, secrets)) writeAllSync(2, line + "\n");
+    return fail(CMD, outcome.kind, outcome.message, undefined, false);
+  }
   if (json) writeAllSync(1, regradeEnvelope(outcome, secrets) + "\n");
   else for (const line of regradeTextReport(outcome, secrets)) writeAllSync(2, line + "\n");
   return process.exit(outcome.exitCode);

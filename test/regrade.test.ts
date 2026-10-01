@@ -10,8 +10,11 @@ import {
   regradeEnvelope,
   regradeFileStem,
   regradeTextReport,
+  regradeErrorEnvelope,
   type RegradeOptions,
 } from "../src/run/regrade.js";
+import Ajv from "ajv";
+import { jsonError } from "../src/run/envelope.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty, DEFAULT_AUTHORED_TOTAL_BYTES } from "../src/run/artifacts.js";
 import { authoredCaptureOpts } from "../src/run/authored-capture-opts.js";
 import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
@@ -317,13 +320,28 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(refused.message).toContain("live assert 0: changed authored outputs/report.md");
     expect(refused.message).toContain("--allow-doc-drift");
     expect(refused.message).toMatch(/\(can't verify ⇒ not green\)$/);
+    expect(refused.code).toBe("doc_drift");
+    expect(refused.refusals).toEqual([
+      {
+        runDir: k.runDir,
+        code: "doc_drift",
+        liveDocDrift: [{ liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/report.md", change: "changed" }] }],
+      },
+    ]);
     expect(judge.calls).toHaveLength(0);
     expect(regradeFiles(k)).toEqual([]);
 
+    // --allow-doc-drift alone grades it: the mutated bytes ARE in the document rebuilt from the live inputs, so they
+    // are drift (accepted and reported), not unchecked content.
     const out = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
     if (!out.ok) throw new Error(out.message);
     expect(judge.calls).toHaveLength(1);
     expect(out.runs[0].docMatchesLive).toBe(false);
+    expect(out.runs[0].uncheckedSections).toEqual([]);
+    expect(out.runs[0].uncheckedCount).toBe(0);
+    expect(out.runs[0].liveDocDrift).toEqual([
+      { liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/report.md", change: "changed" }] },
+    ]);
     expect(out.runs[0].differingSections).toEqual([{ assertionIndex: 0, kind: "authored", path: "outputs/report.md", change: "changed" }]);
     const file = JSON.parse(readFileSync(join(k.runDir, "turns", "1", "regrade", regradeFiles(k)[0]), "utf8"));
     expect(file.docMatchesLive).toBe(false);
@@ -343,6 +361,7 @@ describe("regrade: is the judged document the one the live judge read?", () => {
       runDirs: [wider.runDir],
       scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scn2-")), WIDER),
       makeJudge: judgeFactory(() => true).make,
+      allowUnchecked: true, // the appendix is content the live judge never read
     });
     if (!out.ok) throw new Error(out.message);
     expect(out.runs[0].docMatchesLive).toBe("scope_changed");
@@ -391,7 +410,10 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     // Overriding the budget is a changed scope, reported as such rather than as a match or a drift; the larger
     // budget lets the unscoped assert grade, against a live assert that refused with no fingerprint — live_refused,
     // which outranks scope_changed at the run level.
-    const over = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, authoredTotalBytes: 4096 }));
+    // The larger budget brings in intermediates no live judge read: refused without --allow-unchecked.
+    const refusedOver = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, authoredTotalBytes: 4096 }));
+    expect(refusedOver).toMatchObject({ ok: false, kind: "runtime", code: "unchecked_content" });
+    const over = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, authoredTotalBytes: 4096, allowUnchecked: true }));
     if (!over.ok) throw new Error(over.message);
     expect(over.runs[0].assertions.map((a) => a.docMatchesLive)).toEqual(["scope_changed", "live_refused"]);
     expect(over.runs[0].docMatchesLive).toBe("live_refused");
@@ -437,7 +459,7 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(judge.calls).toHaveLength(0);
   });
 
-  it("content only a larger budget brings in is graded, warned about, and listed as unchecked", async () => {
+  it("content only a larger budget brings in is refused, and with --allow-unchecked graded, warned about and listed", async () => {
     // Live: a 150-byte budget cuts z-notes.md (it sorts last), outside the live assert's scope, so the live grade
     // stands. Re-grade: unscoped, with a far larger budget that captures it whole — content the live judge never
     // read, so no live fingerprint can vouch for it.
@@ -452,17 +474,26 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     });
     expect(JSON.parse(readFileSync(k.resultPath, "utf8")).assertions[0].semanticEvidence.reason).toBe("graded");
     const judge = judgeFactory(() => true);
+    const scenarioFile = scenarioAt(
+      mkdtempSync(join(tmpdir(), "cwh-rg-scn11-")),
+      `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
+    );
+    const refused = await regradeRuns({ runDirs: [k.runDir], scenarioFile, makeJudge: judge.make, authoredTotalBytes: 1_000_000 });
+    expect(refused).toMatchObject({ ok: false, kind: "runtime", code: "unchecked_content" });
+    if (refused.ok) throw new Error("expected a refusal");
+    expect(refused.message).toContain("assert 0: authored outputs/z-notes.md");
+    expect(refused.message).toContain("--allow-unchecked");
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(k)).toEqual([]);
     const stderr = captureStderr();
     let out;
     try {
       out = await regradeRuns({
         runDirs: [k.runDir],
-        scenarioFile: scenarioAt(
-          mkdtempSync(join(tmpdir(), "cwh-rg-scn11-")),
-          `  - semantic_matches:\n      rubric: ["the report names the risk"]\n`,
-        ),
+        scenarioFile,
         makeJudge: judge.make,
         authoredTotalBytes: 1_000_000,
+        allowUnchecked: true,
       });
     } finally {
       stderr.restore();
@@ -471,14 +502,16 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(judge.calls).toHaveLength(1);
     expect(out.runs[0].docMatchesLive).toBe("scope_changed");
     expect(out.runs[0].uncheckedSections).toContainEqual({ assertionIndex: 0, kind: "authored", path: "outputs/z-notes.md" });
+    expect(out.runs[0].uncheckedCount).toBe(out.runs[0].uncheckedSections.length);
     expect(stderr.text()).toMatch(
       /::warning:: regrade: .*never read by the live judge.*outputs\/z-notes\.md.*never checked for drift or for a secret the live run scrubbed/s,
     );
     const file = JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8"));
     expect(file.uncheckedSections).toEqual(out.runs[0].uncheckedSections);
+    expect(file.uncheckedCount).toBe(out.runs[0].uncheckedCount);
   });
 
-  it("content only a widened scope brings in is warned about and listed as unchecked", async () => {
+  it("content only a widened scope brings in is refused, and with --allow-unchecked warned about and listed", async () => {
     const k = await keptRun({
       author: (w) => {
         writeReport(w);
@@ -493,6 +526,7 @@ describe("regrade: is the judged document the one the live judge read?", () => {
         runDirs: [k.runDir],
         scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scn9-")), WIDER),
         makeJudge: judgeFactory(() => true).make,
+        allowUnchecked: true,
       });
     } finally {
       stderr.restore();
@@ -657,10 +691,15 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(a.semanticEvidence?.reason).toBe("evidence_incomplete");
     expect(a.docMatchesLive).toBe("not_graded");
     expect(a.judgedDoc).toBeUndefined();
-    expect(out.runs[0].docMatchesLive).toBe("not_graded");
+    // The per-assert value describes the assert's own document (none was handed to a judge). The run level
+    // reports the drift that was detected and accepted, naming the file, even though nothing was graded.
+    expect(out.runs[0].docMatchesLive).toBe(false);
+    expect(out.runs[0].liveDocDrift).toEqual([
+      { liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/big.md", change: "changed" }] },
+    ]);
     expect(out.runs[0].differingSections).toEqual([]);
     expect(judge.calls).toHaveLength(0);
-    expect(regradeTextReport(out).join("\n")).toContain("judged document: not graded");
+    expect(regradeTextReport(out).join("\n")).toContain("live assert 0: changed authored outputs/big.md");
   });
 
   it("an old run with a graded sibling: the drift in the refused assert's document is still refused", async () => {
@@ -678,8 +717,15 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     // nothing, so it contributes nothing to the run's value.
     const allowed = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
     if (!allowed.ok) throw new Error(allowed.message);
+    // The sibling's own document IS the live one, so it stays true; the run level never reports true over a drift
+    // that was detected and accepted, and names the file.
     expect(allowed.runs[0].assertions.map((x) => x.docMatchesLive)).toEqual(["not_graded", true]);
-    expect(allowed.runs[0].docMatchesLive).toBe(true);
+    expect(allowed.runs[0].docMatchesLive).toBe(false);
+    expect(allowed.runs[0].liveDocDrift).toEqual([
+      { liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/big.md", change: "changed" }] },
+    ]);
+    expect(allowed.runs[0].uncheckedSections).toEqual([]);
+    expect(regradeTextReport(allowed).join("\n")).toContain("outputs/big.md");
     expect(judge.calls).toHaveLength(1);
   });
 
@@ -1063,6 +1109,213 @@ describe("regrade: spend, provenance and invalid grades", () => {
   });
 });
 
+describe("regrade: content the live judge never read, and accepted drift", () => {
+  const widerScenario = () => scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-uc-")), WIDER);
+  const withAppendix = (w: string) => {
+    writeReport(w);
+    writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+  };
+  const APPENDIX_UNCHECKED = { assertionIndex: 0, kind: "authored", path: "outputs/appendix.md" };
+  const REPORT_DRIFT = [{ liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/report.md", change: "changed" }] }];
+
+  it("a widened evidence_files scope is refused before any judge call, naming the section and the flag", async () => {
+    const k = await keptRun({ author: withAppendix, assertYaml: SCOPED });
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [k.runDir], scenarioFile: widerScenario(), makeJudge: judge.make });
+    expect(out).toMatchObject({ ok: false, kind: "runtime", code: "unchecked_content" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toMatch(/^regrade: /);
+    expect(out.message).toContain("never read by the live judge");
+    expect(out.message).toContain("assert 0: authored outputs/appendix.md");
+    expect(out.message).toContain("include_subagent_text");
+    expect(out.message).toContain("--allow-unchecked");
+    expect(out.message).toMatch(/\(can't verify ⇒ not green\)$/);
+    expect(out.refusals).toEqual([
+      { runDir: k.runDir, code: "unchecked_content", uncheckedCount: 1, uncheckedSections: [APPENDIX_UNCHECKED] },
+    ]);
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(k)).toEqual([]);
+  });
+
+  it("a batch with one clean dir and one unchecked dir judges nothing, not even the clean one", async () => {
+    const clean = await keptRun({ author: withAppendix, assertYaml: WIDER });
+    const widened = await keptRun({ author: withAppendix, assertYaml: SCOPED });
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [clean.runDir, widened.runDir], scenarioFile: widerScenario(), makeJudge: judge.make });
+    expect(out).toMatchObject({ ok: false, code: "unchecked_content" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.refusals?.map((r) => r.runDir)).toEqual([widened.runDir]);
+    expect(judge.calls).toHaveLength(0);
+    expect(regradeFiles(clean)).toEqual([]);
+  });
+
+  it("every refused dir is listed: drift in one, unchecked content in another, both in a third; error.code is doc_drift", async () => {
+    const drifted = await keptRun({ author: withAppendix, assertYaml: WIDER });
+    writeFileSync(join(drifted.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const widened = await keptRun({ author: withAppendix, assertYaml: SCOPED });
+    const both = await keptRun({ author: withAppendix, assertYaml: SCOPED });
+    writeFileSync(join(both.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({
+      runDirs: [drifted.runDir, widened.runDir, both.runDir],
+      scenarioFile: widerScenario(),
+      makeJudge: judge.make,
+    });
+    expect(out).toMatchObject({ ok: false, kind: "runtime", code: "doc_drift" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.refusals?.map((r) => [r.runDir, r.code])).toEqual([
+      [drifted.runDir, "doc_drift"],
+      [widened.runDir, "unchecked_content"],
+      [both.runDir, "doc_drift"],
+      [both.runDir, "unchecked_content"],
+    ]);
+    expect(out.refusals?.[0].liveDocDrift).toEqual(REPORT_DRIFT);
+    for (const d of [drifted, widened, both]) expect(out.message).toContain(d.runDir);
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it("--allow-doc-drift alone does not admit unchecked content", async () => {
+    const k = await keptRun({ author: withAppendix, assertYaml: SCOPED });
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: widerScenario(),
+      makeJudge: judgeFactory(() => true).make,
+      allowDocDrift: true,
+    });
+    expect(out).toMatchObject({ ok: false, code: "unchecked_content" });
+  });
+
+  it("--allow-unchecked alone does not admit drift", async () => {
+    const k = await keptRun({ author: writeReport });
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, allowUnchecked: true }));
+    expect(out).toMatchObject({ ok: false, code: "doc_drift" });
+  });
+
+  it("with both flags: the assert whose widened document reads the drifted file is false, not scope_changed", async () => {
+    const k = await keptRun({ author: withAppendix, assertYaml: SCOPED });
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const out = await regradeRuns({
+      runDirs: [k.runDir],
+      scenarioFile: widerScenario(),
+      makeJudge: judgeFactory(() => true).make,
+      allowDocDrift: true,
+      allowUnchecked: true,
+    });
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].assertions[0].docMatchesLive).toBe(false);
+    expect(out.runs[0].docMatchesLive).toBe(false);
+    expect(out.runs[0].liveDocDrift).toEqual(REPORT_DRIFT);
+    expect(out.runs[0].uncheckedSections).toEqual([APPENDIX_UNCHECKED]);
+  });
+
+  it("--allow-doc-drift with no drift changes nothing: liveDocDrift is empty and the value stays true", async () => {
+    const k = await keptRun({ author: writeReport });
+    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, allowDocDrift: true }));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].liveDocDrift).toEqual([]);
+    expect(out.runs[0].docMatchesLive).toBe(true);
+  });
+
+  it("a run with no live fingerprint at all only warns about a widened scope: nothing to measure against", async () => {
+    const k = await keptRun({ author: withAppendix, assertYaml: SCOPED });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    for (const a of r.assertions) delete a.judgedDoc;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const stderr = captureStderr();
+    let out;
+    try {
+      out = await regradeRuns({ runDirs: [k.runDir], scenarioFile: widerScenario(), makeJudge: judgeFactory(() => true).make });
+    } finally {
+      stderr.restore();
+    }
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].docMatchesLive).toBe("unknown");
+    expect(out.runs[0].uncheckedSections).toEqual([]);
+    expect(stderr.text()).toContain("assert 0: unknown");
+  });
+
+  it("a blind assert beside a comparable sibling is measured against the sibling's rebuilt document", async () => {
+    // The asymmetry with an all-blind run (warned only): here there IS a rebuilt live document, and the blind
+    // assert's notes.md is in none of it.
+    const UNSCOPED_ALL = `  - semantic_matches:\n      rubric: ["the outputs name the risk"]\n`;
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "notes.md"), "side notes\n");
+      },
+      assertYaml: `${SCOPED}${UNSCOPED_ALL}`,
+    });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    delete r.assertions[1].judgedDoc;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    expect(out).toMatchObject({ ok: false, code: "unchecked_content" });
+    if (out.ok) throw new Error("expected a refusal");
+    expect(out.message).toContain("assert 1: authored outputs/notes.md");
+  });
+
+  it("a smaller --authored-total-bytes is never an unchecked refusal: it can only drop content the live judge read", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "notes.md"), `${"n".repeat(600)}\n`);
+      },
+      assertYaml: `${SCOPED}  - semantic_matches:\n      rubric: ["the outputs name the risk"]\n`,
+    });
+    const out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make, authoredTotalBytes: 300 }));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].uncheckedSections).toEqual([]);
+    for (const a of out.runs[0].assertions) expect(["scope_changed", "not_graded"]).toContain(a.docMatchesLive);
+    // The cut content never reaches a judge: an assert whose evidence a smaller budget truncates refuses it, so no
+    // truncated section is ever graded (and none needs a truncation exemption).
+    expect(out.runs[0].assertions.map((a) => [a.docMatchesLive, a.semanticEvidence?.reason])).toEqual([
+      ["scope_changed", "graded"],
+      ["not_graded", "evidence_incomplete"],
+    ]);
+  });
+
+  it("a failure writing a regrade file after an earlier dir was graded returns the completed runs", async () => {
+    const a = await keptRun({ author: writeReport });
+    const b = await keptRun({ author: writeReport });
+    writeFileSync(join(b.runDir, "turns", "1", "regrade"), "a file where the regrade dir goes\n");
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [a.runDir, b.runDir], scenarioFile: a.scenarioFile, makeJudge: judge.make });
+    expect(out).toMatchObject({ ok: false, kind: "runtime" });
+    if (out.ok) throw new Error("expected a failure");
+    expect(out.code).toBeUndefined();
+    expect(out.message).toContain(b.runDir);
+    expect(out.completed?.map((r) => r.runDir)).toEqual([a.runDir]);
+    expect(regradeFiles(a)).toHaveLength(1);
+    expect(judge.calls).toHaveLength(2); // the second dir was graded (and paid) before its write failed
+  });
+});
+
+// The covered `--output-format json` surface (SPEC §12): pinned two ways — against the published schema
+// (permissive), and against a copy strictened at the frame and run levels, so a key emitted without a schema
+// update fails too — plus exact key sets.
+const regradeSchema = JSON.parse(readFileSync(resolve("schema/regrade.json"), "utf8")) as Record<string, unknown>;
+/** additionalProperties:false at each branch's frame and at the `runs[]` entry (`definitions.Run`). The assertion
+ *  entry is NOT closed: only the keys the contract names are covered there. */
+function strictRegradeSchema(): Record<string, unknown> {
+  const s = JSON.parse(JSON.stringify(regradeSchema)) as {
+    $id?: string;
+    oneOf: Array<{ additionalProperties?: boolean }>;
+    definitions: { Run: { additionalProperties?: boolean } };
+  };
+  delete s.$id; // ajv rejects two compilations under one $id
+  for (const branch of s.oneOf) branch.additionalProperties = false;
+  s.definitions.Run.additionalProperties = false;
+  return s as unknown as Record<string, unknown>;
+}
+const ajv = new Ajv({ strict: true });
+const validatePublished = ajv.compile(regradeSchema);
+const validateStrict = ajv.compile(strictRegradeSchema());
+const checkSchema = (env: unknown): void => {
+  expect(validatePublished(env), ajv.errorsText(validatePublished.errors)).toBe(true);
+  expect(validateStrict(env), ajv.errorsText(validateStrict.errors)).toBe(true);
+};
+
 describe("regrade: JSON envelope", () => {
   it("is payload-shaped: {tool, version, command, ok, runs[], error:null}", async () => {
     const k = await keptRun({ author: writeReport });
@@ -1076,6 +1329,163 @@ describe("regrade: JSON envelope", () => {
     expect(env.runs[0]).toMatchObject({ pass: false, docMatchesLive: true });
     expect(env.runs[0].regradeFile).toContain(join("turns", "1", "regrade"));
     expect(env.runs[0].assertions[0]).toMatchObject({ assertionIndex: 0, pass: false });
+    checkSchema(env);
+  });
+
+  it("schema/regrade.json ajv strict-compiles", () => {
+    expect(typeof validatePublished).toBe("function");
+  });
+
+  it("a rich envelope matches the schema and the covered key sets exactly", async () => {
+    // Dir 1: the scope widened (scope_changed, a differing and an unchecked section). Dir 2: an accepted drift and a
+    // judge outage (judge-invalid, unpriced). The scenario carries a non-semantic assert (notRegraded).
+    const one = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+      assertYaml: SCOPED,
+    });
+    const two = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+      assertYaml: WIDER,
+    });
+    writeFileSync(join(two.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    let calls = 0;
+    const flaky = (o?: { model?: string }): SemanticJudge => {
+      const inner = judgeFactory(() => true).make(o);
+      const j: SemanticJudge = async (rubric, answer) => {
+        if (++calls > 1) {
+          j.lastCostUsd = undefined;
+          throw new Error("judge transport down");
+        }
+        const r = await inner(rubric, answer);
+        j.lastCostUsd = inner.lastCostUsd;
+        j.lastUsage = inner.lastUsage;
+        return r;
+      };
+      j.model = inner.model;
+      j.promptHash = inner.promptHash;
+      return j;
+    };
+    const out = await regradeRuns({
+      runDirs: [one.runDir, two.runDir],
+      scenarioFile: scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-env-")), `${WIDER}  - file_exists: outputs/report.md\n`),
+      makeJudge: flaky,
+      allowDocDrift: true,
+      allowUnchecked: true,
+    });
+    if (!out.ok) throw new Error(out.message);
+    const env = JSON.parse(regradeEnvelope(out));
+    checkSchema(env);
+
+    expect(Object.keys(env).sort()).toEqual(["command", "error", "judgeCostUsd", "ok", "runs", "tool", "unpricedGrades", "version"]);
+    const RUN_KEYS = [
+      "assertions",
+      "authoredCapture",
+      "differingSections",
+      "docMatchesLive",
+      "invalidGrades",
+      "liveDocDrift",
+      "notRegraded",
+      "pass",
+      "regradeFile",
+      "runDir",
+      "scenarioSha256",
+      "turn",
+      "uncheckedCount",
+      "uncheckedSections",
+      "unpricedGrades",
+    ];
+    expect(Object.keys(env.runs[0]).sort()).toEqual([...RUN_KEYS, "judgeCostUsd"].sort());
+    expect(Object.keys(env.runs[1]).sort()).toEqual(RUN_KEYS);
+    const [r1, r2] = env.runs;
+    expect(r1).toMatchObject({ docMatchesLive: "scope_changed", uncheckedCount: 1, liveDocDrift: [] });
+    expect(r1.uncheckedCount).toBe(r1.uncheckedSections.length);
+    expect(r1.differingSections).toContainEqual({ assertionIndex: 0, kind: "authored", path: "outputs/appendix.md", change: "added" });
+    expect(r1.notRegraded).toEqual([{ assertionIndex: 1, keys: ["file_exists"] }]);
+    expect(r1.authoredCapture).toMatchObject({ source: "persisted" });
+    expect(r2).toMatchObject({ docMatchesLive: false, invalidGrades: 1, unpricedGrades: 1, uncheckedCount: 0 });
+    expect(r2.liveDocDrift).toEqual([
+      { liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/report.md", change: "changed" }] },
+    ]);
+    // TRIPWIRE, not a contract: the assertion entry's covered keys are assertionIndex, docMatchesLive, pass,
+    // judgeInvalid, judgeModel, judgeCostUsd and semanticClaims (SPEC §12); the rest follow the RunResult
+    // assertion entry, which is not pinned field by field. A new key here is a prompt to review, then update.
+    // `evidence` rides in from the shared assertion result (`evaluate`), as on RunResult.assertions[].
+    const ASSERTION_KEYS_GRADED = [
+      "assertion",
+      "assertionIndex",
+      "docMatchesLive",
+      "evidence",
+      "judgeCostUsd",
+      "judgeModel",
+      "judgePromptHash",
+      "judgeUsage",
+      "judgedDoc",
+      "pass",
+      "semanticClaims",
+      "semanticEvidence",
+    ];
+    const ASSERTION_KEYS_INVALID = [
+      "assertion",
+      "assertionIndex",
+      "docMatchesLive",
+      "judgeInvalid",
+      "judgeModel",
+      "judgePromptHash",
+      "judgedDoc",
+      "message",
+      "pass",
+    ];
+    expect(Object.keys(r1.assertions[0]).sort()).toEqual(ASSERTION_KEYS_GRADED);
+    expect(Object.keys(r2.assertions[0]).sort()).toEqual(ASSERTION_KEYS_INVALID);
+    expect(r2.assertions[0].judgeInvalid).toBe(true);
+  });
+
+  it("with no grade priced, the top-level judgeCostUsd is absent and the document still validates", async () => {
+    const k = await keptRun({ author: writeReport });
+    const unpriced = (o?: { model?: string }): SemanticJudge => {
+      const inner = judgeFactory(() => true).make(o);
+      const j: SemanticJudge = async (rubric, answer) => inner(rubric, answer);
+      j.model = inner.model;
+      j.promptHash = inner.promptHash;
+      return j;
+    };
+    const out = await regradeRuns(opts(k, { makeJudge: unpriced }));
+    if (!out.ok) throw new Error(out.message);
+    const env = JSON.parse(regradeEnvelope(out));
+    expect(Object.keys(env).sort()).toEqual(["command", "error", "ok", "runs", "tool", "unpricedGrades", "version"]);
+    checkSchema(env);
+  });
+
+  it("the refusal envelopes validate: usage, runtime, a coded refusal with refusals[], a write failure with runs[]", async () => {
+    checkSchema(JSON.parse(jsonError("regrade", "usage", "usage: regrade …")));
+    checkSchema(JSON.parse(jsonError("regrade", "runtime", "regrade: evidence unavailable")));
+    const k = await keptRun({ author: writeReport });
+    writeFileSync(join(k.workRoot, "outputs", "report.md"), REPORT.replace("concentration", "churn"));
+    const refused = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    if (refused.ok) throw new Error("expected a refusal");
+    const coded = JSON.parse(regradeErrorEnvelope(refused));
+    expect(coded).toMatchObject({ ok: false, error: { category: "runtime", code: "doc_drift" }, refusals: [{ code: "doc_drift" }] });
+    checkSchema(coded);
+
+    const a = await keptRun({ author: writeReport });
+    const b = await keptRun({ author: writeReport });
+    writeFileSync(join(b.runDir, "turns", "1", "regrade"), "x\n");
+    const failed = await regradeRuns({
+      runDirs: [a.runDir, b.runDir],
+      scenarioFile: a.scenarioFile,
+      makeJudge: judgeFactory(() => true).make,
+    });
+    if (failed.ok) throw new Error("expected a failure");
+    const partial = JSON.parse(regradeErrorEnvelope(failed));
+    expect(partial.runs).toHaveLength(1);
+    expect(partial.error.code).toBeUndefined();
+    checkSchema(partial);
   });
 });
 
@@ -1115,6 +1525,39 @@ describe.skipIf(!existsSync(CLI))("regrade CLI", () => {
     delete r.authoredCapture;
     writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
     const j = cli(["regrade", k.runDir, "--scenario", k.scenarioFile, "--allow-doc-drift", "--output-format", "json"]);
+    expect(j.code).toBe(2);
+    expect(JSON.parse(j.stdout)).toMatchObject({ command: "regrade", ok: false, error: { category: "runtime" } });
+  });
+
+  it("a coded refusal reaches stdout with error.code and refusals[], and validates against the schema", async () => {
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "appendix.md"), "appendix\n");
+      },
+      assertYaml: SCOPED,
+    });
+    const wider = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-cli-")), WIDER);
+    const j = cli(["regrade", k.runDir, "--scenario", wider, "--output-format", "json"]);
+    expect(j.code).toBe(2);
+    const env = JSON.parse(j.stdout);
+    expect(env).toMatchObject({
+      ok: false,
+      error: { category: "runtime", code: "unchecked_content" },
+      refusals: [{ code: "unchecked_content" }],
+    });
+    checkSchema(env);
+    const t = cli(["regrade", k.runDir, "--scenario", wider]);
+    expect(t.code).toBe(2);
+    expect(t.stderr).toContain("--allow-unchecked");
+  });
+
+  it("--allow-unchecked is accepted (the refusal that follows is the run's, not a usage error)", async () => {
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    delete r.authoredCapture;
+    writeFileSync(k.resultPath, JSON.stringify(r, null, 2));
+    const j = cli(["regrade", k.runDir, "--scenario", k.scenarioFile, "--allow-unchecked", "--output-format", "json"]);
     expect(j.code).toBe(2);
     expect(JSON.parse(j.stdout)).toMatchObject({ command: "regrade", ok: false, error: { category: "runtime" } });
   });
