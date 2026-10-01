@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, asserting artifacts, egress, or sub-agent dispatch, measuring how long each tool call took (toolDurations / trace), or debugging a failed run or verdict from its result.json or transcript. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. Also for comparing two versions of a skill before merging an edit — did the change make its answers worse? (`eval`: paired, interleaved A/B of two plugin versions, pinned models). NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold / critique / stats / eval commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 4.2.0
-  tracks-harness: cowork-harness 4.2.0 (baseline desktop-2.16120.0)
+  version: 4.2.1
+  tracks-harness: cowork-harness 4.2.1 (baseline desktop-2.16120.0)
 ---
 
 # cowork-harness
@@ -26,7 +26,7 @@ allowlist). This skill exists mostly to keep you out of those traps — the *Inv
 full landmine catalog in [`references/gotchas.md`](references/gotchas.md) are the highest-value part.
 Read them.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 4.2.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 4.2.1` (baseline
 > `desktop-2.16120.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -43,7 +43,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 4.2.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^4.2.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^4.2.0"`. **Pin `@^4.2.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 4.2.1**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^4.2.1" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^4.2.1"`. **Pin `@^4.2.1`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
