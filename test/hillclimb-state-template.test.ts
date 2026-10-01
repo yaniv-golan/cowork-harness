@@ -59,7 +59,8 @@ describe("stateTemplate", () => {
       harnessPaths: [],
       decider: false,
     });
-    expect(withFloat.metricsMd).toMatch(/`words`.*lower is better.*no upper bound/s);
+    // A scenario declares `min` only when the floor is not 0, so the legend states the floor either way.
+    expect(withFloat.metricsMd).toMatch(/`words`.*lower is better.*no upper bound, floor 0\./s);
     expect(withFloat.metricsMd).toMatch(/measured rows only/);
   });
 
