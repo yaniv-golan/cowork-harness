@@ -39,6 +39,27 @@ describe("variantSnapshot", () => {
     expect(s.liveDiffers).toBe(true);
   });
 
+  it("a variant with NO rows re-takes a snapshot the live plugin has moved past: a refused run must not freeze an old round", () => {
+    variantSnapshot(live, opts());
+    writeFileSync(join(live, "skills", "x", "SKILL.md"), "round 2");
+    const s = variantSnapshot(live, opts({ variantRan: false }));
+    expect(s).toMatchObject({ created: true, liveDiffers: false });
+    expect(readFileSync(join(s.dir, "skills", "x", "SKILL.md"), "utf8")).toBe("round 2");
+  });
+
+  it("a file ADDED to the live plugin also counts as moved on", () => {
+    variantSnapshot(live, opts());
+    writeFileSync(join(live, "skills", "x", "extra.md"), "new");
+    const s = variantSnapshot(live, opts({ variantRan: false }));
+    expect(s.created).toBe(true);
+    expect(existsSync(join(s.dir, "skills", "x", "extra.md"))).toBe(true);
+  });
+
+  it("a variant with no rows reuses a snapshot that still matches the live plugin", () => {
+    variantSnapshot(live, opts());
+    expect(variantSnapshot(live, opts({ variantRan: false })).created).toBe(false);
+  });
+
   it("a variant that already ran but whose snapshot is gone is refused: re-running would measure the live dir", () => {
     expect(() => variantSnapshot(live, opts({ variantRan: true }))).toThrow(UsageError);
     expect(() => variantSnapshot(live, opts({ variantRan: true }))).toThrow(/snapshot .* is missing/);

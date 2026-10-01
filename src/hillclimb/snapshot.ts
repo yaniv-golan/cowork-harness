@@ -55,8 +55,12 @@ export function variantSnapshot(
   const dir = join(opts.snapshotRoot, opts.flowHash, opts.variant, basename(live));
   const marker = `${dir}.complete`;
   if (existsSync(dir) && existsSync(marker)) {
-    const rels = files(dir);
-    return { dir, created: false, liveDiffers: digest(dir, rels) !== digest(live, rels) };
+    // Over both trees, so a file added to the live plugin counts as a difference too.
+    const rels = [...new Set([...files(dir), ...files(live)])].sort();
+    const liveDiffers = digest(dir, rels) !== digest(live, rels);
+    // A variant with no rows has measured nothing yet: its snapshot (left by a refused run) is re-taken
+    // when the live plugin moved on, or the pass would measure an older round under this variant's name.
+    if (opts.variantRan || !liveDiffers) return { dir, created: false, liveDiffers };
   }
   if (opts.variantRan) {
     if (existsSync(dir))
@@ -67,7 +71,8 @@ export function variantSnapshot(
       `variant ${opts.variant} already has rows, but its plugin snapshot ${tildeify(dir)} is missing: running it now would measure the live plugin, which may hold a later round — restore the snapshot or re-run this variant into a fresh flow`,
     );
   }
-  rmSync(dir, { recursive: true, force: true }); // an interrupted copy of a variant that never ran
+  rmSync(marker, { force: true }); // first: a crash mid-replace must not leave a marker vouching for it
+  rmSync(dir, { recursive: true, force: true }); // an interrupted or outdated copy of a variant that never ran
   const tmp = `${dir}.tmp-${randomBytes(6).toString("hex")}`;
   try {
     snapshotDirArm(live, tmp, false, `variant ${opts.variant}`);
