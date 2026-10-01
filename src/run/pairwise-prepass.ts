@@ -211,8 +211,17 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         break;
       }
     }
-    // Past the deadline the assert has no result at all ("judge not run"), never a partial set of comparisons.
-    if (ctx.deadlinePassed) break;
+    // Past the deadline the assert has no result at all ("judge not run"), never a partial set of comparisons — but
+    // what the comparisons already made spent is still recorded.
+    if (ctx.deadlinePassed) {
+      if (judged) {
+        if (cost !== undefined) ctx.judgeCosts.set(a, cost);
+        if (usage !== undefined) ctx.judgeUsages.set(a, usage);
+        ctx.judgeModels.set(a, model ?? "unknown");
+        ctx.judgeAttempts.set(a, 1 + retries);
+      }
+      break;
+    }
     ctx.pairwiseResults.set(a, outcomes);
     if (!judged) continue;
     ctx.judgeAttempts.set(a, 1 + retries);

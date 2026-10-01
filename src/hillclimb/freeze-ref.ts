@@ -2,7 +2,9 @@
 // row. ONE selector and ONE freeze, shared by a baseline pass's post-pass sweep and `hillclimb freeze-ref`, so the
 // reference a flow judges against never depends on which of them wrote it.
 
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
 import { loadCases, selectCases } from "./cases.js";
@@ -69,6 +71,8 @@ export interface FreezeCaseInput {
   /** The case's scenario file (what the run answered). */
   scenarioFile: string;
   assertions: readonly Assertion[];
+  /** The scenario's prompt (the task the reference answers). */
+  prompt: string;
   /** The variant's results.jsonl text. */
   results: string | null;
   secrets: string[];
@@ -90,6 +94,13 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
   if (existing.status === "integrity")
     return { status: "refused", caseId: i.caseId, message: `the reference for case ${i.caseId} in ${store} is damaged: ${existing.why}` };
   if (existing.status === "ok") {
+    // A reference for another task is not this case's answer: never compared, never extended — the flow must restart.
+    if (existing.taskSha256 !== createHash("sha256").update(i.prompt, "utf8").digest("hex"))
+      return {
+        status: "refused",
+        caseId: i.caseId,
+        message: `case ${i.caseId}: its reference in ${store} was frozen for a different prompt — start a fresh flow dir for the changed scenario`,
+      };
     const lacking = keys.filter((k) => readRefDoc(store, i.caseId, k).status !== "ok");
     if (!lacking.length) return { status: "exists", caseId: i.caseId, message: `case ${i.caseId}: already frozen in ${store}` };
     // Add the lacking keys from the entry's own run: a store entry never mixes documents of two runs. Its recorded
@@ -119,15 +130,36 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
       caseId: i.caseId,
       message: `case ${i.caseId}: no good row in ${i.variant}/results.jsonl to freeze from (status ok, not an agent failure, verdict and pairwise evidence measured)`,
     };
-  const row = rows[0]!;
-  const runDir = rowRunDir(row);
-  if (runDir === undefined)
-    return {
-      status: "refused",
-      caseId: i.caseId,
-      message: `case ${i.caseId}: the run of rep ${String(row.rep)} (${String((row.meta as Record<string, unknown>).run_id)}) is not under the runs root — pass the --run-dir it was written to, or re-run the variant`,
-    };
-  return run(i, runDir, Number(row.rep), store);
+  // The lowest-rep row whose run is still here and DELIVERED its output: a stalled or deliverable-less run would make
+  // every later variant "win" against nothing. The row says neither, so the run's own result.json decides.
+  const skipped: string[] = [];
+  for (const row of rows) {
+    const runId = String((row.meta as Record<string, unknown>).run_id);
+    const runDir = rowRunDir(row);
+    if (runDir === undefined) {
+      skipped.push(`rep ${String(row.rep)}: its run ${runId} is not under the runs root (pass the --run-dir it was written to)`);
+      continue;
+    }
+    const outcome = runOutcome(runDir);
+    if (outcome === undefined || !outcome.startsWith("delivered_")) {
+      skipped.push(`rep ${String(row.rep)}: its run did not deliver an output (${outcome ?? "no recorded outcome"})`);
+      continue;
+    }
+    return run(i, runDir, Number(row.rep), store);
+  }
+  return { status: "refused", caseId: i.caseId, message: `case ${i.caseId}: no good row's run can be frozen — ${skipped.join("; ")}` };
+}
+
+/** The run's recorded `outcome`, from its latest turn's result.json. */
+function runOutcome(runDir: string): string | undefined {
+  try {
+    const turn = latestTurn(runDir);
+    if (turn === undefined) return undefined;
+    const r = JSON.parse(readFileSync(turnArtifactPath(runDir, turn, "result.json"), "utf8")) as { outcome?: unknown };
+    return typeof r.outcome === "string" ? r.outcome : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function run(i: FreezeCaseInput, runDir: string, rep: number, store: string, allowUnchecked = false): FreezeCaseOutcome {
@@ -135,8 +167,10 @@ function run(i: FreezeCaseInput, runDir: string, rep: number, store: string, all
     { runDir, scenarioFile: i.scenarioFile, out: store, caseId: i.caseId, allowUnchecked },
     { compose: (d, f) => composeFromRunDir(d, f, i.secrets, { command: i.command, variant: i.variant, rep }) },
   );
-  // freezeFromRun prefixes its own command name; this is not `ref freeze`.
-  const message = o.message.replace(/^ref freeze: /, "");
+  // freezeFromRun speaks as `ref freeze`; this is not it, and it takes no --allow-unchecked.
+  const message = o.message
+    .replace(/^ref freeze: /, "")
+    .replace(/; pass --allow-unchecked to freeze it anyway, marked unchecked$/, " — re-run the variant to record one");
   if (o.status === "frozen" || o.status === "added") return { status: o.status, caseId: i.caseId, rep, message };
   if (o.status === "exists") return { status: "exists", caseId: i.caseId, message };
   return { status: "refused", caseId: i.caseId, message };
@@ -165,14 +199,16 @@ export function freezeRefCommand(i: {
   const flowAbs = resolve(i.cwd, i.flowArg);
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${i.flowArg}`);
   // Read-only checks first: a variant with no rows has nothing to freeze, and opening its writer would create files.
-  const results = readVariantFileIfPresent(i.flowArg, i.variant, "results.jsonl", i.cwd);
-  if (results === null) throw new UsageError(`${join(i.flowArg, i.variant)} has no results.jsonl — run the variant first`);
+  if (readVariantFileIfPresent(i.flowArg, i.variant, "results.jsonl", i.cwd) === null)
+    throw new UsageError(`${join(i.flowArg, i.variant)} has no results.jsonl — run the variant first`);
   const { cases: all } = loadCases(resolve(i.cwd, i.target));
   const cases = selectCases(all, [...i.caseIds]).filter((c) => (c.scenario.assert ?? []).some((a) => a.semantic_pairwise !== undefined));
   if (!cases.length) throw new UsageError(`no selected case has a semantic_pairwise assert — nothing to freeze`);
   const release = FlowWriter.open(i.flowArg, i.variant, { cwd: i.cwd, secrets: i.secrets }).lock();
   const report: FreezeRefReport = { exitCode: 0, frozen: [], added: [], exists: [], refused: [] };
   try {
+    // Read under the lock, so the rows are the ones no live run of the variant is still appending to.
+    const results = readVariantFileIfPresent(i.flowArg, i.variant, "results.jsonl", i.cwd);
     for (const c of cases) {
       const o = freezeCaseRef({
         flowAbs,
@@ -180,6 +216,7 @@ export function freezeRefCommand(i: {
         caseId: c.id,
         scenarioFile: c.file,
         assertions: c.scenario.assert,
+        prompt: c.scenario.prompt,
         results,
         secrets: i.secrets,
         command: "hillclimb freeze-ref",

@@ -16,6 +16,10 @@ import { effectiveTier, runOutDir, scenarioInputFindings, sessionOriginSources }
 import { pairwiseRefsRefusal } from "../refs/preflight.js";
 import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { freezeCaseRef } from "./freeze-ref.js";
+import { readRefEntry } from "../refs/store.js";
+import { createHash } from "node:crypto";
+
+const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 import { flowHasPairwise } from "./grade-keys.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
@@ -258,10 +262,16 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
         { caseId: o.caseId, refsFor: () => o.refs, neutralRefs: new Set(o.neutralRefs), gateRefs: new Set(o.gateRefs) },
         sessionOriginSources(sub, "(inline)"),
       );
-      if (pw)
-        throw new UsageError(
-          `case ${c.id}: ${pw}\n  the baseline reference is frozen by a baseline pass from its first good row, or now with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``,
-        );
+      if (pw) {
+        // The repair depends on WHY: an absent entry (or one lacking a key) can be frozen; a damaged one, or one frozen
+        // for another prompt, never is — the flow restarts.
+        const e = readRefEntry(join(resolve(deps.cwd, flowArg), BASELINE_REF, "ref"), c.id);
+        const freezable = e.status === "missing" || (e.status === "ok" && e.taskSha256 === sha256(c.scenario.prompt));
+        const hint = freezable
+          ? `the baseline reference is frozen by a baseline pass from its lowest-rep good row, or now with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``
+          : `a frozen reference is never repaired in place: start a fresh flow dir`;
+        throw new UsageError(`case ${c.id}: ${pw}\n  ${hint}`);
+      }
     }
   }
 
@@ -367,6 +377,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
                 caseId: c.id,
                 scenarioFile: c.file,
                 assertions: c.scenario.assert,
+                prompt: c.scenario.prompt,
                 results,
                 secrets: [...deps.secrets],
                 command: "hillclimb run",

@@ -13,6 +13,9 @@ import { parseHillclimbRunArgs } from "../src/hillclimb/args.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
+import { loadCases } from "../src/hillclimb/cases.js";
+import { freezeRef } from "../src/refs/store.js";
+import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import type { SessionConfig } from "../src/session.js";
 import type { RunResult, Scenario } from "../src/types.js";
 
@@ -506,6 +509,25 @@ describe("runHillclimbCommand", () => {
         expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
         // The scenario's own store is never consulted.
         expect(text).not.toContain("refstore");
+      });
+
+      it("a baseline reference frozen for another prompt is refused with 'start a fresh flow dir', not a freeze-ref circle", async () => {
+        pairwise();
+        const sc = loadCases(join(cwd, "evals")).cases[0]!.scenario;
+        freezeRef(
+          join(cwd, "flow", "baseline", "ref"),
+          "alpha",
+          { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
+          { [pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!)]: "OLD ANSWER" },
+          { harnessVersion: "t", composerId: "c", scenario: "alpha", taskSha256: "0".repeat(64) },
+        );
+        const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
+        expect(r.exitCode).toBe(2);
+        expect(calls).toEqual([]);
+        const text = err.join("\n");
+        expect(text).toMatch(/frozen for a different task/);
+        expect(text).toContain("start a fresh flow dir");
+        expect(text).not.toContain("hillclimb freeze-ref");
       });
 
       it("a baseline pass is neutral against its own missing reference, so it runs — with the flow's setup, not refs:", async () => {

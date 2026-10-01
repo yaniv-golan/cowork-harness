@@ -1859,7 +1859,7 @@ export interface RunResult {
     /** How the judge's call was made: `isolation` (the level of isolation from the operator's own Claude Code setup —
      *  no tools, safe mode, user settings only) and the host CLI's version. Absent for an injected judge. Live lane only. */
     judgeTransport?: { isolation: string; cliVersion?: string; strictMcp?: false };
-    /** How many calls the judge took for this assert beyond its retries: 1 plus every retry it ran. For
+    /** How many calls the judge took for this assert: 1 plus every retry it ran. For
      *  `semantic_matches`, 1 or 2 (a malformed first grade is retried once). For `semantic_pairwise`, 1 plus the
      *  retries summed over every comparison and order, so `judgeAttempts - 1` is the number of retries. Absent
      *  where the judge never ran. Live lane only. */

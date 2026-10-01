@@ -129,6 +129,7 @@ describe.runIf(POSIX)("hillclimb pairwise: baseline → freeze → a later varia
       caseId: "alpha",
       scenarioFile: file,
       assertions: sc.assert,
+      prompt: sc.prompt,
       results: res,
       secrets: [],
       command: "hillclimb run",
@@ -148,6 +149,7 @@ describe.runIf(POSIX)("hillclimb pairwise: baseline → freeze → a later varia
         caseId: "alpha",
         scenarioFile: file,
         assertions: sc.assert,
+        prompt: sc.prompt,
         results: res,
         secrets: [],
         command: "hillclimb run",
@@ -178,6 +180,7 @@ describe.runIf(POSIX)("hillclimb pairwise: baseline → freeze → a later varia
       caseId: "alpha",
       scenarioFile: join(dir, "evals", "alpha.yaml"),
       assertions,
+      prompt: "what is the answer?",
       results: res,
       secrets: [],
       command: "hillclimb freeze-ref" as const,
@@ -215,6 +218,7 @@ describe.runIf(POSIX)("hillclimb pairwise: baseline → freeze → a later varia
       caseId: "alpha",
       scenarioFile: file,
       assertions: sc.assert,
+      prompt: sc.prompt,
       secrets: [],
       command: "hillclimb run" as const,
     };
@@ -327,5 +331,62 @@ describe.runIf(POSIX)("hillclimb freeze-ref", () => {
     writeFileSync(join(dir, "flow", "baseline", "results.jsonl"), "");
     writeFileSync(join(dir, "flow", "baseline", ".lock"), JSON.stringify({ pid: process.pid }));
     expect(() => cmd("baseline")).toThrow(/lock|running/i);
+  });
+});
+
+describe.runIf(POSIX)("freeze selection reads the run itself", () => {
+  const setResultField = (outDir: string, patch: Record<string, unknown>) => {
+    const p = join(outDir, "turns", "1", "result.json");
+    writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), ...patch }));
+  };
+
+  it("skips a lower rep whose run delivered nothing, and refuses when no run delivered", async () => {
+    const file = scenario(ONE);
+    const sc = parseScenarioFile(file);
+    const flow = join(dir, "flow");
+    mkdirSync(join(flow, "baseline"), { recursive: true });
+    const opts = { pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)) };
+    const stalled = await executeScenario(sc, opts);
+    const good = await executeScenario(sc, opts);
+    setResultField(stalled.outDir, { outcome: "no_deliverable" });
+    const input = (res: string) => ({
+      flowAbs: flow,
+      variant: "baseline",
+      caseId: "alpha",
+      scenarioFile: file,
+      assertions: sc.assert,
+      prompt: sc.prompt,
+      results: res,
+      secrets: [],
+      command: "hillclimb run" as const,
+    });
+    expect(freezeCaseRef(input(results(rowFor(stalled.outDir, 0))))).toMatchObject({
+      status: "refused",
+      message: expect.stringMatching(/rep 0: its run did not deliver an output \(no_deliverable\)/),
+    });
+    expect(freezeCaseRef(input(results(rowFor(stalled.outDir, 0), rowFor(good.outDir, 1))))).toMatchObject({ status: "frozen", rep: 1 });
+  });
+
+  it("an entry frozen for another prompt is refused, never reported as exists", async () => {
+    const file = scenario(ONE);
+    const sc = parseScenarioFile(file);
+    const flow = join(dir, "flow");
+    mkdirSync(join(flow, "baseline"), { recursive: true });
+    const run = await executeScenario(sc, { pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)) });
+    const base = {
+      flowAbs: flow,
+      variant: "baseline",
+      caseId: "alpha",
+      scenarioFile: file,
+      assertions: sc.assert,
+      results: results(rowFor(run.outDir, 0)),
+      secrets: [],
+      command: "hillclimb run" as const,
+    };
+    expect(freezeCaseRef({ ...base, prompt: sc.prompt }).status).toBe("frozen");
+    expect(freezeCaseRef({ ...base, prompt: "a different question" })).toMatchObject({
+      status: "refused",
+      message: expect.stringMatching(/frozen for a different prompt — start a fresh flow dir/),
+    });
   });
 });

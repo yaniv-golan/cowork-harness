@@ -510,6 +510,32 @@ describe("semantic_pairwise — composedDoc, attempts, deadline", () => {
     expect(evaluate([a], c)[0]!.judgeAttempts).toBe(1);
   });
 
+  it("a deadline passing between comparisons keeps what was already spent, and no partial result", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "BASE");
+    freezeFrom(join(tmp, "v3"), a, "V3");
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    let deadline = Date.now() + 60_000;
+    const judge: (m: string) => PairwiseJudge = (model) => async () => {
+      deadline = Date.now() - 1; // the first comparison took the rest of the budget
+      return { outcome: "win", value: 1, order: "candidate_first", model, costUsd: 0.03 };
+    };
+    const o = opts(a, {
+      refsFor: () => [
+        { name: "baseline", store: join(tmp, "baseline") },
+        { name: "v3", store: join(tmp, "v3") },
+      ],
+      judgeFor: judge,
+    });
+    Object.defineProperty(o, "deadline", { get: () => deadline });
+    await runPairwiseJudges([a], c, o);
+    expect(c.deadlinePassed).toBe(true);
+    const [r] = evaluate([a], c);
+    expect(r!.pairwise).toBeUndefined();
+    expect(r!.judgeCostUsd).toBeCloseTo(0.03);
+    expect(r!.judgeAttempts).toBe(1);
+  });
+
   it("a deadline already past starts no comparison: the assert has no result and the context says why", async () => {
     const a = assertOf();
     freezeFrom(join(tmp, "baseline"), a, "BASE");
