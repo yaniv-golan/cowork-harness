@@ -52,6 +52,34 @@ describe("stateTemplateFor", () => {
   });
 });
 
+describe("stateTemplateFor --skill", () => {
+  const multi = () => {
+    const plugin = join(cwd, "plug");
+    for (const n of ["a", "b"]) {
+      mkdirSync(join(plugin, "skills", n), { recursive: true });
+      writeFileSync(join(plugin, "skills", n, "SKILL.md"), `---\nname: ${n}\n---\n${n}\n`);
+    }
+    mkdirSync(join(cwd, "evals"));
+    writeFileSync(join(cwd, "evals", "_session.yaml"), `model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+    writeFileSync(join(cwd, "evals", "a.yaml"), "name: a\nbaseline: latest\nsession: ./_session.yaml\nfidelity: container\nprompt: p\n");
+  };
+
+  it("a known skill is accepted and changes nothing in the skeleton: harness_skill is the runner's to write", () => {
+    multi();
+    const t = stateTemplateFor("evals", cwd, {}, "b");
+    expect(t).toEqual(stateTemplateFor("evals", cwd, {}));
+    expect(t.state).not.toHaveProperty("harness_skill");
+  });
+
+  it("an unknown skill is a usage error naming the plugin's skills", () => {
+    multi();
+    expect(() => stateTemplateFor("evals", cwd, {}, "nope")).toThrow(UsageError);
+    expect(() => stateTemplateFor("evals", cwd, {}, "nope")).toThrow(
+      /--skill nope: no skills\/nope\/SKILL\.md under .* — available skills: a, b/,
+    );
+  });
+});
+
 describe("writeMetricsMd (state-template --flow)", () => {
   it("writes metrics.md into the flow dir, creating the dir", () => {
     expect(writeMetricsMd("flow", cwd, "# Metrics\n", []).status).toBe("written");
@@ -110,6 +138,15 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     const r = run();
     expect(r.stderr).toContain("--flow .claude/hillclimb/flow");
     expect(existsSync(join(cwd, ".claude", "hillclimb", "flow", "metrics.md"))).toBe(false);
+  });
+
+  it("an unknown --skill exits 2 before printing a skeleton", () => {
+    setup();
+    const r = run("--skill", "nope");
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    // The fixture plugin is a root-SKILL.md plugin: critique's refusal for --skill on one, not an unknown-flag error.
+    expect(r.stderr).toMatch(/--skill nope: .* is itself a skill folder/);
   });
 
   it("--flow writes metrics.md beside the skeleton and says so", () => {

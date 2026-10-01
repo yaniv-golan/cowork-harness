@@ -19,6 +19,7 @@ import { redactDeep } from "./flow.js";
 import { runHillclimbCommand } from "./run-command.js";
 import { termSafe } from "./runner.js";
 import { checkFlowDir, loadFlowSnapshot, type SchemaCheckReport } from "./schema-check.js";
+import { trackedSkill } from "./skill.js";
 import { stateTemplate, type StateTemplate } from "./state-template.js";
 import { HILLCLIMB_CHECK_USAGE, HILLCLIMB_STATE_TEMPLATE_USAGE, HILLCLIMB_USAGE } from "./usage.js";
 
@@ -46,10 +47,18 @@ export function checkReport(flowArg: string, cwd: string): { report: SchemaCheck
   return { report, warnings: headroom(snap).warnings, exitCode: report.errors ? 1 : 0 };
 }
 
-/** `hillclimb state-template`: the skeleton for the flow's cases, with the gate's files relative to cwd. */
-export function stateTemplateFor(target: string, cwd: string, env: NodeJS.ProcessEnv): StateTemplate {
+/** `hillclimb state-template`: the skeleton for the flow's cases, with the gate's files relative to cwd. A `skill`
+ *  (`--skill`) is checked against the live plugin with run's resolution — there is no snapshot yet — and refused
+ *  as run would refuse it; it adds nothing to the skeleton (`harness_skill` is the runner's to write). */
+export function stateTemplateFor(target: string, cwd: string, env: NodeJS.ProcessEnv, skill?: string): StateTemplate {
   const { cases } = loadCases(resolve(cwd, target));
   const prep = prepareCases(cases, { env });
+  if (skill !== undefined)
+    try {
+      trackedSkill(prep.lever, skill);
+    } catch (e) {
+      throw new UsageError((e as Error).message);
+    }
   return stateTemplate({
     cases: cases.map((c) => ({ assertions: c.scenario.assert ?? [] })),
     harnessPaths: prep.derivedPaths(cases).map((p) => relative(cwd, p)),
@@ -158,7 +167,11 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     try {
       p = parseArgs(
         rest,
-        withCommandGlobals({ booleans: [], values: ["--flow", "--output-format"], enums: { "--output-format": ["text", "json"] } }),
+        withCommandGlobals({
+          booleans: [],
+          values: sub === "check" ? ["--flow", "--output-format"] : ["--flow", "--skill", "--output-format"],
+          enums: { "--output-format": ["text", "json"] },
+        }),
       );
     } catch (e) {
       return usage((e as Error).message, sub === "check" ? HILLCLIMB_CHECK_USAGE : HILLCLIMB_STATE_TEMPLATE_USAGE);
@@ -189,7 +202,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       }
       if (p.positionals.length !== 1)
         return usage(`hillclimb state-template takes exactly one scenario file or directory`, HILLCLIMB_STATE_TEMPLATE_USAGE);
-      const t = stateTemplateFor(p.positionals[0], process.cwd(), process.env);
+      const t = stateTemplateFor(p.positionals[0], process.cwd(), process.env, p.options["--skill"]);
       const md = flowGiven !== undefined ? writeMetricsMd(flowGiven, process.cwd(), t.metricsMd, secrets) : undefined;
       if (md && !json)
         err(
