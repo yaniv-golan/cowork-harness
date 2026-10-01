@@ -304,6 +304,7 @@ describe.runIf(POSIX)("hillclimb freeze-ref", () => {
       const text = readFileSync(join(dir, "flow", "v2", "ref", "alpha", p), "utf8");
       expect(text).not.toContain(SECRET);
       expect(text).not.toContain(dir);
+      expect(text).not.toContain(f.runsDir);
       expect(text).not.toMatch(/\/(Users|home|var\/folders|private)\//);
     }
     expect(readRefEntry(join(dir, "flow", "v2", "ref"), "alpha")).toMatchObject({
