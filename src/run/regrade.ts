@@ -166,10 +166,15 @@ export function judgeSpend(grades: ReadonlyArray<{ judgeCostUsd?: number }>): Ju
   };
 }
 
-/** What the judged document depends on besides the shared capture: an assert's own sub-agent opt-in and its
- *  `evidence_files` scope (order-free; an empty list is unscoped, as `scopeAuthoredEvidence` reads it). */
+/** What the judged document depends on besides the shared capture: an assert's own sub-agent and Skill-result
+ *  opt-ins and its `evidence_files` scope (order-free; an empty list is unscoped, as `scopeAuthoredEvidence`
+ *  reads it). */
 function ownScopeKey(sm: NonNullable<Assertion["semantic_matches"]>): string {
-  return JSON.stringify([sm.include_subagent_text === true, [...new Set(sm.evidence_files ?? [])].sort()]);
+  return JSON.stringify([
+    sm.include_subagent_text === true,
+    [...new Set(sm.evidence_files ?? [])].sort(),
+    sm.include_fork_results === true,
+  ]);
 }
 
 /** The capture's priority globs — the same expression the live run uses. */
@@ -348,7 +353,7 @@ function liveDocDrift(
     const key = ownScopeKey(sm);
     let fp = cache.get(key);
     if (!fp) {
-      fp = composeJudgedDocument(ctx, sm.include_subagent_text === true, sm.evidence_files).fingerprint;
+      fp = composeJudgedDocument(ctx, sm.include_subagent_text === true, sm.evidence_files, sm.include_fork_results === true).fingerprint;
       cache.set(key, fp);
     }
     const sections = diffSections(r.judgedDoc!, fp, liveIndex);
@@ -373,7 +378,7 @@ export interface UncheckedSection {
  * independent. A section is covered when some rebuilt document has one of the same kind and path with the same
  * bytes; a non-authored section (final answer, transcript, health note…) is also covered when it is no longer
  * than a rebuilt one of its kind, since those carry no file content a scope could newly bring in. What is left is
- * content a widened scope (`evidence_files`, `include_subagent_text`) or a larger budget pulled in — never
+ * content a widened scope (`evidence_files`, `include_subagent_text`, `include_fork_results`) or a larger budget pulled in — never
  * compared with anything, so neither a drift nor a value the live run scrubbed and this process does not can be
  * detected in it. Empty when no live assert recorded a comparable `judgedDoc` at all: its asserts are then
  * `unknown` or `live_refused`, unchecked as a whole, and warned about as such rather than refused.
@@ -638,6 +643,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
         second.ctx,
         a.semantic_matches!.include_subagent_text === true,
         a.semantic_matches!.evidence_files,
+        a.semantic_matches!.include_fork_results === true,
       );
       if (semanticRefusal(a, second.ctx, built)) willRefuse.add(a);
       else newDocs.set(a, built.fingerprint);
@@ -656,7 +662,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       refusals.push({ runDir, code: "unchecked_content", uncheckedCount: unchecked.length, uncheckedSections: unchecked });
       refusalLines.push(
         `${CMD}: ${dir}: ${unchecked.length} section(s) of the graded document were never read by the live judge ` +
-          `(${uncheckedLabel(unchecked)}) — brought in by a widened scope (evidence_files / include_subagent_text) or a larger ` +
+          `(${uncheckedLabel(unchecked)}) — brought in by a widened scope (evidence_files / include_subagent_text / include_fork_results) or a larger ` +
           `--authored-total-bytes. They cannot be checked for drift or for a secret the live run scrubbed and this process does not. ` +
           `Nothing was sent to the judge; pass --allow-unchecked to grade anyway. (can't verify ⇒ not green)`,
       );
@@ -694,7 +700,7 @@ export async function regradeRuns(opts: RegradeOptions): Promise<RegradeOutcome>
       warn(
         scrub(
           `::warning:: ${CMD}: ${p.dirAsGiven}: ${p.unchecked.length} section(s) of the graded document were never read by the live judge ` +
-            `(${uncheckedLabel(p.unchecked)}) — brought in by a widened scope (evidence_files / include_subagent_text) or a larger ` +
+            `(${uncheckedLabel(p.unchecked)}) — brought in by a widened scope (evidence_files / include_subagent_text / include_fork_results) or a larger ` +
             `--authored-total-bytes. They were never checked for drift or for a secret the live run scrubbed; this process's scrub set ` +
             `is all that protects them (--allow-unchecked).`,
           secrets,

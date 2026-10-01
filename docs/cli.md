@@ -287,7 +287,7 @@ not run again; the judge call is the only spend.
 - **Whether it matches is measured, not assumed.** Each assert's document is fingerprinted and compared, section
   by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
   (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's
-  `evidence_files` or `include_subagent_text`, or the capture budget, changed, so a different document is
+  `evidence_files`, `include_subagent_text` or `include_fork_results`, or the capture budget, changed, so a different document is
   expected), `unknown` (this assert's scope has no live fingerprint), `live_refused` (every live assert with this
   scope refused its evidence and no fingerprint was recorded — in practice a run from before fingerprints were
   recorded, or one where no judge ran for the refused assert; a refused assert that did record one is compared
@@ -306,11 +306,11 @@ not run again; the judge call is the only spend.
   If no judge ran for any assert (every one refused its evidence), the regrade file is named after the requested
   `--judge-model`, else `not-graded`.
   A `false` says only that the bytes differ, not why:
-  an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
-  cause it, and the listed sections are what tell them apart.
+  an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent or Skill-result
+  section can each cause it, and the listed sections are what tell them apart.
 - **Drift is checked before the judge is called, from the live run's own inputs.** For every run dir, before any
   judge call, each LIVE `semantic_matches` assert that recorded a `judgedDoc` has its document rebuilt from the
-  live inputs — its own `evidence_files` and `include_subagent_text`, the live run's `evidence_files` union and
+  live inputs — its own `evidence_files`, `include_subagent_text` and `include_fork_results`, the live run's `evidence_files` union and
   its recorded capture budget (for a run recorded before `authoredCapture` existed, the `--authored-total-bytes`
   value you pass) — scrubbed with this process's secrets, and compared with that `judgedDoc`. Any
   difference is refused (exit `2`), naming the live assert and the differing sections: an authored file changed
@@ -321,8 +321,8 @@ not run again; the judge call is the only spend.
   `liveDocDrift` (`{liveAssertionIndex, sections: [{kind, path?, change}]}`, indexed by the live run's
   `assertions[]`, in the file and on each `runs[]` entry) and makes the run's `docMatchesLive` `false`.
 - **Content the live judge never read is refused too.** Content that only a widened scope (`evidence_files`,
-  `include_subagent_text`) or a larger `--authored-total-bytes` brings in — a file the live cap left out, a larger
-  part of one, a sub-agent's text — cannot be compared with anything, and a secret in it that this process does
+  `include_subagent_text`, `include_fork_results`) or a larger `--authored-total-bytes` brings in — a file the live
+  cap left out, a larger part of one, a sub-agent's text, a `skill_result` section — cannot be compared with anything, and a secret in it that this process does
   not know is not detected. Each graded document is measured against the live documents just rebuilt from the
   live inputs; a section none of them has is refused (exit `2`), naming the assert and the section. With
   `--allow-unchecked` it is graded instead, named in a `::warning::` before the judge call and listed in

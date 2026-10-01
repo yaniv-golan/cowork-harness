@@ -54,11 +54,11 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v13.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v13.json)):
+Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v14.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v14.json)):
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 13 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 whatever its `lane:`, and 13 only when its `assert:` uses the object form of `tool_called` / `tool_not_called`) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 14 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 whatever its `lane:`, 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, and 14 when a `semantic_matches` entry carries `include_fork_results`) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
@@ -158,7 +158,7 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
            - <one discrete, checkable claim a correct answer MUST make>
            - <another>
    ```
-2a. **NEVER write a claim about whether a TOOL was called — the judge cannot see tool calls.** The
+2a. **NEVER write a claim about whether a TOOL was called — the judge cannot see tool calls** (one exception: `include_fork_results`, below). The
    "transcript" the judge receives is **top-level assistant prose only**. It excludes every `tool_use`
    and `tool_result`, and it excludes **all sub-agent text** (including `Skill` and `Agent(fork)`
    dispatches, whose *tool* calls the harness does attribute to the main agent — the text path does not).
@@ -166,12 +166,19 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    unless you opt in with `include_subagent_text: true`.
 
    So a rubric claim like *"the agent used a tool to surface the file, or said none was available"* has a
-   first branch that **can never grade true**, no matter how the skill behaves — the evidence simply
-   isn't in the document. Such a claim looks reasonable, survives drafting, and silently caps your pass
+   first branch that **cannot grade true**, no matter how the skill behaves — the evidence simply
+   isn't in the document (only a skill's own result, with `include_fork_results: true`, is). Such a claim looks reasonable, survives drafting, and silently caps your pass
    rate. Assert tool use with the structural keys instead (`tool_called`, `present_files_called`,
    `subagent_dispatched`, `hook_blocked`) — and, for what a command actually ran, the object form
    `tool_called: {tool: [Bash, mcp__workspace__bash], input: {command: <regex>}}` — and reserve `semantic_matches` for what the agent *said* or
    *wrote*. For a fan-out skill whose real work happens in sub-agents, add `include_subagent_text: true`.
+   For a foreground `context: fork` skill, add `include_fork_results: true` (it also lets a claim like
+   "skill X ran" grade true, from X's result section): the fork's answer comes back as the
+   `Skill` tool result (it is not a sub-agent, so `include_subagent_text` cannot see it), and this joins
+   each top-level `Skill` call to its result and hands that to the judge. A result cut at its 32,768-character
+   capture cap, a call with no result, or a fork run in the background (whose result is only a launch line)
+   fails evidence-unavailable (`fork_result_truncated` / `fork_result_unpaired` / `fork_result_background`)
+   rather than grading part of an answer.
    If the run authors more than a couple of files, add `evidence_files: ["outputs/report.md"]` naming the
    deliverable — otherwise the 64 KiB capture budget is spent alphabetically and an unrelated intermediate
    dropped at the cap refuses the whole verdict. Paths are `<root>/<rel>`; a glob that matches nothing

@@ -350,7 +350,7 @@ const toolCallObjectFields = {
     })
     .optional()
     .describe(
-      "predicates on the call's PAIRED tool_result (joined by toolUseId; 10 KB of text). An unpaired call never satisfies them, and a truncated result that cannot settle a predicate is evidence-unavailable, never a pass",
+      "predicates on the call's PAIRED tool_result (joined by toolUseId; 10,240 chars of text, 32,768 for a top-level Skill result). An unpaired call never satisfies them, and a truncated result that cannot settle a predicate is evidence-unavailable, never a pass",
     ),
   scope: z
     .enum(["main", "subagent", "any"])
@@ -424,25 +424,29 @@ export const Assertion = z.strictObject({
     .string()
     .min(1)
     .optional()
-    .describe("at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
+    .describe(
+      "at least one tool result contains this literal substring (per-result match, not concatenated; 10,240-char cap per result, 32,768 for a top-level Skill result)",
+    ),
   tool_result_not_contains: z
     .string()
     .min(1)
     .optional()
-    .describe("no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
+    .describe(
+      "no tool result contains this literal substring (per-result match, not concatenated; 10,240-char cap per result, 32,768 for a top-level Skill result)",
+    ),
   tool_result_matches: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "regex (case-insensitive) — at least one tool result matches (per-result, 10 KB cap). The regex sibling of tool_result_contains; use for an error-signature FAMILY a script may print even when its exit code was swallowed by its wrapper",
+      "regex (case-insensitive) — at least one tool result matches (per-result, 10,240-char cap, 32,768 for a top-level Skill result). The regex sibling of tool_result_contains; use for an error-signature FAMILY a script may print even when its exit code was swallowed by its wrapper",
     ),
   tool_result_not_matches: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "regex (case-insensitive) that must NOT match any tool result (per-result, 10 KB cap). The regex sibling of tool_result_not_contains",
+      "regex (case-insensitive) that must NOT match any tool result (per-result, 10,240-char cap, 32,768 for a top-level Skill result). The regex sibling of tool_result_not_contains",
     ),
   file_exists: z.string().min(1).optional().describe("a file exists at this path under the agent's work root"),
   user_visible_artifact: z
@@ -1018,10 +1022,16 @@ export const Assertion = z.strictObject({
         .describe(
           "default false: also send each sub-agent's TEXT turns (RunResult.subagents[].reasoning, kind:'text' only) to the judge. Opt-in because it enlarges the judged document, which can re-grade an existing rubric. Use for a fan-out skill whose real work happens in sub-agents — their text is otherwise invisible to the judge. Sub-agent THINKING is excluded: it arrives empty with redacted:true, so including it would pad the document with blanks",
         ),
+      include_fork_results: z
+        .boolean()
+        .optional()
+        .describe(
+          "default false: also send the result of every top-level `Skill` call to the judge, joined to its call by toolUseId — the only channel that carries a FOREGROUND `context: fork` skill's own answer (a fork is not a dispatch, so it has no subagents[] entry and include_subagent_text cannot see it). Each result is headed `Fork skill result: <skill>` when it carries the agent's `completed (forked execution)` marker, else `Skill result: <skill>` (an inline skill's result is only its launch line). A main-agent Skill result is captured up to 32,768 characters (every other tool result keeps 10,240); one cut at that cap fails the assert evidence-unavailable (`fork_result_truncated`), as does a Skill call with no paired result (`fork_result_unpaired`), a fork launched in the BACKGROUND, whose result is only its launch line (`fork_result_background`), or a lane with no tool-call record (`fork_calls_unrecorded`) — never a grade over a partial answer or a launch line. Opt-in because it enlarges the judged document, which can re-grade an existing rubric",
+        ),
     })
     .optional()
     .describe(
-      "LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*). The judged document is finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — it excludes every tool_use/tool_result, and no sub-agent text (even fork-scoped) unless include_subagent_text is set. A rubric claim about whether a TOOL was called can therefore never grade true; use tool_called/present_files_called/subagent_dispatched for that",
+      "LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*). The judged document is finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — it excludes every tool_use/tool_result, no sub-agent text (even fork-scoped) unless include_subagent_text is set, and no `Skill` tool result (where a `context: fork` skill's answer arrives) unless include_fork_results is set. A rubric claim about whether a TOOL was called therefore cannot grade true — except that with include_fork_results a `Skill result: <skill>` / `Fork skill result: <skill>` section lets the judge confirm skill <skill> ran; use tool_called/present_files_called/subagent_dispatched for tool claims",
     ),
 });
 export type Assertion = z.infer<typeof Assertion>;
@@ -1034,6 +1044,16 @@ export type Assertion = z.infer<typeof Assertion>;
  *  convention is test-enforced (see the schema invariant test), so a new `allow_*` field can't be added
  *  without landing here. `verdict.ts` keeps its own three hand-written branches — they are genuinely
  *  asymmetric (different signal, list-vs-scalar, message) and must NOT be folded into this list. */
+/** Capture cap, in characters, for the result of a MAIN-AGENT `Skill` call — every other tool result keeps the
+ *  10,240-char assert cap. A foreground `context: fork` skill's whole answer comes back as that result, and
+ *  `semantic_matches.include_fork_results` refuses rather than grade a cut one, so a 10,240 cap would refuse
+ *  every fork answer longer than ~2.5 pages (the largest kept fork answer measured 9,657 chars). 32,768 is the
+ *  judged document's own per-answer budget (`JUDGE_FINAL_CAP` in assert.ts, the cap on the agent's final
+ *  answer): final 32K + transcript 128K + one skill answer 32K + the default 64 KiB authored-file capture
+ *  = the 256K aggregate cap, so the defaults still fit whole. The composer caps a skill section at this
+ *  same value, so the capture and the judge can never disagree about what "cut" means. */
+export const SKILL_RESULT_ASSERT_CAP = 32_768;
+
 export const VERDICT_MODIFIER_KEYS = [
   "allow_permissive_auto_allow",
   "allow_missing_capability",
@@ -1413,9 +1433,10 @@ export interface JudgedDocFingerprint {
   sha256: string;
   sections: Array<{
     /** `final` = the agent's final answer; `transcript`; `subagent` = one opted-in sub-agent's text;
+     *  `skill_result` = one main-agent `Skill` call's result (opt-in `include_fork_results`);
      *  `authored` = one authored file (`path` set); `scratch_note` = the note qualifying scratch files;
      *  `health` = the evidence-health note. */
-    kind: "final" | "transcript" | "subagent" | "authored" | "scratch_note" | "health";
+    kind: "final" | "transcript" | "subagent" | "skill_result" | "authored" | "scratch_note" | "health";
     /** The authored file's path (workRoot-relative, or `scratchpad/…`) — `authored` sections only. */
     path?: string;
     sha256: string;
@@ -1739,7 +1760,7 @@ export interface RunResult {
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
     judgeInvalid?: boolean;
     /** WHY a `semantic_matches` assert refused its verdict, or WHAT it graded — as a typed reason rather
-     *  than prose. There are SIX distinct evidence-unavailable causes with six different fixes, and one
+     *  than prose. There are TEN distinct evidence-unavailable causes (four of them `fork_*`) with different fixes, and one
      *  success shape; a consumer (usually an agent iterating on a skill) must be able to tell "your
      *  `evidence_files` glob matched nothing" from "the deliverable was truncated" without regex-scraping
      *  an English message. Same rationale as `judgeInvalid` above. `paths` carries the concrete file list
@@ -1764,7 +1785,12 @@ export interface RunResult {
         | "in_scope_truncated"
         | "evidence_incomplete"
         | "no_pre_run_manifest"
-        | "authored_evidence_truncated";
+        | "authored_evidence_truncated"
+        | "fork_result_truncated"
+        | "fork_result_unpaired"
+        | "fork_result_background"
+        | "fork_calls_unrecorded";
+      /** The offending authored paths — or, for the `fork_result_*` reasons, the offending `Skill` ids. */
       paths?: string[];
     };
   }>;
@@ -2150,7 +2176,7 @@ export interface RunResult {
    *  filesystem/egress half was dropped. Surfaced so a CI script doesn't read a green replay as having checked
    *  everything. The skipped assertions are absent from `assertions[]` (filtered before evaluation). */
   skippedAssertions?: { full: number; partial: number };
-  /** Tool-result text at assertion-fidelity cap (10 KB per result). Used by `tool_result_contains` /
+  /** Tool-result text at assertion-fidelity cap (10 KB per result; SKILL_RESULT_ASSERT_CAP for a top-level `Skill` result). Used by `tool_result_contains` /
    *  `tool_result_not_contains`. `assertText` is preferred when present; falls back to `text` (500-char
    *  display cap) for cassettes recorded before this field was added. */
   toolResults?: {
@@ -2158,7 +2184,7 @@ export interface RunResult {
     isError: boolean;
     text: string;
     assertText?: string;
-    /** `assertText` was cut at the 10 KB cap — a search that misses may have missed past the cut, so the
+    /** `assertText` was cut at its cap (10 KB, or SKILL_RESULT_ASSERT_CAP for a top-level `Skill` result) — a search that misses may have missed past the cut, so the
      *  object form of tool_called/tool_not_called fails a result predicate it cannot settle closed.
      *  Absent when not truncated, and on a result recorded before the field was typed. */
     assertTextTruncated?: boolean;
