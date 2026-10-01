@@ -13,7 +13,7 @@ const fanout = readFileSync("test/fixtures/hillclimb-runs/assistant-models-fanou
 
 describe("mainLoopModels", () => {
   it("collects only the main loop's live models — sub-agent models are not the model under test", () => {
-    // Real run: main loop on claude-opus-5; sub-agents on claude-opus-5 and claude-sonnet-5.
+    // SYNTHETIC fixture (README): main loop on claude-opus-5; sub-agents on claude-opus-5 and claude-sonnet-5.
     expect(mainLoopModels(fanout)).toEqual(["claude-opus-5"]);
   });
 
@@ -27,12 +27,12 @@ describe("mainLoopModels", () => {
 });
 
 describe("servedModelMismatch (S l.485-494)", () => {
-  it("a real fan-out run whose sub-agents used another model is NOT a substitution", () => {
+  it("a fan-out stream whose sub-agents used another model is NOT a substitution", () => {
     expect(servedModelMismatch("claude-opus-5", mainLoopModels(fanout))).toBeUndefined();
   });
 
   it("catches a second main-loop model that modelPinHonored misses", () => {
-    // SYNTHETIC: one extra main-loop event served by another model, appended to the real stream.
+    // One extra main-loop event served by another model, appended to the stream.
     const lines = [...fanout, JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: "claude-sonnet-5" } })];
     const models = mainLoopModels(lines);
     // The existing provenance check calls this run honored — the reason H4 carries its own rule.
