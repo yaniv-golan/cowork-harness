@@ -393,11 +393,17 @@ async function regradeFlowInner(
   const cases = selectCases(all, args.cases);
   const byId = new Map(cases.map((c) => [c.id, c]));
   // No agent runs here, so no agent model needs resolving (a flow run with --model would otherwise be refused).
-  const prep = prepareCases(all, {
-    env: deps.env,
-    noAgentRun: true,
-    ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
-  });
+  // `run --case`'s rule: the per-case checks cover the selected cases; the gate below covers every case.
+  const prep = prepareCases(
+    all,
+    {
+      env: deps.env,
+      noAgentRun: true,
+      ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
+    },
+    cases,
+  );
+  for (const n of prep.notes) say(n);
 
   // The variants: every one with rows, or the one named. Read-only checks first — opening a writer creates files.
   const variants =
