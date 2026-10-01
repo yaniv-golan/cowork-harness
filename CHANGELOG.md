@@ -345,6 +345,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
+  `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
+  constant across both arms and only enlarged the correction family, which weakened the correction for the
+  real rows. An existing eval dir re-rendered with `eval report` loses those rows and can get a smaller `m`, so a
+  row's corrected label can move. An assertion that combines a modifier with another key is still a row. A
+  scenario whose every assertion is a modifier is now refused, as one with no `assert:` entry is.
 - **`lint-skill` lints a file once when two arguments reach it** (a relative and an absolute path to the same
   skill, or a symlinked alias). It used to report each finding once per argument.
 - **`scaffold` no longer asserts on a file that existed before the run unchanged** (marked

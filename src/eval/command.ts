@@ -426,7 +426,10 @@ function resolveEvalContext(args: EvalArgs, deps: EvalDeps): EvalContext {
       throw new UsageError((e as Error).message);
     }
   }
-  if (rowCount === 0) throw new UsageError("eval: no scenario has an assert: entry — there is nothing to compare");
+  if (rowCount === 0)
+    throw new UsageError(
+      "eval: no scenario has an assert: entry that is compared (a verdict modifier such as allow_stall is not a row) — there is nothing to compare",
+    );
 
   // Pins.
   const agentPins = resolveAgentPins(

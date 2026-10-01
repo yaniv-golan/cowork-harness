@@ -128,7 +128,10 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
 - **The runs look like any other run.** Each job's run id — which becomes the agent's working
   directory — has the ordinary `local_…` shape and is derived from a hash, so it names neither the eval
   nor the arm. Both arms see the same system prompt apart from that id.
-- **Rows.** Every assertion of every scenario is a row. Each `semantic_matches` rubric claim is its own
+- **Rows.** Every assertion of every scenario is a row, except one whose only keys are verdict modifiers
+  (`allow_stall`, `allow_outputs_delete`, and the other `allow_*` keys): it always grades `pass`, so it could
+  not detect a change and would only enlarge the correction family. An assertion that combines a modifier with
+  another key (`{result: success, allow_stall: true}`) is a row. Each `semantic_matches` rubric claim is its own
   row; the assertion's own pass (a function of its claims through `min_pass`) is shown as a *derived*
   row. A `semantic_pairwise` assertion is one row, its pass under `pass_if` (so `pass_if: any` gives a row that
   is always 1 when graded). Both arms are judged against the same frozen references; eval reports the pass rate,

@@ -42,7 +42,7 @@ import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { hostPathTokenOccurrences } from "../src/run/host-path-tokens.js";
 import { loadScenarioPure } from "../src/run/execute.js";
 import { deriveModelProvenance } from "../src/run/model-provenance.js";
-import type { Assertion, RunResult } from "../src/types.js";
+import { VERDICT_MODIFIER_KEYS, type Assertion, type RunResult } from "../src/types.js";
 import { evaluateFamily, insufficientThreshold } from "../src/eval/stats.js";
 import { buildRunsLine, repEvidenceOf } from "../src/eval/runs.js";
 import {
@@ -52,6 +52,7 @@ import {
   classifyTermination,
   classifyRep,
   normalizeClaim,
+  isModifierOnlyAssertion,
   scenarioRows,
   repRowValues,
   semanticRefusalReason,
@@ -522,6 +523,48 @@ describe("normalizeClaim", () => {
   });
 });
 
+describe("scenarioRows: a verdict-modifier-only assertion is not a row", () => {
+  // `{allow_stall: true}` and its siblings always grade pass: as a row they are 1 on every graded rep of both
+  // arms, so they could only enlarge the correction family.
+  const real = { result: "success" } as Assertion;
+  const scen = [
+    { allow_stall: true },
+    real,
+    { allow_outputs_delete: true, allow_undelivered_deliverables: true },
+    { result: "success", allow_stall: true },
+    semAssertion,
+  ] as Assertion[];
+
+  it("drops every modifier-only assertion, keeps a combined one, and keeps each row's original index", () => {
+    const rows = scenarioRows("s", scen);
+    expect(rows.filter((r) => r.kind !== "claim").map((r) => [r.assertionIndex, r.kind, r.label])).toEqual([
+      [1, "assertion", "result"],
+      [3, "assertion", "result"],
+      [4, "semantic_rollup", "semantic_matches"],
+    ]);
+    expect(rows.some((r) => r.assertionIndex === 0 || r.assertionIndex === 2)).toBe(false);
+  });
+  it("every VERDICT_MODIFIER_KEYS member is filtered, alone; none is when it shares the assertion with a real key", () => {
+    for (const k of VERDICT_MODIFIER_KEYS) {
+      expect(isModifierOnlyAssertion({ [k]: true } as Assertion), k).toBe(true);
+      expect(scenarioRows("s", [{ [k]: true } as Assertion]), k).toEqual([]);
+      expect(isModifierOnlyAssertion({ [k]: true, result: "success" } as Assertion), k).toBe(false);
+    }
+    expect(isModifierOnlyAssertion({} as Assertion)).toBe(false);
+  });
+  it("grades still line up by index: the rows after a skipped modifier read their own grades", () => {
+    const grades = scen.map((a, i) => ({ assertion: a, pass: i !== 3 }));
+    const r = validRep({ assertions: grades });
+    const rows = scenarioRows("s", scen).filter((x) => x.kind !== "claim");
+    const vals = repRowValues(rows, scen, classifyRep({ result: r }, expected), r);
+    expect(vals.map((v) => [v.row.assertionIndex, v.value ?? v.excluded])).toEqual([
+      [1, 1],
+      [3, 0],
+      [4, 1],
+    ]);
+  });
+});
+
 describe("scenarioRows: every assertion is a row, each claim a sub-row", () => {
   const allRows = () => scenarioRows("s1", [plainAssertion, semAssertion, semAssertion]);
   it("keys assertion rows by (scenario, index) and labels them with firstAssertionKey", () => {
@@ -794,7 +837,8 @@ describe("allow_stall: a stall the scenario opted out of is graded, not errored_
     const scen = r.assertions!.map((a) => a.assertion);
     const rows = scenarioRows("fixture-stalled-on-question", scen);
     const vals = repRowValues(rows, scen, classifyRep({ result: r }, { contentSig: r.fingerprint!.contentSig }), r);
-    expect(vals.map((v) => v.value)).toEqual(r.assertions!.map((a) => (a.pass ? 1 : 0)));
+    // The appended modifier is not a row; every other assertion is, with its graded bit.
+    expect(vals.map((v) => v.value)).toEqual(r.assertions!.slice(0, -1).map((a) => (a.pass ? 1 : 0)));
     expect(vals.some((v) => v.value === 0) && vals.some((v) => v.value === 1)).toBe(true);
   });
   it("the combined form ({ result, allow_stall } in one assertion) opts out too, as it does in the verdict", () => {
@@ -843,7 +887,7 @@ describe("allow_stall: a stall the scenario opted out of is graded, not errored_
     expect(classifyTermination({ result: opted })).toMatchObject({ bucket: "valid", rule: "success" });
     const scen = opted.assertions!.map((a) => a.assertion);
     const rows = scenarioRows("s", scen);
-    expect(repRowValues(rows, scen, classifyRep({ result: opted }, expected), opted).map((v) => v.value)).toEqual([1, 1, 1, 0, 1]);
+    expect(repRowValues(rows, scen, classifyRep({ result: opted }, expected), opted).map((v) => v.value)).toEqual([1, 1, 1, 0]);
     expect(classifyRep({ result: { ...plain, stalledOnQuestion: false } }, expected).bucket).toBe("valid");
   });
   it("allow_stall does not rescue an error result", () => {
