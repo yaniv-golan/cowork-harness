@@ -3224,12 +3224,17 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
   // change to what was graded. A pass flipping to a fail is still refused (the pairs compare above), and
   // redactionRewroteHookOutput names the downgrade at record time.
   // Keyed off the message, not the entry: one `assert:` entry can carry several keys, and only this key's own
-  // message is exempt.
+  // message is exempt. The entry's position stays in the compared string, so two entries of the same key trading
+  // outcomes still differ (both runs evaluate the same scenario, in the same order).
   const HOOK_OUTPUT_MSG = /^(?:evidence unavailable: )?(hook_output_(?:not_)?contains)(?::|'s) /;
   const failedMsgs = (result: RunResult): string[] =>
     result.assertions
-      .filter((a) => !a.pass)
-      .map((a) => HOOK_OUTPUT_MSG.exec(a.message ?? "")?.[1] ?? normalizeMsg(a.message))
+      .map((a, i) => ({ a, i }))
+      .filter(({ a }) => !a.pass)
+      .map(({ a, i }) => {
+        const key = HOOK_OUTPUT_MSG.exec(a.message ?? "")?.[1];
+        return key ? `#${i} ${key}` : normalizeMsg(a.message);
+      })
       .sort();
 
   // 3. INTERNAL sha256 consistency of the REDACTED cassette: every committed body's stored sha256 must

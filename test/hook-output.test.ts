@@ -511,6 +511,19 @@ describe("record's redaction self-check over hook_output_* failures", () => {
     );
   });
 
+  it("GUARD-SENSITIVITY: two entries of the same key trading outcomes are still refused", async () => {
+    const A = [
+      { hook_output_contains: { event: "Stop", stream: "stderr", text: "ALPHA" } },
+      { hook_output_contains: { event: "Stop", stream: "stderr", text: "BETA" } },
+    ];
+    await expect(
+      assertRedactionVerdictPreserved(
+        hookCassette(A, () => "ALPHA here"),
+        hookCassette(A, () => "BETA here"),
+      ),
+    ).rejects.toThrow(/redaction changed assertion failures/);
+  });
+
   it("another key's failing message keeps the full comparison", async () => {
     const base = hookCassette(
       [{ transcript_contains: "never said" }, { hook_output_contains: { event: "Stop", text: "PINEAPPLE" } }],
