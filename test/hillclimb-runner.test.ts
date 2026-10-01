@@ -524,8 +524,8 @@ describe("scenario metrics", () => {
       writeFileSync(join(flowDir(), "_state.json"), JSON.stringify({ ...st, ...t.state }));
       const report = checkFlowDir(flowDir(), { profile: "harness" });
       expect(report.findings.filter((f) => f.level === "error")).toEqual([]);
-      expect(report.findings.filter((f) => /predate/.test(f.message)).map((f) => f.message)).toEqual([
-        "2 rows predate metric words (baseline 2); its mean covers later rows only",
+      expect(report.findings.filter((f) => /do not carry metric/.test(f.message)).map((f) => f.message)).toEqual([
+        "2 rows do not carry metric words (baseline 2): added after they were written, or no scenario declares it any more (then remove it from _state.json); its mean covers the rows that carry it only",
       ]);
     });
 
@@ -544,6 +544,9 @@ describe("scenario metrics", () => {
       expect(err.join("\n")).toMatch(
         /warning: metric words is no longer declared by any scenario: the rows in baseline keep its values, but new rows will not carry it/,
       );
+      // What to do with its _state.json entries, and the refusal's real scope (rows that still carry the old sig).
+      expect(err.join("\n")).toMatch(/remove its entries \(words and words_present\) from _state\.json's metrics/);
+      expect(err.join("\n")).toMatch(/refused while any row still carries the old declaration/);
       expect(rows("v1").some((x) => "words_present" in x.grade || "metric_sigs" in x.meta)).toBe(false);
     });
 

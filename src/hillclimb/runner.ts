@@ -179,7 +179,7 @@ async function run(
   if (existing)
     for (const [id, vs] of removedMetrics(existing, metrics))
       say(
-        `warning: metric ${id} is no longer declared by any scenario: the rows in ${vs.join(", ")} keep its values, but new rows will not carry it (declaring it again later with a different declaration is refused)`,
+        `warning: metric ${id} is no longer declared by any scenario: the rows in ${vs.join(", ")} keep its values, but new rows will not carry it — remove its entries (${id} and ${id}_present) from _state.json's metrics (declaring it again with a different declaration is refused while any row still carries the old declaration)`,
       );
   if (existing)
     for (const [id, vs] of undeclaredRowMetrics(existing, state.metrics))

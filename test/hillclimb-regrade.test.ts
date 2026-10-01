@@ -498,7 +498,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     // As a row `run` wrote after the removal reads: at most the predate note, never an error.
     const words = c.report.findings.filter((x) => /words/.test(JSON.stringify(x)));
     expect(words.map((x) => x.level)).toEqual(["note"]);
-    expect(words[0]!.message).toMatch(/1 rows predate metric words \(v1 1\)/);
+    expect(words[0]!.message).toMatch(/1 rows do not carry metric words \(v1 1\)/);
     expect(c.exitCode).toBe(0);
   }, 240_000);
 
@@ -541,7 +541,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
       JSON.stringify(c.report.findings),
     ).toEqual([]);
     // check still reads v1's row as predating the added metric.
-    expect(c.report.findings.map((x) => x.message)).toContainEqual(expect.stringMatching(/1 rows predate metric gone \(v1 1\)/));
+    expect(c.report.findings.map((x) => x.message)).toContainEqual(expect.stringMatching(/1 rows do not carry metric gone \(v1 1\)/));
   }, 240_000);
 
   it("in-process with no metricDecls dep, the flow's union is still the default (no caller can drop the columns)", async () => {

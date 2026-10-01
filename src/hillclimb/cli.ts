@@ -89,12 +89,36 @@ export function stateTemplateFor(target: string, cwd: string, env: NodeJS.Proces
         pairwiseRefs.push({ ref, rowsMissing: rows.filter((r) => r.grade?.[`win_${ref}_present`] === undefined).length });
     }
   }
-  return stateTemplate({
+  const t = stateTemplate({
     cases: cases.map((c) => ({ name: c.id, assertions: c.scenario.assert ?? [], metrics: c.scenario.metrics })),
     harnessPaths: prep.derivedPaths(cases).map((p) => relative(cwd, p)),
     decider: false,
     ...(pairwiseRefs ? { pairwiseRefs } : {}),
   });
+  // With --flow: a float the flow's _state.json still declares that no scenario declares any more. Only here are both
+  // the scenarios and the flow at hand (`check` reads the flow alone), so this is where a removal's leftover is named.
+  if (flowArg !== undefined) {
+    const flowAbs = resolve(cwd, normalizeRootArg(flowArg));
+    if (lexists(flowAbs)) {
+      const now = new Set(t.state.metrics.map((m) => m.id));
+      let declared: unknown[] = [];
+      try {
+        const st = JSON.parse(loadFlowSnapshot(flowAbs).state ?? "{}");
+        if (Array.isArray(st?.metrics)) declared = st.metrics;
+      } catch {
+        // An unreadable _state.json is `check`'s finding, not this note's.
+      }
+      for (const m of declared) {
+        if (!m || typeof m !== "object") continue;
+        const { id, kind } = m as { id?: unknown; kind?: unknown };
+        if (kind === "float" && typeof id === "string" && !now.has(id))
+          t.notes.push(
+            `no scenario declares metric ${id} any more; remove its entries (${id} and ${id}_present) from _state.json's metrics`,
+          );
+      }
+    }
+  }
+  return t;
 }
 
 /** `state-template --flow`: the metrics legend into `<flow>/metrics.md`, through the no-follow root. The loop
@@ -257,7 +281,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       else {
         writeAllSync(1, JSON.stringify(t.state, null, 2) + "\n");
         err(
-          `save this as ${flow}/_state.json; on a re-run, merge by adding NEW metrics entries only (the loop owns the rest).` +
+          `save this as ${flow}/_state.json; on a re-run, merge by adding NEW metrics entries only (the loop owns the rest), and remove the entries (<id> and <id>_present) of a metric no scenario declares any more.` +
             (md
               ? ""
               : ` The metrics legend (metrics.md) was not written: pass --flow ${HILLCLIMB_RUN_DEFAULTS.flow} (or your flow dir) to write it, or read metrics_md under --output-format json.`),
