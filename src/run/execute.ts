@@ -731,7 +731,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               (confirmable
                 ? `belongs to another project at ${where}`
                 : `can't be confirmed as this project's (the session mounts no source to identify it)`) +
-              ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir`,
+              ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir` +
+              // The identity covers the session file and every staged source, the fixture included, so a resume turn
+              // that changes or drops `workspace_fixture` reads as another project. Say so instead of leaving the
+              // operator to guess.
+              (confirmable
+                ? `. If this is the same project: a --resume turn must declare the same session and the same workspace_fixture as the first turn — both are part of the session's identity`
+                : ""),
           );
         // Refuse to resume onto a pre-layout/mixed shape. `turnArtifactPath` addresses ONLY `turns/<N>/`
         // (no legacy fallback), so resuming one of these writes `turns/<currentTurn>/` next to a root/
@@ -764,7 +770,20 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     mkdirSync(outDir, { recursive: true });
     // Write the origin marker FIRST (before session.json) to minimize the post-mkdir crash window where a
     // dir exists with no marker (which would fail closed on the next run).
-    const sourceHint = sources[0] ?? (scenario.session === "(inline)" ? "(inline session)" : resolve(scenario.session));
+    // Name the project by its session file when it has one — never by the fixture dir, which is a staged source
+    // but not where the project lives.
+    const fixtureCanon = (() => {
+      if (scenario.workspace_fixture === undefined) return undefined;
+      try {
+        return realpathSync(scenario.workspace_fixture);
+      } catch {
+        return resolve(scenario.workspace_fixture);
+      }
+    })();
+    const sourceHint =
+      scenario.session !== "(inline)"
+        ? resolve(scenario.session)
+        : (sources.find((src) => src !== fixtureCanon) ?? sources[0] ?? "(inline session)");
     writeFileSync(originPath, JSON.stringify({ originKey: myOrigin, sourceHint, createdAt: new Date().toISOString() }, null, 2));
   } else {
     mkdirSync(outDir, { recursive: true });
