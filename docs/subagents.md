@@ -669,9 +669,9 @@ It does **not** mean sub-agent reasoning is uncaptured altogether — see the ne
 The parent-stream gap above is closed by a **separate** channel that doesn't depend on
 `parentToolUseId` at all: the on-disk child session transcript the agent binary itself writes per
 `Task` dispatch, `<configDirRoot>/projects/**/subagents/agent-<id>.jsonl`
-(`src/run/subagent-reasoning.ts`). At finalize (after `assembleRunResult`, before `result.json` is
-written), `captureSubagentReasoning` walks `<configDirRoot>/projects/**/subagents/` for every
-`agent-*.meta.json`, reads its `toolUseId`, and joins it to the matching `subagents[]` entry by an
+(`src/run/subagent-reasoning.ts`). After the agent exits and before any `semantic_matches` judge runs
+(so an `include_subagent_text: true` grade sees it), `captureSubagentReasoning` walks
+`<configDirRoot>/projects/**/subagents/` for every `agent-*.meta.json`, reads its `toolUseId`, and joins it to the matching `subagents[]` entry by an
 **exact** `toolUseId` match — no path reconstruction from the projSlug/parentSessionUUID segments.
 The sibling `agent-<id>.jsonl` is then parsed into ordered `{kind: "thinking"|"text", text}` turns
 (`tool_use`/`tool_result` blocks excluded — already covered by `toolsUsed`/`referencesRead`) and
@@ -684,7 +684,12 @@ written to that dispatch's `subagents[].reasoning`.
   `Run.THINKING_TEXT_CAP_BYTES` but separate constants), with `reasoningElided` counting turns pushed
   out past the cap (only present when non-zero).
 - **`configDirRoot` is fidelity-tier-resolved** — hostloop vs. the container/microvm sandboxed config
-  dir; an unresolvable root (e.g. `protocol`) leaves `reasoning` undefined on every dispatch.
+  dir. At `protocol` it is the run's own config dir under managed config (`ANTHROPIC_API_KEY`,
+  `COWORK_MANAGED_CONFIG=1`, or a `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_AUTH_TOKEN` in the environment
+  unless `COWORK_MANAGED_CONFIG=0`); without managed config, or when that dir is your own config dir, the
+  harness never walks it, so `reasoning` stays undefined on every dispatch. When a
+  `semantic_matches` assert sets `include_subagent_text: true` and no dispatch got `reasoning`, the run
+  prints a `::warning::` saying the judge saw no sub-agent text, and why.
 - **Never fails the run.** A missing/malformed child transcript or an unreadable `configDirRoot` is a
   silent per-dispatch no-op — `reasoning` just stays `undefined` for that dispatch (distinct from `[]`,
   which means a child file WAS found but produced no thinking/text turns). A transcript with **no

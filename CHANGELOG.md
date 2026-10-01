@@ -18,6 +18,31 @@ All notable changes to this project are documented here. The format is based on
   like the one above used to pass whatever the run did). The run now prints a `::warning:: [semantic_matches]` naming the redacted claim
   indexes. Assert on a secret with `transcript_not_contains` or `artifact_text: {not_contains}` instead,
   which read the raw transcript and file on the live run.
+- **`semantic_matches: {include_subagent_text: true}` now grades with the sub-agent text on live runs.**
+  The sub-agents' reasoning was read from their transcripts only after the judge had run, so the judge
+  got no sub-agent text on any live run, although `result.json` recorded `subagents[].reasoning`
+  afterwards. The reasoning is now read before the judge runs, at `container`, `hostloop` and `microvm`,
+  and now also at `protocol` under managed config (`ANTHROPIC_API_KEY`, `COWORK_MANAGED_CONFIG=1`, or a
+  `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_AUTH_TOKEN` in the environment unless `COWORK_MANAGED_CONFIG=0`),
+  which previously captured no sub-agent reasoning at all. `protocol` without managed config, or with a
+  managed config dir that is your own, still captures none: the harness does not read your real config
+  dir. A grade recorded before this fix did not see the sub-agent text, and its `judgedDoc`
+  (where recorded) lists no `subagent` section; re-run a scenario that uses `include_subagent_text:
+  true` to grade it with the sub-agent text.
+  - When `include_subagent_text: true` is set, the run dispatched sub-agents, and none of them has
+    captured reasoning, the run now prints a `::warning::` saying the judge saw no sub-agent text and
+    why. The judged document is unchanged.
+  - A sub-agent's reasoning and web searches now appear in the `subagent` entries of `run.jsonl` and
+    `trace.json` whenever the reasoning is captured, including on a run salvaged after an unanswered gate. Before, they
+    appeared there only when the run had no usable timeline.
+### Documentation
+
+- The companion skill now says that a green run says nothing about a skill edited while a session is
+  running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
+  This was previously documented only in `docs/fidelity-gaps.md`.
+- The companion skill now says what a `lint-skill` ignore marker costs: it is an edit to `SKILL.md`, so it
+  changes the skill hash (staling that skill's cassettes) and adds text the agent reads. `--ignore-rule`
+  avoids both.
 
 ## [4.2.0] — 2026-09-30
 

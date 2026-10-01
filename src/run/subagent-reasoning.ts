@@ -8,8 +8,9 @@ import { warn } from "../io.js";
  * transcript the agent binary writes for each `Task` dispatch — the ONLY channel for a sub-agent's
  * reasoning, since the SDK suppresses sub-agent thinking on the parent event stream (live-verified
  * against a real dispatch). LIVE/record lane only: the child transcript exists only while the real
- * agent binary ran, so this is called at execute.ts's finalize (after `assembleRunResult`, before
- * `result.json` is written) and never on replay (no child transcript to read).
+ * agent binary ran, so this is called on the live lane only — before the semantic judge runs (execute.ts's
+ * `captureSubagentReasoningThenJudge`, so `include_subagent_text` grades see it) or, on a salvaged partial
+ * run, while that result is assembled — and never on replay (no child transcript to read).
  *
  * KNOWN CAPTURE LIMIT — sub-agent thinking TEXT is empty by default. The child transcript records
  * sub-agent thinking blocks as an EMPTY `thinking` string plus a non-empty `signature` (the
