@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -183,5 +183,118 @@ describe.skipIf(!can)("verify-run grades question_context from events.jsonl", ()
     const r = verifyRun(run, sc);
     expect(r.code).not.toBe(0);
     expect(r.text).toMatch(/evidence unavailable/);
+  });
+});
+
+// `question_option_count` reads the same events.jsonl evidence through the same `wantsGateOptions` switch, and
+// it is the only gate key that grades EVERY sub-question: so the producer here carries one AskUserQuestion with
+// two bundled sub-questions plus a second gate, never a hand-built context.
+describe.skipIf(!can)("verify-run grades question_option_count from events.jsonl", () => {
+  const PREFIX = "No changes — ";
+  function multiGateRun(gates: { question: string; options: string[] }[][]): string {
+    const run = keptRun({ question: Q, options: OPTS });
+    const frames = gates.map((sub, i) => {
+      const f = gateFrame("unused", []);
+      f.request_id = `req-${i + 1}`;
+      f.request.tool_use_id = `toolu_${i + 1}`;
+      f.request.input.questions = sub.map((g) => ({ question: g.question, options: g.options.map((label) => ({ label })) }));
+      return JSON.stringify(f);
+    });
+    writeFileSync(join(run, "events.jsonl"), frames.join("\n") + "\n");
+    writeFileSync(join(run, "turns", "1", "trace.json"), JSON.stringify({ questions: gates.flat().map((g) => g.question), steps: [] }));
+    return run;
+  }
+  const conforming = () =>
+    multiGateRun([
+      [
+        { question: "Keep the TAM figure?", options: [`${PREFIX}keep it`, "Replace with bottom-up"] },
+        { question: "Keep the competitor list?", options: ["Add Acme", `${PREFIX}keep the list`] },
+      ],
+      [{ question: "Ship the report?", options: [`${PREFIX}ship as is`, "Re-score moat"] }],
+    ]);
+  const ONE = `assert:\n  - question_option_count:\n      matches: '^${PREFIX}'\n      exactly: 1\n  - result: success\n`;
+
+  it("passes when every sub-question of every gate has exactly one prefixed option, with an EMPTY answers: block", () => {
+    const run = conforming();
+    expect(verifyRun(run, scenarioFile(run, ONE)).code).toBe(0);
+  });
+
+  it("fails on the ONE bundled sub-question with two prefixed options, naming it", () => {
+    const run = multiGateRun([
+      [
+        { question: "Keep the TAM figure?", options: [`${PREFIX}keep it`, "Replace with bottom-up"] },
+        { question: "Keep the competitor list?", options: [`${PREFIX}keep the list`, `${PREFIX}add Acme`] },
+      ],
+      [{ question: "Ship the report?", options: [`${PREFIX}ship as is`, "Re-score moat"] }],
+    ]);
+    const r = verifyRun(run, scenarioFile(run, ONE));
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/1 of 3 did not/);
+    expect(r.text).toMatch(/Keep the competitor list\?/);
+  });
+
+  it("fails on a gate with no prefixed option", () => {
+    const run = multiGateRun([[{ question: "Ship the report?", options: ["Ship", "Re-score moat"] }]]);
+    expect(verifyRun(run, scenarioFile(run, ONE)).code).not.toBe(0);
+  });
+
+  it("exactly: 0 catches a prefixed option that proposes a change", () => {
+    const NONE = `assert:\n  - question_option_count:\n      matches: '^${PREFIX}.*\\b(add|remove)\\b'\n      exactly: 0\n`;
+    const bad = multiGateRun([[{ question: "Keep the competitor list?", options: [`${PREFIX}add Acme`, "Remove Beta"] }]]);
+    expect(verifyRun(bad, scenarioFile(bad, NONE)).code).not.toBe(0);
+    const good = conforming();
+    expect(verifyRun(good, scenarioFile(good, NONE)).code).toBe(0);
+  });
+
+  it("when_question narrows to matching sub-questions only", () => {
+    const run = multiGateRun([
+      [
+        { question: "Keep the TAM figure?", options: [`${PREFIX}keep it`] },
+        { question: "Which file?", options: ["a.xlsx", "b.xlsx"] },
+      ],
+    ]);
+    const sc = scenarioFile(
+      run,
+      `assert:\n  - question_option_count:\n      when_question: '^Keep'\n      matches: '^${PREFIX}'\n      exactly: 1\n`,
+    );
+    expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  it("fails evidence-unavailable when events.jsonl is absent", () => {
+    const run = keptRun({ question: Q, options: OPTS }, { noEvents: true });
+    const r = verifyRun(run, scenarioFile(run, ONE));
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/evidence unavailable/);
+  });
+});
+
+// Replay: the committed cassette's frozen AskUserQuestion is re-driven through `handleDecision`, which produces
+// `gateOptions` — the same producer a live run uses. Copied to a scratch tree with its relative layout so
+// `--assert-from` sees the recorded scenario unchanged except for its assert block.
+describe.skipIf(!can)("replay grades question_option_count from the cassette's own gate", () => {
+  function replayWith(assertYaml: string) {
+    const root = mkdtempSync(join(tmpdir(), "cwh-qoc-replay-"));
+    for (const d of ["examples/replays", "e2e/scenarios", "e2e/sessions"]) mkdirSync(join(root, d), { recursive: true });
+    copyFileSync("examples/replays/example-multiselect-gate.cassette.json", join(root, "examples/replays/c.cassette.json"));
+    copyFileSync("e2e/sessions/minimal.yaml", join(root, "e2e/sessions/minimal.yaml"));
+    const src = readFileSync("e2e/scenarios/smoke-multiselect.yaml", "utf8").replace(/\nassert:\n[\s\S]*$/, "\n");
+    writeFileSync(join(root, "e2e/scenarios/smoke-multiselect.yaml"), `${src}assert:\n${assertYaml}`);
+    const r = spawnSync(
+      "node",
+      [CLI, "replay", join(root, "examples/replays/c.cassette.json"), "--assert-from", join(root, "e2e/scenarios/smoke-multiselect.yaml")],
+      { encoding: "utf8", cwd: root },
+    );
+    return { code: r.status, text: (r.stderr || "") + (r.stdout || "") };
+  }
+
+  it("passes on the recorded labels (Auth, Billing, Audit)", () => {
+    const r = replayWith(`  - question_option_count:\n      matches: '^(Auth|Audit)$'\n      exactly: 2\n`);
+    expect(r.code, r.text).toBe(0);
+  });
+
+  it("fails on a bound the recorded labels do not satisfy, naming the sub-question", () => {
+    const r = replayWith(`  - question_option_count:\n      matches: '^A'\n      exactly: 1\n`);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/"Which features would you like to enable\?" has 2 of \[Auth, Billing, Audit\]/);
   });
 });

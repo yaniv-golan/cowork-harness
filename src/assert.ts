@@ -15,7 +15,8 @@ import type {
 import { addTokenUsage } from "./decide/usage.js";
 import { checkToolCallObject, routedToolGlobs } from "./tool-call-assert.js";
 import { outputsDeleteTier, outputsDeleteEntries } from "./run/outputs-delete-tier.js";
-import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS } from "./types.js";
+import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS, questionOptionCountBoundError } from "./types.js";
+import { REDACTION_TOKEN_RE, hasRedactionToken } from "./redactable-literal.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
@@ -3295,6 +3296,110 @@ function check(
             : fail(
                 `question_options (${kind}${exact ? ", order exact" : ", order any"}): expected [${want.join(", ")}]; ${why.join("; ")}`,
               ),
+        );
+      }
+    }
+  }
+  if (a.question_option_count !== undefined) {
+    const qc = a.question_option_count;
+    const boundError = questionOptionCountBoundError(qc);
+    // Fail CLOSED on every "we cannot see the gates" path, as question_options does: a count over a list the
+    // lane never populated would pass `exactly: 0` / `max` on no evidence.
+    if (ctx.gateOptionsMissing || ctx.gateOptions === undefined) {
+      results.push(fail("evidence unavailable: gate-option evidence absent for this run — cannot evaluate question_option_count"));
+    } else if (boundError !== undefined) {
+      results.push(fail(boundError));
+    } else if (!qc.matches) {
+      results.push(fail("question_option_count: `matches` is empty, so it would match every label"));
+    } else if (hasRedactionToken(qc.matches) || (qc.when_question !== undefined && hasRedactionToken(qc.when_question))) {
+      // A frozen regex that record-time redaction rewrote no longer says what the author wrote.
+      results.push(
+        fail(
+          "evidence unavailable: question_option_count's regex was rewritten by the cassette's redaction policy — it cannot be evaluated on replay. Match a literal the policy does not rewrite, or check it on a live run",
+        ),
+      );
+    } else {
+      let re: RegExp | undefined;
+      if (qc.case_sensitive) {
+        try {
+          re = new RegExp(qc.matches);
+        } catch (e) {
+          results.push(fail(`question_option_count: bad regex "${qc.matches}": ${(e as Error).message}`));
+        }
+      } else {
+        const c = compileUserRegex(qc.matches);
+        if ("error" in c) results.push(fail(`question_option_count: bad regex "${qc.matches}": ${c.error}`));
+        else re = c.re;
+      }
+      let pool = ctx.gateOptions;
+      let selector = "";
+      if (re !== undefined && qc.when_question !== undefined) {
+        const w = compileUserRegex(qc.when_question);
+        if ("error" in w) {
+          results.push(fail(`question_option_count: bad regex "${qc.when_question}": ${w.error}`));
+          re = undefined;
+        } else {
+          pool = pool.filter((g) => w.re.test(g.question));
+          selector = ` matching /${qc.when_question}/i`;
+        }
+      }
+      const bound =
+        qc.exactly !== undefined
+          ? `exactly ${qc.exactly}`
+          : [qc.min !== undefined ? `≥ ${qc.min}` : "", qc.max !== undefined ? `≤ ${qc.max}` : ""].filter(Boolean).join(" and ");
+      const flags = qc.case_sensitive ? "" : "i";
+      if (re === undefined) {
+        /* already reported */
+      } else if (pool.length === 0) {
+        // Never vacuous: a rule over every gate proves nothing on a run where no gate fired.
+        results.push(fail(`question_option_count: no question${selector} was asked (${ctx.gateOptions.length} gate(s) recorded)`));
+      } else {
+        // A label a redaction policy rewrote (a replayed cassette, a scrubbed verify-run) hides its bytes: a HIT is
+        // judged with every token replaced by a sentinel no regex can match into, and a MISS on a token-bearing
+        // label is UNKNOWN. So each count is a range [n, n + unknown], and only a range wholly inside (pass) or
+        // wholly outside (fail) the bound is a verdict — otherwise `exactly: 0` could pass on a rewritten label.
+        const counted = pool.map((g) => {
+          let n = 0;
+          let unknown = 0;
+          for (const o of g.options) {
+            if (re!.test(o.label.replace(REDACTION_TOKEN_RE, "\u0000"))) n++;
+            else if (hasRedactionToken(o.label)) unknown++;
+          }
+          return { g, n, unknown };
+        });
+        const inBound = (n: number) =>
+          qc.exactly !== undefined ? n === qc.exactly : (qc.min === undefined || n >= qc.min) && (qc.max === undefined || n <= qc.max);
+        const verdict = (c: { n: number; unknown: number }): "yes" | "no" | "unknown" => {
+          let any = false;
+          let every = true;
+          for (let k = c.n; k <= c.n + c.unknown; k++) {
+            if (inBound(k)) any = true;
+            else every = false;
+          }
+          return every ? "yes" : any ? "unknown" : "no";
+        };
+        const shown = (c: { g: { question: string; options: { label: string }[] }; n: number; unknown: number }) =>
+          `${JSON.stringify(c.g.question)} has ${c.n}${c.unknown ? ` (+${c.unknown} redacted)` : ""} of [${c.g.options
+            .map((o) => o.label.replace(REDACTION_TOKEN_RE, "(redacted)"))
+            .join(", ")}]`;
+        const bad = counted.filter((c) => verdict(c) === "no");
+        const unsure = counted.filter((c) => verdict(c) === "unknown");
+        results.push(
+          bad.length > 0
+            ? fail(
+                `question_option_count: expected ${bound} option(s) matching /${qc.matches}/${flags} on every sub-question${selector}; ${bad.length} of ${pool.length} did not: ${bad
+                  .map(shown)
+                  .join("; ")}`,
+              )
+            : unsure.length > 0
+              ? fail(
+                  `evidence unavailable: question_option_count: ${unsure.length} sub-question(s) carry option labels rewritten by a redaction policy, so the count cannot be decided: ${unsure
+                    .map(shown)
+                    .join("; ")}`,
+                )
+              : ok(
+                  `question_option_count: all ${pool.length} sub-question(s)${selector} have ${bound} option(s) matching /${qc.matches}/${flags}`,
+                ),
         );
       }
     }

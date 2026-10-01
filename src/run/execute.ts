@@ -445,6 +445,8 @@ const CONTRADICTION_GROUPS: {
       { label: "`question_options`", test: (a) => a.question_options !== undefined },
       // Same again: matching text a gate SHOWED requires a gate to have fired.
       { label: "`question_context`", test: (a) => a.question_context !== undefined },
+      // Any value, `exactly: 0` included: zero sub-questions asked fails the count, so it requires a gate too.
+      { label: "`question_option_count`", test: (a) => a.question_option_count !== undefined },
       // `: false` asserts a CONFIRMED delivery failure, which needs a gate to have fired — a presence
       // requirement in disguise. `: true` is NOT one: it passes vacuously at zero gates, so it is merely
       // inert alongside the declaration (lint says so; not worth refusing a run over).
@@ -2425,6 +2427,8 @@ const NESTED_REGEX_LEAVES: [parent: keyof Assertion, child: string][] = [
   ["path_denied", "path_matches"],
   ["question_context", "matches"],
   ["question_context", "when_question"],
+  ["question_option_count", "matches"],
+  ["question_option_count", "when_question"],
   ["question_options", "when_question"],
   ["skill_tool_used", "skill"],
   ["skill_tool_used", "tool"],

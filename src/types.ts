@@ -367,6 +367,18 @@ const toolCallObjectFields = {
     ),
 };
 
+/** Why a `question_option_count` bound is unusable, or undefined when it is fine. Shared by the load-time refine
+ *  and the evaluator, so a hand-built context gets the same answer as a parsed scenario. */
+export function questionOptionCountBoundError(v: { exactly?: number; min?: number; max?: number }): string | undefined {
+  if (v.exactly !== undefined && (v.min !== undefined || v.max !== undefined))
+    return "question_option_count: set `exactly`, or `min`/`max`, not both";
+  if (v.exactly === undefined && v.min === undefined && v.max === undefined)
+    return "question_option_count: set `exactly`, `min` or `max` — with no bound it checks nothing";
+  if (v.min !== undefined && v.max !== undefined && v.min > v.max)
+    return `question_option_count: \`min\` (${v.min}) is greater than \`max\` (${v.max}), so no count satisfies it`;
+  return undefined;
+}
+
 const subagentTypeNeedsSubagentScope = (o: { scope?: string; subagent_type?: string }) =>
   o.subagent_type === undefined || o.scope === "subagent";
 const subagentTypeScopeMessage = { message: "`subagent_type` applies only with `scope: subagent`", path: ["subagent_type"] };
@@ -895,6 +907,38 @@ export const Assertion = z.strictObject({
     .optional()
     .describe(
       "a regex matched against everything a gate put in front of the user: the question label, every option LABEL, and every option DESCRIPTION. Use this when the skill's own wording may land in any of those fields — question_asked sees only the question text and question_options compares only labels, so a sentence delivered in an option's `description` is invisible to both. Evidence is the ask-time AskUserQuestion payload (never a producer's tool_result, which would grade true whether or not the model surfaced anything). Zero gates recorded FAILS; a lane that cannot read the gate payload fails evidence-unavailable, never vacuously. This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose",
+    ),
+  question_option_count: z
+    .strictObject({
+      when_question: z
+        .string()
+        .optional()
+        .describe(
+          "regex narrowing to sub-questions whose label matches (the same string question_asked matches); omit to check EVERY sub-question that was asked",
+        ),
+      matches: z
+        .string()
+        .min(1)
+        .describe(
+          "regex counted against each option LABEL of a sub-question (descriptions are not searched). Case-insensitive unless `case_sensitive: true`. NON-EMPTY: an empty pattern matches every label",
+        ),
+      case_sensitive: z
+        .literal(true)
+        .optional()
+        .describe("match `matches` case-sensitively (default: case-insensitive, like every other regex key)"),
+      exactly: z.number().int().nonnegative().optional().describe("every selected sub-question has exactly N matching options"),
+      min: z.number().int().nonnegative().optional().describe("every selected sub-question has at least N matching options"),
+      max: z.number().int().nonnegative().optional().describe("every selected sub-question has at most N matching options"),
+    })
+    // Load-time, so a bound that checks nothing or contradicts itself is refused BEFORE the spawn. `evaluate()`
+    // repeats it because hand-built contexts (tests, library callers) never pass through parse.
+    .superRefine((v, c) => {
+      const message = questionOptionCountBoundError(v);
+      if (message !== undefined) c.addIssue({ code: "custom", message });
+    })
+    .optional()
+    .describe(
+      'count the options whose LABEL matches a regex, per sub-question, and require the count to satisfy `exactly` (or `min`/`max`) on EVERY selected sub-question — a bundled AskUserQuestion with K sub-questions is K, as in questions_count_max. For a rule over gates the run composes, such as "exactly one option per gate carries the reserved no-change prefix". A sub-question with no options counts 0; a duplicated label counts twice. Zero sub-questions asked (or none matching `when_question`) FAILS, so `exactly: 0` alone is satisfied by any unrelated gate: pair it with a positive rule or a `when_question`. Evidence is the ask-time AskUserQuestion payload; a lane that cannot read it fails evidence-unavailable, never vacuously. This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose',
     ),
   questions_count_max: z
     .number()

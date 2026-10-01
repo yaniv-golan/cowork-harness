@@ -22,7 +22,7 @@ All notable changes to this project are documented here. The format is based on
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
   schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
   assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
-  `artifact_text` / `artifact_json`, also stamps v14.
+  `artifact_text` / `artifact_json`, or a `question_option_count` assertion, also stamps v14.
 
 ### Added
 
@@ -36,6 +36,13 @@ All notable changes to this project are documented here. The format is based on
   every line with that text.
 - **`lint-skill --strict-ignores` reports a suppression that suppressed nothing as WARN instead of INFO**, so
   `--strict --strict-ignores` fails on a stale marker, `--ignore-rule` or suppressions entry.
+- **`question_option_count` counts the options a gate offered whose label matches a regex, on every sub-question.**
+  `{matches, exactly | min/max, when_question?, case_sensitive?}` passes only when the count satisfies the
+  bound on every selected sub-question, so a rule over gates the model composes, such as "exactly one option
+  per gate carries the reserved no-change prefix", no longer needs a script over `events.jsonl`. Zero
+  sub-questions asked fails, never passes vacuously; unreadable gate evidence, or a count that a
+  redaction-rewritten label could change, fails as evidence-unavailable. It grades live, on `verify-run`, and on
+  replay of a cassette with `controlOut`.
 - **`eval --dry-run` plans an A/B before you spend, and `eval --max-budget-usd` caps it.** A dry run makes every
   check the real eval makes before its first run, then prints a plan from the runs dir's history and exits 0.
   It runs no agent, builds no `--decider-cmd` / `--decider-dir` channel, and creates no eval dir (its arm
