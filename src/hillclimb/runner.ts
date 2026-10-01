@@ -201,8 +201,9 @@ async function run(
     );
 
   // A null (--ablate) run belongs in its own flow: mixed into a scored flow it would enter the trajectory.
-  if (lexists(flowAbs)) {
-    const mixed = ablationMix(flowAbs, args.ablate);
+  // The rows read once, before any write (a flow dir created since has no rows).
+  if (existing) {
+    const mixed = ablationMix(existing, args.ablate);
     if (mixed)
       throw new UsageError(
         `--ablate ${args.ablate ? "into a flow that holds scored rows" : "rows are in this flow"}: ${mixed} — run the null baseline into a sibling flow (e.g. <flow>-null)`,
@@ -476,8 +477,7 @@ function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknow
 }
 
 /** A row in the flow whose `meta.ablated` disagrees with this run, named as `<variant>/<prompt_id>`. */
-function ablationMix(flowAbs: string, ablate: boolean): string | undefined {
-  const snap = loadFlowSnapshot(flowAbs);
+function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean): string | undefined {
   for (const [variant, vs] of Object.entries(snap.variants))
     for (const line of (vs.results ?? "").split("\n")) {
       if (!line.trim()) continue;
