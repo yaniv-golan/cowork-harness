@@ -109,7 +109,8 @@ export interface AssertContextFromRunDirOpts {
   /** Authored-file capture budgets. Omitted ⇒ the capture's own defaults. */
   totalBytes?: number;
   perFileBytes?: number;
-  /** Default `"no_lost_write_back"`. */
+  /** Default `"no_lost_write_back"`. `semantic`/`both` also refuse a run whose work dir or transcript sidecar
+   *  is gone when a `semantic_matches` is asserted: either is a section of the judged document. */
   recomputeAuthored?: RecomputeAuthored;
   /** The label leading every refusal message (and passed to the turn-layout gate). Default `"verify-run"`. */
   command?: string;
@@ -327,6 +328,18 @@ export function assertContextFromRunDir(
   const vrTurn = turns[0];
   const sidecarTranscript = readTranscriptSidecar(turnArtifactPath(runDir, vrTurn, "run.jsonl"));
   const sidecarQuestions = readQuestionsSidecar(turnArtifactPath(runDir, vrTurn, "trace.json"));
+  // The transcript is a section of the judged document, so with the sidecar gone a semantic grade would read
+  // an empty transcript the live judge never saw. `transcript_contains` and friends fail evidence-unavailable
+  // on `transcriptMissing` by themselves; a judge handed the document has no such check, so refuse here.
+  // An EMPTY transcript (`""`: the sidecar is readable and the run produced no model output) still grades.
+  if (wantsSemanticEvidence && sidecarTranscript === null) {
+    return refuse(
+      "runtime",
+      `${cmd}: no readable transcript sidecar (${turnArtifactPath(runDir, vrTurn, "run.jsonl")}) — the transcript is part ` +
+        `of the document a semantic_matches judge grades, so a grade without it would read a different document than ` +
+        `the live judge did; re-record. (can't verify ⇒ not green)`,
+    );
+  }
 
   // `question_options` grades the option SET a gate offered, and the distilled trace.json drops options
   // (see parseGatesFromEvents' own doc) — so this lane reads `events.jsonl` directly. Deliberately NOT

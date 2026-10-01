@@ -16,7 +16,10 @@ deterministic re-run. Use `cowork-harness trace <id>` to digest a run. If only a
 run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-checks the `assert:` block against
 a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
 When the scenario declares `answers:`, verify-run **also** checks they still match the run's actual gates (a
-reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). Or skip
+reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). `verify-run`
+never calls the semantic judge, so a `semantic_matches` assert is not re-graded by it; after a rubric change,
+`cowork-harness regrade <run-dir> --scenario <scenario.yaml>` re-grades those against the kept run (the judge call
+is the only spend) and reports whether the judge read the same document the live judge did. Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, `cowork-harness lint
@@ -119,6 +122,13 @@ per-job directory it finds no priced run for the scenario, warns `no priced run 
 UNCAPPED`, and runs with no cap (a batch's estimate becomes a lower bound; only the `--concurrency 1`
 running total still stops it). To keep the cap, leave `--run-dir` at the default, or reuse the same
 directory across invocations (a CI cache, say) so it holds at least one priced run of that scenario.
+Under `--output-format json` this is machine-readable: the envelope's top-level `budget` object reports
+`enforced: false` (single run: at least one scenario ran with no cap) or `"lower_bound"` (a `record`
+batch), with `unpriced[]`, `runsDir` and `runsDirRedirected`; and when the runs dir was redirected the
+warning names `--run-dir` / `COWORK_HARNESS_RUNS_DIR` as the cause. A budget REFUSAL carries
+`error.code: "budget_exceeded"` plus `error.budget` (cap, refused estimate, basis, unpriced) — branch on
+that code, never on the message; a scenario that did not load has no `error.code`. On a
+`record <dir/> --dry-run` refusal, `broken[]` / `inputErrors[]` stay on the error envelope.
 
 #### Validate a skill against real documents (not a cassette)
 

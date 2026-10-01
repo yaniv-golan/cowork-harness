@@ -2,6 +2,7 @@ import { readFileSync, statSync, existsSync, openSync, readSync, closeSync } fro
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { turnArtifactPath } from "../run/turn-layout.js";
+import { collectSecrets, scrub } from "../secrets.js";
 
 // Foundations for the reflective skill-critique loop's UNCONTAMINATED, MECHANICALLY-GROUNDED evidence.
 //
@@ -248,10 +249,20 @@ export interface CritiqueItem {
   findingFingerprint?: string;
 }
 
-/** See `CritiqueItem.findingFingerprint`. Exported for harvest tooling and the unit test. */
-export function findingFingerprint(item: Pick<CritiqueItem, "idea" | "classification" | "recommendedAction">): string {
+/** See `CritiqueItem.findingFingerprint`. Exported for harvest tooling and the unit test.
+ *
+ *  Hashed over the SECRET-SCRUBBED idea and action — the text the report files hold — never the raw text.
+ *  The fingerprint is written verbatim next to the scrubbed fields, so a hash of the raw text would let
+ *  anyone holding a report confirm a guessed scrub value offline (hash each candidate, compare); with a
+ *  low-entropy value (a client name, a project code) that is a lookup, not a search. Text that carries no
+ *  scrub value hashes byte-identically to before, so existing clusters are unaffected. */
+export function findingFingerprint(
+  item: Pick<CritiqueItem, "idea" | "classification" | "recommendedAction">,
+  secrets: string[] = collectSecrets(),
+): string {
+  const s = (t: string) => (secrets.length ? scrub(t, secrets) : t);
   return createHash("sha256")
-    .update(`${norm(item.idea)}\n${item.classification}\n${norm(item.recommendedAction)}`)
+    .update(`${norm(s(item.idea))}\n${item.classification}\n${norm(s(item.recommendedAction))}`)
     .digest("hex")
     .slice(0, 16);
 }

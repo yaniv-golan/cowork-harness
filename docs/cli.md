@@ -266,6 +266,97 @@ when interactive), or `first` (pick
 option 1, loudly warn). Pick with `--on-unanswered`; left unset, `skill` is **adaptive** (`prompt` on
 a TTY, `fail` when piped/CI) and `run` is always `fail`.
 
+
+### Re-grading a kept run (`regrade`)
+
+`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--judge-model <model-id>] [--authored-total-bytes <N>] [--allow-doc-drift] [--output-format json]`
+
+`verify-run` re-checks assertions but never calls the semantic judge, so a `semantic_matches` assert cannot be
+re-graded with it. `regrade` does exactly that: it rebuilds the judged document from the kept run dir and grades
+the scenario's `semantic_matches` asserts again. Every other assert is listed as *not re-graded*. The agent does
+not run again; the judge call is the only spend.
+
+- **The document is rebuilt the way the live run built it.** The authored files are recaptured from the kept work
+  dir with the budget the live run recorded (`result.json` `authoredCapture`) and with the scenario's
+  `evidence_files` as priority globs. Every section is scrubbed before it reaches the judge, but with **this
+  process's** secret set (the known credential variables plus `COWORK_HARNESS_SCRUB_KEYS` /
+  `COWORK_HARNESS_SCRUB_VALUES` as set now), not the live run's: a value the live run scrubbed that this process
+  does not know is **not** scrubbed. Run `regrade` with the same scrub settings as the live run. A different scrub
+  set also changes the scrubbed bytes, so it shows up as `docMatchesLive: false` from redaction alone, not from
+  any change in the evidence.
+- **Whether it matches is measured, not assumed.** Each assert's document is fingerprinted and compared, section
+  by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
+  (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's
+  `evidence_files` or `include_subagent_text`, or the capture budget, changed, so a different document is
+  expected), `unknown` (this assert's scope has no live fingerprint), `live_refused` (every live assert with this
+  scope refused its evidence and no fingerprint was recorded — in practice a run from before fingerprints were
+  recorded, or one where no judge ran for the refused assert; a refused assert that did record one is compared
+  like a graded one), or `not_graded` (this re-grade's own assert refused its evidence and no document was handed
+  to a judge). While the judge is called before a refusal is decided, an assert that refuses has still had its
+  document read, so it is compared and reported like any other — `false` included — and its refusal shows in its
+  own pass and message. The run-level value is the worst over the asserts, in the order `false`, `live_refused`,
+  `unknown`, `scope_changed`, `true` (so "differs by design" never hides "never checked"); it is `not_graded` only
+  when every assert is. `unknown` and `live_refused` are named in a
+  `::warning::` before the judge call: those documents could not be checked for drift or for a secret the live
+  run scrubbed, and this process's scrub set is all that protects them. None of these change the exit code.
+  If no judge ran for any assert (not possible while a refusing assert's judge is still called), the regrade
+  file is named after the requested `--judge-model`, else `not-graded`.
+  A `false` says only that the bytes differ, not why:
+  an authored file changed in the kept work dir, a different secret-scrub set, and a sub-agent section can each
+  cause it, and the listed sections are what tell them apart.
+- **Drift is checked before the judge is called, from the live run's own inputs.** For every run dir, before any
+  judge call, each LIVE `semantic_matches` assert that recorded a `judgedDoc` has its document rebuilt from the
+  live inputs — its own `evidence_files` and `include_subagent_text`, the live run's `evidence_files` union and
+  its recorded capture budget (for a run recorded before `authoredCapture` existed, the `--authored-total-bytes`
+  value you pass) — scrubbed with this process's secrets, and compared with that `judgedDoc`. Any
+  difference is refused (exit `2`), naming the live assert and the differing sections: an authored file changed
+  since the run, a sub-agent section, or a value the live run scrubbed that this process does not (refusing is
+  what keeps that value from being sent). This check does not depend on the new scenario, so a changed scope or
+  an `--authored-total-bytes` override (`scope_changed`) does not skip the check of what the live judge read.
+  `--allow-doc-drift` grades anyway; the grade is then reported with its own `docMatchesLive` and, when that is
+  `false`, a warning.
+  **What is not checked:** a live assert that recorded no `judgedDoc` (`unknown`) or refused its evidence
+  and recorded no fingerprint (`live_refused`) — neither for drift nor for an unscrubbed secret, though it is warned about; and content that only a widened `evidence_files` scope or a larger `--authored-total-bytes`
+  brings in (a file the live cap left out, or a larger part of one). The live judge never read that content, so
+  nothing can be compared with it and a secret in it that this process does not know is not detected. It is not
+  refused: it is graded, named in a `::warning::` before the judge call, and listed in `uncheckedSections`
+  (`{assertionIndex, kind, path?}`, in the file and on each `runs[]` entry).
+- **Output.** Each run dir gets `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`, holding the re-graded
+  asserts (per-claim grades and rationales, judge model, usage, cost, prompt hash and document fingerprint),
+  `docMatchesLive` with the differing sections, the not-re-graded asserts, the `harnessVersion` that wrote it,
+  and the SHA-256 of the `result.json` it was graded against. The whole file is scrubbed with the same secret set
+  before it is written, and records `scenarioSha256`, the SHA-256 of the scenario file's bytes. Re-grades with
+  different judge models sit side by side. `result.json` is never modified
+  and no run-index row is written, so `stats` does not count a re-grade as a run. The same run dir named twice,
+  or reached through a symlink, is graded once. The JSON envelope, the text report and every refusal message are
+  scrubbed with the same secret set. Each `runs[]` entry of the JSON envelope carries `scenarioSha256` too.
+- **Spend and invalid grades.** The file, each `runs[]` entry and the JSON envelope carry `judgeCostUsd` (the
+  sum of the priced judge calls, retries included; absent when none was priced — unpriced is never `$0`) and
+  `unpricedGrades` (how many grades had no price; when it is above `0` the total is a floor). The envelope's
+  top-level pair covers every run dir. The file and each `runs[]` entry also carry `invalidGrades`: asserts the
+  judge could not grade (it failed twice — an outage or a malformed grade), and the file carries `regraded`, the
+  number of asserts graded. A round in which every grade is invalid is still written, with
+  `invalidGrades` equal to `regraded`, so a judge outage can be told apart from a failing grade. The text report
+  counts invalid grades separately from failures and prints the judge spend per run and in total.
+- **Judge model.** `--judge-model` grades every assert with one model; without it each assert's `judge_model`,
+  else `COWORK_HARNESS_JUDGE_MODEL`, else the default applies. Either way the model must name exactly one model —
+  an alias such as `opus` is refused, because it resolves to whatever is newest at call time.
+- **Refusals (exit `2`, before any judge call; one refused run dir stops the whole batch):** a multi-turn run dir,
+  a partial, replay or chat run, a pruned work dir, a missing or unreadable transcript sidecar (`run.jsonl` — the
+  transcript is a section of the judged document), a rebuilt document that differs from the live one (unless
+  `--allow-doc-drift`), a scenario with no `semantic_matches` assert, and a run
+  recorded before `authoredCapture` existed. For the last, pass `--authored-total-bytes` with the budget that run
+  used (`65536` unless `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` was set); on a newer run the flag overrides the
+  recorded budget and the result is reported as `scope_changed`.
+- **Exit codes:** `0` every re-graded assert passes · `1` any fails or is judge-invalid · `2` usage or refusal,
+  and also a failure writing a regrade file after earlier run dirs were already graded (their files stay
+  written; the judge calls for them were spent). Text mode writes its
+  report to stderr; `--output-format json` prints one payload document (`{tool, version, command, ok, runs[],
+  error}`) on stdout. `runs[]` holds only graded run dirs: a refusal refuses the whole batch and prints the error
+  envelope instead.
+
+The regrade file's layout is experimental and may change in a minor release.
+
 ## Exit codes
 
 **Exit-code space is per-command, not global** — the same number means different things on different
@@ -340,6 +431,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter** (key flags below; `replay --explain` prints the evidence behind every passing assert) | **token-free, Docker-free CI** from a once-recorded run |
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path/machine-inventory) + a staleness check (allowlist and skip flags below); a dir argument scans `*.cassette.json` non-recursively | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
+| `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for |
 | `trace <run-id>` | Digest a run's `events.jsonl` through one of eight `--view`s (tools, questions, dispatches, tool-durations, tool-errors, files, usage, subagent-research). Per-view detail: see [Flags worth knowing](#flags-worth-knowing) | "how many sub-agents *actually* dispatched, and which?" — plus per-tool timings, per-call stderr, a workspace-file diff, per-model cost, or each dispatch's WebSearch query+result |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
@@ -386,6 +478,7 @@ The full list is always `<command> --help`. This section carries the detail the 
 - `status`: reads `status.json` rather than shelling out to `ps aux`, which is unreliable across sandbox/PID-namespace boundaries. Pointing it at a run-dir **root** (no `status.json` of its own) resolves to the newest session under it (scanned up to two levels deep) instead of failing with "no status.json". `--follow` streams one line per change until done/error, and staleness detection catches a `SIGKILL`'d process. `--latest-for <scenario-name-or-slug>` resolves the NEWEST run dir for a scenario by actual run time (its `.origin`/`result.json` timestamps) — **not** `ls -td`'s directory mtime, which can return a stale prior-session dir. The text summary goes to **stderr** (stdout stays empty); `--output-format json` and `--follow` write to stdout, so poll with `--follow` rather than a shell loop over stdout.
 - `stats`: reads `<runsRoot>/index.jsonl`, written automatically at every result; `--since`/`--baseline`/`--branch` filter; `--skill-hash <prefix>`/`--label <tag>` narrow to one generation of the iterate-across-fixes loop and `--group-by scenario|skill-hash|label|fidelity` splits per generation — or per effective fidelity tier — instead of aggregating across them (a window spanning >1 generation or >1 tier warns; under `skill-hash`/`label` grouping, rows lacking the field are excluded from grouping and counted, never bucketed blank — the `fidelity` key is total, so nothing is ever excluded under that grouping); `--runs` lists the individual runs behind each summary with their `skillHash`/`runLabel` (each `runs[]` entry also carries `fidelity` — the tier that run actually executed at, `effectiveFidelity ?? fidelity` — in the `--output-format json` envelope only; the text listing is unchanged); `--last <n>` windows per-group; `--reindex` rebuilds the index from the physical run-dir tree (the migration path for pre-index runs), reconstructing each critique's cost roll-up from its run dir along the way.
 - **What a run's cost counts:** `result.json`'s `cost.usd` (the index row's `costUsd`) is the agent session's own SDK-reported spend. The `semantic_matches` judge and the LLM decider (`on_unanswered: llm` / `--decider-llm`) are separate model calls and are **not** included — so `max_cost_usd`, `stats` totals and percentiles, and `--max-budget-usd` (which estimates from prior runs' `cost.usd` only, and whose running total adds the same figure) all leave that spend out. A scenario with several `semantic_matches` asserts or a busy decider costs more than these figures show. Both are recorded separately instead: the judge's per assert (`assertions[].judgeCostUsd`, tokens in `assertions[].judgeUsage`) and per index row (`judgeCostUsd`); the LLM decider's per run (`deciderCostUsd`, tokens in `deciderUsage` — the usage its completed calls reported; a call that threw and the transport's internal retries are not counted, so it is a floor) and per index row (`deciderCostUsd`). `stats --runs` prints both beside each run's cost. Each is absent, never `0`, when no call was priced.
+- **`--max-budget-usd` in JSON:** the pre-flight estimates from the runs dir's own `index.jsonl`, so a scenario with no priced run there runs **uncapped** — and under `--output-format json` the envelope says so in a top-level `budget` object (`enforced: false` + `unpriced[]`; `"lower_bound"` for a `record` batch whose estimate counted unpriced scenarios as $0; `runsDir` / `runsDirRedirected` say which index was read). Gate on `.budget.enforced == true` if an uncapped run must not pass. A refusal is the error envelope with `error.code: "budget_exceeded"` and `error.budget` (the refused estimate) — test `error.code`, not the message; every other error omits it. A `--run-dir` that is new on each invocation starts every scenario unpriced; reuse one runs dir to keep the cap enforceable. Shape: [SPEC.md §11](../SPEC.md).
 - `diff`: `--changelog` renders known-field prose for a baseline diff; `--view tools|transcript|artifacts|meta` narrows a run/cassette diff to one section; normalization (default on) masks per-run noise (ids/timestamps/session markers/host paths) so two runs of the same scenario diff as identical — `--no-normalize` compares raw values.
 - `critique`: advisory — a discovery lead, **not an independent attestation** (the skill under review can steer its own grade). `--corpus-only` is the no-spend form: it stops after resolving the target and prints the evidence corpus a graded run would package — `corpusBytes`/`corpusCeiling`/`corpusCuts`/`corpusExcluded`/`corpusPackaged`/`corpusOmitted` — with `--prompt` optional and every other run-shaping flag validated but ignored (named in `ignoredFlags`); the number is a FLOOR (plugin-root references the agent reads during a real graded turn add to it), and exit 0 means *measured*, not *under the ceiling* — gate on `corpusBytes <= corpusCeiling` yourself. See [docs/critique.md → Knowing before you pay](./critique.md#knowing-before-you-pay). It accepts the `skill` flags a graded run needs — `--upload`/`--folder`/`--plugin` reach both spawned turns, `--answer`/`--decider-*` the graded turn only; anything that can't work is refused with a reason (full table in `critique --help`). Runs at `--fidelity container` (default), `hostloop` (a writable `--folder` there additionally needs `--allow-host-writes`), or `cowork` — which resolves once via the baseline's loop gate to one of those two and pins BOTH turns to it; `microvm`/`protocol` are refused, each with a stated reason. A multi-skill plugin needs `--skill <name>` (refused pre-spend otherwise). It persists `critique-report.json` + the armored evidence package to the run dir (`--out` copies the report; a salvage file lands on exit 2), reports per-critique cost across all four workloads and appends a roll-up row to the run index so a batch's spend is trendable — the two evaluator passes produce no run of their own, so read it back as `stats`' `total=`, never the cost percentiles, which are per-run — and stamps each finding with a cross-input `findingFingerprint`.
 
@@ -661,6 +754,9 @@ Each is overridden by the matching explicit flag.
 
 - `COWORK_HARNESS_SCRUB_KEYS=<KEY1,KEY2>` — adds extra env-var names whose values are redacted from logs (beyond the known auth tokens + `ANTHROPIC_CUSTOM_HEADERS`).
 - `COWORK_HARNESS_SCRUB_VALUES=<v1,v2>` — redacts literal values regardless of env.
+- Where the redaction applies: every file a run writes (`result.json`, `run.jsonl`, `trace.json`, the raw stream logs, a recorded cassette's run data, an `eval` dir's `runs.jsonl`) **and** everything the CLI prints to stdout and stderr, in both `--output-format json` and text. The set is the same for all of them — the known auth tokens, `COWORK_HARNESS_SCRUB_KEYS`, `COWORK_HARNESS_SCRUB_VALUES`, each also in its base64, URI-encoded, JSON-escaped and `Bearer ` forms — read from the environment after every `.env`/`--dotenv` has loaded. Display text that is cut to fit a line is scrubbed before the cut.
+- The scrub replaces matching **text**, so give it secrets of realistic length. A very short or common value, or one equal to a JSON token (`e`, `1`, `true`, `u`), is redacted wherever that text appears — help text, JSON syntax and `\u` escapes included — and can make `--output-format json` output (and `result.json`) unparseable: with `=e`, `doctor --output-format json` prints `"ok":fals[REDACTED]`. An `eval` dir's `runs.jsonl` is the exception: it scrubs only its free-text fields — `thrown.message`, `result.finalMessage` (before its 300-character cap) and `result.unansweredGate.message`/`.hint` — as values, so it stays valid JSON; its authored assertions, rubric claims and identifier/hash fields are kept as written, like the eval manifest's frozen scenario.
+- Not scrubbed: output of a child process that writes to the terminal directly (`chat --raw`, a `--decider-cmd` helper's stderr, `lint` in text mode, `limactl`, `docker build`); Node's default printer for an uncaught exception; a secret split across two separate writes (e.g. `chat`'s readline echo); a string written in a non-UTF-8 encoding; and the copy of the scenario a cassette or an `eval` manifest freezes as written. A written Buffer that contains a secret is re-encoded as UTF-8 after the scrub, so any invalid UTF-8 in it becomes U+FFFD.
 - `COWORK_HARNESS_REDACT_PATTERNS=<rx1,rx2>` — extends the committed-cassette privacy layer that scrubs recorded `controlOut` before a cassette is written for commit.
 - `COWORK_HARNESS_REDACT_KEYS=<k1,k2>` — extends the same committed-cassette privacy layer.
 

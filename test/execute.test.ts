@@ -56,8 +56,15 @@ describe("resolveSubagentConfigRoot — per-tier config-dir root", () => {
     expect(resolveSubagentConfigRoot("microvm", { configDir, workRoot })).toBeUndefined();
   });
 
-  it("other tiers (e.g. protocol) return undefined — no real agent binary spawns", () => {
+  it("protocol uses only the root spawnProtocol reported — never configDir on its own", () => {
+    // Off managed config the host agent reads the operator's REAL config dir; spawnProtocol then reports no
+    // root, and nothing here may substitute one.
     expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId })).toBeUndefined();
+    expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId, protocolConfigRoot: "/managed" })).toBe("/managed");
+  });
+
+  it("an unknown tier returns undefined", () => {
+    expect(resolveSubagentConfigRoot("nonsense", { configDir, workRoot, sessionId, protocolConfigRoot: "/managed" })).toBeUndefined();
   });
 });
 

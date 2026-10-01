@@ -49,6 +49,7 @@ const PHANTOM_EXCEPTIONS: Readonly<Record<string, readonly string[]>> = {
   record: [],
   replay: [],
   "verify-cassettes": [],
+  regrade: [],
 };
 
 describe("usage-guard registry shape", () => {
@@ -132,7 +133,7 @@ describe("phantom-flag reverse guard — every --flag token IN a command's usage
     });
   }
 
-  it("PHANTOM_EXCEPTIONS is empty for all three commands today (a non-empty entry must be inspected, not assumed)", () => {
+  it("PHANTOM_EXCEPTIONS is empty for every command today (a non-empty entry must be inspected, not assumed)", () => {
     for (const [command, exceptions] of Object.entries(PHANTOM_EXCEPTIONS)) {
       expect(exceptions, `${command}`).toEqual([]);
     }

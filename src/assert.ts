@@ -381,7 +381,8 @@ export interface AssertContext {
    *  is INCOMPLETE, so `semantic_matches` fails evidence-unavailable rather than trusting a grade the judge
    *  made without the omitted content. Absent = capture was complete (or lane doesn't author files). */
   authoredFilesHealth?: import("./run/artifacts.js").AuthoredFilesHealth;
-  /** Secret values to scrub from the judged document before it leaves for the judge. */
+  /** Secret values to scrub from everything that leaves for the judge — the judged document AND each
+   *  `semantic_matches` rubric claim — and from the rationale it returns. */
   secrets?: string[];
   toolsCalled: Set<string>;
   subagentTools: Set<string>;
@@ -935,8 +936,29 @@ export async function runSemanticJudges(
     }
     return d;
   };
+  // The run's secret set — the same one `composeJudgedDocument` scrubs the judged document with.
+  const secrets = ctx.secrets ?? [];
   for (const a of assertions) {
     if (a.semantic_matches === undefined) continue;
+    // The RUBRIC leaves for the (external) judge model exactly as the document does, so it is scrubbed
+    // with the same set. Only the claim text SENT changes: the scenario's assertion object is never
+    // mutated (it keys every ctx map and is echoed into result.json), a rubric the scrub leaves unchanged
+    // is sent as the very same array, and the prompt hash cannot move — `JUDGE_PROMPT_HASH` is the
+    // template's identity (filled with placeholder claims), never a hash over this rubric.
+    const rubric = a.semantic_matches.rubric;
+    const scrubbedRubric = secrets.length ? rubric.map((c) => scrub(c, secrets)) : rubric;
+    const redactedIdx = scrubbedRubric.flatMap((c, i) => (c !== rubric[i] ? [i] : []));
+    const sentRubric = redactedIdx.length ? scrubbedRubric : rubric;
+    // A claim that NAMES a secret cannot be graded for it: the judge sees `[REDACTED]` (and the judged
+    // document was already scrubbed of the value), so "must not contain <secret>" becomes a different
+    // claim. Loud, once per assert, naming indexes only — never the claim text, which holds the secret.
+    if (redactedIdx.length)
+      warn(
+        `::warning:: [semantic_matches] rubric claim ${redactedIdx.length === 1 ? "index" : "indexes"} ${redactedIdx.join(",")} ` +
+          `contained a scrubbed secret value and ${redactedIdx.length === 1 ? "was" : "were"} sent to the judge redacted, so ` +
+          `${redactedIdx.length === 1 ? "it" : "they"} cannot be graded for that value. Assert on a secret deterministically ` +
+          `instead: \`transcript_not_contains\` or \`artifact_text: {not_contains}\` (both read the raw evidence on the live run).\n`,
+      );
     const built = judgedDocument(a.semantic_matches.include_subagent_text === true, a.semantic_matches.evidence_files);
     const answer = built.doc;
     ctx.semanticDocInfo.set(a, {
@@ -963,7 +985,7 @@ export async function runSemanticJudges(
     let tokens: TokenUsage | undefined; // same basis as `cost`
     for (let attempt = 0; attempt < 2 && graded === undefined; attempt++) {
       try {
-        graded = await j(a.semantic_matches.rubric, answer);
+        graded = await j(sentRubric, answer);
       } catch (e) {
         if (attempt === 1) {
           ctx.judgeInvalid.add(a);
@@ -990,7 +1012,17 @@ export async function runSemanticJudges(
       // The judged document was scrubbed before it left, but the rationale is fresh model output that can
       // quote it — scrub it again, then normalize and cap, before it is stored (and so reaches result.json
       // and the footer). Done here, for every judge, so a stub or future judge cannot skip it.
-      const secrets = ctx.secrets ?? [];
+      // A claim the rubric scrub altered is restored to the scenario's own text BY INDEX (the alignment
+      // contract), so everything downstream sees what an unscrubbed grade would have produced — the
+      // persisted result.json is then scrubbed whole on write, exactly as before. Claims the scrub did not
+      // touch keep whatever text the judge returned.
+      if (sentRubric !== rubric) {
+        graded = graded.map((c) =>
+          Number.isInteger(c.index) && c.index >= 0 && c.index < rubric.length && sentRubric[c.index] !== rubric[c.index]
+            ? { ...c, claim: rubric[c.index] }
+            : c,
+        );
+      }
       graded = graded.map((c) => {
         if (c.rationale === undefined) return c;
         const { rationale, ...rest } = c;
