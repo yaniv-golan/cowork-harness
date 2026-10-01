@@ -21,6 +21,7 @@ The full schema below documents every optional field.
 - [Scripted answers](#scripted-answers)
 - [Assertions](#assertions)
 - [Starting from a saved workspace (`workspace_fixture:`)](#starting-from-a-saved-workspace-workspace_fixture)
+- [Numeric metrics (`metrics:`)](#numeric-metrics-metrics)
 - [Output](#output)
 - [Running](#running)
 - [The `microvm` tier](#the-microvm-tier--vm-init-prerequisites--troubleshooting)
@@ -86,6 +87,10 @@ allow_host_hooks: true                   # OPTIONAL — required consent to run 
 workspace_fixture: fixtures/after-step-1 # OPTIONAL — a directory (relative to THIS file) copied into the
                                          # session's outputs/ before turn 1, to test one late step of a
                                          # pipeline (see "Starting from a saved workspace" below)
+
+metrics:                                 # OPTIONAL — numbers to measure, reported in RunResult.metrics
+  - { id: words, artifact: outputs/stats.json, path: totals.words, better: higher, unbounded: true }
+                                         # never part of the verdict (see "Numeric metrics" below)
 
 assert:                                  # pass/fail checks (see below)
   - result: success
@@ -938,7 +943,7 @@ Two consequences for CI:
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
-`assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks` and `workspace_fixture` — every field the schema defines — are
+`assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks`, `workspace_fixture` and `metrics` — every field the schema defines — are
 all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.
 
@@ -1124,7 +1129,9 @@ any scenario, fixture or not; it arms the pre-run manifest. Authorship is decide
 `authored: true` fails evidence-unavailable, so a turn never takes credit for what an earlier turn wrote. It
 applies to a regular file: a directory fails (assert on a file the step writes inside it), a hard-linked file is
 evidence-unavailable (the authored-file capture the judge grades excludes it too), and a symlink — or a path reached through a symlinked
-directory — is never authored evidence. The file is looked up by its on-disk name, so on a case-insensitive
+directory — is never authored evidence. A path outside the folders the pre-run manifest walks (`outputs/`,
+`uploads/` and the connected folders) — a staged plugin or skill file, say — is evidence-unavailable: it is
+absent from the manifest because it was never walked, not because the run created it. The file is looked up by its on-disk name, so on a case-insensitive
 filesystem `outputs/REPORT.md` is the fixture's `report.md` (likewise an NFC/NFD spelling of a non-ASCII
 name). A copy or rename of a fixture file to a NEW name is new content at a new path and counts as authored,
 exactly as the judge's authored capture counts it.
@@ -1140,6 +1147,69 @@ staleness check: replay recomputes it from the fixture directory, and a changed 
 fixture that cannot be found or scanned is `unverifiable-fixture`, which fails the replay. Only the
 owner-executable bit counts among permission bits. A cassette that uses `workspace_fixture` or `authored`
 stamps cassette format v14 ([cassette.md](./cassette.md)).
+
+## Numeric metrics (`metrics:`)
+
+A metric is a number the scenario measures: it is read from a JSON file the run wrote and reported in
+`RunResult.metrics` (and in `regrade`'s output). It never changes the verdict — assert on it with `artifact_json`
+if a value must pass or fail.
+
+```yaml
+metrics:
+  - id: words                  # the name it is reported under; also a hillclimb grade key
+    artifact: outputs/stats.json   # a JSON file, relative to the work root
+    path: totals.words         # dotted path to the number (items.0.score; items.length reads an array's length)
+    better: higher             # REQUIRED: higher | lower
+    scale: 5000                # the UPPER BOUND of a bounded metric's range …
+    # unbounded: true          # … or this, for one with no natural ceiling — set EXACTLY ONE of the two
+    min: 0                     # OPTIONAL: the floor of the range (default 0); must be below scale
+```
+
+Refused at load: a missing `better`, both or neither of `scale` / `unbounded`, an id that is not word characters,
+dots and hyphens (at most 129, not all dots), an id that collides with a key the hillclimb runner generates (`pass`,
+`claims`, `a<N>…`, `*_present`, `*win*`, `*both_bad*`), two ids that differ only in letter case, and an `artifact`
+that starts with `/` or a drive root (`c:/`), contains a `..` segment, a backslash or a NUL, or is blank (a colon alone is fine: `a:b.json` is a POSIX name), and a `min` that is not below `scale`. The published schema mirrors all of these except the duplicate-id check and `min` below `scale`. The range is
+`[min, scale]`: a metric that runs from -1 to 1 is `min: -1, scale: 1`, not `scale: 2`. Declaring a metric arms the
+pre-run manifest.
+
+`RunResult.metrics` has one entry per declared id, in declaration order, each with exactly one of `value` (a finite
+number) or `unavailable` (why not). It is absent when the scenario declares none (`metrics: []` included), on a
+partial run, on `chat`, on a replay that could not drive the cassette, and on a replay whose frozen declaration is
+invalid (warned). A missing value is never reported as `0`, and a string is never converted to a number. A number is
+read as a double, so an integer above 2^53 loses precision.
+
+| `unavailable` | meaning |
+|---|---|
+| `missing_artifact` | no readable regular file at `artifact` (absent, a directory, a FIFO or other special file, or a symlink leaving the work root), or (replay) a body that could not be read at record time |
+| `missing_path` | the JSON has no value at `path` |
+| `not_json` | the file is not valid JSON |
+| `not_a_number` | the value is not a finite number (a string, a boolean, `null`, an object, or a number too large for a double) |
+| `readonly` | the file is a read-only connected-folder input |
+| `size` | the file is over the 10 MiB body cap, or (replay) over the cassette's inline-body cap |
+| `remote` | `lane: remote` — the lane's filesystem is not locally observable |
+| `pruned` | there is no work tree to read (a replay of a cassette with no artifact manifest), or (regrade) the kept file differs from what the run wrote |
+| `pre_run` | the run did not write the file — see below |
+
+**`pre_run`: a metric reads only what the run wrote.** "Wrote" is the rule `authored: true` uses: the file's content
+hash compared with the pre-run manifest. A file absent before the run is new; one whose hash changed was rewritten;
+either is measured. There is no record of the write itself, so **a file the run rewrote unchanged is treated as
+untouched**: a fixture file the step rewrote with identical bytes is `pre_run`, exactly like one it never opened —
+`pre_run` does not mean the agent did nothing. `pre_run` also covers every case where authorship cannot be decided,
+as `authored: true` does: a `--resume` turn, a hard-linked file, a symlink at the path or a path through a
+symlinked directory, a missing pre-run manifest or hash, and a path outside the folders the pre-run manifest walks.
+So a metric should read a file under `outputs/` or a connected folder.
+
+**Replay** measures the frozen declaration against the cassette's manifest, so it needs the body inline. A metric the
+recording cannot support — no artifact manifest, a body over the inline cap or unreadable at record time, a missing
+pre- or post-run hash — is reported unavailable and named once in a `::warning::`, with a remedy where a re-record
+would measure it (raise `--max-artifact-bytes` for `size`); one that states what the run did (a link, an untouched
+file, a file outside the walked folders) is not warned about. `replay --assert-from` and
+`--reassert` measure the on-disk declaration, as they do for `assert`, and `--write` freezes it with the assert
+block; a plain replay notices an on-disk `metrics:` block that differs from the frozen one. **`verify-run`** and
+**`regrade`** re-measure the current declaration from the kept work dir, but only while a file's bytes equal the
+run's recorded post-run hash; otherwise `pruned` (a file under `uploads/` has no recorded hash, so it is always
+`pruned` there). `verify-run` needs no judge, so it is the way to re-measure a scenario with no `semantic_matches`
+or `semantic_pairwise` assert, which `regrade` refuses (`no_semantic_asserts`).
 
 ## Output
 

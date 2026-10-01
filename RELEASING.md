@@ -72,12 +72,14 @@ SHA.
 
 > **Tag the MERGE COMMIT (main HEAD after the merge), never the release-branch head — and here's why.**
 > The publish gate (`require-ci-success`) queries `ci.yml` runs with `--event push` for the tagged SHA.
-> `ci.yml` only triggers `on: push` for **`main`** (plus `pull_request` / `workflow_dispatch`), so a
-> release-branch/PR head has *only* a `pull_request` run — which the `--event push` filter ignores.
-> Tagging that SHA makes the gate poll ~30 min and then FAIL. Only the merge commit (produced by
-> `gh pr merge`, then `git pull`ed onto `main`) has a push-event `ci.yml` run. This is why Phase 3 tags
-> `main` HEAD after the merge — do **not** "optimize" by tagging the branch commit whose PR CI you just
-> watched go green.
+> Originally `ci.yml` triggered `on: push` only for **`main`**, so a release-branch head had *only* a
+> `pull_request` run, which the `--event push` filter ignores, and tagging it made the gate poll ~30 min
+> and then FAIL. `ci.yml` now also runs on pushes to `release/**` (for
+> [maintenance releases](#maintenance-patch-off-tag-release)), so a pushed `release/X.Y.Z` head *does*
+> have a push-event run and the publish gate alone **no longer catches** this mis-tag in the normal flow.
+> `npm run preflight -- --for-tag` (HEAD == `origin/main`) is what catches it now. Phase 3 still tags
+> `main` HEAD after the merge, because that is the commit `main` actually ships. Do **not** "optimize" by
+> tagging the branch commit whose CI you just watched go green.
 
 When you query runs by SHA, use the **full 40-char SHA** (`git rev-parse HEAD`) —
 `gh run list --commit <short-sha>` silently returns empty. If you mis-tag: `git push origin
@@ -323,6 +325,85 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       *Why this step exists:* 2.0.0 became the default install for every unpinned consumer the moment CI
       went green — a breaking hash-format epoch plus a flagship replay that exits 1 from an npm install —
       and `latest` had to be rolled back to 1.25.0 by hand (2026-08-22).
+
+## Maintenance (patch-off-tag) release
+
+Use this when a fix must ship on an already-released line **without** shipping whatever has landed on
+`main` since (4.2.1, for example: a security fix cut from `v4.2.0` while `main` carried unreleased
+work). The tag is cut on the release branch, never on `main`, so the "tag the MERGE COMMIT" rule above
+does not apply here. Everything else in the normal flow does.
+
+1. **Cut the branch from the previous tag on that line** (`v4.2.0` for 4.2.1), not from `main`:
+   ```
+   git fetch origin --tags
+   git checkout -b release/X.Y.Z vX.Y.<previous patch>
+   ```
+2. **Apply the fix.** Cherry-pick it from `main` if it landed there first (`git cherry-pick -x <sha>`),
+   or commit it on the branch and cherry-pick it to `main` afterwards. Either way the two commits share a
+   patch-id, so the back-merge in step 7 resolves cleanly in `main`'s favour.
+3. **Bump versions on the branch** with `npm run bump -- X.Y.Z --write`, and add a `## [X.Y.Z] — DATE`
+   section to the **branch's** `CHANGELOG.md`, including the cassette re-record verdict. `release.yml`
+   refuses a tag whose `package.json` version or CHANGELOG heading does not match. Run the local gates
+   from the [Checklist](#checklist) (`npm run preflight`, `format:check`, the typecheck, `npm run ci`).
+   Commit (`release: X.Y.Z — <summary>`).
+4. **Push the branch.** `ci.yml` triggers `on: push` for `branches: [main, "release/**"]`, so the branch
+   head gets the **push-event** `ci.yml` run that the publish gate (`require-ci-success`) looks for. No PR
+   is needed, because this branch is never merged as-is.
+   ```
+   git push origin release/X.Y.Z
+   gh run watch $(gh run list --workflow=ci.yml --branch release/X.Y.Z --event push --limit 1 --json databaseId --jq '.[0].databaseId')
+   ```
+   `ci.yml` cancels in-progress runs on every ref except `main`, so a second push to the branch cancels the
+   first push's run. Confirm the run for the **exact** SHA you will tag concluded `success`
+   (`gh run list --workflow=ci.yml --commit $(git rev-parse HEAD) --event push`, full 40-char SHA).
+5. **Tag the branch HEAD, only after that run is green**, and push the tag:
+   ```
+   git tag vX.Y.Z                # on release/X.Y.Z HEAD
+   git push origin vX.Y.Z
+   gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+   ```
+   Do **not** run `npm run preflight -- --for-tag` here. It hard-fails by design whenever
+   `HEAD != origin/main`, which is always true for a maintenance tag. The step-4 run check replaces it.
+6. **Publish and promote, with care for the dist-tags.** `release.yml` publishes with `--tag next`, and
+   npm points `next` at whatever was just published, so a patch on an older line can move `next`
+   **backwards**. Smoke the artifact exactly as in the [Checklist](#checklist), then:
+   ```
+   npm dist-tag ls cowork-harness
+   ```
+   - `latest`: run `npm dist-tag add cowork-harness@X.Y.Z latest` **only if X.Y.Z is higher than the
+     current `latest`**. If `main` has already shipped a higher version, leave `latest` alone. Users of
+     the older line pin `@^X.Y` or the exact version.
+   - `next`: if a higher version than X.Y.Z was on `next` before this publish, point it back
+     (`npm dist-tag add cowork-harness@<that version> next`).
+
+   Both commands need the same real-terminal 2FA as the normal promote step. The `vX`/`vX.Y` alias tags
+   need nothing: `release.yml` never moves an alias backwards, so each of `vX.Y` and `vX` moves
+   only if this patch is the highest on the line it names.
+7. **Merge the release branch back into `main` with a real merge commit**, so `vX.Y.Z` becomes an ancestor
+   of `main` (`git describe --tags` on `main` then sees it, and the next release's history includes it):
+   ```
+   git checkout -b chore/backmerge-X.Y.Z origin/main
+   git merge --no-ff vX.Y.Z
+   ```
+   Resolve conflicts this way:
+   - **CHANGELOG.md**: keep `main`'s copy (`git checkout --ours CHANGELOG.md`). If it has no
+     `## [X.Y.Z]` section yet, copy the branch's section in at its version-ordered position below
+     `## [Unreleased]`.
+   - **Source, tests, docs**: where `main` already carries the fix and has evolved it further, `main` wins.
+   - **Version strings**: run `npm run bump -- X.Y.Z --write` again. It also catches version-bearing files
+     that `main` added after the branch point (a new `references/*.md` stamp, say), which the merge
+     itself never touches. Afterwards, check `git diff origin/main -- package-lock.json`: the bump runs
+     `npm install`, and a local npm version can rewrite unrelated lockfile fields.
+   - **Workflows**: keep `main`'s, adding anything the branch introduced that `main` lacks.
+
+   Commit as `chore: merge release/X.Y.Z back into main`, then:
+   ```
+   npm run check:versions                          # everything at X.Y.Z
+   git diff origin/main -- CHANGELOG.md            # empty, unless you added the X.Y.Z section
+   git merge-base --is-ancestor vX.Y.Z HEAD && echo ok
+   ```
+   Land it through a PR like any other change, then delete the release branch
+   (`git push origin --delete release/X.Y.Z`). `main`'s next minor bumps every version string again.
 
 ## Notes
 

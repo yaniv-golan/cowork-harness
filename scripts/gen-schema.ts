@@ -9,7 +9,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
-import { ScenarioObject, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import {
+  ScenarioObject,
+  Assertion,
+  VERDICT_MODIFIER_KEYS,
+  RESERVED_METRIC_ID_PATTERNS,
+  METRIC_ARTIFACT_REFUSED_PATTERNS,
+} from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
 import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_PLUGIN_HOOK_EVENTS } from "../src/agent/session.js";
 
@@ -210,6 +216,30 @@ function addScenarioCrossKeyRules(json: Record<string, unknown>): void {
       { allOf: [someEntryHas("no_delete_in_outputs"), someEntryWaivesOutputs] },
     ],
   };
+  addMetricRules(json);
+}
+
+/** Mirror `ScenarioMetric`'s per-item refinements (src/types.ts): exactly one of `scale` / `unbounded`, and an id
+ *  that is neither all dots nor reserved. A duplicate id (compared case-insensitively) has no JSON Schema form and
+ *  stays loader-only; the key's description says so. */
+function addMetricRules(json: Record<string, unknown>): void {
+  const props = json.properties as Record<string, { items?: Record<string, unknown> }> | undefined;
+  const items = props?.metrics?.items;
+  if (!items) throw new Error("gen-schema: scenario schema has no metrics.items to mirror the metric rules onto");
+  // ajv strict mode wants each `required` name declared in a sibling `properties` (strictRequired).
+  const has = (k: string) => ({ type: "object", required: [k], properties: { [k]: {} } });
+  items.oneOf = [
+    { ...has("scale"), not: has("unbounded") },
+    { ...has("unbounded"), not: has("scale") },
+  ];
+  const itemProps = items.properties as Record<string, Record<string, unknown>>;
+  // The artifact path stays under the work root: not blank, not absolute (POSIX, drive letter, UNC), no `..`.
+  itemProps.artifact.not = { anyOf: METRIC_ARTIFACT_REFUSED_PATTERNS.map((pattern) => ({ pattern })) };
+  const id = itemProps.id;
+  // JSON Schema patterns carry no flags, so each letter of the case-insensitive reserved patterns is spelled as a
+  // two-case class (`pass` → `[pP][aA][sS][sS]`). One source: RESERVED_METRIC_ID_PATTERNS.
+  const anyCase = (p: string) => p.replace(/\\.|[a-z]/g, (c) => (c.length === 1 ? `[${c}${c.toUpperCase()}]` : c));
+  id.not = { anyOf: [{ pattern: "^\\.+$" }, ...RESERVED_METRIC_ID_PATTERNS.map((p) => ({ pattern: anyCase(p) }))] };
 }
 
 /** Build { filename: pretty-printed-JSON } for every schema. Pure; no I/O. */

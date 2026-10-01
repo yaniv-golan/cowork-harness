@@ -217,6 +217,7 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
         "execution",
         "lane",
         "on_unanswered",
+        "metrics.better",
         "answers.decide",
         "answers.else",
         "answers.grant",

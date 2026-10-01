@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Ajv from "ajv";
-import type { RunResult } from "../src/types.js";
+import { METRIC_UNAVAILABLE, type RunResult } from "../src/types.js";
 
 // Pins `schema/run-result.json` (a §12-covered 1.0 surface) against the ACTUAL `RunResult` shape.
 // Before this test, the schema was only weakly checked: `verify-envelope-schema.test.ts` pins a
@@ -149,6 +149,10 @@ const full: RunResult = {
   userVisibleRoots: ["outputs", "project"],
   readonlyFolderRoots: ["project"],
   artifacts: [{ path: "outputs/report.pdf", bytes: 42 }],
+  metrics: [
+    { id: "words", value: 1200 },
+    { id: "cost", unavailable: "pre_run" },
+  ],
   workspaceFiles: [
     { path: "outputs/report.pdf", bytes: 42, sha256: "e".repeat(64), class: "output" },
     { path: "project/notes.md", bytes: 10, sha256: "f".repeat(64), class: "mount" },
@@ -245,6 +249,20 @@ describe("schema/run-result.json", () => {
     ).toBe(true);
   });
 
+  it("metrics: exactly one of value / unavailable per entry, and the reason enum is METRIC_UNAVAILABLE", () => {
+    const withMetrics = (metrics: unknown) => validatePublished({ ...full, metrics });
+    expect(
+      withMetrics([
+        { id: "a", value: 1 },
+        { id: "b", unavailable: "not_json" },
+      ]),
+    ).toBe(true);
+    expect(withMetrics([{ id: "a", value: 1, unavailable: "size" }])).toBe(false);
+    expect(withMetrics([{ id: "a" }])).toBe(false);
+    expect(withMetrics([{ id: "a", unavailable: "bogus" }])).toBe(false);
+    const items = (schema.properties as Record<string, { items: { properties: { unavailable: { enum: string[] } } } }>).metrics.items;
+    expect(items.properties.unavailable.enum).toEqual([...METRIC_UNAVAILABLE]);
+  });
   it("every errorSource the type allows validates, including decider_timeout (an unanswered-gate partial whose decider channel timed out)", () => {
     const partial: RunResult = { ...full, result: "error", partial: true, errorSource: "decider_timeout" };
     expect(validatePublished(partial), JSON.stringify(validatePublished.errors)).toBe(true);
