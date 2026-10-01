@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { sep } from "node:path";
 import { ARTIFACT_BODY_CAP, artifactBodyGate, authorshipOf, resolveDotPath, type AssertContext } from "./assert.js";
 import type { MetricUnavailable, RunResult, ScenarioMetric } from "./types.js";
+import { foldsMatch } from "./fixture/workspace.js";
 
 /** What the extractor reads. An `AssertContext` is one. */
 export type MetricsContext = Pick<
@@ -92,7 +93,10 @@ function measure(ctx: MetricsContext, m: ScenarioMetric): MetricMeasurement {
   const hash = sha256(buf);
   if (ctx.recordedPostRunHashes !== undefined) {
     const rel = gate.rel.split(sep).join("/");
-    if (ctx.recordedPostRunHashes[rel] !== hash)
+    const recorded = ctx.recordedPostRunHashes;
+    // Folded like authorship's lookups: a case or NFC/NFD spelling of the recorded path is that path.
+    const key = Object.hasOwn(recorded, rel) ? rel : Object.keys(recorded).find((k) => foldsMatch(k, rel));
+    if (key === undefined || recorded[key] !== hash)
       return off("pruned", "the kept work dir no longer holds what the run wrote (no recorded post-run hash, or a different one)", true);
   }
   const who = authorshipOf(ctx, m.artifact, { postHash: hash });
@@ -123,6 +127,22 @@ export function extractMetrics(ctx: MetricsContext, decls: readonly ScenarioMetr
   return measureMetrics(ctx, decls).map((x) =>
     x.value !== undefined ? { id: x.id, value: x.value } : { id: x.id, unavailable: x.unavailable! },
   );
+}
+
+/** The run's own post-run sha256 per work-root-relative path (`RunResult.workspaceFiles`), the anchor a re-measure
+ *  from a kept work dir checks each file's bytes against. */
+export function recordedPostRunHashesOf(result: Pick<RunResult, "workspaceFiles">): Record<string, string> {
+  return Object.fromEntries((result.workspaceFiles ?? []).flatMap((f) => (f.sha256 !== undefined ? [[f.path, f.sha256] as const] : [])));
+}
+
+/** Re-measure a kept run (verify-run, regrade): the current declaration, read from the kept work dir, each file
+ *  only while its bytes still equal what the run recorded. */
+export function remeasureMetrics(
+  ctx: MetricsContext,
+  result: Pick<RunResult, "workspaceFiles">,
+  decls: readonly ScenarioMetric[] | undefined,
+): RunResult["metrics"] {
+  return metricsFor({ ...ctx, recordedPostRunHashes: recordedPostRunHashesOf(result) }, decls);
 }
 
 /** The one rule every producer applies: metrics are extracted only when the scenario declares at least one;

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Ajv from "ajv";
+import { spawnSync } from "node:child_process";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
 import { POSIX, QUESTION_FRAME, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
 
@@ -94,6 +95,30 @@ describe.runIf(POSIX)("scenario metrics, through the real executeScenario (proto
     const disk = persisted("plain");
     expect(disk.metrics).toEqual([{ id: "words", value: 1200 }]);
     expect(validateRunResult(disk), JSON.stringify(validateRunResult.errors)).toBe(true);
+  }, 120_000);
+
+  it("verify-run re-measures the CURRENT scenario's metrics from the kept work dir (not the live values)", async () => {
+    const r = await executeScenario(
+      parseScenarioFile(scenario("vr", "write", ["metrics:", metric("words", "outputs/m.json", "words")])),
+      {},
+    );
+    expect(r.metrics).toEqual([{ id: "words", value: 1200 }]);
+    const edited = scenario("vr", "write", ["metrics:", metric("again", "outputs/m.json", "words"), metric("gone", "outputs/none.json")]);
+    const verify = () =>
+      spawnSync(process.execPath, ["dist/cli.js", "verify-run", r.outDir, edited, "--output-format", "json"], { encoding: "utf8" });
+    let v = verify();
+    expect(JSON.parse(v.stdout).results[0].metrics, v.stderr).toEqual([
+      { id: "again", value: 1200 },
+      { id: "gone", unavailable: "missing_artifact" },
+    ]);
+    // The kept file edited since the run: its bytes no longer match the run's recorded hash.
+    writeFileSync(join(String(r.workDir), "outputs", "m.json"), '{"words": 99999}');
+    v = verify();
+    expect(JSON.parse(v.stdout).results[0].metrics[0]).toEqual({ id: "again", unavailable: "pruned" });
+    // A scenario with no metrics: none reported, though the live run had them.
+    const none = scenario("vr", "write", []);
+    v = spawnSync(process.execPath, ["dist/cli.js", "verify-run", r.outDir, none, "--output-format", "json"], { encoding: "utf8" });
+    expect(JSON.parse(v.stdout).results[0]).not.toHaveProperty("metrics");
   }, 120_000);
 
   it("a fixture: new and rewritten are measured; untouched and rewritten-identically are pre_run", async () => {

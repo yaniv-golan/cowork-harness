@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { remeasureMetrics } from "./metrics.js";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -4634,6 +4635,9 @@ async function cmdVerifyRun(args: string[]) {
   // through here as `code:"assertion"` fails — so verify-run can now exit 1 on an answer miss, not just an
   // assert miss. Answer-less scenarios never add any, so their exit code is unchanged.
   const verdict = computeVerdict({ ...result, assertions }, "live");
+  // Metrics are re-measured like the assertions: the CURRENT scenario's declaration, read from the kept work dir,
+  // each file only while its bytes still equal the run's recorded post-run hash — never the live run's values.
+  const metrics = remeasureMetrics(ctx, result, scenario.metrics);
   const failed = assertions.filter((a) => !a.pass);
 
   if (json) {
@@ -4656,7 +4660,7 @@ async function cmdVerifyRun(args: string[]) {
     // runs the real query against a real failing envelope — that test, not this comment, is what stops
     // the flat shape from being restored as a "simplification".
     out(
-      jsonEnvelope("verify-run", [{ ...result, assertions }], {
+      jsonEnvelope("verify-run", [{ ...result, assertions, metrics }], {
         extra: {
           pass: verdict.pass,
           assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),

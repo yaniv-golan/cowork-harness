@@ -1199,8 +1199,12 @@ So a metric should read a file under `outputs/` or a connected folder.
 recording cannot support — no artifact manifest, a body over the inline cap, a link placeholder, a missing pre- or
 post-run hash — is reported unavailable and named once in a `::warning::` (re-record, raising
 `--max-artifact-bytes` for `size`); one that states what the run did is not warned about. `replay --assert-from` and
-`--reassert` measure the on-disk declaration, as they do for `assert`. **`regrade`** re-reads metrics from the kept
-work dir, but only while a file's bytes still equal the run's recorded post-run hash; otherwise `pruned`.
+`--reassert` measure the on-disk declaration, as they do for `assert`, and `--write` freezes it with the assert
+block; a plain replay notices an on-disk `metrics:` block that differs from the frozen one. **`verify-run`** and
+**`regrade`** re-measure the current declaration from the kept work dir, but only while a file's bytes equal the
+run's recorded post-run hash; otherwise `pruned` (a file under `uploads/` has no recorded hash, so it is always
+`pruned` there). `verify-run` needs no judge, so it is the way to re-measure a scenario with no `semantic_matches`,
+which `regrade` refuses (`no_semantic_asserts`).
 
 ## Output
 

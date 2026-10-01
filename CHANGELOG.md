@@ -281,7 +281,9 @@ All notable changes to this project are documented here. The format is based on
   `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`. A file the run did not write is
   `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a file the run
   rewrote unchanged is treated as untouched. `replay` re-measures from the cassette manifest and warns once about
-  metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration. The
+  metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration and `--write`
+  freezes it; a plain replay notices an on-disk `metrics:` drift. `verify-run` re-measures the current declaration
+  from the kept work dir — no judge, no spend. The
   published scenario schema mirrors every load rule but the duplicate-id check. Declaring a metric arms the pre-run
   manifest, which a scenario with no other baseline-reading key did not capture before: such runs now persist
   `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back the files the run authored

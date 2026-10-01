@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import Ajv from "ajv";
@@ -16,6 +16,11 @@ import { DEFAULT_AUTHORED_TOTAL_BYTES } from "../src/run/artifacts.js";
 import type { SemanticJudge } from "../src/assert.js";
 import type { LaunchPlan } from "../src/session.js";
 
+function caseInsensitiveFs(): boolean {
+  const d = realpathSync(mkdtempSync(join(tmpdir(), "rgm-fold-")));
+  writeFileSync(join(d, "a"), "");
+  return existsSync(join(d, "A"));
+}
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 let savedRuns: string | undefined;
 beforeEach(() => {
@@ -113,6 +118,12 @@ describe("regrade: metrics", () => {
     const out = await regrade(keptRun(METRIC, false));
     if (!out.ok) throw new Error(out.message);
     expect(out.runs[0].metrics).toEqual([{ id: "words", unavailable: "pruned" }]);
+  });
+
+  it.runIf(caseInsensitiveFs())("the recorded-hash lookup folds case like authorship: OUTPUTS/m.json is measured, not pruned", async () => {
+    const out = await regrade(keptRun(`metrics:\n  - {id: words, artifact: OUTPUTS/m.json, path: words, better: higher, scale: 5000}\n`));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].metrics).toEqual([{ id: "words", value: 1200 }]);
   });
 
   it("absent when none are declared, and for metrics: []", async () => {

@@ -16,7 +16,7 @@
  * `result.json` is never modified and no run-index row is added — a re-grade is not a run, and indexing it
  * would count the run twice in `stats`.
  */
-import { metricsFor } from "../metrics.js";
+import { remeasureMetrics } from "../metrics.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -553,9 +553,9 @@ interface Prepared {
   resultSha256: string;
   budget: RegradeRunReport["authoredCapture"];
   live: LiveSide;
-  /** The run's own post-run sha256 per path (`RunResult.workspaceFiles`): a metric is read only from bytes that
-   *  still match it. Empty when the run recorded none — every metric is then `pruned`. */
-  recordedPostRun: Record<string, string>;
+  /** The run's own post-run file record: a metric is read only from bytes that still match it (none recorded ⇒
+   *  every metric is `pruned`). */
+  workspaceFiles: RunResult["workspaceFiles"];
 }
 
 /**
@@ -744,9 +744,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       resultSha256: sha256Hex(readFileSync(turnArtifactPath(runDir, second.turn, "result.json"))),
       budget,
       live,
-      recordedPostRun: Object.fromEntries(
-        (second.result.workspaceFiles ?? []).flatMap((f) => (f.sha256 !== undefined ? [[f.path, f.sha256] as const] : [])),
-      ),
+      workspaceFiles: second.result.workspaceFiles,
     });
   }
 
@@ -825,7 +823,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
           `${CMD}: internal: assert ${sc.assert.indexOf(a)} was predicted to refuse its evidence but a judge was called for it`,
         );
     const graded = evaluate(semantic, p.ctx);
-    const metrics = metricsFor({ ...p.ctx, recordedPostRunHashes: p.recordedPostRun }, sc.metrics);
+    const metrics = remeasureMetrics(p.ctx, { workspaceFiles: p.workspaceFiles }, sc.metrics);
 
     const differing: DifferingSection[] = [];
     // A section the accepted drift touched (kind and path): an assert whose document carries one read drifted bytes.
