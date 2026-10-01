@@ -3313,6 +3313,29 @@
       ".partial": {
         "type": "boolean"
       },
+      ".partlyScriptedGates": {
+        "type": "array"
+      },
+      ".partlyScriptedGates[]": {
+        "type": "object"
+      },
+      ".partlyScriptedGates[].matched": {
+        "type": "array",
+        "required": true
+      },
+      ".partlyScriptedGates[].matched[]": {
+        "type": "string"
+      },
+      ".partlyScriptedGates[].requestId": {
+        "type": "string"
+      },
+      ".partlyScriptedGates[].unmatched": {
+        "type": "array",
+        "required": true
+      },
+      ".partlyScriptedGates[].unmatched[]": {
+        "type": "string"
+      },
       ".pathDenials": {
         "type": "array"
       },
@@ -3989,7 +4012,8 @@
           "undelivered_deliverables",
           "delivery_unobservable",
           "outputs_delete_unconfirmed",
-          "outputs_diff_unavailable"
+          "outputs_diff_unavailable",
+          "partly_scripted_gate"
         ],
         "required": true
       },

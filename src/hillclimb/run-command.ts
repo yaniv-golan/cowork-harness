@@ -28,7 +28,6 @@ import { pkgVersion } from "../run/envelope.js";
 import { ANSWER_KEY_ADVICE, answerKeyFindings } from "../eval/snapshot.js";
 import { evidenceFacts } from "../eval/invocation.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
-import { gradedSkillNameFor, resolveCritiquedSkillDir } from "../critique/command.js";
 import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, type HillclimbCase } from "./cases.js";
@@ -37,6 +36,7 @@ import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js"
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
 import { readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
+import { trackedSkill } from "./skill.js";
 import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
 
 /** Where variant snapshots live: outside every git work tree, or the stager would mount them empty. */
@@ -103,8 +103,9 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   const say = (line: string) => deps.stderr(termSafe(line));
   let runner: Parameters<typeof runHillclimb>[1];
   let price: Prepared["price"];
+  let skill: string | undefined;
   try {
-    ({ runner, price } = prepare(args, deps, say));
+    ({ runner, price, skill } = prepare(args, deps, say));
   } catch (e) {
     if (!(e instanceof Error)) throw e;
     const m = message(e);
@@ -112,7 +113,8 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
     say(line);
     return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: line } };
   }
-  const outcome = await runHillclimb(args, runner);
+  // --skill by any spelling it accepts is one selection: the gate and `harness_skill` see its registered name.
+  const outcome = await runHillclimb(skill !== undefined ? { ...args, skill } : args, runner);
   if (!args.dryRun || outcome.remaining === undefined) return outcome;
   const cost = price(outcome.remaining);
   say(`[${args.variant}] ${scheduleCostLine(cost)}`);
@@ -123,6 +125,8 @@ interface Prepared {
   runner: Parameters<typeof runHillclimb>[1];
   /** The dry run's estimate for the remaining slots (case id → count). */
   price: (remaining: Record<string, number>) => ReturnType<typeof estimateScheduleCost>;
+  /** `--skill` as the registered name it selects; undefined without --skill. */
+  skill: string | undefined;
 }
 
 const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
@@ -286,15 +290,12 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     }
   }
 
-  // Which skill's invocation the rows record (the `skill_invoked` column): one per plugin, or none.
-  const skillName = (() => {
-    try {
-      return gradedSkillNameFor(undefined, resolveCritiquedSkillDir(pluginDir, undefined));
-    } catch {
-      return undefined;
-    }
-  })();
-  if (skillName === undefined) say(`[${v}] the plugin has no single skill to record invocation for: skill_invoked is omitted`);
+  // Which skill's invocation the rows record (the `skill_invoked` column), resolved against the snapshot the runs
+  // mount (a dry run: the live plugin's tracked files, which a pass would snapshot). An unknown --skill refuses
+  // here, before any spend.
+  const tracked = trackedSkill(pluginDir, args.skill);
+  const skillName = tracked.name;
+  say(tracked.name === undefined ? `[${v}] ${tracked.note}` : `[${v}] skill_invoked tracks ${tracked.id}`);
 
   const job = makeHillclimbJobRunner({
     runScenario: deps.runScenario,
@@ -410,8 +411,9 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
         }
       : {}),
     expectedContentSig: (c) => sigs.get(c.id),
+    ...(tracked.name !== undefined ? { skillTracked: tracked.id } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),
   };
-  return { runner, price };
+  return { runner, price, skill: args.skill !== undefined ? tracked.name : undefined };
 }

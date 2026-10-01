@@ -73,6 +73,8 @@ export interface AttemptContext {
     runDir?: string;
     contentSig?: string;
     skillHash?: string;
+    /** The registered id `skill_invoked` was measured against (`<plugin>:<name>`); absent when the column is omitted. */
+    skillTracked?: string;
     ablated?: boolean;
     nonDeterministic?: boolean;
   };
@@ -397,6 +399,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       flow_hash: ctx.meta.flowHash,
       ...(ctx.meta.contentSig !== undefined ? { content_sig: ctx.meta.contentSig } : {}),
       ...(ctx.meta.skillHash !== undefined ? { skill_hash: ctx.meta.skillHash } : {}),
+      ...(ctx.meta.skillTracked !== undefined ? { skill_tracked: ctx.meta.skillTracked } : {}),
       ...(r?.apiRetries
         ? { retries, retry_delay_s: r.apiRetries.delayMs / 1000, subagent_retries: r.apiRetries.subagentCount }
         : { retries_unrecorded: true }),

@@ -52,6 +52,7 @@ import {
   coerceLabel,
   type OnUnanswered,
   type RunContext,
+  type PartlyScriptedGate,
 } from "./decide/decider.js";
 import { claudeCliComplete, isolationRefusal } from "./decide/llm-transport.js";
 import type { DecisionRequest } from "./agent/session.js";
@@ -4504,6 +4505,10 @@ async function cmdVerifyRun(args: string[]) {
       : null;
 
   let answerCoverage: { matched: number; total: number } | undefined;
+  // Re-derived from the CURRENT scenario's answers by the same decide() calls the coverage loop makes (the
+  // live run's value described the answers it ran with); an author who scripts the missing sub-question sees
+  // the finding go. Report-only — the warn signal never moves the verdict.
+  const partlyScriptedGates: PartlyScriptedGate[] = [];
   if (scenario.answers.length > 0) {
     // Answer-coverage validates against the kept run's gate SNAPSHOT (its events.jsonl). If the skill changed,
     // those gates are stale and a green here is false confidence — refuse rather than vouch (can't verify ⇒ not
@@ -4563,6 +4568,7 @@ async function cmdVerifyRun(args: string[]) {
       transcript: () => sidecarTranscript ?? "",
       toolLog: () => [],
       runId: "verify-run",
+      notePartlyScripted: (f) => partlyScriptedGates.push(f),
     };
     const softFallback = scenario.on_unanswered === "first" || scenario.on_unanswered === "llm";
     let matched = 0;
@@ -4609,7 +4615,8 @@ async function cmdVerifyRun(args: string[]) {
   // scan/parity signals already persisted in result.json). Synthetic answer_coverage failures (above) flow
   // through here as `code:"assertion"` fails — so verify-run can now exit 1 on an answer miss, not just an
   // assert miss. Answer-less scenarios never add any, so their exit code is unchanged.
-  const verdict = computeVerdict({ ...result, assertions }, "live");
+  const judged: RunResult = { ...result, partlyScriptedGates: partlyScriptedGates.length ? partlyScriptedGates : undefined };
+  const verdict = computeVerdict({ ...judged, assertions }, "live");
   // Metrics are re-measured like the assertions: the CURRENT scenario's declaration, read from the kept work dir,
   // each file only while its bytes still equal the run's recorded post-run hash — never the live run's values.
   const metrics = remeasureMetrics(ctx, result, scenario.metrics);
@@ -4635,7 +4642,7 @@ async function cmdVerifyRun(args: string[]) {
     // runs the real query against a real failing envelope — that test, not this comment, is what stops
     // the flat shape from being restored as a "simplification".
     out(
-      jsonEnvelope("verify-run", [{ ...result, assertions, metrics }], {
+      jsonEnvelope("verify-run", [{ ...judged, assertions, metrics }], {
         extra: {
           pass: verdict.pass,
           assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),

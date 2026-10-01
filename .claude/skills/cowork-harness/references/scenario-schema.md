@@ -304,6 +304,10 @@ label validation by intent (mutually exclusive with `choose`):
 - when_question: "company name"
   answer: "Acme Holdings LLC"
 ```
+**Batched gates are answered as one unit.** When one `AskUserQuestion` carries several sub-questions and
+your rules match only some of them, the WHOLE batch goes to `on_unanswered` and the matched answers are not
+delivered. The run reports it (warn signal `partly_scripted_gate`, `result.partlyScriptedGates` naming the
+matched and unmatched sub-questions) without changing the verdict; script every sub-question to pin it.
 
 **Tool permissions:**
 ```yaml

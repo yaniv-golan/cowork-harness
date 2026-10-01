@@ -63,6 +63,17 @@ describe("hillclimb run args — scaffold defaults (runner-scaffold.mjs l.181-18
     });
   });
 
+  it("--skill names the plugin skill skill_invoked tracks; absent by default; given once", () => {
+    const a = run("s.yaml", "--skill", "deck-review");
+    if (a.help) throw new Error("unexpected help");
+    expect(a.skill).toBe("deck-review");
+    const b = run("s.yaml");
+    if (b.help) throw new Error("unexpected help");
+    expect(b.skill).toBeUndefined();
+    expect("skill" in b).toBe(false);
+    refuses(["s.yaml", "--skill", "a", "--skill", "b"], /--skill given more than once/);
+  });
+
   it("-h and --help ask for help (exit 0 at the CLI)", () => {
     expect(run("-h").help).toBe(true);
     expect(run("s.yaml", "--help").help).toBe(true);

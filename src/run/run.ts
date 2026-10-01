@@ -19,6 +19,7 @@ import {
   type Decider,
   type Decision,
   type RunContext,
+  type PartlyScriptedGate,
 } from "../decide/decider.js";
 import { terminationRequested, parkIfTerminating } from "../termination.js";
 import { ProvenanceTracker } from "../hostloop/provenance.js";
@@ -471,6 +472,9 @@ export interface RunRecord {
   gateOptions: { question: string; options: { label: string; description?: string }[]; multiSelect?: boolean }[];
   decisions: DecisionRecord[];
   permissiveAutoAllow: string[]; // tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
+  /** Question batches the scripted rules answered only part of — the whole batch went to the fallback.
+   *  Filled by `ScriptedDecider` through `RunContext.notePartlyScripted` (report-only). */
+  partlyScriptedGates: PartlyScriptedGate[];
   unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
   toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string; assertTextTruncated?: boolean }[]; // captured tool OUTCOMES
   // requestId (the decision's `id`) rides along so post-loop reconciliation (drive()'s gateDeliveries
@@ -722,6 +726,7 @@ export class Run {
       gateOptions: [],
       decisions: [],
       permissiveAutoAllow: [],
+      partlyScriptedGates: [],
       unanswered: [],
       toolResults: [],
       gateAnswers: [],
@@ -803,7 +808,13 @@ export class Run {
   }
 
   private ctx(): RunContext {
-    return { task: this.rec.transcript, transcript: () => this.rec.transcript, toolLog: () => this.toolLog, runId: this.rec.runId };
+    return {
+      task: this.rec.transcript,
+      transcript: () => this.rec.transcript,
+      toolLog: () => this.toolLog,
+      runId: this.rec.runId,
+      notePartlyScripted: (f) => this.rec.partlyScriptedGates.push(f),
+    };
   }
 
   /** The in-progress record. When `drive()` throws on an unanswered gate, this holds everything accumulated

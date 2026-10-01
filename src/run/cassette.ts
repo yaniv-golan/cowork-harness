@@ -111,7 +111,7 @@ import { resolveAgentImageProvenance, type AgentImageProvenance } from "../runti
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
 import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
-import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
+import { ABSTAIN, ScriptedDecider, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, writeDoneMarker, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
 import { isVmSessionsPath } from "../vm-paths.js";
@@ -2543,6 +2543,7 @@ function minimalRec(): RunRecord {
     gateOptions: [],
     decisions: [],
     permissiveAutoAllow: [],
+    partlyScriptedGates: [],
     unanswered: [],
     toolResults: [],
     gateAnswers: [],
@@ -2779,6 +2780,29 @@ function buildReplayDecider(_session: CassetteAgentSession, controlOutIndex: Map
         by: "replay",
         rationale: "recorded",
       };
+    },
+  };
+}
+
+/** Replay answers from the recording, so the scenario's scripted decider never runs and never reports a
+ *  partly scripted batch. Classify each question gate against the cassette's FROZEN `answers:` with the
+ *  scripted decider's own rule lookup (`ScriptedDecider.partlyScripted`) and report through the same
+ *  `RunContext` sink the live run uses. Report-only: the inner decider's answer is returned unchanged. */
+function withPartlyScriptedFindings(inner: Decider, rules: Scenario["answers"] | undefined): Decider {
+  let scripted: ScriptedDecider | undefined;
+  try {
+    scripted = rules?.length ? new ScriptedDecider(rules) : undefined;
+  } catch {
+    scripted = undefined; // an uncompilable frozen pattern: the finding is report-only, never fail the replay on it
+  }
+  if (!scripted) return inner;
+  return {
+    async decide(req, ctx) {
+      if (req.kind === "question") {
+        const f = scripted!.partlyScripted(req.questions);
+        if (f) ctx?.notePartlyScripted?.({ requestId: req.id, ...f });
+      }
+      return inner.decide(req, ctx);
     },
   };
 }
@@ -5904,6 +5928,7 @@ function replayErrorResult(file: string): RunResult {
     nonDeterministic: undefined,
     nonDeterministicTerminal: undefined,
     permissiveAutoAllow: undefined,
+    partlyScriptedGates: undefined,
     scan: undefined,
     fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
     effectiveFidelity: undefined,
@@ -8209,7 +8234,10 @@ export async function replayCassette(
   // ReplayDecider: look up recorded decision body → deserialize → return.
   // Only constructed (and only drives the decision pipeline) when controlOut is present.
   // Reuse the session's already-parsed controlOut index for the decider (no re-parsing).
-  const replayDecider = session.hasControlOut ? buildReplayDecider(session, session.controlOutIndex) : NOOP_DECIDER;
+  const replayDecider = withPartlyScriptedFindings(
+    session.hasControlOut ? buildReplayDecider(session, session.controlOutIndex) : NOOP_DECIDER,
+    cassette.scenario.answers,
+  );
 
   // pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
   // and there is no child, so the synchronous respond() is safe here.
@@ -8998,6 +9026,8 @@ export async function replayCassette(
       unansweredGate: undefined,
       nonDeterministicTerminal: undefined,
       permissiveAutoAllow: undefined,
+      // Re-derived on the re-drive from the cassette's FROZEN `answers:` (see withPartlyScriptedFindings).
+      partlyScriptedGates: rec.partlyScriptedGates.length ? rec.partlyScriptedGates : undefined,
       scan: undefined,
       fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
       fidelityWarnings: undefined,
