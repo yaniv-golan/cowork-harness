@@ -85,6 +85,7 @@ Each row leads with B − A and a 95% Newcombe interval, then a two-sided Fisher
 | `no detectable change` | anything else; the row shows the smallest change this n could have detected (MDD), or `none at this n` |
 | `underpowered` | no outcome at this row's sizes could reach `--alpha`; never read this as "no change" |
 | `insufficient` | an arm has too few valid reps (4 at the default `--reps 5`, so one lost rep per arm is tolerated) |
+| `insufficient_refusals` | `insufficient`, where the candidate refused at least 2 more `semantic_matches` grades for unavailable evidence than the baseline and that excess took the row below the threshold; a drop signal that `--fail-on possible` gates on ([below](#when-the-candidate-refuses-more)) |
 
 When the interval excludes 0 but the exact test cannot flag the row, the row says so rather than
 printing two verdicts.
@@ -98,6 +99,10 @@ The header states what every number depends on:
   where a drop is);
 - **per arm**: each rep's bucket, an `errorSource` histogram, and a loud **UNCLASSIFIED** count for any
   termination the classifier does not recognise (excluded — read those run dirs);
+- **per arm, the `semantic_matches` grades refused for unavailable evidence**, by reason
+  (`report.json`: `arms[].evidenceUnavailable`). A refusal is neither a pass nor a fail, so it leaves that
+  assertion's rows for that rep; an arm that refuses more often is producing evidence the judge cannot see
+  whole (a deliverable that outgrew the capture budget, say), and this count is where that shows;
 - **every (arm, scenario) in which every rep errored**, named with its most frequent bucket and rule —
   for example `errored_infra (auth) 5/5` — and a hint that follows the rule (sign-in, quota, start-up,
   network, decider, or read the run dirs). Whether that scenario's rows were compared is stated on the
@@ -123,11 +128,20 @@ it landed in.
 | the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
+| one `semantic_matches` assertion refused for unavailable evidence (its `semanticEvidence` reason is not `graded`) | only that assertion's rows lose the rep — the roll-up and every claim — and it is counted per arm, by reason |
 
-A **stall** is a run that ended on a question with no tool work after its last gate — what `run` and
-`replay` fail as the `stalled` verdict signal. `eval` applies the same opt-out: in a scenario that asserts
-`allow_stall: true` (its intended terminal state is a question), a stalled rep's assertions are graded
-like those of any completed run. Without it, the stall is the agent's failure and fails every row.
+An eval dir whose `runs.jsonl` was written before the refusal reason was kept in it carries no reason.
+`eval report` then recognises a refusal only where the kept fields prove one — a lone `semantic_matches`
+assertion that failed although its claims met `min_pass` (counted as `unrecorded`); a refusal whose
+claims also missed `min_pass` cannot be told from a graded fail and is scored as one.
+
+A **stalled** rep is one whose run the `stalled` verdict signal would flag: the agent ended asking for input
+(a closing `?`, or, after an `AskUserQuestion` gate, a closing request such as "Please share X so I can…")
+with no tool work after its last gate. `eval` applies the same opt-out as `run` and `replay`: in a scenario
+that asserts `allow_stall: true` (its intended terminal state is a question), a stalled rep's assertions
+are graded like those of any completed run. Without it, the stall is the agent's failure: the rep is
+`errored_agent` and fails every row. The request test is English-only — see the `stalled` row in the
+companion skill's `references/assertion-catalog.md`.
 
 The `auth` and `usage_limit` rows need the reply to come from the agent itself, which writes it as a
 `<synthetic>` turn. A skill's own message that merely reads like one ("You've reached your daily limit
@@ -181,9 +195,10 @@ A refused eval leaves nothing in its eval dir.
 - `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
   result, a scenario that compared nothing, or a judge disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
-  classification rows do not); with `--fail-on confirmed`, a `confirmed` drop. Also, with or without it:
-  every row `insufficient`, a scenario that compared nothing (below), or the judge model differed across
-  reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
+  classification rows do not) or an `insufficient_refusals` row ([below](#when-the-candidate-refuses-more));
+  with `--fail-on confirmed`, a `confirmed` drop only. Also, with or without it: every row `insufficient`
+  (`insufficient_refusals` rows do not count toward this), a scenario that compared nothing (below), or the
+  judge model differed across reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
 - `2` — usage, or any refusal before the first run.
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
 
@@ -198,6 +213,29 @@ Judged per scenario, for each arm:
   crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
   every row) and the rows show the drop. The header still names the arm and its error. It exits 0 unless
   `--fail-on` is set, like any other drop.
+
+### When the candidate refuses more
+
+A `semantic_matches` grade refused for unavailable evidence leaves its assertion's rows, so a rate is over
+the reps that were graded. That has a blind spot: an edit that makes the deliverable outgrow the evidence
+budget makes the candidate refuse more, its rows lose reps, and a row that falls below the threshold would
+be plain `insufficient` — no drop, while the edit broke exactly what the rows measure. Such a row is
+labelled `insufficient_refusals` instead when the baseline had enough reps, the candidate refused at least 2
+more grades than the baseline, and crediting back only that excess would have given it enough. (One extra
+refusal, or a refusal beside a rep lost some other way, does not label a row.) It is a drop signal at the
+`possible` level: `--fail-on possible` gates on it, `--fail-on confirmed` does not (nothing was tested, so
+nothing is confirmed), and without `--fail-on` it does not change the exit code — the same as a `possible
+drop`. A baseline that refuses more never labels a row.
+
+Re-reporting an eval dir written before this label existed (`eval report <dir>`) can change its row labels,
+and with `--fail-on` its exit code: refusals it can prove from the kept fields (the `unrecorded` case above)
+now leave the rows, and may label one `insufficient_refusals`.
+
+The header also warns, per assertion, whenever the two arms' refusals differ by 2 reps or more, or either
+arm refused at least 20% of its scored reps, naming both counts (`summary.refusalImbalances` in
+`report.json`). A roll-up row of an assertion with keys besides `semantic_matches` keeps a refused rep as
+a fail — the grade keeps one pass for every key together, so dropping it could drop a sibling key's real
+failure; only its claim rows lose the rep.
 
 ## Picking scenarios
 

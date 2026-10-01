@@ -321,11 +321,17 @@ export type SemanticJudge = ((rubric: string[], answer: string) => Promise<Seman
   promptHash?: string;
 };
 /** WHY a `semantic_matches` assert refused, or WHAT a scoped one graded — the typed companion to the
- *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are FIVE distinct
- *  evidence-unavailable causes with five different fixes; a consumer (usually an agent iterating on a
+ *  prose message, mirrored onto `RunResult.assertions[].semanticEvidence`. There are SIX distinct
+ *  evidence-unavailable causes with six different fixes; a consumer (usually an agent iterating on a
  *  skill) must be able to tell them apart without regex-scraping English. Same rationale as `judgeInvalid`.
  *  Kept structurally identical to the `RunResult` field in types.ts — that is the persisted contract. */
 export type SemanticEvidence = NonNullable<RunResult["assertions"][number]["semanticEvidence"]>;
+/** Why a `semantic_matches` assert's verdict is evidence-unavailable — the typed reason plus the message the
+ *  check surfaces. Produced only by `semanticRefusal`. */
+export interface SemanticRefusal {
+  semanticEvidence: SemanticEvidence;
+  message: string;
+}
 
 export interface AssertContext {
   transcript: string;
@@ -356,6 +362,13 @@ export interface AssertContext {
    *  evidence-health note that tells the judge not to read an absence as a negative). Without this the
    *  raise-the-budget remedy would just move incompleteness from a loud refusal into a silent cut. */
   semanticDocInfo?: Map<Assertion, { evidenceCut: boolean; healthNoteCut: boolean; overflowSection?: string }>;
+  /** `semantic_matches` asserts runSemanticJudges REFUSED before calling the judge, with the typed reason and
+   *  the message `check` reports. Every evidence-unavailable reason is a function of the composed evidence
+   *  alone (never of a grade), so it is decided before the call: a grade over evidence the verdict will
+   *  refuse anyway is spend that cannot count, and per-claim results recorded beside a refusal read to a
+   *  consumer (an eval row) as if they were graded. Presence is also how `check` tells "the pre-pass ran and
+   *  deliberately did not call the judge" from "the pre-pass never ran" (verify-run, replay). */
+  semanticRefused?: Map<Assertion, SemanticRefusal>;
   /** The agent's final answer (SDK result text) — the first part of the judged document, so a
    *  correct *inline* answer is graded even when no file is written. */
   finalMessage?: string;
@@ -368,7 +381,8 @@ export interface AssertContext {
    *  is INCOMPLETE, so `semantic_matches` fails evidence-unavailable rather than trusting a grade the judge
    *  made without the omitted content. Absent = capture was complete (or lane doesn't author files). */
   authoredFilesHealth?: import("./run/artifacts.js").AuthoredFilesHealth;
-  /** Secret values to scrub from the judged document before it leaves for the judge. */
+  /** Secret values to scrub from everything that leaves for the judge — the judged document AND each
+   *  `semantic_matches` rubric claim — and from the rationale it returns. */
   secrets?: string[];
   toolsCalled: Set<string>;
   subagentTools: Set<string>;
@@ -753,6 +767,137 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   return assertions.map((a) => check(a, withWaivers));
 }
 
+/** Decide whether a `semantic_matches` assert's evidence is unavailable — from the composed evidence ALONE,
+ *  never from a grade. ONE definition, called by `runSemanticJudges` (to skip the judge call for an assert
+ *  whose verdict is already decided) and by `check` (to report it), so the two cannot disagree about which
+ *  asserts refuse or what they say. Pure: no warnings (both callers reach it for the same assert).
+ *  `docInfo` is the compose-time bookkeeping (`composeJudgedDocument`) — the aggregate-cap cut is decided
+ *  there, before any judge call, like every other reason here. */
+export function semanticRefusal(
+  a: Assertion,
+  ctx: AssertContext,
+  docInfo: { evidenceCut: boolean; overflowSection?: string } | undefined,
+): SemanticRefusal | undefined {
+  if (a.semantic_matches === undefined) return undefined;
+  const scope = a.semantic_matches.evidence_files;
+  const sc = scopeAuthoredEvidence(ctx, scope);
+  const scoped = scope !== undefined && scope.length > 0;
+  let semanticEvidence: SemanticEvidence;
+  // Every file the judge would actually grade that was kept only as a prefix. For a SCOPED assert the file
+  // is exempt from the per-file cap, so `truncated` means the TOTAL budget could not hold it; for an
+  // UNSCOPED one it usually means the 16 KiB per-file cap bit, which no budget setting lifts — hence the
+  // two different remedies below. Either way the judge is looking at part of a deliverable.
+  const truncatedGraded = sc.files.filter((f) => f.truncated).map((f) => f.path);
+  // Split, because they need different advice: a budget raise recovers an omission, never an unreadable.
+  const omittedGraded = [...sc.omitted].sort();
+  const unreadableGraded = [...sc.unreadable].sort();
+  // Everything missing from the in-scope evidence, in ONE report. These conditions are not mutually
+  // exclusive — one oversized in-scope file can be TRUNCATED while simultaneously starving a sibling into
+  // being OMITTED — and an earlier version's if/else chain surfaced only the first, naming the 100-byte
+  // casualty while staying silent about the file that actually ate the budget.
+  const missing = [...sc.omitted, ...sc.unreadable].sort();
+  // `authoredTotalBytes()` THROWS on a malformed env value, and building a failure message must never be
+  // what takes down the evaluation — that would lose every other assert's verdict to render one string.
+  // `executeScenario` validates at entry so the CLI path already refuses a bad value; this covers a
+  // library caller and any future lane that populates judge results without going through it.
+  const currentBudget = (): number | string => {
+    try {
+      return authoredTotalBytes();
+    } catch {
+      return "unset/invalid";
+    }
+  };
+  if (ctx.authoredFilesHealth?.noPreRunManifest) {
+    // BEFORE the scope branches. With no baseline the authored set is empty for a reason that has nothing
+    // to do with the scope, so `scope_matched_nothing` would be a lie that sends the author to fix a glob
+    // that is already correct — and for an UNSCOPED assert the alternative was worse still: zero authored
+    // files, clean health, straight to the graded stamp. The judge saw finalMessage + transcript only and
+    // the result said the evidence was complete.
+    semanticEvidence = { reason: "no_pre_run_manifest" };
+    return {
+      semanticEvidence,
+      message:
+        `evidence unavailable: no pre-run manifest for this run, so the set of files it AUTHORED could not be computed — ` +
+        `the judge would have graded the final message and transcript alone while reporting complete authored evidence. ` +
+        `This is a --resume turn (the baseline belongs to the first turn), or the run predates the manifest seam; re-run live without --resume.`,
+    };
+  } else if (scoped && !sc.matchedAny) {
+    // A glob matching nothing would grade the rubric against ZERO authored evidence while the capture
+    // reports clean — the vacuous pass `evidence_files: []` is banned for, reached by a typo or a
+    // renamed mount instead. Fail loud, and PRINT THE PATHS: nothing else in the harness surfaces them,
+    // so this message is the only place the author/agent can learn the `<root>/<rel>` key shape.
+    const all = allAuthoredPaths(ctx);
+    semanticEvidence = { reason: "scope_matched_nothing", paths: all };
+    return {
+      semanticEvidence,
+      message:
+        `evidence unavailable: semantic_matches.evidence_files ${JSON.stringify(scope)} matched NONE of the ${all.length} path(s) this run authored — ` +
+        `grading would have used zero authored evidence. Paths are <root>/<rel> (not a bare filename) and globs use */?/** (not regex). ` +
+        `This run authored: ${all.length ? all.join(", ") : "(nothing)"}`,
+    };
+  } else if (missing.length || truncatedGraded.length) {
+    // ONE branch for scoped and unscoped alike. It used to be two, and the unscoped one tested only
+    // `omittedPaths`/`readErrors` — so a file kept as a 16 KiB PREFIX at the per-file cap (no omission, no
+    // read error, document well under the aggregate cap) fell straight through to the graded stamp. A
+    // negative rubric then passed over a prefix whose tail was never shown: an 87 KB report graded on its
+    // first 16 KiB, affirmed as `reason: "graded"`. Truncation is exactly as fatal as omission — the judge
+    // cannot tell "absent because the skill did not write it" from "absent because we cut it".
+    const bits: string[] = [];
+    const remedies: string[] = [];
+    if (omittedGraded.length) {
+      bits.push(`${omittedGraded.length} dropped at the capture budget (${omittedGraded.join(", ")})`);
+      remedies.push(`raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes)`);
+    }
+    if (unreadableGraded.length) {
+      // NOT a budget problem, and offering the budget lever here sends the operator to turn a knob that
+      // cannot move it. An unreadable file needs the run or the filesystem looked at.
+      bits.push(`${unreadableGraded.length} unreadable at read-back (${unreadableGraded.join(", ")})`);
+      remedies.push(`investigate the unreadable path(s) — no budget setting can recover them`);
+    }
+    if (truncatedGraded.length) {
+      bits.push(`${truncatedGraded.length} kept only as a TRUNCATED prefix (${truncatedGraded.join(", ")})`);
+      remedies.push(
+        scoped
+          ? `raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes) — an in-scope file is already exempt from the per-file cap, so it is the TOTAL that did not fit`
+          : `scope this assert with semantic_matches.evidence_files: ["<the deliverable>"], which exempts it from the ${DEFAULT_AUTHORED_PER_FILE_BYTES}-byte per-file cap (raising the total alone will NOT lift that cap)`,
+      );
+    }
+    semanticEvidence = {
+      reason: scoped ? (truncatedGraded.length && !missing.length ? "in_scope_truncated" : "in_scope_omitted") : "evidence_incomplete",
+      paths: [...new Set([...missing, ...truncatedGraded])].sort(),
+    };
+    return {
+      semanticEvidence,
+      message:
+        `evidence unavailable: the ${scoped ? "in-scope " : ""}authored evidence the judge would grade is incomplete — ${bits.join("; ")}. ` +
+        `A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. ` +
+        `To grade it: ${remedies.join("; or ")}${scoped ? `. Keep the composed document under ${JUDGE_DOC_CAP} chars or it is cut at the other end` : ""}`,
+    };
+  } else if (docInfo?.evidenceCut) {
+    // The remedy for every refusal above is "raise the budget" — which, past JUDGE_DOC_CAP, would
+    // otherwise move the incompleteness from a loud refusal into a SILENT aggregate cut of the sections
+    // that carry the evidence, so the fix would carry the bug it fixes. Deliberately NOT gated on
+    // `scoped`: the env var that makes this reachable is available to every scenario, and an unscoped run
+    // whose capture is clean has nothing else standing between it and a graded-but-truncated document.
+    semanticEvidence = { reason: "authored_evidence_truncated" };
+    // ONE lever, deliberately. LOWERING the capture budget cannot clear this: it shrinks the document only
+    // by dropping or truncating authored bytes, which lands in an earlier refusal branch every time — it
+    // converts one refusal into another rather than fixing either. And `narrow` names a key an UNSCOPED
+    // assert does not have, so the verb follows the scope.
+    return {
+      semanticEvidence,
+      message:
+        `evidence unavailable: the composed judge document exceeded its ${JUDGE_DOC_CAP}-char budget and the authored-file evidence was cut ` +
+        `(the overflow lands in "${docInfo.overflowSection ?? "an unknown section"}") — ` +
+        `${docInfo.overflowSection?.startsWith("Sub-agent output") ? "set include_subagent_text: false, or " : ""}` +
+        `${scoped ? "narrow" : "add"} semantic_matches.evidence_files so only the files the rubric is about reach the judge` +
+        `${sc.files.length === 1 ? ` — but this scope already names a SINGLE file, so it cannot be narrowed further: that deliverable is simply too large to grade whole against a ${JUDGE_DOC_CAP}-char judge document, and the rubric needs to target a smaller artifact` : ""}. ` +
+        `(Lowering $COWORK_HARNESS_AUTHORED_TOTAL_BYTES will NOT help — it only drops the evidence at the capture instead.)`,
+    };
+  }
+  return undefined;
+}
+
 /** LIVE-ONLY async pre-pass. Grade every `semantic_matches` assert (via the supplied judge) and stash
  *  per-claim results in `ctx.semanticResults`, so the SYNCHRONOUS evaluate()/check() can read them. Call
  *  BEFORE evaluate() on the LIVE lane only — the replay lane strips `semantic_matches` (LIVE_ONLY_KEYS)
@@ -775,6 +920,7 @@ export async function runSemanticJudges(
   if (!ctx.judgePromptHashes) ctx.judgePromptHashes = new Map();
   if (!ctx.judgeInvalid) ctx.judgeInvalid = new Set();
   if (!ctx.semanticDocInfo) ctx.semanticDocInfo = new Map();
+  if (!ctx.semanticRefused) ctx.semanticRefused = new Map();
   // The judged document depends on TWO per-assert inputs — `include_subagent_text` and the
   // `evidence_files` scope — so the cache MUST be keyed on both. Keyed on the boolean alone (as it was
   // when the scope did not exist), two asserts with different scopes would silently share the first
@@ -790,8 +936,29 @@ export async function runSemanticJudges(
     }
     return d;
   };
+  // The run's secret set — the same one `composeJudgedDocument` scrubs the judged document with.
+  const secrets = ctx.secrets ?? [];
   for (const a of assertions) {
     if (a.semantic_matches === undefined) continue;
+    // The RUBRIC leaves for the (external) judge model exactly as the document does, so it is scrubbed
+    // with the same set. Only the claim text SENT changes: the scenario's assertion object is never
+    // mutated (it keys every ctx map and is echoed into result.json), a rubric the scrub leaves unchanged
+    // is sent as the very same array, and the prompt hash cannot move — `JUDGE_PROMPT_HASH` is the
+    // template's identity (filled with placeholder claims), never a hash over this rubric.
+    const rubric = a.semantic_matches.rubric;
+    const scrubbedRubric = secrets.length ? rubric.map((c) => scrub(c, secrets)) : rubric;
+    const redactedIdx = scrubbedRubric.flatMap((c, i) => (c !== rubric[i] ? [i] : []));
+    const sentRubric = redactedIdx.length ? scrubbedRubric : rubric;
+    // A claim that NAMES a secret cannot be graded for it: the judge sees `[REDACTED]` (and the judged
+    // document was already scrubbed of the value), so "must not contain <secret>" becomes a different
+    // claim. Loud, once per assert, naming indexes only — never the claim text, which holds the secret.
+    if (redactedIdx.length)
+      warn(
+        `::warning:: [semantic_matches] rubric claim ${redactedIdx.length === 1 ? "index" : "indexes"} ${redactedIdx.join(",")} ` +
+          `contained a scrubbed secret value and ${redactedIdx.length === 1 ? "was" : "were"} sent to the judge redacted, so ` +
+          `${redactedIdx.length === 1 ? "it" : "they"} cannot be graded for that value. Assert on a secret deterministically ` +
+          `instead: \`transcript_not_contains\` or \`artifact_text: {not_contains}\` (both read the raw evidence on the live run).\n`,
+      );
     const built = judgedDocument(a.semantic_matches.include_subagent_text === true, a.semantic_matches.evidence_files);
     const answer = built.doc;
     ctx.semanticDocInfo.set(a, {
@@ -799,6 +966,16 @@ export async function runSemanticJudges(
       healthNoteCut: built.healthNoteCut,
       overflowSection: built.overflowSection,
     });
+    // Evidence the verdict will refuse is decided HERE, before the call, and the judge is not called for it:
+    // its grade could not change the verdict, so it would be spend for nothing — and per-claim results stored
+    // beside a refusal are read downstream (eval rows) as though they graded something. Nothing judge-shaped
+    // is recorded for the assert: no claims, model, cost, prompt hash, or `judgedDoc` (no judge received a
+    // document, and a fingerprint would let a later re-grade claim to match what "the live judge" read).
+    const refusal = semanticRefusal(a, ctx, ctx.semanticDocInfo.get(a));
+    if (refusal) {
+      ctx.semanticRefused.set(a, refusal);
+      continue;
+    }
     const override = a.semantic_matches.judge_model;
     const j = override && judgeFor ? judgeFor(override) : judge;
     // Grade with ONE retry — a stochastic judge sometimes emits a malformed grade. If it still throws,
@@ -808,7 +985,7 @@ export async function runSemanticJudges(
     let tokens: TokenUsage | undefined; // same basis as `cost`
     for (let attempt = 0; attempt < 2 && graded === undefined; attempt++) {
       try {
-        graded = await j(a.semantic_matches.rubric, answer);
+        graded = await j(sentRubric, answer);
       } catch (e) {
         if (attempt === 1) {
           ctx.judgeInvalid.add(a);
@@ -835,7 +1012,17 @@ export async function runSemanticJudges(
       // The judged document was scrubbed before it left, but the rationale is fresh model output that can
       // quote it — scrub it again, then normalize and cap, before it is stored (and so reaches result.json
       // and the footer). Done here, for every judge, so a stub or future judge cannot skip it.
-      const secrets = ctx.secrets ?? [];
+      // A claim the rubric scrub altered is restored to the scenario's own text BY INDEX (the alignment
+      // contract), so everything downstream sees what an unscrubbed grade would have produced — the
+      // persisted result.json is then scrubbed whole on write, exactly as before. Claims the scrub did not
+      // touch keep whatever text the judge returned.
+      if (sentRubric !== rubric) {
+        graded = graded.map((c) =>
+          Number.isInteger(c.index) && c.index >= 0 && c.index < rubric.length && sentRubric[c.index] !== rubric[c.index]
+            ? { ...c, claim: rubric[c.index] }
+            : c,
+        );
+      }
       graded = graded.map((c) => {
         if (c.rationale === undefined) return c;
         const { rationale, ...rest } = c;
@@ -1373,7 +1560,6 @@ function check(
     // ctx.semanticResults; check() only reads them, so evaluate() stays synchronous. On replay the key
     // is stripped (LIVE_ONLY_KEYS) and never reaches here.
     const judged = ctx.semanticResults?.get(a);
-    const ah = ctx.authoredFilesHealth;
     const scope = a.semantic_matches.evidence_files;
     const sc = scopeAuthoredEvidence(ctx, scope);
     const scoped = scope !== undefined && scope.length > 0;
@@ -1388,127 +1574,21 @@ function check(
           `while ${ctx.authoredFilesHealth?.omittedPaths.length} file(s) were dropped at the capture budget — name the deliverable ` +
           `(e.g. "outputs/report.md") rather than a root-wide "**".\n`,
       );
-    // Every file the judge would actually grade that was kept only as a prefix. For a SCOPED assert the file
-    // is exempt from the per-file cap, so `truncated` means the TOTAL budget could not hold it; for an
-    // UNSCOPED one it usually means the 16 KiB per-file cap bit, which no budget setting lifts — hence the
-    // two different remedies below. Either way the judge is looking at part of a deliverable.
-    const truncatedGraded = sc.files.filter((f) => f.truncated).map((f) => f.path);
-    // Split, because they need different advice: a budget raise recovers an omission, never an unreadable.
-    const omittedGraded = [...sc.omitted].sort();
-    const unreadableGraded = [...sc.unreadable].sort();
     const docInfo = ctx.semanticDocInfo?.get(a);
-    const LEVERS = "scope it with semantic_matches.evidence_files, or raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES";
-    // Everything missing from the in-scope evidence, in ONE report. These conditions are not mutually
-    // exclusive — one oversized in-scope file can be TRUNCATED while simultaneously starving a sibling into
-    // being OMITTED — and an earlier version's if/else chain surfaced only the first, naming the 100-byte
-    // casualty while staying silent about the file that actually ate the budget.
-    const missing = [...sc.omitted, ...sc.unreadable].sort();
-    // `authoredTotalBytes()` THROWS on a malformed env value, and building a failure message must never be
-    // what takes down the evaluation — that would lose every other assert's verdict to render one string.
-    // `executeScenario` validates at entry so the CLI path already refuses a bad value; this covers a
-    // library caller and any future lane that populates judge results without going through it.
-    const currentBudget = (): number | string => {
-      try {
-        return authoredTotalBytes();
-      } catch {
-        return "unset/invalid";
-      }
-    };
+    // A refusal the pre-pass already decided (and skipped the judge for), else the same decision made here —
+    // but only over a GRADE: with no grade and no pre-pass refusal, the pre-pass never ran (verify-run,
+    // replay), and the evidence-shaped reasons would be computed from an authored set this lane may never
+    // have captured. Reporting `scope_matched_nothing` for a run that authored plenty (verify-run populates
+    // `authoredFiles` only when `no_lost_write_back` is asserted) would send an author to fix a glob that is
+    // already correct.
+    const refusal = ctx.semanticRefused?.get(a) ?? (judged ? semanticRefusal(a, ctx, docInfo) : undefined);
     if (ctx.judgeInvalid?.has(a)) {
       results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
+    } else if (refusal) {
+      semanticEvidence = refusal.semanticEvidence;
+      results.push(fail(refusal.message));
     } else if (!judged) {
-      // BEFORE the evidence branches: with no grade there is no verdict to protect, and the evidence-shaped
-      // reasons are computed from an authored set this lane may never have captured. Reporting
-      // `scope_matched_nothing` for a run that authored plenty (verify-run populates `authoredFiles` only
-      // when `no_lost_write_back` is asserted) would send an author to fix a glob that is already correct.
       results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
-    } else if (ctx.authoredFilesHealth?.noPreRunManifest) {
-      // BEFORE the scope branches. With no baseline the authored set is empty for a reason that has nothing
-      // to do with the scope, so `scope_matched_nothing` would be a lie that sends the author to fix a glob
-      // that is already correct — and for an UNSCOPED assert the alternative was worse still: zero authored
-      // files, clean health, straight to the graded stamp. The judge saw finalMessage + transcript only and
-      // the result said the evidence was complete.
-      semanticEvidence = { reason: "no_pre_run_manifest" };
-      results.push(
-        fail(
-          `evidence unavailable: no pre-run manifest for this run, so the set of files it AUTHORED could not be computed — ` +
-            `the judge would have graded the final message and transcript alone while reporting complete authored evidence. ` +
-            `This is a --resume turn (the baseline belongs to the first turn), or the run predates the manifest seam; re-run live without --resume.`,
-        ),
-      );
-    } else if (scoped && !sc.matchedAny) {
-      // A glob matching nothing would grade the rubric against ZERO authored evidence while the capture
-      // reports clean — the vacuous pass `evidence_files: []` is banned for, reached by a typo or a
-      // renamed mount instead. Fail loud, and PRINT THE PATHS: nothing else in the harness surfaces them,
-      // so this message is the only place the author/agent can learn the `<root>/<rel>` key shape.
-      const all = allAuthoredPaths(ctx);
-      semanticEvidence = { reason: "scope_matched_nothing", paths: all };
-      results.push(
-        fail(
-          `evidence unavailable: semantic_matches.evidence_files ${JSON.stringify(scope)} matched NONE of the ${all.length} path(s) this run authored — ` +
-            `grading would have used zero authored evidence. Paths are <root>/<rel> (not a bare filename) and globs use */?/** (not regex). ` +
-            `This run authored: ${all.length ? all.join(", ") : "(nothing)"}`,
-        ),
-      );
-    } else if (missing.length || truncatedGraded.length) {
-      // ONE branch for scoped and unscoped alike. It used to be two, and the unscoped one tested only
-      // `omittedPaths`/`readErrors` — so a file kept as a 16 KiB PREFIX at the per-file cap (no omission, no
-      // read error, document well under the aggregate cap) fell straight through to the graded stamp. A
-      // negative rubric then passed over a prefix whose tail was never shown: an 87 KB report graded on its
-      // first 16 KiB, affirmed as `reason: "graded"`. Truncation is exactly as fatal as omission — the judge
-      // cannot tell "absent because the skill did not write it" from "absent because we cut it".
-      const bits: string[] = [];
-      const remedies: string[] = [];
-      if (omittedGraded.length) {
-        bits.push(`${omittedGraded.length} dropped at the capture budget (${omittedGraded.join(", ")})`);
-        remedies.push(`raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes)`);
-      }
-      if (unreadableGraded.length) {
-        // NOT a budget problem, and offering the budget lever here sends the operator to turn a knob that
-        // cannot move it. An unreadable file needs the run or the filesystem looked at.
-        bits.push(`${unreadableGraded.length} unreadable at read-back (${unreadableGraded.join(", ")})`);
-        remedies.push(`investigate the unreadable path(s) — no budget setting can recover them`);
-      }
-      if (truncatedGraded.length) {
-        bits.push(`${truncatedGraded.length} kept only as a TRUNCATED prefix (${truncatedGraded.join(", ")})`);
-        remedies.push(
-          scoped
-            ? `raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes) — an in-scope file is already exempt from the per-file cap, so it is the TOTAL that did not fit`
-            : `scope this assert with semantic_matches.evidence_files: ["<the deliverable>"], which exempts it from the ${DEFAULT_AUTHORED_PER_FILE_BYTES}-byte per-file cap (raising the total alone will NOT lift that cap)`,
-        );
-      }
-      semanticEvidence = {
-        reason: scoped ? (truncatedGraded.length && !missing.length ? "in_scope_truncated" : "in_scope_omitted") : "evidence_incomplete",
-        paths: [...new Set([...missing, ...truncatedGraded])].sort(),
-      };
-      results.push(
-        fail(
-          `evidence unavailable: the ${scoped ? "in-scope " : ""}authored evidence the judge would grade is incomplete — ${bits.join("; ")}. ` +
-            `A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. ` +
-            `To grade it: ${remedies.join("; or ")}${scoped ? `. Keep the composed document under ${JUDGE_DOC_CAP} chars or it is cut at the other end` : ""}`,
-        ),
-      );
-    } else if (docInfo?.evidenceCut) {
-      // The remedy for every refusal above is "raise the budget" — which, past JUDGE_DOC_CAP, would
-      // otherwise move the incompleteness from a loud refusal into a SILENT aggregate cut of the sections
-      // that carry the evidence, so the fix would carry the bug it fixes. Deliberately NOT gated on
-      // `scoped`: the env var that makes this reachable is available to every scenario, and an unscoped run
-      // whose capture is clean has nothing else standing between it and a graded-but-truncated document.
-      semanticEvidence = { reason: "authored_evidence_truncated" };
-      // ONE lever, deliberately. LOWERING the capture budget cannot clear this: it shrinks the document only
-      // by dropping or truncating authored bytes, which lands in an earlier refusal branch every time — it
-      // converts one refusal into another rather than fixing either. And `narrow` names a key an UNSCOPED
-      // assert does not have, so the verb follows the scope.
-      results.push(
-        fail(
-          `evidence unavailable: the composed judge document exceeded its ${JUDGE_DOC_CAP}-char budget and the authored-file evidence was cut ` +
-            `(the overflow lands in "${docInfo.overflowSection ?? "an unknown section"}") — ` +
-            `${docInfo.overflowSection?.startsWith("Sub-agent output") ? "set include_subagent_text: false, or " : ""}` +
-            `${scoped ? "narrow" : "add"} semantic_matches.evidence_files so only the files the rubric is about reach the judge` +
-            `${sc.files.length === 1 ? ` — but this scope already names a SINGLE file, so it cannot be narrowed further: that deliverable is simply too large to grade whole against a ${JUDGE_DOC_CAP}-char judge document, and the rubric needs to target a smaller artifact` : ""}. ` +
-            `(Lowering $COWORK_HARNESS_AUTHORED_TOTAL_BYTES will NOT help — it only drops the evidence at the capture instead.)`,
-        ),
-      );
     } else {
       if (docInfo?.healthNoteCut)
         // Advisory, not a refusal: the graded evidence survived and only the "do not infer absence" note was

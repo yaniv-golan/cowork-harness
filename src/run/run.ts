@@ -27,6 +27,7 @@ import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { posix as posixPath } from "node:path";
 import { realpathSync } from "node:fs";
+import { endsOnRequestForInput } from "./input-request.js";
 
 /** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
  *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). Exported so the replay
@@ -1313,7 +1314,12 @@ export class Run {
     // is_error:false → result:"success" (a false-green — the SDK turn didn't error, but the task didn't
     // complete). Flag it (computeVerdict turns it into a `stalled` fail unless allow_stall). Conservative
     // conjunction to keep the default-fail safe: (1) the run cleanly succeeded, (2) the FINAL top-level
-    // assistant message is a question, and (3) NO productive tool ran AFTER the last gate.
+    // assistant message asks for input — it ends on a `?`, OR (only once an AskUserQuestion gate has
+    // fired) its closing sentence matches the closed list in input-request.ts ("Please share X so I
+    // can…", "Once you upload it, I'll…", a `?` followed only by a "For example: …"/parenthetical
+    // trailer; never a polite closer) — and (3) NO productive tool ran AFTER the last gate. The gate
+    // requirement keeps the widening off a no-gate, no-tool knowledge answer: there `productiveAfterGate`
+    // is 0 by construction, so wording alone would decide, and only the long-standing `?` rule may.
     //
     // (3) is keyed on toolLog position, not "no tools at all": an AskUserQuestion gate arrives as a real
     // assistant tool_use block (→ toolLog; see toolCounts in any gated result.json), so a naive
@@ -1329,7 +1335,8 @@ export class Run {
     const lastText = transcript.length > 0 ? transcript[transcript.length - 1].trim() : "";
     const lastGateIdx = this.toolLog.map((t) => t.name).lastIndexOf("AskUserQuestion");
     const productiveAfterGate = this.toolLog.slice(lastGateIdx + 1).filter((t) => t.name !== "AskUserQuestion").length;
-    if (this.rec.result === "success" && lastText.endsWith("?") && productiveAfterGate === 0) {
+    const asksForInput = lastText.endsWith("?") || (lastGateIdx >= 0 && endsOnRequestForInput(lastText));
+    if (this.rec.result === "success" && asksForInput && productiveAfterGate === 0) {
       this.rec.stalledOnQuestion = true;
     }
     // pair each answered gate with its tool_result (by toolUseId). delivered=true iff a non-error

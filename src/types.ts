@@ -941,7 +941,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
+      "(verdict modifier) suppress the default-fail when a run ends on a question or a closing request for input (e.g. 'Please share X so I can…') having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
     ),
   allow_undelivered_deliverables: z
     .literal(true)
@@ -1500,8 +1500,8 @@ export interface RunResult {
   /** Absolute path to the agent's full stderr log (`<outDir>/agent.stderr.log`), surfaced so an
    *  OOM/crash debugger knows where to look. Live path only — absent on replay (no live process). */
   stderrLogPath?: string;
-  // the run ended on a question having done no productive tool work after its last gate (the agent
-  // asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
+  // the run ended on a question or a closing request for input (src/run/input-request.ts) having done no
+  // productive tool work after its last gate (the agent asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
   // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
   // allow_stall. Scenario-lane only; re-derived by the detector in run.ts on both the live and replay
   // re-drive (NOT a persisted-then-read flag).
@@ -1727,7 +1727,9 @@ export interface RunResult {
     judgeUsage?: TokenUsage;
     /** A fingerprint of the exact document this assert's judge received (after secret scrubbing and every
      *  cap). Lets a later re-grade prove it showed the judge the same bytes, section by section, instead of
-     *  assuming it. Absent when the judge never ran. Live lane only. */
+     *  assuming it. Absent when the judge never ran — including an assert refused for unavailable evidence
+     *  (`semanticEvidence.reason` other than `graded`), for which the judge is deliberately not called. Live
+     *  lane only. */
     judgedDoc?: JudgedDocFingerprint;
     /** Identity (16 hex) of the grading-prompt TEMPLATE the judge used. A before/after comparison must
      *  refuse to mix hashes: a prompt change can shift every pass rate. Live lane only. */
@@ -1737,7 +1739,7 @@ export interface RunResult {
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
     judgeInvalid?: boolean;
     /** WHY a `semantic_matches` assert refused its verdict, or WHAT it graded — as a typed reason rather
-     *  than prose. There are FIVE distinct evidence-unavailable causes with five different fixes, and one
+     *  than prose. There are SIX distinct evidence-unavailable causes with six different fixes, and one
      *  success shape; a consumer (usually an agent iterating on a skill) must be able to tell "your
      *  `evidence_files` glob matched nothing" from "the deliverable was truncated" without regex-scraping
      *  an English message. Same rationale as `judgeInvalid` above. `paths` carries the concrete file list
@@ -1751,7 +1753,9 @@ export interface RunResult {
      *  which is distinct from every other reason: those describe evidence that exists and could not be
      *  fully shown, this one describes evidence that was never derivable. Grading an empty authored set as
      *  though it were complete is the vacuous green this value exists to make impossible.
-     *  Present only on the live lane where the judge ran. */
+     *  Present only on the live lane, whenever the judge pre-pass ran. On every reason but `graded` the judge
+     *  was NOT called — the refusal is decided from the composed evidence first — so such an assert carries
+     *  no `semanticClaims`, `judgeModel`, `judgeCostUsd`, `judgeUsage`, `judgePromptHash` or `judgedDoc`. */
     semanticEvidence?: {
       reason:
         | "graded"

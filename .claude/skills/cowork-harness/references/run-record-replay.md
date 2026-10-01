@@ -16,7 +16,10 @@ deterministic re-run. Use `cowork-harness trace <id>` to digest a run. If only a
 run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-checks the `assert:` block against
 a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
 When the scenario declares `answers:`, verify-run **also** checks they still match the run's actual gates (a
-reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). Or skip
+reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). `verify-run`
+never calls the semantic judge, so a `semantic_matches` assert is not re-graded by it; after a rubric change,
+`cowork-harness regrade <run-dir> --scenario <scenario.yaml>` re-grades those against the kept run (the judge call
+is the only spend) and reports whether the judge read the same document the live judge did. Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, `cowork-harness lint
@@ -119,6 +122,13 @@ per-job directory it finds no priced run for the scenario, warns `no priced run 
 UNCAPPED`, and runs with no cap (a batch's estimate becomes a lower bound; only the `--concurrency 1`
 running total still stops it). To keep the cap, leave `--run-dir` at the default, or reuse the same
 directory across invocations (a CI cache, say) so it holds at least one priced run of that scenario.
+Under `--output-format json` this is machine-readable: the envelope's top-level `budget` object reports
+`enforced: false` (single run: at least one scenario ran with no cap) or `"lower_bound"` (a `record`
+batch), with `unpriced[]`, `runsDir` and `runsDirRedirected`; and when the runs dir was redirected the
+warning names `--run-dir` / `COWORK_HARNESS_RUNS_DIR` as the cause. A budget REFUSAL carries
+`error.code: "budget_exceeded"` plus `error.budget` (cap, refused estimate, basis, unpriced) — branch on
+that code, never on the message; a scenario that did not load has no `error.code`. On a
+`record <dir/> --dry-run` refusal, `broken[]` / `inputErrors[]` stay on the error envelope.
 
 #### Validate a skill against real documents (not a cassette)
 
@@ -201,14 +211,17 @@ Recognize these before "fixing" a non-bug:
   hard-fails rather than silently passing.) **On an open-ended `skill` run** (no `assert:` block to carry
   the modifier), pass **`--allow-missing-capability`** — the CLI equivalent of the assertion.
 - **`ended_with_question`** (`WARN`, live lane) — a heuristic: the agent's final answer contains a
-  question and the run wrote **no deliverable to `outputs/`** — it may have ended on a request for input
-  instead of finishing. Warn-only; the fix is scripting/steering the answer (`answer:` / `--answer` / a
-  decider, or `--decider-llm --intent`), not editing the skill's prose. The strict, fail-severity sibling
-  `stalled` already catches a *trailing*-`?` final turn that did no tool work after the last gate; this
-  covers the residual (a mid-message `?`, or tool work after the last gate that still ended asking). Read
-  the final message before acting — a legitimate question-posing answer that wrote a file never fires.
-  Assert `allow_stall: true` if ending on a question is the intended terminal state (on an open-ended
-  `skill` / `probe-dispatch` run, pass **`--allow-stall`** — the CLI equivalent).
+  question (or closes on a request for input — the same test `stalled` uses, see [gotchas.md](gotchas.md) item 13) and the run
+  wrote **no deliverable to `outputs/`** — it may have ended on a request for input instead of
+  finishing. Warn-only; the fix is scripting/steering the answer (`answer:` / `--answer` / a decider, or
+  `--decider-llm --intent`), not editing the skill's prose. The strict, fail-severity sibling `stalled`
+  already catches a final turn that ends on a question or a closing request for input ("Please share X
+  so I can…", "Once you upload it, I'll…" — counted only once a gate has fired) and did no tool work
+  after the last gate; this covers the residual (a mid-message `?`, or tool work after the last gate
+  that still ended asking). Read the final message before acting — a legitimate question-posing answer
+  that wrote a file never fires. Assert `allow_stall: true` if ending on a question is the intended
+  terminal state (on an open-ended `skill` / `probe-dispatch` run, pass **`--allow-stall`** — the CLI
+  equivalent).
 - **`undelivered_deliverables`** (`WARN`) — the skill produced file(s) **outside every user-visible root**
   and never delivered them. On a **remote** Cowork session the workspace is reclaimed at session end, so
   they are destroyed; on a **local** one they persist but stay invisible to the user. Either way the user

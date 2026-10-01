@@ -70,6 +70,7 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage", ()
     ["chat", "usage: chat"],
     ["decide", "usage: decide"],
     ["verify-run", "usage: verify-run"],
+    ["regrade", "usage: regrade"],
     ["doctor", "usage: doctor"],
     ["status", "usage: status"],
     ["inspect", "usage: inspect"],

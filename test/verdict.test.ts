@@ -329,6 +329,23 @@ describe("computeVerdict (the single verdict source)", () => {
       assertions: [assn({ result: "success" })],
     });
     expect(computeVerdict(noMessage, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+
+    // a `?`-free closing request for input counts too — the same helper `stalled` uses. This is the shape
+    // `stalled` cannot own when tool work ran after the last gate, so it must land here, not in neither.
+    // Same condition as `stalled`: only once an AskUserQuestion gate fired.
+    const gated = { ...fires, toolCounts: { AskUserQuestion: 1, Bash: 2 } };
+    const imperative = rr({ ...gated, finalMessage: "Here is what I found. Please share the raise amount so I can model it." });
+    expect(computeVerdict(imperative, "live").signals.some((s) => s.code === "ended_with_question")).toBe(true);
+    // …not without a gate
+    const ungated = rr({
+      ...fires,
+      toolCounts: { Bash: 2 },
+      finalMessage: "Here is what I found. Please share the raise amount so I can model it.",
+    });
+    expect(computeVerdict(ungated, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
+    // …and never for a polite closer with no `?`
+    const closer = rr({ ...gated, finalMessage: "That covers the deck. Let me know if you'd like any changes." });
+    expect(computeVerdict(closer, "live").signals.some((s) => s.code === "ended_with_question")).toBe(false);
   });
 
   it("ended_with_question stays open-ended through a `skill --allow-missing-capability` assert (A↔B seam)", () => {

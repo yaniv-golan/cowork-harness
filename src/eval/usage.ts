@@ -59,6 +59,8 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --quiet                    no per-job progress lines
   --dotenv <path>, --run-dir <path>   as on every command
        No run label or session id is accepted: eval labels each run eval:<eval-id>:<arm> and gives each job its own session.
-       exit codes: 0 completed (with --fail-on: and no drop at that level) · 1 a drop at the --fail-on level,
+       exit codes: 0 completed (with --fail-on: and no drop at that level) · 1 a drop at the --fail-on level
+       (under possible, also an insufficient_refusals row: the candidate refused ≥ 2 more semantic_matches
+       grades for unavailable evidence than the baseline, and that excess took the row below the threshold),
        every row insufficient, or the judge model differed across reps · 2 usage, or a refusal before any
        run · 3 an arm snapshot could not be copied, or failed its staging preflight`;

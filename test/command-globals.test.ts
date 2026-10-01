@@ -37,6 +37,7 @@ const MATRIX: Array<[string, string[]]> = [
   ["replay", ["replay", "x.cassette.json"]],
   ["verify-cassettes", ["verify-cassettes", "x.cassette.json"]],
   ["verify-run", ["verify-run", "rundir", "x.yaml"]],
+  ["regrade", ["regrade", "rundir", "--scenario", "x.yaml"]],
   ["trace", ["trace", "some-run"]],
   ["inspect", ["inspect", "some-run"]],
   ["diff", ["diff", "a", "b"]],

@@ -13,7 +13,7 @@ import {
   type RunStatus,
   type PlatformBaseline,
 } from "./types.js";
-import { writeAllSync, tildeify } from "./io.js";
+import { writeAllSync, tildeify, installTerminalScrub } from "./io.js";
 import { SECRET_ENV_KEYS } from "./runtime/host-env.js";
 import {
   loadBaseline,
@@ -71,6 +71,7 @@ import {
 } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { assertContextFromRunDir, parseGatesFromEvents, readTranscriptSidecar } from "./run/verify-context.js";
+import { cmdRegrade, REGRADE_USAGE } from "./run/regrade.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint, cmdLintSkill, cmdScaffoldFlagBuilt, isFlagBuiltScaffold, SCAFFOLD_VALUE_FLAGS } from "./run/scenario-tool.js";
 import {
@@ -315,6 +316,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
+  regrade <run-dir>… --scenario <yaml>   re-grade kept runs' semantic_matches asserts with the judge (no live agent; see 'regrade --help')
+      [--judge-model <id>] [--authored-total-bytes <N>] [--output-format json]
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
@@ -466,7 +469,7 @@ Output:
   --allow-missing-capability       don't fail the verdict when the (partial 'core') image omits a capability
                                    the skill used but real Cowork ships — open-ended-run equivalent of a
                                    scenario asserting allow_missing_capability: true
-  --allow-stall                    don't fail the verdict when the run ends on a question (the \`stalled\` signal) —
+  --allow-stall                    don't fail the verdict when the run ends asking for input (the \`stalled\` signal) —
                                    open-ended-run equivalent of a scenario asserting allow_stall: true
   --allow-host-hooks              consent to running a staged plugin's hooks as native host processes at
                                   protocol (no container sandbox); refused loud otherwise
@@ -666,6 +669,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: gates <dir> [--follow] [--output-format text|json]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
   answer:
     'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>") [--output-format text|json]   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
+  regrade: REGRADE_USAGE,
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   inspect:
@@ -733,6 +737,7 @@ const COMMANDS = [
   "replay",
   "verify-cassettes",
   "verify-run",
+  "regrade",
   "trace",
   "inspect",
   "diff",
@@ -781,6 +786,8 @@ function leadingGlobalCount(av: string[]): number {
 }
 
 async function main() {
+  // Before anything can print: stdout/stderr get the same secret scrub as the run's artifacts (src/io.ts).
+  installTerminalScrub();
   const argv = process.argv.slice(2);
 
   // `--dotenv <path>` BEFORE the subcommand — parse + strip it before command dispatch so a skill run from
@@ -962,6 +969,8 @@ async function main() {
       return cmdInitRedact(rest);
     case "verify-run":
       return cmdVerifyRun(rest);
+    case "regrade":
+      return cmdRegrade(rest);
     case "trace":
       return cmdTrace(rest);
     case "inspect":
@@ -2562,7 +2571,7 @@ Probe tuning:
                                  refused (exit 2)
   --expect-write <suffix>         narrow "delivered" to a sub-agent write whose path ends with this suffix
                                  (default: ANY sub-agent-origin write under the dispatch's own toolUseId)
-  --allow-stall                  don't fail the verdict when the run ends on a question (the \`stalled\` signal) —
+  --allow-stall                  don't fail the verdict when the run ends asking for input (the \`stalled\` signal) —
                                  the equivalent of a scenario asserting allow_stall: true
 
 Answering / common flags (inherited from the shared flag set, honored here too):

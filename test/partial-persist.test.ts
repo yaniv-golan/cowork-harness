@@ -303,3 +303,61 @@ describe("buildPartialResult — keeps the outputs filesystem diff", () => {
     expect(result.fsDiff).toEqual(fsDiff);
   });
 });
+
+describe("buildPartialResult — sub-agent reasoning lands on the record, not only the result", () => {
+  it("captures onto record.subagents before assembly, so run.jsonl/trace.json (written from the record) carry it", () => {
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
+    const dir = join(configDir, "projects", "-proj", "sess", "subagents");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "agent-a1.meta.json"), JSON.stringify({ toolUseId: "toolu_w" }));
+    writeFileSync(
+      join(dir, "agent-a1.jsonl"),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "found it" }] } }) + "\n",
+    );
+    // A usable timeline makes result.subagents attributeSubagentSkills' COPIES of the record's entries — the
+    // case where a capture onto the result alone would miss the record that run.jsonl/trace.json are written from.
+    writeFileSync(
+      join(outDir, "timeline.jsonl"),
+      [
+        { v: 1, startedAtWall: "2026-07-05T00:00:00.000Z", startedAtMono: "1" },
+        { seq: 0, ts: 1, line: 0, type: "subagent_dispatch", toolUseId: "toolu_w", dispatchAgentType: "general-purpose" },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n",
+    );
+    const record = partialRecord({
+      subagents: [
+        {
+          toolUseId: "toolu_w",
+          dispatchAgentType: "general-purpose",
+          declaredTools: [],
+          toolsUsed: [],
+          referencesRead: [],
+          referencesAccessed: [],
+        },
+      ],
+    });
+    const result = buildPartialResult({
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "hostloop",
+      baseline: "desktop-1.13576.1",
+      record,
+      outDir,
+      workRoot,
+      configDir,
+      pluginSkillRoots: [],
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      effectiveFidelity: "hostloop",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "unscripted" },
+    });
+    // RunRecord's dispatch type does not declare `reasoning`; the capture adds it in place.
+    const onRecord = (record.subagents[0] as { reasoning?: unknown }).reasoning;
+    expect(result.subagents?.[0]).not.toBe(record.subagents[0]); // the timeline made a copy
+    expect(onRecord).toEqual([{ kind: "text", text: "found it" }]);
+    expect(result.subagents?.[0].reasoning).toBe(onRecord);
+  });
+});

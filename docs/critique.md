@@ -158,7 +158,7 @@ ignored.
 |---|---|
 | `--timeout <ms>` | wall-clock budget for the task turn (default **30 min**; critique's own kill-switch stretches to fit). The turn is killed *after* its model spend, so too-short costs the money **and** the result — the default errs long deliberately |
 | `--label <tag>` | generation tag in the run index, for pairing critiques across fixes |
-| `--allow-stall` | don't fail the task turn when it ends on a question (the `stalled` signal) — the CLI equivalent of `allow_stall: true` |
+| `--allow-stall` | don't fail the task turn when it ends on a question or a request for input (the `stalled` signal) — the CLI equivalent of `allow_stall: true` |
 | `--answer "<q-regex>=<choice>"`, `--answer-policy <yaml>` | pre-answer the skill's gates — **this is what makes gated skills critiquable at all** |
 | `--on-unanswered fail\|first` | unscripted-gate policy (`prompt` is refused — there is no TTY inside) |
 | `--decider-llm` / `--intent` / `--decider-model` / `--decider-cmd` / `--decider-dir` | answer live gates in the graded run (these forward to the graded `skill` turn, which accepts all of them — `run` and `record` each accept a narrower subset, see [decider-dir.md → Decider flags by command](./decider-dir.md#decider-flags-by-command-run-vs-record-vs-skill)) |
@@ -521,6 +521,33 @@ Beyond stdout, every critique leaves durable artifacts at the run-dir root (best
 | `critique-evidence-package.txt` | when the evaluator ran | the **armored** corpus the evaluator actually graded against — re-grade a disputed finding offline against the exact record |
 | `critique-salvage.json` | exit 2 only | the self-report + each evaluator pass's RAW reply (captured **pre-parse**), so salvage is a file read, not console scraping |
 
+These files, and the `--out` file, are secret-scrubbed when they are written, like the run's own
+`result.json`: every value in `COWORK_HARNESS_SCRUB_VALUES`, the env vars named in
+`COWORK_HARNESS_SCRUB_KEYS`, and the auth variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_CUSTOM_HEADERS`) is written as `[REDACTED]`. What critique prints to the
+terminal follows the CLI-wide scrub described in
+[docs/cli.md](./cli.md#secret-scrubbing-and-cassette-redaction). The text files are scrubbed as text. The
+JSON files are scrubbed **by value**, so they parse whatever the scrub set, and only these exact fields are
+kept as written, because they are join keys or closed enums:
+
+- at the report root (and under `reportState` in the salvage file): `sessionId`, `outDir`, `skillFolder`,
+  `skillDir`, `gradedSkill`, `gradedSkillHash`, `gradedModels`, `evaluatorModel`, `requestedModel`,
+  `fidelity`, `requestedFidelity`, `gradedEffectiveFidelity`, `gradedBaseline`, `taskResult`,
+  `gradedOutcome`, `selfReportStatus`, `skillMdStatus`, `infraFailurePhase`, `infraFailureKind`,
+  `verdictProvenance`;
+- `items[].source`, `items[].classification`, `items[].findingFingerprint`, `gateAnswers[].answeredBy`,
+  `evidenceBudget.corpusOmitted[].reason`;
+- in the `--corpus-only` payload: `mode`, `skillFolder`, `skillDir`, `skill`, `corpus.corpusOmitted[].reason`.
+
+A field with the same name anywhere else is scrubbed. Two consequences:
+
+- `findingFingerprint` is hashed over the **scrubbed** `idea` and `recommendedAction`, so it can't be used
+  to confirm a guess at a scrubbed value. A finding whose text carries no scrub value fingerprints exactly
+  as before; one that does fingerprints as its `[REDACTED]` text, and clusters only with runs that scrubbed
+  the same values.
+- An item's `evidence` excerpt stays a substring of `critique-evidence-package.txt`, except where the
+  excerpt starts or ends partway through a scrubbed value.
+
 These artifacts (and the report's JSON shape) are part of critique's **EXPERIMENTAL** surface — useful
 and stable in practice, but not yet a frozen SPEC §12 covered surface; field additions are expected.
 The report's field names and shapes are authoritatively described by
@@ -543,7 +570,7 @@ Then pair/cluster across the reports:
 
 - **Same skill generation?** group by `gradedSkillHash` (content-exact — an edited skill changes it).
 - **Same finding across runs/inputs?** cluster by each item's **`findingFingerprint`** (sha over the
-  normalized idea + classification + recommendedAction, deliberately excluding the input-specific
+  normalized, secret-scrubbed idea + classification + recommendedAction, deliberately excluding the input-specific
   `evidence` excerpt — so the same finding matches across different decks/transcripts).
 - **The fingerprint is high-precision, LOW-RECALL — read the direction correctly.** `idea` is
   model-authored free text, so the same underlying finding *reworded* across runs fingerprints
