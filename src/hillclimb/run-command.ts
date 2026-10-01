@@ -245,8 +245,10 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
 
   // Per case: the session pointed at the variant's plugin, its signature from the same fingerprint call a run
   // makes, and the input checks a run makes before its run dir exists — over the SUBSTITUTED session. Selected cases
-  // only; an unselected case whose session parses still records its signature, so the variant's source_sig is the
-  // same under any --case selection.
+  // only; an unselected case whose session loads still records its signature, so the variant's source_sig is the
+  // same under any --case selection WHEN every unselected case's session loads. One that does not (or an inline
+  // session) records no signature: a --case pass then records a source_sig a full pass would not, and summary.json
+  // keeps the first writer's.
   const sessions = new Map<string, SessionConfig>();
   const sigs = new Map<string, string>();
   const chosen = new Set(selected.map((c) => c.id));
