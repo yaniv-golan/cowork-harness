@@ -307,15 +307,37 @@ function normRel(p: string): string {
   return posix.normalize(p.split("\\").join("/")).replace(/^\.\//, "").replace(/\/+$/, "").normalize("NFC").toLowerCase();
 }
 
+/** The case-folded forms a name is compared under: `lower(NFC(x))` and `lower(upper(NFC(x)))`. The second models
+ *  the folds `toLowerCase` alone misses but a case-insensitive filesystem (macOS APFS) applies — `ß`/`SS`, a final
+ *  sigma, the `ﬁ` ligature; the first keeps what upper-then-lower loses (`ẞ`/`ß`). Two names fold together when
+ *  any form is shared. Over-folding (`ı`/`I`) errs toward refusing, never toward a pass. */
+export function foldForms(x: string): [string, string] {
+  const n = x.normalize("NFC");
+  return [n.toLowerCase(), n.toUpperCase().toLowerCase()];
+}
+
+/** Do two names fold to the same name under {@link foldForms}? */
+export function foldsMatch(a: string, b: string): boolean {
+  const [a1, a2] = foldForms(a);
+  const [b1, b2] = foldForms(b);
+  return a1 === b1 || a2 === b2 || a1 === b2 || a2 === b1;
+}
+
 /** Every path a presence assertion could name and pass on the fixture alone: each staged file, and each
- *  directory above one (`outputs/scores`, `outputs`) — `file_exists` passes on a directory. Case-folded. */
+ *  directory above one (`outputs/scores`, `outputs`) — `file_exists` passes on a directory. In both fold forms. */
 function vacuousTargets(files: ReadonlyArray<{ path: string }>): Set<string> {
   const out = new Set<string>();
   for (const f of files) {
-    const parts = `outputs/${f.path}`.normalize("NFC").toLowerCase().split("/");
-    for (let i = 1; i <= parts.length; i++) out.add(parts.slice(0, i).join("/"));
+    const parts = `outputs/${f.path}`.normalize("NFC").split("/");
+    for (let i = 1; i <= parts.length; i++) for (const form of foldForms(parts.slice(0, i).join("/"))) out.add(form);
   }
   return out;
+}
+
+/** Is this (normalized) assertion path one of the vacuous targets, under either fold form? */
+function hitsTargets(targets: Set<string>, p: string): boolean {
+  const base = posix.normalize(p.split("\\").join("/")).replace(/^\.\//, "").replace(/\/+$/, "");
+  return foldForms(base).some((form) => targets.has(form));
 }
 
 /**
@@ -337,7 +359,7 @@ export function workspaceFixtureAssertRefusal(
       if (v === undefined) continue;
       const p = assertedArtifactPath(key, v);
       if (p === undefined || assertedAuthored(v) !== undefined) continue;
-      if (targets.has(normRel(p))) hits.push({ key, path: p });
+      if (hitsTargets(targets, p)) hits.push({ key, path: p });
     }
   }
   if (!hits.length) return undefined;

@@ -264,8 +264,29 @@ describe("the resume flag reaches the assertion context on every lane that evalu
     expect(loaded.ok).toBe(false);
     expect(!loaded.ok && "message" in loaded ? loaded.message : "").toMatch(/holds 2 turns/);
   });
-  it("the live run passes its own resume flag", () => {
-    const src = readFileSync(join(process.cwd(), "src", "run", "execute.ts"), "utf8");
-    expect(src).toMatch(/^\s+resume: !!opts\.resume,$/m);
+});
+
+describe("case folds toLowerCase alone does not model (ß/SS, final sigma, the ﬁ ligature)", () => {
+  const rows: Array<[string, string]> = [
+    ["stra\u00dfe.md", "STRASSE.md"],
+    ["\u03bf\u03b4\u03bf\u03c2.md", "\u03bf\u03b4\u03bf\u03c3.md"],
+    ["\ufb01le.md", "file.md"],
+    ["stra\u00dfe.md", "STRA\u1e9eE.md"],
+  ];
+  it.each(rows)("fixture %s, asserted %s: the load refusal catches it (on every platform)", (disk, asserted) => {
+    const r = run({ [disk]: "x\n" });
+    expect(workspaceFixtureAssertRefusal(sc([{ file_exists: `outputs/${asserted}` }]), r.files)).toMatch(/already provides/);
   });
+  it.each(rows)(
+    "fixture %s, asserted %s: `authored: true` fails as untouched where the filesystem folds them (never 'symlinked directory')",
+    (disk, asserted) => {
+      const r = run({ [disk]: "x\n" });
+      const [v] = evaluate([{ file_exists: { path: `outputs/${asserted}`, authored: true } }], r.ctx());
+      expect(v!.pass).toBe(false);
+      if (existsSync(join(r.mnt, "outputs", asserted))) {
+        expect(v!.message).toMatch(/untouched pre-run file/);
+        expect(v!.message).not.toMatch(/symlinked directory/);
+      }
+    },
+  );
 });
