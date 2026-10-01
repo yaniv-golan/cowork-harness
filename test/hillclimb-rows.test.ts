@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { attemptRow, type AttemptContext } from "../src/hillclimb/rows.js";
+import { metricSig } from "../src/hillclimb/grade-keys.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "../src/hillclimb/schema-check.js";
 import { UnansweredError, BoundaryError } from "../src/errors.js";
 import type { Assertion, RunResult, ScenarioMetric } from "../src/types.js";
@@ -344,6 +345,23 @@ describe("scored rows", () => {
     expect(row.meta.failure_class).toBe("errored_agent");
     expect(row.grade.words_present).toBe(0);
     expect(row.grade).not.toHaveProperty("words");
+  });
+
+  it("every scored row stamps the flow's metric declarations as meta.metric_sigs, measured or not", () => {
+    const r = { ...fixture("success-semantic"), metrics: [{ id: "ratio", value: 0.5 }] }; // ADDED: metrics
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [words, ratio] })).row as Record<string, any>;
+    expect(row.meta.metric_sigs).toEqual({ words: metricSig(words), ratio: metricSig(ratio) });
+    // An agent-caused failure is a scored row too: its sigs are stamped like any other.
+    const failed = fixture("stalled-on-question");
+    expect((attemptRow({ result: failed }, ctx(failed, { metrics: [words] })).row as Record<string, any>).meta.metric_sigs).toEqual({
+      words: metricSig(words),
+    });
+  });
+
+  it("a flow with no metrics stamps no meta.metric_sigs", () => {
+    const r = fixture("success-semantic");
+    expect((attemptRow({ result: r }, ctx(r)).row as Record<string, any>).meta).not.toHaveProperty("metric_sigs");
+    expect((attemptRow({ result: r }, ctx(r, { metrics: [] })).row as Record<string, any>).meta).not.toHaveProperty("metric_sigs");
   });
 
   it("a metric never carries an explanation, beside a judge's rationale that does", () => {

@@ -31,7 +31,7 @@ import {
   type ClassifiableResult,
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
-import { caseKeyDecls, refusableAssertion, type MetricDecl } from "./grade-keys.js";
+import { caseKeyDecls, metricSig, refusableAssertion, type MetricDecl } from "./grade-keys.js";
 import { metricEntries } from "./metric-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
@@ -345,6 +345,8 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
       ...(Object.keys(claims).length ? { claims } : {}),
       ...(Object.keys(metrics.unavailable).length ? { metrics_unavailable: metrics.unavailable } : {}),
+      // Each flow metric's declaration as this row was graded under it: a later pass refuses a changed one.
+      ...(ctx.metrics?.length ? { metric_sigs: Object.fromEntries(ctx.metrics.map((m) => [m.id, metricSig(m)])) } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),

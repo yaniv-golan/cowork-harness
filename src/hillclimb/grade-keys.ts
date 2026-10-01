@@ -19,6 +19,7 @@
 //   a<i>_c<j>         0|1 for claim j of semantic assertion i
 // Every `_present` companion precedes the graded keys, so none can become the headline by accident.
 
+import { createHash } from "node:crypto";
 import type { Assertion, ScenarioMetric } from "../types.js";
 import { UsageError } from "../errors.js";
 import { scenarioRows } from "../eval/classify.js";
@@ -119,13 +120,22 @@ export function flowMetricDecls(
   ];
 }
 
+/** The canonical declaration tuple: every field that changes what a metric's column means. The id is folded to
+ *  lower case (ids compare case-insensitively) and an absent field is always `null`, so key order and an explicit
+ *  `undefined` never change it. */
+const declTuple = (m: MetricDecl): string =>
+  JSON.stringify([m.id.toLowerCase(), m.artifact, m.path, m.better, m.scale ?? null, m.unbounded ?? null, m.min ?? null]);
+
+/** A metric declaration's signature, stamped on every scored row (`meta.metric_sigs`): the first 16 hex chars of
+ *  the sha256 of its canonical tuple. A later pass compares it, so a column cannot change meaning mid-flow. */
+export const metricSig = (m: MetricDecl): string => createHash("sha256").update(declTuple(m)).digest("hex").slice(0, 16);
+
 /** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared differently in
  *  another case (any field: the file, the path, the direction, the bound, the floor) is refused, naming both cases:
  *  one column cannot mean two things. Ids are compared case-insensitively, as the scenario compares its own: two
  *  spellings of one id would be two keys on a row but one file on a case-folding disk. */
 export function metricUnion(cases: ReadonlyArray<{ name?: string; metrics?: readonly MetricDecl[] }>): MetricDecl[] {
   const seen = new Map<string, { m: MetricDecl; name: string }>();
-  const sig = (m: MetricDecl) => JSON.stringify([m.id, m.artifact, m.path, m.better, m.scale, m.unbounded, m.min]);
   cases.forEach((c, i) => {
     const name = c.name ?? `case ${i + 1}`;
     for (const m of c.metrics ?? []) {
@@ -135,7 +145,7 @@ export function metricUnion(cases: ReadonlyArray<{ name?: string; metrics?: read
         throw new UsageError(
           `metric "${prev.m.id}" (${prev.name}) and metric "${m.id}" (${name}) differ only in case; ids are compared case-insensitively — spell them the same in every scenario`,
         );
-      else if (sig(prev.m) !== sig(m))
+      else if (declTuple(prev.m) !== declTuple(m))
         throw new UsageError(
           `metric "${m.id}" is declared differently in ${prev.name} and ${name} (${JSON.stringify(prev.m)} vs ${JSON.stringify(m)}); one column cannot mean two things — make the declarations identical or rename one`,
         );

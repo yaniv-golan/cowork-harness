@@ -6,7 +6,7 @@
 // (their union). Per-index keys stay on every row as drill-down data and are declared only when every case
 // has the identical assertion list. One producer for the row writer and `state-template`.
 import { describe, it, expect } from "vitest";
-import { caseKeyDecls, flowMetricDecls, presentCompanionOf, reservedMetricId } from "../src/hillclimb/grade-keys.js";
+import { caseKeyDecls, flowMetricDecls, metricSig, presentCompanionOf, reservedMetricId } from "../src/hillclimb/grade-keys.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import { UsageError } from "../src/errors.js";
 import type { Assertion, ScenarioMetric } from "../src/types.js";
@@ -146,6 +146,39 @@ describe("flowMetricDecls — what the flow declares", () => {
     ]);
     expect(decls.find((d) => d.id === "ratio")).toMatchObject({ kind: "float", better: "higher", scale: 1 });
     expect(decls.find((d) => d.id === "cost")).not.toHaveProperty("scale");
+  });
+});
+
+describe("metricSig — a short, stable signature of one metric's declaration, stamped on every row", () => {
+  it("16 hex chars over the fields the union compares; any field change changes it, the id's letter case does not", () => {
+    const base = metric("score");
+    expect(metricSig(base)).toMatch(/^[0-9a-f]{16}$/);
+    expect(metricSig({ ...base })).toBe(metricSig(base));
+    expect(metricSig(metric("Score", { path: "score" }))).toBe(metricSig(base));
+    for (const over of [
+      { artifact: "outputs/other.json" },
+      { path: "totals.score" },
+      { better: "lower" },
+      { scale: 2 },
+      { scale: undefined, unbounded: true },
+      { min: 0.5 },
+    ] as Partial<ScenarioMetric>[])
+      expect(metricSig(metric("score", over)), JSON.stringify(over)).not.toBe(metricSig(base));
+    expect(metricSig(metric("other"))).not.toBe(metricSig(base));
+  });
+
+  it("an absent optional field is normalized the same way every time (key order and an explicit undefined do not matter)", () => {
+    const a = { id: "w", artifact: "o.json", path: "w", better: "lower", unbounded: true } as ScenarioMetric;
+    const b = {
+      unbounded: true,
+      better: "lower",
+      path: "w",
+      artifact: "o.json",
+      id: "w",
+      min: undefined,
+      scale: undefined,
+    } as ScenarioMetric;
+    expect(metricSig(b)).toBe(metricSig(a));
   });
 });
 
