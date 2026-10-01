@@ -102,7 +102,8 @@ already happened.
    or a chosen option the run never offered fails here in a second instead of on a paid re-record.
    `verify-run` never calls the semantic judge; to re-grade `semantic_matches` after a rubric change, use
    `regrade <run-dir> --scenario <scenario.yaml>` (the judge call is the only spend). It writes the new grade
-   beside the run and says whether the judge read the same document the live judge did — see
+   beside the run and says whether the judge read the same document the live judge did; content the live judge
+   never read (a widened scope, a larger budget) is refused unless `--allow-unchecked` — see
    [cli.md → Re-grading a kept run](./cli.md#re-grading-a-kept-run-regrade).
 4. **`diff` — what changed between two runs (or a run and a cassette)?** Compares tool sequence,
    transcript, artifacts, and result/fidelity/baseline meta, with normalization masking per-run noise

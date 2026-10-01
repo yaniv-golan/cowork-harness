@@ -644,39 +644,72 @@ A refusal before the first recording (no credentials, an unresolved model, the b
 collision) prints the error envelope instead, as before.
 
 **`regrade`** re-grades a kept run's `semantic_matches` asserts with the judge and prints one payload-shaped
-document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`. Each `runs[]` entry is one run dir:
-`{runDir, turn, scenarioSha256, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, uncheckedSections[],
-docMatchesLive, differingSections[], assertions[], notRegraded[], authoredCapture}`, and the document's top level also carries
-`judgeCostUsd?` and `unpricedGrades` summed over every run dir. `runs[]` holds only graded run dirs: a refusal
-refuses the whole batch and prints the error envelope instead. `scenarioSha256` is the SHA-256 of the scenario
-file's bytes. `judgeCostUsd` is the sum of the priced judge
+document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`, described by
+**`schema/regrade.json`** (a §12-covered surface). Each `runs[]` entry is one run dir:
+`{runDir, turn, scenarioSha256, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, uncheckedCount,
+uncheckedSections[], docMatchesLive, differingSections[], liveDocDrift[], assertions[], notRegraded[], authoredCapture}`,
+and the document's top level also carries `judgeCostUsd?` and `unpricedGrades` summed over every run dir. `runs[]`
+holds only graded run dirs: a refusal refuses the whole batch and prints the error envelope instead.
+`scenarioSha256` is the SHA-256 of the scenario file's bytes. `judgeCostUsd` is the sum of the priced judge
 calls and is absent when none was priced (never `0` for unknown); `unpricedGrades > 0` makes it a floor.
 `invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
 `assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
-every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `false` | `"scope_changed"` |
-`"unknown"` | `"live_refused"` | `"not_graded"`: whether the recomposed judged document equals, section for
+every other assert as `{assertionIndex, keys}`.
+
+`docMatchesLive` is `true` | `false` | `"scope_changed"` | `"unknown"` | `"live_refused"` | `"not_graded"`. **Per
+assert** it describes that assert's own document: whether the recomposed judged document equals, section for
 section, the `judgedDoc` the live run recorded (`unknown` when this assert's scope has no live fingerprint, never
 `true`; `live_refused` when every live assert with that scope refused its evidence and no fingerprint was
 recorded — one that recorded a `judgedDoc` is compared like a graded one; `not_graded` when the re-grade's own
-assert refused its evidence, so no judge was called for it and no document was handed to one). The run-level value is the worst over the asserts in the order `false`,
-`live_refused`, `unknown`, `scope_changed`, `true`, and `not_graded` only when every assert is; none of these
-values changes the exit code. `differingSections[]` entries are
+assert refused its evidence, so no judge was called for it and no document was handed to one; `false` also when
+its document carries a section an accepted drift is in). **Per run** — the value to consume — it is `false`
+whenever `liveDocDrift[]` is non-empty, and otherwise the worst over the asserts in the order `false`,
+`live_refused`, `unknown`, `scope_changed`, `true`, and `not_graded` only when every assert is. So an accepted
+drift is never reported as `true` or `not_graded` at the run level, even beside a graded assert whose own
+document is `true`. None of these values changes the exit code. `differingSections[]` entries are
 `{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
-passed. `docMatchesLive: false` says the bytes differ, not why (an authored file changed since the run, a
-different secret-scrub set, a sub-agent section). The refusal is decided separately, before any judge call:
-each live assert that recorded a `judgedDoc` is rebuilt from the live run's own inputs (its scope, the live
-`evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture` existed, the
-`--authored-total-bytes` value passed) with this process's secrets, and any difference refuses unless
-`--allow-doc-drift` is passed — whatever the new scenario's scope. Not checked: a live assert that recorded no
-`judgedDoc` (`unknown`) or refused its evidence and recorded none (`live_refused`), neither for drift nor for an unscrubbed secret
-(warned about before the judge call); and content only a widened scope or a
-larger `--authored-total-bytes` brings in, which is graded, warned about and listed in `uncheckedSections[]`
-(`{assertionIndex, kind, path?}`). The envelope is scrubbed with the same secret set as the file. **Exit codes:** `0` every re-graded assert passes · `1` any
-fails or is judge-invalid · `2` usage, or a refusal (a multi-turn, partial, replay or chat run dir, a pruned work
-dir, a missing transcript sidecar, a live document whose rebuild differs from its `judgedDoc` without
-`--allow-doc-drift`, a run that did not record `authoredCapture` without `--authored-total-bytes`,
-an alias judge model, a scenario with no `semantic_matches`), or a failure writing a regrade file after earlier
-run dirs were graded; a refusal is the shared error envelope, decided for every run dir before any judge call.
+passed, i.e. iff the exit code is `0`. `docMatchesLive: false` says the bytes differ, not why (an authored file
+changed since the run, a different secret-scrub set, a sub-agent section).
+
+Two evidence refusals are decided before any judge call, for every run dir:
+
+- **Drift.** Each live assert that recorded a `judgedDoc` is rebuilt from the live run's own inputs (its scope,
+  the live `evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture` existed,
+  the `--authored-total-bytes` value passed) with this process's secrets, and any difference refuses unless
+  `--allow-doc-drift` is passed — whatever the new scenario's scope. An accepted drift is graded and reported in
+  `liveDocDrift[]` (`{liveAssertionIndex, sections: [{kind, path?, change}]}`, indexed by the assert's position in
+  the LIVE run's `assertions[]`; an empty `sections` means only the whole-document hash differs).
+- **Unchecked content.** A graded document's sections are measured against the live documents just rebuilt: a
+  section none of them has is content the live judge never read — brought in by a widened scope (`evidence_files`,
+  `include_subagent_text`) or a larger `--authored-total-bytes`. It refuses unless `--allow-unchecked` is passed;
+  accepted, it is graded, warned about and listed in `uncheckedSections[]` (`{assertionIndex, kind, path?}`) with
+  `uncheckedCount` its length. A section the rebuild has is either what the live judge read or an already-reported
+  drift, so the two flags are independent. In particular, under `--allow-doc-drift` alone an ADDED drift section
+  (an old run given a larger `--authored-total-bytes` than it really used shows up this way) counts as covered,
+  so its content reaches the judge without `--allow-unchecked`: it was detected and explicitly overridden, and the
+  drift warning names its files. `--allow-unchecked` covers only content the drift check could not compare at all.
+  The harness's own evidence-health and scratch notes (fixed text and file paths, scrubbed with this process's
+  secrets) are never unchecked content, so a smaller budget — which only drops or truncates file content, and may
+  add a health note saying so — is never refused as unchecked; content it truncates makes that assert refuse its
+  own evidence. An assert whose evidence will be refused sends nothing and is not measured.
+
+Not checked: a run in which no live assert recorded a `judgedDoc` has no rebuilt document to measure against — its
+asserts are `unknown` or `live_refused`, neither drift- nor secret-checked, and are warned about before the judge
+call, not refused. A blind assert beside a comparable sibling is measured against the sibling's rebuilt document,
+so its extra content can refuse. The envelope is scrubbed with the same secret set as the file.
+
+**Exit codes:** `0` every re-graded assert passes · `1` any fails or is judge-invalid · `2`, with three meanings:
+a usage error; a refusal before any judge call (a multi-turn, partial, replay or chat run dir, a pruned work dir,
+a missing transcript sidecar, a run that did not record `authoredCapture` without `--authored-total-bytes`, an
+alias judge model, a scenario with no `semantic_matches`, and the two evidence refusals above); or a failure
+writing a regrade file after earlier run dirs were graded. Each is the shared error envelope. The evidence
+refusals are collected over every run dir and carry `error.code` — `doc_drift` when any dir drifted, else
+`unchecked_content` — and a top-level `refusals[]`, one entry per run dir and code: `{runDir, code,
+uncheckedCount?, uncheckedSections?, liveDocDrift?}`; every other refusal stops at the first run dir that
+fires it and carries no code. So `refusals[]` is complete only when no other refusal fires: a batch with a
+drifted dir and a later dir refused for another reason (a pruned work dir, say) reports only the latter, with no
+code and no `refusals[]`.
+A write failure carries the run dirs already graded and written in a top-level `runs[]`.
 `result.json` is never modified.
 
 The command lists above are illustrative, not a frozen contract — this is not a single universal
@@ -819,8 +852,11 @@ assertions (never user-authored themselves):
   "results":[],  // [] except record's post-run refusal: the refused run, beside the non-null error
   "budget?": { /* §11 --max-budget-usd marker — present when a pre-flight ran */ },
   "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string",
-             "code?": "budget_exceeded", "budget?": { /* §11 --max-budget-usd */ } } }
+             "code?": "budget_exceeded|doc_drift|unchecked_content", "budget?": { /* §11 --max-budget-usd */ } } }
 ```
+`error.code` narrows a category, never replaces it: `budget_exceeded` is the `--max-budget-usd` refusal (§11);
+`doc_drift` and `unchecked_content` are `regrade`'s evidence refusals, whose error envelope also carries a
+top-level `refusals[]` (see `regrade` above).
 Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryError`→`boundary`).
 `results` is `[]` with one exception: when `record` refuses to write a cassette after the agent finished,
 the run it refused is in `results[0]` beside the non-null `error` (category `runtime`, exit `1`; see
@@ -1086,6 +1122,24 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   shape (`results:[]` / `error.category`) it falls back to on a thrown failure; renaming or removing a
   key is breaking, adding one is not. The `checks[].id` set itself is NOT covered — it grows with new
   tiers/checks.
+- **`regrade` envelope** — `schema/regrade.json` under `--output-format json` (§11): the frame (`tool` /
+  `version` / `command` / `ok` / `error:null` / `judgeCostUsd?` / `unpricedGrades` / `runs[]`); each `runs[]`
+  entry's keys (`runDir`, `turn`, `scenarioSha256`, `regradeFile`, `pass`, `invalidGrades`, `judgeCostUsd?`,
+  `unpricedGrades`, `uncheckedCount`, `uncheckedSections[]`, `docMatchesLive`, `differingSections[]`,
+  `liveDocDrift[]`, `assertions[]`, `notRegraded[]`, `authoredCapture`) and their nested shapes; on an
+  `assertions[]` entry, only `assertionIndex`, `docMatchesLive`, `pass`, `judgeInvalid`, `judgeModel`,
+  `judgeCostUsd` and `semanticClaims` (its other keys follow the `RunResult` assertion entry, which is not
+  pinned field by field); and the error envelope's `error.code` values (`doc_drift`, `unchecked_content`),
+  `refusals[]` and post-write-failure `runs[]`. The enums are covered as sets: `docMatchesLive`, `change`,
+  `authoredCapture.source`, a section's `kind`, `error.code`. **Adding a key or an enum value is MINOR** — a
+  consumer must treat an unknown `docMatchesLive` as not `true` (one validating against an older schema copy
+  rejects the new value); removing or renaming a key or a value, or changing a key's type or meaning, is MAJOR.
+  The published schema stays permissive (no `additionalProperties: false`). Meaning that is covered too: a
+  per-assert `docMatchesLive` describes that assert's own document, and the run-level value is `false` whenever a
+  drift was detected and accepted (`liveDocDrift[]` non-empty) — it is the value to consume. Exit codes: `0`
+  every re-graded assert passes (`ok: true` iff exit `0`) · `1` any fails or is judge-invalid · `2` a usage
+  error, a refusal before any judge call (the evidence refusals carry `error.code`), or a failure writing a
+  regrade file after earlier run dirs were graded (§11). The regrade output FILE is not part of this (below).
 - **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **13**
   (`schema/cassette.v13.json`) and its verdict-modifier assertion keys.
 
@@ -1182,9 +1236,10 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
   explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
 - **`trace` row shapes** and other debug/diagnostic output.
-- **The `regrade` output file** (`turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`) — its name and
-  layout are EXPERIMENTAL and may change in any minor release. The `regrade` command itself — its name, flags and
-  exit codes — is covered by the CLI-surface clause above.
+- **The `regrade` output file** (`turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`) — its name,
+  layout and contents are EXPERIMENTAL and may change in any minor release. The command — its name, flags and
+  exit codes — and its JSON envelope (`schema/regrade.json`, including the `regradeFile` key that holds the file's
+  path) are covered above.
 - **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
   the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
   (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your

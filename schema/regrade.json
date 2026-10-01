@@ -1,0 +1,214 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/regrade.json",
+  "title": "RegradeEnvelope",
+  "description": "Structured stdout of `cowork-harness regrade <run-dir>… --scenario <scenario.yaml> --output-format json` (SPEC §11). A covered surface of the 1.0 compatibility contract (SPEC §12): the frame, each `runs[]` entry's keys, the assertion-entry keys declared here, the enums and the error envelope's `error.code` / `refusals[]` / `runs[]`. Removing or renaming a key or an enum value, or changing a key's type or meaning, is MAJOR; adding a key or an enum value is MINOR — treat an unknown `docMatchesLive` as not `true`. This schema is deliberately permissive (no `additionalProperties: false`) so an additive change does not break a consumer validating with an older copy of the keys; an older copy does reject a new ENUM value. NOT covered: the regrade OUTPUT FILE (`turns/<N>/regrade/…json`) — its name, layout and contents are experimental; `regradeFile` is covered only as a key holding its path. An assertion entry's other keys (`assertion`, `message`, `judgeUsage`, `judgePromptHash`, `judgedDoc`, `semanticEvidence`) follow the RunResult assertion entry, which is not pinned field by field. Two shapes: a completed re-grade (`error: null`, exit 0 or 1) and the shared error envelope (exit 2).",
+  "type": "object",
+  "oneOf": [
+    {
+      "title": "CompletedRegrade",
+      "description": "Every run dir was re-graded and its regrade file written. `ok` is true iff every re-graded assert passed (exit 0); false on exit 1.",
+      "type": "object",
+      "required": ["tool", "version", "command", "ok", "unpricedGrades", "runs", "error"],
+      "properties": {
+        "tool": { "const": "cowork-harness" },
+        "version": { "type": "string" },
+        "command": { "const": "regrade" },
+        "ok": { "type": "boolean" },
+        "judgeCostUsd": {
+          "type": "number",
+          "description": "Sum of the priced judge calls over every run dir, retries included. Absent when none was priced — never 0 for unknown."
+        },
+        "unpricedGrades": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Grades with no price over every run dir; above 0, `judgeCostUsd` is a floor."
+        },
+        "runs": { "type": "array", "items": { "$ref": "#/definitions/Run" } },
+        "error": { "type": "null" }
+      }
+    },
+    {
+      "title": "ErrorEnvelope",
+      "description": "The shared error envelope (exit 2): a usage error; a refusal before any judge call — a drift or unchecked-content refusal carries `error.code` and lists every refused run dir in `refusals[]`, any other refusal carries no code; or a failure writing a regrade file after earlier run dirs were graded, whose reports are in `runs`.",
+      "type": "object",
+      "required": ["tool", "version", "command", "ok", "results", "error"],
+      "properties": {
+        "tool": { "const": "cowork-harness" },
+        "version": { "type": "string" },
+        "command": { "const": "regrade" },
+        "ok": { "const": false },
+        "results": { "type": "array", "maxItems": 0 },
+        "refusals": {
+          "type": "array",
+          "description": "Every run dir refused for its evidence, one entry per run dir and code (a dir with both gets two).",
+          "items": {
+            "type": "object",
+            "required": ["runDir", "code"],
+            "properties": {
+              "runDir": { "type": "string" },
+              "code": { "type": "string", "enum": ["doc_drift", "unchecked_content"] },
+              "uncheckedCount": { "type": "integer", "minimum": 1 },
+              "uncheckedSections": { "type": "array", "items": { "$ref": "#/definitions/UncheckedSection" } },
+              "liveDocDrift": { "type": "array", "items": { "$ref": "#/definitions/LiveDocDrift" } }
+            }
+          }
+        },
+        "runs": {
+          "type": "array",
+          "description": "After a failure writing a regrade file: the run dirs graded and written before it.",
+          "items": { "$ref": "#/definitions/Run" }
+        },
+        "error": {
+          "type": "object",
+          "required": ["category", "message"],
+          "properties": {
+            "category": { "type": "string", "enum": ["usage", "unanswered", "boundary", "runtime", "internal"] },
+            "message": { "type": "string" },
+            "hint": { "type": "string" },
+            "code": {
+              "type": "string",
+              "enum": ["doc_drift", "unchecked_content"],
+              "description": "On an evidence refusal: `doc_drift` when any run dir's kept evidence differs from what the live judge read, else `unchecked_content`."
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "SectionKind": { "type": "string", "enum": ["final", "transcript", "subagent", "authored", "scratch_note", "health"] },
+    "UncheckedSection": {
+      "type": "object",
+      "required": ["assertionIndex", "kind"],
+      "properties": {
+        "assertionIndex": { "type": "integer", "minimum": 0 },
+        "kind": { "$ref": "#/definitions/SectionKind" },
+        "path": { "type": "string" }
+      }
+    },
+    "LiveDocDrift": {
+      "type": "object",
+      "description": "A drift in one LIVE assert's document, rebuilt from the live inputs. `liveAssertionIndex` is the assert's position in the live run's `assertions[]`; an empty `sections` means only the whole-document hash differs.",
+      "required": ["liveAssertionIndex", "sections"],
+      "properties": {
+        "liveAssertionIndex": { "type": "integer", "minimum": 0 },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "change"],
+            "properties": {
+              "kind": { "$ref": "#/definitions/SectionKind" },
+              "path": { "type": "string" },
+              "change": { "type": "string", "enum": ["changed", "added", "removed"] }
+            }
+          }
+        }
+      }
+    },
+    "Run": {
+      "type": "object",
+      "required": [
+        "runDir",
+        "turn",
+        "scenarioSha256",
+        "regradeFile",
+        "pass",
+        "invalidGrades",
+        "unpricedGrades",
+        "uncheckedCount",
+        "uncheckedSections",
+        "docMatchesLive",
+        "differingSections",
+        "liveDocDrift",
+        "assertions",
+        "notRegraded",
+        "authoredCapture"
+      ],
+      "properties": {
+        "runDir": { "type": "string" },
+        "turn": { "type": "integer", "minimum": 1 },
+        "scenarioSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "regradeFile": {
+          "type": "string",
+          "description": "Path of the file written. The key is covered; the file's name, layout and contents are experimental."
+        },
+        "pass": { "type": "boolean" },
+        "invalidGrades": { "type": "integer", "minimum": 0 },
+        "judgeCostUsd": { "type": "number" },
+        "unpricedGrades": { "type": "integer", "minimum": 0 },
+        "uncheckedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "`uncheckedSections.length`; above 0 only under --allow-unchecked."
+        },
+        "uncheckedSections": { "type": "array", "items": { "$ref": "#/definitions/UncheckedSection" } },
+        "docMatchesLive": {
+          "$ref": "#/definitions/DocMatch",
+          "description": "The run's value: false whenever `liveDocDrift` is non-empty; otherwise the worst over its asserts (false, live_refused, unknown, scope_changed, true; not_graded only when every assert is). The signal to consume."
+        },
+        "differingSections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["assertionIndex", "kind", "change"],
+            "properties": {
+              "assertionIndex": { "type": "integer", "minimum": 0 },
+              "kind": { "$ref": "#/definitions/SectionKind" },
+              "path": { "type": "string" },
+              "change": { "type": "string", "enum": ["changed", "added", "removed"] }
+            }
+          }
+        },
+        "liveDocDrift": {
+          "type": "array",
+          "description": "The drift detected and accepted with --allow-doc-drift; [] when none was found.",
+          "items": { "$ref": "#/definitions/LiveDocDrift" }
+        },
+        "assertions": { "type": "array", "items": { "$ref": "#/definitions/RegradedAssertion" } },
+        "notRegraded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["assertionIndex", "keys"],
+            "properties": {
+              "assertionIndex": { "type": "integer", "minimum": 0 },
+              "keys": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "authoredCapture": {
+          "type": "object",
+          "required": ["totalBytes", "source"],
+          "properties": {
+            "totalBytes": { "type": "integer", "minimum": 1 },
+            "perFileBytes": { "type": "integer", "minimum": 1 },
+            "source": { "type": "string", "enum": ["persisted", "flag"] }
+          }
+        }
+      }
+    },
+    "RegradedAssertion": {
+      "type": "object",
+      "description": "Only the keys below are covered. The entry also carries the RunResult assertion entry's other keys (assertion, message, judgeUsage, judgePromptHash, judgedDoc, semanticEvidence), which are not pinned field by field.",
+      "required": ["assertionIndex", "pass", "docMatchesLive"],
+      "properties": {
+        "assertionIndex": { "type": "integer", "minimum": 0, "description": "The assert's position in the scenario's `assert:` list." },
+        "pass": { "type": "boolean" },
+        "docMatchesLive": {
+          "$ref": "#/definitions/DocMatch",
+          "description": "This assert's own document: false also when it carries a file an accepted drift is in."
+        },
+        "judgeInvalid": { "type": "boolean" },
+        "judgeModel": { "type": "string" },
+        "judgeCostUsd": { "type": "number" },
+        "semanticClaims": { "type": "array" }
+      }
+    },
+    "DocMatch": {
+      "enum": [true, false, "scope_changed", "unknown", "live_refused", "not_graded"],
+      "description": "Adding a value is MINOR; treat an unknown value as not `true`."
+    }
+  }
+}

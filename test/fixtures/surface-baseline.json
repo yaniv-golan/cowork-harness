@@ -2077,6 +2077,321 @@
         "ref": "#/definitions/QSpec"
       }
     },
+    "regrade.json": {
+      "": {
+        "type": "object"
+      },
+      "<oneOf:0>": {
+        "type": "object"
+      },
+      "<oneOf:0>.command": {
+        "const": "regrade",
+        "required": true
+      },
+      "<oneOf:0>.error": {
+        "type": "null",
+        "required": true
+      },
+      "<oneOf:0>.judgeCostUsd": {
+        "type": "number"
+      },
+      "<oneOf:0>.ok": {
+        "type": "boolean",
+        "required": true
+      },
+      "<oneOf:0>.runs": {
+        "type": "array",
+        "required": true
+      },
+      "<oneOf:0>.runs[]": {
+        "ref": "#/definitions/Run"
+      },
+      "<oneOf:0>.tool": {
+        "const": "cowork-harness",
+        "required": true
+      },
+      "<oneOf:0>.unpricedGrades": {
+        "type": "integer",
+        "required": true
+      },
+      "<oneOf:0>.version": {
+        "type": "string",
+        "required": true
+      },
+      "<oneOf:1>": {
+        "type": "object"
+      },
+      "<oneOf:1>.command": {
+        "const": "regrade",
+        "required": true
+      },
+      "<oneOf:1>.error": {
+        "type": "object",
+        "required": true
+      },
+      "<oneOf:1>.error.category": {
+        "type": "string",
+        "enum": ["usage", "unanswered", "boundary", "runtime", "internal"],
+        "required": true
+      },
+      "<oneOf:1>.error.code": {
+        "type": "string",
+        "enum": ["doc_drift", "unchecked_content"]
+      },
+      "<oneOf:1>.error.hint": {
+        "type": "string"
+      },
+      "<oneOf:1>.error.message": {
+        "type": "string",
+        "required": true
+      },
+      "<oneOf:1>.ok": {
+        "const": false,
+        "required": true
+      },
+      "<oneOf:1>.refusals": {
+        "type": "array"
+      },
+      "<oneOf:1>.refusals[]": {
+        "type": "object"
+      },
+      "<oneOf:1>.refusals[].code": {
+        "type": "string",
+        "enum": ["doc_drift", "unchecked_content"],
+        "required": true
+      },
+      "<oneOf:1>.refusals[].liveDocDrift": {
+        "type": "array"
+      },
+      "<oneOf:1>.refusals[].liveDocDrift[]": {
+        "ref": "#/definitions/LiveDocDrift"
+      },
+      "<oneOf:1>.refusals[].runDir": {
+        "type": "string",
+        "required": true
+      },
+      "<oneOf:1>.refusals[].uncheckedCount": {
+        "type": "integer"
+      },
+      "<oneOf:1>.refusals[].uncheckedSections": {
+        "type": "array"
+      },
+      "<oneOf:1>.refusals[].uncheckedSections[]": {
+        "ref": "#/definitions/UncheckedSection"
+      },
+      "<oneOf:1>.results": {
+        "type": "array",
+        "required": true
+      },
+      "<oneOf:1>.runs": {
+        "type": "array"
+      },
+      "<oneOf:1>.runs[]": {
+        "ref": "#/definitions/Run"
+      },
+      "<oneOf:1>.tool": {
+        "const": "cowork-harness",
+        "required": true
+      },
+      "<oneOf:1>.version": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.DocMatch": {
+        "enum": [true, false, "scope_changed", "unknown", "live_refused", "not_graded"]
+      },
+      "definitions.LiveDocDrift": {
+        "type": "object"
+      },
+      "definitions.LiveDocDrift.liveAssertionIndex": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.LiveDocDrift.sections": {
+        "type": "array",
+        "required": true
+      },
+      "definitions.LiveDocDrift.sections[]": {
+        "type": "object"
+      },
+      "definitions.LiveDocDrift.sections[].change": {
+        "type": "string",
+        "enum": ["changed", "added", "removed"],
+        "required": true
+      },
+      "definitions.LiveDocDrift.sections[].kind": {
+        "ref": "#/definitions/SectionKind",
+        "required": true
+      },
+      "definitions.LiveDocDrift.sections[].path": {
+        "type": "string"
+      },
+      "definitions.RegradedAssertion": {
+        "type": "object"
+      },
+      "definitions.RegradedAssertion.assertionIndex": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.RegradedAssertion.docMatchesLive": {
+        "ref": "#/definitions/DocMatch",
+        "required": true
+      },
+      "definitions.RegradedAssertion.judgeCostUsd": {
+        "type": "number"
+      },
+      "definitions.RegradedAssertion.judgeInvalid": {
+        "type": "boolean"
+      },
+      "definitions.RegradedAssertion.judgeModel": {
+        "type": "string"
+      },
+      "definitions.RegradedAssertion.pass": {
+        "type": "boolean",
+        "required": true
+      },
+      "definitions.RegradedAssertion.semanticClaims": {
+        "type": "array"
+      },
+      "definitions.Run": {
+        "type": "object"
+      },
+      "definitions.Run.assertions": {
+        "type": "array",
+        "required": true
+      },
+      "definitions.Run.assertions[]": {
+        "ref": "#/definitions/RegradedAssertion"
+      },
+      "definitions.Run.authoredCapture": {
+        "type": "object",
+        "required": true
+      },
+      "definitions.Run.authoredCapture.perFileBytes": {
+        "type": "integer"
+      },
+      "definitions.Run.authoredCapture.source": {
+        "type": "string",
+        "enum": ["persisted", "flag"],
+        "required": true
+      },
+      "definitions.Run.authoredCapture.totalBytes": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.Run.differingSections": {
+        "type": "array",
+        "required": true
+      },
+      "definitions.Run.differingSections[]": {
+        "type": "object"
+      },
+      "definitions.Run.differingSections[].assertionIndex": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.Run.differingSections[].change": {
+        "type": "string",
+        "enum": ["changed", "added", "removed"],
+        "required": true
+      },
+      "definitions.Run.differingSections[].kind": {
+        "ref": "#/definitions/SectionKind",
+        "required": true
+      },
+      "definitions.Run.differingSections[].path": {
+        "type": "string"
+      },
+      "definitions.Run.docMatchesLive": {
+        "ref": "#/definitions/DocMatch",
+        "required": true
+      },
+      "definitions.Run.invalidGrades": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.Run.judgeCostUsd": {
+        "type": "number"
+      },
+      "definitions.Run.liveDocDrift": {
+        "type": "array",
+        "required": true
+      },
+      "definitions.Run.liveDocDrift[]": {
+        "ref": "#/definitions/LiveDocDrift"
+      },
+      "definitions.Run.notRegraded": {
+        "type": "array",
+        "required": true
+      },
+      "definitions.Run.notRegraded[]": {
+        "type": "object"
+      },
+      "definitions.Run.notRegraded[].assertionIndex": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.Run.notRegraded[].keys": {
+        "type": "array",
+        "required": true
+      },
+      "definitions.Run.notRegraded[].keys[]": {
+        "type": "string"
+      },
+      "definitions.Run.pass": {
+        "type": "boolean",
+        "required": true
+      },
+      "definitions.Run.regradeFile": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.runDir": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.scenarioSha256": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.turn": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.Run.uncheckedCount": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.Run.uncheckedSections": {
+        "type": "array",
+        "required": true
+      },
+      "definitions.Run.uncheckedSections[]": {
+        "ref": "#/definitions/UncheckedSection"
+      },
+      "definitions.Run.unpricedGrades": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.SectionKind": {
+        "type": "string",
+        "enum": ["final", "transcript", "subagent", "authored", "scratch_note", "health"]
+      },
+      "definitions.UncheckedSection": {
+        "type": "object"
+      },
+      "definitions.UncheckedSection.assertionIndex": {
+        "type": "integer",
+        "required": true
+      },
+      "definitions.UncheckedSection.kind": {
+        "ref": "#/definitions/SectionKind",
+        "required": true
+      },
+      "definitions.UncheckedSection.path": {
+        "type": "string"
+      }
+    },
     "run-result.json": {
       "": {
         "type": "object"

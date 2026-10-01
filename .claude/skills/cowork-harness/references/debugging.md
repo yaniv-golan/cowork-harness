@@ -39,6 +39,8 @@ rubric changed (or you want another judge model) on a run you already paid for, 
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` instead: it re-grades those asserts against the
 kept run without re-running the agent — unlike the tools above it is not token-free (the judge call is its
 spend) — writes the grade beside the run, and says whether the judge read the same document the live judge did.
+Content the live judge never read (a widened `evidence_files` / `include_subagent_text` scope, or a larger
+`--authored-total-bytes`) is refused unless you pass `--allow-unchecked`.
 
 **microvm: "control-protocol write failed" with `env: 'claude': No such file or directory` in the agent
 stderr** usually means the VM never finished provisioning (the agent never reached PATH). Check

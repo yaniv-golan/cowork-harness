@@ -269,7 +269,7 @@ a TTY, `fail` when piped/CI) and `run` is always `fail`.
 
 ### Re-grading a kept run (`regrade`)
 
-`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--judge-model <model-id>] [--authored-total-bytes <N>] [--allow-doc-drift] [--output-format json]`
+`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--judge-model <model-id>] [--authored-total-bytes <N>] [--allow-doc-drift] [--allow-unchecked] [--output-format json]`
 
 `verify-run` re-checks assertions but never calls the semantic judge, so a `semantic_matches` assert cannot be
 re-graded with it. `regrade` does exactly that: it rebuilds the judged document from the kept run dir and grades
@@ -294,9 +294,12 @@ not run again; the judge call is the only spend.
   like a graded one), or `not_graded` (this re-grade's own assert refused its evidence, so no judge was called for
   it and no document was handed to one; its refusal shows in its own pass and message). A kept run recorded while
   the judge was still called before a refusal can carry a `judgedDoc` on a refused live assert: that document is
-  still drift-checked before any judge call, like a graded one's. The run-level value is the worst over the asserts, in the order `false`, `live_refused`,
-  `unknown`, `scope_changed`, `true` (so "differs by design" never hides "never checked"); it is `not_graded` only
-  when every assert is. `unknown` and `live_refused` are named in a
+  still drift-checked before any judge call, like a graded one's. Each assert's value describes its own document
+  (and is `false` too when that document carries a file an accepted drift is in). The **run-level** value — the
+  one to consume — is `false` whenever a drift was detected and accepted with `--allow-doc-drift` (see below),
+  even beside an assert whose own document is `true`. Otherwise it is the worst over the asserts, in the order
+  `false`, `live_refused`, `unknown`, `scope_changed`, `true` (so "differs by design" never hides "never
+  checked"); it is `not_graded` only when every assert is. `unknown` and `live_refused` are named in a
   `::warning::` before the judge call: those documents could not be checked for drift or for a secret the live
   run scrubbed, and this process's scrub set is all that protects them. An assert that will refuse its evidence
   is left out of that warning and of the unchecked-sections one: no judge receives its document. None of these change the exit code.
@@ -314,17 +317,30 @@ not run again; the judge call is the only spend.
   since the run, a sub-agent section, or a value the live run scrubbed that this process does not (refusing is
   what keeps that value from being sent). This check does not depend on the new scenario, so a changed scope or
   an `--authored-total-bytes` override (`scope_changed`) does not skip the check of what the live judge read.
-  `--allow-doc-drift` grades anyway; the grade is then reported with its own `docMatchesLive` and, when that is
-  `false`, a warning.
-  **What is not checked:** a live assert that recorded no `judgedDoc` (`unknown`) or refused its evidence
-  and recorded no fingerprint (`live_refused`) — neither for drift nor for an unscrubbed secret, though it is warned about; and content that only a widened `evidence_files` scope or a larger `--authored-total-bytes`
-  brings in (a file the live cap left out, or a larger part of one). The live judge never read that content, so
-  nothing can be compared with it and a secret in it that this process does not know is not detected. It is not
-  refused: it is graded, named in a `::warning::` before the judge call, and listed in `uncheckedSections`
-  (`{assertionIndex, kind, path?}`, in the file and on each `runs[]` entry).
+  `--allow-doc-drift` grades anyway, with a warning naming the files; the accepted drift is reported in
+  `liveDocDrift` (`{liveAssertionIndex, sections: [{kind, path?, change}]}`, indexed by the live run's
+  `assertions[]`, in the file and on each `runs[]` entry) and makes the run's `docMatchesLive` `false`.
+- **Content the live judge never read is refused too.** Content that only a widened scope (`evidence_files`,
+  `include_subagent_text`) or a larger `--authored-total-bytes` brings in — a file the live cap left out, a larger
+  part of one, a sub-agent's text — cannot be compared with anything, and a secret in it that this process does
+  not know is not detected. Each graded document is measured against the live documents just rebuilt from the
+  live inputs; a section none of them has is refused (exit `2`), naming the assert and the section. With
+  `--allow-unchecked` it is graded instead, named in a `::warning::` before the judge call and listed in
+  `uncheckedSections` (`{assertionIndex, kind, path?}`) with `uncheckedCount`, in the file and on each `runs[]`
+  entry. The two flags are independent: a file changed in place is drift (the rebuild has it), not unchecked
+  content, and accepting one never accepts the other. Under `--allow-doc-drift` alone, a section the drift ADDED
+  (for instance an old run given a larger `--authored-total-bytes` than it used) reaches the judge without
+  `--allow-unchecked`: it was detected and overridden, and the drift warning names its files. The harness's own
+  evidence-health and scratch notes (fixed text and paths) never count as unchecked, so a smaller budget — which
+  only drops or truncates file content — is never refused as unchecked; an assert whose evidence it truncates
+  refuses its own evidence and sends nothing, like any assert that refuses.
+  **What is not checked:** a run in which no live assert recorded a `judgedDoc` has nothing to measure against:
+  its asserts are `unknown` or `live_refused` — neither drift- nor secret-checked — and are only warned about,
+  not refused. A blind assert beside a comparable sibling is measured against the sibling's rebuilt document, so
+  its extra content can be refused.
 - **Output.** Each run dir gets `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`, holding the re-graded
   asserts (per-claim grades and rationales, judge model, usage, cost, prompt hash and document fingerprint),
-  `docMatchesLive` with the differing sections, the not-re-graded asserts, the `harnessVersion` that wrote it,
+  `docMatchesLive` with the differing sections, `liveDocDrift`, `uncheckedSections` / `uncheckedCount`, the not-re-graded asserts, the `harnessVersion` that wrote it,
   and the SHA-256 of the `result.json` it was graded against. The whole file is scrubbed with the same secret set
   before it is written, and records `scenarioSha256`, the SHA-256 of the scenario file's bytes. Re-grades with
   different judge models sit side by side. `result.json` is never modified
@@ -345,18 +361,31 @@ not run again; the judge call is the only spend.
 - **Refusals (exit `2`, before any judge call; one refused run dir stops the whole batch):** a multi-turn run dir,
   a partial, replay or chat run, a pruned work dir, a missing or unreadable transcript sidecar (`run.jsonl` — the
   transcript is a section of the judged document), a rebuilt document that differs from the live one (unless
-  `--allow-doc-drift`), a scenario with no `semantic_matches` assert, and a run
+  `--allow-doc-drift`), content the live judge never read (unless `--allow-unchecked`), a scenario with no
+  `semantic_matches` assert, and a run
   recorded before `authoredCapture` existed. For the last, pass `--authored-total-bytes` with the budget that run
-  used (`65536` unless `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` was set); on a newer run the flag overrides the
-  recorded budget and the result is reported as `scope_changed`.
-- **Exit codes:** `0` every re-graded assert passes · `1` any fails or is judge-invalid · `2` usage or refusal,
-  and also a failure writing a regrade file after earlier run dirs were already graded (their files stay
-  written; the judge calls for them were spent). Text mode writes its
+  used (`65536` unless `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` was set) — the value stands in for the live budget, so
+  pass the one the run really used; on a newer run the flag overrides the recorded budget, the result is reported
+  as `scope_changed`, and content a larger budget brings in is refused unless `--allow-unchecked`. The two
+  evidence refusals (drift, unchecked content) are collected over every run dir, so one refusal lists them all;
+  every other refusal stops at the first run dir that fires it, so the list is complete only when no other
+  refusal fires (a drifted dir followed by a pruned one reports only the pruned one, with no code).
+- **Exit codes:** `0` every re-graded assert passes (`ok: true` exactly then) · `1` any fails or is
+  judge-invalid · `2` has three meanings: a usage error; a refusal before any judge call; or a failure writing a
+  regrade file after earlier run dirs were already graded (their files stay written; the judge calls for them, and
+  for the dir whose write failed, were spent). Text mode writes its
   report to stderr; `--output-format json` prints one payload document (`{tool, version, command, ok, runs[],
   error}`) on stdout. `runs[]` holds only graded run dirs: a refusal refuses the whole batch and prints the error
-  envelope instead.
+  envelope instead. On a drift or unchecked-content refusal that envelope carries `error.code` (`doc_drift` when
+  any dir drifted, else `unchecked_content`) and `refusals[]` — one `{runDir, code, uncheckedCount?,
+  uncheckedSections?, liveDocDrift?}` per refused run dir and code — so a batch caller can list what to fix. After a
+  write failure it carries the run dirs already graded in `runs[]`.
 
-The regrade file's layout is experimental and may change in a minor release.
+**What is covered.** The JSON envelope — its frame, every `runs[]` key, the named assertion-entry keys, the
+enums, `error.code` and `refusals[]` — is a covered surface ([SPEC.md](../SPEC.md) §12), described by
+`schema/regrade.json`: adding a key or an enum value is a minor change (treat an unknown `docMatchesLive` as not
+`true`), removing or renaming one is a major change. The regrade **file**'s name, layout and contents are
+experimental and may change in a minor release.
 
 ## Exit codes
 

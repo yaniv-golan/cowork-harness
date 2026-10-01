@@ -160,8 +160,10 @@ export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEn
 /** Stable machine codes on `error.code`. A code NARROWS a category, it never replaces one: `category` stays
  *  the covered coarse class (§11), and `code` is present only on the errors a consumer needs to tell apart
  *  within it. `budget_exceeded` is a `--max-budget-usd` pre-flight refusal — a `runtime` error whose exit
- *  code is shared with other refusals, so without it the only discriminator was the message prose. */
-export type ErrCode = "budget_exceeded";
+ *  code is shared with other refusals, so without it the only discriminator was the message prose. `doc_drift` and
+ *  `unchecked_content` are `regrade`'s two evidence refusals (the kept evidence differs from what the live judge
+ *  read; content the live judge never read would be graded), listed per run dir in the payload's `refusals[]`. */
+export type ErrCode = "budget_exceeded" | "doc_drift" | "unchecked_content";
 
 /** Additive extras for the error envelope. `error` fields merge into the `error` object beside the
  *  covered `category`/`message`/`hint` (typed so they cannot collide with them); `payload` keys sit at the top level
