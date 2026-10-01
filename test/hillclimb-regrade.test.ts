@@ -577,3 +577,25 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     expect(tree(flow)).toEqual(before);
   }, 240_000);
 });
+
+describe("hillclimb regrade's refusal on the CLI", () => {
+  it("text mode prints a refusal once (the flow's own stderr line), json mode prints the envelope", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "hc-regrade-once-")));
+    try {
+      const run = (...a: string[]) =>
+        spawnSync(process.execPath, [CLI, "hillclimb", "regrade", "evals", "--flow", "nope", ...a], {
+          cwd: dir,
+          encoding: "utf8",
+          timeout: 60_000,
+        });
+      const text = run();
+      expect(text.status).toBe(2);
+      expect(text.stderr.split("\n").filter((l) => l.includes("refusing to regrade: no flow dir at nope"))).toHaveLength(1);
+      const json = run("--output-format", "json");
+      expect(json.status).toBe(2);
+      expect(JSON.parse(json.stdout).error.message).toBe("refusing to regrade: no flow dir at nope");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
