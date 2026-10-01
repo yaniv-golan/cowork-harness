@@ -85,8 +85,11 @@ function fileSig(f: Pick<WorkspaceFixtureFile, "sha256" | "exec">): string {
  *  collide with `a\0b` + `c`. */
 export function workspaceFixtureSig(files: ReadonlyArray<Pick<WorkspaceFixtureFile, "path" | "sha256" | "exec">>): string {
   const h = createHash("sha256");
-  for (const f of [...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)))
-    h.update(`F:${f.path}\0${f.sha256}\0${f.exec ? "x" : "-"}\0`);
+  // Paths enter in NFC: the same fixture checked out on a filesystem that stores the other Unicode form (macOS
+  // HFS/APFS vs Linux) must not read as drift.
+  const nfc = (p: string) => p.normalize("NFC");
+  for (const f of [...files].sort((a, b) => (nfc(a.path) < nfc(b.path) ? -1 : nfc(a.path) > nfc(b.path) ? 1 : 0)))
+    h.update(`F:${nfc(f.path)}\0${f.sha256}\0${f.exec ? "x" : "-"}\0`);
   return h.digest("hex");
 }
 
@@ -121,6 +124,9 @@ export function scanWorkspaceFixture(dir: string): ScannedWorkspaceFixture {
   const cap = workspaceFixtureMaxBytes();
   const hashCap = preRunHashCap();
   const tracked = gitModeEnabled() ? gitTrackedSet(root.root) : null;
+  // `git ls-files` can emit one Unicode form (NFC under core.precomposeunicode) while readdir returns the stored one
+  // (NFD on macOS): compare in NFC, or a tracked file reads as untracked.
+  const trackedNfc = tracked === null ? null : new Set([...tracked].map((t) => t.normalize("NFC")));
 
   const problems: string[] = [];
   const found: Array<{ rel: string; abs: string; st: Stats }> = [];
@@ -168,7 +174,7 @@ export function scanWorkspaceFixture(dir: string): ScannedWorkspaceFixture {
         problems.push(`${describe(rel)} has a second hard link (another name for the same file) — replace it with a plain copy`);
         continue;
       }
-      if (tracked !== null && !tracked.has(rel)) {
+      if (trackedNfc !== null && !trackedNfc.has(rel.normalize("NFC"))) {
         problems.push(
           `${describe(rel)} is not tracked by git — only tracked files are staged and hashed ('git add' it, or ${GITSET_ENV}=0 to include untracked files)`,
         );
@@ -222,7 +228,7 @@ export function scanWorkspaceFixture(dir: string): ScannedWorkspaceFixture {
     dir: root.root,
     files,
     sig: workspaceFixtureSig(files),
-    fileSigs: files.map((f) => [f.path, fileSig(f)]),
+    fileSigs: files.map((f) => [f.path.normalize("NFC"), fileSig(f)]),
     bytes: files.reduce((n, f) => n + f.bytes, 0),
   };
 }
@@ -291,13 +297,14 @@ export function assertedAuthored(v: unknown): boolean | undefined {
 export const PRESENCE_KEYS = ["file_exists", "user_visible_artifact", "artifact_text", "artifact_json"] as const;
 
 /** Normalize a workRoot-relative assertion path for comparison with `outputs/<fixture path>`: separators,
- *  `./`, `a/../`, a trailing `/`, and CASE. Case is folded on every platform: a case-insensitive filesystem
+ *  `./`, `a/../`, a trailing `/`, Unicode form (NFC — macOS resolves an NFD name to its NFC twin, and vice
+ *  versa, exactly as it folds case) and CASE. Case is folded on every platform: a case-insensitive filesystem
  *  (macOS APFS, the default) resolves `outputs/REPORT.md` to the fixture's `report.md`, so comparing exactly
  *  would let it pass on the fixture alone there; folding everywhere keeps the verdict platform-independent
  *  (a deliberately different-case new file on a case-sensitive filesystem is over-refused, and stating
  *  `authored:` resolves that). */
 function normRel(p: string): string {
-  return posix.normalize(p.split("\\").join("/")).replace(/^\.\//, "").replace(/\/+$/, "").toLowerCase();
+  return posix.normalize(p.split("\\").join("/")).replace(/^\.\//, "").replace(/\/+$/, "").normalize("NFC").toLowerCase();
 }
 
 /** Every path a presence assertion could name and pass on the fixture alone: each staged file, and each
@@ -305,7 +312,7 @@ function normRel(p: string): string {
 function vacuousTargets(files: ReadonlyArray<{ path: string }>): Set<string> {
   const out = new Set<string>();
   for (const f of files) {
-    const parts = `outputs/${f.path}`.toLowerCase().split("/");
+    const parts = `outputs/${f.path}`.normalize("NFC").toLowerCase().split("/");
     for (let i = 1; i <= parts.length; i++) out.add(parts.slice(0, i).join("/"));
   }
   return out;
@@ -347,14 +354,20 @@ export function workspaceFixtureAssertRefusal(
  * rather than a fresh scan — for the paths that check an assertion after the fact: `verify-run`, a `--resume`
  * turn, `replay --assert-from`. When the list is missing, or the record redaction policy rewrote a fixture path
  * (so the real names are unknown), the check cannot run: an unannotated presence/body assertion under
- * `outputs/` is then refused as cannot-be-checked rather than allowed to pass. Undefined when the scenario
- * declares no fixture, or nothing is refused.
+ * `outputs/` is then refused as cannot-be-checked rather than allowed to pass. A recorded list applies whether or not
+ * the scenario (re)declares `workspace_fixture`. Undefined when there is neither a recorded list nor a declared
+ * fixture, or nothing is refused.
  */
 export function recordedFixtureRefusal(
   scenario: Pick<Scenario, "name" | "assert"> & { workspace_fixture?: string },
   fileSigs: ReadonlyArray<readonly [string, string]> | undefined,
 ): string | undefined {
-  if (scenario.workspace_fixture === undefined) return undefined;
+  // The run's own evidence decides, not the YAML: a scenario that omits the key (a different file given to
+  // verify-run, a --resume turn that does not redeclare it) still asserts over a tree the fixture populated.
+  // With no recorded list, only a scenario that declares a fixture is refused as uncheckable.
+  const recorded = fileSigs !== undefined && fileSigs.length > 0;
+  if (!recorded && scenario.workspace_fixture === undefined) return undefined;
+  if (fileSigs !== undefined && fileSigs.length === 0) return undefined;
   const known = fileSigs !== undefined && !fileSigs.some(([p]) => p.includes("[REDACTED"));
   if (known)
     return workspaceFixtureAssertRefusal(

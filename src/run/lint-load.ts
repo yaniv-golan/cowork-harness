@@ -17,7 +17,7 @@ import { loadBaseline as realLoadBaseline } from "../baseline.js";
 import { UsageError, renderIssuePath } from "../errors.js";
 import { loadScenarioPure } from "./execute.js";
 import type { Scenario } from "../types.js";
-import { scanWorkspaceFixture, workspaceFixtureAssertRefusal } from "../fixture/workspace.js";
+import { scanWorkspaceFixture, workspaceFixtureAsWritten, workspaceFixtureAssertRefusal } from "../fixture/workspace.js";
 
 /** Python's `Finding.as_dict()` shape (`scenario.py`), field for field. */
 export interface LintFinding {
@@ -177,12 +177,33 @@ function baselineFinding(file: string, name: string, e: unknown): LintFinding {
 function fixtureFindings(file: string, scenario: Scenario): LintFinding[] {
   if (scenario.workspace_fixture === undefined) return [];
   const dryRun = `\`cowork-harness record ${shellQuote(file)} --dry-run\` reports the same refusal.`;
+  // A fixture is a property of the scenario only when it is scenario-relative (committed next to it). An absolute
+  // or `~/` ref names a directory on SOME machine: warn that it should be relative, and when it does not exist
+  // here, leave it unchecked rather than fail a lint lane that never runs the scenario.
+  const asWritten = workspaceFixtureAsWritten(scenario) ?? scenario.workspace_fixture;
+  const machinePath = isAbsolute(asWritten) || asWritten === "~" || asWritten.startsWith("~/");
+  const out: LintFinding[] = [];
+  if (machinePath) {
+    const here = existsSync(scenario.workspace_fixture);
+    out.push({
+      severity: "WARN",
+      rule: "workspace-fixture-not-relative",
+      message:
+        `workspace_fixture ${asWritten} is not relative to the scenario file, so it names a directory on one machine` +
+        (here ? "" : " — it does not exist here, so it was not checked"),
+      fix: "Commit the fixture next to the scenario and point workspace_fixture at it relatively (e.g. `fixtures/after-step-1`).",
+      file,
+      line: null,
+    });
+    if (!here) return out;
+  }
   let files: Array<{ path: string }>;
   try {
     files = scanWorkspaceFixture(scenario.workspace_fixture).files;
   } catch (e) {
     if (!(e instanceof UsageError)) throw e;
     return [
+      ...out,
       {
         severity: "ERROR",
         rule: "workspace-fixture-invalid",
@@ -196,6 +217,7 @@ function fixtureFindings(file: string, scenario: Scenario): LintFinding[] {
   const refusal = workspaceFixtureAssertRefusal(scenario, files);
   return refusal
     ? [
+        ...out,
         {
           severity: "ERROR",
           rule: "workspace-fixture-vacuous-assert",
@@ -205,7 +227,7 @@ function fixtureFindings(file: string, scenario: Scenario): LintFinding[] {
           line: null,
         },
       ]
-    : [];
+    : out;
 }
 
 /** Loader findings for already-expanded scenario files (see `expandLintInputs`). Never throws and never

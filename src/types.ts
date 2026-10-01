@@ -2207,7 +2207,8 @@ export interface RunResult {
   workspaceFixture?: string;
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
-   *  against. undefined = the run didn't capture it (a --resume run, or the run predates the seam); the
+   *  against. undefined = the run didn't capture it (it never armed one, or predates the seam; a --resume turn
+   *  reports the FIRST turn's, which it reads because it captures none of its own); the
    *  assertion then fails evidence-unavailable, never vacuous-passes. (microvm captures it now — its
    *  session tree is snapshotted from the VM into the run dir before this walk.) */
   preRunPaths?: string[];

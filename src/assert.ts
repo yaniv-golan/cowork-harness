@@ -402,8 +402,9 @@ export interface AssertContext {
   workRoot: string; // dir under which file_exists paths resolve (L0: work/, L1/L2: work/session/mnt)
   userVisiblePrefixes: string[]; // path prefixes promoted to the user (e.g. outputs, .projects)
   /** workRoot-relative paths under userVisiblePrefixes BEFORE the agent ran (RunResult.preRunPaths /
-   *  cassette.preRunPaths). undefined = no pre-run manifest (a --resume run, or an older run/cassette) —
-   *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. (microvm captures it now —
+   *  cassette.preRunPaths). undefined = no pre-run manifest (an older run/cassette, or a run that never armed
+   *  one) — no_unexpected_files then fails evidence-unavailable, never vacuous-passes. A --resume turn captures
+   *  none of its own but READS the first turn's, so there this is the session's state before turn 1. (microvm captures it now —
    *  its session tree is snapshotted from the VM into the run dir.) */
   preRunPaths?: string[];
   /** True iff `preRunPaths` was captured link-aware (manifest v2+). When false/undefined (a pre-#38
@@ -421,6 +422,10 @@ export interface AssertContext {
    *  never a vacuous pass just because a (locally meaningless) preRunPaths/preRunHashes happens to be
    *  present. undefined today on every real caller; only a hand-constructed ctx sets this. */
   preRunOrigin?: "local-walk" | "remote-unavailable" | "local-unreadable";
+  /** True on a `--resume` turn. Such a turn captures no pre-run manifest of its own; the manifest it reads is the
+   *  FIRST turn's. `authored: true` keys on this flag (and fails evidence-unavailable), never on the manifest being
+   *  absent, because a workspace_fixture scenario always has one. Absent = not a resume turn (replay: never). */
+  resume?: boolean;
   /** Replay-lane ONLY: authoritative post-run per-path sha256 from the cassette manifest
    *  (cassette.artifacts[].sha256). undefined on live/verify-run (there, input_unmodified re-hashes the
    *  real tree under workRoot). Needed because replay's materialized tree writes 0-byte placeholders for
@@ -900,7 +905,7 @@ export function semanticRefusal(
       message:
         `evidence unavailable: no pre-run manifest for this run, so the set of files it AUTHORED could not be computed — ` +
         `the judge would have graded the final message and transcript alone while reporting complete authored evidence. ` +
-        `This is a --resume turn (the baseline belongs to the first turn), or the run predates the manifest seam; re-run live without --resume.`,
+        `The run never armed the manifest, or predates the manifest seam; re-run live.`,
     };
   } else if (scoped && !sc.matchedAny) {
     // A glob matching nothing would grade the rubric against ZERO authored evidence while the capture
@@ -1515,19 +1520,21 @@ const SCRATCHPAD_PREFIX = "scratchpad/";
  *  - A `-lost` finding on a MODIFIED file on a read-write connected mount (a user's pre-existing HTML the
  *    skill edited) is downgraded to advisory — not the skill's failure to own; surfaced, never a hard fail.
  *  - `-suspect` findings → PASS with the advisory surfaced.
- *  - Missing pre-run manifest (a `--resume` run, or a run predating the manifest seam), a scratchpad walk
- *    skipped on `--resume`, an unresolvable scratchpad path, or an `analysisFailure` on a produced
+ *  - Missing pre-run manifest (a run predating the manifest seam, or one that never armed it — a `--resume`
+ *    turn reads the FIRST turn's manifest, so it diffs against the session's state before turn 1), a scratchpad
+ *    walk skipped on `--resume`, an unresolvable scratchpad path, or an `analysisFailure` on a produced
  *    candidate → could-not-verify (fail-closed), never a silent clean. (Every live sandbox tier captures
  *    a manifest now, microvm included — its session tree is snapshotted from the VM into the run dir.)
  */
 function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
-  // No pre-run manifest → captureAuthoredFiles can't diff, so we cannot know what the run authored. This
-  // is a `--resume` run (no fresh manifest) or a pre-seam run — evidence-unavailable, never a silent clean.
+  // No pre-run manifest → captureAuthoredFiles can't diff, so we cannot know what the run authored. This is a
+  // pre-seam run, or one that never armed the manifest (a --resume turn reads the first turn's, so it lands below
+  // with a session-cumulative diff) — evidence-unavailable, never a silent clean.
   if (ctx.preRunHashes === undefined) {
     return {
       pass: false,
       message:
-        "evidence unavailable: no pre-run manifest for this run (a --resume run, or a run predating the manifest seam) — " +
+        "evidence unavailable: no pre-run manifest for this run (it never armed one, or predates the manifest seam) — " +
         "cannot determine which files the run authored, so a lost interactive-artifact write-back cannot be ruled out",
     };
   }
@@ -1727,9 +1734,17 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
     message: `evidence unavailable: ${key} {authored: true} on "${p}" — ${why}`,
   });
   if (ctx.preRunOrigin === "remote-unavailable") return unavailable("the pre-run manifest is not locally observable (remote)");
+  // Authorship is decided per invocation. A --resume turn captures no pre-run manifest of its own: the one on disk
+  // is the FIRST turn's (taken before turn 1), so diffing against it would credit this turn with everything earlier
+  // turns wrote. Never read that as authored — keyed on the resume flag, not on the manifest being absent, because
+  // a fixture scenario always has one.
+  if (ctx.resume)
+    return unavailable(
+      "this is a --resume turn: authorship is decided per invocation, and a resume turn captures no pre-run manifest of its own (the one on disk is the first turn's), so what THIS turn wrote cannot be told apart from earlier turns' work",
+    );
   if (ctx.preRunHashes === undefined)
     return unavailable(
-      "no pre-run manifest for this run/cassette (a --resume run, or one predating the manifest) — authorship cannot be decided",
+      "no pre-run manifest for this run/cassette (it predates the manifest, or nothing armed it) — authorship cannot be decided",
     );
   const abs = containedPath(ctx.workRoot, p);
   if (!abs) return { pass: false, message: `unsafe ${key} path "${p}" — must stay under the work root (no absolute paths or "..")` };
@@ -1748,24 +1763,33 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
       message: `${key} {authored: true}: \`authored\` applies to a file — "${p}" is a directory (assert on a file the step writes inside it)`,
     };
   if (!st.isFile()) return { pass: false, message: `${key} {authored: true}: "${p}" is not a regular file` };
-  // The canonical on-disk name, relative to the canonical work root. A difference other than case means the
-  // path went through a symlinked directory.
+  // A second hard link is another name for an existing inode (it may be an untouched fixture file); the
+  // authored-file capture the judge grades excludes such a file, so authorship cannot claim it either.
+  if (st.nlink > 1)
+    return unavailable("it has a second hard link (another name for the same file) — the authored-file capture excludes it too");
+  // The canonical on-disk name, relative to the canonical work root. A difference other than case or Unicode
+  // normalization form (macOS resolves NFC and NFD spellings to one name) means the path went through a symlinked
+  // directory. Lookups use the same NFC + lower-case key.
   let rel: string;
   try {
     rel = relative(realpathSync.native(ctx.workRoot), realpathSync.native(abs)).split(sep).join("/");
   } catch {
     return unavailable("its on-disk name could not be resolved");
   }
-  if (rel !== lexical && rel.toLowerCase() !== lexical.toLowerCase())
+  const fold = (x: string): string => x.normalize("NFC").toLowerCase();
+  if (rel !== lexical && fold(rel) !== fold(lexical))
     return unavailable("it is reached through a symlinked directory — a link is never authored evidence");
   const hashes = ctx.preRunHashes;
   if (!Object.hasOwn(hashes, rel)) {
-    const folded = Object.keys(hashes).find((k) => k.toLowerCase() === rel.toLowerCase());
+    const folded = Object.keys(hashes).find((k) => fold(k) === fold(rel));
     if (folded !== undefined) rel = folded;
   }
   let post: string | undefined;
   const postHash = (): string | undefined | "too-large" => {
-    if (ctx.postRunHashes !== undefined) return ctx.postRunHashes[rel] ?? ctx.postRunHashes[lexical];
+    if (ctx.postRunHashes !== undefined) {
+      const post = ctx.postRunHashes;
+      return post[rel] ?? post[lexical] ?? post[Object.keys(post).find((k) => fold(k) === fold(rel)) ?? ""];
+    }
     try {
       if (st.size > postRunHashCap()) return "too-large";
       return createHash("sha256").update(readFileSync(abs)).digest("hex");
@@ -1774,7 +1798,7 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
     }
   };
   if (!Object.hasOwn(hashes, rel)) {
-    if (ctx.preRunPaths?.some((q) => q.toLowerCase() === rel.toLowerCase()))
+    if (ctx.preRunPaths?.some((q) => fold(q) === fold(rel)))
       return unavailable("it existed before the run as a link, whose content was never hashed");
     if (ctx.preRunOrigin === "local-unreadable")
       return unavailable(
@@ -2930,7 +2954,7 @@ function check(
     } else if (ctx.preRunPaths === undefined) {
       results.push(
         fail(
-          "evidence unavailable: no pre-run manifest for this run/cassette (a --resume run, or a run/cassette predating 0.24) — cannot compute created files; re-run without --resume, or re-record",
+          "evidence unavailable: no pre-run manifest for this run/cassette (it never armed one, or predates 0.24) — cannot compute created files; re-run live, or re-record",
         ),
       );
     } else {
@@ -2988,7 +3012,7 @@ function check(
     } else if (ctx.preRunHashes === undefined) {
       results.push(
         fail(
-          "evidence unavailable: no pre-run hash manifest for this run/cassette (a --resume run, or a run/cassette predating the fingerprinted manifest) — cannot compare content; re-run without --resume, or re-record",
+          "evidence unavailable: no pre-run hash manifest for this run/cassette (it never armed one, or predates the fingerprinted manifest) — cannot compare content; re-run live, or re-record",
         ),
       );
     } else {

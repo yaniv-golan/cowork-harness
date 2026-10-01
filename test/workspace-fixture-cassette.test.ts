@@ -43,7 +43,6 @@ describe("the fixture ref is relocatable", () => {
     const fixture = join(root, "fixtures", "step1");
     const ref = cassetteFixtureRef(fixture, cassettePath);
     expect(ref).toBe("../fixtures/step1");
-    expect(cassetteFixtureRef("~/fx", cassettePath)).toBe("~/fx");
     const sc = { session: "(inline)", workspace_fixture: ref } as unknown as Scenario;
     expect(embeddedScenario(sc, cassettePath).workspace_fixture).toBe(fixture);
     expect(embeddedScenario({ session: "(inline)" } as unknown as Scenario, cassettePath).workspace_fixture).toBeUndefined();

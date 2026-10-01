@@ -815,9 +815,10 @@ export function cassetteSessionRef(session: string, cassettePath: string): strin
 }
 
 /** The `workspace_fixture:` a cassette stores: relative to the cassette's own directory (like `session:`), so a
- *  moved bundle stays resolvable and no absolute host path is committed. A `~/…` ref is kept as written. */
+ *  moved bundle stays resolvable and no absolute host path is committed. The loader always resolves the ref to
+ *  an absolute path first (a `~/…` ref included), and `record` refuses a fixture outside the cassette's
+ *  repository, so the stored ref never climbs out of it. */
 export function cassetteFixtureRef(fixture: string, cassettePath: string): string {
-  if (fixture === "~" || fixture.startsWith("~/")) return fixture;
   return relative(dirname(cassettePath), fixture);
 }
 
@@ -869,7 +870,7 @@ export function workspaceFixtureStaleness(cassette: Cassette, cassetteDir: strin
  *  checkout. Undefined when the scenario declares no fixture, or the ref stays inside. */
 export function fixtureRefPreflight(scenario: Pick<Scenario, "workspace_fixture">, cassettePath: string): string | undefined {
   const fixture = scenario.workspace_fixture;
-  if (fixture === undefined || fixture === "~" || fixture.startsWith("~/")) return undefined;
+  if (fixture === undefined) return undefined;
   const cassetteDir = resolve(dirname(cassettePath));
   // The nearest EXISTING ancestor answers `git rev-parse` (the cassette dir may not exist before the first record).
   let probe = cassetteDir;

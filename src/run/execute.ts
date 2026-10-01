@@ -1700,6 +1700,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       preRunLinkAware,
       preRunHashes,
       preRunOrigin,
+      // A resume turn reads the FIRST turn's manifest; `authored: true` must not diff against it.
+      resume: !!opts.resume,
       outputsDeletes: scan.outputsDeletes,
       outputsDeleteBasis: scan.outputsDeleteBasis,
       fsDiff,

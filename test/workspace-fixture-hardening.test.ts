@@ -260,9 +260,9 @@ describe("refusal from a RECORDED fixture file list (verify-run, --resume, --ass
 
   it("refuses against the recorded list, accepts `authored:`", () => {
     const sigs: Array<[string, string]> = [["report.md", "h"]];
-    expect(recordedFixtureRefusal(fx([{ file_exists: "outputs/report.md" }]), sigs)).toMatch(/pass on the fixture alone/);
+    expect(recordedFixtureRefusal(fx([{ file_exists: "outputs/report.md" }]), sigs)).toMatch(/already provides/);
     expect(recordedFixtureRefusal(fx([{ file_exists: { path: "outputs/report.md", authored: false } }]), sigs)).toBeUndefined();
-    expect(recordedFixtureRefusal({ name: "s", assert: [{ file_exists: "outputs/report.md" }] }, sigs)).toBeUndefined(); // no fixture
+    expect(recordedFixtureRefusal({ name: "s", assert: [{ file_exists: "outputs/report.md" }] }, undefined)).toBeUndefined(); // no fixture, no record
   });
 
   it("a redacted fixture path, or no recorded list, refuses an unannotated outputs/ presence assert as unverifiable", () => {
@@ -468,8 +468,14 @@ describe("a --resume turn refuses against the file list turn 1 recorded", () => 
       join(outDir, "turns", "1", "result.json"),
       JSON.stringify({ fingerprint: { baseline: LIVE, workspaceFixtureFileSigs: [["report.md", "h"]] } }),
     );
+    // `already provides` is the KNOWN-list refusal only — the no-list branch says "cannot be checked" instead.
     await expect(executeScenario(scenario, { sessionId: "x", resume: true, modelOverride: "claude-test" })).rejects.toThrow(
-      /pass on the fixture alone/,
+      /already provides/,
+    );
+    // …and it still refuses when the resume turn's YAML does not redeclare workspace_fixture: the run's evidence decides.
+    const undeclared = { ...scenario, workspace_fixture: undefined } as Scenario;
+    await expect(executeScenario(undeclared, { sessionId: "x", resume: true, modelOverride: "claude-test" })).rejects.toThrow(
+      /already provides/,
     );
     expect(spawnMock).not.toHaveBeenCalled();
   });
