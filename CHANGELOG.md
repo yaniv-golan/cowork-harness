@@ -65,6 +65,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`eval` honours `allow_stall`.** A scenario whose intended terminal state is a question asserts
+  `allow_stall: true`, which `run` and `replay` accept as the opt-out from the `stalled` verdict. `eval`
+  ignored it and classified every stalled rep as the agent's failure, scoring it 0 on every row. A
+  scenario whose every rep stalled in both arms compared nothing and the eval exited 1; one that stalled
+  in only some reps had those reps scored 0. Such a rep is now graded like any completed run (rule
+  `stall_allowed` in `report.json`). A stall in a scenario without `allow_stall` still fails every row.
+  `eval report <eval-dir>` applies the fix to an existing eval dir at no cost.
+
 - **Verdict change: `stalled` now fails a run that ends by asking for input without a `?`, on `run`,
   `replay` and `eval`.** After an `AskUserQuestion` gate, a run that closed on "Please share your
   pre-money valuation and the total amount you're raising so I can run the numbers." passed, while the
@@ -89,8 +97,8 @@ All notable changes to this project are documented here. The format is based on
     `allow_stall: true` / `--allow-stall` still opt out on `run` and `replay`.
   - `replay` re-derives the check from the recording, so an existing cassette with this ending fails on
     replay too.
-  - Under `eval`, a newly stalled rep is `errored_agent`, which fails every row; `allow_stall` does not
-    apply there.
+  - Under `eval`, a newly stalled rep is `errored_agent`, which fails every row unless the scenario asserts
+    `allow_stall: true`.
   - The live-lane `ended_with_question` warning uses the same test under the same gate condition. A
     `?`-free request made after post-gate tool work, which raised nothing, now warns. A run that used to
     warn `ended_with_question` and matches the new shape now fails `stalled` instead.

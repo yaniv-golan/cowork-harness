@@ -535,6 +535,52 @@ describe("eval: credential preflight (doctor's token check, before any run)", ()
   });
 });
 
+describe("eval: a scenario that opts out of the stall verdict (allow_stall: true)", () => {
+  // Every rep of both arms stalls on a question, which the scenario declares as its intended terminal state.
+  // The termination fields come from the REAL stalled excerpt; the grades are the csv scenario's own (plus the
+  // modifier's), because the excerpt's graded assertions belong to another scenario and would not align.
+  const stalled = fixture("stalled-on-question");
+  const stall =
+    (optedOut: boolean) =>
+    (_s: EvalJobSpec, r: RunResult): RunResult => ({
+      ...r,
+      result: stalled.result,
+      resultSubtype: stalled.resultSubtype,
+      stalledOnQuestion: stalled.stalledOnQuestion,
+      assertions: optedOut
+        ? [...r.assertions, { assertion: { allow_stall: true }, pass: true } as RunResult["assertions"][number]]
+        : r.assertions,
+    });
+  const optOut = (scen: string) =>
+    writeFileSync(join(scen, "csv-metrics.yaml"), readFileSync(join(scen, "csv-metrics.yaml"), "utf8") + "  - allow_stall: true\n");
+
+  it("every rep stalled: graded, rule stall_allowed, no errored arm, rows compared, exit 0", async () => {
+    const { scen, a, b } = setup();
+    optOut(scen);
+    const out = await runEval(args(scen, a, b), deps(fakeRunner(stall(true))));
+    expect(out.report.arms.map((x) => x.buckets)).toEqual([{ valid: 5 }, { valid: 5 }]);
+    expect(out.report.reps).toHaveLength(10);
+    expect(out.report.reps.every((r) => r.rule === "stall_allowed")).toBe(true);
+    expect(out.report.summary.erroredArms).toEqual([]);
+    const rows = out.report.sections.tuned!.rows;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.label !== "insufficient")).toBe(true);
+    expect(out.report.summary.exitCode).toBe(0);
+  });
+
+  it("the same stalls without the opt-out are the agent's failure in every rep: compared nothing, exit 1", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner(stall(false))));
+    expect(out.report.arms.map((x) => x.buckets)).toEqual([{ errored_agent: 5 }, { errored_agent: 5 }]);
+    expect(out.report.reps.every((r) => r.rule === "stalled_on_question")).toBe(true);
+    expect(out.report.summary.erroredArms.map((e) => [e.arm, e.rowsInsufficient])).toEqual([
+      ["before", true],
+      ["after", true],
+    ]);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+});
+
 describe("eval: every rep of an arm errored, per scenario", () => {
   // The consumer's report: no usable credential, every rep of both arms "Not logged in", and the eval said
   // "no detectable change" and exited 0. The fake returns the REAL auth excerpt for every job.
