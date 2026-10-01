@@ -55,7 +55,21 @@ describe("scored rows", () => {
       status: "ok",
       stop_reason: "end_turn",
     });
-    expect(row.grade).toEqual({ pass: 1, a3_present: 1, a0: 1, a1: 1, a2: 1, a3_c0: 1, a3_c1: 1, a3_c2: 1, a3_c3: 1, a3_c4: 1 });
+    expect(row.grade).toEqual({
+      pass: 1,
+      claims_present: 1,
+      a3_present: 1,
+      claims: 1,
+      a0: 1,
+      a1: 1,
+      a2: 1,
+      a3_c0: 1,
+      a3_c1: 1,
+      a3_c2: 1,
+      a3_c3: 1,
+      a3_c4: 1,
+    });
+    expect(Object.keys(row.grade).slice(0, 4)).toEqual(["pass", "claims_present", "a3_present", "claims"]);
     expect(row.model).toBe("claude-sonnet-5");
   });
 
@@ -135,7 +149,7 @@ describe("scored rows", () => {
     sm.judgeUsage = { input_tokens: 900, output_tokens: 80, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
     const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
     expect(row.explanation.a3_c0).toBe(`${UNTRUSTED_JUDGE_PREFIX}because 0`);
-    expect(Object.keys(row.explanation)).toEqual(["a3_c0", "a3_c1", "a3_c2", "a3_c3", "a3_c4"]);
+    expect(Object.keys(row.explanation)).toEqual(["claims", "a3_c0", "a3_c1", "a3_c2", "a3_c3", "a3_c4"]);
     expect(row.meta).toMatchObject({ explanation_untrusted: true, claims: { a3_c0: "claim 1" } });
     expect(row).toMatchObject({ judge_model: "claude-haiku-4-5-20251001", judge_usage: { input_tokens: 900, output_tokens: 80 } });
   });
@@ -149,8 +163,37 @@ describe("scored rows", () => {
       semanticEvidence: { reason: "in_scope_truncated" },
     } as never; // ADDED: a refusal
     const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
-    expect(row.grade).toMatchObject({ a3_present: 0 });
+    expect(row.grade).toMatchObject({ a3_present: 0, claims_present: 0 });
     for (let j = 0; j < 5; j++) expect(row.grade).not.toHaveProperty(`a3_c${j}`);
+    expect(row.grade).not.toHaveProperty("claims");
+  });
+
+  it("claims pools graded claims: 3 of 5 passed ⇒ 0.6; explanation.claims names the failed claims first", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    // ADDED: two failing claims and a rationale per claim
+    r.assertions[3].semanticClaims = r.assertions[3].semanticClaims!.map((c) => ({ ...c, pass: c.index > 1, rationale: `why ${c.index}` }));
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.grade.claims).toBeCloseTo(0.6);
+    expect(row.explanation.claims).toBe(
+      `${UNTRUSTED_JUDGE_PREFIX}2/5 claims failed. FAILED a3_c0: claim 1 — why 0 | FAILED a3_c1: claim 2 — why 1 | passed a3_c2: claim 3 — why 2 | passed a3_c3: claim 4 — why 3 | passed a3_c4: claim 5 — why 4`,
+    );
+  });
+
+  it("a case with no semantic assert carries claims_present 0 and no claims", () => {
+    const r = fixture("public-scenario-pinned");
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.grade.claims_present).toBe(0);
+    expect(row.grade).not.toHaveProperty("claims");
+  });
+
+  it("a flow metric this case does not produce is carried as <id>_present 0, never as a value", () => {
+    const r = fixture("success-semantic");
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [{ id: "words", better: "lower", unbounded: true }] })).row as Record<
+      string,
+      any
+    >;
+    expect(row.grade.words_present).toBe(0);
+    expect(row.grade).not.toHaveProperty("words");
   });
 
   it("an agent-caused failure (stalled on a question) is SCORED: every graded key 0, the reason in meta", () => {

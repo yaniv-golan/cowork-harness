@@ -23,7 +23,7 @@ import { basename } from "node:path";
 import type { Assertion, RunResult, TokenUsage } from "../types.js";
 import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
-import { gradeKeyDecls, type MetricDecl } from "./grade-keys.js";
+import { caseKeyDecls, type MetricDecl } from "./grade-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { resultEventFields } from "./result-event.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "./schema-check.js";
@@ -197,6 +197,23 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       if (!agentFailed && sc?.rationale) explanation[key] = UNTRUSTED_JUDGE_PREFIX + sc.rationale;
     }
   }
+  // claims: the pooled share of graded claims that passed (refused asserts are excluded — they have no claim
+  // values). The explanation lists every graded claim, failed first, so a reader sees what cost the score.
+  const gradedClaims = values.filter((v) => v.row.kind === "claim" && v.excluded === undefined);
+  grade.claims_present = gradedClaims.length > 0 ? 1 : 0;
+  if (gradedClaims.length > 0) {
+    const passedN = gradedClaims.filter((v) => v.value === 1).length;
+    grade.claims = passedN / gradedClaims.length;
+    if (!agentFailed && Object.keys(explanation).length > 0) {
+      const line = (v: (typeof gradedClaims)[number]) => {
+        const key = `a${v.row.assertionIndex}_c${v.row.claimIndex}`;
+        const why = explanation[key]?.slice(UNTRUSTED_JUDGE_PREFIX.length);
+        return `${v.value === 1 ? "passed" : "FAILED"} ${key}: ${claims[key] ?? ""}${why ? ` — ${why}` : ""}`;
+      };
+      const ordered = [...gradedClaims.filter((v) => v.value !== 1), ...gradedClaims.filter((v) => v.value === 1)];
+      explanation.claims = `${UNTRUSTED_JUDGE_PREFIX}${gradedClaims.length - passedN}/${gradedClaims.length} claims failed. ${ordered.map(line).join(" | ")}`;
+    }
+  }
   for (const m of ctx.metrics ?? []) {
     const got = (r as { metrics?: Array<{ id: string; value?: number }> } | undefined)?.metrics?.find((x) => x.id === m.id);
     const ok = !agentFailed && typeof got?.value === "number" && Number.isFinite(got.value);
@@ -205,7 +222,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   }
   // Order the keys as declared, so every row reads the same way.
   const ordered: Record<string, number> = {};
-  for (const d of gradeKeyDecls(ctx.assertions, ctx.metrics ?? [])) if (d.id in grade) ordered[d.id] = grade[d.id];
+  for (const d of caseKeyDecls(ctx.assertions, ctx.metrics ?? [])) if (d.id in grade) ordered[d.id] = grade[d.id];
 
   const toolCalls = r?.toolCalls;
   const latencyBasisWall = ev.durationMs === undefined;
@@ -216,6 +233,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     models[m] = { ...snake(e as Record<string, unknown>), ...(typeof cost === "number" ? { cost_usd: cost } : {}) };
   }
   const hasExplanation = Object.keys(explanation).length > 0;
+  const explanationOrdered: Record<string, string> = {};
+  if ("claims" in explanation) explanationOrdered.claims = explanation.claims;
+  for (const [k, v] of Object.entries(explanation)) if (k !== "claims") explanationOrdered[k] = v;
   const row: Record<string, unknown> = {
     prompt_id: ctx.caseId,
     rep: ctx.rep,
@@ -242,7 +262,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     ...(typeof r?.deciderCostUsd === "number" ? { decider_usd: r.deciderCostUsd } : {}),
     ...(ctx.skillInvoked !== undefined ? { skill_invoked: ctx.skillInvoked ? 1 : 0 } : {}),
     grade: ordered,
-    ...(hasExplanation ? { explanation } : {}),
+    ...(hasExplanation ? { explanation: explanationOrdered } : {}),
     meta: {
       scenario_name: ctx.scenarioName,
       ...(ctx.originalId !== undefined ? { original_id: ctx.originalId } : {}),
