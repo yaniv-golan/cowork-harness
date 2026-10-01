@@ -71,6 +71,7 @@ import {
 } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { assertContextFromRunDir, parseGatesFromEvents, readTranscriptSidecar } from "./run/verify-context.js";
+import { cmdRegrade, REGRADE_USAGE } from "./run/regrade.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint, cmdLintSkill, cmdScaffoldFlagBuilt, isFlagBuiltScaffold, SCAFFOLD_VALUE_FLAGS } from "./run/scenario-tool.js";
 import {
@@ -315,6 +316,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
+  regrade <run-dir>… --scenario <yaml>   re-grade kept runs' semantic_matches asserts with the judge (no live agent; see 'regrade --help')
+      [--judge-model <id>] [--authored-total-bytes <N>] [--output-format json]
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
@@ -666,6 +669,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: gates <dir> [--follow] [--output-format text|json]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
   answer:
     'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>") [--output-format text|json]   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
+  regrade: REGRADE_USAGE,
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   inspect:
@@ -733,6 +737,7 @@ const COMMANDS = [
   "replay",
   "verify-cassettes",
   "verify-run",
+  "regrade",
   "trace",
   "inspect",
   "diff",
@@ -964,6 +969,8 @@ async function main() {
       return cmdInitRedact(rest);
     case "verify-run":
       return cmdVerifyRun(rest);
+    case "regrade":
+      return cmdRegrade(rest);
     case "trace":
       return cmdTrace(rest);
     case "inspect":

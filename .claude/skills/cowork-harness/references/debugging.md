@@ -34,6 +34,12 @@ agent stderr) — read those before re-running; a re-record rarely tells you mor
 already does.
 <!-- END triage-canonical -->
 
+**`verify-run` never calls the semantic judge**, so it cannot re-grade a `semantic_matches` assert. When the
+rubric changed (or you want another judge model) on a run you already paid for, use
+`cowork-harness regrade <run-dir> --scenario <scenario.yaml>` instead: it re-grades those asserts against the
+kept run without re-running the agent — unlike the tools above it is not token-free (the judge call is its
+spend) — writes the grade beside the run, and says whether the judge read the same document the live judge did.
+
 **microvm: "control-protocol write failed" with `env: 'claude': No such file or directory` in the agent
 stderr** usually means the VM never finished provisioning (the agent never reached PATH). Check
 `cowork-harness vm status` — a `provisioning` other than `ready` confirms it — and if a run does not

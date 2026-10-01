@@ -8,6 +8,47 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` asserts** with
+  the judge, without running the agent again; the judge call is the only spend. `verify-run` never calls the
+  judge, so a rubric change previously meant a paid re-run.
+  - The judged document is rebuilt from the kept run dir with the capture budget the live run recorded
+    (`authoredCapture`) and the scenario's `evidence_files` as priority globs, and scrubbed with this process's
+    secret set. A value the live run scrubbed that this process does not know is not scrubbed: run `regrade`
+    with the same `COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS` as the live run.
+  - `docMatchesLive` reports whether the rebuilt document equals, section by section, the `judgedDoc` the live
+    run recorded: `true`, `false` (the differing sections are listed by kind and path; an authored file changed
+    since the run, a different scrub set, or a sub-agent section can each cause it), `scope_changed` (the
+    evidence scope or budget changed), `unknown` (this assert's scope has no live fingerprint), `live_refused`
+    (the live assert refused its evidence and no fingerprint was recorded; one that recorded a `judgedDoc` is
+    compared like a graded one), or `not_graded` (the re-grade's own assert refused its evidence and no document
+    was handed to a judge; one that refused after its judge read a document is compared like any other). The
+    run-level value ranks `false`, then the unchecked `live_refused` and `unknown`, above `scope_changed`.
+    `unknown` and `live_refused` are warned about before the judge call; none of them changes the exit code.
+  - Before any judge call, each live assert's document is rebuilt from the live run's own inputs (its scope,
+    the live `evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture`
+    existed, the `--authored-total-bytes` value you pass) and compared with its `judgedDoc`; any difference is
+    refused, whatever the new scenario's scope — it can mean a value the live run scrubbed and this process does
+    not. So a changed scope or an `--authored-total-bytes` override does not skip the check of what the live
+    judge read. `--allow-doc-drift` grades anyway, with a warning.
+  - Not checked: a live assert that recorded no `judgedDoc` (`unknown`) or refused its evidence
+    and recorded no fingerprint (`live_refused`), neither for drift nor for an unscrubbed secret; and content only a widened scope or a larger `--authored-total-bytes` brings in. That content is
+    graded, named in a warning before the judge call, and listed in `uncheckedSections`; this process's scrub set
+    is all that protects it.
+  - The grade is written to `turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json` (layout
+    experimental), scrubbed as a whole document and stamped with `harnessVersion` and `scenarioSha256`.
+    `result.json` is never modified and no run-index row is added. The same run dir named twice, or through a
+    symlink, is graded once. The JSON envelope, the text report and refusal messages are scrubbed too.
+  - Judge spend is reported per run and in total (`judgeCostUsd`, with `unpricedGrades` counting grades that
+    had no price — the total is then a floor). Grades the judge could not produce are counted as
+    `invalidGrades`, apart from failures.
+  - `--judge-model` grades every assert with one model; an alias such as `opus` is refused.
+  - Exit `0` when every re-graded assert passes, `1` when any fails or is judge-invalid, `2` on usage or a
+    refusal: a multi-turn, partial, replay or chat run dir, a pruned work dir, a missing transcript sidecar, a
+    rebuilt document that differs from the live one (without `--allow-doc-drift`), or
+    a run recorded before `authoredCapture` existed (accepted with `--authored-total-bytes <N>`). Refusals are
+    decided for every run dir before any judge call. A failure writing a regrade file after earlier run dirs
+    were graded also exits `2`.
+  - `--output-format json` prints one payload document with a `runs[]` array.
 - **`--output-format json` now says whether `--max-budget-usd` was actually enforced.** Every envelope
   from `run`, `skill` and `record` (every `record` arm, including `record`'s `--dry-run` arms; `skill
   --dry-run` runs no pre-flight) carries a top-level `budget` object when a cap was passed: `{capUsd,

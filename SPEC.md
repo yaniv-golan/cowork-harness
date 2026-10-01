@@ -596,7 +596,7 @@ there are three families:
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload, `eval` and `eval report` (`evalDir`, `arms`, `pins`,
   `sections`, `summary`, `cost`, `stoppedEarly`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
-  and `answer` (`gate`, `answers`).
+  `answer` (`gate`, `answers`), and `regrade` (below).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object, oldest → newest; the entry `latest` resolves to carries `latest: true`), **`boundary-check`**, **`init-redact`**, **`decide`**,
   **`gates`** (an NDJSON stream, not a single object — one line per pending gate; a terminal
@@ -642,6 +642,43 @@ A scenario file that did not load is a `failed` item. A batch stopped by `--max-
 unless `--allow-budget-stop`. `--rerecord-stale` with nothing stale prints `ok: true` and `items: []`.
 A refusal before the first recording (no credentials, an unresolved model, the budget pre-flight, a slug
 collision) prints the error envelope instead, as before.
+
+**`regrade`** re-grades a kept run's `semantic_matches` asserts with the judge and prints one payload-shaped
+document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`. Each `runs[]` entry is one run dir:
+`{runDir, turn, scenarioSha256, regradeFile, pass, invalidGrades, judgeCostUsd?, unpricedGrades, uncheckedSections[],
+docMatchesLive, differingSections[], assertions[], notRegraded[], authoredCapture}`, and the document's top level also carries
+`judgeCostUsd?` and `unpricedGrades` summed over every run dir. `runs[]` holds only graded run dirs: a refusal
+refuses the whole batch and prints the error envelope instead. `scenarioSha256` is the SHA-256 of the scenario
+file's bytes. `judgeCostUsd` is the sum of the priced judge
+calls and is absent when none was priced (never `0` for unknown); `unpricedGrades > 0` makes it a floor.
+`invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
+`assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
+every other assert as `{assertionIndex, keys}`. `docMatchesLive` is `true` | `false` | `"scope_changed"` |
+`"unknown"` | `"live_refused"` | `"not_graded"`: whether the recomposed judged document equals, section for
+section, the `judgedDoc` the live run recorded (`unknown` when this assert's scope has no live fingerprint, never
+`true`; `live_refused` when every live assert with that scope refused its evidence and no fingerprint was
+recorded — one that recorded a `judgedDoc` is compared like a graded one; `not_graded` when the re-grade's own
+assert refused its evidence and no document was handed to a judge — an assert that refused after its judge read
+a document is compared like any other). The run-level value is the worst over the asserts in the order `false`,
+`live_refused`, `unknown`, `scope_changed`, `true`, and `not_graded` only when every assert is; none of these
+values changes the exit code. `differingSections[]` entries are
+`{assertionIndex, kind, path?, change: "changed"|"added"|"removed"}`. `ok` is `true` iff every re-graded assert
+passed. `docMatchesLive: false` says the bytes differ, not why (an authored file changed since the run, a
+different secret-scrub set, a sub-agent section). The refusal is decided separately, before any judge call:
+each live assert that recorded a `judgedDoc` is rebuilt from the live run's own inputs (its scope, the live
+`evidence_files` union, and the recorded budget — for a run recorded before `authoredCapture` existed, the
+`--authored-total-bytes` value passed) with this process's secrets, and any difference refuses unless
+`--allow-doc-drift` is passed — whatever the new scenario's scope. Not checked: a live assert that recorded no
+`judgedDoc` (`unknown`) or refused its evidence and recorded none (`live_refused`), neither for drift nor for an unscrubbed secret
+(warned about before the judge call); and content only a widened scope or a
+larger `--authored-total-bytes` brings in, which is graded, warned about and listed in `uncheckedSections[]`
+(`{assertionIndex, kind, path?}`). The envelope is scrubbed with the same secret set as the file. **Exit codes:** `0` every re-graded assert passes · `1` any
+fails or is judge-invalid · `2` usage, or a refusal (a multi-turn, partial, replay or chat run dir, a pruned work
+dir, a missing transcript sidecar, a live document whose rebuild differs from its `judgedDoc` without
+`--allow-doc-drift`, a run that did not record `authoredCapture` without `--authored-total-bytes`,
+an alias judge model, a scenario with no `semantic_matches`), or a failure writing a regrade file after earlier
+run dirs were graded; a refusal is the shared error envelope, decided for every run dir before any judge call.
+`result.json` is never modified.
 
 The command lists above are illustrative, not a frozen contract — this is not a single universal
 envelope across every command, so check a given command's own section (or grep its
@@ -1146,6 +1183,9 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
   explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
 - **`trace` row shapes** and other debug/diagnostic output.
+- **The `regrade` output file** (`turns/<N>/regrade/<prompt-hash>-<judge-model>-<time>.json`) — its name and
+  layout are EXPERIMENTAL and may change in any minor release. The `regrade` command itself — its name, flags and
+  exit codes — is covered by the CLI-surface clause above.
 - **`lint-skill` / `analyze-skill` JSON envelopes** (`--output-format json`) — NOT yet frozen. Unlike
   the `doctor`/`verify-cassettes`/RunResult envelopes above, these have no `schema/*.json` and may change
   (fields, rule ids, the artifact-write-back finding shape) while the analyzers stabilize. Parse at your
