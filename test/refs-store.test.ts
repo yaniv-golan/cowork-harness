@@ -155,3 +155,19 @@ describe("verifyStore", () => {
     expect(verifyStore(join(tmp, "nope")).problems[0]?.why).toMatch(/does not exist/);
   });
 });
+
+describe("relative store paths", () => {
+  it("a relative store dir works end to end (method paths are built from the resolved root)", () => {
+    const prev = process.cwd();
+    process.chdir(tmp); // the default forks pool allows it; restored below
+    try {
+      const rel = "./relstore/ref"; // a CLI spelling: './' prefix, nested, no '..'
+      expect(freezeRef(rel, "case_1", SRC, { [K1]: "R" }, { harnessVersion: "t", composerId: "c1" }).status).toBe("frozen");
+      expect(readRefDoc(rel, "case_1", K1)).toMatchObject({ status: "ok", text: "R" });
+      expect(addRefDoc(rel, "case_1", K2, "R2", { resultSha256: SRC.resultSha256, composerId: "c1" }).status).toBe("added");
+      expect(verifyStore(rel)).toMatchObject({ entries: ["case_1"], problems: [] });
+    } finally {
+      process.chdir(prev);
+    }
+  });
+});

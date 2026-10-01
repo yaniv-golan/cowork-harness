@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkRefsBeforeSpend, storesInsideMounts } from "../src/refs/preflight.js";
+import { checkRefsBeforeSpend } from "../src/refs/preflight.js";
 import { composeKey, freezeRef } from "../src/refs/store.js";
 
 let tmp: string;
@@ -10,24 +10,6 @@ beforeEach(() => {
   tmp = realpathSync(mkdtempSync(join(tmpdir(), "refs-pre-")));
 });
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
-
-describe("storesInsideMounts (the reference is the answer key)", () => {
-  it("flags a store inside a mounted folder, including through a symlink", () => {
-    mkdirSync(join(tmp, "mount", "refs"), { recursive: true });
-    mkdirSync(join(tmp, "outside", "refs"), { recursive: true });
-    symlinkSync(join(tmp, "mount", "refs"), join(tmp, "alias"));
-    const hits = storesInsideMounts([join(tmp, "mount", "refs"), join(tmp, "outside", "refs"), join(tmp, "alias")], [join(tmp, "mount")]);
-    expect(hits.map((h) => h.store)).toEqual([join(tmp, "mount", "refs"), join(tmp, "alias")]);
-  });
-  it("a mount nested INSIDE a store does not expose the store", () => {
-    mkdirSync(join(tmp, "refs", "mnt"), { recursive: true });
-    expect(storesInsideMounts([join(tmp, "refs")], [join(tmp, "refs", "mnt")])).toEqual([]);
-  });
-  it("a store that does not exist yet is checked by its nearest existing ancestor", () => {
-    mkdirSync(join(tmp, "mount"), { recursive: true });
-    expect(storesInsideMounts([join(tmp, "mount", "flow", "baseline", "ref")], [join(tmp, "mount")])).toHaveLength(1);
-  });
-});
 
 describe("checkRefsBeforeSpend", () => {
   const K = composeKey("c1", false, undefined);

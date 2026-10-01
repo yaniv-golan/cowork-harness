@@ -17,9 +17,9 @@
 // The store holds text it is given. Composing, scrubbing and host-path redaction happen in the caller.
 
 import { createHash, randomBytes } from "node:crypto";
-import { readdirSync, renameSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { FsRefusal, NoFollowRoot, lexists, lstatOrNull, preflightRoot } from "../hillclimb/fs.js";
+import { rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { FsRefusal, NoFollowRoot, lexists, lstatOrNull, normalizeRootArg } from "../hillclimb/fs.js";
 import { pathSafeId } from "../hillclimb/ids.js";
 
 /** The spellings the scaffold probes for a frozen ref (runner-scaffold.mjs l.132-134). Any of them already
@@ -109,11 +109,12 @@ export function freezeRef(
 ): { status: "frozen" | "exists"; entryDir: string } {
   assertCaseId(caseId);
   if (Object.keys(docs).length === 0) throw new Error("freezeRef: no documents to freeze");
-  preflightRoot(storeDir, []);
-  const root = NoFollowRoot.open(storeDir);
-  const entryDir = join(storeDir, caseId);
-  if (REF_EXTS.some((ext) => lexists(join(storeDir, caseId + ext)))) return { status: "exists", entryDir };
-  const tmp = join(storeDir, `.tmp-${randomBytes(6).toString("hex")}`);
+  const root = NoFollowRoot.open(storeDir); // runs the preflight; every path below is built from root.root
+  const store = root.root;
+  const entryDir = join(store, caseId);
+  const present = (): boolean => REF_EXTS.some((ext) => lexists(join(store, caseId + ext)));
+  if (present()) return { status: "exists", entryDir };
+  const tmp = join(store, `.tmp-${randomBytes(6).toString("hex")}`);
   root.mkdir(tmp);
   try {
     const manifest: EntryManifest = {
@@ -126,20 +127,11 @@ export function freezeRef(
     };
     root.createFile(join(tmp, "ref.json"), json(manifest));
     for (const [key, text] of Object.entries(docs)) writeDoc(root, tmp, key, text, meta.composerId, meta.unchecked === true);
-    // Re-probe right before the rename: an EMPTY directory planted at the name would otherwise be replaced.
-    if (REF_EXTS.some((ext) => lexists(join(storeDir, caseId + ext)))) {
+    // Re-probe every spelling right before the rename (the rename itself checks only `<case-id>`). What remains is the
+    // directory-rename window renameNoFollow documents.
+    if (present() || root.renameNoFollow(tmp, entryDir, { replace: false }) === "exists") {
       rmSync(tmp, { recursive: true, force: true });
       return { status: "exists", entryDir };
-    }
-    try {
-      renameSync(tmp, entryDir);
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException)?.code;
-      if (code === "EEXIST" || code === "ENOTEMPTY") {
-        rmSync(tmp, { recursive: true, force: true });
-        return { status: "exists", entryDir };
-      }
-      throw e;
     }
   } catch (e) {
     rmSync(tmp, { recursive: true, force: true });
@@ -152,47 +144,60 @@ export function freezeRef(
 type Inspected =
   { status: "ok"; manifest: EntryManifest; keys: Set<string> } | { status: "missing"; why: string } | { status: "integrity"; why: string };
 
+/** The store's absolute path (a user-typed relative path, `./` allowed, resolved once), or the refusal. */
+function absStore(storeDir: string): { store: string } | { why: string } {
+  try {
+    return { store: resolve(normalizeRootArg(storeDir)) };
+  } catch (e) {
+    return { why: (e as Error).message };
+  }
+}
+
 /** Structural check of one entry: the layout, the manifest, and doc/sidecar pairing. Does not hash documents. */
-function inspectEntry(storeDir: string, caseId: string): { root?: NoFollowRoot; result: Inspected } {
-  const storeSt = lstatOrNull(storeDir);
-  if (storeSt === null) return { result: { status: "missing", why: `reference store ${storeDir} does not exist` } };
+function inspectEntry(storeDir: string, caseId: string): { root?: NoFollowRoot; entryDir: string; result: Inspected } {
+  const a = absStore(storeDir);
+  if ("why" in a) return { entryDir: "", result: { status: "integrity", why: a.why } };
+  const entryDir = join(a.store, caseId);
+  if (lstatOrNull(a.store) === null) return { entryDir, result: { status: "missing", why: `reference store ${storeDir} does not exist` } };
   let root: NoFollowRoot;
   try {
-    root = NoFollowRoot.existing(storeDir);
+    root = NoFollowRoot.existing(a.store);
   } catch (e) {
-    return { result: { status: "integrity", why: (e as Error).message } };
+    return { entryDir, result: { status: "integrity", why: (e as Error).message } };
   }
-  const entryDir = join(storeDir, caseId);
+  const fail = (why: string): { root: NoFollowRoot; entryDir: string; result: Inspected } => ({
+    root,
+    entryDir,
+    result: { status: "integrity", why },
+  });
   const st = lstatOrNull(entryDir);
-  if (st === null) return { root, result: { status: "missing", why: `no reference entry for case ${caseId} in ${storeDir}` } };
-  if (st.isSymbolicLink() || !st.isDirectory())
-    return { root, result: { status: "integrity", why: `${entryDir} is not a plain directory` } };
+  if (st === null) return { root, entryDir, result: { status: "missing", why: `no reference entry for case ${caseId} in ${storeDir}` } };
+  if (st.isSymbolicLink() || !st.isDirectory()) return fail(`${entryDir} is not a plain directory`);
   const txt = new Set<string>();
   const side = new Set<string>();
   let hasManifest = false;
-  for (const d of readdirSync(entryDir, { withFileTypes: true })) {
-    if (!d.isFile()) return { root, result: { status: "integrity", why: `${join(entryDir, d.name)} is not a regular file` } };
+  for (const d of root.readdirNoFollow(entryDir)) {
+    if (!d.isFile()) return fail(`${join(entryDir, d.name)} is not a regular file`);
     if (d.name === "ref.json") {
       hasManifest = true;
       continue;
     }
     const m = DOC_RE.exec(d.name);
-    if (!m) return { root, result: { status: "integrity", why: `unexpected file ${join(entryDir, d.name)}` } };
+    if (!m) return fail(`unexpected file ${join(entryDir, d.name)}`);
     (m[2] === "txt" ? txt : side).add(m[1]!);
   }
-  if (!hasManifest) return { root, result: { status: "integrity", why: `${entryDir} has no ref.json` } };
-  for (const k of txt)
-    if (!side.has(k)) return { root, result: { status: "integrity", why: `doc-${k}.txt has no sidecar (an interrupted add?)` } };
-  for (const k of side) if (!txt.has(k)) return { root, result: { status: "integrity", why: `doc-${k}.json has no document` } };
+  if (!hasManifest) return fail(`${entryDir} has no ref.json`);
+  for (const k of txt) if (!side.has(k)) return fail(`doc-${k}.txt has no sidecar (an interrupted add?)`);
+  for (const k of side) if (!txt.has(k)) return fail(`doc-${k}.json has no document`);
   let manifest: EntryManifest;
   try {
     manifest = JSON.parse(root.readFile(join(entryDir, "ref.json"))) as EntryManifest;
   } catch (e) {
-    return { root, result: { status: "integrity", why: `${join(entryDir, "ref.json")}: ${(e as Error).message}` } };
+    return fail(`${join(entryDir, "ref.json")}: ${(e as Error).message}`);
   }
   if (manifest?.format !== 1 || manifest.caseId !== caseId || typeof manifest.source?.resultSha256 !== "string")
-    return { root, result: { status: "integrity", why: `${join(entryDir, "ref.json")} does not describe case ${caseId}` } };
-  return { root, result: { status: "ok", manifest, keys: txt } };
+    return fail(`${join(entryDir, "ref.json")} does not describe case ${caseId}`);
+  return { root, entryDir, result: { status: "ok", manifest, keys: txt } };
 }
 
 function readDoc(root: NoFollowRoot, entryDir: string, key: string): { text: string; sidecar: DocSidecar } | { why: string } {
@@ -213,14 +218,14 @@ function readDoc(root: NoFollowRoot, entryDir: string, key: string): { text: str
 /** Read one frozen document, verified. Never returns text on any failure. */
 export function readRefDoc(storeDir: string, caseId: string, key: string): ReadRefResult {
   assertCaseId(caseId);
-  const { root, result } = inspectEntry(storeDir, caseId);
+  const { root, entryDir, result } = inspectEntry(storeDir, caseId);
   if (result.status !== "ok") return result;
   if (!result.keys.has(key))
     return {
       status: "missing",
       why: `the reference for case ${caseId} has no document for compose key ${key} (a scope or composer change)`,
     };
-  const d = readDoc(root!, join(storeDir, caseId), key);
+  const d = readDoc(root!, entryDir, key);
   if ("why" in d) return { status: "integrity", why: d.why };
   return {
     status: "ok",
@@ -242,7 +247,7 @@ export function addRefDoc(
   from: { resultSha256: string; composerId: string; unchecked?: boolean },
 ): { status: "added" | "exists" } {
   assertCaseId(caseId);
-  const { root, result } = inspectEntry(storeDir, caseId);
+  const { root, entryDir, result } = inspectEntry(storeDir, caseId);
   if (result.status !== "ok") throw new FsRefusal(`refusing to add to the reference for case ${caseId}: ${result.why}`);
   if (result.manifest.source.resultSha256 !== from.resultSha256)
     throw new FsRefusal(
@@ -250,7 +255,7 @@ export function addRefDoc(
         `${result.manifest.source.resultSha256.slice(0, 12)}…); every document in one entry must come from one run`,
     );
   if (result.keys.has(key)) return { status: "exists" };
-  writeDoc(root!, join(storeDir, caseId), key, text, from.composerId, from.unchecked === true);
+  writeDoc(root!, entryDir, key, text, from.composerId, from.unchecked === true);
   return { status: "added" };
 }
 
@@ -261,30 +266,34 @@ export function verifyStore(storeDir: string): {
   problems: Array<{ caseId: string; why: string }>;
   notes: string[];
 } {
-  const st = lstatOrNull(storeDir);
+  const a = absStore(storeDir);
+  if ("why" in a) return { entries: [], problems: [{ caseId: "", why: a.why }], notes: [] };
+  const st = lstatOrNull(a.store);
   if (st === null) return { entries: [], problems: [{ caseId: "", why: `reference store ${storeDir} does not exist` }], notes: [] };
   if (st.isSymbolicLink() || !st.isDirectory())
     return { entries: [], problems: [{ caseId: "", why: `reference store ${storeDir} is not a plain directory` }], notes: [] };
+  const root = NoFollowRoot.existing(a.store);
   const entries: string[] = [];
   const problems: Array<{ caseId: string; why: string }> = [];
   const notes: string[] = [];
-  for (const d of readdirSync(storeDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const d of root.readdirNoFollow(a.store).sort((x, y) => x.name.localeCompare(y.name))) {
+    const at = join(a.store, d.name);
     if (d.name.startsWith(".")) {
-      notes.push(`${join(storeDir, d.name)}: left by an interrupted freeze; safe to delete`);
+      notes.push(`${at}: left by an interrupted freeze; safe to delete`);
       continue;
     }
     if (!d.isDirectory() || pathSafeId(d.name) !== d.name) {
-      problems.push({ caseId: d.name, why: `${join(storeDir, d.name)} is not a reference entry (a foreign file, link or name)` });
+      problems.push({ caseId: d.name, why: `${at} is not a reference entry (a foreign file, link or name)` });
       continue;
     }
     entries.push(d.name);
-    const { root, result } = inspectEntry(storeDir, d.name);
+    const { root: r, entryDir, result } = inspectEntry(a.store, d.name);
     if (result.status !== "ok") {
       problems.push({ caseId: d.name, why: result.why });
       continue;
     }
     for (const key of [...result.keys].sort()) {
-      const doc = readDoc(root!, join(storeDir, d.name), key);
+      const doc = readDoc(r!, entryDir, key);
       if ("why" in doc) problems.push({ caseId: d.name, why: doc.why });
     }
   }
