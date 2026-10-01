@@ -32,6 +32,7 @@ import {
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
 import { caseKeyDecls, refusableAssertion, type MetricDecl } from "./grade-keys.js";
+import { metricEntries } from "./metric-keys.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
@@ -283,12 +284,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       explanation.claims = `${UNTRUSTED_JUDGE_PREFIX}${gradedClaims.length - passedN}/${gradedClaims.length} claims failed. ${ordered.map(line).join(" | ")}`;
     }
   }
-  for (const m of ctx.metrics ?? []) {
-    const got = (r as { metrics?: Array<{ id: string; value?: number }> } | undefined)?.metrics?.find((x) => x.id === m.id);
-    const ok = !agentFailed && typeof got?.value === "number" && Number.isFinite(got.value);
-    grade[`${m.id}_present`] = ok ? 1 : 0;
-    if (ok) grade[m.id] = got!.value!;
-  }
+  // The flow's metrics (metric-keys.ts). An agent-caused failure scores no float: every metric reads unmeasured.
+  const metrics = metricEntries(agentFailed ? {} : (r ?? {}), ctx.metrics ?? []);
+  Object.assign(grade, metrics.grade);
   // Order the keys as declared, so every row reads the same way.
   const ordered: Record<string, number> = {};
   for (const d of caseKeyDecls(ctx.assertions, ctx.metrics ?? [])) if (d.id in grade) ordered[d.id] = grade[d.id];
@@ -346,6 +344,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       judge_retries: jr.judge_retries,
       ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
       ...(Object.keys(claims).length ? { claims } : {}),
+      ...(Object.keys(metrics.unavailable).length ? { metrics_unavailable: metrics.unavailable } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),
